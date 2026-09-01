@@ -359,12 +359,19 @@ impl OpenCodeDriver {
                                 continue;
                             };
                             // Another session's traffic must not reach this
-                            // task's transcript.
+                            // task's transcript — except session lifecycle
+                            // news, which the app needs to keep its sidebar
+                            // in sync with the server's whole session list.
+                            let lifecycle = matches!(
+                                value.get("type").and_then(Value::as_str),
+                                Some("session.created" | "session.updated" | "session.deleted")
+                            );
                             let session = value
                                 .pointer("/data/sessionID")
                                 .or_else(|| value.pointer("/properties/sessionID"))
                                 .and_then(Value::as_str);
-                            if session.is_some_and(|session| session != stream_session) {
+                            if !lifecycle && session.is_some_and(|session| session != stream_session)
+                            {
                                 continue;
                             }
                             handle_event(
@@ -986,6 +993,11 @@ fn handle_event(
             tool_called(payload, events, state);
         }
         "session.tool.progress" | "session.tool.input.ended" => {}
+        "session.created" | "session.updated" | "session.deleted" => {
+            // Lifecycle news for the sidebar's reconciliation; debounced
+            // app-side, so one send per event is fine.
+            let _ = events.send(DriverEvent::NativeSessionsChanged);
+        }
         "session.tool.success" => {
             tool_finished(payload, events, state, false);
         }

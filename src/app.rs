@@ -1017,7 +1017,6 @@ pub struct Waku {
     store: StateStore,
     /// Cached before rendering so path labels can abbreviate the home prefix
     /// without consulting the environment or account database in a frame.
-    home_directory: Option<PathBuf>,
     composer: Entity<ComposerInput>,
     user_input_answer: Entity<ComposerInput>,
     /// Drafts are independent of transcript persistence: started tasks key by
@@ -1317,6 +1316,62 @@ pub struct Waku {
     /// The skill directory whose delete button is armed for its confirming
     /// second click.
     skills_delete_arming: Option<PathBuf>,
+    /// The Providers page's roster selection — a custom provider id, or the
+    /// built-in provider key. `None` means the built-in provider.
+    providers_selected: Option<String>,
+    /// The Providers page is showing the add-provider form instead of a
+    /// provider's detail.
+    providers_adding: bool,
+    /// The selected provider's name is being renamed inline.
+    providers_renaming: bool,
+    /// The selected provider's API key is shown in plain text.
+    providers_api_key_revealed: bool,
+    /// The selected custom provider whose delete button is armed for its
+    /// confirming second click.
+    providers_delete_arming: Option<String>,
+    /// The inline model editor over the selected provider's model list.
+    providers_model_editor: Option<providers_page::ProvidersModelEditor>,
+    /// Generation token for the debounced commit of keystroke-level field
+    /// edits; a newer edit supersedes the pending one.
+    providers_commit_generation: u64,
+    /// The provider roster, loaded from and committed back to OpenCode's own
+    /// configuration file. The app keeps no separate store — this is a
+    /// working copy that only lives between a config load and the next
+    /// commit.
+    providers_store: Vec<waku_client::custom_providers::CustomProvider>,
+    /// Generation token for the background config load; a newer load
+    /// supersedes an older one's result.
+    providers_load_generation: usize,
+    /// Generation token for the debounced native-session reconcile.
+    native_reconcile_generation: u64,
+    /// Server transcript version (local fetch timestamp) already applied to
+    /// each imported session, so re-opening a session does not refetch
+    /// unless the server moved.
+    imported_transcript_fetched: HashMap<Uuid, u64>,
+    /// Imported transcript fetches in flight, keyed by session id.
+    imported_transcript_fetches: HashSet<Uuid>,
+    /// Last reconcile/fetch failure, shown next to the sidebar. `None` means
+    /// the last attempt succeeded (or none ran yet).
+    native_reconcile_error: Option<String>,
+    /// The API format picked in the add-provider form.
+    providers_form_format: waku_client::custom_providers::ProviderApiFormat,
+    /// Model draft rows of the add-provider form: id + context window.
+    providers_form_models: Vec<(Entity<ComposerInput>, Entity<ComposerInput>)>,
+    /// The selected provider's editable endpoint and key fields.
+    provider_base_url_input: Entity<ComposerInput>,
+    provider_api_key_input: Entity<ComposerInput>,
+    provider_rename_input: Entity<ComposerInput>,
+    provider_model_id_input: Entity<ComposerInput>,
+    provider_model_context_input: Entity<ComposerInput>,
+    provider_form_name: Entity<ComposerInput>,
+    provider_form_base_url: Entity<ComposerInput>,
+    provider_form_api_key: Entity<ComposerInput>,
+    /// Scroll positions of the Providers page's panes, tracked so they can
+    /// draw scrollbars and reset per selection.
+    providers_list_scroll: ScrollHandle,
+    providers_list_scrollbar: Rc<ScrollbarState>,
+    providers_detail_scroll: ScrollHandle,
+    providers_detail_scrollbar: Rc<ScrollbarState>,
     /// Scroll position of the settings content column, tracked so the pane
     /// can draw a scrollbar and mark the titlebar boundary once content
     /// slides under it.
@@ -1467,6 +1522,8 @@ mod composer;
 mod drafts;
 mod file_search;
 mod image_preview;
+mod native_sessions;
+mod providers_page;
 mod render;
 mod right_panel;
 mod runtime;
@@ -1776,7 +1833,6 @@ impl Waku {
         let composer_draft_store = ComposerDraftStore::remote(daemon.clone());
         let composer_drafts = composer_draft_store.load().unwrap_or_default();
         let mut state = store.load_or_fresh(cwd);
-        let home_directory = crate::projectless::home_directory();
         state.apply_daemon_settings(daemon.settings());
         if let Err(error) = daemon.update_settings(state.daemon_settings()) {
             eprintln!("could not normalize daemon settings after migration: {error:#}");
@@ -1853,6 +1909,40 @@ impl Waku {
             ComposerInput::new(window, cx)
                 .search_field()
                 .placeholder(tr!("skills.search"))
+        });
+        let provider_base_url_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("providers.base_url_placeholder"))
+        });
+        let provider_api_key_input =
+            cx.new(|cx| ComposerInput::new(window, cx).search_field());
+        let provider_rename_input =
+            cx.new(|cx| ComposerInput::new(window, cx).search_field());
+        let provider_model_id_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("providers.model_id_placeholder"))
+        });
+        let provider_model_context_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("providers.context_window_placeholder"))
+        });
+        let provider_form_name = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("providers.name_placeholder"))
+        });
+        let provider_form_base_url = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("providers.base_url_placeholder"))
+        });
+        let provider_form_api_key = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("providers.api_key_placeholder"))
         });
         let session_rename_input = cx.new(|cx| ComposerInput::new(window, cx).search_field());
         let right_panel_diff_filter = cx.new(|cx| {
@@ -2163,6 +2253,10 @@ impl Waku {
                     if this.settings_page == Some(SettingsPage::Skills) {
                         this.ensure_skills_catalog(true, cx);
                     }
+                    // And the OpenCode server may have gained, renamed, or
+                    // dropped sessions while another app (the TUI) had
+                    // focus — reconcile the sidebar.
+                    this.schedule_native_session_reconcile(cx);
                 }
             })
             .detach();
@@ -2376,6 +2470,63 @@ impl Waku {
             )
             .detach();
             cx.subscribe(
+                &provider_base_url_input,
+                |this: &mut Self, input, event: &ComposerEvent, cx| {
+                    if matches!(event, ComposerEvent::Edited) {
+                        this.provider_field_edited(
+                            providers_page::ProviderField::BaseUrl,
+                            input.read(cx).content().to_owned(),
+                            cx,
+                        );
+                    }
+                },
+            )
+            .detach();
+            cx.subscribe(
+                &provider_api_key_input,
+                |this: &mut Self, input, event: &ComposerEvent, cx| {
+                    if matches!(event, ComposerEvent::Edited) {
+                        this.provider_field_edited(
+                            providers_page::ProviderField::ApiKey,
+                            input.read(cx).content().to_owned(),
+                            cx,
+                        );
+                    }
+                },
+            )
+            .detach();
+            cx.subscribe(
+                &provider_rename_input,
+                |this: &mut Self, _, event: &ComposerEvent, cx| {
+                    if matches!(event, ComposerEvent::Submit(_)) {
+                        this.confirm_rename(cx);
+                    }
+                },
+            )
+            .detach();
+            for model_editor_input in [&provider_model_id_input, &provider_model_context_input] {
+                cx.subscribe(model_editor_input, |this, _, event, cx| match event {
+                    ComposerEvent::Submit(_) => this.confirm_model_editor(cx),
+                    ComposerEvent::Edited if this.providers_model_editor.is_some() => cx.notify(),
+                    _ => {}
+                })
+                .detach();
+            }
+            for form_input in [
+                &provider_form_name,
+                &provider_form_base_url,
+                &provider_form_api_key,
+            ] {
+                cx.subscribe(form_input, |this, _, event, cx| match event {
+                    // The add form submits only when its fields validate, so
+                    // Return in any field is an honest attempt to save.
+                    ComposerEvent::Submit(_) => this.submit_provider_form(cx),
+                    ComposerEvent::Edited if this.providers_adding => cx.notify(),
+                    _ => {}
+                })
+                .detach();
+            }
+            cx.subscribe(
                 &right_panel_diff_filter,
                 |this: &mut Self, _, event: &ComposerEvent, cx| {
                     if matches!(event, ComposerEvent::Edited) {
@@ -2498,7 +2649,6 @@ impl Waku {
                 analytics,
                 state,
                 store,
-                home_directory,
                 composer,
                 user_input_answer,
                 composer_drafts,
@@ -2674,6 +2824,33 @@ impl Waku {
                 skills_detail_scrollbar: ScrollbarState::new(),
                 skills_source_filter: None,
                 skills_delete_arming: None,
+                providers_selected: None,
+                providers_adding: false,
+                providers_renaming: false,
+                providers_api_key_revealed: false,
+                providers_delete_arming: None,
+                providers_model_editor: None,
+                providers_commit_generation: 0,
+                providers_store: Vec::new(),
+                providers_load_generation: 0,
+                native_reconcile_generation: 0,
+                imported_transcript_fetched: HashMap::new(),
+                imported_transcript_fetches: HashSet::new(),
+                native_reconcile_error: None,
+                providers_form_format: Default::default(),
+                providers_form_models: Vec::new(),
+                provider_base_url_input,
+                provider_api_key_input,
+                provider_rename_input,
+                provider_model_id_input,
+                provider_model_context_input,
+                provider_form_name,
+                provider_form_base_url,
+                provider_form_api_key,
+                providers_list_scroll: ScrollHandle::new(),
+                providers_list_scrollbar: ScrollbarState::new(),
+                providers_detail_scroll: ScrollHandle::new(),
+                providers_detail_scrollbar: ScrollbarState::new(),
                 settings_scroll: ScrollHandle::new(),
                 settings_scrollbar: ScrollbarState::new(),
                 header_drag_armed: false,
@@ -2770,6 +2947,14 @@ impl Waku {
             // The skill library too: the Skills settings page must open onto
             // data, not a scan.
             this.ensure_skills_catalog(false, cx);
+            // And the provider roster from OpenCode's own configuration, so
+            // the Providers page opens onto the CLI's providers — after the
+            // one-time migration of the old app-managed mirror file.
+            this.load_providers_from_config(cx);
+            // The session roster too: the server is the single store, so the
+            // sidebar must reconcile with what the CLI and TUI left there.
+            // It retries once the provider probe finds the binary.
+            this.schedule_native_session_reconcile(cx);
         });
         entity
     }

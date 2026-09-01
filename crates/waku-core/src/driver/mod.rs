@@ -2,6 +2,7 @@
 
 mod activity;
 mod computer_use;
+pub(crate) mod native;
 mod opencode;
 mod support;
 

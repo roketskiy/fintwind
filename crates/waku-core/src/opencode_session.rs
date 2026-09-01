@@ -314,12 +314,31 @@ impl OpenCodeServer {
 fn is_native_user_turn(message: &Value) -> bool {
     // opencode2 stores the transcript as flat messages: user turns carry
     // their text directly and system turns have their own types
-    // (`synthetic`, `agent-switched`, `model-switched`, ...).
-    message.get("type").and_then(Value::as_str) == Some("user")
-        && message
-            .get("text")
-            .and_then(Value::as_str)
-            .is_some_and(|text| !text.trim().is_empty())
+    // (`synthetic`, `agent-switched`, `model-switched`, ...). The current
+    // beta keeps the text in `content` parts; older builds used a flat
+    // `text` field — accept both so fork boundaries keep working.
+    if message.get("type").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    if message
+        .get("text")
+        .and_then(Value::as_str)
+        .is_some_and(|text| !text.trim().is_empty())
+    {
+        return true;
+    }
+    message
+        .get("content")
+        .and_then(Value::as_array)
+        .is_some_and(|parts| {
+            parts.iter().any(|part| {
+                part.get("type").and_then(Value::as_str) == Some("text")
+                    && part
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+            })
+        })
 }
 
 impl OpenCodeServer {

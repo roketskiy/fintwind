@@ -36,6 +36,11 @@ export const sessions = sqliteTable(
     provider: text("provider").notNull(),
     model: text("model"),
     status: text("status").notNull(),
+    /** The session was discovered on the OpenCode server, not created here. */
+    imported: integer("imported", { mode: "boolean" }).notNull().default(false),
+    /** OpenCode's native session id — list-level, so reconciliation can match
+     *  a skeleton to its server record without hydrating the transcript. */
+    nativeSessionId: text("native_session_id"),
     /** Session creation time, unix seconds. */
     createdAt: integer("created_at").notNull(),
     /** Any mutation, unix seconds — including title edits and truncation. */

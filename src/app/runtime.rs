@@ -2701,15 +2701,21 @@ impl Waku {
     pub(super) fn drain_event_pump(&mut self, cx: &mut Context<Self>) -> EventPumpSchedule {
         // `|` on purpose: a busy provider must not starve the other result
         // queues just because its own drain reported a change first.
+        let detection_changed = self.drain_provider_detection_events();
         if self.drain_driver_events(cx)
             | self.drain_provider_probe_events()
             | self.drain_provider_version_events()
-            | self.drain_provider_detection_events()
+            | detection_changed
             | self.drain_computer_permission_events()
             | self.drain_plan_usage_events()
             | self.drain_task_state_sync_events(cx)
         {
             cx.notify();
+        }
+        if detection_changed {
+            // Provider detection just resolved the CLI binary; the startup
+            // reconcile that skipped for lack of one can run now.
+            self.schedule_native_session_reconcile(cx);
         }
         if std::mem::take(&mut self.workspace_queries_stale) {
             self.invalidate_workspace_queries(cx);

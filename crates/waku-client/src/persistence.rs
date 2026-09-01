@@ -19,6 +19,7 @@ use waku_protocol::computer_use::ComputerAppGrant;
 use waku_protocol::i18n::AppLanguage;
 use waku_protocol::identity::DATA_DIRECTORY_NAME;
 use waku_protocol::model::{AgentSession, FavoriteModel, Project, OPENCODE_PROVIDER};
+use waku_protocol::provider_session::{NativeSessionSummary, NativeTranscript};
 use waku_protocol::theme::ThemePreference;
 
 pub use waku_protocol::persistence::{
@@ -826,6 +827,116 @@ impl StateStore {
                 session.detail_loaded = true;
                 Ok(())
             }
+        }
+    }
+
+    /// Sessions the OpenCode server holds for `directory`. Blocking RPC; call
+    /// off the UI thread.
+    pub fn list_provider_sessions(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+    ) -> io::Result<Vec<NativeSessionSummary>> {
+        match self
+            .daemon
+            .client()
+            .request(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::ListProviderSessions { binary, directory },
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::ProviderSessions { sessions } => Ok(sessions),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an invalid provider-session list",
+            )),
+        }
+    }
+
+    /// One native session's transcript, translated into the app's model.
+    /// Blocking RPC; call off the UI thread.
+    pub fn fetch_native_transcript(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        session_id: String,
+    ) -> io::Result<NativeTranscript> {
+        match self
+            .daemon
+            .client()
+            .request(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::FetchNativeTranscript {
+                    binary,
+                    directory,
+                    session_id,
+                },
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::NativeTranscript { transcript } => Ok(transcript),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an invalid native transcript",
+            )),
+        }
+    }
+
+    /// Rename a native session on the OpenCode server. Blocking RPC.
+    pub fn rename_provider_session(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        session_id: String,
+        title: String,
+    ) -> io::Result<()> {
+        self.expect_ack(
+            self.daemon
+                .client()
+                .request(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    Command::RenameProviderSession {
+                        binary,
+                        directory,
+                        session_id,
+                        title,
+                    },
+                )
+                .map_err(to_io_error),
+        )
+    }
+
+    /// Delete a native session on the OpenCode server. Blocking RPC.
+    pub fn delete_provider_session(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        session_id: String,
+    ) -> io::Result<()> {
+        self.expect_ack(
+            self.daemon
+                .client()
+                .request(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    Command::DeleteProviderSession {
+                        binary,
+                        directory,
+                        session_id,
+                    },
+                )
+                .map_err(to_io_error),
+        )
+    }
+
+    fn expect_ack(&self, response: io::Result<ResponsePayload>) -> io::Result<()> {
+        match response? {
+            ResponsePayload::Ack => Ok(()),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an unexpected response",
+            )),
         }
     }
 

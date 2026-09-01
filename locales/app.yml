@@ -123,7 +123,7 @@ settings.general_keywords:
 settings.appearance_keywords:
   en: appearance theme system light dark language english chinese simplified
 settings.providers_keywords:
-  en: providers agents models cli version install detect claude codex cursor opencode amp grok pi
+  en: providers agents models custom add api key base url endpoint cli version install detect claude codex cursor opencode amp grok pi
 settings.skills:
   en: Skills
 settings.skills_keywords:
@@ -327,7 +327,7 @@ settings.share_anonymous_usage_data_description:
 providers.coding_agents:
   en: Coding agents
 providers.description:
-  en: fintwind drives agent CLIs installed on this Mac. Install or sign in with each agent's own CLI, then refresh
+  en: fintwind drives agent CLIs installed on this computer. Install or sign in with each agent's own CLI, then refresh
 providers.web_description:
   en: fintwind drives agent CLIs installed on the daemon host. Install or sign in with each agent's own CLI, then refresh
 providers.check_failed:
@@ -358,6 +358,91 @@ providers.checked_minutes_ago:
   en: Checked %{count}m ago
 providers.checked_hours_ago:
   en: Checked %{count}h ago
+sessions.sync_failed:
+  en: "Could not sync sessions from OpenCode: %{error}"
+
+providers.section_builtin:
+  en: Built-in
+providers.section_custom:
+  en: Custom providers
+providers.custom_count_zero:
+  en: No custom providers yet
+providers.custom_count_one:
+  en: "%{count} custom provider"
+providers.custom_count_many:
+  en: "%{count} custom providers"
+providers.add_provider:
+  en: Add provider
+providers.form_title:
+  en: Add a model provider
+providers.form_description:
+  en: A fully custom API endpoint and its first models.
+providers.name_label:
+  en: Name
+providers.name_placeholder:
+  en: "e.g. Zhipu GLM"
+providers.base_url_label:
+  en: Base URL
+providers.base_url_placeholder:
+  en: "https://api.example.com/v1"
+providers.api_key_label:
+  en: API Key
+providers.api_key_placeholder:
+  en: Enter API key
+providers.api_format_label:
+  en: API format
+providers.api_format_openai:
+  en: Chat Completions (OpenAI-compatible)
+providers.api_format_anthropic:
+  en: Anthropic Messages
+providers.models_label:
+  en: Models
+providers.models_empty:
+  en: No models yet. Add one to make this provider usable in chat.
+providers.add_model:
+  en: Add model
+providers.model_id_placeholder:
+  en: "e.g. deepseek-chat"
+providers.context_window_placeholder:
+  en: "e.g. 1M"
+providers.enabled_badge:
+  en: Enabled
+providers.disabled_badge:
+  en: Disabled
+providers.action_enable:
+  en: Enable
+providers.action_disable:
+  en: Disable
+providers.rename:
+  en: Rename
+providers.save:
+  en: Save
+providers.delete_provider:
+  en: Delete provider
+providers.confirm_delete_provider:
+  en: Confirm delete?
+providers.delete_model:
+  en: Delete model
+providers.edit_model:
+  en: Edit model
+providers.hint_need_model:
+  en: Add at least one model before saving the provider.
+providers.hint_invalid_url:
+  en: "The Base URL must start with http:// or https://."
+providers.hint_invalid_window:
+  en: The context window format is not recognized.
+providers.added_toast:
+  en: "Added provider %{name}"
+providers.deleted_toast:
+  en: "Deleted provider %{name}"
+providers.duplicate_model:
+  en: This model ID already exists
+providers.sync_failed:
+  en: "Could not update OpenCode's provider configuration: %{error}"
+providers.builtin_managed:
+  en: The endpoint and API key are managed by the opencode2 CLI (opencode2 auth login); this roster is OpenCode's own configuration file.
+providers.default_model_badge:
+  en: Default
 
 computer_use.allow_apps:
   en: Let fintwind use apps

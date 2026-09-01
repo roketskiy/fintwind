@@ -109,6 +109,7 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             json!({ "success": success, "summary": summary }),
         ),
         DriverEvent::Error(error) => ("error", Value::String(error)),
+        DriverEvent::NativeSessionsChanged => ("nativeSessionsChanged", Value::Null),
         DriverEvent::ProcessExited => ("processExited", Value::Null),
     };
     Ok(WireDriverEvent::new(kind, payload))
@@ -124,6 +125,7 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "autoTitleUpdated" => DriverEvent::AutoTitleUpdated(serde_json::from_value(payload)?),
         "availableCommands" => DriverEvent::AvailableCommands(serde_json::from_value(payload)?),
         "turnStarted" => DriverEvent::TurnStarted,
+        "nativeSessionsChanged" => DriverEvent::NativeSessionsChanged,
         "textDelta" => DriverEvent::TextDelta(serde_json::from_value(payload)?),
         "reasoningDelta" => DriverEvent::ReasoningDelta(serde_json::from_value(payload)?),
         "activity" => {

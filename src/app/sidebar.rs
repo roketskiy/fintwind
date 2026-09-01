@@ -996,6 +996,9 @@ impl Waku {
         {
             self.save();
         }
+        // A session backed by a native OpenCode session carries the rename to
+        // the server, so the CLI and TUI see the same title.
+        self.rename_native_session(session_id, &title, cx);
         cx.notify();
     }
 

@@ -633,6 +633,18 @@ pub struct AgentSession {
     pub context_usage: Option<ContextUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_event_cursor: Option<RuntimeEventCursor>,
+    /// The session was discovered on the OpenCode server (created by the CLI,
+    /// the TUI, or another client) rather than in this app. Imported sessions
+    /// hydrate their transcript from the server and are removed locally when
+    /// the server no longer has them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub imported: bool,
+    /// OpenCode's native session id, duplicated from
+    /// [`Self::provider_cursor`] at list level so a skeleton (whose cursor
+    /// lives in the detail blob) can still be reconciled against the
+    /// server's session list without hydrating.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_session_id: Option<String>,
     /// Read-only compatibility field for v1 state files. New saves omit it.
     #[serde(default, skip_serializing)]
     pub provider_session_id: Option<String>,
@@ -690,6 +702,8 @@ impl AgentSession {
             available_commands: Vec::new(),
             context_usage: None,
             runtime_event_cursor: None,
+            imported: false,
+            native_session_id: None,
             provider_session_id: None,
             messages: Vec::new(),
             transcript_blocks: Vec::new(),
@@ -726,6 +740,8 @@ impl AgentSession {
             available_commands: Vec::new(),
             context_usage: None,
             runtime_event_cursor: None,
+            imported: self.imported,
+            native_session_id: self.native_session_id.clone(),
             provider_session_id: None,
             messages: Vec::new(),
             transcript_blocks: Vec::new(),
@@ -1441,6 +1457,11 @@ pub enum DriverEvent {
         success: bool,
         summary: Option<String>,
     },
+    /// The OpenCode server reported a session-level lifecycle change (a
+    /// session was created, updated, renamed, or deleted — possibly by the
+    /// CLI or TUI). The app re-reconciles its sidebar with the server's
+    /// session list. Never carries transcript data.
+    NativeSessionsChanged,
     Error(String),
     ProcessExited,
 }

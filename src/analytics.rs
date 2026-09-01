@@ -280,13 +280,13 @@ fn run(
                 Context::new()
                     .hostname("waku.sh")
                     .url("/desktop")
-                    .title("Waku")
+                    .title("fintwind")
                     .language(language)
                     .os(std::env::consts::OS)
                     .device("desktop"),
             )
             .user_agent(format!(
-                "Waku/{} ({}; {})",
+                "fintwind/{} ({}; {})",
                 env!("CARGO_PKG_VERSION"),
                 std::env::consts::OS,
                 std::env::consts::ARCH

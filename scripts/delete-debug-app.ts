@@ -22,7 +22,7 @@ function addCandidate(path: string): void {
 }
 
 function isDebugDiagnostic(name: string): boolean {
-  return /^Waku Debug(?: Computer Use)?[-_.]/.test(name);
+  return /^fintwind Debug(?: Computer Use)?[-_.]/.test(name);
 }
 
 async function addMatchingChildren(
@@ -65,23 +65,25 @@ async function existingTargets(): Promise<Target[]> {
 // Checkout-local state and build artifacts. Keep the release cache intact.
 addCandidate(join(projectRoot, "temp"));
 addCandidate(join(projectRoot, ".waku-cache", "computer-use", "debug"));
+addCandidate(join(projectRoot, "target", "debug", "fintwind Debug.app"));
 addCandidate(join(projectRoot, "target", "debug", "Waku Debug.app"));
 
 if (process.env.CARGO_TARGET_DIR) {
-  addCandidate(
-    join(
-      resolve(projectRoot, process.env.CARGO_TARGET_DIR),
-      "debug",
-      "Waku Debug.app",
-    ),
+  const debugDirectory = join(
+    resolve(projectRoot, process.env.CARGO_TARGET_DIR),
+    "debug",
   );
+  addCandidate(join(debugDirectory, "fintwind Debug.app"));
+  addCandidate(join(debugDirectory, "Waku Debug.app"));
 }
 
 // Debug app bundles that may have been copied outside the checkout.
+addCandidate(join(userHome, "Applications", "fintwind Debug.app"));
 addCandidate(join(userHome, "Applications", "Waku Debug.app"));
+addCandidate("/Applications/fintwind Debug.app");
 addCandidate("/Applications/Waku Debug.app");
 
-// Debug-only app data. The release app uses Waku/sh.waku and is not included.
+// Debug-only app data retains the original directory name for compatibility.
 addCandidate(join(library, "Application Support", "Waku Debug"));
 addCandidate(
   join(
@@ -89,7 +91,7 @@ addCandidate(
     "Application Support",
     "Waku",
     "Computer Use",
-    "Waku Debug Computer Use.app",
+    "fintwind Debug Computer Use.app",
   ),
 );
 addCandidate(join(library, "Caches", "Waku Debug"));
@@ -137,18 +139,23 @@ await addMatchingChildren(
 
 const targets = await existingTargets();
 if (targets.length === 0) {
-  console.log("No Waku Debug files or directories found.");
+  console.log("No fintwind Debug files or directories found.");
   process.exit(0);
 }
 
 console.log(
-  "The following Waku Debug paths, including directory contents, will be permanently deleted:\n",
+  "The following fintwind Debug paths, including directory contents, will be permanently deleted:\n",
 );
 for (const target of targets) {
   console.log(`  [${target.kind}] ${target.path}`);
 }
 
-const runningProcesses = ["Waku Debug", "Waku Debug Computer Use"].filter(
+const runningProcesses = [
+  "fintwind Debug",
+  "fintwind Debug Computer Use",
+  "Waku Debug",
+  "Waku Debug Computer Use",
+].filter(
   (name) =>
     Bun.spawnSync(["/usr/bin/pgrep", "-x", name], {
       stdout: "ignore",

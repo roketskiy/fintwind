@@ -4,7 +4,7 @@
 //! this module loads it at runtime instead of linking it, so a bare `cargo
 //! run` binary simply runs without an updater. Sparkle still owns update
 //! discovery, download, signature verification, installation, and relaunch.
-//! Waku's routing user driver keeps automatic checks in the sidebar, but
+//! fintwind's routing user driver keeps automatic checks in the sidebar, but
 //! forwards an explicit Check for Updates action to Sparkle's standard user
 //! driver so the original updater window still appears when requested.
 //!
@@ -21,7 +21,7 @@ pub struct UpdaterState(pub Option<Updater>);
 
 impl Global for UpdaterState {}
 
-/// The compact state rendered by Waku. Update details remain owned by
+/// The compact state rendered by fintwind. Update details remain owned by
 /// Sparkle and never enter a frame path.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum UpdateStatus {
@@ -79,7 +79,7 @@ mod macos {
 
     struct UserDriverIvars {
         /// Explicit checks and the one-time automatic-check permission prompt
-        /// use Sparkle's own windows. Scheduled checks stay inside Waku.
+        /// use Sparkle's own windows. Scheduled checks stay inside fintwind.
         standard_driver: Retained<AnyObject>,
         standard_presentation: Cell<bool>,
         standard_update_check: Cell<Option<isize>>,
@@ -603,7 +603,7 @@ mod macos {
                         .to_string_lossy()
                         .into_owned()
                 };
-                eprintln!("Waku updater: failed to load Sparkle: {reason}");
+                eprintln!("fintwind updater: failed to load Sparkle: {reason}");
                 return None;
             }
 
@@ -652,7 +652,7 @@ mod macos {
                 ]
             };
             if !started {
-                eprintln!("Waku updater: Sparkle rejected its updater configuration");
+                eprintln!("fintwind updater: Sparkle rejected its updater configuration");
                 return None;
             }
 
@@ -763,7 +763,7 @@ mod macos {
     }
 
     /// The embedded framework's dylib next to the running executable
-    /// (Contents/MacOS/Waku → Contents/Frameworks/Sparkle.framework/Sparkle).
+    /// (Contents/MacOS/<app> → Contents/Frameworks/Sparkle.framework/Sparkle).
     fn sparkle_library_path() -> Option<std::path::PathBuf> {
         let executable = std::env::current_exe().ok()?;
         let contents = executable.parent()?.parent()?;
@@ -873,7 +873,7 @@ mod feed {
         compare_versions(candidate, current) == std::cmp::Ordering::Greater
     }
 
-    /// Compare dotted release numbers field by field. Waku's versions are
+    /// Compare dotted release numbers field by field. fintwind's versions are
     /// plain `major.minor.patch`; anything after a `-` or `+` is build
     /// metadata and is not ordered.
     fn compare_versions(left: &str, right: &str) -> std::cmp::Ordering {
@@ -911,12 +911,12 @@ mod feed {
     <item>
       <title>0.1.4</title>
       <sparkle:shortVersionString>0.1.4</sparkle:shortVersionString>
-      <enclosure url="https://releases.waku.sh/Waku-0.1.4-x86_64-Setup.exe" length="1024" type="application/octet-stream" sparkle:edSignature="oldsig" />
+      <enclosure url="https://releases.waku.sh/fintwind-0.1.4-x86_64-Setup.exe" length="1024" type="application/octet-stream" sparkle:edSignature="oldsig" />
     </item>
     <item>
       <title>0.2.0</title>
       <sparkle:shortVersionString>0.2.0</sparkle:shortVersionString>
-      <enclosure url="https://releases.waku.sh/Waku-0.2.0-x86_64-Setup.exe" length="2048" type="application/octet-stream" sparkle:edSignature="newsig" />
+      <enclosure url="https://releases.waku.sh/fintwind-0.2.0-x86_64-Setup.exe" length="2048" type="application/octet-stream" sparkle:edSignature="newsig" />
     </item>
   </channel>
 </rss>"#;
@@ -928,7 +928,7 @@ mod feed {
             assert_eq!(item.version, "0.2.0");
             assert_eq!(item.signature, "newsig");
             assert_eq!(item.length, Some(2048));
-            assert!(item.url.ends_with("Waku-0.2.0-x86_64-Setup.exe"));
+            assert!(item.url.ends_with("fintwind-0.2.0-x86_64-Setup.exe"));
         }
 
         #[test]
@@ -1030,7 +1030,7 @@ mod windows {
                 return None;
             }
             if verifying_key().is_none() {
-                eprintln!("Waku updater: SUPublicEDKey is not a valid ed25519 key");
+                eprintln!("fintwind updater: SUPublicEDKey is not a valid ed25519 key");
                 return None;
             }
 
@@ -1100,7 +1100,7 @@ mod windows {
                         if user_initiated {
                             let _ = events.try_send(UpdaterEvent::Failed(error.to_string()));
                         } else {
-                            eprintln!("Waku updater: {error}");
+                            eprintln!("fintwind updater: {error}");
                         }
                     }
                 });
@@ -1215,7 +1215,7 @@ mod windows {
         ));
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory)?;
-        let installer = directory.join("Waku-Setup.exe");
+        let installer = directory.join("fintwind-Setup.exe");
 
         curl(&["-fsSL", "--max-time", "600", "-o"], &installer, &item.url)?;
 

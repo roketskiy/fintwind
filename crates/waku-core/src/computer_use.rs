@@ -187,18 +187,18 @@ fn helper_app_path() -> anyhow::Result<PathBuf> {
     let executable = host_executable_path()?;
     let macos = executable
         .parent()
-        .ok_or_else(|| anyhow!("Waku executable has no parent directory"))?;
+        .ok_or_else(|| anyhow!("fintwind executable has no parent directory"))?;
     let contents = macos
         .parent()
-        .ok_or_else(|| anyhow!("Waku app bundle is malformed"))?;
+        .ok_or_else(|| anyhow!("fintwind app bundle is malformed"))?;
     let app_name = executable
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| anyhow!("Waku executable name is invalid"))?;
+        .ok_or_else(|| anyhow!("fintwind executable name is invalid"))?;
     let helper_name = format!("{app_name} Computer Use");
     let path = contents.join("Helpers").join(format!("{helper_name}.app"));
     if !path.is_dir() {
-        bail!("Computer Use helper is missing from this Waku build")
+        bail!("Computer Use helper is missing from this fintwind build")
     }
     Ok(path)
 }
@@ -211,7 +211,7 @@ pub fn helper_display_name() -> String {
                 .map(|name| name.to_string_lossy().into_owned())
         })
         .map(|app_name| format!("{app_name} Computer Use"))
-        .unwrap_or_else(|| "Waku Computer Use".into())
+        .unwrap_or_else(|| "fintwind Computer Use".into())
 }
 
 pub fn mcp_server_command() -> anyhow::Result<PathBuf> {
@@ -227,13 +227,13 @@ pub fn js_repl_server_path() -> anyhow::Result<PathBuf> {
     let executable = host_executable_path()?;
     let macos = executable
         .parent()
-        .ok_or_else(|| anyhow!("Waku executable has no parent directory"))?;
+        .ok_or_else(|| anyhow!("fintwind executable has no parent directory"))?;
     let contents = macos
         .parent()
-        .ok_or_else(|| anyhow!("Waku app bundle is malformed"))?;
+        .ok_or_else(|| anyhow!("fintwind app bundle is malformed"))?;
     let path = contents.join("Resources").join("waku_js_repl");
     if !path.is_file() {
-        bail!("Waku JavaScript REPL is missing from this Waku build")
+        bail!("fintwind JavaScript REPL is missing from this fintwind build")
     }
     Ok(path)
 }
@@ -242,16 +242,16 @@ pub fn pi_extension_path() -> anyhow::Result<PathBuf> {
     let executable = host_executable_path()?;
     let macos = executable
         .parent()
-        .ok_or_else(|| anyhow!("Waku executable has no parent directory"))?;
+        .ok_or_else(|| anyhow!("fintwind executable has no parent directory"))?;
     let contents = macos
         .parent()
-        .ok_or_else(|| anyhow!("Waku app bundle is malformed"))?;
+        .ok_or_else(|| anyhow!("fintwind app bundle is malformed"))?;
     let path = contents
         .join("Resources")
         .join("computer-use")
         .join("pi-extension.ts");
     if !path.is_file() {
-        bail!("Waku Pi Computer Use extension is missing from this Waku build")
+        bail!("fintwind Pi Computer Use extension is missing from this fintwind build")
     }
     Ok(path)
 }
@@ -339,13 +339,13 @@ pub fn skill_root_path() -> anyhow::Result<PathBuf> {
     let executable = host_executable_path()?;
     let macos = executable
         .parent()
-        .ok_or_else(|| anyhow!("Waku executable has no parent directory"))?;
+        .ok_or_else(|| anyhow!("fintwind executable has no parent directory"))?;
     let contents = macos
         .parent()
-        .ok_or_else(|| anyhow!("Waku app bundle is malformed"))?;
+        .ok_or_else(|| anyhow!("fintwind app bundle is malformed"))?;
     let path = contents.join("Resources").join("skills");
     if !path.join("waku-computer-use").join("SKILL.md").is_file() {
-        bail!("Waku Computer Use skill is missing from this Waku build")
+        bail!("fintwind Computer Use skill is missing from this fintwind build")
     }
     Ok(path)
 }
@@ -355,7 +355,7 @@ fn host_executable_path() -> anyhow::Result<PathBuf> {
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
         .map(Ok)
-        .unwrap_or_else(|| std::env::current_exe().context("Waku executable path is unavailable"))
+        .unwrap_or_else(|| std::env::current_exe().context("fintwind executable path is unavailable"))
 }
 
 #[cfg(test)]

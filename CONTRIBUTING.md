@@ -67,7 +67,7 @@ users run to install that archive. Point it at a local build to exercise it
 without publishing:
 
 ```sh
-WAKU_BUNDLE_PATH=target/release/waku-<version>-<target>.tar.gz \
+WAKU_BUNDLE_PATH=target/release/fintwind-<version>-<target>.tar.gz \
   sh website/public/install.sh
 ```
 

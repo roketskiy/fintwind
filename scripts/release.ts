@@ -14,16 +14,16 @@ import { parseArgs } from "node:util";
 import { defaultDownloadUrlPrefix, generateAppcast } from "./appcast";
 import { extractReleaseNotes } from "./changelog";
 
-const appName = "Waku";
-const executableName = "Waku";
+const appName = "fintwind";
+const executableName = "fintwind";
 const jsReplExecutableName = "waku_js_repl";
-const daemonExecutableName = "waku-daemon";
-const computerUseHelperName = "Waku Computer Use";
+const daemonExecutableName = "fintwind-daemon";
+const computerUseHelperName = "fintwind Computer Use";
 const packageName = "waku";
 const defaultNotaryProfile = "NOTARY";
 const projectRoot = resolve(import.meta.dir, "..");
 
-const help = `Build, notarize, and publish a production release of Waku.
+const help = `Build, notarize, and publish a production release of fintwind.
 
 Usage:
   bun run release [options]
@@ -37,7 +37,7 @@ Options:
   --local                       Build, notarize, and write the DMG + zip
                                 without publishing to R2
   --force                       Publish even if this version is already in R2
-  --output <path>               DMG output path (default: dist/Waku-<version>.dmg)
+  --output <path>               DMG output path (default: dist/fintwind-<version>.dmg)
   --signing-identity <name>     Developer ID Application identity selector
                                 (or WAKU_SIGNING_IDENTITY; required unless --adhoc)
   --notary-profile <name>       notarytool keychain profile
@@ -45,9 +45,9 @@ Options:
   --build-number <number>       CFBundleVersion override (or WAKU_BUILD_NUMBER;
                                 default derives a monotonic number from the
                                 Cargo version)
-  --volume-name <name>          Mounted DMG name (default: Waku)
-  --skip-build                  Reuse target/release/waku, waku_js_repl, and
-                                waku-daemon
+  --volume-name <name>          Mounted DMG name (default: fintwind)
+  --skip-build                  Reuse target/release/fintwind, waku_js_repl, and
+                                fintwind-daemon
   --skip-notarize               Unnotarized signed DMG (implies --local)
   --adhoc                       Ad-hoc sign, no notarization (implies --local)
   --help                        Show this help
@@ -269,7 +269,7 @@ const releaseDirectory = resolve(
   process.env.CARGO_TARGET_DIR ?? "target",
   "release",
 );
-const releaseExecutable = join(releaseDirectory, packageName);
+const releaseExecutable = join(releaseDirectory, "fintwind");
 const releaseJsReplExecutable = join(
   releaseDirectory,
   jsReplExecutableName,
@@ -630,7 +630,7 @@ try {
   await $`ditto ${zipPath} ${join(updatesDirectory, zipName)}`;
 
   // Release notes: this version's CHANGELOG.md section ships next to the
-  // archive as Waku-<version>.md; generate_appcast links it as the update's
+  // archive as fintwind-<version>.md; generate_appcast links it as the update's
   // release notes, which Sparkle renders in the prompt.
   const changelogFile = Bun.file(join(projectRoot, "CHANGELOG.md"));
   const notes = (await changelogFile.exists())
@@ -666,7 +666,7 @@ try {
     logStep("Uploading appcast.xml");
     await $`rclone copyto ${join(updatesDirectory, "appcast.xml")} ${`${r2Destination}/appcast.xml`} ${rcloneFlags} --header-upload ${"Cache-Control: public, max-age=300, must-revalidate"}`;
 
-    console.log(`\nWaku ${version} (build ${buildNumber}) is live:`);
+    console.log(`\nfintwind ${version} (build ${buildNumber}) is live:`);
     console.log(`  download : ${downloadUrlPrefix}${dmgName}`);
     console.log(`  update   : ${downloadUrlPrefix}${zipName}`);
     console.log(`  feed     : ${downloadUrlPrefix}appcast.xml`);

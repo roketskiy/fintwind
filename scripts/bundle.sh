@@ -39,13 +39,17 @@ fi
 case "$profile" in
   debug)
     app_name="Waku Debug"
+    display_name="fintwind Debug"
     helper_name="Waku Debug Computer Use"
+    helper_display_name="fintwind Debug Computer Use"
     bundle_identifier="sh.waku.dev"
     icon_file="AppIconDev.icns"
     ;;
   release)
-    app_name="Waku"
-    helper_name="Waku Computer Use"
+    app_name="fintwind"
+    display_name="fintwind"
+    helper_name="fintwind Computer Use"
+    helper_display_name="fintwind Computer Use"
     bundle_identifier="sh.waku"
     icon_file="AppIcon.icns"
     ;;
@@ -61,9 +65,9 @@ fi
 debug_adhoc_requirement="=designated => identifier \"$bundle_identifier\""
 if [ "${WAKU_SKIP_CARGO_BUILD:-0}" != "1" ]; then
   if [ "$profile" = "release" ]; then
-    cargo build --release --package waku --bin waku --bin waku_js_repl --package waku-daemon --bin waku-daemon
+    cargo build --release --package waku --bin fintwind --bin waku_js_repl --package waku-daemon --bin fintwind-daemon
   else
-    cargo build --package waku --bin waku --bin waku_js_repl
+    cargo build --package waku --bin fintwind --bin waku_js_repl
   fi
 fi
 
@@ -71,7 +75,7 @@ bundle="$cargo_target_dir/$profile/$app_name.app"
 contents="$bundle/Contents"
 helper_bundle="$contents/Helpers/$helper_name.app"
 repl_executable="$contents/Resources/waku_js_repl"
-daemon_executable="$contents/MacOS/waku-daemon"
+daemon_executable="$contents/MacOS/fintwind-daemon"
 swift_module_cache="$cargo_target_dir/$profile/swift-module-cache"
 helper_source="resources/computer-use/WakuComputerUse.swift"
 menu_bar_cursor_resource="resources/computer-use/menubar-cursor.png"
@@ -82,7 +86,7 @@ helper_fingerprint="$({
     resources/computer-use/Info.plist \
     "$menu_bar_cursor_resource" \
     "$overlay_cursor_resource"
-  printf '%s\n' "standalone-service-v2" "$helper_name" "$bundle_identifier.computer-use" "$codesign_identity" "$(uname -m)-apple-macos13.0"
+  printf '%s\n' "standalone-service-v2" "$helper_name" "$helper_display_name" "$bundle_identifier.computer-use" "$codesign_identity" "$(uname -m)-apple-macos13.0"
   xcrun swiftc -version
 } | shasum -a 256 | awk '{ print $1 }')"
 helper_cache_root=".waku-cache/computer-use/$profile"
@@ -92,9 +96,9 @@ cached_helper_bundle="$helper_cache_entry/$helper_name.app"
 # Keep compiled helpers outside target so `cargo clean` does not force an
 # unnecessary Swift rebuild. The fingerprint includes the signing identity so
 # switching certificates can never reuse a helper signed as different code.
-# The cached app is copied into Waku's standard Helpers directory as the
-# canonical packaged service. Waku refreshes a stable standalone runtime copy
-# from it so Screen Recording is attributed to the helper rather than Waku.
+# The cached app is copied into fintwind's standard Helpers directory as the
+# canonical packaged service. fintwind refreshes a stable standalone runtime copy
+# from it so Screen Recording is attributed to the helper rather than fintwind.
 
 if [ ! -d "$cached_helper_bundle" ]; then
   helper_cache_staging="$helper_cache_root/.staging-$helper_fingerprint-$$"
@@ -105,10 +109,10 @@ if [ ! -d "$cached_helper_bundle" ]; then
   cp resources/computer-use/Info.plist "$cached_helper_contents/Info.plist"
   cp "$menu_bar_cursor_resource" "$overlay_cursor_resource" "$cached_helper_contents/Resources/"
   printf '%s\n' "$helper_fingerprint" > "$cached_helper_contents/Resources/.waku-helper-fingerprint"
-  plutil -replace CFBundleDisplayName -string "$helper_name" "$cached_helper_contents/Info.plist"
+  plutil -replace CFBundleDisplayName -string "$helper_display_name" "$cached_helper_contents/Info.plist"
   plutil -replace CFBundleExecutable -string "$helper_name" "$cached_helper_contents/Info.plist"
   plutil -replace CFBundleIdentifier -string "$bundle_identifier.computer-use" "$cached_helper_contents/Info.plist"
-  plutil -replace CFBundleName -string "$helper_name" "$cached_helper_contents/Info.plist"
+  plutil -replace CFBundleName -string "$helper_display_name" "$cached_helper_contents/Info.plist"
   xcrun swiftc \
     -O \
     -parse-as-library \
@@ -152,11 +156,11 @@ fi
 
 rm -rf "$bundle"
 mkdir -p "$contents/MacOS" "$contents/Resources/computer-use" "$contents/Resources/skills/waku-computer-use" "$contents/Helpers"
-cp "$cargo_target_dir/$profile/waku" "$contents/MacOS/$app_name"
+cp "$cargo_target_dir/$profile/fintwind" "$contents/MacOS/$app_name"
 cp "$cargo_target_dir/$profile/waku_js_repl" "$repl_executable"
 chmod 755 "$repl_executable"
 if [ "$profile" = "release" ]; then
-  cp "$cargo_target_dir/$profile/waku-daemon" "$daemon_executable"
+  cp "$cargo_target_dir/$profile/fintwind-daemon" "$daemon_executable"
   chmod 755 "$daemon_executable"
 fi
 cp resources/Info.plist "$contents/Info.plist"
@@ -167,17 +171,17 @@ frameworks_directory="$contents/Frameworks"
 sparkle_framework="$frameworks_directory/Sparkle.framework"
 mkdir -p "$frameworks_directory"
 cp -R "$sparkle_framework_source" "$sparkle_framework"
-# Waku is not sandboxed, so Sparkle's XPC services never run; drop them along
+# fintwind is not sandboxed, so Sparkle's XPC services never run; drop them along
 # with the header and module folders so the shipped framework carries no dev
 # artifacts and no unsigned nested code.
 for sparkle_extra in XPCServices Headers PrivateHeaders Modules; do
   rm -rf "$sparkle_framework/$sparkle_extra" \
     "$sparkle_framework/Versions/B/$sparkle_extra"
 done
-plutil -replace CFBundleDisplayName -string "$app_name" "$contents/Info.plist"
+plutil -replace CFBundleDisplayName -string "$display_name" "$contents/Info.plist"
 plutil -replace CFBundleExecutable -string "$app_name" "$contents/Info.plist"
 plutil -replace CFBundleIdentifier -string "$bundle_identifier" "$contents/Info.plist"
-plutil -replace CFBundleName -string "$app_name" "$contents/Info.plist"
+plutil -replace CFBundleName -string "$display_name" "$contents/Info.plist"
 cp -R "$cached_helper_bundle" "$helper_bundle"
 # Finder info and resource forks on copied resources make codesign reject the
 # bundle as "detritus"; strip extended attributes before signing.

@@ -64,7 +64,7 @@ settings.daemon: デーモン
 settings.computer_use: コンピュータ操作
 settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン
 settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語
-settings.providers_keywords: プロバイダー エージェント モデル CLI バージョン インストール 検出 claude codex cursor opencode amp grok pi
+settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 claude codex cursor opencode amp grok pi
 settings.skills: スキル
 settings.skills_keywords: スキル ライブラリ エージェント 無効 有効 削除 claude codex cursor opencode pi amp 共有
 settings.usage_keywords: 使用状況 トークン コスト 支出 キャッシュ 日別 グラフ モデル 内訳 履歴 claude codex
@@ -170,7 +170,7 @@ settings.share_anonymous_usage_data: 匿名の使用状況データを共有
 settings.share_anonymous_usage_data_description: 機能の利用状況と信頼性に関するデータを共有して、fintwind の改善にご協力ください。プロンプト、回答、プロジェクト名、ファイルパスなどの個人データは一切含まれません
 
 providers.coding_agents: コーディングエージェント
-providers.description: fintwind はこの Mac にインストールされたエージェントの CLI を使用します。各エージェントの CLI をインストールするかログインしてから、更新してください
+providers.description: fintwind はこのコンピューターにインストールされたエージェントの CLI を使用します。各エージェントの CLI をインストールするかログインしてから、更新してください
 providers.web_description: fintwind はデーモンホストにインストールされたエージェント CLI を使用します。各エージェントの CLI をインストールするかログインしてから、更新してください
 providers.check_failed: "%{command} を確認できませんでした：%{error}"
 providers.show_settings: "%{provider} の設定を表示"
@@ -191,6 +191,47 @@ providers.binary_path_description: fintwind が %{provider} の起動に使用�
 providers.checked_just_now: たった今確認済み
 providers.checked_minutes_ago: "%{count} 分前に確認済み"
 providers.checked_hours_ago: "%{count} 時間前に確認済み"
+providers.section_builtin: 内蔵
+providers.section_custom: カスタムプロバイダー
+providers.custom_count_zero: カスタムプロバイダーはまだありません
+providers.custom_count_one: "カスタムプロバイダー %{count} 件"
+providers.custom_count_many: "カスタムプロバイダー %{count} 件"
+providers.add_provider: プロバイダーを追加
+providers.form_title: モデルプロバイダーを追加
+providers.form_description: 完全にカスタムな API エンドポイントと初期モデル。
+providers.name_label: 名前
+providers.name_placeholder: "例: Zhipu GLM"
+providers.base_url_label: Base URL
+providers.base_url_placeholder: "https://api.example.com/v1"
+providers.api_key_label: API Key
+providers.api_key_placeholder: API キーを入力
+providers.api_format_label: API 形式
+providers.api_format_openai: Chat Completions（OpenAI 互換）
+providers.api_format_anthropic: Anthropic Messages
+providers.models_label: モデル一覧
+providers.models_empty: モデルが未設定です。追加するとチャットで使用できます。
+providers.add_model: モデルを追加
+providers.model_id_placeholder: "例: deepseek-chat"
+providers.context_window_placeholder: "例: 1M"
+providers.enabled_badge: 有効
+providers.disabled_badge: 無効
+providers.action_enable: 有効にする
+providers.action_disable: 無効にする
+providers.rename: 名前を変更
+providers.save: 保存
+providers.delete_provider: プロバイダーを削除
+providers.confirm_delete_provider: 削除しますか？
+providers.delete_model: モデルを削除
+providers.edit_model: モデルを編集
+providers.hint_need_model: 保存する前に少なくとも 1 つのモデルを追加してください。
+providers.hint_invalid_url: "Base URL は http:// または https:// で始まる必要があります。"
+providers.hint_invalid_window: コンテキストウィンドウの形式を認識できません。
+providers.added_toast: "プロバイダー「%{name}」を追加しました"
+providers.deleted_toast: "プロバイダー「%{name}」を削除しました"
+providers.duplicate_model: このモデル ID は既に存在します
+providers.sync_failed: "OpenCode のプロバイダー設定を更新できませんでした：%{error}"
+providers.builtin_managed: エンドポイントと API キーは opencode2 CLI が管理します（opencode2 auth login）。この一覧は OpenCode 自身の設定ファイルです。
+providers.default_model_badge: デフォルト
 
 computer_use.allow_apps: fintwind にアプリの操作を許可
 computer_use.availability: コンピュータ操作は Codex、OpenCode、Grok、Pi で利用できます
@@ -673,6 +714,7 @@ errors.pi_reported_error: Pi からエラーが報告されました
 session.response_unavailable: その回答は利用できなくなりました
 session.response_cannot_fork: その回答からは現在タスクをフォークできません
 session.response_fork_in_progress: フォーク元のタスクを削除する前に、タスクのフォークが完了するまでお待ちください
+sessions.sync_failed: "OpenCode からセッションを同期できませんでした：%{error}"
 session.response_cannot_copy: その回答を新しいタスクにコピーできませんでした
 session.forked_with_checkpoint_warning: "タスクをフォークしましたが、一部の Git チェックポイントをコピーできませんでした：%{error}"
 session.forked_from_response: この回答からタスクをフォークしました

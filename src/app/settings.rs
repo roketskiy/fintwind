@@ -99,6 +99,11 @@ impl Waku {
         if page == SettingsPage::Skills {
             self.ensure_skills_catalog(false, cx);
         }
+        if page == SettingsPage::Providers {
+            // A half-finished rename, model edit, or add form never survives
+            // the visit; the roster selection itself does.
+            self.reset_providers_page(cx);
+        }
         cx.notify();
     }
 
@@ -319,10 +324,11 @@ impl Waku {
             window,
             cx,
         );
-        // The Skills page is a mail-style split that owns the whole content
-        // column — no page title, no titlebar strip, no width cap, no card.
-        // Window dragging stays with the sidebar's own titlebar region.
-        if page == SettingsPage::Skills {
+        // The Skills and Providers pages are mail-style splits that own the
+        // whole content column — no page title, no titlebar strip, no width
+        // cap, no card. Window dragging stays with the sidebar's own
+        // titlebar region.
+        if matches!(page, SettingsPage::Skills | SettingsPage::Providers) {
             return div()
                 .flex_1()
                 .h_full()
@@ -333,7 +339,7 @@ impl Waku {
                 .border_color(theme.sidebar_border)
                 .bg(theme.surface)
                 .children(right_window_controls.map(|controls| {
-                    self.render_settings_drag_region("settings-skills-titlebar", cx)
+                    self.render_settings_drag_region("settings-split-titlebar", cx)
                         .flex()
                         .items_center()
                         .justify_end()
@@ -343,7 +349,10 @@ impl Waku {
                     div()
                         .flex_1()
                         .min_h_0()
-                        .child(self.render_skills_settings(cx)),
+                        .child(match page {
+                            SettingsPage::Skills => self.render_skills_settings(cx),
+                            _ => self.render_providers_page(cx),
+                        }),
                 );
         }
         // The titlebar strip is transparent; once content slides under it, a
@@ -373,7 +382,7 @@ impl Waku {
             )
             .child(match page {
                 SettingsPage::General => self.render_general_settings(cx),
-                SettingsPage::Providers => self.render_providers_settings(cx),
+                SettingsPage::Providers => self.render_providers_page(cx),
                 SettingsPage::Skills => self.render_skills_settings(cx),
                 SettingsPage::Daemon => self.render_daemon_settings(cx),
                 SettingsPage::ComputerUse => self.render_computer_use_settings(cx),
@@ -1373,225 +1382,6 @@ impl Waku {
             .into_any_element()
     }
 
-    fn render_providers_settings(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::current(cx);
-        let checking = self.provider_detection_remaining > 0;
-        let checked_label = self
-            .provider_detection_checked_at
-            .filter(|_| !checking)
-            .map(|checked_at| detection_checked_label(checked_at.elapsed()));
-
-        let refresh = div()
-            .id("refresh-providers")
-            .tab_index(0)
-            .focus_visible(|style| style.border_color(theme.accent))
-            .h(px(28.0))
-            .px(px(11.0))
-            .rounded(px(7.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .cursor_default()
-            .text_size(px(10.5))
-            .text_color(theme.text_secondary)
-            .opacity(if checking { 0.6 } else { 1.0 })
-            .hover(|element| element.bg(theme.overlay))
-            .child(icon("icons/rotate-cw.svg", 11.0, theme.text_tertiary))
-            .child(if checking {
-                tr!("common.checking")
-            } else {
-                tr!("common.refresh")
-            })
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.refresh_provider_detection();
-                cx.notify();
-            }));
-
-        let mut rows = div().mt(px(4.0)).flex().flex_col();
-        let provider = OPENCODE_PROVIDER.to_owned();
-        {
-            let probe = self.provider_probe();
-            let installed = probe.is_some_and(|probe| probe.installed);
-            let binary_path = probe
-                .filter(|probe| probe.installed)
-                .and_then(|probe| probe.path.as_deref())
-                .map(|path| abbreviate_home_path(path, self.home_directory.as_deref()));
-            let model_count = probe.map(|probe| probe.models.len()).unwrap_or(0);
-
-            let dot_color = if !installed {
-                theme.text_ghost
-            } else {
-                theme.success
-            };
-
-            let detail: AnyElement = if installed {
-                let mut parts = Vec::new();
-                if let Some(path) = binary_path {
-                    parts.push(path);
-                }
-                if model_count > 0 {
-                    parts.push(if model_count == 1 {
-                        tr!("providers.model_count_one", count = model_count)
-                    } else {
-                        tr!("providers.model_count_many", count = model_count)
-                    });
-                }
-                div()
-                    .truncate()
-                    .child(SharedString::from(parts.join("  ·  ")))
-                    .into_any_element()
-            } else {
-                div()
-                    .flex()
-                    .items_baseline()
-                    .child(SharedString::from(tr!(
-                        "providers.not_detected_as",
-                        command = "opencode"
-                    )))
-                    .into_any_element()
-            };
-
-            let header = div()
-                .flex()
-                .items_center()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .relative()
-                        .w(px(30.0))
-                        .h(px(30.0))
-                        .flex_none()
-                        .rounded(px(7.0))
-                        .bg(theme.overlay)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(icon(
-                            provider_icon(&provider),
-                            16.0,
-                            provider_color(&theme, &provider)
-                                .opacity(if installed { 1.0 } else { 0.5 }),
-                        ))
-                        .child(
-                            div()
-                                .absolute()
-                                .bottom(px(-2.0))
-                                .right(px(-2.0))
-                                .w(px(10.0))
-                                .h(px(10.0))
-                                .rounded_full()
-                                .border_2()
-                                .border_color(theme.raised)
-                                .bg(dot_color),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .child(
-                            div()
-                                .flex()
-                                .items_baseline()
-                                .gap(px(7.0))
-                                .child(
-                                    div()
-                                        .text_size(px(12.5))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(if installed {
-                                            theme.text
-                                        } else {
-                                            theme.text_secondary
-                                        })
-                                        .child("OpenCode"),
-                                )
-                                .when_some(
-                                    self.provider_versions.get(&provider).and_then(|v| v.clone()),
-                                    |element, version| {
-                                        element.child(
-                                            div()
-                                                .font_family(crate::md::render::MONO_FAMILY)
-                                                .text_size(px(10.0))
-                                                .text_color(theme.text_tertiary)
-                                                .child(SharedString::from(format!("v{version}"))),
-                                        )
-                                    },
-                                ),
-                        )
-                        .child(
-                            div()
-                                .mt(px(3.0))
-                                .text_size(px(10.5))
-                                .text_color(theme.text_tertiary)
-                                .child(detail),
-                        ),
-                );
-
-            rows = rows.child(
-                div()
-                    .py(px(11.0))
-                    .flex()
-                    .flex_col()
-                    .child(header),
-            );
-        }
-
-        div()
-            .mt(px(15.0))
-            .w_full()
-            .px(px(20.0))
-            .py(px(14.0))
-            .rounded(px(13.0))
-            .bg(theme.raised)
-            .child(
-                div()
-                    .flex()
-                    .items_start()
-                    .gap(px(20.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .child(
-                                div()
-                                    .text_size(px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("providers.coding_agents")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(px(12.0))
-                                    .line_height(px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("providers.description")),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .items_end()
-                            .gap(px(6.0))
-                            .child(refresh)
-                            .when_some(checked_label, |element, label| {
-                                element.child(
-                                    div()
-                                        .text_size(px(9.5))
-                                        .text_color(theme.text_ghost)
-                                        .child(SharedString::from(label)),
-                                )
-                            }),
-                    ),
-            )
-            .child(rows)
-            .into_any_element()
-    }
-
     fn render_computer_use_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let enabled = self.state.computer_use_enabled;
@@ -2005,28 +1795,6 @@ impl Waku {
     }
 }
 
-/// "Checked …" caption for the Providers page. Recomputed whenever the page
-/// redraws; precision beyond the minute is noise here.
-fn detection_checked_label(elapsed: Duration) -> String {
-    let seconds = elapsed.as_secs();
-    if seconds < 90 {
-        tr!("providers.checked_just_now")
-    } else if seconds < 3600 {
-        tr!("providers.checked_minutes_ago", count = seconds / 60)
-    } else {
-        tr!("providers.checked_hours_ago", count = seconds / 3600)
-    }
-}
-
-/// Keep the full binary path, abbreviating only the user's home directory.
-fn abbreviate_home_path(path: &Path, home: Option<&Path>) -> String {
-    match home.and_then(|home| path.strip_prefix(home).ok()) {
-        Some(relative) if relative.as_os_str().is_empty() => "~".to_owned(),
-        Some(relative) => format!("~/{}", relative.display()),
-        None => path.display().to_string(),
-    }
-}
-
 fn permission_status_row(
     name: String,
     description: String,
@@ -2097,24 +1865,4 @@ fn permission_status_row(
                 ),
         )
         .child(status)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::abbreviate_home_path;
-    use std::path::Path;
-
-    #[test]
-    fn provider_paths_abbreviate_only_the_home_prefix() {
-        let home = Path::new("/Users/example");
-
-        assert_eq!(
-            abbreviate_home_path(Path::new("/Users/example/.local/bin/amp"), Some(home)),
-            "~/.local/bin/amp"
-        );
-        assert_eq!(
-            abbreviate_home_path(Path::new("/opt/homebrew/bin/codex"), Some(home)),
-            "/opt/homebrew/bin/codex"
-        );
-    }
 }

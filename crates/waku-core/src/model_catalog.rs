@@ -79,8 +79,8 @@ fn write_models_file(path: &Path, models: &[ProviderModel]) -> std::io::Result<(
 
 fn discover_opencode_models(binary: &Path) -> Vec<ProviderModel> {
     let mut command = crate::command_env::command(binary);
-    let command = command.arg("models");
-    let Ok(output) = crate::command_env::output(command) else {
+    command.arg("models");
+    let Ok(output) = crate::command_env::output(&mut command) else {
         return Vec::new();
     };
     parse_opencode_models(&String::from_utf8_lossy(&output.stdout))

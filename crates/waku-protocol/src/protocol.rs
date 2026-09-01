@@ -9,7 +9,9 @@ use crate::attachments::{AttachmentUpload, StoredAttachment};
 use crate::computer_use::ComputerPermissions;
 use crate::model::{AgentSession, Project, ProviderProbe, UserInputAnswer};
 use crate::persistence::{ComposerDraftChange, ComposerDrafts, SessionMessageMatch};
-use crate::provider_session::{ProviderSessionFork, ProviderSessionForkRequest};
+use crate::provider_session::{
+    NativeSessionSummary, NativeTranscript, ProviderSessionFork, ProviderSessionForkRequest,
+};
 use crate::settings::DaemonSettings;
 use crate::skills::SkillsCatalog;
 use crate::usage::PlanUsage;
@@ -155,6 +157,36 @@ pub enum Command {
     /// merge-only so a stale client snapshot cannot delete tasks another
     /// client just created.
     RemoveSession,
+    /// List the OpenCode server's sessions for a workspace directory, so the
+    /// client can reconcile its sidebar with sessions created outside the app
+    /// (CLI, TUI, another client).
+    ListProviderSessions {
+        binary: PathBuf,
+        directory: PathBuf,
+    },
+    /// Fetch one native session's transcript and translate it into the app's
+    /// message/block model. Runs off any session runtime: the daemon reaches
+    /// the workspace's OpenCode server through the pool.
+    FetchNativeTranscript {
+        binary: PathBuf,
+        directory: PathBuf,
+        session_id: String,
+    },
+    /// Rename a native session on the OpenCode server, so the title matches
+    /// what the CLI and TUI show.
+    RenameProviderSession {
+        binary: PathBuf,
+        directory: PathBuf,
+        session_id: String,
+        title: String,
+    },
+    /// Delete a native session on the OpenCode server. Deleting a session in
+    /// the app removes it from OpenCode too — the server is the single store.
+    DeleteProviderSession {
+        binary: PathBuf,
+        directory: PathBuf,
+        session_id: String,
+    },
     HydrateSession {
         session_id: Uuid,
     },
@@ -387,6 +419,12 @@ pub enum ResponsePayload {
     },
     SessionMessageMatches {
         matches: Vec<SessionMessageMatch>,
+    },
+    ProviderSessions {
+        sessions: Vec<NativeSessionSummary>,
+    },
+    NativeTranscript {
+        transcript: NativeTranscript,
     },
     ComposerDrafts {
         drafts: ComposerDrafts,

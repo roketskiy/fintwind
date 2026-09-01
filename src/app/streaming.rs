@@ -245,10 +245,21 @@ impl Waku {
                 runtime.driver.refresh_background_work();
                 if let Some(session) = self.state.session_mut(session_id) {
                     session.provider_cursor = provider_cursor;
+                    // List-level mirror of the native id, so reconciliation
+                    // can match this session's row without hydrating it.
+                    session.native_session_id = session
+                        .provider_cursor
+                        .as_ref()
+                        .map(|cursor| cursor.native_id().to_owned());
                     if session.status == SessionStatus::Connecting {
                         session.status = SessionStatus::Working;
                     }
                 }
+            }
+            DriverEvent::NativeSessionsChanged => {
+                // Sessions came or went on the OpenCode server while a driver
+                // is attached; refresh the sidebar's roster.
+                self.schedule_native_session_reconcile(cx);
             }
             DriverEvent::AgentPresetSelected(agent_preset) => {
                 if let Some(session) = self.state.session_mut(session_id) {

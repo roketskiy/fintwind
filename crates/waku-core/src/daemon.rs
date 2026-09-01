@@ -450,6 +450,42 @@ impl Backend for WakuBackend {
                     result: fork_provider_session(request)?,
                 })
             }
+            Command::ListProviderSessions { binary, directory } => {
+                // Shares the workspace's resident server when one is live;
+                // a transient one is started and killed with the handle
+                // otherwise. Blocking I/O, so this runs on the request thread.
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let sessions = crate::driver::native::list_sessions(&server, &directory.to_string_lossy())?;
+                Ok(ResponsePayload::ProviderSessions { sessions })
+            }
+            Command::FetchNativeTranscript {
+                binary,
+                directory,
+                session_id,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let transcript = crate::driver::native::fetch_transcript(&server, &session_id)?;
+                Ok(ResponsePayload::NativeTranscript { transcript })
+            }
+            Command::RenameProviderSession {
+                binary,
+                directory,
+                session_id,
+                title,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                crate::driver::native::rename_session(&server, &session_id, &title)?;
+                Ok(ResponsePayload::Ack)
+            }
+            Command::DeleteProviderSession {
+                binary,
+                directory,
+                session_id,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                crate::driver::native::delete_session(&server, &session_id)?;
+                Ok(ResponsePayload::Ack)
+            }
             Command::Workspace {
                 operation:
                     WorkspaceOperation::CaptureTurn {
@@ -1172,6 +1208,10 @@ fn handle_driver_command(
         | Command::ForkSessionFromResponse { .. }
         | Command::RewindSessionToMessage { .. }
         | Command::ForkProviderSession { .. }
+        | Command::ListProviderSessions { .. }
+        | Command::FetchNativeTranscript { .. }
+        | Command::RenameProviderSession { .. }
+        | Command::DeleteProviderSession { .. }
         | Command::Workspace { .. }
         | Command::OpenTerminal { .. }
         | Command::WriteTerminal { .. }
@@ -1219,6 +1259,7 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             ("availableCommands", serde_json::to_value(commands)?)
         }
         DriverEvent::TurnStarted => ("turnStarted", Value::Null),
+        DriverEvent::NativeSessionsChanged => ("nativeSessionsChanged", Value::Null),
         DriverEvent::TextDelta(text) => ("textDelta", Value::String(text)),
         DriverEvent::ReasoningDelta(text) => ("reasoningDelta", Value::String(text)),
         DriverEvent::Activity {
@@ -1308,6 +1349,7 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "autoTitleUpdated" => DriverEvent::AutoTitleUpdated(serde_json::from_value(payload)?),
         "availableCommands" => DriverEvent::AvailableCommands(serde_json::from_value(payload)?),
         "turnStarted" => DriverEvent::TurnStarted,
+        "nativeSessionsChanged" => DriverEvent::NativeSessionsChanged,
         "textDelta" => DriverEvent::TextDelta(serde_json::from_value(payload)?),
         "reasoningDelta" => DriverEvent::ReasoningDelta(serde_json::from_value(payload)?),
         "activity" => {

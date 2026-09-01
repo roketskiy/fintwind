@@ -196,6 +196,9 @@ impl Waku {
             // retain the clean snapshot captured before its agent made edits.
             self.refresh_selected_branch_snapshot(cx);
         }
+        // An imported session opened for the first time pulls its transcript
+        // from the OpenCode server.
+        self.ensure_imported_transcript(session_id, cx);
         self.refresh_composer_sources(cx);
         self.reset_transcript_rows(self.transcript_row_count());
         self.save();
@@ -286,6 +289,9 @@ impl Waku {
             .workspace_path_for_session(&self.state.sessions[index])
             .map(std::path::Path::to_path_buf);
         let was_selected = self.state.selected_session == Some(session_id);
+        // A session backed by a native OpenCode session is deleted there too,
+        // before the local row disappears (the delete reads the roster).
+        self.delete_native_session(session_id, project_path.clone(), cx);
         self.submission_preparations.remove(&session_id);
         self.reset_session_runtime(session_id);
         self.background_work.remove(&session_id);

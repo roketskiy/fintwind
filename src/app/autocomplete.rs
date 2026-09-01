@@ -118,8 +118,8 @@ impl Waku {
         };
         let provider = self
             .selected_session()
-            .map(|session| session.provider)
-            .unwrap_or(self.state.last_provider);
+            .map(|session| session.provider.clone())
+            .unwrap_or_else(|| self.state.last_provider.clone());
         let reported = self
             .selected_session()
             .map(|session| session.available_commands.clone())
@@ -154,7 +154,6 @@ impl Waku {
                         .spawn(async move {
                             match workspace.request(
                                 waku_client::WorkspaceOperation::DiscoverSlashCommands {
-                                    provider,
                                     project_root: path,
                                 },
                             ) {
@@ -233,8 +232,8 @@ impl Waku {
         {
             let provider = self
                 .selected_session()
-                .map(|session| session.provider)
-                .unwrap_or(self.state.last_provider);
+                .map(|session| session.provider.clone())
+                .unwrap_or_else(|| self.state.last_provider.clone());
             self.slash_commands.invalidate(&(provider, path.clone()));
             self.mention_files.invalidate(&path);
         }
@@ -356,13 +355,6 @@ impl Waku {
             AutocompleteRow::Command(scored) => format!("/{} ", scored.item.name),
             AutocompleteRow::File(scored) => format!("@{} ", scored.item.path),
         };
-        if matches!(row, AutocompleteRow::Command(_)) {
-            let mut submission = self.composer.read(cx).content().to_owned();
-            submission.replace_range(trigger.range.clone(), &insert);
-            if self.execute_local_composer_command(&submission, cx) {
-                return;
-            }
-        }
         self.composer.update(cx, |input, cx| {
             input.replace_range(trigger.range.clone(), &insert, cx);
         });

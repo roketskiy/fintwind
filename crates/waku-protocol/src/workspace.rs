@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::composer::{FileEntry, SlashCommand};
 use crate::git::{AgentInvocation, BranchSnapshot, CommitSnapshot, CreatedWorktree};
-use crate::model::{Checkpoint, ProviderKind};
+use crate::model::Checkpoint;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -76,7 +76,6 @@ pub enum WorkspaceOperation {
         cap: usize,
     },
     DiscoverSlashCommands {
-        provider: ProviderKind,
         #[ts(type = "string")]
         project_root: PathBuf,
     },

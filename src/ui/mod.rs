@@ -11,7 +11,7 @@ pub mod scrollbar;
 pub mod text_field;
 pub mod tooltip;
 
-use crate::model::{ActivityKind, ProviderKind, SessionStatus};
+use crate::model::{ActivityKind, SessionStatus};
 use crate::theme::Theme;
 
 /// A monochrome icon from the embedded set, tinted via text color.
@@ -154,38 +154,18 @@ where
     }
 }
 
-/// Brand hue for each provider's official mark.
-pub fn provider_color(theme: &Theme, provider: ProviderKind) -> Hsla {
-    match provider {
-        ProviderKind::Amp => rgb(0xF34E3F).into(),
-        ProviderKind::Claude => rgb(0xD97757).into(),
-        ProviderKind::DeepSeek => rgb(0x4D6BFE).into(),
-        ProviderKind::Codex
-        | ProviderKind::Cursor
-        | ProviderKind::OpenCode
-        | ProviderKind::Grok
-        | ProviderKind::Pi => {
-            if theme.is_dark {
-                rgb(0xF3F3F3).into()
-            } else {
-                rgb(0x34363B).into()
-            }
-        }
+/// Brand hue for the OpenCode mark.
+pub fn provider_color(theme: &Theme, _provider: &str) -> Hsla {
+    if theme.is_dark {
+        rgb(0xF3F3F3).into()
+    } else {
+        rgb(0x34363B).into()
     }
 }
 
-/// Recognizable provider marks, matching the model picker vocabulary.
-pub fn provider_icon(provider: ProviderKind) -> &'static str {
-    match provider {
-        ProviderKind::Amp => "icons/provider-amp.svg",
-        ProviderKind::Claude => "icons/provider-claude.svg",
-        ProviderKind::Codex => "icons/provider-openai.svg",
-        ProviderKind::Cursor => "icons/provider-cursor.svg",
-        ProviderKind::DeepSeek => "icons/provider-deepseek.svg",
-        ProviderKind::OpenCode => "icons/provider-opencode.svg",
-        ProviderKind::Grok => "icons/provider-grok.svg",
-        ProviderKind::Pi => "icons/provider-pi.svg",
-    }
+/// Recognizable OpenCode mark, matching the model picker vocabulary.
+pub fn provider_icon(_provider: &str) -> &'static str {
+    "icons/provider-opencode.svg"
 }
 
 pub fn status_color(theme: &Theme, status: SessionStatus) -> Hsla {
@@ -448,7 +428,7 @@ mod tests {
     #[test]
     fn every_referenced_icon_is_embedded() {
         use crate::assets::Assets;
-        use crate::model::{ActivityKind, ProviderKind};
+        use crate::model::ActivityKind;
         use gpui::AssetSource;
 
         let mut paths = vec![
@@ -486,10 +466,8 @@ mod tests {
             "icons/rotate-cw.svg",
             "icons/package.svg",
             "icons/trash.svg",
+            "icons/provider-opencode.svg",
         ];
-        for provider in ProviderKind::ALL {
-            paths.push(provider_icon(provider));
-        }
         for kind in [
             ActivityKind::Reasoning,
             ActivityKind::Command,

@@ -589,10 +589,7 @@ mod tests {
         let ProviderResumeCursor::OpenCode {
             session_id: fork_id,
         } = fork_session_at_turn_on_server(&server, &session_id, 0)
-            .expect("the first turn should be excluded from the fork")
-        else {
-            panic!("expected an OpenCode cursor");
-        };
+            .expect("the first turn should be excluded from the fork");
         let messages = server
             .request(
                 "GET",

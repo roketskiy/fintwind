@@ -3,7 +3,6 @@ import type { AgentTurn } from "./AgentTurn";
 import type { ContextUsage } from "./ContextUsage";
 import type { InteractionMode } from "./InteractionMode";
 import type { Message } from "./Message";
-import type { ProviderKind } from "./ProviderKind";
 import type { ProviderResumeCursor } from "./ProviderResumeCursor";
 import type { QueuedMessage } from "./QueuedMessage";
 import type { ReportedCommand } from "./ReportedCommand";
@@ -27,7 +26,13 @@ auto_title?: string | null, project_id: string,
 /**
  * Local project checkout or an isolated Git worktree for this task.
  */
-workspace?: SessionWorkspace, provider: ProviderKind, model?: string | null, runtime_mode: RuntimeMode, interaction_mode: InteractionMode, reasoning_effort?: string | null, service_tier?: string | null,
+workspace?: SessionWorkspace,
+/**
+ * The coding agent that ran this session. New sessions are always
+ * `"opencode"`; sessions persisted by older builds may carry another
+ * provider id and are kept viewable read-only.
+ */
+provider: string, model?: string | null, runtime_mode: RuntimeMode, interaction_mode: InteractionMode, reasoning_effort?: string | null, service_tier?: string | null,
 /**
  * Selected context window, when the provider exposes more than one.
  */

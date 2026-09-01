@@ -66,12 +66,11 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
         WorkspaceOperation::ListProjectFiles { root, cap } => WorkspaceResult::ProjectFiles {
             entries: crate::composer_complete::list_project_files(&root, cap),
         },
-        WorkspaceOperation::DiscoverSlashCommands {
-            provider,
-            project_root,
-        } => WorkspaceResult::SlashCommands {
-            commands: crate::composer_complete::discover_slash_commands(provider, &project_root),
-        },
+        WorkspaceOperation::DiscoverSlashCommands { project_root } => {
+            WorkspaceResult::SlashCommands {
+                commands: crate::composer_complete::discover_slash_commands(&project_root),
+            }
+        }
         WorkspaceOperation::CreateProjectlessWorkspace { prompt } => {
             WorkspaceResult::ProjectlessWorkspace {
                 cwd: crate::projectless::create_workspace(prompt.as_deref())?.cwd,

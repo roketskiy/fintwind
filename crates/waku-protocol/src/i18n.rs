@@ -214,9 +214,5 @@ mod tests {
             &*rust_i18n::t!("command_palette.new_task", locale = "en"),
             "New task"
         );
-        assert_eq!(
-            &*rust_i18n::t!("providers.disabled_for_new_tasks", locale = "en"),
-            "Disabled for new tasks"
-        );
     }
 }

@@ -90,7 +90,7 @@ impl PaletteSection {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PaletteIcon {
     Asset(&'static str),
-    Provider(ProviderKind),
+    Provider,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -546,7 +546,7 @@ impl Waku {
 
         let can_choose_model = self
             .selected_session()
-            .is_some_and(|session| session.can_choose_model(session.provider));
+            .is_some_and(|session| session.can_choose_model());
         if can_choose_model {
             commands.push(CommandPaletteItem::command(
                 display_section(PaletteSection::Suggested),
@@ -636,12 +636,6 @@ impl Waku {
                 "settings preferences skills library create disable agent skill",
             ),
             (
-                SettingsPage::Usage,
-                "settings.usage",
-                "icons/chart-column.svg",
-                "settings preferences usage tokens cost history",
-            ),
-            (
                 SettingsPage::Daemon,
                 "settings.daemon",
                 "icons/server.svg",
@@ -722,15 +716,13 @@ impl Waku {
                 CommandPaletteItem {
                     section: PaletteSection::Tasks,
                     search_text: format!(
-                        "{label} {project} {project_path} {workspace_path} {} {} {} {} task session chat conversation",
+                        "{label} {project} {project_path} {workspace_path} {} opencode OpenCode {} task session chat conversation",
                         branch.unwrap_or_default(),
-                        session.provider.short_name(),
-                        session.provider.display_name(),
                         session.model.as_deref().unwrap_or_default(),
                     ),
                     label,
                     detail: Some(detail),
-                    icon: PaletteIcon::Provider(session.provider),
+                    icon: PaletteIcon::Provider,
                     shortcut: None,
                     action: PaletteAction::SelectTask(session.id),
                     content_match,
@@ -1027,11 +1019,11 @@ impl Waku {
                 let highlighted = index == selected;
                 let icon_color = match item.icon {
                     PaletteIcon::Asset(_) => theme.text_secondary,
-                    PaletteIcon::Provider(provider) => provider_color(&theme, provider),
+                    PaletteIcon::Provider => provider_color(&theme, OPENCODE_PROVIDER),
                 };
                 let icon_path = match item.icon {
                     PaletteIcon::Asset(path) => path,
-                    PaletteIcon::Provider(provider) => provider_icon(provider),
+                    PaletteIcon::Provider => provider_icon(OPENCODE_PROVIDER),
                 };
                 let detail = item.detail.clone();
                 let content_match = item.content_match.clone();

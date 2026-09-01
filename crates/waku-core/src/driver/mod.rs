@@ -1,16 +1,9 @@
 //! Local provider runtime owned by `waku-daemon`.
 
-mod acp;
 mod activity;
-mod amp;
-mod claude;
-mod codex;
 mod computer_use;
-mod deepseek;
 mod opencode;
-mod pi;
 mod support;
-mod title_refresh;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -19,8 +12,8 @@ use crossbeam_channel::{Receiver, SendError, Sender, unbounded};
 
 use crate::computer_use::ComputerToolRequest;
 use crate::model::{
-    BackgroundWorkKey, DriverEvent, InteractionMode, ProviderKind, ProviderResumeCursor,
-    RuntimeMode, UserInputAnswer,
+    BackgroundWorkKey, DriverEvent, InteractionMode, ProviderResumeCursor, RuntimeMode,
+    UserInputAnswer,
 };
 
 /// Provider events remain synchronous to send from reader threads, while the
@@ -197,31 +190,13 @@ pub struct SessionOptions {
 }
 
 pub(crate) fn start_local(
-    provider: ProviderKind,
     options: DriverStartOptions,
     events: DriverEventSender,
 ) -> anyhow::Result<DriverHandle> {
-    let inner: Arc<dyn DriverControl> = match provider {
-        ProviderKind::Codex => Arc::new(codex::CodexDriver::start(options, events)?),
-        ProviderKind::Pi => Arc::new(pi::PiDriver::start(options, events)?),
-        // Cursor and Grok both serve a long-lived ACP session, which is the only
-        // way their Supervised mode can actually ask the user rather than
-        // silently forcing or denying.
-        ProviderKind::Cursor | ProviderKind::Grok => {
-            Arc::new(acp::AcpDriver::start(provider, options, events)?)
-        }
-        ProviderKind::DeepSeek => Arc::new(deepseek::DeepSeekDriver::start(options, events)?),
-        // OpenCode's own server is its real API, and it is what exposes
-        // interactive permission requests.
-        ProviderKind::OpenCode => Arc::new(opencode::OpenCodeDriver::start(options, events)?),
-        // Claude serves a realtime stream of user messages on stdin — the same
-        // transport the Agent SDK drives — which is what lets its Supervised
-        // mode ask rather than decide alone.
-        ProviderKind::Claude => Arc::new(claude::ClaudeDriver::start(options, events)?),
-        // Amp reads newline-delimited user messages on stdin and stays alive
-        // until stdin closes, so it too serves the whole conversation.
-        ProviderKind::Amp => Arc::new(amp::AmpDriver::start(options, events)?),
-    };
+    // OpenCode's own server is its real API, and it is what exposes
+    // interactive permission requests.
+    let inner: Arc<dyn DriverControl> =
+        Arc::new(opencode::OpenCodeDriver::start(options, events)?);
     Ok(DriverHandle { inner })
 }
 

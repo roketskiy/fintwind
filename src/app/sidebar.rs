@@ -1227,9 +1227,6 @@ impl Waku {
         let title = session
             .map(localized_session_title)
             .unwrap_or_else(|| tr!("session.new_task"));
-        let agent_preset_label = session
-            .filter(|session| session.provider == ProviderKind::DeepSeek && session.has_started())
-            .and_then(|session| self.agent_preset_label_for_session(session));
         let left_window_controls = (!self.sidebar_visible)
             .then(|| {
                 self.render_client_window_controls(
@@ -1325,24 +1322,7 @@ impl Waku {
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text)
                                 .child(SharedString::from(title)),
-                        )
-                        .children(agent_preset_label.map(|label| {
-                            div()
-                                .h(px(22.0))
-                                .max_w(px(180.0))
-                                .px(px(6.0))
-                                .rounded(px(6.0))
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .gap(px(4.0))
-                                .bg(theme.overlay)
-                                .text_size(px(11.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text_secondary)
-                                .child(icon("icons/bot.svg", 10.5, theme.text_tertiary))
-                                .child(div().min_w_0().truncate().child(SharedString::from(label)))
-                        })),
+                        ),
                     cx,
                 ),
             )
@@ -1648,12 +1628,12 @@ mod tests {
     #[test]
     fn sidebar_recency_uses_last_reply_with_creation_fallback() {
         let project_id = Uuid::new_v4();
-        let mut renamed_old_session = AgentSession::new(project_id, ProviderKind::Codex);
+        let mut renamed_old_session = AgentSession::new(project_id);
         renamed_old_session.created_at = 10;
         renamed_old_session.last_reply_at = Some(20);
         renamed_old_session.updated_at = 1_000;
 
-        let mut newer_unanswered_session = AgentSession::new(project_id, ProviderKind::Codex);
+        let mut newer_unanswered_session = AgentSession::new(project_id);
         newer_unanswered_session.created_at = 30;
         newer_unanswered_session.last_reply_at = None;
         newer_unanswered_session.updated_at = 30;

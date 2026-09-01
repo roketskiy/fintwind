@@ -18,7 +18,7 @@ use crate::{Command, DaemonExposureSettings, DaemonSettings, DaemonSupervisor, R
 use waku_protocol::computer_use::ComputerAppGrant;
 use waku_protocol::i18n::AppLanguage;
 use waku_protocol::identity::DATA_DIRECTORY_NAME;
-use waku_protocol::model::{AgentSession, FavoriteModel, Project, ProviderKind};
+use waku_protocol::model::{AgentSession, FavoriteModel, Project, OPENCODE_PROVIDER};
 use waku_protocol::theme::ThemePreference;
 
 pub use waku_protocol::persistence::{
@@ -48,8 +48,8 @@ fn default_analytics_enabled() -> bool {
     true
 }
 
-fn default_provider() -> ProviderKind {
-    ProviderKind::Codex
+fn default_provider() -> String {
+    OPENCODE_PROVIDER.to_owned()
 }
 
 fn default_sidebar_width() -> f32 {
@@ -62,7 +62,6 @@ fn default_right_panel_width() -> f32 {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RememberedModelTraits {
-    provider: ProviderKind,
     model: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<String>,
@@ -240,7 +239,7 @@ struct AppState {
     #[serde(default)]
     selected_session: Option<Uuid>,
     #[serde(default = "default_provider")]
-    last_provider: ProviderKind,
+    last_provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -274,7 +273,7 @@ pub struct PersistedState {
     pub sessions: Vec<AgentSession>,
     pub selected_project: Option<Uuid>,
     pub selected_session: Option<Uuid>,
-    pub last_provider: ProviderKind,
+    pub last_provider: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -307,10 +306,6 @@ pub struct PersistedState {
     pub computer_use_enabled: bool,
     #[serde(default)]
     pub computer_use_allowed_apps: Vec<ComputerAppGrant>,
-    #[serde(default)]
-    pub disabled_providers: Vec<ProviderKind>,
-    #[serde(default)]
-    pub provider_binary_overrides: HashMap<ProviderKind, String>,
     #[serde(skip)]
     daemon_settings_extra: BTreeMap<String, serde_json::Value>,
     #[serde(skip)]
@@ -342,7 +337,7 @@ impl PersistedState {
             sessions: Vec::new(),
             selected_project: None,
             selected_session: None,
-            last_provider: ProviderKind::Codex,
+            last_provider: OPENCODE_PROVIDER.to_owned(),
             last_model: None,
             last_reasoning_effort: None,
             last_service_tier: None,
@@ -359,8 +354,6 @@ impl PersistedState {
             window_state: None,
             computer_use_enabled: false,
             computer_use_allowed_apps: Vec::new(),
-            disabled_providers: Vec::new(),
-            provider_binary_overrides: HashMap::new(),
             daemon_settings_extra: BTreeMap::new(),
             dirty_sessions: HashSet::new(),
         }
@@ -368,7 +361,7 @@ impl PersistedState {
 
     pub fn fresh(cwd: PathBuf) -> Self {
         let project = Project::from_path(cwd);
-        let session = AgentSession::new(project.id, ProviderKind::Codex);
+        let session = AgentSession::new(project.id);
         Self {
             selected_project: Some(project.id),
             selected_session: Some(session.id),
@@ -378,24 +371,21 @@ impl PersistedState {
         }
     }
 
-    pub fn new_session(&self, project_id: Uuid, provider: ProviderKind) -> AgentSession {
-        let mut session = AgentSession::new(project_id, provider);
-        if provider == self.last_provider {
-            session.model.clone_from(&self.last_model);
-            session
-                .reasoning_effort
-                .clone_from(&self.last_reasoning_effort);
-            session.service_tier.clone_from(&self.last_service_tier);
-            session
-                .context_window
-                .clone_from(&self.last_context_window);
-        }
+    pub fn new_session(&self, project_id: Uuid) -> AgentSession {
+        let mut session = AgentSession::new(project_id);
+        session.model.clone_from(&self.last_model);
+        session
+            .reasoning_effort
+            .clone_from(&self.last_reasoning_effort);
+        session.service_tier.clone_from(&self.last_service_tier);
+        session
+            .context_window
+            .clone_from(&self.last_context_window);
         session
     }
 
     pub fn remember_model_traits(
         &mut self,
-        provider: ProviderKind,
         model: &str,
         reasoning_effort: Option<String>,
         service_tier: Option<String>,
@@ -404,7 +394,7 @@ impl PersistedState {
         let existing = self
             .remembered_model_traits
             .iter()
-            .position(|traits| traits.provider == provider && traits.model == model);
+            .position(|traits| traits.model == model);
         if reasoning_effort.is_none() && service_tier.is_none() && context_window.is_none() {
             if let Some(index) = existing {
                 self.remembered_model_traits.remove(index);
@@ -418,7 +408,6 @@ impl PersistedState {
             traits.context_window = context_window;
         } else {
             self.remembered_model_traits.push(RememberedModelTraits {
-                provider,
                 model: model.to_owned(),
                 reasoning_effort,
                 service_tier,
@@ -429,12 +418,11 @@ impl PersistedState {
 
     pub fn model_traits_for(
         &self,
-        provider: ProviderKind,
         model: &str,
     ) -> (Option<String>, Option<String>, Option<String>) {
         self.remembered_model_traits
             .iter()
-            .find(|traits| traits.provider == provider && traits.model == model)
+            .find(|traits| traits.model == model)
             .map(|traits| {
                 (
                     traits.reasoning_effort.clone(),
@@ -449,8 +437,6 @@ impl PersistedState {
         DaemonSettings {
             computer_use_enabled: self.computer_use_enabled,
             computer_use_allowed_apps: self.computer_use_allowed_apps.clone(),
-            disabled_providers: self.disabled_providers.clone(),
-            provider_binary_overrides: self.provider_binary_overrides.clone(),
             extra: self.daemon_settings_extra.clone(),
         }
     }
@@ -458,8 +444,6 @@ impl PersistedState {
     pub fn apply_daemon_settings(&mut self, settings: DaemonSettings) {
         self.computer_use_enabled = settings.computer_use_enabled;
         self.computer_use_allowed_apps = settings.computer_use_allowed_apps;
-        self.disabled_providers = settings.disabled_providers;
-        self.provider_binary_overrides = settings.provider_binary_overrides;
         self.daemon_settings_extra = settings.extra;
     }
 
@@ -479,7 +463,7 @@ impl PersistedState {
             analytics_id: self.analytics_id,
             selected_project: self.selected_project,
             selected_session: self.persistable_selected_session(),
-            last_provider: self.last_provider,
+            last_provider: self.last_provider.clone(),
             last_model: self.last_model.clone(),
             last_reasoning_effort: self.last_reasoning_effort.clone(),
             last_service_tier: self.last_service_tier.clone(),
@@ -540,7 +524,7 @@ impl PersistedState {
         else {
             return;
         };
-        let session = self.new_session(project_id, self.last_provider);
+        let session = self.new_session(project_id);
         self.selected_session = Some(session.id);
         self.sessions.push(session);
     }
@@ -765,7 +749,7 @@ impl StateStore {
             && cwd.parent().is_some()
         {
             let project = Project::from_path(cwd);
-            let session = state.new_session(project.id, state.last_provider);
+            let session = state.new_session(project.id);
             state.selected_project = Some(project.id);
             state.selected_session = Some(session.id);
             state.projects.push(project);
@@ -997,7 +981,7 @@ mod tests {
 
     #[test]
     fn daemon_task_state_becomes_list_only_after_crossing_the_client_boundary() {
-        let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+        let mut session = AgentSession::new(Uuid::new_v4());
         session.detail_loaded = false;
         assert!(
             session.has_started(),

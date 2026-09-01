@@ -3,8 +3,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::model::ProviderKind;
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
 pub struct BranchEntry {
     pub name: String,
@@ -43,7 +41,6 @@ pub struct CommitSnapshot {
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 pub struct AgentInvocation {
-    pub provider: ProviderKind,
     #[ts(type = "string")]
     pub binary: PathBuf,
     pub model: Option<String>,

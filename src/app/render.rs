@@ -396,12 +396,12 @@ mod tests {
 
     #[test]
     fn unloaded_history_never_renders_the_new_task_prompt() {
-        let mut stored = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+        let mut stored = AgentSession::new(Uuid::new_v4());
         stored.detail_loaded = false;
 
         assert!(!should_render_empty_state(Some(&stored)));
 
-        let draft = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+        let draft = AgentSession::new(Uuid::new_v4());
         assert!(should_render_empty_state(Some(&draft)));
         assert!(should_render_empty_state(None));
     }

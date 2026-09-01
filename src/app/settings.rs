@@ -7,10 +7,6 @@ actions!(waku_settings, [ClearSearch]);
 
 const SETTINGS_CONTENT_MAX_WIDTH: f32 = 760.0;
 
-/// The Usage page is a dashboard, not a form; it mirrors T3 Code's wide
-/// two-column layout and needs the extra room for the chart.
-const SETTINGS_USAGE_MAX_WIDTH: f32 = 1024.0;
-
 /// Key context the settings sidebar declares around its search field.
 const SETTINGS_SIDEBAR_CONTEXT: &str = "SettingsSidebar";
 
@@ -23,7 +19,7 @@ const SETTINGS_SEARCH_CONTEXT: &str = "SettingsSidebar > ComposerInput";
 
 /// The sidebar's rows in display order, each with the keyword haystack the
 /// search field filters against.
-const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
+const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 6] = [
     (
         SettingsPage::General,
         "settings.general",
@@ -47,12 +43,6 @@ const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
         "settings.skills",
         "icons/package.svg",
         "settings.skills_keywords",
-    ),
-    (
-        SettingsPage::Usage,
-        "settings.usage",
-        "icons/chart-column.svg",
-        "settings.usage_keywords",
     ),
     (
         SettingsPage::Daemon,
@@ -97,6 +87,21 @@ pub(super) fn visible_settings_pages(
 }
 
 impl Waku {
+    /// Switch the settings view to `page`.
+    pub(super) fn open_settings_page(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
+        // Secrets are revealed only for the current visit to the page. This
+        // also masks the token again when the Daemon row is reselected.
+        self.daemon_token_revealed = false;
+        self.settings_page = Some(page);
+        // Each page starts at its own top; a scroll position carried over
+        // from the previous page would land mid-content.
+        self.settings_scroll.set_offset(gpui::Point::default());
+        if page == SettingsPage::Skills {
+            self.ensure_skills_catalog(false, cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn render_settings(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
 
@@ -341,29 +346,15 @@ impl Waku {
                         .child(self.render_skills_settings(cx)),
                 );
         }
-        // The Monthly and Projects list views own their own scrolling, so
-        // their pages fill the viewport instead of riding the shared scroll
-        // container.
-        let fills_viewport = page == SettingsPage::Usage
-            && matches!(
-                self.usage_view,
-                UsageViewMode::Monthly | UsageViewMode::Projects
-            );
         // The titlebar strip is transparent; once content slides under it, a
         // hairline marks the boundary so the clip edge reads as a header
         // rather than a glitch.
-        let content_scrolled = !fills_viewport && self.settings_scroll.offset().y < px(-1.0);
+        let content_scrolled = self.settings_scroll.offset().y < px(-1.0);
 
         let inner = div()
             .w_full()
-            .max_w(px(match page {
-                SettingsPage::Usage => SETTINGS_USAGE_MAX_WIDTH,
-                _ => SETTINGS_CONTENT_MAX_WIDTH,
-            }))
+            .max_w(px(SETTINGS_CONTENT_MAX_WIDTH))
             .mx_auto()
-            .when(fills_viewport, |element| {
-                element.h_full().min_h_0().flex().flex_col()
-            })
             .child(
                 div()
                     .pt(px(2.0))
@@ -375,7 +366,6 @@ impl Waku {
                         SettingsPage::General => tr!("settings.general"),
                         SettingsPage::Providers => tr!("settings.providers"),
                         SettingsPage::Skills => tr!("settings.skills"),
-                        SettingsPage::Usage => tr!("settings.usage"),
                         SettingsPage::Daemon => tr!("settings.daemon"),
                         SettingsPage::ComputerUse => tr!("settings.computer_use"),
                         SettingsPage::Appearance => tr!("settings.appearance"),
@@ -385,7 +375,6 @@ impl Waku {
                 SettingsPage::General => self.render_general_settings(cx),
                 SettingsPage::Providers => self.render_providers_settings(cx),
                 SettingsPage::Skills => self.render_skills_settings(cx),
-                SettingsPage::Usage => self.render_usage_settings(cx),
                 SettingsPage::Daemon => self.render_daemon_settings(cx),
                 SettingsPage::ComputerUse => self.render_computer_use_settings(cx),
                 SettingsPage::Appearance => self.render_appearance_settings(cx),
@@ -419,24 +408,16 @@ impl Waku {
                         div()
                             .id("settings-content-scroll")
                             .size_full()
-                            .when(!fills_viewport, |element| {
-                                element
-                                    .overflow_y_scroll()
-                                    .track_scroll(&self.settings_scroll)
-                                    .pb(px(48.0))
-                            })
-                            .when(fills_viewport, |element| {
-                                element.min_h_0().flex().flex_col()
-                            })
+                            .overflow_y_scroll()
+                            .track_scroll(&self.settings_scroll)
+                            .pb(px(48.0))
                             .px(px(32.0))
                             .child(inner),
                     )
-                    .when(!fills_viewport, |element| {
-                        element.child(scrollbar::vertical(
-                            &self.settings_scroll,
-                            &self.settings_scrollbar,
-                        ))
-                    }),
+                    .child(scrollbar::vertical(
+                        &self.settings_scroll,
+                        &self.settings_scrollbar,
+                    )),
             )
     }
 
@@ -1424,30 +1405,23 @@ impl Waku {
                 tr!("common.refresh")
             })
             .on_click(cx.listener(|this, _, _, cx| {
-                this.refresh_provider_detection(None);
+                this.refresh_provider_detection();
                 cx.notify();
             }));
 
         let mut rows = div().mt(px(4.0)).flex().flex_col();
-        let provider_count = ProviderKind::ALL.len();
-        for (index, kind) in ProviderKind::ALL.into_iter().enumerate() {
-            let probe = self.provider_probe(kind);
+        let provider = OPENCODE_PROVIDER.to_owned();
+        {
+            let probe = self.provider_probe();
             let installed = probe.is_some_and(|probe| probe.installed);
             let binary_path = probe
                 .filter(|probe| probe.installed)
                 .and_then(|probe| probe.path.as_deref())
                 .map(|path| abbreviate_home_path(path, self.home_directory.as_deref()));
             let model_count = probe.map(|probe| probe.models.len()).unwrap_or(0);
-            let version = self
-                .provider_versions
-                .get(&kind)
-                .and_then(|version| version.clone());
-            let disabled = self.state.disabled_providers.contains(&kind);
 
             let dot_color = if !installed {
                 theme.text_ghost
-            } else if disabled {
-                theme.warning
             } else {
                 theme.success
             };
@@ -1457,9 +1431,7 @@ impl Waku {
                 if let Some(path) = binary_path {
                     parts.push(path);
                 }
-                if disabled {
-                    parts.push(tr!("providers.disabled_for_new_tasks"));
-                } else if model_count > 0 {
+                if model_count > 0 {
                     parts.push(if model_count == 1 {
                         tr!("providers.model_count_one", count = model_count)
                     } else {
@@ -1476,36 +1448,10 @@ impl Waku {
                     .items_baseline()
                     .child(SharedString::from(tr!(
                         "providers.not_detected_as",
-                        command = kind.command()
+                        command = "opencode"
                     )))
                     .into_any_element()
             };
-
-            let toggle_on = !disabled;
-            let toggle = toggle_switch(
-                SharedString::from(format!("provider-enabled-{}", kind.id())),
-                toggle_on,
-                false,
-                theme,
-                cx,
-                move |this, _, cx| this.set_provider_enabled(kind, disabled, cx),
-            );
-
-            let expanded = self.expanded_provider_settings == Some(kind);
-            let expand_button = icon_button(
-                SharedString::from(format!("provider-expand-{}", kind.id())),
-                if expanded {
-                    "icons/chevron-down.svg"
-                } else {
-                    "icons/chevron-right.svg"
-                },
-                theme,
-            )
-            .tab_index(0)
-            .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.toggle_provider_expanded(kind, window, cx);
-            }));
 
             let header = div()
                 .flex()
@@ -1523,9 +1469,10 @@ impl Waku {
                         .items_center()
                         .justify_center()
                         .child(icon(
-                            provider_icon(kind),
+                            provider_icon(&provider),
                             16.0,
-                            provider_color(&theme, kind).opacity(if installed { 1.0 } else { 0.5 }),
+                            provider_color(&theme, &provider)
+                                .opacity(if installed { 1.0 } else { 0.5 }),
                         ))
                         .child(
                             div()
@@ -1558,17 +1505,20 @@ impl Waku {
                                         } else {
                                             theme.text_secondary
                                         })
-                                        .child(kind.display_name()),
+                                        .child("OpenCode"),
                                 )
-                                .when_some(version, |element, version| {
-                                    element.child(
-                                        div()
-                                            .font_family(crate::md::render::MONO_FAMILY)
-                                            .text_size(px(10.0))
-                                            .text_color(theme.text_tertiary)
-                                            .child(SharedString::from(format!("v{version}"))),
-                                    )
-                                }),
+                                .when_some(
+                                    self.provider_versions.get(&provider).and_then(|v| v.clone()),
+                                    |element, version| {
+                                        element.child(
+                                            div()
+                                                .font_family(crate::md::render::MONO_FAMILY)
+                                                .text_size(px(10.0))
+                                                .text_color(theme.text_tertiary)
+                                                .child(SharedString::from(format!("v{version}"))),
+                                        )
+                                    },
+                                ),
                         )
                         .child(
                             div()
@@ -1577,22 +1527,14 @@ impl Waku {
                                 .text_color(theme.text_tertiary)
                                 .child(detail),
                         ),
-                )
-                .child(expand_button)
-                .when(installed, |element| element.child(toggle));
+                );
 
             rows = rows.child(
                 div()
                     .py(px(11.0))
                     .flex()
                     .flex_col()
-                    .when(index + 1 != provider_count, |element| {
-                        element.border_b_1().border_color(theme.border)
-                    })
-                    .child(header)
-                    .when(expanded, |element| {
-                        element.child(self.render_provider_expanded_settings(kind, theme, cx))
-                    }),
+                    .child(header),
             );
         }
 
@@ -1648,212 +1590,6 @@ impl Waku {
             )
             .child(rows)
             .into_any_element()
-    }
-
-    /// The expanded row's settings body: the binary override for this
-    /// provider, with the detection result as its caption.
-    fn render_provider_expanded_settings(
-        &self,
-        kind: ProviderKind,
-        theme: Theme,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        let override_value = self.state.provider_binary_overrides.get(&kind).cloned();
-        let full_path = self
-            .provider_probe(kind)
-            .filter(|probe| probe.installed)
-            .and_then(|probe| probe.path.as_ref())
-            .map(|path| path.display().to_string());
-
-        let caption = match (&override_value, full_path) {
-            (Some(_), Some(path)) => tr!("providers.using_override", path = path),
-            (Some(_), None) => tr!("providers.invalid_override"),
-            (None, Some(path)) => tr!("providers.detected_at", path = path),
-            (None, None) => tr!("providers.searches_path", command = kind.command()),
-        };
-
-        let reset = div()
-            .id(SharedString::from(format!(
-                "provider-path-reset-{}",
-                kind.id()
-            )))
-            .tab_index(0)
-            .focus_visible(|style| style.border_color(theme.accent))
-            .h(px(29.0))
-            .px(px(10.0))
-            .rounded(px(7.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .flex()
-            .flex_none()
-            .items_center()
-            .cursor_default()
-            .text_size(px(10.5))
-            .text_color(theme.text_secondary)
-            .hover(|element| element.bg(theme.overlay))
-            .child(tr!("common.reset"))
-            .on_click(cx.listener(|this, _, _, cx| {
-                this.provider_path_input
-                    .update(cx, |input, cx| input.clear(cx));
-                this.apply_provider_path_override(cx);
-            }));
-
-        div()
-            .mt(px(10.0))
-            .pl(px(42.0))
-            .flex()
-            .flex_col()
-            .gap(px(5.0))
-            .child(
-                div()
-                    .text_size(px(11.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(tr!("providers.binary_path")),
-            )
-            .child(
-                div()
-                    .text_size(px(10.5))
-                    .line_height(px(15.0))
-                    .text_color(theme.text_tertiary)
-                    .child(SharedString::from(tr!(
-                        "providers.binary_path_description",
-                        provider = kind.short_name()
-                    ))),
-            )
-            .child(
-                div()
-                    .mt(px(3.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        TextField::new(
-                            SharedString::from(format!("provider-path-field-{}", kind.id())),
-                            self.provider_path_input.clone(),
-                        )
-                        .flex_1()
-                        .max_w(px(430.0)),
-                    )
-                    .when(override_value.is_some(), |element| element.child(reset)),
-            )
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(theme.text_ghost)
-                    .child(SharedString::from(caption)),
-            )
-    }
-
-    fn toggle_provider_expanded(
-        &mut self,
-        provider: ProviderKind,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Commit any pending edit for the previously expanded provider before
-        // the input is handed to another row.
-        self.apply_provider_path_override(cx);
-        if self.expanded_provider_settings == Some(provider) {
-            self.expanded_provider_settings = None;
-        } else {
-            self.expanded_provider_settings = Some(provider);
-            let override_value = self
-                .state
-                .provider_binary_overrides
-                .get(&provider)
-                .cloned()
-                .unwrap_or_default();
-            self.provider_path_input
-                .update(cx, |input, cx| input.set_content(override_value, cx));
-            let focus = self.provider_path_input.read(cx).focus();
-            window.focus(&focus, cx);
-        }
-        cx.notify();
-    }
-
-    /// Commit the binary override edit for the expanded provider: empty means
-    /// detect from PATH. Re-detects that provider, which in turn refreshes its
-    /// version and model catalog.
-    pub(super) fn apply_provider_path_override(&mut self, cx: &mut Context<Self>) {
-        let Some(provider) = self.expanded_provider_settings else {
-            return;
-        };
-        let text = self
-            .provider_path_input
-            .read(cx)
-            .content()
-            .trim()
-            .to_owned();
-        let current = self
-            .state
-            .provider_binary_overrides
-            .get(&provider)
-            .cloned()
-            .unwrap_or_default();
-        if text == current {
-            return;
-        }
-        if text.is_empty() {
-            self.state.provider_binary_overrides.remove(&provider);
-        } else {
-            self.state.provider_binary_overrides.insert(provider, text);
-        }
-        self.save();
-        self.refresh_provider_detection(Some(provider));
-        cx.notify();
-    }
-
-    /// Providers switched off here stop offering models to new sessions;
-    /// sessions already locked to them keep working.
-    fn set_provider_enabled(
-        &mut self,
-        provider: ProviderKind,
-        enabled: bool,
-        cx: &mut Context<Self>,
-    ) {
-        if enabled {
-            self.state
-                .disabled_providers
-                .retain(|kind| *kind != provider);
-        } else if !self.state.disabled_providers.contains(&provider) {
-            self.state.disabled_providers.push(provider);
-        }
-        if !enabled
-            && let Some(fallback) = ProviderKind::ALL
-                .into_iter()
-                .find(|kind| self.provider_enabled(*kind))
-        {
-            // New work must land somewhere usable: move the new-session
-            // default and any unstarted drafts off the switched-off provider.
-            // The remembered model belongs to the old provider, so it resets
-            // with it.
-            if self.state.last_provider == provider {
-                self.state.last_provider = fallback;
-                self.state.last_model = None;
-                self.state.last_reasoning_effort = None;
-                self.state.last_service_tier = None;
-                self.state.last_context_window = None;
-            }
-            let draft_ids = self
-                .state
-                .sessions
-                .iter()
-                .filter(|session| session.provider == provider && !session.has_started())
-                .map(|session| session.id)
-                .collect::<Vec<_>>();
-            for id in draft_ids {
-                if let Some(session) = self.state.session_mut(id) {
-                    session.provider = fallback;
-                    session.model = None;
-                    session.reasoning_effort = None;
-                    session.service_tier = None;
-                    session.context_window = None;
-                }
-            }
-        }
-        self.save();
-        cx.notify();
     }
 
     fn render_computer_use_settings(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -2244,12 +1980,6 @@ impl Waku {
         self.skills_search.update(cx, |input, cx| {
             input.set_placeholder(tr!("skills.search"), cx)
         });
-        self.provider_path_input.update(cx, |input, cx| {
-            input.set_placeholder(tr!("input.detected_automatically"), cx)
-        });
-        self.usage_project_filter.update(cx, |input, cx| {
-            input.set_placeholder(tr!("input.filter_projects"), cx)
-        });
         self.refresh_command_palette_localized_text(cx);
         self.refresh_file_search_localized_text(cx);
         for browser in self.right_panel_browsers.values() {
@@ -2259,9 +1989,9 @@ impl Waku {
             terminal.update(cx, |terminal, cx| terminal.refresh_localized_text(cx));
         }
         for probe in &mut self.probes {
-            probe.models = crate::model_catalog::fallback_models(probe.provider);
+            probe.models = crate::model_catalog::fallback_models();
         }
-        self.refresh_provider_detection(None);
+        self.refresh_provider_detection();
         self.invalidate_composer_sources(cx);
 
         let updater_available = cx

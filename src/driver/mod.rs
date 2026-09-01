@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::computer_use::ComputerToolRequest;
 use crate::model::{
-    BackgroundWorkKey, DriverEvent, ProviderKind, ProviderResumeCursor, RuntimeEventCursor,
+    BackgroundWorkKey, DriverEvent, ProviderResumeCursor, RuntimeEventCursor,
 };
 
 pub use waku_client::driver::{
@@ -15,14 +15,12 @@ pub use waku_client::driver::{
 pub(crate) fn start_remote(
     client: waku_client::DaemonClient,
     session_id: uuid::Uuid,
-    provider: ProviderKind,
     options: DriverStartOptions,
     events: DriverEventSender,
 ) -> anyhow::Result<DriverHandle> {
     let runtime_id = uuid::Uuid::new_v4();
     let command = waku_client::Command::Start {
         options: waku_client::WireDriverStartOptions {
-            provider: waku_client::encode_enum(provider)?,
             binary: options.binary,
             cwd: options.cwd,
             mode: waku_client::encode_enum(options.mode)?,

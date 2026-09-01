@@ -111,11 +111,10 @@ impl Waku {
         if self.commit_operation.is_some() {
             return;
         }
-        let Some((workspace, provider, model, reasoning_effort)) =
+        let Some((workspace, model, reasoning_effort)) =
             self.selected_session().and_then(|session| {
                 Some((
                     self.workspace_path_for_session(session)?.to_path_buf(),
-                    session.provider,
                     self.model_for_session(session).map(str::to_owned),
                     session.reasoning_effort.clone(),
                 ))
@@ -127,10 +126,9 @@ impl Waku {
         };
 
         let invocation = self
-            .provider_probe(provider)
+            .provider_probe()
             .and_then(|probe| probe.path.clone())
             .map(|binary| crate::git_commit::AgentInvocation {
-                provider,
                 binary,
                 model,
                 reasoning_effort,

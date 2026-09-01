@@ -988,9 +988,6 @@ impl Waku {
         }
         let turn_id = message.turn_id?;
         let turn = session.turns.iter().find(|turn| turn.id == turn_id)?;
-        if !session.provider.supports_conversation_rollback() {
-            return None;
-        }
         // A steer joins the running turn as another user message. Rewinding
         // restores the turn's checkpoint and resubmits the prompt that opened
         // it, so only that prompt can carry the affordance.
@@ -1095,11 +1092,7 @@ impl Waku {
         if message.role != MessageRole::Assistant
             || assistant_response_footer_index(session, message_index) != Some(message_index)
             || !matches!(session.status, SessionStatus::Idle | SessionStatus::Failed)
-            || !session.provider.supports_conversation_fork()
-            || session
-                .provider_cursor
-                .as_ref()
-                .is_none_or(|cursor| cursor.provider() != session.provider)
+            || session.provider_cursor.is_none()
         {
             return None;
         }

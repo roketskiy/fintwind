@@ -791,13 +791,10 @@ impl Waku {
     pub(super) fn render_provider_model_control(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let session = self.selected_session();
-        let provider = session.map(|session| session.provider).unwrap_or_default();
+        let provider = OPENCODE_PROVIDER.to_owned();
         let selected_model = session.and_then(|session| self.model_for_session(session));
-        let selected_model_name = self.model_display_name(provider, selected_model);
-        let locked_provider = session
-            .filter(|session| !session.messages.is_empty())
-            .map(|session| session.provider);
-        let picker_enabled = session.is_some_and(|session| session.can_choose_model(provider));
+        let selected_model_name = self.model_display_name(selected_model);
+        let picker_enabled = session.is_some_and(|session| session.can_choose_model());
 
         if !picker_enabled {
             return div()
@@ -807,9 +804,9 @@ impl Waku {
                 .items_center()
                 .gap(px(6.0))
                 .child(icon(
-                    provider_icon(provider),
+                    provider_icon(&provider),
                     10.5,
-                    provider_color(&theme, provider).opacity(0.9),
+                    provider_color(&theme, &provider).opacity(0.9),
                 ))
                 .child(
                     div()
@@ -827,7 +824,6 @@ impl Waku {
         let selected_tab = self.model_picker_tab;
         let selected_model = selected_model.map(str::to_owned);
         let probes = self.probes.clone();
-        let disabled_providers = self.state.disabled_providers.clone();
         let pending_discoveries = self.provider_model_discoveries_pending.clone();
         let favorites = self.state.favorite_models.clone();
         let weak = cx.entity().downgrade();
@@ -841,30 +837,10 @@ impl Waku {
             self.menu_handle_with(MODEL_PICKER_MENU_ID, cx, move |open, window, cx| {
                 let _ = reset_weak.update(cx, |this, cx| {
                     if open {
-                        let provider = this
-                            .selected_session()
-                            .map(|session| session.provider)
-                            .unwrap_or_default();
-                        // A draft can sit on a provider that was since switched
-                        // off; open onto the first usable provider instead of a
-                        // tab whose rows the filter would leave empty.
-                        let locked = this
-                            .selected_session()
-                            .is_some_and(|session| !session.messages.is_empty());
-                        let provider =
-                            if !locked && this.state.disabled_providers.contains(&provider) {
-                                ProviderKind::ALL
-                                    .into_iter()
-                                    .find(|kind| this.provider_enabled(*kind))
-                                    .unwrap_or(provider)
-                            } else {
-                                provider
-                            };
-                        this.model_picker_tab = ModelPickerTab::Provider(provider);
+                        this.model_picker_tab = ModelPickerTab::Provider;
                         // Opening re-runs the tab's catalog discovery so models
-                        // authored since launch appear without a restart; the
-                        // other rails refresh when selected, not all at once.
-                        this.refresh_provider_model_discovery(provider);
+                        // authored since launch appear without a restart.
+                        this.refresh_provider_model_discovery();
                         this.model_picker_highlight = None;
                         reset_search.update(cx, |search, cx| search.clear(cx));
                         this.reveal_selected_picker_model();
@@ -897,8 +873,8 @@ impl Waku {
             })
         };
 
-        // Only while the panel is open: this clones every installed provider's
-        // model list, and the closed picker is on the composer's every frame.
+        // Only while the panel is open: this clones the provider's model list,
+        // and the closed picker is on the composer's every frame.
         // Built out here rather than in the body so the key handler and the
         // rendered rows index one ordering and cannot disagree about what
         // `enter` selects.
@@ -906,8 +882,6 @@ impl Waku {
             visible_picker_models(
                 &probes,
                 &favorites,
-                &disabled_providers,
-                locked_provider,
                 selected_tab,
                 &normalized_query,
             )
@@ -923,8 +897,8 @@ impl Waku {
         popover(
             MenuChip::new("composer-provider-model")
                 .icon(
-                    provider_icon(provider),
-                    provider_color(&theme, provider).opacity(0.9),
+                    provider_icon(&provider),
+                    provider_color(&theme, &provider).opacity(0.9),
                 )
                 .label(selected_model_name)
                 .caret(false)
@@ -985,47 +959,33 @@ impl Waku {
                     .child(div().w(px(34.0)).h(px(1.0)).my(px(3.0)).bg(theme.border));
 
                 // One predicate with the `tab` cycle, so clicking and cycling
-                // agree on which tabs are usable.
-                let rail_tabs = visible_picker_tabs(&probes, &disabled_providers, locked_provider);
-                for kind in ProviderKind::ALL {
-                    let usable = rail_tabs.contains(&ModelPickerTab::Provider(kind));
-                    let selected = selected_tab == ModelPickerTab::Provider(kind) && !searching;
-                    let tab_weak = weak.clone();
-                    sidebar = sidebar.child(
-                        div()
-                            .id(SharedString::from(format!("model-tab-{}", kind.id())))
-                            .w(px(38.0))
-                            .h(px(38.0))
-                            .rounded(px(7.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_default()
-                            .when(selected, |element| element.bg(theme.overlay_strong))
-                            .when(!usable, |element| element.opacity(0.35))
-                            .when(usable, |element| {
-                                element.hover(|element| element.bg(theme.overlay)).on_click(
-                                    move |_, _, cx| {
-                                        let _ = tab_weak.update(cx, |this, cx| {
-                                            this.select_model_picker_tab(
-                                                ModelPickerTab::Provider(kind),
-                                                cx,
-                                            );
-                                        });
-                                    },
-                                )
-                            })
-                            .child(icon(
-                                provider_icon(kind),
-                                18.0,
-                                provider_color(&theme, kind).opacity(if selected {
-                                    1.0
-                                } else {
-                                    0.82
-                                }),
-                            )),
-                    );
-                }
+                // agree on which tabs are usable. OpenCode is the only rail
+                // besides Favorites.
+                let tab_weak = weak.clone();
+                let selected = selected_tab == ModelPickerTab::Provider && !searching;
+                sidebar = sidebar.child(
+                    div()
+                        .id("model-tab-opencode")
+                        .w(px(38.0))
+                        .h(px(38.0))
+                        .rounded(px(7.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_default()
+                        .when(selected, |element| element.bg(theme.overlay_strong))
+                        .hover(|element| element.bg(theme.overlay))
+                        .on_click(move |_, _, cx| {
+                            let _ = tab_weak.update(cx, |this, cx| {
+                                this.select_model_picker_tab(ModelPickerTab::Provider, cx);
+                            });
+                        })
+                        .child(icon(
+                            "icons/provider-opencode.svg",
+                            18.0,
+                            theme.text.opacity(if selected { 1.0 } else { 0.82 }),
+                        )),
+                );
 
                 let search_input = div()
                     .h(px(52.0))
@@ -1060,11 +1020,7 @@ impl Waku {
                         tr!("models.none_found")
                     } else if selected_tab == ModelPickerTab::Favorites {
                         tr!("models.favorite_hint")
-                    } else if matches!(
-                        selected_tab,
-                        ModelPickerTab::Provider(provider)
-                            if pending_discoveries.contains(&provider)
-                    ) {
+                    } else if pending_discoveries.contains(OPENCODE_PROVIDER) {
                         tr!("models.loading")
                     } else {
                         tr!("models.none_reported")
@@ -1081,27 +1037,22 @@ impl Waku {
                     );
                 }
 
-                for (row_index, (kind, model)) in available_models.iter().enumerate() {
-                    let kind = *kind;
+                for (row_index, model) in available_models.iter().enumerate() {
                     let is_selected =
-                        kind == provider && selected_model.as_deref() == Some(model.id.as_str());
+                        selected_model.as_deref() == Some(model.id.as_str());
                     let is_highlighted = highlight == Some(row_index);
                     let is_favorite = favorites
                         .iter()
-                        .any(|favorite| favorite.provider == kind && favorite.model == model.id);
+                        .any(|favorite| favorite.model == model.id);
                     let model_id = model.id.clone();
                     let select_weak = weak.clone();
                     let select_popover = popover.clone();
                     let favorite_model_id = model.id.clone();
                     let favorite_weak = weak.clone();
-                    let subtitle = model_picker_subtitle(kind, model.sub_provider.as_deref());
+                    let subtitle = model_picker_subtitle(model.sub_provider.as_deref());
                     rows = rows.child(
                         div()
-                            .id(SharedString::from(format!(
-                                "model-row-{}-{}",
-                                kind.id(),
-                                model.id
-                            )))
+                            .id(SharedString::from(format!("model-row-{}", model.id)))
                             .h(px(58.0))
                             .px(px(12.0))
                             .rounded(px(9.0))
@@ -1141,9 +1092,9 @@ impl Waku {
                                             .items_center()
                                             .gap(px(6.0))
                                             .child(icon(
-                                                provider_icon(kind),
+                                                "icons/provider-opencode.svg",
                                                 10.5,
-                                                provider_color(&theme, kind).opacity(0.85),
+                                                theme.text_ghost.opacity(0.85),
                                             ))
                                             .child(
                                                 div()
@@ -1157,8 +1108,7 @@ impl Waku {
                             .child(
                                 div()
                                     .id(SharedString::from(format!(
-                                        "favorite-model-{}-{}",
-                                        kind.id(),
+                                        "favorite-model-{}",
                                         model.id
                                     )))
                                     .w(px(28.0))
@@ -1185,7 +1135,6 @@ impl Waku {
                                         cx.stop_propagation();
                                         let _ = favorite_weak.update(cx, |this, cx| {
                                             this.toggle_favorite_model(
-                                                kind,
                                                 favorite_model_id.clone(),
                                                 cx,
                                             );
@@ -1194,7 +1143,7 @@ impl Waku {
                             )
                             .on_click(move |_, window, cx| {
                                 let _ = select_weak.update(cx, |this, cx| {
-                                    this.choose_model(kind, model_id.clone(), cx);
+                                    this.choose_model(model_id.clone(), cx);
                                 });
                                 select_popover.close(window, cx);
                             }),
@@ -1282,7 +1231,7 @@ impl Waku {
     fn move_model_picker_highlight(
         &mut self,
         key: &str,
-        models: &[(ProviderKind, ProviderModel)],
+        models: &[ProviderModel],
         cx: &mut Context<Self>,
     ) {
         let current = self
@@ -1305,15 +1254,7 @@ impl Waku {
         if !self.model_search.read(cx).content().trim().is_empty() {
             return;
         }
-        let locked_provider = self
-            .selected_session()
-            .filter(|session| !session.messages.is_empty())
-            .map(|session| session.provider);
-        let tabs = visible_picker_tabs(
-            &self.probes,
-            &self.state.disabled_providers,
-            locked_provider,
-        );
+        let tabs = visible_picker_tabs();
         let current = tabs.iter().position(|tab| *tab == self.model_picker_tab);
         let Some(next) = next_picker_highlight(current, tabs.len(), key) else {
             return;
@@ -1331,21 +1272,15 @@ impl Waku {
     /// scroll offset from an earlier open never leaks into a fresh list.
     pub(super) fn reveal_selected_picker_model(&self) {
         let session = self.selected_session();
-        let provider = session.map(|session| session.provider).unwrap_or_default();
         let selected_model = session.and_then(|session| self.model_for_session(session));
-        let locked_provider = session
-            .filter(|session| !session.messages.is_empty())
-            .map(|session| session.provider);
         let index = visible_picker_models(
             &self.probes,
             &self.state.favorite_models,
-            &self.state.disabled_providers,
-            locked_provider,
             self.model_picker_tab,
             "",
         )
         .iter()
-        .position(|(kind, model)| *kind == provider && selected_model == Some(model.id.as_str()))
+        .position(|model| selected_model == Some(model.id.as_str()))
         .unwrap_or(0);
         self.model_picker_scroll.scroll_to_item(index);
     }
@@ -1354,14 +1289,14 @@ impl Waku {
     /// works the moment the panel opens.
     fn choose_highlighted_model(
         &mut self,
-        models: &[(ProviderKind, ProviderModel)],
+        models: &[ProviderModel],
         cx: &mut Context<Self>,
     ) {
-        let Some((kind, model)) = models.get(self.model_picker_highlight.unwrap_or(0)) else {
+        let Some(model) = models.get(self.model_picker_highlight.unwrap_or(0)) else {
             return;
         };
-        let (kind, model_id) = (*kind, model.id.clone());
-        self.choose_model(kind, model_id, cx);
+        let model_id = model.id.clone();
+        self.choose_model(model_id, cx);
     }
 
     pub(super) fn render_model_traits_control(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -1640,135 +1575,12 @@ impl Waku {
         )
     }
 
-    pub(super) fn render_agent_preset_control(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let session = self
-            .selected_session()
-            .filter(|session| session.provider == ProviderKind::DeepSeek)?;
-        if session.has_started() || session.is_busy() {
-            return None;
-        }
-        let presets = self
-            .provider_probe(ProviderKind::DeepSeek)
-            .map(|probe| probe.agent_presets.clone())
-            .unwrap_or_default();
-        if presets.is_empty() {
-            return None;
-        }
-        let selected_id = self.agent_preset_for_session(session)?;
-        let selected_label = self.agent_preset_label_for_session(session)?;
-        let theme = Theme::current(cx);
-        let weak = cx.entity().downgrade();
-        let refresh_weak = weak.clone();
-        let handle = self.menu_handle_with("agent-preset", cx, move |open, _, cx| {
-            if open {
-                let _ = refresh_weak.update(cx, |this, _| {
-                    this.refresh_provider_model_discovery(ProviderKind::DeepSeek);
-                });
-            }
-        });
-        let trigger = MenuChip::new("agent-preset")
-            .icon("icons/bot.svg", theme.text_tertiary)
-            .label(selected_label)
-            .caret(false)
-            .selected(handle.is_open());
-
-        Some(dropdown_menu(
-            trigger,
-            "agent-preset-menu",
-            &handle,
-            MenuAlign::AboveLeft,
-            move |_| {
-                presets
-                    .clone()
-                    .into_iter()
-                    .map(|preset| {
-                        let weak = weak.clone();
-                        let preset_id = preset.id.clone();
-                        let selected = preset_id == selected_id;
-                        let name = if preset.is_custom {
-                            format!("{} · {}", preset.display_name(), tr!("agent_preset.custom"))
-                        } else {
-                            preset.display_name()
-                        };
-                        let description = preset
-                            .display_description()
-                            .unwrap_or_else(|| tr!("agent_preset.no_description"))
-                            // GPUI wraps at Unicode line-break opportunities,
-                            // but an underscored tool name is otherwise one
-                            // indivisible word. The zero-width spaces preserve
-                            // its visible spelling while allowing the menu to
-                            // keep it inside the card.
-                            .replace('_', "_\u{200b}");
-                        MenuItem::custom(move |_, _| {
-                            div()
-                                .w(px(340.0))
-                                .py(px(5.0))
-                                .overflow_hidden()
-                                .flex()
-                                .items_center()
-                                .gap(px(10.0))
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .child(
-                                            div()
-                                                .w_full()
-                                                .truncate()
-                                                .text_size(px(12.0))
-                                                .font_weight(if selected {
-                                                    FontWeight::SEMIBOLD
-                                                } else {
-                                                    FontWeight::MEDIUM
-                                                })
-                                                .text_color(theme.text)
-                                                .child(name.clone()),
-                                        )
-                                        .child(
-                                            div()
-                                                .w_full()
-                                                .mt(px(2.0))
-                                                .text_size(px(10.5))
-                                                .line_height(px(14.0))
-                                                .whitespace_normal()
-                                                .overflow_hidden()
-                                                .text_color(theme.text_tertiary)
-                                                .child(description.clone()),
-                                        ),
-                                )
-                                .when(selected, |element| {
-                                    element.child(icon(
-                                        "icons/check.svg",
-                                        11.0,
-                                        theme.text_tertiary,
-                                    ))
-                                })
-                                .into_any_element()
-                        })
-                        .on_click(move |_, cx| {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.set_agent_preset(preset_id.clone(), cx);
-                            });
-                        })
-                    })
-                    .collect()
-            },
-        ))
-    }
-
     pub(super) fn render_interaction_mode_control(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let mode = self
             .selected_session()
             .map(|session| session.interaction_mode)
             .unwrap_or_default();
-        let supports_plan = self.selected_session().is_none_or(|session| {
-            session.provider != ProviderKind::DeepSeek
-                || self.agent_preset_for_session(session).as_deref() != Some("minimal")
-        });
-        // A stale state can still be switched back to Build; Minimal simply
-        // cannot be toggled from Build into a plan capability it does not mount.
-        let interactive = mode == InteractionMode::Plan || supports_plan;
         let next_mode = if mode == InteractionMode::Plan {
             InteractionMode::Build
         } else {
@@ -1805,19 +1617,11 @@ impl Waku {
                 },
             ))
             .child(mode.label())
-            .when(interactive, |element| {
-                element
-                    .hover(|element| element.bg(theme.overlay))
-                    .on_click(move |_, _, cx| {
-                        let _ = weak.update(cx, |this, cx| {
-                            this.set_interaction_mode(next_mode, cx);
-                        });
-                    })
-            })
-            .when(!interactive, |element| {
-                element
-                    .opacity(0.7)
-                    .tooltip(Tooltip::text(tr!("agent_preset.minimal_no_plan")))
+            .hover(|element| element.bg(theme.overlay))
+            .on_click(move |_, _, cx| {
+                let _ = weak.update(cx, |this, cx| {
+                    this.set_interaction_mode(next_mode, cx);
+                });
             })
             .into_any_element()
     }
@@ -2041,9 +1845,6 @@ impl Waku {
         prompt: &str,
         cx: &mut Context<Self>,
     ) -> Option<ComposerSubmission> {
-        if self.execute_local_composer_command(prompt, cx) {
-            return None;
-        }
         for attachment in &self.composer_attachments {
             if let (Some(reference), Some(image)) = (
                 attachment.blob_reference.as_ref(),
@@ -2071,40 +1872,6 @@ impl Waku {
             display_content,
             attachments,
         })
-    }
-
-    pub(super) fn execute_local_composer_command(
-        &mut self,
-        prompt: &str,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let Some(next_tier) = self.selected_session().and_then(|session| {
-            if !crate::composer_complete::is_fast_mode_toggle_submission(
-                session.provider,
-                prompt,
-                &self.slash_command_index,
-            ) {
-                return None;
-            }
-            let model = self.model_metadata_for_session(session)?;
-            crate::composer_complete::toggled_fast_service_tier(
-                session.service_tier.as_deref(),
-                &model.service_tiers,
-            )
-        }) else {
-            return false;
-        };
-        let enabled = next_tier != "default";
-        // Clearing emits an Edited event. Apply the tier afterward so any
-        // draft refresh caused by that event cannot repaint the old choice.
-        self.composer.update(cx, |input, cx| input.clear(cx));
-        self.set_service_tier(next_tier, cx);
-        self.show_success_toast(tr!(if enabled {
-            "commands.fast_enabled"
-        } else {
-            "commands.fast_disabled"
-        }));
-        true
     }
 
     pub(super) fn restore_composer_submission(
@@ -2596,7 +2363,6 @@ impl Waku {
                         .line_height(px(14.0))
                         .child(self.render_provider_model_control(cx))
                         .children(self.render_model_traits_control(cx))
-                        .children(self.render_agent_preset_control(cx))
                         .child(self.render_access_control(cx))
                         .child(self.render_interaction_mode_control(cx))
                         .child(div().flex_1())
@@ -3532,35 +3298,19 @@ pub(super) fn next_picker_highlight(
 }
 
 /// The sidebar tabs the picker can land on, in rail order: favorites first,
-/// then every installed provider a new session may use.
+/// then OpenCode.
 ///
 /// Shared by the rail's click gating and by `tab`'s cycle handler so the two
-/// agree on which tabs are usable. A locked session keeps its own provider
-/// usable even if it was switched off afterwards — disabling is for new work —
-/// while every other provider drops out for the lock's duration.
-pub(super) fn visible_picker_tabs(
-    probes: &[ProviderProbe],
-    disabled_providers: &[ProviderKind],
-    locked_provider: Option<ProviderKind>,
-) -> Vec<ModelPickerTab> {
-    let mut tabs = vec![ModelPickerTab::Favorites];
-    tabs.extend(ProviderKind::ALL.into_iter().filter_map(|kind| {
-        let installed = probes
-            .iter()
-            .any(|probe| probe.provider == kind && probe.installed);
-        let switched_off = disabled_providers.contains(&kind) && locked_provider != Some(kind);
-        let allowed = (locked_provider.is_none() || locked_provider == Some(kind)) && !switched_off;
-        (installed && allowed).then_some(ModelPickerTab::Provider(kind))
-    }));
-    tabs
+/// agree on which tabs are usable.
+pub(super) fn visible_picker_tabs() -> Vec<ModelPickerTab> {
+    vec![ModelPickerTab::Favorites, ModelPickerTab::Provider]
 }
 
-pub(super) fn model_picker_subtitle(provider: ProviderKind, sub_provider: Option<&str>) -> String {
-    let provider_name = provider.short_name();
+pub(super) fn model_picker_subtitle(sub_provider: Option<&str>) -> String {
     match sub_provider.map(str::trim).filter(|name| !name.is_empty()) {
-        Some(name) if name.eq_ignore_ascii_case(provider_name) => provider_name.to_owned(),
-        Some(name) => format!("{name} · {provider_name}"),
-        None => provider_name.to_owned(),
+        Some(name) if name.eq_ignore_ascii_case("opencode") => "OpenCode".to_owned(),
+        Some(name) => format!("{name} · OpenCode"),
+        None => "OpenCode".to_owned(),
     }
 }
 
@@ -3571,33 +3321,20 @@ pub(super) fn model_picker_subtitle(provider: ProviderKind, sub_provider: Option
 pub(super) fn visible_picker_models(
     probes: &[ProviderProbe],
     favorites: &[FavoriteModel],
-    disabled_providers: &[ProviderKind],
-    locked_provider: Option<ProviderKind>,
     selected_tab: ModelPickerTab,
     normalized_query: &str,
-) -> Vec<(ProviderKind, ProviderModel)> {
+) -> Vec<ProviderModel> {
     let searching = !normalized_query.is_empty();
-    let mut models = probes
+    let mut models: Vec<ProviderModel> = probes
         .iter()
         .filter(|probe| probe.installed)
-        .flat_map(|probe| {
-            probe
-                .models
-                .iter()
-                .cloned()
-                .map(move |model| (probe.provider, model))
-        })
-        .filter(|(kind, _)| locked_provider.is_none() || locked_provider == Some(*kind))
-        // Switched-off providers keep serving the session already locked to
-        // them, but offer nothing to new work — including favorites.
-        .filter(|(kind, _)| !disabled_providers.contains(kind) || locked_provider == Some(*kind))
-        .filter(|(kind, model)| {
+        .flat_map(|probe| probe.models.iter().cloned())
+        .filter(|model| {
             if searching {
                 let searchable = format!(
-                    "{} {} {} {}",
+                    "{} {} {}",
                     model.name,
                     model.id,
-                    kind.short_name(),
                     model.sub_provider.as_deref().unwrap_or("")
                 )
                 .to_ascii_lowercase();
@@ -3608,16 +3345,16 @@ pub(super) fn visible_picker_models(
             match selected_tab {
                 ModelPickerTab::Favorites => favorites
                     .iter()
-                    .any(|favorite| favorite.provider == *kind && favorite.model == model.id),
-                ModelPickerTab::Provider(provider) => provider == *kind,
+                    .any(|favorite| favorite.model == model.id),
+                ModelPickerTab::Provider => true,
             }
         })
-        .collect::<Vec<_>>();
+        .collect();
     if !searching && selected_tab == ModelPickerTab::Favorites {
-        models.sort_by_key(|(kind, model)| {
+        models.sort_by_key(|model| {
             favorites
                 .iter()
-                .position(|favorite| favorite.provider == *kind && favorite.model == model.id)
+                .position(|favorite| favorite.model == model.id)
                 .unwrap_or(usize::MAX)
         });
     }

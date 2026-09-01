@@ -1,12 +1,5 @@
 use super::*;
 
-fn retain_runtime_after_cancel(provider: ProviderKind) -> bool {
-    // Codex's app-server owns the Computer Use process tree, and Amp offers no
-    // interrupt on its stream — stopping it means ending the process. Both
-    // resume their native thread on the next prompt.
-    !matches!(provider, ProviderKind::Codex | ProviderKind::Amp)
-}
-
 impl Waku {
     pub(crate) fn open_task_from_notification(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
         self.select_session(session_id, cx);
@@ -14,7 +7,7 @@ impl Waku {
 
     pub(super) fn select_project(&mut self, project_id: Uuid, cx: &mut Context<Self>) {
         self.state.selected_project = Some(project_id);
-        self.create_session_for(project_id, self.state.last_provider, cx);
+        self.create_session_for(project_id, cx);
     }
 
     pub(super) fn select_session(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
@@ -166,11 +159,10 @@ impl Waku {
             self.store_selected_right_panel_state();
         }
         self.state.selected_session = Some(session_id);
-        if let Some((project_id, provider, model, reasoning_effort, service_tier, context_window)) =
+        if let Some((project_id, model, reasoning_effort, service_tier, context_window)) =
             self.selected_session().map(|session| {
                 (
                     session.project_id,
-                    session.provider,
                     session.model.clone(),
                     session.reasoning_effort.clone(),
                     session.service_tier.clone(),
@@ -179,7 +171,6 @@ impl Waku {
             })
         {
             self.state.selected_project = Some(project_id);
-            self.state.last_provider = provider;
             self.state.last_model = model;
             self.state.last_reasoning_effort = reasoning_effort;
             self.state.last_service_tier = service_tier;
@@ -238,7 +229,6 @@ impl Waku {
     pub(super) fn create_session_for(
         &mut self,
         project_id: Uuid,
-        provider: ProviderKind,
         cx: &mut Context<Self>,
     ) {
         if let Some(draft_id) = self
@@ -251,7 +241,7 @@ impl Waku {
             self.select_session(draft_id, cx);
             return;
         }
-        let session = self.state.new_session(project_id, provider);
+        let session = self.state.new_session(project_id);
         let id = session.id;
         self.state.push_session(session);
         self.select_session(id, cx);
@@ -356,7 +346,7 @@ impl Waku {
             } else if projectless {
                 self.create_projectless_session(cx);
             } else {
-                self.create_session_for(project_id, self.state.last_provider, cx);
+                self.create_session_for(project_id, cx);
             }
         } else {
             self.save();
@@ -387,7 +377,7 @@ impl Waku {
         } else if self.selected_project().is_some_and(Project::is_projectless) {
             self.create_projectless_session(cx);
         } else if let Some(project_id) = self.state.selected_project {
-            self.create_session_for(project_id, self.state.last_provider, cx);
+            self.create_session_for(project_id, cx);
         } else {
             self.create_projectless_session(cx);
         }
@@ -418,9 +408,6 @@ impl Waku {
             .try_global::<crate::updater::UpdaterState>()
             .and_then(|updater| updater.0.as_ref())
             .is_some_and(|updater| updater.automatically_checks_for_updates());
-        // Warm the Usage page's transcript scan while the user is still on
-        // General, so clicking Usage lands on data instead of a spinner.
-        self.ensure_usage_history(false, cx);
         window.focus(&self.settings_focus, cx);
         cx.notify();
     }
@@ -844,10 +831,9 @@ impl Waku {
     }
 
     fn remember_selected_model_traits(&mut self) {
-        let Some((provider, model, reasoning_effort, service_tier, context_window)) =
+        let Some((model, reasoning_effort, service_tier, context_window)) =
             self.selected_session().and_then(|session| {
                 Some((
-                    session.provider,
                     self.model_for_session(session)?.to_owned(),
                     session.reasoning_effort.clone(),
                     session.service_tier.clone(),
@@ -858,7 +844,6 @@ impl Waku {
             return;
         };
         self.state.remember_model_traits(
-            provider,
             &model,
             reasoning_effort,
             service_tier,
@@ -868,49 +853,32 @@ impl Waku {
 
     pub(super) fn choose_model(
         &mut self,
-        provider: ProviderKind,
         model: String,
         cx: &mut Context<Self>,
     ) {
-        let Some((session_id, provider_changed)) = self
+        let Some(session_id) = self
             .selected_session()
             .filter(|session| {
-                session.can_choose_model(provider)
-                    && (session.provider != provider
-                        || session.model.as_deref() != Some(model.as_str()))
+                session.can_choose_model() && session.model.as_deref() != Some(model.as_str())
             })
-            .map(|session| (session.id, session.provider != provider))
+            .map(|session| session.id)
         else {
             return;
         };
 
         self.remember_selected_model_traits();
-        let (reasoning_effort, service_tier, context_window) =
-            self.state.model_traits_for(provider, &model);
+        let (reasoning_effort, service_tier, context_window) = self.state.model_traits_for(&model);
         if let Some(session) = self.selected_session_mut() {
-            session.provider = provider;
             session.model = Some(model.clone());
-            if provider_changed {
-                session.agent_preset = None;
-            }
             session.reasoning_effort.clone_from(&reasoning_effort);
             session.service_tier.clone_from(&service_tier);
             session.context_window.clone_from(&context_window);
-            self.state.last_provider = provider;
             self.state.last_model = Some(model);
             self.state.last_reasoning_effort = reasoning_effort;
             self.state.last_service_tier = service_tier;
             self.state.last_context_window = context_window;
-            self.model_picker_tab = ModelPickerTab::Provider(provider);
-            // A different provider is a different binary and protocol; only a
-            // model change within one provider can be applied in session.
-            if provider_changed {
-                self.reset_session_runtime(session_id);
-                // A different provider is also a different command registry.
-                self.refresh_composer_sources(cx);
-            } else {
-                self.apply_session_options(session_id, cx);
-            }
+            self.model_picker_tab = ModelPickerTab::Provider;
+            self.apply_session_options(session_id, cx);
             self.save();
             cx.notify();
         }
@@ -928,7 +896,7 @@ impl Waku {
         }
         if !self
             .selected_session()
-            .is_some_and(|session| session.can_choose_model(session.provider))
+            .is_some_and(|session| session.can_choose_model())
         {
             return;
         }
@@ -954,16 +922,15 @@ impl Waku {
         });
     }
 
-    /// Discovery is not requested here: launch already requested it for every
-    /// installed provider, so tabs only ever switch between loaded lists.
+    /// Discovery is not requested here: launch already requested it, so the
+    /// picker only ever switches between loaded lists.
     pub(super) fn select_model_picker_tab(&mut self, tab: ModelPickerTab, cx: &mut Context<Self>) {
         if self.model_picker_tab != tab {
             self.model_picker_tab = tab;
-            if let ModelPickerTab::Provider(provider) = tab {
-                // Selecting a rail re-runs that provider's catalog discovery,
-                // so each tab is fresh when viewed without probing every
-                // provider on open.
-                self.refresh_provider_model_discovery(provider);
+            if tab == ModelPickerTab::Provider {
+                // Selecting the rail re-runs catalog discovery, so the list is
+                // fresh when viewed without probing on every open.
+                self.refresh_provider_model_discovery();
             }
             // A different tab renumbers the rows under the keyboard cursor,
             // and would otherwise inherit the old tab's scroll offset.
@@ -975,7 +942,6 @@ impl Waku {
 
     pub(super) fn toggle_favorite_model(
         &mut self,
-        provider: ProviderKind,
         model: String,
         cx: &mut Context<Self>,
     ) {
@@ -983,13 +949,11 @@ impl Waku {
             .state
             .favorite_models
             .iter()
-            .position(|favorite| favorite.provider == provider && favorite.model == model)
+            .position(|favorite| favorite.model == model)
         {
             self.state.favorite_models.remove(index);
         } else {
-            self.state
-                .favorite_models
-                .push(FavoriteModel { provider, model });
+            self.state.favorite_models.push(FavoriteModel { model });
         }
         self.save();
         cx.notify();
@@ -1064,38 +1028,6 @@ impl Waku {
         }
     }
 
-    pub(super) fn set_agent_preset(&mut self, agent_preset: String, cx: &mut Context<Self>) {
-        let selectable = self
-            .provider_probe(ProviderKind::DeepSeek)
-            .is_some_and(|probe| {
-                probe
-                    .agent_presets
-                    .iter()
-                    .any(|preset| preset.id == agent_preset)
-            });
-        if !selectable {
-            return;
-        }
-        if let Some(session) = self.selected_session_mut()
-            && session.provider == ProviderKind::DeepSeek
-            && !session.has_started()
-            && !session.is_busy()
-            && session.agent_preset.as_deref() != Some(agent_preset.as_str())
-        {
-            let session_id = session.id;
-            if agent_preset == "minimal" {
-                session.interaction_mode = InteractionMode::Build;
-            }
-            session.agent_preset = Some(agent_preset);
-            // A provider cursor makes a session started, so this is normally a
-            // no-op. It also closes the narrow race where a blank runtime was
-            // prepared but had not reported its native session yet.
-            self.reset_session_runtime(session_id);
-            self.save();
-            cx.notify();
-        }
-    }
-
     pub(super) fn cancel_turn(&mut self, cx: &mut Context<Self>) {
         self.escape_stop_confirmation.clear();
         let Some(session_id) = self.state.selected_session else {
@@ -1108,21 +1040,13 @@ impl Waku {
         if self.submission_preparations.contains(&session_id) {
             return;
         }
-        let retain_runtime = self
-            .state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .is_some_and(|session| retain_runtime_after_cancel(session.provider))
-            || self.session_has_live_detached_work(session_id);
+        // OpenCode's resident server survives an interrupt, so the runtime is
+        // always retained and reattached on the next prompt.
         let mut runtime = self.runtimes.remove(&session_id);
         if let Some(runtime) = runtime.as_ref() {
             runtime.driver.cancel();
-            if retain_runtime {
-                // A detached process keeps Codex's app-server resident, but
-                // Computer Use descendants still belong to the cancelled turn.
-                runtime.driver.cancel_computer_use();
-            }
+            // Computer Use descendants still belong to the cancelled turn.
+            runtime.driver.cancel_computer_use();
         }
         // Do not leave already-received text in the smoothing queue: once the
         // message is marked complete, a later delta would otherwise create a
@@ -1186,7 +1110,7 @@ impl Waku {
         // prompt resumes the same provider thread with a fresh runtime. A
         // detached process or subagent is the exception: its provider must
         // remain resident so Waku can keep observing and stopping it.
-        if retain_runtime && keep_runtime {
+        if keep_runtime {
             if let Some(runtime) = runtime.take() {
                 self.runtimes.insert(session_id, runtime);
             }
@@ -1207,12 +1131,6 @@ impl Waku {
         let Some(session_id) = self.state.selected_session else {
             return;
         };
-        let provider = self
-            .state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .map(|session| session.provider.id());
         let decision = if let Some(runtime) = self.runtimes.get_mut(&session_id) {
             let decision = runtime
                 .pending_permission
@@ -1233,10 +1151,10 @@ impl Waku {
         } else {
             None
         };
-        if let (Some(provider), Some(decision)) = (provider, decision) {
+        if let Some(decision) = decision {
             self.analytics
                 .track(crate::analytics::Event::PermissionResponded {
-                    provider,
+                    provider: "opencode",
                     kind: "provider",
                     decision,
                 });
@@ -1426,12 +1344,6 @@ impl Waku {
         let Some(session_id) = self.state.selected_session else {
             return;
         };
-        let provider = self
-            .state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .map_or("unknown", |session| session.provider.id());
         let Some(mut runtime) = self.runtimes.remove(&session_id) else {
             return;
         };
@@ -1470,7 +1382,7 @@ impl Waku {
         }
         self.analytics
             .track(crate::analytics::Event::PermissionResponded {
-                provider,
+                provider: "opencode",
                 kind: "computer_use",
                 decision: match decision {
                     "deny" => "deny",
@@ -1542,7 +1454,7 @@ impl Waku {
                     let project_id = project.id;
                     this.state.projects.push(project);
                     this.analytics.track(crate::analytics::Event::ProjectAdded);
-                    this.create_session_for(project_id, this.state.last_provider, cx);
+                    this.create_session_for(project_id, cx);
                 });
             }
         })
@@ -1589,7 +1501,7 @@ impl Waku {
                     project.name = Project::PROJECTLESS_NAME.to_owned();
                     let project_id = project.id;
                     waku.state.projects.push(project);
-                    waku.create_session_for(project_id, waku.state.last_provider, cx);
+                    waku.create_session_for(project_id, cx);
                 }
                 Err(error) => {
                     waku.show_toast(tr!("errors.create_projectless_task", error = error));
@@ -1608,8 +1520,8 @@ mod tests {
     #[test]
     fn new_task_navigation_keeps_the_selected_project_after_visiting_history() {
         let project_id = Uuid::new_v4();
-        let draft = AgentSession::new(project_id, ProviderKind::Codex);
-        let mut started = AgentSession::new(Uuid::new_v4(), ProviderKind::Claude);
+        let draft = AgentSession::new(project_id);
+        let mut started = AgentSession::new(Uuid::new_v4());
         started.begin_turn("Existing task");
         let mut navigation = SessionNavigation::default();
 
@@ -1625,7 +1537,7 @@ mod tests {
     #[test]
     fn new_task_navigation_does_not_reopen_a_started_or_removed_draft() {
         let project_id = Uuid::new_v4();
-        let mut draft = AgentSession::new(project_id, ProviderKind::Codex);
+        let mut draft = AgentSession::new(project_id);
         let mut navigation = SessionNavigation::default();
         navigation.remember_new_task(draft.id);
 
@@ -1634,17 +1546,5 @@ mod tests {
 
         navigation.remove(draft.id);
         assert_eq!(navigation.new_task, None);
-    }
-
-    #[test]
-    fn stopping_releases_the_runtimes_that_cannot_be_interrupted_in_place() {
-        // Codex owns a Computer Use process tree; Amp has no stream interrupt.
-        assert!(!retain_runtime_after_cancel(ProviderKind::Codex));
-        assert!(!retain_runtime_after_cancel(ProviderKind::Amp));
-        for provider in ProviderKind::ALL {
-            if !matches!(provider, ProviderKind::Codex | ProviderKind::Amp) {
-                assert!(retain_runtime_after_cancel(provider));
-            }
-        }
     }
 }

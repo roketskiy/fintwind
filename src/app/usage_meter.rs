@@ -1,10 +1,8 @@
 //! The usage meter under the composer: a circular context-window gauge that
 //! opens a panel with the session's context occupancy and the account's
 //! rate-limit lanes, mirroring Claude Code's `/usage` rows. Context numbers
-//! stream in from every provider transport that reports them; plan lanes come
-//! from the Claude OAuth endpoint (fetched off-thread in [`crate::usage`]),
-//! OpenCode Go's usage endpoint, and Codex's own rate-limit
-//! notifications. Frames read only snapshots stored on the entity.
+//! stream in from the OpenCode transport; plan lanes come from OpenCode Go's
+//! usage endpoint. Frames read only snapshots stored on the entity.
 
 use gpui::{PathBuilder, relative};
 
@@ -13,92 +11,67 @@ use crate::usage::{PlanUsage, format_tokens, reset_label};
 
 const USAGE_METER_MENU_ID: &str = "usage-meter";
 
-/// Providers with an account-level plan fetcher. Codex additionally refreshes
-/// live from its own stream notifications.
-pub(super) const PLAN_USAGE_PROVIDERS: [ProviderKind; 4] = [
-    ProviderKind::Claude,
-    ProviderKind::Codex,
-    ProviderKind::OpenCode,
-    ProviderKind::Grok,
-];
+/// The provider with an account-level plan fetcher (OpenCode Go over HTTPS).
+pub(super) const PLAN_USAGE_PROVIDER: &str = "opencode";
 
-/// Refresh cadences for the plan snapshots. Quota moves only when turns run,
+/// Refresh cadences for the plan snapshot. Quota moves only when turns run,
 /// so idle refreshes stay rare; a settled turn or a just-opened panel asks
-/// sooner. Grok's fetch spawns a probe process, so its idle cadence is wider.
+/// sooner.
 const PLAN_USAGE_REFRESH: Duration = Duration::from_secs(300);
-const PLAN_USAGE_REFRESH_GROK: Duration = Duration::from_secs(600);
 const PLAN_USAGE_REFRESH_STALE: Duration = Duration::from_secs(30);
 const PLAN_USAGE_RETRY: Duration = Duration::from_secs(90);
 
 impl Waku {
-    /// Start background fetches of any plan meters whose snapshot is due.
+    /// Start a background fetch of the plan meter whose snapshot is due.
     /// The slow maintenance clock and explicit panel-open requests call this;
-    /// guards keep it to one in-flight fetch per provider.
+    /// a guard keeps it to one in-flight fetch.
     pub(super) fn maybe_refresh_plan_usage(&mut self, cx: &mut Context<Self>) {
-        // Disabling a provider only stops it backing new sessions; a session
-        // already locked to it keeps running, and while one is selected its
-        // usage panel still owes the account meters. Without this the panel
-        // would show its loading skeleton forever: fetchable provider, no
-        // snapshot, and no fetch ever allowed to start.
-        let selected_provider = self.selected_session().map(|session| session.provider);
-        for provider in PLAN_USAGE_PROVIDERS {
-            if self.plan_usage_pending.contains(&provider)
-                || (!self.provider_enabled(provider) && selected_provider != Some(provider))
-            {
-                continue;
-            }
-            let interval = if self.plan_usage_error.contains_key(&provider) {
-                PLAN_USAGE_RETRY
-            } else if self.plan_usage_stale.contains(&provider) {
-                PLAN_USAGE_REFRESH_STALE
-            } else if provider == ProviderKind::Grok {
-                PLAN_USAGE_REFRESH_GROK
-            } else {
-                PLAN_USAGE_REFRESH
-            };
-            if self
-                .plan_usage_checked_at
-                .get(&provider)
-                .is_some_and(|checked| checked.elapsed() < interval)
-            {
-                continue;
-            }
-            self.plan_usage_pending.insert(provider);
-            let tx = self.plan_usage_tx.clone();
-            let event_wake = self.event_wake_tx.clone();
-            let claude_version = self
-                .provider_versions
-                .get(&ProviderKind::Claude)
-                .cloned()
-                .flatten();
-            let binary_override = self.state.provider_binary_overrides.get(&provider).cloned();
-            let daemon = self.daemon.client();
-            cx.background_executor()
-                .spawn(async move {
-                    let result = match daemon.request(
-                        Uuid::nil(),
-                        Uuid::nil(),
-                        waku_client::Command::FetchPlanUsage {
-                            provider,
-                            binary_override,
-                            cli_version: claude_version,
-                        },
-                    ) {
-                        Ok(waku_client::ResponsePayload::PlanUsage { usage }) => Ok(usage),
-                        Ok(_) => Err(anyhow::anyhow!(
-                            "the daemon returned an invalid plan usage response"
-                        )),
-                        Err(error) => Err(error),
-                    };
-                    if tx
-                        .send((provider, result.map_err(|error| format!("{error:#}"))))
-                        .is_ok()
-                    {
-                        signal_event_pump(&event_wake);
-                    }
-                })
-                .detach();
+        let provider = PLAN_USAGE_PROVIDER.to_owned();
+        if self.plan_usage_pending.contains(&provider) {
+            return;
         }
+        let interval = if self.plan_usage_error.contains_key(&provider) {
+            PLAN_USAGE_RETRY
+        } else if self.plan_usage_stale.contains(&provider) {
+            PLAN_USAGE_REFRESH_STALE
+        } else {
+            PLAN_USAGE_REFRESH
+        };
+        if self
+            .plan_usage_checked_at
+            .get(&provider)
+            .is_some_and(|checked| checked.elapsed() < interval)
+        {
+            return;
+        }
+        self.plan_usage_pending.insert(provider.clone());
+        let tx = self.plan_usage_tx.clone();
+        let event_wake = self.event_wake_tx.clone();
+        let daemon = self.daemon.client();
+        cx.background_executor()
+            .spawn(async move {
+                let result = match daemon.request(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    waku_client::Command::FetchPlanUsage {
+                        binary_override: None,
+                        cli_version: None,
+                    },
+                ) {
+                    Ok(waku_client::ResponsePayload::PlanUsage { usage }) => Ok(usage),
+                    Ok(_) => Err(anyhow::anyhow!(
+                        "the daemon returned an invalid plan usage response"
+                    )),
+                    Err(error) => Err(error),
+                };
+                if tx
+                    .send((provider, result.map_err(|error| format!("{error:#}"))))
+                    .is_ok()
+                {
+                    signal_event_pump(&event_wake);
+                }
+            })
+            .detach();
     }
 
     pub(super) fn drain_plan_usage_events(&mut self) -> bool {
@@ -106,20 +79,20 @@ impl Waku {
         while let Ok((provider, result)) = self.plan_usage_events.try_recv() {
             self.plan_usage_pending.remove(&provider);
             self.plan_usage_stale.remove(&provider);
-            self.plan_usage_checked_at.insert(provider, Instant::now());
+            self.plan_usage_checked_at.insert(provider.clone(), Instant::now());
             match result {
                 Ok(Some(usage)) => {
                     changed |= self.plan_usage.get(&provider) != Some(&usage)
                         || self.plan_usage_error.contains_key(&provider)
                         || self.plan_usage_unconfigured.contains(&provider);
-                    self.plan_usage.insert(provider, usage);
+                    self.plan_usage.insert(provider.clone(), usage);
                     self.plan_usage_error.remove(&provider);
                     self.plan_usage_unconfigured.remove(&provider);
                 }
                 Ok(None) => {
                     let had_usage = self.plan_usage.remove(&provider).is_some();
                     let had_error = self.plan_usage_error.remove(&provider).is_some();
-                    let newly_unconfigured = self.plan_usage_unconfigured.insert(provider);
+                    let newly_unconfigured = self.plan_usage_unconfigured.insert(provider.clone());
                     changed |= had_usage || had_error || newly_unconfigured;
                 }
                 Err(error) => {
@@ -179,7 +152,7 @@ impl Waku {
             return None;
         }
         let session = self.selected_session()?;
-        let provider = session.provider;
+        let provider = PLAN_USAGE_PROVIDER.to_owned();
         let context = session.context_usage;
         let theme = Theme::current(cx);
         let plan = self.plan_usage.get(&provider).cloned();
@@ -188,8 +161,7 @@ impl Waku {
         // whether the fetch is already in flight or lands on the next tick.
         let plan_loading = plan.is_none()
             && error.is_none()
-            && !self.plan_usage_unconfigured.contains(&provider)
-            && PLAN_USAGE_PROVIDERS.contains(&provider);
+            && !self.plan_usage_unconfigured.contains(&provider);
 
         let weak = cx.entity().downgrade();
         let handle = self.menu_handle_with(USAGE_METER_MENU_ID, cx, move |open, window, cx| {
@@ -198,13 +170,7 @@ impl Waku {
                 let _ = weak.update(cx, |this, cx| {
                     // An opening panel wants fresh numbers; the pump honors
                     // the stale flag on its next tick once the backoff allows.
-                    if let Some(provider) = this
-                        .selected_session()
-                        .map(|session| session.provider)
-                        .filter(|provider| PLAN_USAGE_PROVIDERS.contains(provider))
-                    {
-                        this.plan_usage_stale.insert(provider);
-                    }
+                    this.plan_usage_stale.insert(PLAN_USAGE_PROVIDER.to_owned());
                     this.maybe_refresh_plan_usage(cx);
                     card_focus = this
                         .menus
@@ -274,7 +240,6 @@ impl Waku {
             move |handle, _, cx| {
                 usage_panel(
                     handle,
-                    provider,
                     context,
                     plan.clone(),
                     error.as_deref(),
@@ -369,7 +334,6 @@ fn context_gauge(percent: Option<f64>, track: Hsla, fill: Hsla) -> impl IntoElem
 
 fn usage_panel(
     handle: &ContextMenuHandle,
-    provider: ProviderKind,
     context: Option<ContextUsage>,
     plan: Option<PlanUsage>,
     error: Option<&str>,
@@ -440,11 +404,6 @@ fn usage_panel(
             Some(label) => tr!("usage.plan_limits_named", plan = label),
             None => tr!("usage.plan_limits"),
         };
-        let usage_url = match provider {
-            ProviderKind::Claude => Some("https://claude.ai/settings/usage"),
-            ProviderKind::Codex => Some("https://chatgpt.com/codex/settings/usage"),
-            _ => None,
-        };
         let header_row = div().flex().items_center().gap(px(6.0)).child(
             div()
                 .flex_1()
@@ -454,17 +413,7 @@ fn usage_panel(
                 .text_color(theme.text_tertiary)
                 .child(SharedString::from(header)),
         );
-        panel = panel.child(match usage_url {
-            Some(url) => header_row
-                .id("plan-usage-link")
-                .cursor_default()
-                .hover(|element| element.opacity(0.8))
-                .tooltip(Tooltip::text(tr!("usage.open_account_settings")))
-                .on_click(move |_, _, cx| cx.open_url(url))
-                .child(icon("icons/arrow-right.svg", 10.0, theme.text_tertiary))
-                .into_any_element(),
-            None => header_row.into_any_element(),
-        });
+        panel = panel.child(header_row);
         for window in &plan.windows {
             panel = panel.child(
                 div()

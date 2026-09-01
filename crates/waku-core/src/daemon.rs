@@ -20,7 +20,7 @@ use crate::computer_use::{ComputerTarget, ComputerUsePhase, ComputerUseState};
 use crate::driver::{self, DriverHandle, DriverStartOptions, SessionOptions};
 use crate::model::{
     ActivityKind, AgentSession, Checkpoint, CheckpointStatus, DriverEvent, PermissionOption,
-    Project, ProviderKind, ProviderResumeCursor, SessionStatus,
+    Project, ProviderResumeCursor, SessionStatus,
 };
 use crate::persistence::{ComposerDraftStore, PersistedState, StateStore};
 use crate::settings::DaemonSettingsStore;
@@ -35,9 +35,7 @@ pub struct WakuBackend {
     removed_session_ids: Mutex<HashSet<Uuid>>,
     composer_drafts: ComposerDraftStore,
     attachments: AttachmentStore,
-    usage_scan_cache: Mutex<crate::usage_history::ScanCache>,
     checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
-    usage_rates_dir: std::path::PathBuf,
     default_cwd: std::path::PathBuf,
 }
 
@@ -55,11 +53,6 @@ impl WakuBackend {
                 .unwrap_or_else(|| std::path::Path::new("."))
                 .join("attachments"),
         );
-        let usage_rates_dir = task_store
-            .path()
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_owned();
         Ok(Self {
             sessions: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
@@ -69,9 +62,7 @@ impl WakuBackend {
             removed_session_ids: Mutex::new(HashSet::new()),
             composer_drafts,
             attachments,
-            usage_scan_cache: Mutex::new(HashMap::new()),
             checkpoint_capture_locks: Mutex::new(HashMap::new()),
-            usage_rates_dir,
             default_cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         })
     }
@@ -201,7 +192,6 @@ impl Backend for WakuBackend {
                 Ok(ResponsePayload::Ack)
             }
             Command::ProbeProvider {
-                provider,
                 binary_override,
                 discover_models,
                 probe_version,
@@ -209,9 +199,9 @@ impl Backend for WakuBackend {
                 ensure_shell_environment();
                 let mut probe = match binary_override.as_deref() {
                     override_value if discover_models || probe_version => {
-                        crate::model::provider_probe(provider, override_value)
+                        crate::model::provider_probe(override_value)
                     }
-                    override_value => crate::model::cached_provider_probe(provider, override_value),
+                    override_value => crate::model::cached_provider_probe(override_value),
                 };
                 let version = probe_version
                     .then(|| {
@@ -227,51 +217,16 @@ impl Backend for WakuBackend {
                 Ok(ResponsePayload::ProviderProbe { probe, version })
             }
             Command::FetchPlanUsage {
-                provider,
-                binary_override,
-                cli_version,
+                binary_override: _,
+                cli_version: _,
             } => {
-                let usage = match provider {
-                    crate::model::ProviderKind::Claude => Some(
-                        crate::usage::fetch_claude_plan_usage(cli_version.as_deref())?,
-                    ),
-                    crate::model::ProviderKind::Codex => {
-                        Some(crate::usage::fetch_codex_plan_usage()?)
-                    }
-                    crate::model::ProviderKind::OpenCode => {
-                        crate::usage::fetch_opencode_go_plan_usage()?
-                    }
-                    crate::model::ProviderKind::Grok => {
-                        ensure_shell_environment();
-                        let probe = match binary_override.as_deref() {
-                            override_value => {
-                                crate::model::provider_probe(provider, override_value)
-                            }
-                        };
-                        let binary = probe.path.ok_or_else(|| anyhow!("grok is not installed"))?;
-                        Some(crate::usage::fetch_grok_plan_usage(&binary)?)
-                    }
-                    _ => bail!("provider has no plan usage fetcher"),
-                };
+                let usage = crate::usage::fetch_opencode_go_plan_usage()?;
                 Ok(ResponsePayload::PlanUsage { usage })
             }
             Command::ProbeComputerPermissions { prompt } => {
                 Ok(ResponsePayload::ComputerPermissions {
                     permissions: crate::computer_use::probe_permissions(prompt)?,
                 })
-            }
-            Command::LoadUsageHistory {
-                window,
-                project_roots,
-            } => {
-                let rates = crate::usage_history::load_rate_table(&self.usage_rates_dir);
-                let history = crate::usage_history::scan(
-                    &mut self.usage_scan_cache.lock(),
-                    &rates,
-                    window,
-                    &project_roots,
-                );
-                Ok(ResponsePayload::UsageHistory { history })
             }
             Command::LoadSkills { projects } => {
                 let locations = crate::skills::skill_locations(&projects);
@@ -564,7 +519,6 @@ impl Backend for WakuBackend {
             Command::Start { options } => {
                 let previous = self.sessions.lock().remove(&session_id);
                 drop(previous);
-                let provider = decode_enum(&options.provider)?;
                 let options = DriverStartOptions {
                     binary: options.binary,
                     cwd: options.cwd,
@@ -584,7 +538,7 @@ impl Backend for WakuBackend {
                 };
                 let (wake, _wake_events) = smol::channel::bounded(1);
                 let (event_sender, event_receiver) = driver::event_channel(wake);
-                let handle = driver::start_local(provider, options, event_sender)?;
+                let handle = driver::start_local(options, event_sender)?;
                 let supports_steer = handle.supports_steer();
                 std::thread::Builder::new()
                     .name(format!("waku-daemon-events-{session_id}"))
@@ -770,15 +724,8 @@ impl WakuBackend {
             .take(turn_count)
             .filter(|turn| turn.provider_turn_started)
             .count();
-        let turns_to_remove = source.provider_turns_after(turn_count);
-        let (provider_cursor, message_ids) = self.fork_provider_response(
-            &source,
-            &cwd,
-            &fork_title,
-            turn_count,
-            provider_turn_count,
-            turns_to_remove,
-        )?;
+        let (provider_cursor, message_ids) =
+            self.fork_provider_response(&source, &cwd, provider_turn_count)?;
         let mut forked = source
             .fork_through_turn(turn_count, provider_cursor, &fork_title)
             .ok_or_else(|| anyhow!("the selected response cannot be copied"))?;
@@ -846,7 +793,7 @@ impl WakuBackend {
         // transcript operations are immediately followed by a replacement
         // prompt, so accepting a rewind that cannot resume would strand the
         // user at a provider state the UI cannot continue.
-        let binary = self.provider_binary(source.provider)?;
+        let binary = self.provider_binary()?;
         let retained_turn_count = turn_count.saturating_sub(1);
         let previous_turn_count = source.turns.len();
         let rollback_turns = source.provider_turns_after(retained_turn_count);
@@ -856,10 +803,6 @@ impl WakuBackend {
             .take(retained_turn_count)
             .filter(|turn| turn.provider_turn_started)
             .count();
-        let provider_resume_at = retained_turn_count
-            .checked_sub(1)
-            .and_then(|index| source.turns.get(index))
-            .and_then(|turn| turn.provider_resume_at.clone());
 
         let turn_start_ref = crate::checkpoint::turn_start_ref(session_id, turn_count);
         let retained_ref = crate::checkpoint::checkpoint_ref(session_id, retained_turn_count);
@@ -891,7 +834,6 @@ impl WakuBackend {
             retained_turn_count,
             rollback_turns,
             provider_turn_count,
-            provider_resume_at,
         );
         let (provider_cursor, message_ids, reset_native_session) = match provider_rewind {
             Ok(result) => result,
@@ -960,158 +902,22 @@ impl WakuBackend {
         &self,
         source: &AgentSession,
         cwd: &Path,
-        fork_title: &str,
-        turn_count: usize,
         provider_turn_count: usize,
-        turns_to_remove: usize,
     ) -> anyhow::Result<(ProviderResumeCursor, HashMap<String, String>)> {
-        match source.provider {
-            ProviderKind::Claude => {
-                let Some(ProviderResumeCursor::Claude { session_id, .. }) =
-                    source.provider_cursor.as_ref()
-                else {
-                    bail!("Claude's native session is unavailable");
-                };
-                let resume_at = source
-                    .turns
-                    .get(turn_count.saturating_sub(1))
-                    .and_then(|turn| turn.provider_resume_at.clone());
-                let fork = fork_provider_session(ProviderSessionForkRequest::Claude {
-                    session_id: session_id.clone(),
-                    resume_at,
-                    turn_count: provider_turn_count,
-                    title: fork_title.to_owned(),
-                })?;
-                Ok((fork.cursor, fork.message_ids))
-            }
-            ProviderKind::Codex | ProviderKind::DeepSeek | ProviderKind::Pi => Ok((
-                self.fork_response_with_driver(source, cwd, turns_to_remove)?,
-                HashMap::new(),
-            )),
-            ProviderKind::Cursor => {
-                let fork = fork_provider_session(ProviderSessionForkRequest::Cursor {
-                    source: source.clone(),
-                    turn_count,
-                })?;
-                Ok((fork.cursor, HashMap::new()))
-            }
-            ProviderKind::Amp => {
-                let Some(ProviderResumeCursor::Amp {
-                    thread_id,
-                    fork_context,
-                }) = source.provider_cursor.as_ref()
-                else {
-                    bail!("Amp's native thread is unavailable");
-                };
-                let fork = fork_provider_session(ProviderSessionForkRequest::Amp {
-                    binary: self.provider_binary(ProviderKind::Amp)?,
-                    cwd: cwd.to_owned(),
-                    thread_id: thread_id.clone(),
-                    fork_context: fork_context.clone(),
-                    turn_count: provider_turn_count,
-                })?;
-                Ok((fork.cursor, HashMap::new()))
-            }
-            ProviderKind::OpenCode => {
-                let Some(ProviderResumeCursor::OpenCode { session_id }) =
-                    source.provider_cursor.as_ref()
-                else {
-                    bail!("OpenCode's native session is unavailable");
-                };
-                let fork = fork_provider_session(ProviderSessionForkRequest::OpenCode {
-                    binary: self.provider_binary(ProviderKind::OpenCode)?,
-                    cwd: cwd.to_owned(),
-                    session_id: session_id.clone(),
-                    turn_count: provider_turn_count,
-                })?;
-                Ok((fork.cursor, HashMap::new()))
-            }
-            ProviderKind::Grok => {
-                let Some(ProviderResumeCursor::Grok { session_id }) =
-                    source.provider_cursor.as_ref()
-                else {
-                    bail!("Grok Build's native session is unavailable");
-                };
-                let fork = fork_provider_session(ProviderSessionForkRequest::Grok {
-                    binary: self.provider_binary(ProviderKind::Grok)?,
-                    cwd: cwd.to_owned(),
-                    session_id: session_id.clone(),
-                    turn_count: provider_turn_count,
-                })?;
-                Ok((fork.cursor, HashMap::new()))
-            }
-        }
+        let Some(ProviderResumeCursor::OpenCode { session_id }) =
+            source.provider_cursor.as_ref()
+        else {
+            bail!("OpenCode's native session is unavailable");
+        };
+        let fork = fork_provider_session(ProviderSessionForkRequest::OpenCode {
+            binary: self.provider_binary()?,
+            cwd: cwd.to_owned(),
+            session_id: session_id.clone(),
+            turn_count: provider_turn_count,
+        })?;
+        Ok((fork.cursor, HashMap::new()))
     }
 
-    fn fork_response_with_driver(
-        &self,
-        source: &AgentSession,
-        cwd: &Path,
-        turns_to_remove: usize,
-    ) -> anyhow::Result<ProviderResumeCursor> {
-        if let Some(driver) = self
-            .sessions
-            .lock()
-            .get(&source.id)
-            .map(|(_, driver)| driver.clone())
-        {
-            return driver.fork(turns_to_remove);
-        }
-
-        match source.provider {
-            ProviderKind::Codex
-                if !matches!(
-                    source.provider_cursor.as_ref(),
-                    Some(ProviderResumeCursor::Codex { .. })
-                ) =>
-            {
-                bail!("Codex's native thread is unavailable");
-            }
-            ProviderKind::DeepSeek
-                if !matches!(
-                    source.provider_cursor.as_ref(),
-                    Some(ProviderResumeCursor::DeepSeek { .. })
-                ) =>
-            {
-                bail!("DeepSeek Harness's native session is unavailable");
-            }
-            ProviderKind::Pi
-                if !matches!(
-                    source.provider_cursor.as_ref(),
-                    Some(ProviderResumeCursor::Pi {
-                        session_file: Some(_),
-                        ..
-                    })
-                ) =>
-            {
-                bail!("Pi's native session file is unavailable");
-            }
-            _ => {}
-        }
-
-        let (wake, _wake_events) = smol::channel::bounded(1);
-        let (event_sender, _event_receiver) = driver::event_channel(wake);
-        let driver = driver::start_local(
-            source.provider,
-            DriverStartOptions {
-                binary: self.provider_binary(source.provider)?,
-                cwd: cwd.to_owned(),
-                mode: source.runtime_mode,
-                interaction_mode: source.interaction_mode,
-                model: source.model.clone(),
-                reasoning_effort: source.reasoning_effort.clone(),
-                service_tier: source.service_tier.clone(),
-                context_window: source.context_window.clone(),
-                agent_preset: source.agent_preset.clone(),
-                computer_use_enabled: false,
-                provider_cursor: source.provider_cursor.clone(),
-            },
-            event_sender,
-        )?;
-        driver.fork(turns_to_remove)
-    }
-
-    #[allow(clippy::too_many_arguments)]
     fn rewind_provider_response(
         &self,
         source: &AgentSession,
@@ -1120,158 +926,45 @@ impl WakuBackend {
         retained_turn_count: usize,
         rollback_turns: usize,
         provider_turn_count: usize,
-        provider_resume_at: Option<String>,
     ) -> anyhow::Result<(Option<ProviderResumeCursor>, HashMap<String, String>, bool)> {
         if rollback_turns == 0 {
             return Ok((None, HashMap::new(), false));
         }
-        let reset_native_session = retained_turn_count == 0
-            && matches!(
-                source.provider,
-                ProviderKind::Claude | ProviderKind::Cursor | ProviderKind::Grok
-            );
-        if reset_native_session {
+        if retained_turn_count == 0 {
             return Ok((None, HashMap::new(), true));
         }
 
-        match source.provider {
-            ProviderKind::Claude => {
-                let Some(ProviderResumeCursor::Claude { session_id, .. }) =
-                    source.provider_cursor.as_ref()
-                else {
-                    bail!("Claude's native session is unavailable");
-                };
-                let fork = fork_provider_session(ProviderSessionForkRequest::Claude {
-                    session_id: session_id.clone(),
-                    resume_at: provider_resume_at,
-                    turn_count: provider_turn_count,
-                    title: format!("{} (rewind)", source.display_title()),
-                })?;
-                Ok((Some(fork.cursor), fork.message_ids, false))
-            }
-            ProviderKind::OpenCode => {
-                let cursor = if let Some(driver) = self
-                    .sessions
-                    .lock()
-                    .get(&source.id)
-                    .map(|(_, driver)| driver.clone())
-                {
-                    driver
-                        .rollback(rollback_turns)?
-                        .ok_or_else(|| anyhow!("OpenCode returned no rewound-session cursor"))?
-                } else {
-                    let Some(ProviderResumeCursor::OpenCode { session_id }) =
-                        source.provider_cursor.as_ref()
-                    else {
-                        bail!("OpenCode's native session is unavailable");
-                    };
-                    fork_provider_session(ProviderSessionForkRequest::OpenCode {
-                        binary: binary.to_owned(),
-                        cwd: cwd.to_owned(),
-                        session_id: session_id.clone(),
-                        turn_count: provider_turn_count,
-                    })?
-                    .cursor
-                };
-                Ok((Some(cursor), HashMap::new(), false))
-            }
-            ProviderKind::Amp => {
-                let Some(ProviderResumeCursor::Amp {
-                    thread_id,
-                    fork_context,
-                }) = source.provider_cursor.as_ref()
-                else {
-                    bail!("Amp's native thread is unavailable");
-                };
-                let cursor = fork_provider_session(ProviderSessionForkRequest::Amp {
-                    binary: binary.to_owned(),
-                    cwd: cwd.to_owned(),
-                    thread_id: thread_id.clone(),
-                    fork_context: fork_context.clone(),
-                    turn_count: provider_turn_count,
-                })?
-                .cursor;
-                Ok((Some(cursor), HashMap::new(), false))
-            }
-            ProviderKind::Cursor => {
-                let cursor = fork_provider_session(ProviderSessionForkRequest::Cursor {
-                    source: source.clone(),
-                    turn_count: retained_turn_count,
-                })?
-                .cursor;
-                Ok((Some(cursor), HashMap::new(), false))
-            }
-            ProviderKind::Grok => {
-                let Some(ProviderResumeCursor::Grok { session_id }) =
-                    source.provider_cursor.as_ref()
-                else {
-                    bail!("Grok Build's native session is unavailable");
-                };
-                let cursor = fork_provider_session(ProviderSessionForkRequest::Grok {
-                    binary: binary.to_owned(),
-                    cwd: cwd.to_owned(),
-                    session_id: session_id.clone(),
-                    turn_count: provider_turn_count,
-                })?
-                .cursor;
-                Ok((Some(cursor), HashMap::new(), false))
-            }
-            ProviderKind::Codex | ProviderKind::DeepSeek | ProviderKind::Pi => Ok((
-                self.rollback_response_with_driver(source, cwd, binary, rollback_turns)?,
-                HashMap::new(),
-                false,
-            )),
-        }
-    }
-
-    fn rollback_response_with_driver(
-        &self,
-        source: &AgentSession,
-        cwd: &Path,
-        binary: &Path,
-        rollback_turns: usize,
-    ) -> anyhow::Result<Option<ProviderResumeCursor>> {
-        if let Some(driver) = self
+        let cursor = if let Some(driver) = self
             .sessions
             .lock()
             .get(&source.id)
             .map(|(_, driver)| driver.clone())
         {
-            return driver.rollback(rollback_turns);
-        }
-
-        let (wake, _wake_events) = smol::channel::bounded(1);
-        let (event_sender, _event_receiver) = driver::event_channel(wake);
-        let driver = driver::start_local(
-            source.provider,
-            DriverStartOptions {
+            driver
+                .rollback(rollback_turns)?
+                .ok_or_else(|| anyhow!("OpenCode returned no rewound-session cursor"))?
+        } else {
+            let Some(ProviderResumeCursor::OpenCode { session_id }) =
+                source.provider_cursor.as_ref()
+            else {
+                bail!("OpenCode's native session is unavailable");
+            };
+            fork_provider_session(ProviderSessionForkRequest::OpenCode {
                 binary: binary.to_owned(),
                 cwd: cwd.to_owned(),
-                mode: source.runtime_mode,
-                interaction_mode: source.interaction_mode,
-                model: source.model.clone(),
-                reasoning_effort: source.reasoning_effort.clone(),
-                service_tier: source.service_tier.clone(),
-                context_window: source.context_window.clone(),
-                agent_preset: source.agent_preset.clone(),
-                computer_use_enabled: false,
-                provider_cursor: source.provider_cursor.clone(),
-            },
-            event_sender,
-        )?;
-        driver.rollback(rollback_turns)
+                session_id: session_id.clone(),
+                turn_count: provider_turn_count,
+            })?
+            .cursor
+        };
+        Ok((Some(cursor), HashMap::new(), false))
     }
 
-    fn provider_binary(&self, provider: ProviderKind) -> anyhow::Result<PathBuf> {
+    fn provider_binary(&self) -> anyhow::Result<PathBuf> {
         ensure_shell_environment();
-        let settings = self.settings.get();
-        let binary_override = settings
-            .provider_binary_overrides
-            .get(&provider)
-            .map(String::as_str);
-        crate::model::provider_probe(provider, binary_override)
+        crate::model::provider_probe(None)
             .path
-            .ok_or_else(|| anyhow!("{} is not installed on the daemon", provider.display_name()))
+            .ok_or_else(|| anyhow!("opencode is not installed on the daemon"))
     }
 }
 
@@ -1369,56 +1062,7 @@ fn next_response_fork_title<'a>(
 fn fork_provider_session(
     request: ProviderSessionForkRequest,
 ) -> anyhow::Result<ProviderSessionFork> {
-    use crate::model::ProviderResumeCursor;
-
     let (cursor, message_ids, source_resume_at) = match request {
-        ProviderSessionForkRequest::Claude {
-            session_id,
-            resume_at,
-            turn_count,
-            title,
-        } => {
-            let source_resume_at = resume_at.map(Ok).unwrap_or_else(|| {
-                crate::claude_session::message_id_for_turn(&session_id, turn_count)
-            })?;
-            let fork =
-                crate::claude_session::fork_session_at(&session_id, &source_resume_at, &title)?;
-            let fork_resume_at = fork
-                .message_ids
-                .get(&source_resume_at)
-                .cloned()
-                .ok_or_else(|| anyhow!("Claude fork did not include its target message"))?;
-            (
-                ProviderResumeCursor::Claude {
-                    session_id: fork.session_id,
-                    resume_at: Some(fork_resume_at),
-                },
-                fork.message_ids,
-                Some(source_resume_at),
-            )
-        }
-        ProviderSessionForkRequest::Amp {
-            binary,
-            cwd,
-            thread_id,
-            fork_context,
-            turn_count,
-        } => (
-            crate::amp_session::fork_session_at_turn(
-                &binary,
-                &cwd,
-                &thread_id,
-                fork_context.as_deref(),
-                turn_count,
-            )?,
-            HashMap::new(),
-            None,
-        ),
-        ProviderSessionForkRequest::Cursor { source, turn_count } => (
-            crate::cursor_session::fork_session_at_turn(&source, turn_count)?,
-            HashMap::new(),
-            None,
-        ),
         ProviderSessionForkRequest::OpenCode {
             binary,
             cwd,
@@ -1426,16 +1070,6 @@ fn fork_provider_session(
             turn_count,
         } => (
             crate::opencode_session::fork_session_at_turn(&binary, &cwd, &session_id, turn_count)?,
-            HashMap::new(),
-            None,
-        ),
-        ProviderSessionForkRequest::Grok {
-            binary,
-            cwd,
-            session_id,
-            turn_count,
-        } => (
-            crate::grok_session::fork_session_at_turn(&binary, &cwd, &session_id, turn_count)?,
             HashMap::new(),
             None,
         ),
@@ -1518,7 +1152,6 @@ fn handle_driver_command(
         | Command::ProbeProvider { .. }
         | Command::FetchPlanUsage { .. }
         | Command::ProbeComputerPermissions { .. }
-        | Command::LoadUsageHistory { .. }
         | Command::LoadSkills { .. }
         | Command::SetSkillsEnabled { .. }
         | Command::TrashSkills { .. }
@@ -1815,7 +1448,7 @@ mod tests {
     fn stale_runtime_projection_keeps_newer_transcript_cursor() {
         let runtime_id = Uuid::new_v4();
         let epoch = Uuid::new_v4();
-        let mut existing = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+        let mut existing = AgentSession::new(Uuid::new_v4());
         existing.status = SessionStatus::Working;
         existing.runtime_event_cursor = Some(crate::model::RuntimeEventCursor {
             runtime_id,
@@ -1846,7 +1479,7 @@ mod tests {
 
     #[test]
     fn client_projection_cannot_replace_a_daemon_checkpoint() {
-        let mut existing = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+        let mut existing = AgentSession::new(Uuid::new_v4());
         existing.begin_turn("change it");
         existing.finish_active_turn(crate::model::TurnStatus::Completed);
         let checkpoint = Checkpoint {
@@ -1891,11 +1524,11 @@ mod tests {
 
     #[test]
     fn message_rewind_requires_a_settled_user_turn_and_provider_cursor() {
-        let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+        let mut session = AgentSession::new(Uuid::new_v4());
         session.begin_turn("change it");
         session.mark_active_turn_provider_started();
-        session.provider_cursor = Some(ProviderResumeCursor::Codex {
-            thread_id: "thread".into(),
+        session.provider_cursor = Some(ProviderResumeCursor::OpenCode {
+            session_id: "session".into(),
         });
         session.finish_active_turn(crate::model::TurnStatus::Completed);
 

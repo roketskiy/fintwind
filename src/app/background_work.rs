@@ -274,12 +274,6 @@ impl BackgroundWorkRegistry {
         self.items.values().any(|item| item.status.is_live())
     }
 
-    fn has_live_detached(&self) -> bool {
-        self.items
-            .values()
-            .any(|item| item.background && item.status.is_live())
-    }
-
     fn counts(&self) -> (usize, usize) {
         self.items
             .values()
@@ -485,16 +479,7 @@ impl Waku {
         session_id: Uuid,
         activity: &ActivityItem,
     ) {
-        if activity.kind != crate::model::ActivityKind::Command
-            || self
-                .state
-                .sessions
-                .iter()
-                .find(|session| session.id == session_id)
-                .is_some_and(|session| {
-                    matches!(session.provider, ProviderKind::Codex | ProviderKind::Claude)
-                })
-        {
+        if activity.kind != crate::model::ActivityKind::Command {
             return;
         }
         let provider_id = activity
@@ -552,12 +537,6 @@ impl Waku {
         self.background_work
             .get(&session_id)
             .is_some_and(BackgroundWorkRegistry::has_live)
-    }
-
-    pub(super) fn session_has_live_detached_work(&self, session_id: Uuid) -> bool {
-        self.background_work
-            .get(&session_id)
-            .is_some_and(BackgroundWorkRegistry::has_live_detached)
     }
 
     pub(super) fn background_work_counts(&self, session_id: Uuid) -> (usize, usize) {

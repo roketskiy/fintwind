@@ -24,8 +24,8 @@ use super::{
 use crate::git_branch::BranchEntry;
 use crate::model::{
     ActivityItem, ActivityKind, AgentSession, Checkpoint, CheckpointFile, CheckpointStatus,
-    DriverEvent, Message, MessageRole, ProviderKind, ReasoningBlock, RuntimeEventCursor,
-    SessionStatus, TranscriptBlock, TurnStatus, UserInputOption, UserInputQuestion,
+    DriverEvent, Message, MessageRole, ReasoningBlock, RuntimeEventCursor, SessionStatus,
+    TranscriptBlock, TurnStatus, UserInputOption, UserInputQuestion,
 };
 
 #[test]
@@ -93,7 +93,7 @@ fn attach_changed_files(session: &mut AgentSession, files: Vec<CheckpointFile>) 
 #[test]
 fn remote_task_catalog_adds_web_tasks_without_replacing_hydrated_detail() {
     let project_id = Uuid::new_v4();
-    let mut local = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut local = AgentSession::new(project_id);
     local.title = "Local title".into();
     local
         .messages
@@ -105,7 +105,7 @@ fn remote_task_catalog_adds_web_tasks_without_replacing_hydrated_detail() {
     local_projection.status = SessionStatus::Waiting;
     local_projection.updated_at += 10;
 
-    let mut web_task = AgentSession::new(project_id, ProviderKind::Claude).list_projection();
+    let mut web_task = AgentSession::new(project_id).list_projection();
     web_task.title = "Created in Web".into();
     let web_task_id = web_task.id;
 
@@ -427,7 +427,7 @@ fn conversation_navigation_active_turn_follows_the_scroll_top_and_tail() {
 #[test]
 fn conversation_navigation_preview_uses_each_prompt_and_latest_response() {
     let project_id = Uuid::new_v4();
-    let mut session = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut session = AgentSession::new(project_id);
     session.begin_turn("  First\n\nprompt  ");
     session.push_message(MessageRole::Assistant, "Interim update");
     session.push_message(MessageRole::Assistant, "Final answer");
@@ -452,7 +452,7 @@ fn conversation_navigation_preview_uses_each_prompt_and_latest_response() {
 #[test]
 fn conversation_navigation_preview_does_not_change_during_a_running_turn() {
     let project_id = Uuid::new_v4();
-    let mut session = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut session = AgentSession::new(project_id);
     let session_id = session.id;
     session.begin_turn("Streaming prompt");
     append_text_delta_to_session(
@@ -636,7 +636,7 @@ fn pending_expansion_reasserts_the_user_message_anchor() {
 
 #[test]
 fn settling_an_anchored_turn_splices_without_resetting_its_prompt() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     session.begin_turn("hi");
     session.push_message(MessageRole::Assistant, "Hello.");
     session.finish_active_turn(TurnStatus::Completed);
@@ -704,7 +704,7 @@ fn only_later_user_messages_start_followup_turns() {
 
 #[test]
 fn only_the_turn_opening_prompt_is_a_rewind_boundary() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     session.begin_turn("first prompt");
     session.push_message(MessageRole::Assistant, "working on it");
     // A steer the provider folded into the live turn.
@@ -778,11 +778,11 @@ fn stream_batches_commit_full_adjacent_text_and_preserve_event_order() {
 #[test]
 fn stream_parts_keep_targeting_the_running_session_after_selection_changes() {
     let project_id = uuid::Uuid::new_v4();
-    let mut running = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut running = AgentSession::new(project_id);
     running.begin_turn("background task");
     running.status = SessionStatus::Working;
     let running_id = running.id;
-    let visible = AgentSession::new(project_id, ProviderKind::Claude);
+    let visible = AgentSession::new(project_id);
     let visible_id = visible.id;
     let mut sessions = vec![running, visible];
 
@@ -800,7 +800,7 @@ fn stream_parts_keep_targeting_the_running_session_after_selection_changes() {
 
 #[test]
 fn reasoning_and_tools_share_one_ordered_activity_block() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     session.begin_turn("Build it");
 
     push_transcript_activity(
@@ -858,24 +858,24 @@ fn idle_reaping_releases_finished_sessions_but_never_a_running_turn() {
     let fresh = Duration::from_secs(60);
     let stale = Duration::from_secs(60 * 60);
 
-    let idle = AgentSession::new(project_id, ProviderKind::Codex);
+    let idle = AgentSession::new(project_id);
     assert!(session_is_reapable(Some(&idle), stale, false));
     assert!(!session_is_reapable(Some(&idle), fresh, false));
     assert!(!session_is_reapable(Some(&idle), stale, true));
 
-    let mut working = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut working = AgentSession::new(project_id);
     working.begin_turn("a long tool call");
     working.status = SessionStatus::Working;
     assert!(!session_is_reapable(Some(&working), stale, false));
 
     // An approval can sit unanswered far longer than the idle window; its agent
     // is blocked on the user, not abandoned.
-    let mut waiting = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut waiting = AgentSession::new(project_id);
     waiting.begin_turn("needs approval");
     waiting.status = SessionStatus::Waiting;
     assert!(!session_is_reapable(Some(&waiting), stale, false));
 
-    let mut failed = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut failed = AgentSession::new(project_id);
     failed.begin_turn("failed turn");
     failed.finish_active_turn(TurnStatus::Failed);
     failed.status = SessionStatus::Failed;
@@ -981,7 +981,7 @@ fn splicing_one_row_in_place_preserves_the_list() {
 #[test]
 fn row_kinds_and_row_count_describe_the_same_rows() {
     let project_id = Uuid::new_v4();
-    let mut session = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut session = AgentSession::new(project_id);
     let turn_id = session.begin_turn("Build it");
     session.transcript_blocks.push(TranscriptBlock {
         after_message: 1,
@@ -1028,7 +1028,7 @@ fn row_kinds_and_row_count_describe_the_same_rows() {
 
 #[test]
 fn changed_files_attach_to_the_terminal_response_before_its_footer() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     let first_turn = session.begin_turn("Build it");
     session.push_message(MessageRole::Assistant, "Done.");
     session.finish_active_turn(TurnStatus::Completed);
@@ -1057,7 +1057,7 @@ fn changed_files_attach_to_the_terminal_response_before_its_footer() {
 
 #[test]
 fn changed_files_remain_visible_when_an_interrupted_turn_has_no_answer() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     let turn_id = session.begin_turn("Make the change");
     session.transcript_blocks.push(TranscriptBlock {
         after_message: 1,
@@ -1100,7 +1100,7 @@ fn changed_files_remain_visible_when_an_interrupted_turn_has_no_answer() {
 
 #[test]
 fn changed_files_surface_appears_only_for_a_ready_nonempty_checkpoint() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     let turn_id = session.begin_turn("Build it");
     session.push_message(MessageRole::Assistant, "Done.");
     session.finish_active_turn(TurnStatus::Completed);
@@ -1139,7 +1139,7 @@ fn changed_files_surface_appears_only_for_a_ready_nonempty_checkpoint() {
 
 #[test]
 fn checkpoint_completion_invalidates_the_cached_transcript_rows() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     let turn_id = session.begin_turn("Build it");
     session.push_message(MessageRole::Assistant, "Done.");
     session.finish_active_turn(TurnStatus::Completed);
@@ -1186,7 +1186,7 @@ fn an_inline_checkpoint_keeps_followup_row_identity() {
 /// reasoning block and tool activity from the session.
 #[test]
 fn the_row_fingerprint_moves_whenever_the_fold_does() {
-    let mut base = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut base = AgentSession::new(Uuid::new_v4());
     let turn_id = base.begin_turn("Build it");
     base.transcript_blocks.push(TranscriptBlock {
         after_message: 1,
@@ -1299,7 +1299,7 @@ fn the_row_fingerprint_moves_whenever_the_fold_does() {
 #[test]
 fn a_settled_turn_folds_all_of_its_work_above_the_answer() {
     let project_id = Uuid::new_v4();
-    let mut session = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut session = AgentSession::new(project_id);
     let turn_id = session.begin_turn("Build it");
     session.transcript_blocks.push(TranscriptBlock {
         after_message: 1,
@@ -1354,7 +1354,7 @@ fn a_settled_turn_folds_all_of_its_work_above_the_answer() {
 /// work between them, so they are all answer and none of them folds.
 #[test]
 fn consecutive_trailing_text_parts_all_stay_out_of_the_fold() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     let turn_id = session.begin_turn("Build it");
     session.transcript_blocks.push(TranscriptBlock {
         after_message: 1,
@@ -1382,7 +1382,7 @@ fn consecutive_trailing_text_parts_all_stay_out_of_the_fold() {
 /// so the whole turn folds behind its summary rather than spilling raw work.
 #[test]
 fn a_turn_without_an_answer_folds_completely() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     let turn_id = session.begin_turn("Build it");
     session.transcript_blocks.push(TranscriptBlock {
         after_message: 1,
@@ -1412,7 +1412,7 @@ fn a_turn_without_an_answer_folds_completely() {
 #[test]
 fn assistant_response_footer_is_owned_by_the_terminal_part_and_copies_the_visible_answer() {
     let project_id = Uuid::new_v4();
-    let mut session = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut session = AgentSession::new(project_id);
     let turn_id = session.begin_turn("Build it");
     session.transcript_blocks.push(TranscriptBlock {
         after_message: 1,
@@ -1466,7 +1466,7 @@ fn assistant_response_footer_is_owned_by_the_terminal_part_and_copies_the_visibl
 /// the text before it, so the copied message must leave that text out too.
 #[test]
 fn assistant_response_footer_treats_a_blank_part_as_work() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     let turn_id = session.begin_turn("Build it");
     session.push_message(MessageRole::Assistant, "First text part.");
     session.push_message(MessageRole::Assistant, "  ");
@@ -1486,7 +1486,7 @@ fn assistant_response_footer_treats_a_blank_part_as_work() {
 #[test]
 fn running_assistant_response_withholds_its_footer() {
     let project_id = Uuid::new_v4();
-    let mut session = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut session = AgentSession::new(project_id);
     session.begin_turn("Keep going");
     session.push_message(MessageRole::Assistant, "Interim text.");
 
@@ -1497,7 +1497,7 @@ fn running_assistant_response_withholds_its_footer() {
 #[test]
 fn unkeyed_assistant_message_keeps_a_standalone_footer() {
     let project_id = Uuid::new_v4();
-    let mut session = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut session = AgentSession::new(project_id);
     session
         .messages
         .push(Message::new(MessageRole::Assistant, "Standalone response."));
@@ -1536,7 +1536,7 @@ fn turn_fold_visibility_splice_preserves_surrounding_message_rows() {
 #[test]
 fn running_turn_keeps_its_ordered_work_visible() {
     let project_id = Uuid::new_v4();
-    let mut session = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut session = AgentSession::new(project_id);
     let turn_id = session.begin_turn("Keep going");
     session.transcript_blocks.push(TranscriptBlock {
         after_message: 1,
@@ -1561,7 +1561,7 @@ fn running_turn_keeps_its_ordered_work_visible() {
 #[test]
 fn plain_settled_response_does_not_add_an_empty_work_fold() {
     let project_id = Uuid::new_v4();
-    let mut session = AgentSession::new(project_id, ProviderKind::Codex);
+    let mut session = AgentSession::new(project_id);
     session.begin_turn("Answer directly");
     session.push_message(MessageRole::Assistant, "The answer.");
     session.finish_active_turn(TurnStatus::Completed);
@@ -1592,7 +1592,7 @@ fn sidebar_time_labels_prefer_the_live_turn_over_the_last_reply() {
     assert_eq!(format_time_ago(420 * 86_400), "420d");
 
     // Never replied, nothing running: the row stays quiet.
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     assert_eq!(session_time_label(&session, 1_000), None);
 
     // A live turn counts up instead of showing the previous reply's age.
@@ -1622,7 +1622,7 @@ fn time_label_wakes_land_exactly_on_label_boundaries() {
 
     // Nothing on the clock: no sessions, or none that ever replied.
     assert_eq!(next_time_label_change(&[], 1_000), None);
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     assert_eq!(
         next_time_label_change(std::slice::from_ref(&session), 1_000),
         None
@@ -1646,7 +1646,7 @@ fn time_label_wakes_land_exactly_on_label_boundaries() {
     );
 
     // The earliest boundary across sessions wins.
-    let mut fresher = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut fresher = AgentSession::new(Uuid::new_v4());
     fresher.last_reply_at = Some(1_000 + 2 * 86_400 + 3_550);
     let sessions = [&sessions[0], &fresher]
         .into_iter()
@@ -1658,7 +1658,7 @@ fn time_label_wakes_land_exactly_on_label_boundaries() {
     );
 
     // A live turn pins the chain to seconds for its elapsed counter.
-    let mut busy = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut busy = AgentSession::new(Uuid::new_v4());
     busy.begin_turn("go");
     busy.status = SessionStatus::Working;
     let sessions = [busy];
@@ -1681,7 +1681,7 @@ fn working_elapsed_stays_compact() {
 /// permission pause — and gone the moment the session stops being busy.
 #[test]
 fn a_busy_turn_pins_the_working_indicator_after_the_last_row() {
-    let mut session = AgentSession::new(Uuid::new_v4(), ProviderKind::Codex);
+    let mut session = AgentSession::new(Uuid::new_v4());
     session.begin_turn("Build it");
     session.status = SessionStatus::Working;
 
@@ -1766,7 +1766,6 @@ fn settings_search_filters_pages_for_arrow_cycling() {
         SettingsPage::Appearance,
         SettingsPage::Providers,
         SettingsPage::Skills,
-        SettingsPage::Usage,
         SettingsPage::Daemon,
     ];
     if cfg!(all(debug_assertions, target_os = "macos")) {
@@ -1778,11 +1777,7 @@ fn settings_search_filters_pages_for_arrow_cycling() {
     assert_eq!(pages("skill"), vec![SettingsPage::Skills]);
 
     // A keyword shared across pages keeps them all reachable.
-    let mut codex_pages = vec![
-        SettingsPage::Providers,
-        SettingsPage::Skills,
-        SettingsPage::Usage,
-    ];
+    let mut codex_pages = vec![SettingsPage::Providers, SettingsPage::Skills];
     if cfg!(all(debug_assertions, target_os = "macos")) {
         codex_pages.push(SettingsPage::ComputerUse);
     }
@@ -1803,139 +1798,57 @@ fn computer_use_navigation_is_macos_debug_only() {
 }
 
 #[test]
-fn switched_off_providers_leave_the_picker_except_for_their_locked_session() {
+fn picker_lists_favorites_and_models_for_the_single_provider() {
     use super::ModelPickerTab;
     use super::composer::visible_picker_models;
     use crate::model::{FavoriteModel, ProviderModel, ProviderProbe};
 
-    let probe = |provider: ProviderKind, model: &str| ProviderProbe {
-        provider,
+    let probe = ProviderProbe {
         installed: true,
-        path: Some(std::path::PathBuf::from(format!("/bin/{}", provider.id()))),
-        models: vec![ProviderModel::new(model, model)],
+        path: Some(std::path::PathBuf::from("/bin/opencode")),
+        models: vec![
+            ProviderModel::new("sonnet", "Sonnet"),
+            ProviderModel::new("opus", "Opus"),
+        ],
         agent_presets: Vec::new(),
     };
-    let probes = [
-        probe(ProviderKind::Claude, "claude-sonnet-5"),
-        probe(ProviderKind::Codex, "gpt-5.6-sol"),
-    ];
+    let probes = [probe];
     let favorites = [FavoriteModel {
-        provider: ProviderKind::Claude,
-        model: "claude-sonnet-5".into(),
+        model: "opus".into(),
     }];
-    let disabled = [ProviderKind::Claude];
 
-    // Provider tab and favorites both stop offering the switched-off provider.
-    let models = visible_picker_models(
-        &probes,
-        &favorites,
-        &disabled,
-        None,
-        ModelPickerTab::Provider(ProviderKind::Claude),
-        "",
-    );
-    assert!(models.is_empty());
-    let models = visible_picker_models(
-        &probes,
-        &favorites,
-        &disabled,
-        None,
-        ModelPickerTab::Favorites,
-        "",
-    );
-    assert!(models.is_empty());
-    let models = visible_picker_models(
-        &probes,
-        &favorites,
-        &disabled,
-        None,
-        ModelPickerTab::Provider(ProviderKind::Codex),
-        "",
-    );
+    // The provider rail lists every discovered model.
+    let models = visible_picker_models(&probes, &favorites, ModelPickerTab::Provider, "");
+    assert_eq!(models.len(), 2);
+
+    // The favorites rail lists only starred models.
+    let models = visible_picker_models(&probes, &favorites, ModelPickerTab::Favorites, "");
     assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "opus");
 
-    // Search cannot resurface it either.
-    let models = visible_picker_models(
-        &probes,
-        &favorites,
-        &disabled,
-        None,
-        ModelPickerTab::Provider(ProviderKind::Codex),
-        "claude",
-    );
-    assert!(models.is_empty());
-
-    // A session already locked to the provider keeps its models.
-    let models = visible_picker_models(
-        &probes,
-        &favorites,
-        &disabled,
-        Some(ProviderKind::Claude),
-        ModelPickerTab::Provider(ProviderKind::Claude),
-        "",
-    );
+    // Search narrows across the pooled list.
+    let models = visible_picker_models(&probes, &favorites, ModelPickerTab::Provider, "son");
     assert_eq!(models.len(), 1);
+    assert_eq!(models[0].id, "sonnet");
 }
 
 #[test]
 fn model_picker_subtitle_deduplicates_the_provider_name() {
     use super::composer::model_picker_subtitle;
 
-    assert_eq!(
-        model_picker_subtitle(ProviderKind::DeepSeek, Some("DeepSeek")),
-        "DeepSeek"
-    );
-    assert_eq!(
-        model_picker_subtitle(ProviderKind::DeepSeek, Some("OpenAI")),
-        "OpenAI · DeepSeek"
-    );
+    assert_eq!(model_picker_subtitle(Some("OpenCode")), "OpenCode");
+    assert_eq!(model_picker_subtitle(Some("OpenAI")), "OpenAI · OpenCode");
+    assert_eq!(model_picker_subtitle(None), "OpenCode");
 }
 
 #[test]
-fn tab_cycle_walks_favorites_then_usable_providers_in_rail_order() {
+fn tab_cycle_walks_favorites_then_the_provider_rail() {
     use super::ModelPickerTab;
     use super::composer::visible_picker_tabs;
-    use crate::model::{ProviderModel, ProviderProbe};
 
-    let probe = |provider: ProviderKind, installed: bool| ProviderProbe {
-        provider,
-        installed,
-        path: installed.then(|| std::path::PathBuf::from(format!("/bin/{}", provider.id()))),
-        models: vec![ProviderModel::new("model", "model")],
-        agent_presets: Vec::new(),
-    };
-    let probes = [
-        probe(ProviderKind::Claude, true),
-        probe(ProviderKind::Codex, true),
-        probe(ProviderKind::Cursor, false),
-    ];
-
-    // Uninstalled providers never join the cycle; favorites leads.
+    // Favorites leads, OpenCode follows — the only two rails left.
     assert_eq!(
-        visible_picker_tabs(&probes, &[], None),
-        vec![
-            ModelPickerTab::Favorites,
-            ModelPickerTab::Provider(ProviderKind::Claude),
-            ModelPickerTab::Provider(ProviderKind::Codex),
-        ]
-    );
-
-    // Switched-off providers leave the cycle like they leave the rail.
-    assert_eq!(
-        visible_picker_tabs(&probes, &[ProviderKind::Claude], None),
-        vec![
-            ModelPickerTab::Favorites,
-            ModelPickerTab::Provider(ProviderKind::Codex),
-        ]
-    );
-
-    // A locked session cycles between favorites and its own provider only,
-    // even when that provider was switched off after the session started.
-    assert_eq!(
-        visible_picker_tabs(&probes, &[ProviderKind::Claude], Some(ProviderKind::Claude)),
-        vec![
-            ModelPickerTab::Favorites,
-            ModelPickerTab::Provider(ProviderKind::Claude),
-        ]
+        visible_picker_tabs(),
+        vec![ModelPickerTab::Favorites, ModelPickerTab::Provider]
     );
 }

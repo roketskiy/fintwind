@@ -33,7 +33,7 @@ const SKILLS_LIST_WIDTH: f32 = 264.0;
 fn skill_source_icon(source: SkillSource) -> &'static str {
     match source {
         SkillSource::Shared => "icons/package.svg",
-        SkillSource::Provider(provider) => crate::ui::provider_icon(provider),
+        SkillSource::OpenCode => "icons/provider-opencode.svg",
     }
 }
 
@@ -552,12 +552,7 @@ impl Waku {
         let handle = self.menu_handle("skills-source-filter", cx);
         let sources = [
             SkillSource::Shared,
-            SkillSource::Provider(ProviderKind::Claude),
-            SkillSource::Provider(ProviderKind::Codex),
-            SkillSource::Provider(ProviderKind::Cursor),
-            SkillSource::Provider(ProviderKind::OpenCode),
-            SkillSource::Provider(ProviderKind::Pi),
-            SkillSource::Provider(ProviderKind::Amp),
+            SkillSource::OpenCode,
         ];
         dropdown_menu(
             MenuChip::new("skills-source-filter")

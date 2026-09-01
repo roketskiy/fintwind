@@ -25,8 +25,6 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::model::ProviderKind;
-
 pub use waku_protocol::skills::{
     DISABLED_SKILL_FILE, SKILL_FILE, SkillEntry, SkillInstall, SkillLocation, SkillScope,
     SkillSource, SkillsCatalog,
@@ -45,11 +43,6 @@ const DIR_WALK_MAX_FILES: usize = 500;
 /// filesystem access — so this is safe to call while building a frame.
 pub fn user_skill_locations() -> Vec<SkillLocation> {
     let home = dirs::home_dir();
-    let claude_config_dir = std::env::var("CLAUDE_CONFIG_DIR")
-        .ok()
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .or_else(|| home.as_deref().map(|home| home.join(".claude")));
     let mut locations = Vec::new();
     let mut push = |source: SkillSource, root: Option<PathBuf>| {
         if let Some(root) = root {
@@ -64,28 +57,8 @@ pub fn user_skill_locations() -> Vec<SkillLocation> {
     let home_join = |suffix: &str| home.as_deref().map(|home| home.join(suffix));
     push(SkillSource::Shared, home_join(".agents/skills"));
     push(
-        SkillSource::Provider(ProviderKind::Claude),
-        claude_config_dir.map(|dir| dir.join("skills")),
-    );
-    push(
-        SkillSource::Provider(ProviderKind::Codex),
-        home_join(".codex/skills"),
-    );
-    push(
-        SkillSource::Provider(ProviderKind::OpenCode),
+        SkillSource::OpenCode,
         home_join(".config/opencode/skills"),
-    );
-    push(
-        SkillSource::Provider(ProviderKind::Cursor),
-        home_join(".cursor/skills"),
-    );
-    push(
-        SkillSource::Provider(ProviderKind::Pi),
-        home_join(".pi/agent/skills"),
-    );
-    push(
-        SkillSource::Provider(ProviderKind::Amp),
-        home_join(".config/agents/skills"),
     );
     locations
 }
@@ -94,20 +67,7 @@ pub fn user_skill_locations() -> Vec<SkillLocation> {
 pub fn project_skill_locations(project_root: &Path, project_name: &str) -> Vec<SkillLocation> {
     [
         (SkillSource::Shared, ".agents/skills"),
-        (
-            SkillSource::Provider(ProviderKind::Claude),
-            ".claude/skills",
-        ),
-        (SkillSource::Provider(ProviderKind::Codex), ".codex/skills"),
-        (
-            SkillSource::Provider(ProviderKind::OpenCode),
-            ".opencode/skills",
-        ),
-        (
-            SkillSource::Provider(ProviderKind::Cursor),
-            ".cursor/skills",
-        ),
-        (SkillSource::Provider(ProviderKind::Pi), ".pi/skills"),
+        (SkillSource::OpenCode, ".opencode/skills"),
     ]
     .into_iter()
     .map(|(source, suffix)| SkillLocation {
@@ -473,11 +433,10 @@ mod tests {
 
     #[test]
     fn copies_across_roots_group_into_one_entry() {
-        let codex_root = temp_root("group-codex");
-        let cursor_root = temp_root("group-cursor");
+        let shared_root = temp_root("group-shared");
         let opencode_root = temp_root("group-opencode");
-        // The installer-drops-it-everywhere layout: same skill, three roots.
-        for root in [&codex_root, &cursor_root, &opencode_root] {
+        // The installer-drops-it-everywhere layout: same skill, two roots.
+        for root in [&shared_root, &opencode_root] {
             write_skill(
                 root,
                 "agents-sdk",
@@ -485,32 +444,25 @@ mod tests {
             );
         }
         let locations = vec![
-            user_location(SkillSource::Provider(ProviderKind::Codex), &codex_root),
-            user_location(SkillSource::Provider(ProviderKind::Cursor), &cursor_root),
-            user_location(
-                SkillSource::Provider(ProviderKind::OpenCode),
-                &opencode_root,
-            ),
+            user_location(SkillSource::Shared, &shared_root),
+            user_location(SkillSource::OpenCode, &opencode_root),
         ];
         let catalog = scan_skills(&locations);
         assert_eq!(catalog.skills.len(), 1, "one row, not one per root");
 
         let skill = &catalog.skills[0];
-        assert_eq!(skill.installs.len(), 3);
-        assert_eq!(
-            skill.primary().source,
-            SkillSource::Provider(ProviderKind::Codex)
-        );
-        assert_eq!(skill.sources_label(), "Codex · Cursor · OpenCode");
+        assert_eq!(skill.installs.len(), 2);
+        assert_eq!(skill.primary().source, SkillSource::Shared);
+        assert_eq!(skill.sources_label(), "Shared · OpenCode");
         assert_eq!(skill.duplicates, 0, "grouped copies are not duplicates");
 
         // A disabled copy next to live ones keeps the skill enabled.
-        set_skill_enabled(&cursor_root.join("agents-sdk"), false).unwrap();
+        set_skill_enabled(&opencode_root.join("agents-sdk"), false).unwrap();
         let catalog = scan_skills(&locations);
         assert!(catalog.skills[0].enabled);
-        assert_eq!(catalog.skills[0].installs.len(), 3);
+        assert_eq!(catalog.skills[0].installs.len(), 2);
 
-        for root in [&codex_root, &cursor_root, &opencode_root] {
+        for root in [&shared_root, &opencode_root] {
             let _ = std::fs::remove_dir_all(root);
         }
     }
@@ -526,7 +478,7 @@ mod tests {
         let locations = vec![
             user_location(SkillSource::Shared, &user_root),
             SkillLocation {
-                source: SkillSource::Provider(ProviderKind::Claude),
+                source: SkillSource::OpenCode,
                 scope: SkillScope::Project,
                 root: project_root.clone(),
                 project: Some("waku".into()),
@@ -587,35 +539,22 @@ mod tests {
     fn every_ecosystem_root_is_listed() {
         let projects = vec![("waku".to_owned(), PathBuf::from("/tmp/waku"))];
         let locations = skill_locations(&projects);
-        let roots: Vec<String> = locations
-            .iter()
-            .map(|location| location.root.display().to_string())
-            .collect();
-        for expected in [
-            ".agents/skills",
-            ".claude/skills",
-            ".codex/skills",
-            ".config/opencode/skills",
-            ".cursor/skills",
-            ".pi/agent/skills",
-            ".config/agents/skills",
-        ] {
+        let roots: Vec<PathBuf> = locations.iter().map(|location| location.root.clone()).collect();
+        for expected in [".agents/skills", ".config/opencode/skills"] {
             assert!(
                 roots.iter().any(|root| root.ends_with(expected)),
                 "user root missing: {expected}"
             );
         }
+        let project_root = PathBuf::from("/tmp/waku");
         for expected in [
-            "/tmp/waku/.agents/skills",
-            "/tmp/waku/.claude/skills",
-            "/tmp/waku/.codex/skills",
-            "/tmp/waku/.opencode/skills",
-            "/tmp/waku/.cursor/skills",
-            "/tmp/waku/.pi/skills",
+            project_root.join(".agents/skills"),
+            project_root.join(".opencode/skills"),
         ] {
             assert!(
-                roots.iter().any(|root| root == expected),
-                "project root missing: {expected}"
+                roots.iter().any(|root| root == &expected),
+                "project root missing: {}",
+                expected.display()
             );
         }
         // User scope leads the scan, so grouped entries prefer user copies.

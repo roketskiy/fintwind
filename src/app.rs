@@ -33,7 +33,7 @@ use crate::model::{
     ActivityItem, ActivityKind, AgentSession, BackgroundWorkEvent, BackgroundWorkItem,
     BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkStatus, Checkpoint, CheckpointStatus,
     ContextUsage, DriverEvent, FavoriteModel, InteractionMode, Message, MessageAttachment,
-    MessageRole, PendingPermission, Project, ProviderKind, ProviderModel, ProviderProbe,
+    MessageRole, OPENCODE_PROVIDER, PendingPermission, Project, ProviderModel, ProviderProbe,
     ProviderResumeCursor, QueuedMessage, ReasoningBlock, RuntimeMode, SessionStatus,
     SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer, UserInputQuestion,
     compact_path, unix_time, unix_time_millis,
@@ -194,7 +194,7 @@ enum StreamDeltaKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ModelPickerTab {
     Favorites,
-    Provider(ProviderKind),
+    Provider,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -215,7 +215,6 @@ enum SettingsPage {
     General,
     Providers,
     Skills,
-    Usage,
     Daemon,
     ComputerUse,
     Appearance,
@@ -228,29 +227,6 @@ impl SettingsPage {
     fn is_visible_in_navigation(self) -> bool {
         self != Self::ComputerUse || cfg!(all(debug_assertions, target_os = "macos"))
     }
-}
-
-/// Which presentation the Usage page shows: the daily dashboard, the monthly
-/// statement, or the per-project ranking.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UsageViewMode {
-    Daily,
-    Monthly,
-    Projects,
-}
-
-/// Which unit the Usage page's headline and chart read in.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UsageMetric {
-    Cost,
-    Tokens,
-}
-
-/// Which table the Usage page's breakdown section shows.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum UsageBreakdown {
-    Model,
-    Day,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -555,7 +531,6 @@ struct PreparedSubmission {
 /// worktree path by the background preparation task.
 struct DriverStartRequest {
     session_id: Uuid,
-    provider: ProviderKind,
     options: DriverStartOptions,
     event_wake: smol::channel::Sender<()>,
     daemon_client: waku_client::DaemonClient,
@@ -1076,16 +1051,16 @@ pub struct Waku {
     probes: Vec<ProviderProbe>,
     provider_probe_tx: Sender<ProviderProbe>,
     provider_probe_events: Receiver<ProviderProbe>,
-    provider_model_discoveries: HashSet<ProviderKind>,
-    provider_model_discoveries_pending: HashSet<ProviderKind>,
-    /// CLI version per provider, probed off-thread. Missing key means the
-    /// probe has not answered yet; `None` means it ran and found nothing.
-    provider_versions: HashMap<ProviderKind, Option<String>>,
-    provider_version_tx: Sender<(ProviderKind, Option<String>)>,
-    provider_version_events: Receiver<(ProviderKind, Option<String>)>,
+    provider_model_discoveries: HashSet<String>,
+    provider_model_discoveries_pending: HashSet<String>,
+    /// CLI version, probed off-thread. Missing key means the probe has not
+    /// answered yet; `None` means it ran and found nothing.
+    provider_versions: HashMap<String, Option<String>>,
+    provider_version_tx: Sender<(String, Option<String>)>,
+    provider_version_events: Receiver<(String, Option<String>)>,
     /// Providers with a version probe in flight, so a re-detect cannot stack
     /// a second subprocess on one that has not answered.
-    provider_version_probes_pending: HashSet<ProviderKind>,
+    provider_version_probes_pending: HashSet<String>,
     /// Fast provider detection results from the daemon, including its cached
     /// model catalog. Live discovery revalidates these probes afterward.
     provider_detection_tx: Sender<ProviderProbe>,
@@ -1095,77 +1070,29 @@ pub struct Waku {
     provider_detection_remaining: usize,
     /// When provider detection last completed, for the page's "Checked" label.
     provider_detection_checked_at: Option<Instant>,
-    /// The provider row expanded on the Providers page, if any. The binary
-    /// override input below edits this provider's entry.
-    expanded_provider_settings: Option<ProviderKind>,
-    provider_path_input: Entity<ComposerInput>,
     computer_permissions: ComputerPermissions,
     computer_permission_tx: Sender<Result<ComputerPermissions, String>>,
     computer_permission_events: Receiver<Result<ComputerPermissions, String>>,
     computer_permission_request_pending: bool,
-    /// Account rate-limit meters per provider, fetched off-thread (Claude,
-    /// Codex, and OpenCode Go over HTTPS; Grok through a stdio probe) and
-    /// refreshed live by Codex's own stream. Frames read only this snapshot.
-    plan_usage: HashMap<ProviderKind, crate::usage::PlanUsage>,
-    /// Why a provider's last fetch failed, kept alongside stale data for the
-    /// meter's tooltip. Cleared by that provider's next success.
-    plan_usage_error: HashMap<ProviderKind, String>,
-    plan_usage_tx: Sender<(
-        ProviderKind,
-        Result<Option<crate::usage::PlanUsage>, String>,
-    )>,
-    plan_usage_events: Receiver<(
-        ProviderKind,
-        Result<Option<crate::usage::PlanUsage>, String>,
-    )>,
-    plan_usage_pending: HashSet<ProviderKind>,
-    /// Fetchable providers with no matching account credential. Unlike a
-    /// request failure, this hides the plan section until a later refresh
-    /// discovers a newly configured account.
-    plan_usage_unconfigured: HashSet<ProviderKind>,
-    /// When each provider's last fetch settled, successful or not — the
-    /// refresh backoff measures from here.
-    plan_usage_checked_at: HashMap<ProviderKind, Instant>,
-    /// Providers whose turn settled since the last fetch, so the meters have
-    /// moved.
-    plan_usage_stale: HashSet<ProviderKind>,
-    /// The settings Usage page's snapshot: historical token/cost usage
-    /// scanned from provider transcripts off-thread. Frames read only this.
-    usage_history: Option<crate::usage_history::UsageHistory>,
-    /// The window a scan is currently in flight for, so a repeat request for
-    /// the same window coalesces while a changed window supersedes it.
-    usage_history_pending_for: Option<crate::usage_history::UsageWindow>,
-    /// Bumped per scan; a result from a superseded scan is discarded.
-    usage_history_generation: u64,
-    /// When the current snapshot landed, for the reopen-staleness check.
-    usage_history_scanned_at: Option<Instant>,
-    usage_view: UsageViewMode,
-    /// The selected window for the daily and project views; the statement
-    /// view fixes its own.
-    usage_window: crate::usage_history::UsageWindow,
-    usage_metric: UsageMetric,
-    usage_breakdown: UsageBreakdown,
-    /// Scroll position of the monthly statement card, which scrolls
-    /// internally like the projects card so the two list views feel alike.
-    usage_months_scroll: ScrollHandle,
-    usage_months_scrollbar: Rc<ScrollbarState>,
-    /// Filter query over the Usage page's project rows.
-    usage_project_filter: Entity<ComposerInput>,
-    /// Virtualized list over the filtered project rows, so only visible rows
-    /// build elements no matter how many working directories have usage.
-    usage_projects_list: ListState,
-    usage_projects_scrollbar: Rc<ScrollbarState>,
-    /// Indices into `usage_history.projects` the filter leaves visible — the
-    /// row builder reads only this.
-    usage_projects_rows: RefCell<Vec<usize>>,
-    /// `(peak value, rank-by-cost)` for the visible rows' bars, refreshed
-    /// once per frame rather than per row.
-    usage_projects_scale: Cell<(f64, bool)>,
-    /// Hovered or keyboard-selected day index on the Usage page's chart.
-    usage_chart_hover: Option<usize>,
-    /// The chart plot's window bounds, written during paint so the mouse-move
-    /// handler can map positions to day indices.
-    usage_chart_bounds: Rc<Cell<Option<gpui::Bounds<Pixels>>>>,
+    /// Account rate-limit meters, fetched off-thread (OpenCode Go over HTTPS)
+    /// and refreshed live by OpenCode's own stream. Frames read only this
+    /// snapshot.
+    plan_usage: HashMap<String, crate::usage::PlanUsage>,
+    /// Why the last fetch failed, kept alongside stale data for the meter's
+    /// tooltip. Cleared by the next success.
+    plan_usage_error: HashMap<String, String>,
+    plan_usage_tx: Sender<(String, Result<Option<crate::usage::PlanUsage>, String>)>,
+    plan_usage_events: Receiver<(String, Result<Option<crate::usage::PlanUsage>, String>)>,
+    plan_usage_pending: HashSet<String>,
+    /// Fetchable with no matching account credential. Unlike a request
+    /// failure, this hides the plan section until a later refresh discovers a
+    /// newly configured account.
+    plan_usage_unconfigured: HashSet<String>,
+    /// When the last fetch settled, successful or not — the refresh backoff
+    /// measures from here.
+    plan_usage_checked_at: HashMap<String, Instant>,
+    /// Turns that settled since the last fetch, so the meters have moved.
+    plan_usage_stale: HashSet<String>,
     computer_use_app_icons: RefCell<HashMap<String, Option<std::sync::Arc<gpui::Image>>>>,
     computer_use_app_icon_loads: RefCell<HashSet<String>>,
     model_picker_tab: ModelPickerTab,
@@ -1198,12 +1125,12 @@ pub struct Waku {
     commit_operation: Option<commit_dialog::CommitOperationState>,
     /// Slash commands discovered per (provider, project root). Filesystem
     /// walks live on the background executor; frames read the index below.
-    slash_commands: QueryCache<(ProviderKind, PathBuf), Vec<SlashCommand>>,
+    slash_commands: QueryCache<(String, PathBuf), Vec<SlashCommand>>,
     /// The merged command list the autocomplete popup draws, and the key it
     /// was built for — a stale key means "no commands", never another
     /// provider's list.
     slash_command_index: Rc<Vec<SlashCommand>>,
-    slash_command_index_key: Option<(ProviderKind, PathBuf)>,
+    slash_command_index_key: Option<(String, PathBuf)>,
     /// Workspace file index per project root, for `@` mentions.
     mention_files: QueryCache<PathBuf, Vec<FileEntry>>,
     mention_file_index: Rc<Vec<FileEntry>>,
@@ -1551,7 +1478,6 @@ mod streaming;
 mod transcript;
 mod transcript_view;
 mod usage_meter;
-mod usage_page;
 mod window_chrome;
 
 pub use autocomplete::init as init_composer_autocomplete;
@@ -1929,17 +1855,6 @@ impl Waku {
                 .placeholder(tr!("skills.search"))
         });
         let session_rename_input = cx.new(|cx| ComposerInput::new(window, cx).search_field());
-        let provider_path_input = cx.new(|cx| {
-            ComposerInput::new(window, cx)
-                .search_field()
-                .select_all_on_focus_click()
-                .placeholder(tr!("input.detected_automatically"))
-        });
-        let usage_project_filter = cx.new(|cx| {
-            ComposerInput::new(window, cx)
-                .search_field()
-                .placeholder(tr!("input.filter_projects"))
-        });
         let right_panel_diff_filter = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
@@ -2087,16 +2002,12 @@ impl Waku {
             .into_iter()
             .map(ComposerAttachment::from)
             .collect();
-        let probes = ProviderKind::ALL
-            .into_iter()
-            .map(|provider| ProviderProbe {
-                provider,
-                installed: false,
-                path: None,
-                models: crate::model_catalog::fallback_models(provider),
-                agent_presets: crate::model_catalog::fallback_agent_presets(provider),
-            })
-            .collect::<Vec<_>>();
+        let probes = vec![ProviderProbe {
+            installed: false,
+            path: None,
+            models: crate::model_catalog::fallback_models(),
+            agent_presets: crate::model_catalog::fallback_agent_presets(),
+        }];
         let (provider_probe_tx, provider_probe_events) = unbounded();
         let (provider_version_tx, provider_version_events) = unbounded();
         let (provider_detection_tx, provider_detection_events) = unbounded();
@@ -2129,13 +2040,7 @@ impl Waku {
                 })
                 .ok();
         }
-        let model_picker_tab = ModelPickerTab::Provider(
-            state
-                .selected_session
-                .and_then(|id| state.sessions.iter().find(|session| session.id == id))
-                .map(|session| session.provider)
-                .unwrap_or(state.last_provider),
-        );
+        let model_picker_tab = ModelPickerTab::Provider;
         let mut session_navigation = SessionNavigation::default();
         if let Some(session_id) = state.selected_session.filter(|session_id| {
             state
@@ -2152,7 +2057,6 @@ impl Waku {
         let transcript_rows = ListState::new(0, ListAlignment::Bottom, px(2048.0));
         let anchored_transcript_rows = ListState::new(0, ListAlignment::Top, px(2048.0));
         let sidebar_list_state = ListState::new(0, ListAlignment::Top, px(256.0));
-        let usage_projects_list = ListState::new(0, ListAlignment::Top, px(256.0));
         let branch_picker_list_state = ListState::new(0, ListAlignment::Top, px(152.0));
         let transcript_is_scrolled = Rc::new(Cell::new(false));
         let transcript_anchor_following = Rc::new(Cell::new(false));
@@ -2472,29 +2376,11 @@ impl Waku {
             )
             .detach();
             cx.subscribe(
-                &usage_project_filter,
-                |_: &mut Self, _, event: &ComposerEvent, cx| {
-                    if matches!(event, ComposerEvent::Edited) {
-                        cx.notify();
-                    }
-                },
-            )
-            .detach();
-            cx.subscribe(
                 &right_panel_diff_filter,
                 |this: &mut Self, _, event: &ComposerEvent, cx| {
                     if matches!(event, ComposerEvent::Edited) {
                         this.sync_right_panel_diff_tree_rows(cx);
                         cx.notify();
-                    }
-                },
-            )
-            .detach();
-            cx.subscribe(
-                &provider_path_input,
-                |this: &mut Self, _, event: &ComposerEvent, cx| {
-                    if matches!(event, ComposerEvent::Submit(_)) {
-                        this.apply_provider_path_override(cx);
                     }
                 },
             )
@@ -2656,8 +2542,6 @@ impl Waku {
                 provider_detection_events,
                 provider_detection_remaining: 0,
                 provider_detection_checked_at: None,
-                expanded_provider_settings: None,
-                provider_path_input,
                 computer_permissions: ComputerPermissions::default(),
                 computer_permission_tx,
                 computer_permission_events,
@@ -2670,23 +2554,6 @@ impl Waku {
                 plan_usage_unconfigured: HashSet::new(),
                 plan_usage_checked_at: HashMap::new(),
                 plan_usage_stale: HashSet::new(),
-                usage_history: None,
-                usage_history_pending_for: None,
-                usage_history_generation: 0,
-                usage_history_scanned_at: None,
-                usage_view: UsageViewMode::Daily,
-                usage_window: crate::usage_history::UsageWindow::TrailingDays(30),
-                usage_metric: UsageMetric::Cost,
-                usage_breakdown: UsageBreakdown::Model,
-                usage_months_scroll: ScrollHandle::new(),
-                usage_months_scrollbar: ScrollbarState::new(),
-                usage_project_filter,
-                usage_projects_list,
-                usage_projects_scrollbar: ScrollbarState::new(),
-                usage_projects_rows: RefCell::new(Vec::new()),
-                usage_projects_scale: Cell::new((0.0, true)),
-                usage_chart_hover: None,
-                usage_chart_bounds: Rc::default(),
                 computer_use_app_icons: RefCell::new(HashMap::new()),
                 computer_use_app_icon_loads: RefCell::new(HashSet::new()),
                 model_picker_tab,
@@ -2895,11 +2762,11 @@ impl Waku {
             // The autocomplete indexes prefetch alongside, so typing `/` or
             // `@` into the very first prompt already has data to draw.
             this.refresh_composer_sources(cx);
-            // Re-detect providers after resolving the user's login-shell
+            // Re-detect the provider CLI after resolving the user's login-shell
             // environment off-thread. Detection then starts model and version
-            // discovery for every CLI it finds, including nvm/fnm-managed
+            // discovery for what it finds, including nvm/fnm-managed
             // installs.
-            this.refresh_provider_detection(None);
+            this.refresh_provider_detection();
             // The skill library too: the Skills settings page must open onto
             // data, not a scan.
             this.ensure_skills_catalog(false, cx);

@@ -96,21 +96,12 @@ impl OpenCodeDriver {
             Some(ProviderResumeCursor::OpenCode { session_id }) => {
                 (!session_id.is_empty()).then_some(session_id)
             }
-            Some(cursor) => {
-                return Err(anyhow!(
-                    "cannot resume OpenCode from a {} cursor",
-                    cursor.provider().display_name()
-                ));
-            }
             None => None,
         };
 
         let computer_use = computer_use_enabled
             .then(|| {
-                super::support::HeadlessComputerUseRuntime::start(
-                    crate::model::ProviderKind::OpenCode,
-                    events.clone(),
-                )
+                super::support::HeadlessComputerUseRuntime::start(events.clone())
             })
             .transpose()?;
         // The one-shot path handed Computer Use to OpenCode through the
@@ -1320,10 +1311,7 @@ mod tests {
             session_id: fork_session_id,
         } = driver
             .fork(1)
-            .expect("the resident server should fork away the completed turn")
-        else {
-            panic!("expected an OpenCode fork cursor");
-        };
+            .expect("the resident server should fork away the completed turn");
         assert_ne!(fork_session_id, source_session_id);
     }
 

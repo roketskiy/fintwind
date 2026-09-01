@@ -108,7 +108,6 @@ mod tests {
     use super::*;
     use serde_json::Value;
     use uuid::Uuid;
-    use waku_protocol::model::ProviderKind;
 
     #[test]
     fn legacy_combined_settings_keep_only_daemon_fields() {
@@ -141,16 +140,24 @@ mod tests {
         fs::create_dir_all(legacy.parent().unwrap()).unwrap();
         fs::write(
             &legacy,
-            r#"{"theme":"dark","disabled_providers":["claude"]}"#,
+            r#"{"theme":"dark","disabled_providers":["claude"],"future":42}"#,
         )
         .unwrap();
 
         let store = DaemonSettingsStore::open_with_legacy(path.clone(), [legacy.clone()]).unwrap();
 
-        assert_eq!(store.get().disabled_providers, vec![ProviderKind::Claude]);
+        // Legacy provider fields are unknown to the new schema, so the
+        // flatten map keeps them around untouched rather than dropping them.
+        let settings = store.get();
+        assert_eq!(settings.extra.get("future"), Some(&Value::from(42)));
+        assert_eq!(
+            settings.extra.get("disabled_providers"),
+            Some(&Value::from(serde_json::json!(["claude"])))
+        );
         let migrated: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         assert_eq!(migrated["disabled_providers"][0], "claude");
         assert!(migrated.get("theme").is_none());
+        assert_eq!(migrated["future"], 42);
         assert!(legacy.exists());
         fs::remove_dir_all(directory).ok();
     }

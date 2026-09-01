@@ -3,8 +3,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::model::ProviderKind;
-
 pub const SKILL_FILE: &str = "SKILL.md";
 pub const DISABLED_SKILL_FILE: &str = "SKILL.md.disabled";
 
@@ -12,14 +10,14 @@ pub const DISABLED_SKILL_FILE: &str = "SKILL.md.disabled";
 #[serde(rename_all = "camelCase")]
 pub enum SkillSource {
     Shared,
-    Provider(ProviderKind),
+    OpenCode,
 }
 
 impl SkillSource {
     pub fn label(self) -> String {
         match self {
             Self::Shared => tr!("skills.source_shared"),
-            Self::Provider(provider) => provider.short_name().to_owned(),
+            Self::OpenCode => "OpenCode".to_owned(),
         }
     }
 }

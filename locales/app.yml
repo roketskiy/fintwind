@@ -114,8 +114,6 @@ settings.appearance:
   en: Appearance
 settings.providers:
   en: Providers
-settings.usage:
-  en: Usage
 settings.daemon:
   en: Daemon
 settings.computer_use:
@@ -130,8 +128,6 @@ settings.skills:
   en: Skills
 settings.skills_keywords:
   en: skills skill library agent disable enable delete claude codex cursor opencode pi amp shared
-settings.usage_keywords:
-  en: usage tokens cost spend cache daily chart model breakdown history claude codex
 settings.daemon_keywords:
   en: daemon server remote web network expose origin token port websocket
 settings.computer_use_keywords:
@@ -289,8 +285,6 @@ input.search_branches:
   en: Search branches
 input.new_branch_name:
   en: New branch name
-input.detected_automatically:
-  en: Detected automatically
 input.filter_projects:
   en: Filter projects
 input.search_or_enter_address:
@@ -346,24 +340,14 @@ providers.enable:
   en: Enable %{provider}
 providers.disable:
   en: Disable %{provider}
-providers.disabled_for_new_tasks:
-  en: Disabled for new tasks
 providers.model_count_one:
   en: "%{count} model"
 providers.model_count_many:
   en: "%{count} models"
 providers.not_detected_as:
   en: Not detected on PATH as %{command}
-providers.using_override:
-  en: Using %{path} instead of PATH detection
-providers.invalid_override:
-  en: Nothing runnable at this path. Clear it to detect from PATH
-providers.detected_at:
-  en: Detected at %{path}
 providers.detected_as:
   en: Detected as %{command}
-providers.searches_path:
-  en: Waku did not detect %{command} in PATH
 providers.binary_path:
   en: Binary path
 providers.binary_path_description:
@@ -784,29 +768,6 @@ mode.full_access_description:
 mode.switch_to:
   en: Switch to %{mode}
 
-agent_preset.standard:
-  en: Standard mode
-agent_preset.code:
-  en: Code mode
-agent_preset.minimal:
-  en: Minimal mode
-agent_preset.creator:
-  en: Creator mode
-agent_preset.standard_description:
-  en: Full coding agent with file editing, shell, file and web search, skills, planning, goals, subagents, and workflows.
-agent_preset.code_description:
-  en: All Standard mode capabilities, with tools exposed through the Code Mode SDK so the model can combine multi-step operations in one TypeScript program.
-agent_preset.minimal_description:
-  en: Two-tool coding agent with persistent bash and str_replace_editor.
-agent_preset.creator_description:
-  en: Built for creating custom agent presets, with all Standard mode capabilities plus runtime inspection, plugin experiments, and preset-authoring guidance.
-agent_preset.custom:
-  en: Custom
-agent_preset.no_description:
-  en: No description.
-agent_preset.minimal_no_plan:
-  en: Minimal mode does not include Plan
-
 computer_use.allow_for_task:
   en: Allow for task
 computer_use.always_allow_app:
@@ -1027,10 +988,6 @@ commands.commit_description:
   en: Stage and commit the current changes
 commands.fast_description:
   en: Toggle fast mode
-commands.fast_enabled:
-  en: Fast mode enabled
-commands.fast_disabled:
-  en: Fast mode disabled
 commands.claude_compact:
   en: Free up context by summarizing the conversation
 commands.claude_context:

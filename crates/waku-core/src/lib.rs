@@ -17,22 +17,16 @@ macro_rules! tr {
     };
 }
 
-pub mod amp_session;
 pub mod attachments;
 pub mod blob_store;
 pub mod checkpoint;
-pub mod claude_session;
 pub mod command_env;
 pub mod composer_complete;
 pub mod computer_use;
-pub mod cursor_session;
 pub mod daemon;
-pub mod deepseek_pool;
-pub mod deepseek_session;
 pub mod driver;
 pub mod git_branch;
 pub mod git_commit;
-pub mod grok_session;
 pub mod i18n;
 pub mod identity;
 pub mod model;
@@ -46,7 +40,6 @@ pub mod skills;
 pub mod terminal;
 pub mod theme;
 pub mod usage;
-pub mod usage_history;
 pub mod workspace;
 pub mod worktree;
 

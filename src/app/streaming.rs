@@ -244,13 +244,6 @@ impl Waku {
                 runtime.last_background_refresh_at = Instant::now();
                 runtime.driver.refresh_background_work();
                 if let Some(session) = self.state.session_mut(session_id) {
-                    if let Some(ProviderResumeCursor::Claude {
-                        resume_at: Some(message_id),
-                        ..
-                    }) = &provider_cursor
-                    {
-                        session.mark_active_turn_provider_resume_at(message_id.clone());
-                    }
                     session.provider_cursor = provider_cursor;
                     if session.status == SessionStatus::Connecting {
                         session.status = SessionStatus::Working;
@@ -453,7 +446,7 @@ impl Waku {
                     .sessions
                     .iter()
                     .find(|session| session.id == session_id)
-                    .map(|session| session.provider)
+                    .map(|session| session.provider.clone())
                 {
                     self.plan_usage.insert(provider, usage);
                 }
@@ -494,8 +487,8 @@ impl Waku {
                     .sessions
                     .iter()
                     .find(|session| session.id == session_id)
-                    .map(|session| session.provider)
-                    .filter(|provider| usage_meter::PLAN_USAGE_PROVIDERS.contains(provider))
+                    .map(|session| session.provider.clone())
+                    .filter(|provider| *provider == usage_meter::PLAN_USAGE_PROVIDER)
                 {
                     self.plan_usage_stale.insert(provider);
                 }

@@ -7,13 +7,12 @@ use uuid::Uuid;
 
 use crate::attachments::{AttachmentUpload, StoredAttachment};
 use crate::computer_use::ComputerPermissions;
-use crate::model::{AgentSession, Project, ProviderKind, ProviderProbe, UserInputAnswer};
+use crate::model::{AgentSession, Project, ProviderProbe, UserInputAnswer};
 use crate::persistence::{ComposerDraftChange, ComposerDrafts, SessionMessageMatch};
 use crate::provider_session::{ProviderSessionFork, ProviderSessionForkRequest};
 use crate::settings::DaemonSettings;
 use crate::skills::SkillsCatalog;
 use crate::usage::PlanUsage;
-use crate::usage_history::{UsageHistory, UsageWindow};
 use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 
 pub const PROTOCOL_VERSION: u32 = 3;
@@ -125,22 +124,16 @@ pub enum Command {
         settings: DaemonSettings,
     },
     ProbeProvider {
-        provider: ProviderKind,
         binary_override: Option<String>,
         discover_models: bool,
         probe_version: bool,
     },
     FetchPlanUsage {
-        provider: ProviderKind,
         binary_override: Option<String>,
         cli_version: Option<String>,
     },
     ProbeComputerPermissions {
         prompt: bool,
-    },
-    LoadUsageHistory {
-        window: UsageWindow,
-        project_roots: Vec<PathBuf>,
     },
     LoadSkills {
         projects: Vec<(String, PathBuf)>,
@@ -241,8 +234,9 @@ pub enum Command {
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WireDriverStartOptions {
-    pub provider: String,
+    #[ts(type = "string")]
     pub binary: PathBuf,
+    #[ts(type = "string")]
     pub cwd: PathBuf,
     pub mode: String,
     pub interaction_mode: String,
@@ -375,9 +369,6 @@ pub enum ResponsePayload {
     },
     ComputerPermissions {
         permissions: ComputerPermissions,
-    },
-    UsageHistory {
-        history: UsageHistory,
     },
     SkillsCatalog {
         catalog: SkillsCatalog,

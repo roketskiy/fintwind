@@ -8,6 +8,10 @@ menu.settings:
   en: Settings…
 menu.quit:
   en: Quit %{app}
+tray.open:
+  en: Open %{app}
+tray.quit:
+  en: Quit %{app}
 menu.file:
   en: File
 menu.new_task:

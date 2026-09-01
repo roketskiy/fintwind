@@ -275,7 +275,18 @@ pub fn configure_main_window_close_behavior(window: &Window, cx: &gpui::App) {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Windows pairs the same hide-on-close with the tray icon (`src/tray.rs`):
+/// there is no Dock activation to reveal a hidden window, so the tray owns
+/// restore and quit, and the daemon keeps sessions running underneath.
+#[cfg(target_os = "windows")]
+pub fn configure_main_window_close_behavior(window: &Window, cx: &gpui::App) {
+    window.on_window_should_close(cx, |window, _| {
+        hide_window(window);
+        false
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn configure_main_window_close_behavior(_: &Window, _: &gpui::App) {}
 
 #[cfg(target_os = "macos")]
@@ -304,10 +315,48 @@ pub fn hide_window(window: &mut Window) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// Hiding keeps the GPUI window object alive — only the Win32 window goes
+/// invisible — so `on_window_closed` never fires and the process keeps the
+/// daemon running. The tray icon (`src/tray.rs`) owns restoring it.
+#[cfg(target_os = "windows")]
+pub fn hide_window(window: &mut Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindowAsync, SW_HIDE};
+
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    unsafe { ShowWindowAsync(handle.hwnd.get() as HWND, SW_HIDE) };
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub fn hide_window(window: &mut Window) {
     window.remove_window();
 }
+
+/// Reverse of `hide_window` for the tray restore path: make the Win32 window
+/// visible again, then GPUI's activate wins the foreground.
+#[cfg(target_os = "windows")]
+pub fn show_window(window: &mut Window) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::Foundation::HWND;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{ShowWindowAsync, SW_SHOW};
+
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+        return;
+    };
+    unsafe { ShowWindowAsync(handle.hwnd.get() as HWND, SW_SHOW) };
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn show_window(_: &mut Window) {}
 
 #[cfg(target_os = "macos")]
 thread_local! {

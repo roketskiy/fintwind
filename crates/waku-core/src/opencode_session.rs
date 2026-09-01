@@ -92,7 +92,7 @@ pub(crate) fn fork_session_removing_turns_on_server(
 fn retained_turn_count(total_turns: usize, turns_to_remove: usize) -> anyhow::Result<usize> {
     total_turns.checked_sub(turns_to_remove).ok_or_else(|| {
         anyhow!(
-            "OpenCode has only {total_turns} native turns, but Waku needs to remove {turns_to_remove}"
+            "OpenCode has only {total_turns} native turns, but fintwind needs to remove {turns_to_remove}"
         )
     })
 }
@@ -202,7 +202,7 @@ fn fork_session_with_message_ids(
 fn fork_message_id(message_ids: &[String], retained_turns: usize) -> anyhow::Result<Option<&str>> {
     if retained_turns > message_ids.len() {
         bail!(
-            "OpenCode has only {} native turns, but Waku needs {retained_turns}",
+            "OpenCode has only {} native turns, but fintwind needs {retained_turns}",
             message_ids.len()
         );
     }

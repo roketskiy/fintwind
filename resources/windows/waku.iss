@@ -1,4 +1,4 @@
-; Waku's Windows installer.
+; fintwind's Windows installer.
 ;
 ; Per-user by design: %LOCALAPPDATA%\Programs needs no elevation, which is
 ; what lets the in-app updater re-run this silently without a UAC prompt.
@@ -34,20 +34,20 @@
 ; Never change AppId: it is how Windows and every later installer recognize
 ; an existing install, and how the updater replaces rather than duplicates it.
 AppId={{8B6C6E4A-3E0F-4F0B-9C5F-2E0E9C4B7A11}
-AppName=Waku
+AppName=fintwind
 AppVersion={#AppVersion}
 VersionInfoVersion={#AppVersion}
-AppPublisher=Waku
+AppPublisher=fintwind
 AppPublisherURL=https://waku.sh
 AppSupportURL=https://github.com/egoist/waku/issues
 AppUpdatesURL=https://github.com/egoist/waku/releases
-DefaultDirName={autopf}\Waku
-DefaultGroupName=Waku
-UninstallDisplayName=Waku
-UninstallDisplayIcon={app}\waku.exe
+DefaultDirName={autopf}\fintwind
+DefaultGroupName=fintwind
+UninstallDisplayName=fintwind
+UninstallDisplayIcon={app}\fintwind.exe
 LicenseFile={#StageDir}\LICENSE
 OutputDir={#OutputDir}
-OutputBaseFilename=Waku-{#AppVersion}-{#Arch}-Setup
+OutputBaseFilename=fintwind-{#AppVersion}-{#Arch}-Setup
 SetupIconFile=AppIcon.ico
 Compression=lzma2/max
 SolidCompression=yes
@@ -59,7 +59,7 @@ ArchitecturesInstallIn64BitMode={#Architectures}
 MinVersion=10.0.17763
 ; Two installers must not race — the updater can be triggered again while an
 ; update is already applying.
-SetupMutex=WakuSetup
+SetupMutex=fintwindSetup
 ; No elevation, so an update never has to ask for it either.
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
@@ -67,8 +67,8 @@ DisableReadyPage=yes
 ; The updater passes /DIR, and a manual reinstall should land where the
 ; previous one did rather than asking again.
 UsePreviousAppDir=yes
-; Waku persists continuously to SQLite, so closing it is safe; a silent
-; update cannot stop to ask, and a locked waku.exe would fail the install.
+; fintwind persists continuously to SQLite, so closing it is safe; a silent
+; update cannot stop to ask, and a locked fintwind.exe would fail the install.
 CloseApplications=force
 RestartApplications=no
 
@@ -76,17 +76,17 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
-Source: "{#StageDir}\waku.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#StageDir}\waku-daemon.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\fintwind.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#StageDir}\fintwind-daemon.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Waku"; Filename: "{app}\waku.exe"
-Name: "{userdesktop}\Waku"; Filename: "{app}\waku.exe"; Tasks: desktopicon
+Name: "{group}\fintwind"; Filename: "{app}\fintwind.exe"
+Name: "{userdesktop}\fintwind"; Filename: "{app}\fintwind.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 
 [Run]
-; No skipifsilent: this is also how the updater's silent run brings Waku back.
-Filename: "{app}\waku.exe"; Description: "{cm:LaunchProgram,Waku}"; Flags: nowait postinstall
+; No skipifsilent: this is also how the updater's silent run brings fintwind back.
+Filename: "{app}\fintwind.exe"; Description: "{cm:LaunchProgram,fintwind}"; Flags: nowait postinstall

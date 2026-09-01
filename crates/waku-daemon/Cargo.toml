@@ -10,7 +10,7 @@ readme = "README.md"
 dev-binary = []
 
 [[bin]]
-name = "waku-daemon"
+name = "fintwind-daemon"
 path = "src/main.rs"
 
 [[bin]]

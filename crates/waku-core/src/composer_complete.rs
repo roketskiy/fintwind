@@ -1038,7 +1038,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing /{expected}"));
             assert!(
                 command.template.is_some(),
-                "/{expected} must be a Waku template"
+                "/{expected} must be a fintwind template"
             );
         }
         // The instructions file matches OpenCode's convention.

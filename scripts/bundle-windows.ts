@@ -116,14 +116,14 @@ if (!targetTriple || !architecture) {
   throw new Error(`Unsupported Windows target ${targetTriple ?? "(unknown)"}`);
 }
 
-const packageDirectoryName = `waku-${version}-${targetTriple}`;
+const packageDirectoryName = `fintwind-${version}-${targetTriple}`;
 const archive = join(releaseDirectory, `${packageDirectoryName}.zip`);
 const installer = join(
   releaseDirectory,
-  `Waku-${version}-${architecture}-Setup.exe`,
+  `fintwind-${version}-${architecture}-Setup.exe`,
 );
 
-await $`cargo build --locked --release --package waku --bin waku --package waku-daemon --bin waku-daemon`;
+await $`cargo build --locked --release --package waku --bin fintwind --package waku-daemon --bin fintwind-daemon`;
 
 const staging = await mkdtemp(join(tmpdir(), "waku-bundle-"));
 try {
@@ -131,7 +131,7 @@ try {
   // itself, so the layout is what makes an extracted zip runnable in place.
   const packageDirectory = join(staging, packageDirectoryName);
   await mkdir(packageDirectory, { recursive: true });
-  for (const file of ["waku.exe", "waku-daemon.exe"]) {
+  for (const file of ["fintwind.exe", "fintwind-daemon.exe"]) {
     await copyFile(join(releaseDirectory, file), join(packageDirectory, file));
   }
   await copyFile(join(projectRoot, "LICENSE"), join(packageDirectory, "LICENSE"));
@@ -148,8 +148,8 @@ try {
     await writeFile(certificate, Buffer.from(certificateData, "base64"));
     signtool = findSigntool();
     await sign(signtool, certificate, certificatePassword, [
-      join(packageDirectory, "waku.exe"),
-      join(packageDirectory, "waku-daemon.exe"),
+      join(packageDirectory, "fintwind.exe"),
+      join(packageDirectory, "fintwind-daemon.exe"),
     ]);
   } else {
     console.log("No WINDOWS_CERTIFICATE set; packaging unsigned binaries.");

@@ -10,9 +10,9 @@ import type { ReactNode } from 'react'
 import appCss from '@/styles.css?url'
 
 const SITE_URL = 'https://waku.sh'
-const TITLE = 'Waku — one native app for all your coding agents'
+const TITLE = 'fintwind — native Windows desktop for OpenCode 2'
 const DESCRIPTION =
-  'A fast, native app for local coding agents. Amp, Claude Code, Codex, Cursor, OpenCode, Grok, and Pi — one timeline, entirely on your machine.'
+  'A native Windows desktop app for OpenCode 2. Sessions, transcripts, tool activity, and checkpoints — entirely on your machine.'
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient

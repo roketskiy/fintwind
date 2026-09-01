@@ -76,7 +76,7 @@ const FEATURES = [
   {
     icon: HardDrive,
     title: 'Local by architecture',
-    body: 'Projects, sessions, transcripts, and provider IDs live on your disk. No account, no telemetry, no Waku cloud between you and your agents.',
+    body: 'Projects, sessions, transcripts, and provider IDs live on your disk. No account, no telemetry, no fintwind cloud between you and your agents.',
   },
   {
     icon: RefreshCw,
@@ -88,19 +88,19 @@ const FEATURES = [
 const FAQ = [
   {
     q: 'Is this another Electron app?',
-    a: 'No. Waku is a single Rust binary rendered by GPUI, the UI framework Zed is built on. The window you see is drawn by the GPU, not by a browser engine.',
+    a: 'No. fintwind is a single Rust binary rendered by GPUI, the UI framework Zed is built on. The window you see is drawn by the GPU, not by a browser engine.',
   },
   {
     q: 'Do I need new API keys?',
-    a: 'No. Waku detects amp, claude, codex, cursor-agent, opencode, grok, and pi on your machine and drives them directly — your existing logins, plans, and rate limits apply unchanged.',
+    a: 'No. fintwind detects amp, claude, codex, cursor-agent, opencode, grok, and pi on your machine and drives them directly — your existing logins, plans, and rate limits apply unchanged.',
   },
   {
     q: 'Where does my data live?',
-    a: 'On your machine. Projects, sessions, transcripts, and provider session IDs are stored locally. There is no Waku account and no telemetry.',
+    a: 'On your machine. Projects, sessions, transcripts, and provider session IDs are stored locally. There is no fintwind account and no telemetry.',
   },
   {
     q: 'What about Windows?',
-    a: 'Waku runs natively on Windows 10 and 11. Run the installer and it keeps itself up to date, same as macOS. The embedded browser and computer use are macOS-only for now.',
+    a: 'fintwind runs natively on Windows 10 and 11. Run the installer and it keeps itself up to date, same as macOS. The embedded browser and computer use are macOS-only for now.',
   },
   {
     q: 'What is the future plan?',
@@ -202,7 +202,7 @@ function Home() {
                 className="size-8 rounded-[6px]"
               />
               <span className="text-[15px] font-semibold tracking-tight">
-                Waku
+                fintwind
               </span>
             </a>
             <div className="flex items-center gap-5">
@@ -243,12 +243,12 @@ function Home() {
                 Not backed by Y Combinator
               </div>
               <h1 className="max-w-4xl text-4xl font-semibold tracking-[-0.03em] text-balance md:text-[3.4rem] md:leading-[1.04]">
-                One native app for all your coding agents.
+                OpenCode 2, in a native Windows app.
               </h1>
               <p className="mt-5 max-w-[36rem] text-[17px] leading-relaxed text-pretty text-muted-foreground">
-                Waku drives the agent CLIs you already have — sessions,
-                transcripts, tool activity, and checkpoints in one fast
-                graphite window, entirely on your machine.
+                fintwind drives OpenCode 2 — sessions, transcripts, tool
+                activity, and checkpoints in one fast graphite window,
+                entirely on your machine.
               </p>
               <div className="mt-8 flex flex-wrap items-center gap-x-5 gap-y-3">
                 <DownloadMenu
@@ -305,7 +305,7 @@ function Home() {
                 />
                 <img
                   src="/app-screenshot-light.png"
-                  alt="Waku showing a coding-agent session"
+                  alt="fintwind showing a coding-agent session"
                   width={2266}
                   height={1752}
                   className="block h-auto w-full"
@@ -337,7 +337,7 @@ function Home() {
             <section id="download" className="border-t px-5 py-16 md:px-10 md:py-20">
               <SectionLabel>Download</SectionLabel>
               <h2 className="mt-3 text-2xl font-semibold tracking-tight">
-                Get Waku
+                Get fintwind
               </h2>
               <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-3">
                 <DownloadMenu
@@ -381,7 +381,7 @@ function Home() {
               alt=""
               className="size-4 rounded-[4px] opacity-80 grayscale"
             />
-            <span>© 2026 Waku</span>
+            <span>© 2026 fintwind</span>
           </footer>
         </div>
       </div>

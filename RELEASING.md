@@ -155,16 +155,16 @@ same artifacts as a local release:
 
 Linux CI adds:
 
-- `waku-<version>-x86_64-unknown-linux-gnu.tar.gz`
-- `waku-<version>-aarch64-unknown-linux-gnu.tar.gz`
+- `fintwind-<version>-x86_64-unknown-linux-gnu.tar.gz`
+- `fintwind-<version>-aarch64-unknown-linux-gnu.tar.gz`
 - `latest-linux.txt` — the version `install.sh` resolves "latest" to
 
 Windows CI adds:
 
 - `Waku-<version>-x86_64-Setup.exe`
 - `Waku-<version>-aarch64-Setup.exe`
-- `waku-<version>-x86_64-pc-windows-msvc.zip` (portable)
-- `waku-<version>-aarch64-pc-windows-msvc.zip` (portable)
+- `fintwind-<version>-x86_64-pc-windows-msvc.zip` (portable)
+- `fintwind-<version>-aarch64-pc-windows-msvc.zip` (portable)
 - `appcast-windows-x86_64.xml`, `appcast-windows-aarch64.xml`
 - `latest-windows.txt` — the version the download page resolves "latest" to
 
@@ -292,8 +292,8 @@ secrets first:
 - **Platform artifacts:** keep the bucket layout flat and platform-tagged by
   artifact name/extension — today's macOS names
   (`Waku-<v>.dmg`, `Waku-<v>.zip`, `appcast.xml`) must keep their URLs.
-  Linux CI releases produce `waku-<v>-<target>.tar.gz` with
-  `scripts/bundle-linux.sh`, Windows CI produces `waku-<v>-<target>.zip` with
+  Linux CI releases produce `fintwind-<v>-<target>.tar.gz` with
+  `scripts/bundle-linux.sh`, Windows CI produces `fintwind-<v>-<target>.zip` with
   `scripts/bundle-windows.ts`, and both land in GitHub Releases, then R2 via
   the sync workflow. Windows also ships `Waku-<v>-<arch>-Setup.exe` and updates
   itself from `appcast-windows-<arch>.xml`. Automatic Linux updates are still

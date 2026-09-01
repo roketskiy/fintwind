@@ -31,7 +31,7 @@ impl DaemonSettingsStore {
                 Err(error) => {
                     let backup = quarantine_corrupt_settings(&path)?;
                     eprintln!(
-                        "Waku daemon moved invalid settings to {}: {error}",
+                        "fintwind daemon moved invalid settings to {}: {error}",
                         backup.display()
                     );
                     (DaemonSettings::default(), true)

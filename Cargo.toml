@@ -174,12 +174,19 @@ windows-core = "0.61"
 # graph through GPUI.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
 # Verifies the EdDSA signatures `generate_appcast` writes, so the Windows
 # updater trusts the same key Sparkle does on macOS.
 ed25519-dalek = "2"
+# System-tray presence behind the close-to-background window. Same crate
+# Tauri builds its tray on; the icon shell-scales from the 256px PNG.
+tray-icon = { version = "0.24", features = ["common-controls-v6"] }
+# Decodes the embedded app icon for the tray. Matches the version GPUI
+# renders with, so no second image stack enters the graph.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [profile.release]
 lto = "thin"

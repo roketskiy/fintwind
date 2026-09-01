@@ -8,4 +8,8 @@ target
 node_modules
 temp/
 
+# Local resources, not part of the source tree
+.agents/
+gpui-component-main/
+
 .DS_Store

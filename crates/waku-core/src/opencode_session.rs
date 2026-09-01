@@ -1,13 +1,16 @@
 //! OpenCode server lifecycle and native-session helpers.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Stdio};
+use std::sync::OnceLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, anyhow, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -24,6 +27,30 @@ const FORK_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 /// A startup probe caught there must give up quickly and retry — at the full
 /// `HTTP_TIMEOUT` one hung probe would eat the whole start budget.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+/// How many messages one request of the native transcript may return before
+/// the page boundary is hit; the batch keeps going with the cursor.
+const MESSAGE_PAGE_LIMIT: usize = 200;
+
+/// Port → Basic-auth password, remembered so requests that hold only a port
+/// (the event-stream reader and the usage-metadata poll) can authenticate
+/// against the credentials the owning server was started with. Ports are
+/// unique per process, so the map cannot alias two servers.
+fn server_passwords() -> &'static Mutex<HashMap<u16, String>> {
+    static PASSWORDS: OnceLock<Mutex<HashMap<u16, String>>> = OnceLock::new();
+    PASSWORDS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// The `Authorization: Basic ...` header for the server on `port`, if a
+/// password was registered for it. opencode2 serves Basic-auth every request
+/// and generate their own random password when none is injected, so Waku
+/// supplies one and must present it on every connection, including the SSE
+/// stream.
+pub(crate) fn basic_authorization(port: u16) -> Option<String> {
+    server_passwords().lock().get(&port).map(|password| {
+        let credentials = BASE64.encode(format!("opencode:{password}"));
+        format!("Authorization: Basic {credentials}")
+    })
+}
 
 pub fn fork_session_at_turn(
     binary: &Path,
@@ -48,8 +75,8 @@ pub(crate) fn fork_session_at_turn_on_server(
     session_id: &str,
     retained_turns: usize,
 ) -> anyhow::Result<ProviderResumeCursor> {
-    let message_ids = native_user_message_ids(server, session_id)?;
-    fork_session_with_message_ids(server, session_id, &message_ids, retained_turns)
+    let native = native_messages(server, session_id)?;
+    fork_session_with_message_ids(server, session_id, &native, retained_turns)
 }
 
 pub(crate) fn fork_session_removing_turns_on_server(
@@ -57,9 +84,9 @@ pub(crate) fn fork_session_removing_turns_on_server(
     session_id: &str,
     turns_to_remove: usize,
 ) -> anyhow::Result<ProviderResumeCursor> {
-    let message_ids = native_user_message_ids(server, session_id)?;
-    let retained_turns = retained_turn_count(message_ids.len(), turns_to_remove)?;
-    fork_session_with_message_ids(server, session_id, &message_ids, retained_turns)
+    let native = native_messages(server, session_id)?;
+    let retained_turns = retained_turn_count(native.user_ids.len(), turns_to_remove)?;
+    fork_session_with_message_ids(server, session_id, &native, retained_turns)
 }
 
 fn retained_turn_count(total_turns: usize, turns_to_remove: usize) -> anyhow::Result<usize> {
@@ -70,34 +97,96 @@ fn retained_turn_count(total_turns: usize, turns_to_remove: usize) -> anyhow::Re
     })
 }
 
-fn native_user_message_ids(
-    server: &OpenCodeServer,
-    session_id: &str,
-) -> anyhow::Result<Vec<String>> {
-    let session_path = format!("/session/{}/message", encode_path_segment(session_id));
-    let messages = server.request_with_timeout("GET", &session_path, None, FORK_HTTP_TIMEOUT)?;
-    Ok(messages
-        .as_array()
-        .ok_or_else(|| anyhow!("OpenCode returned an invalid message list"))?
-        .iter()
-        .filter_map(|message| {
-            (is_native_user_turn(message))
-                .then(|| message.pointer("/info/id").and_then(Value::as_str))
-                .flatten()
-                .map(str::to_owned)
-        })
-        .collect())
+/// The native transcript as opencode2 stores it: separated user turns and the
+/// id of the newest message of any kind (used to fork "keep everything").
+struct NativeMessages {
+    user_ids: Vec<String>,
+    last_id: Option<String>,
+}
+
+fn native_messages(server: &OpenCodeServer, session_id: &str) -> anyhow::Result<NativeMessages> {
+    let mut user_ids = Vec::new();
+    let mut last_id = None;
+    let mut cursor: Option<String> = None;
+    loop {
+        let path = match &cursor {
+            Some(cursor) => format!(
+                "/api/session/{}/message?limit={}&cursor={}",
+                encode_path_segment(session_id),
+                MESSAGE_PAGE_LIMIT,
+                encode_path_segment(cursor)
+            ),
+            None => format!(
+                "/api/session/{}/message?limit={}",
+                encode_path_segment(session_id),
+                MESSAGE_PAGE_LIMIT
+            ),
+        };
+        let messages = server.request_with_timeout("GET", &path, None, FORK_HTTP_TIMEOUT)?;
+        let data = messages
+            .pointer("/data")
+            .and_then(Value::as_array)
+            .ok_or_else(|| anyhow!("OpenCode returned an invalid message list"))?;
+        // The wire lists messages newest first, so the first page's first
+        // entry is the newest message of the whole conversation.
+        if last_id.is_none() {
+            if let Some(id) = data
+                .first()
+                .and_then(|message| message.get("id").and_then(Value::as_str))
+            {
+                last_id = Some(id.to_owned());
+            }
+        }
+        for message in data {
+            if is_native_user_turn(message) {
+                if let Some(id) = message.get("id").and_then(Value::as_str) {
+                    user_ids.push(id.to_owned());
+                }
+            }
+        }
+        // The next cursor repeats the current one when the paged list has
+        // already been fully scanned, which would loop forever.
+        match messages
+            .pointer("/cursor/next")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        {
+            Some(next) if cursor.as_deref() != Some(next.as_str()) => cursor = Some(next),
+            _ => break,
+        }
+    }
+    // Pages arrive newest first; oldest-first ordering keeps `fork_message_id`
+    // counting the same "first user turn" the v1 driver did.
+    user_ids.reverse();
+    Ok(NativeMessages { user_ids, last_id })
 }
 
 fn fork_session_with_message_ids(
     server: &OpenCodeServer,
     session_id: &str,
-    message_ids: &[String],
+    native: &NativeMessages,
     retained_turns: usize,
 ) -> anyhow::Result<ProviderResumeCursor> {
-    let fork_at = fork_message_id(&message_ids, retained_turns)?;
-    let body = fork_at.map_or_else(|| json!({}), |message_id| json!({"messageID": message_id}));
-    let fork_path = format!("/session/{}/fork", encode_path_segment(session_id));
+    let fork_at = fork_message_id(&native.user_ids, retained_turns)?;
+    let body = match fork_at {
+        // opencode2 forks at an explicit boundary instead of v1's bare
+        // message id: `before` keeps everything up to (not including) the
+        // message, which matches the v1 "keep the retained prefix" semantics.
+        Some(message_id) => json!({"boundary": {"type": "before", "messageID": message_id}}),
+        // Keeping every turn needs a boundary too — `through` the newest
+        // message of the conversation copies the whole transcript.
+        None => match native.last_id.as_deref() {
+            Some(last_id) => json!({"boundary": {"type": "through", "messageID": last_id}}),
+            // An empty conversation has nothing to fork; the original session
+            // already is the full copy.
+            None => {
+                return Ok(ProviderResumeCursor::OpenCode {
+                    session_id: session_id.to_owned(),
+                });
+            }
+        },
+    };
+    let fork_path = format!("/api/session/{}/fork", encode_path_segment(session_id));
     let fork = server.request_with_timeout("POST", &fork_path, Some(&body), FORK_HTTP_TIMEOUT)?;
     let fork_id = fork
         .get("id")
@@ -146,6 +235,11 @@ impl OpenCodeServer {
         for (name, value) in environment {
             command.env(name, value);
         }
+        // opencode2 serves enforce Basic auth and generate their own random
+        // password when none is provided (an empty value behaves the same as
+        // unset), so Waku injects its own random password and authenticates
+        // every request against the exact credentials it started.
+        let password = uuid::Uuid::new_v4().to_string();
         let command = command
             .args([
                 "serve",
@@ -154,7 +248,7 @@ impl OpenCodeServer {
                 "--port",
                 &port.to_string(),
             ])
-            .env("OPENCODE_SERVER_PASSWORD", "")
+            .env("OPENCODE_SERVER_PASSWORD", &password)
             .env("OPENCODE_SERVER_USERNAME", "opencode")
             .current_dir(cwd)
             .stdin(Stdio::null())
@@ -162,6 +256,9 @@ impl OpenCodeServer {
             .stderr(Stdio::null());
         let child =
             crate::command_env::spawn(command).context("failed to start `opencode serve`")?;
+        // The health probe below already needs the credentials, and the
+        // event-stream reader reaches the server by port alone.
+        server_passwords().lock().insert(port, password);
         let server = Self {
             child: Mutex::new(child),
             port,
@@ -169,7 +266,7 @@ impl OpenCodeServer {
         let started_at = Instant::now();
         loop {
             if server
-                .request_with_timeout("GET", "/global/health", None, HEALTH_PROBE_TIMEOUT)
+                .request_with_timeout("GET", "/api/health", None, HEALTH_PROBE_TIMEOUT)
                 .is_ok()
             {
                 return Ok(server);
@@ -215,22 +312,21 @@ impl OpenCodeServer {
 }
 
 fn is_native_user_turn(message: &Value) -> bool {
-    message.pointer("/info/role").and_then(Value::as_str) == Some("user")
+    // opencode2 stores the transcript as flat messages: user turns carry
+    // their text directly and system turns have their own types
+    // (`synthetic`, `agent-switched`, `model-switched`, ...).
+    message.get("type").and_then(Value::as_str) == Some("user")
         && message
-            .get("parts")
-            .and_then(Value::as_array)
-            .is_some_and(|parts| {
-                parts.iter().any(|part| {
-                    part.get("type").and_then(Value::as_str) == Some("text")
-                        && part.get("synthetic").and_then(Value::as_bool) != Some(true)
-                })
-            })
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty())
 }
 
 impl OpenCodeServer {
     /// Terminates and reaps the owned child. The timeout is a graceful-exit
     /// budget; a server that ignores TERM is killed afterward.
     pub(crate) fn shutdown(&self, timeout: Duration) {
+        server_passwords().lock().remove(&self.port);
         let mut child = self.child.lock();
         if child.try_wait().is_ok_and(|status| status.is_some()) {
             return;
@@ -242,7 +338,7 @@ impl OpenCodeServer {
         }
         #[cfg(not(unix))]
         {
-            let _ = child.kill();
+            kill_process_tree(&mut child);
         }
 
         let deadline = Instant::now() + timeout;
@@ -254,21 +350,42 @@ impl OpenCodeServer {
             }
         }
 
-        let _ = child.kill();
+        kill_process_tree(&mut child);
         let _ = child.wait();
     }
 }
 
 impl Drop for OpenCodeServer {
     fn drop(&mut self) {
+        server_passwords().lock().remove(&self.port);
         let child = self.child.get_mut();
         if child.try_wait().is_ok_and(|status| status.is_some()) {
             return;
         }
+        #[cfg(unix)]
         let _ = child.kill();
+        #[cfg(not(unix))]
+        kill_process_tree(child);
         let _ = child.wait();
     }
 }
+
+/// Windows spawns `.cmd` shims (npm installs) through `cmd.exe`, so killing
+/// the wrapper leaves the real server running as an orphan reaped by nobody.
+/// `taskkill /T` takes the whole tree, wrapper and server alike. No-op on
+/// Unix, where the child is the process itself.
+#[cfg(not(unix))]
+fn kill_process_tree(child: &mut Child) {
+    let _ = std::process::Command::new("taskkill")
+        .args(["/PID", &child.id().to_string(), "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    let _ = child.kill();
+}
+
+#[cfg(unix)]
+fn kill_process_tree(_child: &mut Child) {}
 
 /// Sends one request to a server identified by port alone. Readers that must
 /// not keep the server alive (they only unblock when it exits) hold the port
@@ -303,11 +420,16 @@ fn http_request(
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
     let body = body.unwrap_or_default();
-    write!(
-        stream,
-        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+    let mut headers = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: application/json\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
         body.len()
-    )?;
+    );
+    if let Some(authorization) = basic_authorization(port) {
+        headers.push_str(&authorization);
+        headers.push_str("\r\n");
+    }
+    headers.push_str("\r\n");
+    write!(stream, "{headers}")?;
     stream.write_all(body)?;
     stream.flush()?;
 
@@ -480,18 +602,31 @@ mod tests {
     }
 
     #[test]
-    fn native_turn_filter_ignores_compaction_and_synthetic_user_messages() {
+    fn native_turn_filter_ignores_system_messages() {
         assert!(is_native_user_turn(&json!({
-            "info": {"role": "user"},
-            "parts": [{"type": "text", "text": "hello"}]
+            "id": "msg_1",
+            "type": "user",
+            "text": "hello"
         })));
         assert!(!is_native_user_turn(&json!({
-            "info": {"role": "user"},
-            "parts": [{"type": "compaction", "auto": true}]
+            "id": "msg_2",
+            "type": "synthetic",
+            "text": "system reminder"
         })));
         assert!(!is_native_user_turn(&json!({
-            "info": {"role": "user"},
-            "parts": [{"type": "text", "text": "continue", "synthetic": true}]
+            "id": "msg_3",
+            "type": "agent-switched",
+            "text": ""
+        })));
+        assert!(!is_native_user_turn(&json!({
+            "id": "msg_4",
+            "type": "user",
+            "text": "   "
+        })));
+        assert!(!is_native_user_turn(&json!({
+            "id": "msg_5",
+            "type": "assistant",
+            "text": "absent"
         })));
     }
 
@@ -578,10 +713,10 @@ mod tests {
     /// the caller so this never creates provider traffic; it only forks the
     /// already-completed native transcript and removes the test fork again.
     #[test]
-    #[ignore = "requires an installed opencode and WAKU_OPENCODE_TEST_SESSION_ID"]
+    #[ignore = "requires an installed opencode2 and WAKU_OPENCODE_TEST_SESSION_ID"]
     fn forks_away_a_real_single_turn_session() {
         let binary =
-            crate::command_env::find_executable("opencode").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode2").expect("opencode2 is not installed");
         let session_id = std::env::var("WAKU_OPENCODE_TEST_SESSION_ID")
             .expect("set WAKU_OPENCODE_TEST_SESSION_ID to a completed one-turn session");
         let cwd = std::env::current_dir().expect("the test working directory should exist");
@@ -593,15 +728,30 @@ mod tests {
         let messages = server
             .request(
                 "GET",
-                &format!("/session/{}/message", encode_path_segment(&fork_id)),
+                &format!(
+                    "/api/session/{}/message",
+                    encode_path_segment(&fork_id)
+                ),
                 None,
             )
             .expect("the fork should be readable");
-        assert_eq!(messages.as_array().map(Vec::len), Some(0));
+        // A fork taken before the first user turn keeps no user turns; the
+        // session's system messages (`model-switched` etc.) are still copied.
+        assert!(
+            messages
+                .pointer("/data")
+                .and_then(Value::as_array)
+                .is_some_and(|data| {
+                    !data
+                        .iter()
+                        .any(|message| message.get("type").and_then(Value::as_str) == Some("user"))
+                }),
+            "a fork taken before the first turn should keep no user turns"
+        );
         server
             .request(
                 "DELETE",
-                &format!("/session/{}", encode_path_segment(&fork_id)),
+                &format!("/api/session/{}", encode_path_segment(&fork_id)),
                 None,
             )
             .expect("the test fork should be removed");

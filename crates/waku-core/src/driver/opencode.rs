@@ -1,15 +1,21 @@
-//! `opencode serve` is OpenCode's real API: one resident process serves
+//! `opencode2 serve` is OpenCode's real API: one resident process serves
 //! every session in a workspace, streams server-sent events, and answers
 //! permission requests the user can actually be asked. Waku already started
 //! this server for a side-quest — forking a session — while running
-//! conversations through one-shot `opencode run` invocations; this drives
+//! conversations through one-shot `opencode2 run` invocations; this drives
 //! everything through it, pooled per workspace via `opencode_pool` so
 //! sessions share the process instead of starting one each. A prompt posted
 //! into a busy session is folded into the running turn rather than queued
 //! behind it, which is what makes steering a plain post.
 //!
-//! Routes and payload shapes here were read off a live server's OpenAPI
-//! document and event stream, not guessed.
+//! Routes and payload shapes here were read off a live `opencode2` server's
+//! `/api` protocol and event stream, not guessed. The v1 compatibility
+//! surface (`/session/...`, `/event` with `properties`) is gone from current
+//! releases — `POST /session` answers 405 — so everything below speaks the
+//! `/api/*` protocol: prompts post `{text}`, forks take
+//! `{boundary:{type:"before"|"through",messageID}}`, messages come back as
+//! `{data:[...],cursor}`, and events arrive as `{type,data}` lines on
+//! `/api/event`.
 
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
@@ -34,8 +40,14 @@ use crate::model::{
 };
 use crate::opencode_pool::PooledServer;
 use crate::opencode_session::{
-    OpenCodeServer, encode_path_segment, fork_session_removing_turns_on_server,
+    OpenCodeServer, basic_authorization, encode_path_segment, fork_session_removing_turns_on_server,
 };
+
+/// How often the permission poll scans the server's pending requests. The
+/// endpoint answers instantly when nothing is pending and opencode2 does not
+/// stream permission events, so this cadence bounds how long an approval
+/// waits to reach the UI while costing next to nothing when idle.
+const PERMISSION_POLL_INTERVAL: Duration = Duration::from_millis(400);
 
 enum CommandMessage {
     Prompt(String),
@@ -52,16 +64,12 @@ enum CommandMessage {
     Shutdown,
 }
 
-/// The prompt body both turn starts and steers post; the model rides on every
-/// prompt because the server has no session-level model setting.
-fn prompt_body(text: &str, model: Option<&str>) -> Value {
-    let mut body = json!({
-        "parts": [{"type": "text", "text": text}]
-    });
-    if let Some((provider_id, model_id)) = model.and_then(|model| model.split_once('/')) {
-        body["model"] = json!({"providerID": provider_id, "modelID": model_id});
-    }
-    body
+/// The prompt body both turn starts and steers post; opencode2 keeps the
+/// model on the session (set through `/api/session/{id}/model`), so prompts
+/// carry only their text. The wire's default delivery (`steer`) folds a
+/// prompt posted into a busy session into the running turn, matching v1.
+fn prompt_body(text: &str) -> Value {
+    json!({"text": text})
 }
 
 pub struct OpenCodeDriver {
@@ -74,6 +82,7 @@ pub struct OpenCodeDriver {
     event_stream: Arc<OpenCodeEventStreamControl>,
     mode: RuntimeMode,
     interaction_mode: InteractionMode,
+    model: Option<String>,
     computer_use: Option<super::support::HeadlessComputerUseRuntime>,
 }
 
@@ -124,13 +133,19 @@ impl OpenCodeDriver {
         // Reuse the native session when resuming so the conversation, and the
         // cursor already persisted for it, stay the same.
         let session_id = match resume_session_id {
-            Some(session_id) => session_id,
+            Some(session_id) => {
+                let path = format!("/api/session/{}", encode_path_segment(&session_id));
+                server
+                    .request("GET", &path, None)
+                    .with_context(|| format!("could not resume OpenCode session `{session_id}`"))?;
+                session_id
+            }
             None => {
                 let created = server
-                    .request("POST", "/session", Some(&json!({})))
+                    .request("POST", "/api/session", Some(&json!({})))
                     .context("could not open an OpenCode session")?;
                 created
-                    .get("id")
+                    .pointer("/data/id")
                     .and_then(Value::as_str)
                     .map(str::to_owned)
                     .ok_or_else(|| anyhow!("OpenCode returned no session ID"))?
@@ -152,24 +167,38 @@ impl OpenCodeDriver {
         };
         let _ = server.request(
             "POST",
-            &format!("/session/{}/agent", encode_path_segment(&session_id)),
+            &format!("/api/session/{}/agent", encode_path_segment(&session_id)),
             Some(&json!({"agent": agent})),
         );
 
+        // opencode2 keeps the model on the session instead of on every
+        // prompt. A startup model override switches it once; later switches
+        // would ride the same endpoint. The model reference on this wire is
+        // `{id, providerID}`, unlike v1's `{providerID, modelID}`.
+        if let Some(model) = model.as_ref() {
+            if let Some((provider_id, model_id)) = model.split_once('/') {
+                let _ = server.request(
+                    "POST",
+                    &format!("/api/session/{}/model", encode_path_segment(&session_id)),
+                    Some(&json!({"model": {"id": model_id, "providerID": provider_id}})),
+                );
+            }
+        }
+
         let usage_metadata = Arc::new(OpenCodeUsageMetadata::default());
         let previous_usage_path = format!(
-            "/session/{}/message?limit=20",
+            "/api/session/{}/message?limit=20",
             encode_path_segment(&session_id)
         );
         let previous_info = server
             .request("GET", &previous_usage_path, None)
             .ok()
-            .and_then(|messages| latest_opencode_usage_info(&messages).cloned());
+            .and_then(|messages| latest_opencode_usage_message(&messages).cloned());
         if let Some(info) = previous_info.as_ref() {
-            if let Some(model) = opencode_model_key(info) {
+            if let Some(model) = opencode_message_model_key(info) {
                 *usage_metadata.last_model.lock() = Some(model);
             }
-            if let Some(tokens) = opencode_context_tokens(info) {
+            if let Some(tokens) = opencode_message_tokens(info) {
                 let _ = events.send(DriverEvent::UsageUpdated {
                     context_tokens: Some(tokens),
                     context_window: None,
@@ -237,6 +266,67 @@ impl OpenCodeDriver {
         let permissions = Arc::new(Mutex::new(OpenCodePermissionState::default()));
         let event_stream = Arc::new(OpenCodeEventStreamControl::default());
 
+        // opencode2 answers permission requests through a polling endpoint
+        // (`GET /api/permission/request`) instead of the event stream v1
+        // used, so a dedicated thread scans it and routes requests through
+        // the same approval path the event handler used. The request shape
+        // maps straight onto the v1 event payload: `action` is the
+        // permission, `resources` the patterns, `save` the always-rules.
+        let permission_port = server.port;
+        let permission_session = session_id.clone();
+        let permission_events = events.clone();
+        let permission_commands = commands.clone();
+        let permission_state = Arc::clone(&permissions);
+        let permission_stream = Arc::clone(&event_stream);
+        let permission_seen = Arc::new(Mutex::new(HashSet::new()));
+        let poll_permission_seen = Arc::clone(&permission_seen);
+        thread::Builder::new()
+            .name("waku-opencode-permissions".into())
+            .spawn(move || {
+                while !permission_stream.is_cancelled() {
+                    if let Ok(pending) = crate::opencode_session::request_json_on_port(
+                        permission_port,
+                        "GET",
+                        "/api/permission/request",
+                        None,
+                        Duration::from_secs(2),
+                    ) {
+                        let Some(requests) = pending.get("data").and_then(Value::as_array) else {
+                            thread::sleep(PERMISSION_POLL_INTERVAL);
+                            continue;
+                        };
+                        for request in requests {
+                            let Some(request_id) = request.get("id").and_then(Value::as_str) else {
+                                continue;
+                            };
+                            if request.get("sessionID").and_then(Value::as_str)
+                                != Some(permission_session.as_str())
+                            {
+                                continue;
+                            }
+                            if !poll_permission_seen.lock().insert(request_id.to_owned()) {
+                                continue;
+                            }
+                            let adapted = json!({
+                                "id": request.get("id").cloned().unwrap_or(Value::Null),
+                                "sessionID": request.get("sessionID").cloned().unwrap_or(Value::Null),
+                                "permission": request.get("action").cloned().unwrap_or(Value::Null),
+                                "patterns": request.get("resources").cloned().unwrap_or(Value::Null),
+                                "always": request.get("save").cloned().unwrap_or(Value::Null),
+                            });
+                            let _ = request_permission(
+                                &adapted,
+                                &permission_events,
+                                &permission_commands,
+                                auto_approve,
+                                &permission_state,
+                            );
+                        }
+                    }
+                    thread::sleep(PERMISSION_POLL_INTERVAL);
+                }
+            })?;
+
         // The reader holds only the port, never a server handle: the stream
         // closes exactly when the process exits, so a handle held here would
         // keep the pooled server from ever being killed.
@@ -256,10 +346,7 @@ impl OpenCodeDriver {
                     permissions: stream_permissions,
                     ..OpenCodeStreamState::default()
                 };
-                // The server-wide stream, not a per-session one: the scoped
-                // route exists only under `/api`, and the workspace server
-                // may carry other sessions' traffic, so filter by session id.
-                match open_event_stream(stream_port, "/event", &stream_control) {
+                match open_event_stream(stream_port, "/api/event", &stream_control) {
                     Ok(Some(stream)) => {
                         for line in BufReader::new(stream).lines().map_while(Result::ok) {
                             if stream_control.is_cancelled() {
@@ -274,7 +361,8 @@ impl OpenCodeDriver {
                             // Another session's traffic must not reach this
                             // task's transcript.
                             let session = value
-                                .pointer("/properties/sessionID")
+                                .pointer("/data/sessionID")
+                                .or_else(|| value.pointer("/properties/sessionID"))
                                 .and_then(Value::as_str);
                             if session.is_some_and(|session| session != stream_session) {
                                 continue;
@@ -310,6 +398,7 @@ impl OpenCodeDriver {
         let worker_session = session_id.clone();
         let worker_events = events;
         let worker_turn = turn_active;
+        let worker_permission_seen = Arc::clone(&permission_seen);
         thread::Builder::new()
             .name("waku-opencode-driver".into())
             .spawn(move || {
@@ -318,26 +407,27 @@ impl OpenCodeDriver {
                         CommandMessage::Prompt(text) => {
                             *worker_turn.lock() = true;
                             let _ = worker_events.send(DriverEvent::TurnStarted);
-                            // `prompt_async` acknowledges as soon as the prompt
-                            // is accepted; completion arrives as `session.idle`
-                            // on the event stream. The blocking message route
+                            // `prompt` acknowledges as soon as the prompt
+                            // is accepted; completion arrives as
+                            // `session.execution.succeeded` (or `failed`) on
+                            // the event stream. The blocking message route
                             // holds its response for the whole turn, which no
                             // sane read timeout survives — a turn longer than
                             // the HTTP timeout would be falsely failed.
                             let path = format!(
-                                "/session/{}/prompt_async",
+                                "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let body = prompt_body(&text, model.as_deref());
+                            let body = prompt_body(&text);
                             if let Err(error) = worker_server.request("POST", &path, Some(&body)) {
                                 let _ = worker_events.send(DriverEvent::Error(tr!(
                                     "errors.provider_rejected_prompt_detail",
                                     provider = "OpenCode",
                                     error = error
                                 )));
-                                // `session.idle` never arrives for a turn that
-                                // failed to start, so settle it here instead of
-                                // hanging.
+                                // `session.execution.succeeded` never arrives
+                                // for a turn that failed to start, so settle
+                                // it here instead of hanging.
                                 if std::mem::take(&mut *worker_turn.lock()) {
                                     let _ = worker_events.send(DriverEvent::TurnFinished {
                                         success: false,
@@ -352,13 +442,11 @@ impl OpenCodeDriver {
                         CommandMessage::Steer(text) => {
                             // A prompt posted into a busy session is a steer:
                             // the server folds it into the running turn and one
-                            // `session.idle` still settles everything —
-                            // OpenCode's own UI calls this "queued", but it is
-                            // the live turn absorbing the message, not a
-                            // follow-up turn. `prompt_async` acknowledges as
-                            // soon as the prompt is accepted, unlike the
-                            // message route, which blocks until the merged turn
-                            // ends — which is what makes it the steer vehicle.
+                            // `session.execution.succeeded` still settles
+                            // everything. `prompt` acknowledges as soon as the
+                            // prompt is accepted, unlike the message route,
+                            // which blocks until the merged turn ends — which
+                            // is what makes it the steer vehicle.
                             if !*worker_turn.lock() {
                                 let _ = worker_events.send(DriverEvent::SteerRejected {
                                     message: text,
@@ -370,10 +458,10 @@ impl OpenCodeDriver {
                                 continue;
                             }
                             let path = format!(
-                                "/session/{}/prompt_async",
+                                "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let body = prompt_body(&text, model.as_deref());
+                            let body = prompt_body(&text);
                             match worker_server.request("POST", &path, Some(&body)) {
                                 Ok(_) => {
                                     let _ = worker_events
@@ -392,8 +480,10 @@ impl OpenCodeDriver {
                             }
                         }
                         CommandMessage::Cancel => {
-                            let path =
-                                format!("/session/{}/abort", encode_path_segment(&worker_session));
+                            let path = format!(
+                                "/api/session/{}/interrupt",
+                                encode_path_segment(&worker_session)
+                            );
                             if let Err(error) = worker_server.request("POST", &path, None) {
                                 let _ = worker_events.send(DriverEvent::Error(tr!(
                                     "errors.stop_provider",
@@ -407,7 +497,7 @@ impl OpenCodeDriver {
                             option_id,
                         } => {
                             let path = format!(
-                                "/session/{}/permission/{}/reply",
+                                "/api/session/{}/permission/{}/reply",
                                 encode_path_segment(&worker_session),
                                 encode_path_segment(&request_id)
                             );
@@ -416,6 +506,7 @@ impl OpenCodeDriver {
                                 &path,
                                 Some(&json!({"reply": option_id})),
                             ) {
+                                worker_permission_seen.lock().remove(&request_id);
                                 let _ = worker_events.send(DriverEvent::Error(tr!(
                                     "errors.answer_provider_permission",
                                     provider = "OpenCode",
@@ -428,7 +519,7 @@ impl OpenCodeDriver {
                             answers,
                         } => {
                             let path =
-                                format!("/question/{}/reply", encode_path_segment(&request_id));
+                                format!("/api/question/{}/reply", encode_path_segment(&request_id));
                             let answers = answers
                                 .into_iter()
                                 .map(|answer| answer.answers)
@@ -461,6 +552,7 @@ impl OpenCodeDriver {
             event_stream,
             mode,
             interaction_mode,
+            model,
             computer_use,
         })
     }
@@ -508,9 +600,11 @@ impl DriverControl for OpenCodeDriver {
     }
 
     fn apply_options(&self, options: SessionOptions) -> bool {
-        // The model rides on each prompt, but the agent is chosen per
-        // session, so a mode change needs a fresh driver (and session).
-        options.mode == self.mode && options.interaction_mode == self.interaction_mode
+        // The agent and model are session-level settings, so either changing
+        // one requires a fresh driver to apply the new session configuration.
+        options.mode == self.mode
+            && options.interaction_mode == self.interaction_mode
+            && options.model == self.model
     }
 
     fn rollback(&self, turns: usize) -> anyhow::Result<Option<ProviderResumeCursor>> {
@@ -591,10 +685,15 @@ fn open_event_stream(
     if !control.attach(&stream)? {
         return Ok(None);
     }
-    write!(
-        stream,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n\r\n"
-    )?;
+    let mut request = format!(
+        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n"
+    );
+    if let Some(authorization) = basic_authorization(port) {
+        request.push_str(&authorization);
+        request.push_str("\r\n");
+    }
+    request.push_str("\r\n");
+    write!(stream, "{request}")?;
     stream.flush()?;
     // Skip the response head; every later line is stream payload.
     let mut reader = BufReader::new(stream.try_clone()?);
@@ -723,63 +822,42 @@ fn opencode_model_context_windows(response: &Value) -> HashMap<String, u64> {
         .collect()
 }
 
-fn opencode_context_tokens(info: &Value) -> Option<u64> {
-    let tokens = info.get("tokens")?;
-    tokens
-        .get("total")
-        .and_then(Value::as_u64)
-        .filter(|tokens| *tokens > 0)
-        .or_else(|| {
-            let total = [
-                tokens.get("input"),
-                tokens.get("output"),
-                tokens.pointer("/cache/read"),
-                tokens.pointer("/cache/write"),
-            ]
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_u64)
-            .fold(0_u64, u64::saturating_add);
-            (total > 0).then_some(total)
-        })
+/// The token total of an opencode2 usage payload: assistant messages carry
+/// `tokens` at the top level and the event stream reports the same shape on
+/// `session.usage.updated`. There is no `total`, so input/output plus cache
+/// define the meter.
+fn opencode_message_tokens(message: &Value) -> Option<u64> {
+    let tokens = message.get("tokens")?;
+    let total = [
+        tokens.get("input"),
+        tokens.get("output"),
+        tokens.get("reasoning"),
+        tokens.pointer("/cache/read"),
+        tokens.pointer("/cache/write"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_u64)
+    .fold(0_u64, u64::saturating_add);
+    (total > 0).then_some(total)
 }
 
-fn opencode_model_key(info: &Value) -> Option<String> {
-    info.get("providerID")
-        .and_then(Value::as_str)
-        .zip(info.get("modelID").and_then(Value::as_str))
-        .map(|(provider, model)| format!("{provider}/{model}"))
+/// The model key (`provider/id`) of an opencode2 assistant message or
+/// `session.step.started` payload, where `model` is an object.
+fn opencode_message_model_key(message: &Value) -> Option<String> {
+    let model = message.get("model")?;
+    let provider = model.get("providerID").and_then(Value::as_str)?;
+    let id = model.get("id").and_then(Value::as_str)?;
+    Some(format!("{provider}/{id}"))
 }
 
-fn opencode_context_usage(
-    info: &Value,
-    model_context_windows: &HashMap<String, u64>,
-) -> Option<(Option<u64>, Option<u64>)> {
-    if info.get("role").and_then(Value::as_str) != Some("assistant") {
-        return None;
-    }
-    let tokens = opencode_context_tokens(info);
-    let window = opencode_model_key(info)
-        .as_ref()
-        .and_then(|model| model_context_windows.get(model).copied());
-    (tokens.is_some() || window.is_some()).then_some((tokens, window))
-}
-
-fn latest_opencode_usage_info(messages: &Value) -> Option<&Value> {
-    let mut assistant = None;
-    for message in messages.as_array()?.iter().rev() {
-        let Some(info) = message
-            .get("info")
-            .filter(|info| info.get("role").and_then(Value::as_str) == Some("assistant"))
-        else {
-            continue;
-        };
-        if opencode_context_tokens(info).is_some() {
-            return Some(info);
-        }
-        assistant.get_or_insert(info);
-    }
-    assistant
+fn latest_opencode_usage_message(messages: &Value) -> Option<&Value> {
+    let data = messages.pointer("/data").and_then(Value::as_array)?;
+    // The native endpoint returns the newest message first.
+    data.iter().find(|message| {
+        message.get("type").and_then(Value::as_str) == Some("assistant")
+            && message.get("tokens").is_some()
+    })
 }
 
 fn handle_event(
@@ -794,72 +872,60 @@ fn handle_event(
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let properties = value.get("properties").unwrap_or(&Value::Null);
+    // opencode2's `/api/event` payloads carry their fields under `data`; the
+    // old v1 compatibility stream (still advertised by some forks) used
+    // `properties`, tolerated here at no cost.
+    let payload = value
+        .get("data")
+        .or_else(|| value.get("properties"))
+        .unwrap_or(&Value::Null);
 
     match kind {
-        "message.part.delta" => {
-            let Some(delta) = properties.get("delta").and_then(Value::as_str) else {
+        "session.text.delta" => {
+            let Some(delta) = payload.get("delta").and_then(Value::as_str) else {
                 return;
             };
             if delta.is_empty() {
                 return;
             }
-            let part_id = properties.get("partID").and_then(Value::as_str);
-            let native_reasoning_part =
-                part_id.is_some_and(|part_id| state.reasoning_parts.contains(part_id));
-            match properties.get("field").and_then(Value::as_str) {
-                // OpenCode streams a reasoning part's own `text` property as
-                // `field: "text"`. The preceding part update is therefore the
-                // authoritative distinction between answer and thought text.
-                Some("text") if native_reasoning_part => {
-                    let _ = events.send(DriverEvent::ReasoningDelta(delta.to_owned()));
-                }
-                Some("text") => {
-                    let _ = events.send(DriverEvent::TextDelta(delta.to_owned()));
-                }
-                Some("reasoning" | "thinking") => {
-                    if let Some(part_id) = part_id {
-                        state.reasoning_parts.insert(part_id.to_owned());
-                    }
-                    let _ = events.send(DriverEvent::ReasoningDelta(delta.to_owned()));
-                }
-                _ => {}
+            let _ = events.send(DriverEvent::TextDelta(delta.to_owned()));
+        }
+        "session.reasoning.delta" => {
+            let Some(delta) = payload.get("delta").and_then(Value::as_str) else {
+                return;
+            };
+            if delta.is_empty() {
+                return;
+            }
+            let _ = events.send(DriverEvent::ReasoningDelta(delta.to_owned()));
+        }
+        "session.step.started" => {
+            // The step announces the model that will run it; later usage
+            // events carry tokens but no model.
+            if let Some(model) = opencode_message_model_key(payload) {
+                *state.usage_metadata.last_model.lock() = Some(model);
             }
         }
-        "message.part.updated" => {
-            let part = properties.get("part").unwrap_or(&Value::Null);
-            let part_type = part.get("type").and_then(Value::as_str);
-            if let Some(part_id) = part.get("id").and_then(Value::as_str) {
-                if matches!(part_type, Some("reasoning" | "thinking")) {
-                    state.reasoning_parts.insert(part_id.to_owned());
-                } else {
-                    state.reasoning_parts.remove(part_id);
-                }
-            }
-            if part_type == Some("tool") {
-                tool_activity(part, events, state);
-            }
-        }
-        "message.updated" => {
-            if let Some(info) = properties.get("info") {
-                if let Some(model) = opencode_model_key(info) {
-                    *state.usage_metadata.last_model.lock() = Some(model);
-                }
-                let usage = {
-                    let windows = state.usage_metadata.model_context_windows.lock();
-                    opencode_context_usage(info, &windows)
-                };
-                if let Some((context_tokens, context_window)) = usage {
-                    let _ = events.send(DriverEvent::UsageUpdated {
-                        context_tokens,
-                        context_window,
-                    });
-                }
+        "session.usage.updated" => {
+            // The payload carries tokens but no model; the window comes from
+            // the model announced by `session.step.started`.
+            let (context_tokens, context_window) = {
+                let metadata = &state.usage_metadata;
+                let tokens = opencode_message_tokens(payload);
+                let window = metadata.current_context_window();
+                (tokens, window)
+            };
+            if context_tokens.is_some() || context_window.is_some() {
+                let _ = events.send(DriverEvent::UsageUpdated {
+                    context_tokens,
+                    context_window,
+                });
             }
         }
-        "session.idle" => {
+        "session.execution.succeeded" => {
             state.reasoning_parts.clear();
             state.permissions.lock().pending.clear();
+            state.tools.clear();
             if std::mem::take(&mut *turn_active.lock()) {
                 let _ = events.send(DriverEvent::TurnFinished {
                     success: true,
@@ -867,17 +933,37 @@ fn handle_event(
                 });
             }
         }
-        "session.error" => {
-            let message = properties
+        "session.execution.failed" => {
+            state.reasoning_parts.clear();
+            state.permissions.lock().pending.clear();
+            state.tools.clear();
+            // The failure payload carries the provider error; surface it so
+            // the transcript explains why the turn settled unsuccessfully.
+            let message = payload
                 .pointer("/error/message")
-                .or_else(|| properties.get("message"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if let Some(message) = message {
+                let _ = events.send(DriverEvent::Error(message));
+            }
+            if std::mem::take(&mut *turn_active.lock()) {
+                let _ = events.send(DriverEvent::TurnFinished {
+                    success: false,
+                    summary: Some(tr!("errors.provider_start_turn", provider = "OpenCode")),
+                });
+            }
+        }
+        "session.error" => {
+            let message = payload
+                .pointer("/error/message")
+                .or_else(|| payload.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("OpenCode reported an error");
             let _ = events.send(DriverEvent::Error(message.to_owned()));
         }
-        "session.updated" => {
-            let title = properties
-                .pointer("/info/title")
+        "session.renamed" => {
+            let title = payload
+                .get("title")
                 .and_then(Value::as_str)
                 .map(str::trim)
                 .filter(|title| !title.is_empty() && !title.starts_with("New session - "));
@@ -885,21 +971,118 @@ fn handle_event(
                 let _ = events.send(DriverEvent::AutoTitleUpdated(Some(title.to_owned())));
             }
         }
+        "session.tool.input.started" => {
+            // The tool's name arrives on this event; `session.tool.called`
+            // (which carries the arguments) does not repeat it.
+            if let (Some(id), Some(name)) = (
+                payload.get("id").and_then(Value::as_str),
+                payload.get("name").and_then(Value::as_str),
+            ) {
+                let kind = super::support::classify_tool(name);
+                state.tools.insert(id.to_owned(), (kind, name.to_owned()));
+            }
+        }
+        "session.tool.called" => {
+            tool_called(payload, events, state);
+        }
+        "session.tool.progress" | "session.tool.input.ended" => {}
+        "session.tool.success" => {
+            tool_finished(payload, events, state, false);
+        }
+        "session.tool.error" | "session.tool.failed" => {
+            tool_finished(payload, events, state, true);
+        }
         _ if kind.starts_with("permission.") => {
             request_permission(
-                properties,
+                payload,
                 events,
                 commands,
                 auto_approve,
                 &state.permissions,
             );
         }
-        "question.asked" => request_user_input(properties, events),
-        "question.replied" | "question.rejected" => {}
-        // `session.created`, `session.diff`, and the plugin/catalog/reference
-        // chatter are not transcript content.
+        "question.asked" | "question.v2.asked" => request_user_input(payload, events),
+        "question.replied"
+        | "question.rejected"
+        | "question.v2.replied"
+        | "question.v2.rejected" => {}
+        // `session.text.started`/`ended`, `session.reasoning.started`/`ended`,
+        // `session.step.streamed`, `session.inbox.*`, `session.execution.started`,
+        // `session.instructions.updated`, `server.connected`, and the
+        // heartbeat comment lines are not transcript content.
         _ => {}
     }
+}
+
+/// `session.tool.called` opens a tool activity with the arguments the tool
+/// will run with; the name was recorded by `session.tool.input.started`.
+fn tool_called(payload: &Value, events: &impl DriverEventSink, state: &mut OpenCodeStreamState) {
+    let Some(id) = payload.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    let stored = state.tools.get(id).cloned();
+    let kind = stored
+        .as_ref()
+        .map(|(kind, _)| *kind)
+        .unwrap_or(ActivityKind::Tool);
+    let title = stored
+        .as_ref()
+        .map(|(_, title)| title.clone())
+        .unwrap_or_else(|| tr!("activity.tool"));
+    let arguments = payload.get("input");
+    let display = activity::input_title(arguments);
+    let item = activity::tool_activity(
+        Some(id.to_owned()),
+        kind,
+        display.unwrap_or(title),
+        arguments,
+        None,
+        payload.get("input"),
+        false,
+        false,
+    );
+    let _ = events.send(DriverEvent::RichActivity(item));
+}
+
+/// `session.tool.success`/`session.tool.error` close a tool activity with its
+/// output (or failure) and release the recorded name.
+fn tool_finished(
+    payload: &Value,
+    events: &impl DriverEventSink,
+    state: &mut OpenCodeStreamState,
+    failed: bool,
+) {
+    let Some(id) = payload.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    let stored = state.tools.remove(id);
+    let kind = stored
+        .as_ref()
+        .map(|(kind, _)| *kind)
+        .unwrap_or(ActivityKind::Tool);
+    let title = stored
+        .map(|(_, title)| title)
+        .unwrap_or_else(|| tr!("activity.tool"));
+    let output = failed
+        .then(|| payload.pointer("/error").unwrap_or(&Value::Null).clone())
+        .filter(|value| !value.is_null())
+        .or_else(|| {
+            payload
+                .pointer("/content")
+                .filter(|value| !value.is_null())
+                .cloned()
+        });
+    let item = activity::tool_activity(
+        Some(id.to_owned()),
+        kind,
+        title,
+        payload.get("input"),
+        output.as_ref(),
+        Some(payload),
+        failed,
+        true,
+    );
+    let _ = events.send(DriverEvent::RichActivity(item));
 }
 
 fn request_user_input(properties: &Value, events: &impl DriverEventSink) {
@@ -1116,63 +1299,6 @@ fn permission_responses(
         .collect()
 }
 
-fn tool_activity(part: &Value, events: &impl DriverEventSink, state: &mut OpenCodeStreamState) {
-    let wire_title = part
-        .get("tool")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| tr!("activity.tool"));
-    let id = part
-        .get("callID")
-        .or_else(|| part.get("id"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let arguments = part.pointer("/state/input");
-    let complete = matches!(
-        part.pointer("/state/status").and_then(Value::as_str),
-        Some("completed" | "error")
-    );
-    let stored = id.as_ref().and_then(|id| {
-        if complete {
-            state.tools.remove(id)
-        } else {
-            state.tools.get(id).cloned()
-        }
-    });
-    let kind = stored
-        .as_ref()
-        .map(|(kind, _)| *kind)
-        .unwrap_or_else(|| super::support::classify_tool(&wire_title));
-    let title = activity::input_title(arguments)
-        .or_else(|| stored.map(|(_, title)| title))
-        .unwrap_or(wire_title);
-    if !complete && let Some(id) = id.as_ref() {
-        state.tools.insert(id.clone(), (kind, title.clone()));
-    }
-    let failed = part.pointer("/state/status").and_then(Value::as_str) == Some("error")
-        || part
-            .pointer("/state/error")
-            .is_some_and(|error| !error.is_null());
-    let output = part
-        .pointer("/state/error")
-        .filter(|value| !value.is_null())
-        .or_else(|| {
-            part.pointer("/state/output")
-                .filter(|value| !value.is_null())
-        });
-    let item = activity::tool_activity(
-        id,
-        kind,
-        title,
-        arguments,
-        output,
-        part.get("state"),
-        failed,
-        complete,
-    );
-    let _ = events.send(DriverEvent::RichActivity(item));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1230,14 +1356,14 @@ mod tests {
         assert_eq!(questions[0].options[0].label, "Source");
     }
 
-    /// Drives a real `opencode serve` through the actual driver. Ignored by
+    /// Drives a real `opencode2 serve` through the actual driver. Ignored by
     /// default: needs the CLI installed, credentials, and the network. Run with
     /// `cargo test --bin waku opencode_session_against_a_real_server -- --ignored`.
     #[test]
-    #[ignore = "requires an installed, authenticated opencode"]
+    #[ignore = "requires an installed, authenticated opencode2"]
     fn opencode_session_against_a_real_server() {
         let binary =
-            crate::command_env::find_executable("opencode").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
         let (events, event_rx) = crate::driver::test_event_channel();
         let driver = OpenCodeDriver::start(
             DriverStartOptions {
@@ -1245,7 +1371,7 @@ mod tests {
                 cwd: std::env::temp_dir(),
                 mode: RuntimeMode::FullAccess,
                 interaction_mode: InteractionMode::Build,
-                model: None,
+                model: Some("glmcoding/glm-5.3-flash".into()),
                 reasoning_effort: None,
                 service_tier: None,
                 context_window: None,
@@ -1320,10 +1446,10 @@ mod tests {
     /// one TurnFinished, and a reply that honors both instructions. Ignored by
     /// default: needs the CLI installed, credentials, and the network.
     #[test]
-    #[ignore = "requires an installed, authenticated opencode"]
+    #[ignore = "requires an installed, authenticated opencode2"]
     fn opencode_steering_folds_a_mid_turn_message_into_the_running_turn() {
         let binary =
-            crate::command_env::find_executable("opencode").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
         let (events, event_rx) = crate::driver::test_event_channel();
         let driver = OpenCodeDriver::start(
             DriverStartOptions {
@@ -1331,7 +1457,7 @@ mod tests {
                 cwd: std::env::temp_dir(),
                 mode: RuntimeMode::FullAccess,
                 interaction_mode: InteractionMode::Build,
-                model: None,
+                model: Some("glmcoding/glm-5.3-flash".into()),
                 reasoning_effort: None,
                 service_tier: None,
                 context_window: None,
@@ -1402,18 +1528,19 @@ mod tests {
     }
 
     #[test]
-    fn streams_text_and_correlated_tools_and_settles_on_idle() {
+    fn streams_text_and_correlated_tools_and_settles_on_execution() {
         let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
-        // Payloads copied from a live `opencode serve` event stream.
+        // Payloads copied from a live `opencode2 serve` event stream.
         let wire = [
-            json!({"type":"message.part.delta","properties":{"sessionID":"ses_1","messageID":"msg_1","partID":"prt_1","field":"text","delta":"OK"}}),
-            json!({"type":"message.part.delta","properties":{"field":"reasoning","delta":"thinking"}}),
-            json!({"type":"message.part.updated","properties":{"part":{"type":"tool","tool":"read","callID":"call_1","state":{"status":"running","input":{"filePath":"a.txt"}}}}}),
-            json!({"type":"message.part.updated","properties":{"part":{"type":"tool","tool":"read","callID":"call_1","state":{"status":"completed","output":"contents"}}}}),
+            json!({"type":"session.text.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"OK"}}),
+            json!({"type":"session.reasoning.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"thinking"}}),
+            json!({"type":"session.tool.input.started","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"call_1","name":"read"}}),
+            json!({"type":"session.tool.called","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"call_1","input":{"filePath":"a.txt"},"executed":false}}),
+            json!({"type":"session.tool.success","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"call_1","content":[{"type":"text","text":"contents"}],"metadata":{"status":"completed"}}}),
             // Not transcript content.
-            json!({"type":"session.diff","properties":{"diff":[]}}),
-            json!({"type":"message.updated","properties":{"info":{"role":"assistant"}}}),
-            json!({"type":"session.idle","properties":{"sessionID":"ses_1"}}),
+            json!({"type":"session.inbox.enqueued","data":{"sessionID":"ses_1","inboxID":"msg_0","item":{"type":"user"}}}),
+            json!({"type":"session.usage.updated","data":{"sessionID":"ses_1","cost":0,"tokens":{"input":1,"output":1,"cache":{"read":0,"write":0}}}}),
+            json!({"type":"session.execution.succeeded","data":{"sessionID":"ses_1"}}),
         ];
         for event in wire {
             handle_event(&event, &events, &commands, &turn, true, &mut state);
@@ -1433,24 +1560,29 @@ mod tests {
                 if item.complete && item.title == "read"));
         assert!(matches!(
             &seen[4],
+            DriverEvent::UsageUpdated {
+                context_tokens: Some(2),
+                context_window: None
+            }
+        ));
+        assert!(matches!(
+            &seen[5],
             DriverEvent::TurnFinished { success: true, .. }
         ));
-        assert_eq!(seen.len(), 5, "non-transcript events leaked");
+        assert_eq!(seen.len(), 6, "non-transcript events leaked");
         assert!(!*turn.lock(), "the turn should be settled exactly once");
     }
 
     #[test]
-    fn classifies_text_deltas_by_their_native_part_type() {
+    fn v2_reasoning_and_text_flows_classify_by_their_own_events() {
         let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
-        // DeepSeek V4 Flash is stored by OpenCode as a reasoning part, but the
-        // part's content still streams through the generic `text` field.
+        // opencode2 separates the thought and answer streams into their own
+        // events, so no part classification is needed.
         let wire = [
-            json!({"type":"message.part.updated","properties":{"part":{"id":"prt_reason","type":"reasoning","text":""}}}),
-            json!({"type":"message.part.delta","properties":{"partID":"prt_reason","field":"text","delta":"thinking"}}),
-            json!({"type":"message.part.updated","properties":{"part":{"id":"prt_answer","type":"text","text":""}}}),
-            json!({"type":"message.part.delta","properties":{"partID":"prt_answer","field":"text","delta":"answer"}}),
-            json!({"type":"message.part.delta","properties":{"partID":"prt_unknown","field":"text","delta":" fallback"}}),
-            json!({"type":"session.idle","properties":{"sessionID":"ses_1"}}),
+            json!({"type":"session.reasoning.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"thinking"}}),
+            json!({"type":"session.text.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"answer"}}),
+            json!({"type":"session.text.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_2","ordinal":0,"delta":" tail"}}),
+            json!({"type":"session.execution.succeeded","data":{"sessionID":"ses_1"}}),
         ];
         for event in wire {
             handle_event(&event, &events, &commands, &turn, true, &mut state);
@@ -1459,43 +1591,50 @@ mod tests {
         let seen = event_rx.try_iter().collect::<Vec<_>>();
         assert!(matches!(&seen[0], DriverEvent::ReasoningDelta(text) if text == "thinking"));
         assert!(matches!(&seen[1], DriverEvent::TextDelta(text) if text == "answer"));
-        assert!(matches!(&seen[2], DriverEvent::TextDelta(text) if text == " fallback"));
+        assert!(matches!(&seen[2], DriverEvent::TextDelta(text) if text == " tail"));
         assert!(matches!(
             &seen[3],
             DriverEvent::TurnFinished { success: true, .. }
         ));
         assert_eq!(seen.len(), 4);
-        assert!(
-            state.reasoning_parts.is_empty(),
-            "settled turns should release their part classification state"
-        );
     }
 
     #[test]
-    fn assistant_updates_feed_opencode_context_usage() {
+    fn usage_events_feed_opencode_context_usage() {
         let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
         state
             .usage_metadata
             .model_context_windows
             .lock()
-            .insert("opencode/deepseek-v4-flash-free".into(), 200_000);
+            .insert("glmcoding/glm-5.3-flash".into(), 200_000);
 
+        // The step announces the model; the usage event then carries tokens.
         handle_event(
             &json!({
-                "type": "message.updated",
-                "properties": {
+                "type": "session.step.started",
+                "data": {
                     "sessionID": "ses_1",
-                    "info": {
-                        "role": "assistant",
-                        "providerID": "opencode",
-                        "modelID": "deepseek-v4-flash-free",
-                        "tokens": {
-                            "total": 0,
-                            "input": 13_399,
-                            "output": 10,
-                            "reasoning": 0,
-                            "cache": {"read": 1792, "write": 0}
-                        }
+                    "agent": "build",
+                    "model": {"id": "glm-5.3-flash", "providerID": "glmcoding"}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            true,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.usage.updated",
+                "data": {
+                    "sessionID": "ses_1",
+                    "cost": 0,
+                    "tokens": {
+                        "input": 13_399,
+                        "output": 10,
+                        "reasoning": 0,
+                        "cache": {"read": 1792, "write": 0}
                     }
                 }
             }),
@@ -1520,32 +1659,41 @@ mod tests {
     fn model_metadata_and_last_message_restore_opencode_usage() {
         let models = json!({
             "data": [{
-                "providerID": "opencode-go",
-                "id": "deepseek-v4-flash",
+                "providerID": "glmcoding",
+                "id": "glm-5.3-flash",
                 "limit": {"context": 1_000_000, "output": 384_000}
             }]
         });
         let windows = opencode_model_context_windows(&models);
-        let messages = json!([
-            {"info": {"role": "user"}},
-            {"info": {
-                "role": "assistant",
-                "providerID": "opencode-go",
-                "modelID": "deepseek-v4-flash",
-                "tokens": {
-                    "total": 15_467,
-                    "input": 15_450,
-                    "output": 17,
-                    "reasoning": 0,
+        let messages = json!({
+            "data": [
+                {"type": "assistant", "id": "msg_3", "finish": "stop", "model": {
+                    "id": "glm-5.3-flash", "providerID": "glmcoding"
+                }, "tokens": {
+                    "input": 200, "output": 300, "reasoning": 0,
                     "cache": {"read": 0, "write": 0}
-                }
-            }}
-        ]);
+                }},
+                {"type": "assistant", "id": "msg_2", "finish": "stop", "tokens": {
+                    "input": 15_450, "output": 17, "reasoning": 0,
+                    "cache": {"read": 0, "write": 0}
+                }},
+                {"type": "user", "id": "msg_1", "text": "hi"}
+            ],
+            "cursor": {"previous": null, "next": null}
+        });
 
-        let latest = latest_opencode_usage_info(&messages).expect("latest assistant usage");
+        let latest = latest_opencode_usage_message(&messages).expect("latest assistant usage");
+        assert_eq!(opencode_message_tokens(latest), Some(500));
         assert_eq!(
-            opencode_context_usage(latest, &windows),
-            Some((Some(15_467), Some(1_000_000)))
+            opencode_message_model_key(latest).as_deref(),
+            Some("glmcoding/glm-5.3-flash")
+        );
+        assert_eq!(
+            opencode_message_model_key(latest)
+                .as_ref()
+                .and_then(|model| windows.get(model))
+                .copied(),
+            Some(1_000_000)
         );
     }
 
@@ -1553,30 +1701,13 @@ mod tests {
     fn generated_session_titles_replace_the_local_fallback() {
         let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
 
-        // OpenCode emits this placeholder before its title-generation model call.
+        // opencode2 emits the final generated title once through `session.renamed`.
         handle_event(
             &json!({
-                "type": "session.updated",
-                "properties": {
+                "type": "session.renamed",
+                "data": {
                     "sessionID": "ses_1",
-                    "info": {"title": "New session - 2026-08-08T18:33:35.122Z"}
-                }
-            }),
-            &events,
-            &commands,
-            &turn,
-            true,
-            &mut state,
-        );
-        assert!(event_rx.try_recv().is_err());
-
-        // Exact envelope captured from a live isolated `opencode serve` stream.
-        handle_event(
-            &json!({
-                "type": "session.updated",
-                "properties": {
-                    "sessionID": "ses_1",
-                    "info": {"title": "Generated provider title"}
+                    "title": "Generated provider title"
                 }
             }),
             &events,

@@ -184,11 +184,11 @@ pub fn find_executable(name: &str) -> Option<PathBuf> {
 /// lands as `claude.cmd` beside `claude.ps1`, and Bun and Cargo install
 /// `.exe`. Trying `PATHEXT` in its configured order picks the same file the
 /// shell would, and `std::process::Command` runs a `.cmd`/`.bat` through
-/// `cmd.exe` for us.
+/// `cmd.exe` for us. The bare name is only a fallback on Windows because npm
+/// also drops an extensionless bash shim next to the real `.cmd`/`.exe` —
+/// `CreateProcess` cannot run a bare text file, so it must never win over a
+/// PATHEXT candidate.
 fn resolve_executable_file(candidate: &Path) -> Option<PathBuf> {
-    if candidate.is_file() {
-        return Some(candidate.to_path_buf());
-    }
     #[cfg(windows)]
     {
         let stem = candidate.file_name()?.to_owned();
@@ -201,7 +201,7 @@ fn resolve_executable_file(candidate: &Path) -> Option<PathBuf> {
             }
         }
     }
-    None
+    candidate.is_file().then(|| candidate.to_path_buf())
 }
 
 #[cfg(windows)]

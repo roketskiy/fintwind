@@ -72,6 +72,30 @@ fn prompt_body(text: &str) -> Value {
     json!({"text": text})
 }
 
+/// The `answer` object a form reply posts: every question's selections keyed
+/// by its field key. A multiselect field must answer with an array — the
+/// server rejects a bare string with `FormInvalidAnswerError` — so recorded
+/// field shapes decide; without a recording (a driver restart between ask
+/// and reply) the selection count guesses, and multi-select answered with a
+/// single choice degrades to the rejected shape.
+fn form_reply_answer(fields: &[(String, bool)], answers: &[UserInputAnswer]) -> Value {
+    answers
+        .iter()
+        .map(|answer| {
+            let multi = fields
+                .iter()
+                .any(|(key, multi)| *multi && *key == answer.question_id);
+            let value = if multi || answer.answers.len() > 1 {
+                json!(answer.answers)
+            } else {
+                json!(answer.answers.first().cloned().unwrap_or_default())
+            };
+            (answer.question_id.clone(), value)
+        })
+        .collect::<serde_json::Map<String, Value>>()
+        .into()
+}
+
 pub struct OpenCodeDriver {
     // `Drop` releases this lease before waking the worker, guaranteeing that
     // final process teardown runs on the worker rather than the UI thread.
@@ -264,6 +288,7 @@ impl OpenCodeDriver {
         let (commands, command_rx) = unbounded();
         let turn_active = Arc::new(Mutex::new(false));
         let permissions = Arc::new(Mutex::new(OpenCodePermissionState::default()));
+        let forms = Arc::new(Mutex::new(OpenCodeFormState::default()));
         let event_stream = Arc::new(OpenCodeEventStreamControl::default());
 
         // opencode2 answers permission requests through a polling endpoint
@@ -277,6 +302,7 @@ impl OpenCodeDriver {
         let permission_events = events.clone();
         let permission_commands = commands.clone();
         let permission_state = Arc::clone(&permissions);
+        let poll_forms = Arc::clone(&forms);
         let permission_stream = Arc::clone(&event_stream);
         let permission_seen = Arc::new(Mutex::new(HashSet::new()));
         let poll_permission_seen = Arc::clone(&permission_seen);
@@ -323,6 +349,37 @@ impl OpenCodeDriver {
                             );
                         }
                     }
+                    // The question tool's prompt rides a form, and the
+                    // dedicated question events current releases stream are
+                    // not emitted, so the poll is the safety net for a form
+                    // the event stream dropped (or that predates this
+                    // driver). The event path dedups through the same
+                    // `announced` set.
+                    if let Ok(pending) = crate::opencode_session::request_json_on_port(
+                        permission_port,
+                        "GET",
+                        "/api/form/request",
+                        None,
+                        Duration::from_secs(2),
+                    ) {
+                        for form in pending
+                            .get("data")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                        {
+                            if form.get("sessionID").and_then(Value::as_str)
+                                != Some(permission_session.as_str())
+                            {
+                                continue;
+                            }
+                            let _ = request_user_input_from_form(
+                                &json!({"form": form}),
+                                &poll_forms,
+                                &permission_events,
+                            );
+                        }
+                    }
                     thread::sleep(PERMISSION_POLL_INTERVAL);
                 }
             })?;
@@ -337,6 +394,7 @@ impl OpenCodeDriver {
         let stream_turn = turn_active.clone();
         let stream_usage_metadata = usage_metadata;
         let stream_permissions = Arc::clone(&permissions);
+        let stream_forms = Arc::clone(&forms);
         let stream_control = Arc::clone(&event_stream);
         thread::Builder::new()
             .name("waku-opencode-events".into())
@@ -344,6 +402,7 @@ impl OpenCodeDriver {
                 let mut state = OpenCodeStreamState {
                     usage_metadata: stream_usage_metadata,
                     permissions: stream_permissions,
+                    forms: stream_forms,
                     ..OpenCodeStreamState::default()
                 };
                 match open_event_stream(stream_port, "/api/event", &stream_control) {
@@ -369,6 +428,9 @@ impl OpenCodeDriver {
                             let session = value
                                 .pointer("/data/sessionID")
                                 .or_else(|| value.pointer("/properties/sessionID"))
+                                // `form.created` nests the session under the
+                                // form object.
+                                .or_else(|| value.pointer("/data/form/sessionID"))
                                 .and_then(Value::as_str);
                             if !lifecycle && session.is_some_and(|session| session != stream_session)
                             {
@@ -406,6 +468,7 @@ impl OpenCodeDriver {
         let worker_events = events;
         let worker_turn = turn_active;
         let worker_permission_seen = Arc::clone(&permission_seen);
+        let worker_forms = Arc::clone(&forms);
         thread::Builder::new()
             .name("waku-opencode-driver".into())
             .spawn(move || {
@@ -525,22 +588,52 @@ impl OpenCodeDriver {
                             request_id,
                             answers,
                         } => {
-                            let path =
-                                format!("/api/question/{}/reply", encode_path_segment(&request_id));
-                            let answers = answers
-                                .into_iter()
-                                .map(|answer| answer.answers)
-                                .collect::<Vec<_>>();
-                            if let Err(error) = worker_server.request(
-                                "POST",
-                                &path,
-                                Some(&json!({"answers": answers})),
-                            ) {
-                                let _ = worker_events.send(DriverEvent::Error(tr!(
-                                    "errors.answer_provider_question",
-                                    provider = "OpenCode",
-                                    error = error
-                                )));
+                            // Current opencode2 routes the question tool's
+                            // answers through the form that carried the
+                            // prompt; the dedicated question route stays for
+                            // releases that still publish `question.asked`.
+                            let (path, body) = if request_id.starts_with("frm_") {
+                                let fields = worker_forms
+                                    .lock()
+                                    .fields
+                                    .get(&request_id)
+                                    .cloned()
+                                    .unwrap_or_default();
+                                (
+                                    format!(
+                                        "/api/session/{}/form/{}/reply",
+                                        encode_path_segment(&worker_session),
+                                        encode_path_segment(&request_id)
+                                    ),
+                                    json!({"answer": form_reply_answer(&fields, &answers)}),
+                                )
+                            } else {
+                                (
+                                    format!(
+                                        "/api/question/{}/reply",
+                                        encode_path_segment(&request_id)
+                                    ),
+                                    json!({
+                                        "answers": answers
+                                            .iter()
+                                            .map(|answer| json!(answer.answers))
+                                            .collect::<Vec<_>>()
+                                    }),
+                                )
+                            };
+                            match worker_server.request("POST", &path, Some(&body)) {
+                                Ok(_) => {
+                                    if request_id.starts_with("frm_") {
+                                        worker_forms.lock().fields.remove(&request_id);
+                                    }
+                                }
+                                Err(error) => {
+                                    let _ = worker_events.send(DriverEvent::Error(tr!(
+                                        "errors.answer_provider_question",
+                                        provider = "OpenCode",
+                                        error = error
+                                    )));
+                                }
                             }
                         }
                         CommandMessage::Shutdown => break,
@@ -724,6 +817,22 @@ struct OpenCodeStreamState {
     reasoning_parts: HashSet<String>,
     usage_metadata: Arc<OpenCodeUsageMetadata>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
+    forms: Arc<Mutex<OpenCodeFormState>>,
+}
+
+/// Pending question forms and whether they were already announced.
+///
+/// opencode2 delivers the `question` tool's prompt as a *form*: a
+/// `form.created` event whose `metadata.kind` is `"question"` and whose
+/// fields carry the questions (`title` = header, `description` = question
+/// text, `type` `"multiselect"` for multi-select). The field shapes are kept
+/// per form id because the reply route requires them: a multiselect field
+/// rejects a bare string with `FormInvalidAnswerError`, so the answer value
+/// must be an array exactly for those fields.
+#[derive(Default)]
+struct OpenCodeFormState {
+    fields: HashMap<String, Vec<(String, bool)>>,
+    announced: HashSet<String>,
 }
 
 #[derive(Default)]
@@ -1018,6 +1127,21 @@ fn handle_event(
         | "question.rejected"
         | "question.v2.replied"
         | "question.v2.rejected" => {}
+        // The `question` tool's prompt on current releases: a form whose
+        // `metadata.kind` is `"question"`. Replied/cancelled only retire the
+        // recorded field shapes; the app dismisses its own prompt when it
+        // sends the reply.
+        "form.created" => {
+            let _ = request_user_input_from_form(payload, &state.forms, events);
+        }
+        "form.replied" | "form.cancelled" => {
+            let form = payload.get("form").unwrap_or(payload);
+            if let Some(id) = form.get("id").and_then(Value::as_str) {
+                let mut forms = state.forms.lock();
+                forms.fields.remove(id);
+                forms.announced.remove(id);
+            }
+        }
         // `session.text.started`/`ended`, `session.reasoning.started`/`ended`,
         // `session.step.streamed`, `session.inbox.*`, `session.execution.started`,
         // `session.instructions.updated`, `server.connected`, and the
@@ -1171,6 +1295,103 @@ fn request_user_input(properties: &Value, events: &impl DriverEventSink) {
             questions,
         });
     }
+}
+
+/// The `question` tool on current opencode2 publishes its prompt as a form
+/// (`form.created` with `metadata.kind == "question"`), not as the question
+/// events the dedicated route still documents. A field maps back to a
+/// question: `title` is the header, `description` the question text, each
+/// option keeps `label`/`description`, and `type == "multiselect"` marks
+/// multi-select. Other forms (if any ever appear) are ignored.
+///
+/// Records the field shapes under the form id so the reply can build the
+/// answer object the route demands, and stays silent on a form the poll
+/// already announced.
+fn request_user_input_from_form(
+    payload: &Value,
+    forms: &Mutex<OpenCodeFormState>,
+    events: &impl DriverEventSink,
+) -> Option<()> {
+    let form = payload.get("form").unwrap_or(payload);
+    let form_id = form.get("id").and_then(Value::as_str)?;
+    if form.get("sessionID").and_then(Value::as_str).is_none() {
+        return None;
+    }
+    let is_question = form
+        .pointer("/metadata/kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind == "question");
+    let fields = form.get("fields").and_then(Value::as_array)?;
+
+    let mut field_shapes = Vec::new();
+    let mut questions = Vec::new();
+    for field in fields {
+        let Some(key) = field
+            .get("key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+        else {
+            continue;
+        };
+        let multi_select = field.get("type").and_then(Value::as_str) == Some("multiselect");
+        // The question text rides `description`; the form synthesis in the
+        // server keeps it non-empty, but a missing one falls back to the
+        // header so the card still asks something.
+        let question = field
+            .get("description")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .or_else(|| field.get("title").and_then(Value::as_str).map(str::trim))
+            .filter(|text| !text.is_empty())?;
+        let header = field
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|header| !header.is_empty())
+            .unwrap_or("Question");
+        let options = field
+            .get("options")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|option| {
+                let label = option.get("label").and_then(Value::as_str)?.trim();
+                (!label.is_empty()).then(|| UserInputOption {
+                    label: label.to_owned(),
+                    description: option
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::trim)
+                        .filter(|description| !description.is_empty())
+                        .map(str::to_owned),
+                })
+            })
+            .collect::<Vec<_>>();
+        field_shapes.push((key.to_owned(), multi_select));
+        questions.push(UserInputQuestion {
+            id: key.to_owned(),
+            header: header.to_owned(),
+            question: question.to_owned(),
+            options,
+            multi_select,
+        });
+    }
+    if questions.is_empty() || !is_question {
+        return None;
+    }
+
+    let mut state = forms.lock();
+    if !state.announced.insert(form_id.to_owned()) {
+        return None;
+    }
+    state.fields.insert(form_id.to_owned(), field_shapes);
+    let _ = events.send(DriverEvent::UserInputRequested {
+        request_id: form_id.to_owned(),
+        questions,
+    });
+    Some(())
 }
 
 fn request_permission(
@@ -1368,6 +1589,143 @@ mod tests {
         assert_eq!(questions[0].options[0].label, "Source");
     }
 
+    #[test]
+    fn form_created_delivers_the_question_tool_prompt() {
+        let (events, event_rx) = unbounded();
+        let forms = Mutex::new(OpenCodeFormState::default());
+        request_user_input_from_form(
+            &json!({
+                "form": {
+                    "id": "frm_061c395b7001uJsmhrmjPH0tp4",
+                    "sessionID": "ses_f9e4118feffeoIsNOAxowOF7u0",
+                    "title": "Questions",
+                    "metadata": {
+                        "kind": "question",
+                        "tool": {"messageID": "msg_1", "id": "call_1"}
+                    },
+                    "fields": [{
+                        "key": "q0",
+                        "title": "Favorite Color",
+                        "description": "What is your favorite color?",
+                        "type": "string",
+                        "options": [
+                            {"value": "Red", "label": "Red", "description": "A bold color."},
+                            {"value": "Blue", "label": "Blue", "description": "A calm color."}
+                        ],
+                        "custom": true
+                    }]
+                }
+            }),
+            &forms,
+            &events,
+        )
+        .expect("a question form must map onto the structured question event");
+
+        let DriverEvent::UserInputRequested {
+            request_id,
+            questions,
+        } = event_rx.try_recv().unwrap()
+        else {
+            panic!("form.created must deliver the structured question event");
+        };
+        assert_eq!(request_id, "frm_061c395b7001uJsmhrmjPH0tp4");
+        assert_eq!(questions.len(), 1);
+        assert_eq!(questions[0].id, "q0");
+        assert_eq!(questions[0].header, "Favorite Color");
+        assert_eq!(questions[0].question, "What is your favorite color?");
+        assert!(!questions[0].multi_select);
+        assert_eq!(questions[0].options[1].label, "Blue");
+
+        // The reply needs the recorded field shapes to type each answer.
+        assert_eq!(
+            forms.lock().fields.get(request_id.as_str()).cloned(),
+            Some(vec![("q0".to_owned(), false)])
+        );
+    }
+
+    #[test]
+    fn form_question_asks_once_per_form_id() {
+        let (events, event_rx) = unbounded();
+        let forms = Mutex::new(OpenCodeFormState::default());
+        let form = json!({
+            "form": {
+                "id": "frm_once",
+                "sessionID": "ses_1",
+                "metadata": {"kind": "question"},
+                "fields": [{
+                    "key": "q0", "title": "Color", "description": "Which?",
+                    "type": "multiselect",
+                    "options": [{"value": "Red", "label": "Red"}]
+                }]
+            }
+        });
+        request_user_input_from_form(&form, &forms, &events)
+            .expect("the first sight must ask");
+        assert!(
+            request_user_input_from_form(&form, &forms, &events).is_none(),
+            "the poll and the event must not ask twice"
+        );
+
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::UserInputRequested { .. }
+        ));
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn non_question_forms_are_ignored() {
+        let (events, _event_rx) = unbounded();
+        let forms = Mutex::new(OpenCodeFormState::default());
+        let requested = request_user_input_from_form(
+            &json!({
+                "form": {
+                    "id": "frm_other",
+                    "sessionID": "ses_1",
+                    "title": "Settings",
+                    "fields": [{
+                        "key": "theme", "title": "Theme", "description": "Pick one",
+                        "type": "string",
+                        "options": [{"value": "dark", "label": "Dark"}]
+                    }]
+                }
+            }),
+            &forms,
+            &events,
+        );
+        assert!(requested.is_none());
+        assert!(forms.lock().fields.is_empty());
+    }
+
+    #[test]
+    fn form_reply_shapes_answers_to_their_fields() {
+        let answers = vec![
+            UserInputAnswer {
+                question_id: "q0".into(),
+                answers: vec!["Blue".into()],
+            },
+            UserInputAnswer {
+                question_id: "q1".into(),
+                answers: vec!["Red".into(), "Green".into()],
+            },
+        ];
+        let shapes = vec![
+            ("q0".to_owned(), true),
+            ("q1".to_owned(), false),
+        ];
+        assert_eq!(
+            form_reply_answer(&shapes, &answers),
+            json!({"q0": ["Blue"], "q1": ["Red", "Green"]})
+        );
+
+        // Without recorded shapes (driver restarted mid-question) the count
+        // guesses: one selection is a string, several an array.
+        assert_eq!(
+            form_reply_answer(&[], &answers),
+            json!({"q0": "Blue", "q1": ["Red", "Green"]})
+        );
+    }
+
     /// Drives a real `opencode2 serve` through the actual driver. Ignored by
     /// default: needs the CLI installed, credentials, and the network. Run with
     /// `cargo test --bin waku opencode_session_against_a_real_server -- --ignored`.
@@ -1451,6 +1809,90 @@ mod tests {
             .fork(1)
             .expect("the resident server should fork away the completed turn");
         assert_ne!(fork_session_id, source_session_id);
+    }
+
+    /// Drives the `question` tool against a real `opencode2`: the prompt
+    /// must arrive as a form (`form.created`, not the question events older
+    /// docs describe), surface as a structured question request, and the
+    /// reply must settle the form and the turn. Ignored by default: needs
+    /// the CLI installed with working provider credentials. Run with
+    /// `cargo test --bin waku question_form_against_a_real_server -- --ignored`.
+    #[test]
+    #[ignore = "requires an installed, authenticated opencode2"]
+    fn question_form_against_a_real_server() {
+        let binary =
+            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+        let (events, event_rx) = crate::driver::test_event_channel();
+        let driver = OpenCodeDriver::start(
+            DriverStartOptions {
+                binary,
+                cwd: std::env::temp_dir(),
+                mode: RuntimeMode::FullAccess,
+                interaction_mode: InteractionMode::Build,
+                model: Some("opencode-go/deepseek-v4-flash".into()),
+                reasoning_effort: None,
+                service_tier: None,
+                context_window: None,
+                agent_preset: None,
+                computer_use_enabled: false,
+                provider_cursor: None,
+            },
+            events,
+        )
+        .expect("the server should start and open a session");
+
+        match event_rx
+            .recv_timeout(std::time::Duration::from_secs(90))
+            .expect("the server should report its session")
+        {
+            DriverEvent::Connected {
+                provider_cursor: Some(ProviderResumeCursor::OpenCode { .. }),
+            } => {}
+            event => panic!("expected an OpenCode cursor, got {event:?}"),
+        }
+
+        driver.prompt(
+            "Use the question tool to ask me exactly one question with three options: \
+             what is my favorite color?"
+                .into(),
+        );
+        let request = loop {
+            let event = event_rx
+                .recv_timeout(std::time::Duration::from_secs(120))
+                .expect("the question should arrive before the deadline");
+            match event {
+                DriverEvent::UserInputRequested {
+                    request_id,
+                    questions,
+                } => break (request_id, questions),
+                DriverEvent::Error(error) => panic!("the server reported: {error}"),
+                _ => {}
+            }
+        };
+        assert!(request.0.starts_with("frm_"), "got request {}", request.0);
+        assert_eq!(request.1.len(), 1);
+        assert_eq!(request.1[0].options.len(), 3);
+
+        driver.respond_user_input(
+            request.0.clone(),
+            vec![UserInputAnswer {
+                question_id: request.1[0].id.clone(),
+                answers: vec![request.1[0].options[0].label.clone()],
+            }],
+        );
+        let mut finished = None;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+        while finished.is_none() && std::time::Instant::now() < deadline {
+            let Ok(event) = event_rx.recv_timeout(std::time::Duration::from_secs(5)) else {
+                continue;
+            };
+            match event {
+                DriverEvent::TurnFinished { success, .. } => finished = Some(success),
+                DriverEvent::Error(error) => panic!("the server reported: {error}"),
+                _ => {}
+            }
+        }
+        assert_eq!(finished, Some(true), "the turn should settle after the reply");
     }
 
     /// Proves steering through the actual driver: the message injected while

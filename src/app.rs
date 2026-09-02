@@ -2487,7 +2487,15 @@ impl Waku {
                             this.reveal_selected_picker_model();
                         } else {
                             this.model_picker_highlight = Some(0);
-                            this.model_picker_scroll.scroll_to_item(0);
+                            let models = crate::app::composer::model_picker_grouped_models(
+                                crate::app::composer::visible_picker_models(
+                                    &this.probes,
+                                    &this.state.favorite_models,
+                                    this.model_picker_tab,
+                                    &search.read(cx).content().trim().to_ascii_lowercase(),
+                                ),
+                            );
+                            this.scroll_to_model_picker_index(&models, 0);
                         }
                         cx.notify();
                     }

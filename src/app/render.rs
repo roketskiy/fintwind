@@ -347,6 +347,9 @@ impl Render for Waku {
                             .child(self.render_workspace_footer(cx))
                     })
                     .relative()
+                    .when(!empty, |element| {
+                        element.child(self.render_task_capsule(cx))
+                    })
                     .children(toast)
                     .children(computer_use)
                     .when(self.sidebar_visible, |element| {

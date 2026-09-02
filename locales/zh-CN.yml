@@ -760,6 +760,14 @@ environment.summary: 环境和后台工作
 environment.changes: 更改
 environment.commit_or_push: 提交或推送
 environment.compare_branch: 比较分支
+capsule.tasks: 会话工具
+capsule.git_tools: Git 工具
+capsule.todo: Todo
+capsule.todo_empty: 暂无待办事项
+todo.status.pending: 待处理
+todo.status.in_progress: 进行中
+todo.status.completed: 已完成
+todo.status.failed: 失败
 commit.message_placeholder: 提交信息（留空以自动生成）…
 commit.message: 提交信息
 commit.include_unstaged: 包含未暂存的更改
@@ -781,6 +789,7 @@ background.title: 后台工作
 background.description: 查看智能体启动的进程和子智能体
 background.processes: 后台进程
 background.agents: 子智能体
+background.no_agents: 暂无子智能体
 background.process: 进程
 background.monitor: 监控
 background.subagent: 子智能体

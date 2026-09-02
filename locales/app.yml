@@ -1515,6 +1515,24 @@ environment.commit_or_push:
 environment.compare_branch:
   en: Compare branch
 
+capsule.tasks:
+  en: Session tools
+capsule.git_tools:
+  en: Git tools
+capsule.todo:
+  en: Todo
+capsule.todo_empty:
+  en: No todo items
+
+todo.status.pending:
+  en: Pending
+todo.status.in_progress:
+  en: In progress
+todo.status.completed:
+  en: Completed
+todo.status.failed:
+  en: Failed
+
 commit.message_placeholder:
   en: Commit message (leave blank to generate)…
 commit.message:
@@ -1558,6 +1576,8 @@ background.processes:
   en: Background processes
 background.agents:
   en: Subagents
+background.no_agents:
+  en: No subagents
 background.process:
   en: Process
 background.monitor:

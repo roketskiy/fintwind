@@ -879,10 +879,16 @@ impl Waku {
         // rendered rows index one ordering and cannot disagree about what
         // `enter` selects.
         let available_models = Rc::new(if handle.is_open() {
-            visible_picker_models(&probes, &favorites, selected_tab, &normalized_query)
+            model_picker_grouped_models(visible_picker_models(
+                &probes,
+                &favorites,
+                selected_tab,
+                &normalized_query,
+            ))
         } else {
             Vec::new()
         });
+        let model_groups = Rc::new(model_picker_groups(&available_models));
         let highlight = self
             .model_picker_highlight
             .filter(|index| *index < available_models.len());
@@ -903,6 +909,7 @@ impl Waku {
             move |popover, _window, _cx| {
                 let popover = popover.clone();
                 let available_models = available_models.clone();
+                let model_groups = model_groups.clone();
 
                 let mut sidebar = div()
                     .w(px(50.0))
@@ -933,14 +940,14 @@ impl Waku {
                             .justify_center()
                             .cursor_default()
                             .when(favorites_selected, |element| {
-                                element.bg(theme.overlay_strong)
+                                element.bg(theme.accent.opacity(0.12))
                             })
                             .hover(|element| element.bg(theme.overlay))
                             .child(icon(
                                 "icons/star.svg",
                                 18.0,
                                 if favorites_selected {
-                                    theme.text
+                                    theme.accent
                                 } else {
                                     theme.text_tertiary
                                 },
@@ -968,7 +975,7 @@ impl Waku {
                         .items_center()
                         .justify_center()
                         .cursor_default()
-                        .when(selected, |element| element.bg(theme.overlay_strong))
+                        .when(selected, |element| element.bg(theme.accent.opacity(0.12)))
                         .hover(|element| element.bg(theme.overlay))
                         .on_click(move |_, _, cx| {
                             let _ = tab_weak.update(cx, |this, cx| {
@@ -978,7 +985,11 @@ impl Waku {
                         .child(icon(
                             "icons/provider-opencode.svg",
                             19.0,
-                            theme.text.opacity(if selected { 1.0 } else { 0.82 }),
+                            if selected {
+                                theme.accent
+                            } else {
+                                theme.text.opacity(0.82)
+                            },
                         )),
                 );
 
@@ -1032,111 +1043,130 @@ impl Waku {
                     );
                 }
 
-                for (row_index, model) in available_models.iter().enumerate() {
-                    let is_selected = selected_model.as_deref() == Some(model.id.as_str());
-                    let is_highlighted = highlight == Some(row_index);
-                    let is_favorite = favorites.iter().any(|favorite| favorite.model == model.id);
-                    let model_id = model.id.clone();
-                    let select_weak = weak.clone();
-                    let select_popover = popover.clone();
-                    let favorite_model_id = model.id.clone();
-                    let favorite_weak = weak.clone();
-                    let subtitle = model_picker_subtitle(model.sub_provider.as_deref());
+                for group in model_groups.iter() {
+                    let header_model = &available_models[group.model_indices[0]];
                     rows = rows.child(
                         div()
-                            .id(SharedString::from(format!("model-row-{}", model.id)))
-                            .h(px(60.0))
+                            .id(SharedString::from(format!(
+                                "model-provider-group-{}",
+                                header_model.id
+                            )))
+                            .h(px(28.0))
                             .px(px(12.0))
-                            .rounded(px(9.0))
                             .flex()
                             .items_center()
-                            .gap(px(10.0))
-                            .cursor_default()
-                            // Reserved on every row so highlighting one cannot
-                            // resize it and shift the list by a pixel.
-                            .border_1()
-                            .border_color(gpui::transparent_black())
-                            .when(is_selected, |element| element.bg(theme.overlay_strong))
-                            // The keyboard cursor reads as a ring rather than a
-                            // fill, so it stays legible on the current model's
-                            // already-filled row.
-                            .when(is_highlighted, |element| {
-                                element.bg(theme.overlay).border_color(theme.accent)
-                            })
-                            .hover(|element| element.bg(theme.overlay))
-                            .active(|element| element.opacity(0.85))
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .flex_1()
-                                    .child(
-                                        div()
-                                            .truncate()
-                                            .text_size(px(13.0))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme.text)
-                                            .child(SharedString::from(model.name.clone())),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(4.0))
-                                            .flex()
-                                            .items_center()
-                                            .gap(px(6.0))
-                                            .child(icon(
-                                                "icons/provider-opencode.svg",
-                                                10.5,
-                                                theme.text_ghost.opacity(0.85),
-                                            ))
-                                            .child(
-                                                div()
-                                                    .truncate()
-                                                    .text_size(px(11.5))
-                                                    .text_color(theme.text_tertiary)
-                                                    .child(SharedString::from(subtitle)),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!("favorite-model-{}", model.id)))
-                                    .w(px(30.0))
-                                    .h(px(30.0))
-                                    .rounded(px(7.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .hover(|element| element.bg(theme.overlay_strong))
-                                    .child(icon(
-                                        if is_favorite {
-                                            "icons/star-filled.svg"
-                                        } else {
-                                            "icons/star.svg"
-                                        },
-                                        15.0,
-                                        if is_favorite {
-                                            theme.favorite
-                                        } else {
-                                            theme.text_ghost
-                                        },
-                                    ))
-                                    .on_click(move |_, _, cx| {
-                                        cx.stop_propagation();
-                                        let _ = favorite_weak.update(cx, |this, cx| {
-                                            this.toggle_favorite_model(
-                                                favorite_model_id.clone(),
-                                                cx,
-                                            );
-                                        });
-                                    }),
-                            )
-                            .on_click(move |_, window, cx| {
-                                let _ = select_weak.update(cx, |this, cx| {
-                                    this.choose_model(model_id.clone(), cx);
-                                });
-                                select_popover.close(window, cx);
-                            }),
+                            .text_size(px(11.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.accent)
+                            .child(SharedString::from(group.label.clone())),
                     );
+                    for &row_index in &group.model_indices {
+                        let model = &available_models[row_index];
+                        let is_selected = selected_model.as_deref() == Some(model.id.as_str());
+                        let is_highlighted = highlight == Some(row_index);
+                        let is_favorite =
+                            favorites.iter().any(|favorite| favorite.model == model.id);
+                        let model_id = model.id.clone();
+                        let select_weak = weak.clone();
+                        let select_popover = popover.clone();
+                        let favorite_model_id = model.id.clone();
+                        let favorite_weak = weak.clone();
+                        rows = rows.child(
+                            div()
+                                .id(SharedString::from(format!("model-row-{}", model.id)))
+                                .h(px(60.0))
+                                .px(px(12.0))
+                                .rounded(px(9.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(10.0))
+                                .cursor_default()
+                                // Reserved on every row so highlighting one cannot
+                                // resize it and shift the list by a pixel.
+                                .border_1()
+                                .border_color(if is_selected {
+                                    theme.accent.opacity(0.34)
+                                } else {
+                                    gpui::transparent_black()
+                                })
+                                .when(is_selected, |element| {
+                                    element.bg(theme.accent.opacity(0.10))
+                                })
+                                // The keyboard cursor reads as a ring rather than a
+                                // fill, so it stays legible on the current model's
+                                // already-filled row.
+                                .when(is_highlighted, |element| {
+                                    element
+                                        .bg(theme.accent.opacity(0.14))
+                                        .border_color(theme.accent)
+                                })
+                                .hover(|element| element.bg(theme.overlay))
+                                .active(|element| element.opacity(0.85))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .flex_1()
+                                        .child(
+                                            div()
+                                                .truncate()
+                                                .text_size(px(13.0))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(theme.text)
+                                                .child(SharedString::from(model.name.clone())),
+                                        )
+                                        .child(
+                                            div()
+                                                .mt(px(4.0))
+                                                .truncate()
+                                                .text_size(px(11.5))
+                                                .text_color(theme.text_tertiary)
+                                                .child(SharedString::from(model.id.clone())),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "favorite-model-{}",
+                                            model.id
+                                        )))
+                                        .w(px(30.0))
+                                        .h(px(30.0))
+                                        .rounded(px(7.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .hover(|element| element.bg(theme.overlay_strong))
+                                        .child(icon(
+                                            if is_favorite {
+                                                "icons/star-filled.svg"
+                                            } else {
+                                                "icons/star.svg"
+                                            },
+                                            15.0,
+                                            if is_favorite {
+                                                theme.favorite
+                                            } else {
+                                                theme.text_ghost
+                                            },
+                                        ))
+                                        .on_click(move |_, _, cx| {
+                                            cx.stop_propagation();
+                                            let _ = favorite_weak.update(cx, |this, cx| {
+                                                this.toggle_favorite_model(
+                                                    favorite_model_id.clone(),
+                                                    cx,
+                                                );
+                                            });
+                                        }),
+                                )
+                                .on_click(move |_, window, cx| {
+                                    let _ = select_weak.update(cx, |this, cx| {
+                                        this.choose_model(model_id.clone(), cx);
+                                    });
+                                    select_popover.close(window, cx);
+                                }),
+                        );
+                    }
                 }
 
                 let next_models = available_models.clone();
@@ -1230,7 +1260,7 @@ impl Waku {
             return;
         };
         self.model_picker_highlight = Some(next);
-        self.model_picker_scroll.scroll_to_item(next);
+        self.scroll_to_model_picker_index(models, next);
         cx.notify();
     }
 
@@ -1262,16 +1292,22 @@ impl Waku {
     pub(super) fn reveal_selected_picker_model(&self) {
         let session = self.selected_session();
         let selected_model = session.and_then(|session| self.model_for_session(session));
-        let index = visible_picker_models(
+        let models = model_picker_grouped_models(visible_picker_models(
             &self.probes,
             &self.state.favorite_models,
             self.model_picker_tab,
             "",
-        )
-        .iter()
-        .position(|model| selected_model == Some(model.id.as_str()))
-        .unwrap_or(0);
-        self.model_picker_scroll.scroll_to_item(index);
+        ));
+        let index = models
+            .iter()
+            .position(|model| selected_model == Some(model.id.as_str()))
+            .unwrap_or(0);
+        self.scroll_to_model_picker_index(&models, index);
+    }
+
+    pub(super) fn scroll_to_model_picker_index(&self, models: &[ProviderModel], index: usize) {
+        self.model_picker_scroll
+            .scroll_to_item(model_picker_scroll_index(models, index));
     }
 
     /// Take the row the selection is on, defaulting to the first so `enter`
@@ -3293,12 +3329,69 @@ pub(super) fn visible_picker_tabs() -> Vec<ModelPickerTab> {
     vec![ModelPickerTab::Favorites, ModelPickerTab::Provider]
 }
 
-pub(super) fn model_picker_subtitle(sub_provider: Option<&str>) -> String {
+#[derive(Debug, Eq, PartialEq)]
+pub(super) struct ModelPickerGroup {
+    pub(super) label: String,
+    pub(super) model_indices: Vec<usize>,
+}
+
+pub(super) fn model_picker_provider_label(sub_provider: Option<&str>) -> String {
     match sub_provider.map(str::trim).filter(|name| !name.is_empty()) {
         Some(name) if name.eq_ignore_ascii_case("opencode") => "OpenCode".to_owned(),
-        Some(name) => format!("{name} · OpenCode"),
+        Some(name) => name.to_owned(),
         None => "OpenCode".to_owned(),
     }
+}
+
+/// Partition models by provider without changing each provider's relative
+/// selectable order. Groups follow the provider's first appearance.
+pub(super) fn model_picker_groups(models: &[ProviderModel]) -> Vec<ModelPickerGroup> {
+    let mut groups: Vec<ModelPickerGroup> = Vec::new();
+    for (index, model) in models.iter().enumerate() {
+        let label = model_picker_provider_label(model.sub_provider.as_deref());
+        if let Some(group) = groups.iter_mut().find(|group| group.label == label) {
+            group.model_indices.push(index);
+        } else {
+            groups.push(ModelPickerGroup {
+                label,
+                model_indices: vec![index],
+            });
+        }
+    }
+    groups
+}
+
+/// Reorder the flat selectable sequence into provider groups while preserving
+/// the original order of models within every provider.
+pub(super) fn model_picker_grouped_models(models: Vec<ProviderModel>) -> Vec<ProviderModel> {
+    let groups = model_picker_groups(&models);
+    let mut grouped = Vec::with_capacity(models.len());
+    for group in groups {
+        grouped.extend(
+            group
+                .model_indices
+                .into_iter()
+                .map(|index| models[index].clone()),
+        );
+    }
+    grouped
+}
+
+/// Convert a selectable model index to its sibling index in the rendered list,
+/// which includes one non-selectable provider heading per group.
+pub(super) fn model_picker_scroll_index(models: &[ProviderModel], model_index: usize) -> usize {
+    let groups = model_picker_groups(models);
+    let mut rendered_index = 0;
+    for group in &groups {
+        rendered_index += 1;
+        for &index in &group.model_indices {
+            if index == model_index {
+                return rendered_index;
+            }
+            rendered_index += 1;
+        }
+    }
+    rendered_index
 }
 
 /// The models the picker lists, in display order.

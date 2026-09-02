@@ -799,6 +799,14 @@ environment.summary: 環境とバックグラウンド作業
 environment.changes: 変更
 environment.commit_or_push: コミットまたはプッシュ
 environment.compare_branch: ブランチを比較
+capsule.tasks: セッションツール
+capsule.git_tools: Git ツール
+capsule.todo: Todo
+capsule.todo_empty: Todo 項目はありません
+todo.status.pending: 保留中
+todo.status.in_progress: 進行中
+todo.status.completed: 完了
+todo.status.failed: 失敗
 
 commit.message_placeholder: コミットメッセージ（空欄の場合は自動生成）…
 commit.message: コミットメッセージ
@@ -822,6 +830,7 @@ background.title: バックグラウンド
 background.description: エージェントが起動したプロセスとサブエージェントを確認します
 background.processes: バックグラウンドプロセス
 background.agents: サブエージェント
+background.no_agents: サブエージェントなし
 background.process: プロセス
 background.monitor: モニター
 background.subagent: サブエージェント

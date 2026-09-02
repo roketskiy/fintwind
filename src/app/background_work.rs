@@ -42,9 +42,192 @@ struct BackgroundSummaryEntry {
 
 #[derive(Clone)]
 struct EnvironmentSummary {
+    branch: Option<String>,
+    additions: u64,
+    deletions: u64,
+    has_changes: bool,
     commit_status: Option<String>,
+    changes_focus: FocusHandle,
     commit_focus: FocusHandle,
     compare_focus: FocusHandle,
+}
+
+/// Progress of one entry of the latest plan activity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TodoEntryState {
+    Pending,
+    InProgress,
+    Completed,
+    Failed,
+}
+
+impl TodoEntryState {
+    /// Providers spell plan statuses many ways; map the known families and
+    /// leave anything else pending.
+    fn from_status(status: &str) -> Self {
+        match status
+            .trim()
+            .to_ascii_lowercase()
+            .replace(['-', ' '], "_")
+            .as_str()
+        {
+            "completed" | "complete" | "done" | "finished" | "success" | "succeeded" | "ok" => {
+                Self::Completed
+            }
+            "in_progress" | "inprogress" | "active" | "running" | "current" | "started"
+            | "working" => Self::InProgress,
+            "failed" | "error" | "errored" | "aborted" | "cancelled" | "canceled" => Self::Failed,
+            _ => Self::Pending,
+        }
+    }
+
+    fn label(self) -> String {
+        match self {
+            Self::Pending => tr!("todo.status.pending"),
+            Self::InProgress => tr!("todo.status.in_progress"),
+            Self::Completed => tr!("todo.status.completed"),
+            Self::Failed => tr!("todo.status.failed"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct TodoEntry {
+    pub label: String,
+    pub state: TodoEntryState,
+}
+
+/// Read-only display model for the capsule's Todo section: the newest
+/// `ActivityKind::Plan` activity in the transcript. Built off the render
+/// path — see [`Waku::rebuild_todo_summary`].
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct TodoSummary {
+    pub entries: Vec<TodoEntry>,
+    pub updating: bool,
+    pub failed: bool,
+}
+
+/// Extracts the display model from a session's transcript blocks. Pure, so
+/// callers can invoke it on plan updates, hydration, and selection changes
+/// without ever walking blocks from a row builder.
+pub(super) fn todo_summary_from_blocks(blocks: &[crate::model::TranscriptBlock]) -> TodoSummary {
+    blocks
+        .iter()
+        .rev()
+        .flat_map(|block| block.activities.iter().rev())
+        .find(|activity| activity.kind == crate::model::ActivityKind::Plan)
+        .map(todo_summary_from_activity)
+        .unwrap_or_default()
+}
+
+fn todo_summary_from_activity(activity: &crate::model::ActivityItem) -> TodoSummary {
+    let mut entries = todo_entries_from_json(activity.arguments.as_deref());
+    if entries.is_empty() {
+        entries = todo_entries_from_json(activity.output.as_deref());
+    }
+    if entries.is_empty() {
+        let state = match (activity.failed, activity.complete) {
+            (true, _) => TodoEntryState::Failed,
+            (false, false) => TodoEntryState::InProgress,
+            (false, true) => TodoEntryState::Completed,
+        };
+        entries.push(TodoEntry {
+            label: fallback_todo_label(activity),
+            state,
+        });
+    }
+    TodoSummary {
+        entries,
+        updating: !activity.complete,
+        failed: activity.failed,
+    }
+}
+
+fn fallback_todo_label(activity: &crate::model::ActivityItem) -> String {
+    if !crate::model::is_generic_activity_title(activity.kind, &activity.title) {
+        return activity.title.clone();
+    }
+    if let Some(detail) = activity
+        .detail
+        .as_deref()
+        .map(str::trim)
+        .filter(|detail| !detail.is_empty())
+    {
+        return detail.to_owned();
+    }
+    tr!("activity.action_plan")
+}
+
+fn todo_entries_from_json(json: Option<&str>) -> Vec<TodoEntry> {
+    let Some(text) = json
+        .map(str::trim)
+        .filter(|text| text.starts_with('[') || text.starts_with('{'))
+    else {
+        return Vec::new();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Vec::new();
+    };
+    todo_entries_from_value(&value)
+}
+
+fn todo_entries_from_value(value: &serde_json::Value) -> Vec<TodoEntry> {
+    for key in ["todos", "todo", "plan", "items", "steps"] {
+        if let Some(items) = value.get(key).and_then(|items| items.as_array()) {
+            let entries = items
+                .iter()
+                .filter_map(todo_entry_from_item)
+                .collect::<Vec<_>>();
+            if !entries.is_empty() {
+                return entries;
+            }
+        }
+    }
+    value
+        .as_array()
+        .map(|items| items.iter().filter_map(todo_entry_from_item).collect())
+        .unwrap_or_default()
+}
+
+fn todo_entry_from_item(item: &serde_json::Value) -> Option<TodoEntry> {
+    match item {
+        serde_json::Value::String(text) => {
+            let label = text.trim();
+            (!label.is_empty()).then(|| TodoEntry {
+                label: label.to_owned(),
+                state: TodoEntryState::Pending,
+            })
+        }
+        serde_json::Value::Object(map) => {
+            let label = [
+                "content",
+                "text",
+                "title",
+                "description",
+                "step",
+                "label",
+                "name",
+            ]
+            .iter()
+            .find_map(|key| map.get(*key).and_then(|value| value.as_str()))
+            .map(str::trim)
+            .filter(|label| !label.is_empty())?;
+            let state = ["status", "state"]
+                .iter()
+                .find_map(|key| map.get(*key).and_then(|value| value.as_str()))
+                .map(TodoEntryState::from_status)
+                .or_else(|| match map.get("completed") {
+                    Some(serde_json::Value::Bool(true)) => Some(TodoEntryState::Completed),
+                    _ => None,
+                })
+                .unwrap_or(TodoEntryState::Pending);
+            Some(TodoEntry {
+                label: label.to_owned(),
+                state,
+            })
+        }
+        _ => None,
+    }
 }
 
 impl BackgroundWorkRegistry {
@@ -641,7 +824,36 @@ impl Waku {
         self.open_right_panel_surface(RightPanelSurface::BackgroundWork { key, title }, cx);
     }
 
-    pub(super) fn render_background_work_summary(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn todo_summary(&self, session_id: Option<Uuid>) -> Rc<TodoSummary> {
+        session_id
+            .and_then(|session_id| self.todo_summaries.borrow().get(&session_id).cloned())
+            .unwrap_or_default()
+    }
+
+    /// Rebuilds the session's todo display model from its transcript blocks.
+    /// Returns whether anything changed so event handlers can decide to
+    /// repaint. Render must call [`Self::todo_summary`] instead — this walks
+    /// the whole session.
+    pub(super) fn rebuild_todo_summary(&mut self, session_id: Uuid) -> bool {
+        let summary = Rc::new(
+            self.state
+                .session_mut(session_id)
+                .map(|session| todo_summary_from_blocks(&session.transcript_blocks))
+                .unwrap_or_default(),
+        );
+        let changed = self
+            .todo_summaries
+            .borrow()
+            .get(&session_id)
+            .is_none_or(|previous| **previous != *summary);
+        self.todo_summaries.borrow_mut().insert(session_id, summary);
+        changed
+    }
+
+    /// Floating tool capsule over the session pane: collapsed it shows the
+    /// git change totals; expanded it lists Git tools, todos, subagents, and
+    /// background work for the selected session.
+    pub(super) fn render_task_capsule(&self, cx: &mut Context<Self>) -> AnyElement {
         let session = self.selected_session();
         let session_id = session.map(|session| session.id);
         let entries = session_id
@@ -681,18 +893,39 @@ impl Waku {
                 .filter(|(snapshot_path, _)| snapshot_path == path)
                 .map(|(_, snapshot)| snapshot)
         });
-        let change_counts = snapshot
+        let todo = self.todo_summary(session_id);
+        let (additions, deletions) = snapshot
             .map(|snapshot| (snapshot.additions, snapshot.deletions))
-            .filter(|(additions, deletions)| *additions > 0 || *deletions > 0);
+            .unwrap_or_default();
+        let has_changes = additions > 0 || deletions > 0;
         let environment = Some(EnvironmentSummary {
+            branch: snapshot
+                .and_then(|snapshot| snapshot.display_branch())
+                .map(ToString::to_string),
+            additions,
+            deletions,
+            has_changes,
             commit_status: self.commit_operation_status_label(),
+            changes_focus: self.transcript_control_focus("environment-summary-changes", cx),
             commit_focus: self.transcript_control_focus("environment-summary-commit", cx),
             compare_focus: self.transcript_control_focus("environment-summary-compare", cx),
         });
         let (processes, agents) = session_id
             .map(|session_id| self.background_work_counts(session_id))
             .unwrap_or_default();
-        let summary = background_work_count_summary(processes, agents);
+        let live_summary = background_work_count_summary(processes, agents);
+        let mut tooltip_parts = Vec::new();
+        if has_changes {
+            tooltip_parts.push(tr!("environment.changes"));
+        }
+        if !live_summary.is_empty() {
+            tooltip_parts.push(live_summary);
+        }
+        let tooltip = if tooltip_parts.is_empty() {
+            tr!("capsule.tasks")
+        } else {
+            tooltip_parts.join(" · ")
+        };
         let theme = Theme::current(cx);
         let refresh_weak = cx.entity().downgrade();
         let handle = self.menu_handle_with(BACKGROUND_SUMMARY_MENU_ID, cx, move |open, _, cx| {
@@ -703,109 +936,74 @@ impl Waku {
             }
         });
         let trigger = div()
-            .id("environment-summary-trigger")
-            .size(px(28.0))
-            .rounded(px(7.0))
+            .id("task-capsule-trigger")
+            .h(px(28.0))
+            .px(px(11.0))
+            .rounded_full()
+            .border_1()
+            .border_color(if handle.is_open() {
+                theme.accent
+            } else {
+                theme.border_strong
+            })
+            .bg(theme.raised)
+            .shadow_xs()
             .flex_none()
             .flex()
             .items_center()
-            .justify_center()
+            .gap(px(6.0))
             .cursor_default()
-            .focus_visible(|style| {
-                style
-                    .bg(theme.overlay)
-                    .border_1()
-                    .border_color(theme.accent)
-            })
+            .text_size(px(12.0))
+            .font_weight(FontWeight::MEDIUM)
+            .focus_visible(|style| style.border_color(theme.accent))
             .hover(|style| style.bg(theme.overlay))
-            .when(handle.is_open(), |style| style.bg(theme.overlay_strong))
-            .tooltip(Tooltip::text(if summary.is_empty() {
-                tr!("environment.summary")
-            } else {
-                summary
-            }))
-            .child(icon("icons/info.svg", 15.0, theme.text_tertiary));
-        let git_status = change_counts.map(|(additions, deletions)| {
-            let focus = self.transcript_control_focus("header-git-status", cx);
-            div()
-                .id("header-git-status")
-                .track_focus(&focus)
-                .tab_index(0)
-                .h(px(28.0))
-                .px(px(7.0))
-                .rounded(px(7.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .cursor_default()
-                .text_size(px(12.5))
-                .font_weight(FontWeight::MEDIUM)
-                .focus_visible(|style| {
-                    style
-                        .bg(theme.overlay)
-                        .border_1()
-                        .border_color(theme.accent)
-                })
-                .hover(|style| style.bg(theme.overlay))
-                .active(|style| style.bg(theme.overlay_strong))
-                .when(additions > 0, |button| {
-                    button.child(
-                        div()
-                            .text_color(theme.success)
-                            .child(format!("+{additions}")),
-                    )
-                })
-                .when(deletions > 0, |button| {
-                    button.child(
-                        div()
-                            .text_color(theme.danger)
-                            .child(format!("-{deletions}")),
-                    )
-                })
-                .tooltip(Tooltip::text(tr!("environment.changes")))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(cx.listener(|this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.set_right_panel_diff_source(ReviewDiffSource::Uncommitted, cx);
-                }))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        this.set_right_panel_diff_source(ReviewDiffSource::Uncommitted, cx);
-                        cx.stop_propagation();
-                    }
-                }))
-                .into_any_element()
-        });
+            .active(|style| style.bg(theme.overlay_strong))
+            .tooltip(Tooltip::text(tooltip))
+            .child(icon(
+                "icons/git-branch.svg",
+                13.0,
+                if handle.is_open() {
+                    theme.accent
+                } else {
+                    theme.text_secondary
+                },
+            ))
+            .when(additions > 0, |trigger| {
+                trigger.child(
+                    div()
+                        .text_color(theme.success)
+                        .child(format!("+{additions}")),
+                )
+            })
+            .when(deletions > 0, |trigger| {
+                trigger.child(
+                    div()
+                        .text_color(theme.danger)
+                        .child(format!("-{deletions}")),
+                )
+            });
         let entries = Rc::new(entries);
         let weak = cx.entity().downgrade();
-        let info = popover(
-            trigger,
-            &handle,
-            MenuAlign::BelowRight,
-            move |handle, _, cx| {
-                render_background_summary_card(
-                    handle,
-                    session_id.unwrap_or_else(Uuid::nil),
-                    environment.clone(),
-                    entries.clone(),
-                    weak.clone(),
-                    cx,
-                )
-            },
-        );
         div()
-            .id("header-environment-controls")
-            .tab_group()
-            .tab_stop(false)
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .children(git_status)
-            .child(info)
+            .absolute()
+            .top(px(56.0))
+            .right(px(16.0))
+            .child(popover(
+                trigger,
+                &handle,
+                MenuAlign::BelowRight,
+                move |handle, _, cx| {
+                    render_task_capsule_card(
+                        handle,
+                        session_id.unwrap_or_else(Uuid::nil),
+                        environment.clone(),
+                        todo.clone(),
+                        entries.clone(),
+                        weak.clone(),
+                        cx,
+                    )
+                },
+            ))
             .into_any_element()
     }
 
@@ -1146,10 +1344,11 @@ fn background_work_count_summary(processes: usize, agents: usize) -> String {
     parts.join(" · ")
 }
 
-fn render_background_summary_card(
+fn render_task_capsule_card(
     handle: &ContextMenuHandle,
     session_id: Uuid,
     environment: Option<EnvironmentSummary>,
+    todo: Rc<TodoSummary>,
     entries: Rc<Vec<BackgroundSummaryEntry>>,
     weak: WeakEntity<Waku>,
     cx: &mut App,
@@ -1165,49 +1364,55 @@ fn render_background_summary_card(
         .filter(|entry| entry.item.key.kind == BackgroundWorkKind::Subagent)
         .cloned()
         .collect::<Vec<_>>();
-    let mut content = div()
-        .id("background-summary-scroll")
-        .max_h(px(420.0))
+    let separator = || div().mx(px(8.0)).h(px(1.0)).bg(theme.border);
+    let git_tools = environment
+        .map(|environment| {
+            render_git_tools_section(environment, handle.clone(), weak.clone(), &theme)
+        })
+        .unwrap_or_else(|| {
+            div()
+                .h(px(26.0))
+                .px(px(8.0))
+                .flex()
+                .items_center()
+                .text_size(px(12.5))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text_tertiary)
+                .child(tr!("capsule.git_tools"))
+        });
+    let content = div()
+        .id("task-capsule-scroll")
+        .max_h(px(480.0))
         .overflow_y_scroll()
         .p(px(8.0))
         .flex()
         .flex_col()
-        .gap(px(8.0));
-    let has_environment = environment.is_some();
-    let has_background = !processes.is_empty() || !agents.is_empty();
-    if let Some(environment) = environment {
-        content = content.child(render_environment_summary_section(
-            environment,
-            handle.clone(),
-            weak.clone(),
-            &theme,
-        ));
-    }
-    if has_environment && has_background {
-        content = content.child(div().mx(px(8.0)).h(px(1.0)).bg(theme.border));
-    }
-    if !processes.is_empty() {
-        content = content.child(render_background_summary_section(
-            tr!("background.processes"),
-            processes,
-            session_id,
-            handle.clone(),
-            weak.clone(),
-            &theme,
-        ));
-    }
-    if !agents.is_empty() {
-        content = content.child(render_background_summary_section(
+        .gap(px(6.0))
+        .child(git_tools)
+        .child(separator())
+        .child(render_todo_section(&todo, &theme))
+        .child(separator())
+        .child(render_background_summary_section(
             tr!("background.agents"),
             agents,
             session_id,
             handle.clone(),
             weak.clone(),
             &theme,
+            tr!("background.no_agents"),
+        ))
+        .child(separator())
+        .child(render_background_summary_section(
+            tr!("background.title"),
+            processes,
+            session_id,
+            handle.clone(),
+            weak,
+            &theme,
+            tr!("background.no_work"),
         ));
-    }
     div()
-        .id("background-summary-card")
+        .id("task-capsule-card")
         .track_focus(handle.focus_handle())
         .w(px(300.0))
         .rounded(px(12.0))
@@ -1220,12 +1425,75 @@ fn render_background_summary_card(
         .into_any_element()
 }
 
-fn render_environment_summary_section(
+fn render_capsule_section_header(id: &'static str, label: String, theme: &Theme) -> Stateful<Div> {
+    div()
+        .id(id)
+        .h(px(26.0))
+        .px(px(8.0))
+        .flex()
+        .items_center()
+        .text_size(px(12.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_tertiary)
+        .child(label)
+}
+
+fn render_git_tools_section(
     environment: EnvironmentSummary,
     handle: ContextMenuHandle,
     weak: WeakEntity<Waku>,
     theme: &Theme,
 ) -> Div {
+    let counts = (environment.has_changes).then(|| {
+        div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .text_size(px(11.5))
+            .font_weight(FontWeight::MEDIUM)
+            .when(environment.additions > 0, |counts| {
+                counts.child(
+                    div()
+                        .text_color(theme.success)
+                        .child(format!("+{}", environment.additions)),
+                )
+            })
+            .when(environment.deletions > 0, |counts| {
+                counts.child(
+                    div()
+                        .text_color(theme.danger)
+                        .child(format!("-{}", environment.deletions)),
+                )
+            })
+            .into_any_element()
+    });
+    let changes_handle = handle.clone();
+    let changes_weak = weak.clone();
+    let changes = render_environment_action_row(
+        "environment-summary-changes",
+        &environment.changes_focus,
+        "icons/file-diff.svg",
+        tr!("environment.changes"),
+        environment.has_changes,
+        false,
+        counts,
+        theme,
+        move |window, cx| {
+            changes_handle.close(window, cx);
+            window.refresh();
+            let _ = changes_weak.update(cx, |this, cx| {
+                this.set_right_panel_diff_source(ReviewDiffSource::Uncommitted, cx);
+            });
+        },
+    );
+    let branch = render_capsule_info_row(
+        "environment-summary-branch",
+        "icons/git-branch.svg",
+        environment.branch.unwrap_or_else(|| "—".to_owned()),
+        theme,
+    );
+
     let commit_handle = handle.clone();
     let commit_weak = weak.clone();
     let commit_pending = environment.commit_status.is_some();
@@ -1274,18 +1542,142 @@ fn render_environment_summary_section(
         .flex()
         .flex_col()
         .gap_0()
+        .child(render_capsule_section_header(
+            "task-capsule-git-header",
+            tr!("capsule.git_tools"),
+            theme,
+        ))
+        .child(changes)
+        .child(branch)
+        .child(commit)
+        .child(compare)
+}
+
+/// A read-only informational row: icon plus a single-line label.
+fn render_capsule_info_row(
+    id: &'static str,
+    icon_path: &'static str,
+    label: String,
+    theme: &Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .min_h(px(32.0))
+        .w_full()
+        .px(px(8.0))
+        .rounded(px(8.0))
+        .flex()
+        .items_center()
+        .gap(px(10.0))
+        .child(icon(icon_path, 14.0, theme.text_secondary))
         .child(
             div()
-                .h(px(30.0))
+                .min_w_0()
+                .flex_1()
+                .truncate()
+                .text_size(px(13.5))
+                .text_color(theme.text_secondary)
+                .child(label),
+        )
+}
+
+fn render_todo_section(todo: &TodoSummary, theme: &Theme) -> Div {
+    let mut rows = div().w_full().flex().flex_col().gap(px(1.0));
+    if todo.entries.is_empty() {
+        rows = rows.child(
+            div()
+                .px(px(8.0))
+                .py(px(6.0))
+                .text_size(px(12.0))
+                .text_color(theme.text_tertiary)
+                .child(tr!("capsule.todo_empty")),
+        );
+    } else {
+        for (index, entry) in todo.entries.iter().enumerate() {
+            rows = rows.child(render_todo_row(index, entry, theme));
+        }
+    }
+    div()
+        .w_full()
+        .flex()
+        .flex_col()
+        .gap(px(5.0))
+        .child(
+            div()
+                .id("task-capsule-todo-header")
+                .h(px(26.0))
                 .px(px(8.0))
                 .flex()
                 .items_center()
-                .text_size(px(13.5))
-                .text_color(theme.text_tertiary)
-                .child(tr!("environment.title")),
+                .justify_between()
+                .child(
+                    div()
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text_tertiary)
+                        .child(tr!("capsule.todo")),
+                )
+                .children(todo.updating.then(|| {
+                    motion::spin_slow(icon("icons/loader-circle.svg", 10.0, theme.text_tertiary))
+                })),
         )
-        .child(commit)
-        .child(compare)
+        .child(rows)
+}
+
+fn render_todo_row(index: usize, entry: &TodoEntry, theme: &Theme) -> Stateful<Div> {
+    let (marker, label_color) = match entry.state {
+        TodoEntryState::Pending => (
+            div()
+                .size(px(10.0))
+                .rounded_full()
+                .border_1()
+                .border_color(theme.border_strong)
+                .into_any_element(),
+            theme.text_secondary,
+        ),
+        TodoEntryState::InProgress => (
+            motion::spin_slow(icon("icons/loader-circle.svg", 12.0, theme.accent)),
+            theme.text,
+        ),
+        TodoEntryState::Completed => (
+            icon("icons/check.svg", 12.0, theme.success).into_any_element(),
+            theme.text_tertiary,
+        ),
+        TodoEntryState::Failed => (
+            icon("icons/x.svg", 12.0, theme.danger).into_any_element(),
+            theme.text_tertiary,
+        ),
+    };
+    div()
+        .id(SharedString::from(format!("task-capsule-todo-row-{index}")))
+        .min_h(px(26.0))
+        .w_full()
+        .px(px(8.0))
+        .py(px(3.0))
+        .rounded(px(6.0))
+        .flex()
+        .items_center()
+        .gap(px(9.0))
+        .child(
+            div()
+                .size(px(12.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(marker),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .flex_1()
+                .line_clamp(1)
+                .text_ellipsis()
+                .text_size(px(12.5))
+                .text_color(label_color)
+                .child(entry.label.clone()),
+        )
+        .tooltip(Tooltip::text(entry.state.label()))
 }
 
 fn render_environment_action_row(
@@ -1363,8 +1755,19 @@ fn render_background_summary_section(
     handle: ContextMenuHandle,
     weak: WeakEntity<Waku>,
     theme: &Theme,
+    empty_label: String,
 ) -> Div {
     let mut rows = div().w_full().flex().flex_col().gap(px(2.0));
+    if entries.is_empty() {
+        rows = rows.child(
+            div()
+                .px(px(8.0))
+                .py(px(6.0))
+                .text_size(px(12.0))
+                .text_color(theme.text_tertiary)
+                .child(empty_label),
+        );
+    }
     for entry in entries {
         rows = rows.child(render_background_summary_row(
             entry,
@@ -1682,6 +2085,174 @@ mod tests {
             registry.items[&BackgroundWorkKey::new(BackgroundWorkKind::Process, "background")]
                 .status,
             BackgroundWorkStatus::Running
+        );
+    }
+
+    fn plan_activity(
+        title: &str,
+        arguments: Option<String>,
+        complete: bool,
+        failed: bool,
+    ) -> crate::model::ActivityItem {
+        let mut activity = crate::model::ActivityItem::new(
+            Some("plan-source".to_owned()),
+            crate::model::ActivityKind::Plan,
+            title,
+            None,
+            complete,
+        );
+        activity.failed = failed;
+        activity.arguments = arguments;
+        activity
+    }
+
+    fn block(activities: Vec<crate::model::ActivityItem>) -> crate::model::TranscriptBlock {
+        crate::model::TranscriptBlock {
+            after_message: 0,
+            turn_id: None,
+            activities,
+        }
+    }
+
+    #[test]
+    fn todo_summary_prefers_the_newest_plan_activity() {
+        let older = plan_activity(
+            "Plan",
+            Some(r#"{"todos":[{"content":"old task","status":"pending"}]}"#.to_owned()),
+            true,
+            false,
+        );
+        let newer = plan_activity(
+            "Plan",
+            Some(r#"{"todos":[{"content":"new task","status":"in_progress"}]}"#.to_owned()),
+            false,
+            false,
+        );
+        let blocks = vec![
+            block(vec![older]),
+            block(vec![crate::model::ActivityItem::new(
+                None,
+                crate::model::ActivityKind::Command,
+                "ls",
+                None,
+                true,
+            )]),
+            block(vec![newer]),
+        ];
+        let summary = todo_summary_from_blocks(&blocks);
+        assert_eq!(summary.entries.len(), 1);
+        assert_eq!(summary.entries[0].label, "new task");
+        assert_eq!(summary.entries[0].state, TodoEntryState::InProgress);
+        assert!(summary.updating);
+    }
+
+    #[test]
+    fn todo_summary_without_plan_activities_is_empty() {
+        let blocks = vec![block(vec![crate::model::ActivityItem::new(
+            None,
+            crate::model::ActivityKind::Command,
+            "ls",
+            None,
+            true,
+        )])];
+        assert_eq!(todo_summary_from_blocks(&blocks), TodoSummary::default());
+    }
+
+    #[test]
+    fn todo_summary_parses_todo_and_plan_payloads() {
+        let claude = plan_activity(
+            "Plan",
+            Some(
+                r#"{"todos":[
+                    {"content":"done task","status":"completed"},
+                    {"content":"running task","status":"in_progress"},
+                    {"content":"queued task"}
+                ]}"#
+                .to_owned(),
+            ),
+            true,
+            false,
+        );
+        let summary = todo_summary_from_activity(&claude);
+        assert_eq!(
+            summary
+                .entries
+                .iter()
+                .map(|entry| entry.state)
+                .collect::<Vec<_>>(),
+            vec![
+                TodoEntryState::Completed,
+                TodoEntryState::InProgress,
+                TodoEntryState::Pending
+            ]
+        );
+        assert!(!summary.updating);
+
+        let steps = plan_activity(
+            "Plan",
+            Some(r#"{"plan":[{"step":"write tests","status":"done"}]}"#.to_owned()),
+            true,
+            false,
+        );
+        let summary = todo_summary_from_activity(&steps);
+        assert_eq!(summary.entries[0].label, "write tests");
+        assert_eq!(summary.entries[0].state, TodoEntryState::Completed);
+
+        let bare = plan_activity("Plan", None, true, false);
+        let mut bare = bare;
+        bare.output = Some(r#"["first", "second"]"#.to_owned());
+        let summary = todo_summary_from_activity(&bare);
+        assert_eq!(
+            summary
+                .entries
+                .iter()
+                .map(|entry| entry.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
+        assert!(
+            summary
+                .entries
+                .iter()
+                .all(|entry| entry.state == TodoEntryState::Pending)
+        );
+    }
+
+    #[test]
+    fn todo_summary_falls_back_to_one_entry_without_parseable_payload() {
+        let live = plan_activity("Ship the release", None, false, false);
+        let summary = todo_summary_from_activity(&live);
+        assert_eq!(summary.entries.len(), 1);
+        assert_eq!(summary.entries[0].label, "Ship the release");
+        assert_eq!(summary.entries[0].state, TodoEntryState::InProgress);
+
+        let failed = plan_activity("Plan", Some("not json".to_owned()), true, true);
+        let summary = todo_summary_from_activity(&failed);
+        assert_eq!(summary.entries[0].state, TodoEntryState::Failed);
+        assert!(summary.failed);
+    }
+
+    #[test]
+    fn todo_status_normalizes_provider_spellings() {
+        assert_eq!(
+            TodoEntryState::from_status("Done"),
+            TodoEntryState::Completed
+        );
+        assert_eq!(
+            TodoEntryState::from_status("In-Progress"),
+            TodoEntryState::InProgress
+        );
+        assert_eq!(
+            TodoEntryState::from_status("cancelled"),
+            TodoEntryState::Failed
+        );
+        assert_eq!(
+            TodoEntryState::from_status("pending"),
+            TodoEntryState::Pending
+        );
+        assert_eq!(
+            TodoEntryState::from_status("some future status"),
+            TodoEntryState::Pending
         );
     }
 }

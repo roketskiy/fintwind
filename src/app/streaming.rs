@@ -179,6 +179,7 @@ impl Waku {
                 }
             }
         }
+        self.rebuild_todo_summary(session_id);
     }
 
     pub(super) fn turn_has_assistant_message(&self, session_id: Uuid) -> bool {
@@ -315,6 +316,9 @@ impl Waku {
                     let item = ActivityItem::new(id, kind, title, detail, complete);
                     self.observe_foreground_command_activity(session_id, &item);
                     self.update_activity(session_id, runtime, item);
+                    if kind == ActivityKind::Plan {
+                        self.rebuild_todo_summary(session_id);
+                    }
                     if refresh_branch {
                         self.refresh_selected_branch_snapshot(cx);
                     }
@@ -326,7 +330,11 @@ impl Waku {
                         should_refresh_branch_after_activity(item.kind, item.complete)
                             && self.state.selected_session == Some(session_id);
                     self.observe_foreground_command_activity(session_id, &item);
+                    let plan_activity = item.kind == ActivityKind::Plan;
                     self.update_activity(session_id, runtime, item);
+                    if plan_activity {
+                        self.rebuild_todo_summary(session_id);
+                    }
                     if refresh_branch {
                         self.refresh_selected_branch_snapshot(cx);
                     }

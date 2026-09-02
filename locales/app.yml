@@ -576,6 +576,9 @@ common.rename:
 session.new_task:
   en: New task
 
+session.reveal_project_folder:
+  en: Show project folder in file manager
+
 sidebar.today:
   en: Today
 sidebar.search:

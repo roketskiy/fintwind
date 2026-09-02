@@ -245,9 +245,27 @@
 2. **Supervised 模式语义变化**：v2 默认配置不产生权限请求（全自动），
    Waku 的 Ask 模式只有用户侧配置 `permission: ask` 时才会出现审批 UI；
    轮询线程已就位，但「默认无审批」是产品行为差异，需产品侧确认。
-3. **question 事件名**：`question.v2.asked` 未能自然触发验证（需 multi-agent
-   或自定义提问配置）；代码同时监听 `question.asked`/`question.v2.asked`，
-   回复路由 `POST /api/question/{rid}/reply` 已实测存在。
+3. **question 事件名**：~~`question.v2.asked` 未能自然触发验证~~
+   **已实测（2026-09-02，beta-18866）**：`question` 工具的提问**不走**
+   `question.asked` / `question.v2.asked` 事件，而是走 **form 通道**：
+   - 工具侧：`session.tool.input.started`（name=`question`）→
+     `session.tool.called`（`input` 为解析后的参数，`executed:false`）→
+     **`form.created`**（`data.form = {id: "frm_…", sessionID, title:"Questions",
+     metadata:{kind:"question", tool:{messageID, id: callID}},
+     fields:[{key:"q0", title:header, description:问题文本, type:"string"|
+     "multiselect", options:[{value,label,description}], custom:true}]}`）。
+   - 等待答复期间回合保持 running；答复
+     `POST /api/session/{sid}/form/{frm}/reply` body
+     `{answer:{<key>: <label…>}}`（**multiselect 字段必须是数组**，裸字符串
+     返回 400 `FormInvalidAnswerError: Expected string array`）→ 204 →
+     `form.replied`（`{id, sessionID, answer}`）→ `session.tool.success` →
+     回合正常 `session.execution.succeeded`。
+   - `/api/question/*` 路由在该版本 404（连列表端点都没有）；
+     `question.asked`/`question.v2.asked` 事件未出现。
+   - Waku 对策：驱动同时监听 question 事件（旧版本）与 `form.created`
+     （当前版本），回复按 `frm_` 前缀路由，form 字段形状记录在
+     `OpenCodeFormState` 供组答复使用；另有 `/api/form/request` 轮询兜底
+     （与权限轮询同一线程，`announced` 集合去重）。
 4. **事件模型差异的产品影响**：无 `session.idle`，回合结算由
    `execution.succeeded/failed` 驱动（已实现）；`session.step.ended` 的
    `finish:"tool-calls"` 等中间态未建模，工具活动在 `tool.success` 完成。

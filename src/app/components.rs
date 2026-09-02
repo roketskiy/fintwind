@@ -932,12 +932,15 @@ fn tool_name_leaf(name: &str) -> &str {
 
 fn is_ask_user_question(activity: &ActivityItem) -> bool {
     activity.kind == crate::model::ActivityKind::Tool
-        && tool_name_leaf(&activity.title)
-            .chars()
-            .filter(|character| !matches!(*character, '_' | '-' | ' '))
-            .flat_map(char::to_lowercase)
-            .collect::<String>()
-            == "askuserquestion"
+        && matches!(
+            tool_name_leaf(&activity.title)
+                .chars()
+                .filter(|character| !matches!(*character, '_' | '-' | ' '))
+                .flat_map(char::to_lowercase)
+                .collect::<String>()
+                .as_str(),
+            "askuserquestion" | "question"
+        )
 }
 
 fn humanize_tool_name(name: &str) -> String {
@@ -1628,6 +1631,26 @@ mod message_time_tests {
             true,
         )
         .with_arguments(Some(r#"{"questions":[]}"#.into()));
+
+        assert_eq!(activity_action_label(&activity), "Ask questions");
+        assert_eq!(activity_row_detail(&activity, false), "");
+        assert_eq!(activity_display_title(&activity), "Ask questions");
+    }
+
+    #[test]
+    fn opencode_question_tool_gets_the_ask_questions_label() {
+        // opencode2 names its question tool `question`; the raw JSON
+        // arguments are a prompt for the user, not transcript detail.
+        let activity = ActivityItem::new(
+            Some("tool-1".into()),
+            crate::model::ActivityKind::Tool,
+            "question",
+            None,
+            false,
+        )
+        .with_arguments(Some(
+            r#"{"questions":[{"question":"Favorite color?","header":"Color","options":[{"label":"Red"}]}]}"#.to_string(),
+        ));
 
         assert_eq!(activity_action_label(&activity), "Ask questions");
         assert_eq!(activity_row_detail(&activity, false), "");

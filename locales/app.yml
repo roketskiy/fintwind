@@ -1584,6 +1584,8 @@ background.monitor:
   en: Monitor
 background.subagent:
   en: Subagent
+background.child_deleted:
+  en: Session was deleted
 background.no_work:
   en: No background work
 background.no_work_description:

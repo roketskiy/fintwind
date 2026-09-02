@@ -1,9 +1,10 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Editor } from '@pierre/diffs/edit'
-import type { AgentSession, Project, ReviewDiffSource, WorkingTreeEntry } from '@waku/client'
+import type { ActivityItem, AgentSession, Message, Project, ReviewDiffSource, TranscriptBlock, WorkingTreeEntry } from '@waku/client'
 import { GhosttyCore } from '@wterm/ghostty'
 import { Terminal, useTerminal } from '@wterm/react'
 import {
+  Fragment,
   lazy,
   Suspense,
   useCallback,
@@ -16,6 +17,8 @@ import {
   type SetStateAction,
 } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import { toast } from 'sonner'
 import { ControlMenu } from '@/components/control-menu'
 import { PanelResizeHandle } from '@/components/panel-resize-handle'
@@ -53,6 +56,7 @@ import {
   type BackgroundWorkItem,
   type BackgroundWorkKey,
   type BackgroundWorkStatus,
+  type BackgroundWorkTranscript,
 } from '@/lib/runtime-context'
 import { cn } from '@/lib/utils'
 
@@ -1314,10 +1318,13 @@ function BackgroundWorkPanel({
   onTitle: (title: string) => void
 }) {
   const { t } = useI18n()
-  const { backgroundWork, stopBackgroundWork } = useRuntime()
+  const { backgroundWork, backgroundWorkTranscripts, stopBackgroundWork } = useRuntime()
   const reportedTitle = useRef<string | null>(null)
   const item = session
     ? backgroundWork[session.id]?.find((candidate) => sameBackgroundWorkKey(candidate.key, workKey))
+    : undefined
+  const transcript = session
+    ? backgroundWorkTranscripts[session.id]?.[`${workKey.kind}:${workKey.providerId}`]
     : undefined
 
   useEffect(() => {
@@ -1380,16 +1387,93 @@ function BackgroundWorkPanel({
             <div className="mt-[3px] whitespace-pre-wrap break-words font-mono text-[10.5px] text-[var(--text-secondary)]">{value}</div>
           </div>
         ))}
-        <div className="border-t p-2.5">
-          <div className="mb-[5px] flex items-center justify-between text-[9.5px] text-[var(--text-tertiary)]">
-            <span>{t('background.output')}</span>
-            {item.outputTruncated && <span>{t('background.output_truncated')}</span>}
+        {item.key.kind === 'subagent' && transcript ? (
+          <BackgroundTranscriptPanel transcript={transcript} t={t} />
+        ) : (
+          <div className="border-t p-2.5">
+            <div className="mb-[5px] flex items-center justify-between text-[9.5px] text-[var(--text-tertiary)]">
+              <span>{t('background.output')}</span>
+              {item.outputTruncated && <span>{t('background.output_truncated')}</span>}
+            </div>
+            <pre className="max-h-80 overflow-auto rounded-md bg-[var(--inset)] p-2 font-mono text-[10.5px] leading-[15px] text-[var(--text-secondary)]">
+              {stripAnsi(item.output || t('background.no_output'))}
+            </pre>
           </div>
-          <pre className="max-h-80 overflow-auto rounded-md bg-[var(--inset)] p-2 font-mono text-[10.5px] leading-[15px] text-[var(--text-secondary)]">
-            {stripAnsi(item.output || t('background.no_output'))}
-          </pre>
-        </div>
+        )}
       </div>
+    </div>
+  )
+}
+
+function BackgroundTranscriptPanel({
+  transcript,
+  t,
+}: {
+  transcript: BackgroundWorkTranscript
+  t: Translator
+}) {
+  // Group blocks by their anchor once so each activity card interleaves with
+  // the message it belongs to, matching the desktop projection.
+  const blocksByAfter = new Map<number, TranscriptBlock[]>()
+  for (const block of transcript.transcriptBlocks) {
+    const anchored = blocksByAfter.get(block.after_message) ?? []
+    anchored.push(block)
+    blocksByAfter.set(block.after_message, anchored)
+  }
+  return (
+    <div className="border-t p-2.5">
+      <div className="mb-2 text-[9.5px] text-[var(--text-tertiary)]">{t('background.output')}</div>
+      <div className="max-h-[420px] space-y-3 overflow-auto rounded-md bg-[var(--inset)] p-2.5">
+        {Array.from({ length: transcript.messages.length + 1 }, (_, after) => (
+          <Fragment key={after}>
+            {(blocksByAfter.get(after) ?? []).flatMap((block) => (
+              block.content.kind === 'activities' ? block.content.data : []
+            )).map((activity) => (
+              <BackgroundActivityCard activity={activity} key={activity.id} t={t} />
+            ))}
+            {transcript.messages[after] && (
+              <div className="space-y-1">
+                <div className={cn(
+                  'text-[9.5px] font-semibold uppercase tracking-wide',
+                  transcript.messages[after].role === 'user' ? 'text-ring' : 'text-[var(--text-tertiary)]',
+                )}>
+                  {transcript.messages[after].role === 'user' ? t('command_palette.you') : t('background.subagent')}
+                </div>
+                <div className="prose prose-invert max-w-none text-[11px] leading-[17px] text-[var(--text-secondary)]">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {transcript.messages[after].display_content ?? transcript.messages[after].content}
+                  </ReactMarkdown>
+                </div>
+              </div>
+            )}
+          </Fragment>
+        ))}
+        {!transcript.messages.length && !transcript.transcriptBlocks.length && (
+          <div className="text-[11px] text-[var(--text-tertiary)]">{t('background.no_output')}</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function BackgroundActivityCard({ activity, t }: { activity: ActivityItem; t: Translator }) {
+  const detail = activity.reasoning?.content || activity.output || activity.detail
+  return (
+    <div className="rounded-md border bg-[var(--activity-surface)] px-2 py-1.5">
+      <div className="flex items-center gap-1.5 text-[10.5px] font-medium text-[var(--text-secondary)]">
+        <span>{activity.title}</span>
+        <span className={cn(
+          'text-[9px]',
+          activity.failed ? 'text-destructive' : activity.complete ? 'text-[var(--text-tertiary)]' : 'text-ring',
+        )}>
+          {activity.failed
+            ? t('background.status.failed')
+            : activity.complete
+              ? t('background.status.completed')
+              : t('background.status.running')}
+        </span>
+      </div>
+      {detail && <div className="mt-1 whitespace-pre-wrap break-words font-mono text-[10px] leading-[15px] text-[var(--text-secondary)]">{detail}</div>}
     </div>
   )
 }

@@ -31,13 +31,13 @@ use crate::git_branch::BranchSnapshot;
 use crate::input::{ComposerAttachmentPaste, ComposerEvent, ComposerInput};
 use crate::md;
 use crate::model::{
-    ActivityItem, ActivityKind, AgentSession, BackgroundWorkEvent, BackgroundWorkItem,
-    BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkStatus, Checkpoint, CheckpointStatus,
-    ContextUsage, DriverEvent, FavoriteModel, InteractionMode, Message, MessageAttachment,
-    MessageRole, OPENCODE_PROVIDER, PendingPermission, Project, ProviderModel, ProviderProbe,
-    ProviderResumeCursor, QueuedMessage, ReasoningBlock, RuntimeMode, SessionStatus,
-    SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer, UserInputQuestion,
-    compact_path, unix_time, unix_time_millis,
+    ActivityItem, ActivityKind, AgentSession, AgentTurn, BackgroundWorkEvent, BackgroundWorkItem,
+    BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkStatus, BackgroundWorkTranscript,
+    BackgroundWorkTranscriptEvent, Checkpoint, CheckpointStatus, ContextUsage, DriverEvent,
+    FavoriteModel, InteractionMode, Message, MessageAttachment, MessageRole, OPENCODE_PROVIDER,
+    PendingPermission, Project, ProviderModel, ProviderProbe, ProviderResumeCursor, QueuedMessage,
+    ReasoningBlock, RuntimeMode, SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus,
+    UserInputAnswer, UserInputQuestion, compact_path, unix_time, unix_time_millis,
 };
 use unicode_segmentation::UnicodeSegmentation;
 

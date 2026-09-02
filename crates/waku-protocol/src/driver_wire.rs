@@ -261,7 +261,10 @@ struct TurnFinishedWire {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{UserInputOption, UserInputQuestion};
+    use crate::model::{
+        ActivityItem, BackgroundWorkEvent, BackgroundWorkKey, BackgroundWorkKind,
+        BackgroundWorkTranscriptEvent, ReasoningBlock, UserInputOption, UserInputQuestion,
+    };
 
     #[test]
     fn structured_user_input_round_trips_through_the_daemon_wire() {
@@ -291,5 +294,59 @@ mod tests {
         assert_eq!(request_id, "request-1");
         assert_eq!(questions[0].id, "deployment");
         assert_eq!(questions[0].options[0].label, "Preview");
+    }
+
+    #[test]
+    fn background_work_transcript_events_round_trip_through_the_daemon_wire() {
+        let key = BackgroundWorkKey {
+            kind: BackgroundWorkKind::Subagent,
+            provider_id: "ses_child".into(),
+        };
+        let activity = ActivityItem::from_reasoning(
+            ReasoningBlock {
+                content: "thinking".into(),
+                started_at_ms: 1,
+                finished_at_ms: 2,
+            },
+            true,
+        );
+        // Every variant must survive both serde tag layers: the inner
+        // externally tagged transcript variant and the outer internally
+        // tagged backgroundWork payload.
+        let events = vec![
+            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Started {
+                key: key.clone(),
+                prompt: Some("Inspect the repository".into()),
+            }),
+            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::ReasoningDelta {
+                key: key.clone(),
+                delta: "thinking".into(),
+            }),
+            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::TextDelta {
+                key: key.clone(),
+                delta: "answer".into(),
+            }),
+            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Activity {
+                key: key.clone(),
+                activity: activity.clone(),
+            }),
+            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
+                key: key.clone(),
+                success: true,
+            }),
+        ];
+        for event in events {
+            let wire = event_to_wire(DriverEvent::BackgroundWork(event.clone())).unwrap();
+            assert_eq!(wire.kind, "backgroundWork");
+            let DriverEvent::BackgroundWork(round_tripped) = event_from_wire(wire).unwrap() else {
+                panic!("the event changed variants during its wire round trip");
+            };
+            // Serialized-shape equality doubles as a wire-contract check:
+            // both sides must tag the transcript variant identically.
+            assert_eq!(
+                serde_json::to_value(&round_tripped).unwrap(),
+                serde_json::to_value(&event).unwrap()
+            );
+        }
     }
 }

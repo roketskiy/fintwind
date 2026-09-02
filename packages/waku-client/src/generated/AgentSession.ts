@@ -65,6 +65,20 @@ available_commands?: Array<ReportedCommand>,
  */
 context_usage?: ContextUsage | null, runtime_event_cursor?: RuntimeEventCursor | null,
 /**
+ * The session was discovered on the OpenCode server (created by the CLI,
+ * the TUI, or another client) rather than in this app. Imported sessions
+ * hydrate their transcript from the server and are removed locally when
+ * the server no longer has them.
+ */
+imported?: boolean,
+/**
+ * OpenCode's native session id, duplicated from
+ * [`Self::provider_cursor`] at list level so a skeleton (whose cursor
+ * lives in the detail blob) can still be reconciled against the
+ * server's session list without hydrating.
+ */
+native_session_id?: string | null,
+/**
  * Read-only compatibility field for v1 state files. New saves omit it.
  */
 provider_session_id?: string | null,

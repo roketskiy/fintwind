@@ -883,7 +883,7 @@ impl Waku {
             self.state.last_reasoning_effort = reasoning_effort;
             self.state.last_service_tier = service_tier;
             self.state.last_context_window = context_window;
-            self.model_picker_tab = ModelPickerTab::Provider;
+            self.model_picker_tab = self.selected_model_picker_tab();
             self.apply_session_options(session_id, cx);
             self.save();
             cx.notify();
@@ -932,8 +932,9 @@ impl Waku {
     /// picker only ever switches between loaded lists.
     pub(super) fn select_model_picker_tab(&mut self, tab: ModelPickerTab, cx: &mut Context<Self>) {
         if self.model_picker_tab != tab {
+            let refresh_discovery = matches!(tab, ModelPickerTab::Provider(_));
             self.model_picker_tab = tab;
-            if tab == ModelPickerTab::Provider {
+            if refresh_discovery {
                 // Selecting the rail re-runs catalog discovery, so the list is
                 // fresh when viewed without probing on every open.
                 self.refresh_provider_model_discovery();

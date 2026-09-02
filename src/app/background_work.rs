@@ -873,24 +873,24 @@ impl Waku {
                     )))
                     .track_focus(&focus)
                     .tab_index(0)
-                    .h(px(26.0))
-                    .px(px(9.0))
-                    .rounded(px(6.0))
+                    .h(px(30.0))
+                    .px(px(10.0))
+                    .rounded(px(7.0))
                     .border_1()
                     .border_color(theme.border_strong)
                     .flex_none()
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
+                    .gap(px(6.0))
                     .cursor_default()
-                    .text_size(px(10.5))
+                    .text_size(px(12.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_secondary)
                     .hover(|style| style.bg(theme.danger.opacity(0.10)))
                     .active(|style| style.bg(theme.danger.opacity(0.16)))
                     .focus_visible(|style| style.border_color(theme.accent))
                     .tooltip(Tooltip::text(tr!("background.stop")))
-                    .child(icon("icons/stop-filled.svg", 11.0, theme.danger))
+                    .child(icon("icons/stop-filled.svg", 12.5, theme.danger))
                     .child(tr!("background.stop"))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(move |_, _, cx| {
@@ -953,7 +953,11 @@ impl Waku {
                                     .gap(px(5.0))
                                     .text_size(px(10.0))
                                     .text_color(theme.text_tertiary)
-                                    .child(rendered_work_status_icon(item.status, 9.0, status_color))
+                                    .child(rendered_work_status_icon(
+                                        item.status,
+                                        9.0,
+                                        status_color,
+                                    ))
                                     .child(work_status_label(item.status))
                                     .child("·")
                                     .child(work_elapsed(item)),

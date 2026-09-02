@@ -185,8 +185,7 @@ impl Waku {
         if let Some(selected) = self.mcp_selected.clone() {
             self.load_mcp_fields(&selected, cx);
         }
-        self.mcp_detail_scroll
-            .set_offset(gpui::Point::default());
+        self.mcp_detail_scroll.set_offset(gpui::Point::default());
         cx.notify();
     }
 
@@ -391,7 +390,11 @@ impl Waku {
             _ => {}
         }
 
-        let taken: Vec<String> = self.mcp_servers.iter().map(|server| server.name.clone()).collect();
+        let taken: Vec<String> = self
+            .mcp_servers
+            .iter()
+            .map(|server| server.name.clone())
+            .collect();
         let key = unique_provider_slug(&name, &taken);
         let server = McpServer {
             name: key.clone(),
@@ -500,18 +503,13 @@ impl Waku {
 
     // ── Variable editor (environment / headers) ────────────────────────────
 
-    fn begin_mcp_variable_editor(
-        &mut self,
-        editor: McpVariableEditor,
-        cx: &mut Context<Self>,
-    ) {
+    fn begin_mcp_variable_editor(&mut self, editor: McpVariableEditor, cx: &mut Context<Self>) {
         let existing = match (editor.row, self.effective_mcp_server()) {
-            (McpVariableRow::Edit(index), Some(server)) => mcp_server_variables(
-                &server,
-                editor.table,
-            )
-            .get(index)
-            .cloned(),
+            (McpVariableRow::Edit(index), Some(server)) => {
+                mcp_server_variables(&server, editor.table)
+                    .get(index)
+                    .cloned()
+            }
             _ => None,
         };
         let (key, value) = existing.unwrap_or_default();
@@ -644,9 +642,7 @@ impl Waku {
             let matches: Vec<&McpServer> = self
                 .mcp_servers
                 .iter()
-                .filter(|server| {
-                    server.kind == kind && Self::mcp_search_matches(server, &query)
-                })
+                .filter(|server| server.kind == kind && Self::mcp_search_matches(server, &query))
                 .collect();
             if matches.is_empty() {
                 continue;
@@ -682,14 +678,10 @@ impl Waku {
                     .child(tr!("settings.mcp_servers")),
             )
             .child(
-                div()
-                    .px(px(12.0))
-                    .pt(px(10.0))
-                    .flex_none()
-                    .child(
-                        TextField::new("mcp-search-field", self.mcp_search.clone())
-                            .icon("icons/search.svg", 13.0),
-                    ),
+                div().px(px(12.0)).pt(px(10.0)).flex_none().child(
+                    TextField::new("mcp-search-field", self.mcp_search.clone())
+                        .icon("icons/search.svg", 13.0),
+                ),
             )
             .child(
                 div()
@@ -771,7 +763,7 @@ impl Waku {
                     .focus_visible(|style| style.border_1().border_color(accent))
                     .w_full()
                     .px(px(9.0))
-                    .py(px(6.0))
+                    .py(px(7.0))
                     .mb(px(1.0))
                     .rounded(px(8.0))
                     .cursor_default()
@@ -784,17 +776,17 @@ impl Waku {
                     .gap(px(9.0))
                     .child(
                         div()
-                            .w(px(26.0))
-                            .h(px(26.0))
+                            .w(px(28.0))
+                            .h(px(28.0))
                             .flex_none()
-                            .rounded(px(6.0))
+                            .rounded(px(7.0))
                             .bg(theme.overlay)
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(icon(
                                 mcp_server_icon(server.kind),
-                                13.0,
+                                14.0,
                                 if selected {
                                     accent
                                 } else {
@@ -810,7 +802,7 @@ impl Waku {
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(px(12.0))
+                                    .text_size(px(12.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(if selected || enabled {
                                         theme.text
@@ -825,7 +817,7 @@ impl Waku {
                                     .min_w_0()
                                     .truncate()
                                     .font_family(crate::md::render::MONO_FAMILY)
-                                    .text_size(px(9.5))
+                                    .text_size(px(10.5))
                                     .text_color(theme.text_tertiary)
                                     .child(SharedString::from(caption)),
                             ),
@@ -869,7 +861,7 @@ impl Waku {
                     .focus_visible(|style| style.border_1().border_color(accent))
                     .w_full()
                     .px(px(9.0))
-                    .py(px(6.0))
+                    .py(px(7.0))
                     .mt(px(10.0))
                     .rounded(px(8.0))
                     .cursor_default()
@@ -888,10 +880,10 @@ impl Waku {
                     })
                     .child(icon(
                         "icons/plus.svg",
-                        12.0,
+                        13.0,
                         if adding { accent } else { theme.text_tertiary },
                     ))
-                    .child(div().text_size(px(12.0)).child(tr!("mcp.add_server")))
+                    .child(div().text_size(px(12.5)).child(tr!("mcp.add_server")))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.begin_add_mcp_server(cx);
                     }))
@@ -959,8 +951,7 @@ impl Waku {
                 .items_center()
                 .gap(px(6.0))
                 .child(
-                    TextField::new("mcp-rename-field", self.mcp_rename_input.clone())
-                        .w(px(220.0)),
+                    TextField::new("mcp-rename-field", self.mcp_rename_input.clone()).w(px(220.0)),
                 )
                 .child(
                     small_action_button(
@@ -973,14 +964,16 @@ impl Waku {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.confirm_mcp_rename(cx);
                     }))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if !event.keystroke.modifiers.modified()
-                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                        {
-                            this.confirm_mcp_rename(cx);
-                            cx.stop_propagation();
-                        }
-                    })),
+                    .on_key_down(cx.listener(
+                        |this, event: &KeyDownEvent, _, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.confirm_mcp_rename(cx);
+                                cx.stop_propagation();
+                            }
+                        },
+                    )),
                 )
                 .child(
                     small_action_button(
@@ -1050,9 +1043,9 @@ impl Waku {
             .id("delete-mcp-server")
             .tab_index(0)
             .focus_visible(|style| style.border_color(theme.accent))
-            .h(px(26.0))
-            .px(px(9.0))
-            .rounded(px(6.0))
+            .h(px(30.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
             .border_1()
             .border_color(if armed {
                 theme.danger
@@ -1063,9 +1056,9 @@ impl Waku {
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(5.0))
+            .gap(px(6.0))
             .cursor_default()
-            .text_size(px(10.5))
+            .text_size(px(12.0))
             .text_color(if armed {
                 theme.danger
             } else {
@@ -1074,7 +1067,7 @@ impl Waku {
             .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
             .child(icon(
                 "icons/trash.svg",
-                11.0,
+                12.5,
                 if armed {
                     theme.danger
                 } else {
@@ -1176,11 +1169,7 @@ impl Waku {
                         .flex()
                         .items_center()
                         .gap(px(12.0))
-                        .child(provider_tile(
-                            theme,
-                            mcp_server_icon(current_kind),
-                            enabled,
-                        ))
+                        .child(provider_tile(theme, mcp_server_icon(current_kind), enabled))
                         .child(
                             div()
                                 .flex_1()
@@ -1198,11 +1187,7 @@ impl Waku {
                         .flex()
                         .flex_col()
                         .gap(px(14.0))
-                        .child(labeled_field(
-                            theme,
-                            tr!("mcp.type_label"),
-                            kind_selector,
-                        ))
+                        .child(labeled_field(theme, tr!("mcp.type_label"), kind_selector))
                         .child(connection_field),
                 )
                 .child(variables_section)
@@ -1224,10 +1209,11 @@ impl Waku {
         let rows_pairs = mcp_server_variables(server, table);
         let mut rows = div().flex().flex_col();
         if rows_pairs.is_empty()
-            && self.mcp_variable_editor != Some(McpVariableEditor {
-                table,
-                row: McpVariableRow::Add,
-            })
+            && self.mcp_variable_editor
+                != Some(McpVariableEditor {
+                    table,
+                    row: McpVariableRow::Add,
+                })
         {
             rows = rows.child(
                 div()
@@ -1341,7 +1327,7 @@ impl Waku {
                     )))
                     .tab_index(0)
                     .focus_visible(|style| style.border_color(accent))
-                    .h(px(34.0))
+                    .h(px(36.0))
                     .flex()
                     .items_center()
                     .gap(px(7.0))
@@ -1350,10 +1336,10 @@ impl Waku {
                         element.border_t_1().border_color(theme.border)
                     })
                     .cursor_default()
-                    .text_size(px(10.5))
+                    .text_size(px(12.0))
                     .text_color(theme.text_secondary)
                     .hover(|element| element.bg(theme.overlay))
-                    .child(icon("icons/plus.svg", 11.0, theme.text_tertiary))
+                    .child(icon("icons/plus.svg", 12.5, theme.text_tertiary))
                     .child(table.add_label())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.begin_mcp_variable_editor(
@@ -1405,7 +1391,12 @@ impl Waku {
         separator: bool,
     ) -> AnyElement {
         let accent = mcp_accent(theme);
-        let key = self.mcp_variable_key_input.read(cx).content().trim().to_owned();
+        let key = self
+            .mcp_variable_key_input
+            .read(cx)
+            .content()
+            .trim()
+            .to_owned();
         let valid = !key.is_empty();
 
         div()
@@ -1439,14 +1430,14 @@ impl Waku {
                     .id("confirm-mcp-variable")
                     .tab_index(0)
                     .focus_visible(|style| style.border_color(accent))
-                    .h(px(26.0))
-                    .px(px(9.0))
-                    .rounded(px(6.0))
+                    .h(px(30.0))
+                    .px(px(10.0))
+                    .rounded(px(7.0))
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
+                    .gap(px(6.0))
                     .cursor_default()
-                    .text_size(px(10.5))
+                    .text_size(px(12.0))
                     .when(valid, |element| {
                         element
                             .bg(accent)
@@ -1472,7 +1463,7 @@ impl Waku {
                     })
                     .child(icon(
                         "icons/check.svg",
-                        11.0,
+                        12.5,
                         if valid {
                             on_mcp_accent(theme)
                         } else {
@@ -1541,15 +1532,15 @@ impl Waku {
                     .tab_index(0)
                     .focus_visible(|style| style.border_color(accent))
                     .mt(px(6.0))
-                    .h(px(29.0))
-                    .px(px(14.0))
-                    .rounded(px(7.0))
+                    .h(px(32.0))
+                    .px(px(16.0))
+                    .rounded(px(8.0))
                     .bg(accent)
                     .flex()
                     .items_center()
                     .justify_center()
                     .cursor_default()
-                    .text_size(px(11.0))
+                    .text_size(px(12.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(on_mcp_accent(theme))
                     .hover(|element| element.bg(accent.opacity(0.85)))
@@ -1616,14 +1607,14 @@ impl Waku {
             .id("submit-mcp-form")
             .tab_index(0)
             .focus_visible(|style| style.border_color(accent))
-            .h(px(29.0))
-            .px(px(14.0))
-            .rounded(px(7.0))
+            .h(px(32.0))
+            .px(px(16.0))
+            .rounded(px(8.0))
             .flex()
             .items_center()
             .justify_center()
             .cursor_default()
-            .text_size(px(11.0))
+            .text_size(px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .when(valid, |element| {
                 element
@@ -1688,11 +1679,7 @@ impl Waku {
                             TextField::new("mcp-form-name-field", self.mcp_form_name.clone())
                                 .w_full(),
                         ))
-                        .child(labeled_field(
-                            theme,
-                            tr!("mcp.type_label"),
-                            kind_selector,
-                        ))
+                        .child(labeled_field(theme, tr!("mcp.type_label"), kind_selector))
                         .child(match kind {
                             McpServerKind::Local => labeled_field(
                                 theme,

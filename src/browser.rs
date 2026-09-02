@@ -1989,19 +1989,19 @@ impl BrowserView {
     ) -> Stateful<Div> {
         let base = div()
             .id(id)
-            .size(px(26.0))
-            .rounded(px(6.0))
+            .size(px(28.0))
+            .rounded(px(7.0))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
             .cursor_default();
         if !enabled {
-            return base.child(icon(icon_path, 14.0, theme.text_ghost));
+            return base.child(icon(icon_path, 15.0, theme.text_ghost));
         }
         base.hover(|element| element.bg(theme.overlay))
             .active(|element| element.bg(theme.overlay_strong))
-            .child(icon(icon_path, 14.0, theme.text_secondary))
+            .child(icon(icon_path, 15.0, theme.text_secondary))
             .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx))
             .on_click(cx.listener(move |this, _, window, cx| {
                 on_click(this, window, cx);

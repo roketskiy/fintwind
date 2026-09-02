@@ -18,9 +18,7 @@
 
 use gpui::{ElementId, KeyDownEvent};
 
-use waku_client::custom_providers::{
-    self, CustomProvider, CustomProviderModel, ProviderApiFormat,
-};
+use waku_client::custom_providers::{self, CustomProvider, CustomProviderModel, ProviderApiFormat};
 
 use super::*;
 
@@ -82,10 +80,11 @@ impl Waku {
     fn effective_provider_id(&self) -> String {
         match self.providers_selected.as_deref() {
             Some(id) if id == OPENCODE_PROVIDER => id.to_owned(),
-            Some(id) if self
-                .providers_store
-                .iter()
-                .any(|provider| provider.id == id) =>
+            Some(id)
+                if self
+                    .providers_store
+                    .iter()
+                    .any(|provider| provider.id == id) =>
             {
                 id.to_owned()
             }
@@ -172,10 +171,8 @@ impl Waku {
                 }
                 match migrated {
                     Ok(providers) => {
-                        let selected_missing = this
-                            .providers_selected
-                            .as_deref()
-                            .is_some_and(|id| {
+                        let selected_missing =
+                            this.providers_selected.as_deref().is_some_and(|id| {
                                 id != OPENCODE_PROVIDER
                                     && !providers.iter().any(|provider| provider.id == id)
                             });
@@ -187,18 +184,13 @@ impl Waku {
                             this.providers_renaming = false;
                             this.providers_model_editor = None;
                             this.providers_delete_arming = None;
-                        } else if page_reload
-                            && let Some(id) = this.providers_selected.clone()
-                        {
+                        } else if page_reload && let Some(id) = this.providers_selected.clone() {
                             this.load_provider_fields(&id, cx);
                         }
                         cx.notify();
                     }
                     Err(error) => {
-                        this.show_toast(tr!(
-                            "providers.sync_failed",
-                            error = error.to_string()
-                        ));
+                        this.show_toast(tr!("providers.sync_failed", error = error.to_string()));
                     }
                 }
             });
@@ -211,13 +203,8 @@ impl Waku {
     /// watches the file and hot-reloads, so running serves pick the change up
     /// without a restart.
     fn commit_custom_providers(&mut self, cx: &mut Context<Self>) {
-        if let Err(error) =
-            waku_client::opencode_config::save_providers(&self.providers_store)
-        {
-            self.show_toast(tr!(
-                "providers.sync_failed",
-                error = error.to_string()
-            ));
+        if let Err(error) = waku_client::opencode_config::save_providers(&self.providers_store) {
+            self.show_toast(tr!("providers.sync_failed", error = error.to_string()));
         }
         self.refresh_provider_detection();
         cx.notify();
@@ -305,12 +292,7 @@ impl Waku {
         if !self.providers_adding {
             return;
         }
-        let name = self
-            .provider_form_name
-            .read(cx)
-            .content()
-            .trim()
-            .to_owned();
+        let name = self.provider_form_name.read(cx).content().trim().to_owned();
         let base_url = self
             .provider_form_base_url
             .read(cx)
@@ -374,9 +356,7 @@ impl Waku {
             .iter()
             .find(|provider| provider.id == id)
             .map(|provider| provider.name.clone());
-        self
-            .providers_store
-            .retain(|provider| provider.id != id);
+        self.providers_store.retain(|provider| provider.id != id);
         self.providers_delete_arming = None;
         self.commit_custom_providers(cx);
         if self.providers_selected.as_deref() == Some(id.as_str()) {
@@ -427,9 +407,8 @@ impl Waku {
             return;
         };
         self.providers_renaming = true;
-        self.provider_rename_input.update(cx, |input, cx| {
-            input.set_content(provider.name, cx)
-        });
+        self.provider_rename_input
+            .update(cx, |input, cx| input.set_content(provider.name, cx));
         cx.notify();
     }
 
@@ -598,8 +577,7 @@ impl Waku {
 
     fn selected_custom_provider(&self) -> Option<CustomProvider> {
         let selected = self.providers_selected.clone();
-        self
-            .providers_store
+        self.providers_store
             .iter()
             .find(|provider| Some(&provider.id) == selected.as_ref())
             .cloned()
@@ -741,7 +719,7 @@ impl Waku {
                     .focus_visible(|style| style.border_1().border_color(accent))
                     .w_full()
                     .px(px(9.0))
-                    .py(px(6.0))
+                    .py(px(7.0))
                     .mb(px(1.0))
                     .rounded(px(8.0))
                     .cursor_default()
@@ -754,17 +732,17 @@ impl Waku {
                     .gap(px(9.0))
                     .child(
                         div()
-                            .w(px(26.0))
-                            .h(px(26.0))
+                            .w(px(28.0))
+                            .h(px(28.0))
                             .flex_none()
-                            .rounded(px(6.0))
+                            .rounded(px(7.0))
                             .bg(theme.overlay)
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(icon(
                                 icon_path,
-                                13.0,
+                                14.0,
                                 if selected {
                                     accent
                                 } else {
@@ -777,7 +755,7 @@ impl Waku {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(12.0))
+                            .text_size(px(12.5))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if selected || active {
                                 theme.text
@@ -788,15 +766,11 @@ impl Waku {
                     )
                     .child(
                         div()
-                            .w(px(7.0))
-                            .h(px(7.0))
+                            .w(px(8.0))
+                            .h(px(8.0))
                             .flex_none()
                             .rounded_full()
-                            .bg(if active {
-                                accent
-                            } else {
-                                theme.text_ghost
-                            }),
+                            .bg(if active { accent } else { theme.text_ghost }),
                     )
                     .on_click({
                         let provider_id = provider_id.clone();
@@ -827,7 +801,7 @@ impl Waku {
                     .focus_visible(|style| style.border_1().border_color(accent))
                     .w_full()
                     .px(px(9.0))
-                    .py(px(6.0))
+                    .py(px(7.0))
                     .mt(px(10.0))
                     .rounded(px(8.0))
                     .cursor_default()
@@ -846,12 +820,12 @@ impl Waku {
                     })
                     .child(icon(
                         "icons/plus.svg",
-                        12.0,
+                        13.0,
                         if adding { accent } else { theme.text_tertiary },
                     ))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(12.5))
                             .child(tr!("providers.add_provider")),
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -947,17 +921,13 @@ impl Waku {
                 }))
         });
 
-        let mut header_title = div()
-            .flex()
-            .items_baseline()
-            .gap(px(7.0))
-            .child(
-                div()
-                    .text_size(px(15.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child("OpenCode"),
-            );
+        let mut header_title = div().flex().items_baseline().gap(px(7.0)).child(
+            div()
+                .text_size(px(15.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text)
+                .child("OpenCode"),
+        );
         if let Some(version) = version {
             header_title = header_title.child(
                 div()
@@ -1037,36 +1007,30 @@ impl Waku {
                         .flex()
                         .items_center()
                         .gap(px(12.0))
-                        .child(provider_tile(theme, "icons/provider-opencode.svg", installed))
+                        .child(provider_tile(
+                            theme,
+                            "icons/provider-opencode.svg",
+                            installed,
+                        ))
                         .child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .child(header_title)
-                                .child(
-                                    div()
-                                        .mt(px(2.0))
-                                        .text_size(px(10.5))
-                                        .text_color(theme.text_tertiary)
-                                        .child(if installed {
-                                            SharedString::from(if model_count == 1 {
-                                                tr!(
-                                                    "providers.model_count_one",
-                                                    count = model_count
-                                                )
-                                            } else {
-                                                tr!(
-                                                    "providers.model_count_many",
-                                                    count = model_count
-                                                )
-                                            })
+                            div().flex_1().min_w_0().child(header_title).child(
+                                div()
+                                    .mt(px(2.0))
+                                    .text_size(px(10.5))
+                                    .text_color(theme.text_tertiary)
+                                    .child(if installed {
+                                        SharedString::from(if model_count == 1 {
+                                            tr!("providers.model_count_one", count = model_count)
                                         } else {
-                                            SharedString::from(tr!(
-                                                "providers.not_detected_as",
-                                                command = "opencode2"
-                                            ))
-                                        }),
-                                ),
+                                            tr!("providers.model_count_many", count = model_count)
+                                        })
+                                    } else {
+                                        SharedString::from(tr!(
+                                            "providers.not_detected_as",
+                                            command = "opencode2"
+                                        ))
+                                    }),
+                            ),
                         )
                         .child(refresh),
                 )
@@ -1083,11 +1047,11 @@ impl Waku {
                     "icons/info.svg",
                     tr!("providers.builtin_managed"),
                 ))
-                .child(
-                    div()
-                        .mt(px(18.0))
-                        .child(section_label(theme, tr!("providers.models_label"), true)),
-                )
+                .child(div().mt(px(18.0)).child(section_label(
+                    theme,
+                    tr!("providers.models_label"),
+                    true,
+                )))
                 .child(
                     div()
                         .mt(px(8.0))
@@ -1131,14 +1095,16 @@ impl Waku {
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.confirm_rename(cx);
                     }))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if !event.keystroke.modifiers.modified()
-                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                        {
-                            this.confirm_rename(cx);
-                            cx.stop_propagation();
-                        }
-                    })),
+                    .on_key_down(cx.listener(
+                        |this, event: &KeyDownEvent, _, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.confirm_rename(cx);
+                                cx.stop_propagation();
+                            }
+                        },
+                    )),
                 )
                 .child(
                     small_action_button(
@@ -1208,9 +1174,9 @@ impl Waku {
             .id("delete-provider")
             .tab_index(0)
             .focus_visible(|style| style.border_color(theme.accent))
-            .h(px(26.0))
-            .px(px(9.0))
-            .rounded(px(6.0))
+            .h(px(30.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
             .border_1()
             .border_color(if armed {
                 theme.danger
@@ -1221,9 +1187,9 @@ impl Waku {
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(5.0))
+            .gap(px(6.0))
             .cursor_default()
-            .text_size(px(10.5))
+            .text_size(px(12.0))
             .text_color(if armed {
                 theme.danger
             } else {
@@ -1232,7 +1198,7 @@ impl Waku {
             .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
             .child(icon(
                 "icons/trash.svg",
-                11.0,
+                12.5,
                 if armed {
                     theme.danger
                 } else {
@@ -1281,8 +1247,11 @@ impl Waku {
         let base_url_field = labeled_field(
             theme,
             tr!("providers.base_url_label"),
-            TextField::new("provider-base-url-field", self.provider_base_url_input.clone())
-                .w_full(),
+            TextField::new(
+                "provider-base-url-field",
+                self.provider_base_url_input.clone(),
+            )
+            .w_full(),
         );
         let api_key_field = labeled_field(
             theme,
@@ -1321,8 +1290,7 @@ impl Waku {
                     .collect()
             },
         );
-        let format_field =
-            labeled_field(theme, tr!("providers.api_format_label"), format_selector);
+        let format_field = labeled_field(theme, tr!("providers.api_format_label"), format_selector);
 
         let models_section = self.render_provider_models(provider, theme, cx);
 
@@ -1375,9 +1343,12 @@ impl Waku {
     fn render_api_key_field(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let revealed = self.providers_api_key_revealed;
         let field: AnyElement = if revealed {
-            TextField::new("provider-api-key-field", self.provider_api_key_input.clone())
-                .w_full()
-                .into_any_element()
+            TextField::new(
+                "provider-api-key-field",
+                self.provider_api_key_input.clone(),
+            )
+            .w_full()
+            .into_any_element()
         } else {
             let key = self.provider_api_key_input.read(cx).content();
             let masked = if key.is_empty() {
@@ -1480,9 +1451,7 @@ impl Waku {
         // editor row sliding in between models never doubles a border.
         let mut separator = !provider.models.is_empty();
         for (index, model) in provider.models.iter().enumerate() {
-            if self.providers_model_editor.as_ref()
-                == Some(&ProvidersModelEditor::Edit(index))
-            {
+            if self.providers_model_editor.as_ref() == Some(&ProvidersModelEditor::Edit(index)) {
                 rows = rows.child(self.render_model_editor_row(theme, cx, separator));
                 separator = true;
                 continue;
@@ -1549,7 +1518,7 @@ impl Waku {
                     .id("add-provider-model")
                     .tab_index(0)
                     .focus_visible(|style| style.border_color(providers_accent(theme)))
-                    .h(px(34.0))
+                    .h(px(36.0))
                     .flex()
                     .items_center()
                     .gap(px(7.0))
@@ -1558,10 +1527,10 @@ impl Waku {
                         element.border_t_1().border_color(theme.border)
                     })
                     .cursor_default()
-                    .text_size(px(10.5))
+                    .text_size(px(12.0))
                     .text_color(theme.text_secondary)
                     .hover(|element| element.bg(theme.overlay))
-                    .child(icon("icons/plus.svg", 11.0, theme.text_tertiary))
+                    .child(icon("icons/plus.svg", 12.5, theme.text_tertiary))
                     .child(tr!("providers.add_model"))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.begin_model_editor(ProvidersModelEditor::Add, cx);
@@ -1647,14 +1616,14 @@ impl Waku {
                     .id("confirm-provider-model")
                     .tab_index(0)
                     .focus_visible(|style| style.border_color(accent))
-                    .h(px(26.0))
-                    .px(px(9.0))
-                    .rounded(px(6.0))
+                    .h(px(30.0))
+                    .px(px(10.0))
+                    .rounded(px(7.0))
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
+                    .gap(px(6.0))
                     .cursor_default()
-                    .text_size(px(10.5))
+                    .text_size(px(12.0))
                     .when(valid, |element| {
                         element
                             .bg(accent)
@@ -1663,19 +1632,14 @@ impl Waku {
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.confirm_model_editor(cx);
                             }))
-                            .on_key_down(cx.listener(
-                                |this, event: &KeyDownEvent, _, cx| {
-                                    if !event.keystroke.modifiers.modified()
-                                        && matches!(
-                                            event.keystroke.key.as_str(),
-                                            "enter" | "space"
-                                        )
-                                    {
-                                        this.confirm_model_editor(cx);
-                                        cx.stop_propagation();
-                                    }
-                                },
-                            ))
+                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                if !event.keystroke.modifiers.modified()
+                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                {
+                                    this.confirm_model_editor(cx);
+                                    cx.stop_propagation();
+                                }
+                            }))
                     })
                     .when(!valid, |element| {
                         element
@@ -1685,7 +1649,7 @@ impl Waku {
                     })
                     .child(icon(
                         "icons/check.svg",
-                        11.0,
+                        12.5,
                         if valid {
                             on_providers_accent(theme)
                         } else {
@@ -1713,12 +1677,7 @@ impl Waku {
 
     fn render_provider_form(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let accent = providers_accent(theme);
-        let name = self
-            .provider_form_name
-            .read(cx)
-            .content()
-            .trim()
-            .to_owned();
+        let name = self.provider_form_name.read(cx).content().trim().to_owned();
         let base_url = self
             .provider_form_base_url
             .read(cx)
@@ -1765,19 +1724,21 @@ impl Waku {
                             *theme,
                         )
                         .tooltip(Tooltip::text(tr!("providers.delete_model")))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            if let Some(index) = this
-                                .providers_form_models
-                                .iter()
-                                .position(|(_, candidate)| candidate == &context_entity)
-                            {
-                                this.providers_form_models.remove(index);
-                                // A dropped draft's field may hold focus; let
-                                // it go instead of parking it nowhere.
-                                window.blur();
-                                cx.notify();
-                            }
-                        })),
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                if let Some(index) = this
+                                    .providers_form_models
+                                    .iter()
+                                    .position(|(_, candidate)| candidate == &context_entity)
+                                {
+                                    this.providers_form_models.remove(index);
+                                    // A dropped draft's field may hold focus; let
+                                    // it go instead of parking it nowhere.
+                                    window.blur();
+                                    cx.notify();
+                                }
+                            },
+                        )),
                     ),
             );
         }
@@ -1818,14 +1779,14 @@ impl Waku {
             .id("submit-provider-form")
             .tab_index(0)
             .focus_visible(|style| style.border_color(accent))
-            .h(px(29.0))
-            .px(px(14.0))
-            .rounded(px(7.0))
+            .h(px(32.0))
+            .px(px(16.0))
+            .rounded(px(8.0))
             .flex()
             .items_center()
             .justify_center()
             .cursor_default()
-            .text_size(px(11.0))
+            .text_size(px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .when(valid, |element| {
                 element
@@ -1919,11 +1880,7 @@ impl Waku {
                         ))
                         .child(
                             div()
-                                .child(section_label(
-                                    theme,
-                                    tr!("providers.models_label"),
-                                    true,
-                                ))
+                                .child(section_label(theme, tr!("providers.models_label"), true))
                                 .child(
                                     div()
                                         .mt(px(8.0))
@@ -1961,25 +1918,21 @@ impl Waku {
                                         .tab_index(0)
                                         .focus_visible(|style| style.border_color(accent))
                                         .mt(px(8.0))
-                                        .h(px(30.0))
+                                        .h(px(32.0))
                                         .px(px(10.0))
-                                        .rounded(px(6.0))
+                                        .rounded(px(7.0))
                                         .border_1()
                                         .border_color(theme.border_strong)
                                         .flex()
                                         .items_center()
                                         .gap(px(7.0))
                                         .cursor_default()
-                                        .text_size(px(10.5))
+                                        .text_size(px(12.0))
                                         .text_color(theme.text_secondary)
                                         .hover(|element| {
                                             element.bg(theme.overlay).text_color(theme.text)
                                         })
-                                        .child(icon(
-                                            "icons/plus.svg",
-                                            11.0,
-                                            theme.text_tertiary,
-                                        ))
+                                        .child(icon("icons/plus.svg", 12.5, theme.text_tertiary))
                                         .child(tr!("providers.add_model"))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.add_form_model_draft(window, cx);
@@ -2070,11 +2023,11 @@ pub(super) fn enabled_badge(theme: &Theme, accent: Hsla, enabled: bool) -> Div {
         .py(px(2.0))
         .rounded_full()
         .text_size(px(9.5))
-        .when(enabled, |element| element.text_color(accent).bg(accent.opacity(0.14)))
+        .when(enabled, |element| {
+            element.text_color(accent).bg(accent.opacity(0.14))
+        })
         .when(!enabled, |element| {
-            element
-                .text_color(theme.text_tertiary)
-                .bg(theme.overlay)
+            element.text_color(theme.text_tertiary).bg(theme.overlay)
         })
         .child(if enabled {
             tr!("providers.enabled_badge")
@@ -2145,22 +2098,22 @@ pub(super) fn outline_button(
         .id(id)
         .tab_index(0)
         .focus_visible(|style| style.border_color(providers_accent(theme)))
-        .h(px(26.0))
-        .px(px(10.0))
-        .rounded(px(6.0))
+        .h(px(30.0))
+        .px(px(12.0))
+        .rounded(px(7.0))
         .border_1()
         .border_color(theme.border_strong)
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(5.0))
+        .gap(px(6.0))
         .cursor_default()
-        .text_size(px(10.5))
+        .text_size(px(12.0))
         .text_color(theme.text_secondary)
         .hover(|element| element.bg(theme.overlay))
         .child(label.into());
     if let Some(icon_path) = icon_path {
-        button = button.child(icon(icon_path, 11.0, theme.text_tertiary));
+        button = button.child(icon(icon_path, 12.5, theme.text_tertiary));
     }
     button
 }
@@ -2177,22 +2130,26 @@ pub(super) fn small_action_button(
         .id(id)
         .tab_index(0)
         .focus_visible(|style| style.border_color(providers_accent(theme)))
-        .h(px(26.0))
-        .px(px(8.0))
-        .rounded(px(6.0))
+        .h(px(30.0))
+        .px(px(10.0))
+        .rounded(px(7.0))
         .flex()
         .flex_none()
         .items_center()
-        .gap(px(4.0))
+        .gap(px(5.0))
         .cursor_default()
-        .text_size(px(10.5))
+        .text_size(px(12.0))
         .text_color(color)
         .hover(|element| element.bg(theme.overlay))
-        .child(icon(icon_path, 11.0, color))
+        .child(icon(icon_path, 12.5, color))
         .child(label.into())
 }
 
-pub(super) fn labeled_field(theme: &Theme, label: impl Into<SharedString>, field: impl IntoElement) -> Div {
+pub(super) fn labeled_field(
+    theme: &Theme,
+    label: impl Into<SharedString>,
+    field: impl IntoElement,
+) -> Div {
     div()
         .w_full()
         .flex()

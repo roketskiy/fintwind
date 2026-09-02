@@ -63,9 +63,9 @@ impl RenderOnce for TextField {
         let theme = Theme::current(cx);
         let focused = self.input.read(cx).is_visually_focused(window);
         self.base
-            .h(px(28.0))
-            .px(px(8.0))
-            .rounded(px(6.0))
+            .h(px(32.0))
+            .px(px(9.0))
+            .rounded(px(7.0))
             .border_1()
             .border_color(if focused {
                 theme.accent
@@ -75,9 +75,9 @@ impl RenderOnce for TextField {
             .bg(theme.inset)
             .flex()
             .items_center()
-            .gap(px(6.0))
-            .text_size(px(11.5))
-            .line_height(px(16.0))
+            .gap(px(7.0))
+            .text_size(px(12.5))
+            .line_height(px(17.0))
             .when_some(self.icon, |element, (path, size)| {
                 element.child(icon(path, size, theme.text_tertiary))
             })

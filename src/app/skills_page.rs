@@ -550,10 +550,7 @@ impl Waku {
         }
         let weak = cx.entity().downgrade();
         let handle = self.menu_handle("skills-source-filter", cx);
-        let sources = [
-            SkillSource::Shared,
-            SkillSource::OpenCode,
-        ];
+        let sources = [SkillSource::Shared, SkillSource::OpenCode];
         dropdown_menu(
             MenuChip::new("skills-source-filter")
                 .icon(
@@ -566,7 +563,7 @@ impl Waku {
                 .label(chip_label)
                 .outlined()
                 .background(theme.raised)
-                .height(px(26.0))
+                .height(px(28.0))
                 .selected(handle.is_open())
                 .w_full()
                 .justify_between(),
@@ -781,17 +778,17 @@ impl Waku {
                     .gap(px(9.0))
                     .child(
                         div()
-                            .w(px(26.0))
-                            .h(px(26.0))
+                            .w(px(28.0))
+                            .h(px(28.0))
                             .flex_none()
-                            .rounded(px(6.0))
+                            .rounded(px(7.0))
                             .bg(theme.overlay)
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(icon(
                                 skill_icon(skill),
-                                13.0,
+                                14.0,
                                 theme
                                     .text_secondary
                                     .opacity(if enabled { 1.0 } else { 0.45 }),
@@ -811,7 +808,7 @@ impl Waku {
                                             .flex_1()
                                             .min_w_0()
                                             .truncate()
-                                            .text_size(px(12.0))
+                                            .text_size(px(12.5))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(if enabled {
                                                 theme.text
@@ -824,7 +821,7 @@ impl Waku {
                                         element.child(
                                             div()
                                                 .flex_none()
-                                                .text_size(px(8.5))
+                                                .text_size(px(9.5))
                                                 .text_color(theme.warning)
                                                 .child(tr!("skills.disabled_badge")),
                                         )
@@ -833,7 +830,7 @@ impl Waku {
                             .child(
                                 div()
                                     .mt(px(1.0))
-                                    .text_size(px(10.0))
+                                    .text_size(px(11.0))
                                     .text_color(theme.text_tertiary)
                                     .truncate()
                                     .child(SharedString::from(if skill.description.is_empty() {
@@ -876,9 +873,9 @@ impl Waku {
             )))
             .tab_index(0)
             .focus_visible(|style| style.border_color(theme.accent))
-            .w(px(36.0))
-            .h(px(20.0))
-            .p(px(2.0))
+            .w(px(40.0))
+            .h(px(22.0))
+            .p(px(3.0))
             .flex_none()
             .rounded_full()
             .cursor_default()
@@ -892,7 +889,7 @@ impl Waku {
             .flex()
             .items_center()
             .when(enabled, |element| element.justify_end())
-            .child(div().w(px(14.0)).h(px(14.0)).rounded_full().bg(if enabled {
+            .child(div().w(px(16.0)).h(px(16.0)).rounded_full().bg(if enabled {
                 theme.on_inverse
             } else {
                 theme.text_tertiary
@@ -969,20 +966,20 @@ impl Waku {
                 .id(id)
                 .tab_index(0)
                 .focus_visible(|style| style.border_color(theme.accent))
-                .h(px(26.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
+                .h(px(30.0))
+                .px(px(11.0))
+                .rounded(px(7.0))
                 .border_1()
                 .border_color(theme.border_strong)
                 .flex()
                 .flex_none()
                 .items_center()
-                .gap(px(5.0))
+                .gap(px(6.0))
                 .cursor_default()
-                .text_size(px(10.5))
+                .text_size(px(12.0))
                 .text_color(theme.text_secondary)
                 .hover(|element| element.bg(theme.overlay))
-                .child(icon(icon_path, 11.0, theme.text_tertiary))
+                .child(icon(icon_path, 12.5, theme.text_tertiary))
                 .child(SharedString::from(label))
         };
 
@@ -1051,9 +1048,9 @@ impl Waku {
             )))
             .tab_index(0)
             .focus_visible(|style| style.border_color(theme.accent))
-            .h(px(26.0))
+            .h(px(30.0))
             .px(px(10.0))
-            .rounded(px(6.0))
+            .rounded(px(7.0))
             .border_1()
             .border_color(if armed {
                 theme.danger
@@ -1064,9 +1061,9 @@ impl Waku {
             .flex()
             .flex_none()
             .items_center()
-            .gap(px(5.0))
+            .gap(px(6.0))
             .cursor_default()
-            .text_size(px(10.5))
+            .text_size(px(12.0))
             .text_color(if armed {
                 theme.danger
             } else {
@@ -1075,7 +1072,7 @@ impl Waku {
             .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
             .child(icon(
                 "icons/trash.svg",
-                11.0,
+                12.5,
                 if armed {
                     theme.danger
                 } else {

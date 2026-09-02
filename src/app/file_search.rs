@@ -1061,9 +1061,9 @@ fn find_toggle(
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .size(px(18.0))
+        .size(px(20.0))
         .flex_none()
-        .rounded(px(4.0))
+        .rounded(px(5.0))
         .flex()
         .items_center()
         .justify_center()
@@ -1106,16 +1106,16 @@ fn find_bar_button(
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .size(px(22.0))
+        .size(px(26.0))
         .flex_none()
-        .rounded(px(5.0))
+        .rounded(px(6.0))
         .flex()
         .items_center()
         .justify_center()
         .cursor_default()
         .child(icon(
             icon_path,
-            12.0,
+            13.0,
             if enabled {
                 theme.text_secondary
             } else {

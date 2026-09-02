@@ -36,15 +36,15 @@ pub fn file_icon(path: &'static str, size: f32) -> Img {
 pub fn icon_button(id: impl Into<ElementId>, path: &'static str, theme: Theme) -> Stateful<Div> {
     div()
         .id(id)
-        .size(px(22.0))
-        .rounded(px(6.0))
+        .size(px(26.0))
+        .rounded(px(7.0))
         .flex()
         .items_center()
         .justify_center()
         .cursor_default()
         .hover(|element| element.bg(theme.overlay))
         .active(|element| element.bg(theme.overlay_strong))
-        .child(icon(path, 13.0, theme.text_tertiary))
+        .child(icon(path, 14.0, theme.text_tertiary))
 }
 
 /// Keeps a wheel gesture inside a scrollable nested in another scrollable
@@ -124,9 +124,9 @@ where
         .id(id)
         .tab_index(0)
         .focus_visible(|style| style.border_color(theme.accent))
-        .w(px(36.0))
-        .h(px(20.0))
-        .p(px(2.0))
+        .w(px(40.0))
+        .h(px(22.0))
+        .p(px(3.0))
         .flex_none()
         .rounded_full()
         .cursor_default()
@@ -141,7 +141,7 @@ where
         .flex()
         .items_center()
         .when(on, |element| element.justify_end())
-        .child(div().w(px(14.0)).h(px(14.0)).rounded_full().bg(if on {
+        .child(div().w(px(16.0)).h(px(16.0)).rounded_full().bg(if on {
             theme.on_inverse
         } else {
             theme.text_tertiary
@@ -306,14 +306,14 @@ impl RenderOnce for MenuChip {
         self.base
             .h(self
                 .height
-                .unwrap_or(if self.outlined { px(30.0) } else { px(24.0) }))
-            .px(if self.outlined { px(10.0) } else { px(7.0) })
-            .rounded(if self.outlined { px(7.0) } else { px(6.0) })
+                .unwrap_or(if self.outlined { px(32.0) } else { px(28.0) }))
+            .px(if self.outlined { px(11.0) } else { px(9.0) })
+            .rounded(if self.outlined { px(8.0) } else { px(7.0) })
             .flex()
             .items_center()
-            .gap(px(6.0))
-            .text_size(px(11.5))
-            .line_height(px(14.0))
+            .gap(px(7.0))
+            .text_size(px(12.5))
+            .line_height(px(16.0))
             .cursor_default()
             .focus_visible(|style| style.border_1().border_color(theme.accent))
             .when(self.outlined, |element| {
@@ -328,7 +328,7 @@ impl RenderOnce for MenuChip {
             })
             .when(self.disabled, |element| element.opacity(0.7))
             .when_some(self.icon, |element, (path, color)| {
-                element.child(icon(path, 10.5, color))
+                element.child(icon(path, 12.0, color))
             })
             .child(
                 div()
@@ -338,7 +338,7 @@ impl RenderOnce for MenuChip {
                     .child(self.label),
             )
             .when(self.caret, |element| {
-                element.child(icon("icons/chevron-down.svg", 9.0, theme.text_ghost))
+                element.child(icon("icons/chevron-down.svg", 10.0, theme.text_ghost))
             })
     }
 }

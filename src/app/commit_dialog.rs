@@ -794,9 +794,9 @@ fn render_commit_action_row(
         theme.text_ghost
     };
     let indicator = if active {
-        motion::spin(icon("icons/loader-circle.svg", 15.0, theme.text_secondary))
+        motion::spin(icon("icons/loader-circle.svg", 16.0, theme.text_secondary))
     } else {
-        icon(icon_path, 15.0, foreground).into_any_element()
+        icon(icon_path, 16.0, foreground).into_any_element()
     };
     let click_weak = weak.clone();
     let key_weak = weak;
@@ -804,7 +804,7 @@ fn render_commit_action_row(
         .id(id)
         .track_focus(focus)
         .when(enabled, |row| row.tab_index(0))
-        .h(px(38.0))
+        .h(px(40.0))
         .w_full()
         .px(px(10.0))
         .rounded(px(9.0))

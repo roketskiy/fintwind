@@ -42,7 +42,6 @@ mod query;
 mod review_diff;
 mod terminal;
 mod theme;
-mod tray;
 mod ui;
 mod updater;
 
@@ -186,13 +185,6 @@ impl WakuApplicationExt for Application {
 }
 
 pub fn run() {
-    // A hidden tray instance owns the sessions and the daemon; a second
-    // launch must surface that window instead of starting a competing
-    // process. Checked before anything else so the losing instance spawns
-    // nothing.
-    if crate::tray::acquire_single_instance() == crate::tray::SingleInstance::AlreadyRunning {
-        return;
-    }
     let daemon = crate::daemon::start_process()
         .unwrap_or_else(|error| panic!("failed to start fintwind daemon: {error:#}"));
     gpui_platform::application()
@@ -353,8 +345,6 @@ pub fn run() {
                 )
                 .expect("failed to open fintwind window");
 
-            crate::tray::init(cx, window.into());
-
             cx.on_system_notification_response({
                 let window = window;
                 move |response, cx| {
@@ -455,6 +445,4 @@ pub(crate) fn set_app_menus(cx: &mut App, updater_available: bool) {
             ],
         },
     ]);
-
-    crate::tray::refresh_labels();
 }

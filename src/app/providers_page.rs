@@ -2031,7 +2031,7 @@ impl Waku {
 
 // ── Small shared pieces ────────────────────────────────────────────────────
 
-fn section_label(theme: &Theme, label: String, first: bool) -> Div {
+pub(super) fn section_label(theme: &Theme, label: String, first: bool) -> Div {
     div()
         .w_full()
         .pt(px(if first { 2.0 } else { 16.0 }))
@@ -2045,7 +2045,7 @@ fn section_label(theme: &Theme, label: String, first: bool) -> Div {
         .child(SharedString::from(label.to_uppercase()))
 }
 
-fn provider_tile(theme: &Theme, icon_path: &'static str, active: bool) -> Div {
+pub(super) fn provider_tile(theme: &Theme, icon_path: &'static str, active: bool) -> Div {
     div()
         .w(px(38.0))
         .h(px(38.0))
@@ -2064,7 +2064,7 @@ fn provider_tile(theme: &Theme, icon_path: &'static str, active: bool) -> Div {
         ))
 }
 
-fn enabled_badge(theme: &Theme, accent: Hsla, enabled: bool) -> Div {
+pub(super) fn enabled_badge(theme: &Theme, accent: Hsla, enabled: bool) -> Div {
     div()
         .px(px(7.0))
         .py(px(2.0))
@@ -2095,7 +2095,7 @@ fn small_pill(theme: &Theme, label: String, color: Option<Hsla>) -> Div {
         .child(SharedString::from(label))
 }
 
-fn info_note(theme: &Theme, icon_path: &'static str, text: String) -> Div {
+pub(super) fn info_note(theme: &Theme, icon_path: &'static str, text: String) -> Div {
     div()
         .mt(px(12.0))
         .px(px(10.0))
@@ -2119,7 +2119,7 @@ fn info_note(theme: &Theme, icon_path: &'static str, text: String) -> Div {
         )
 }
 
-fn form_hint(theme: &Theme, accent: Hsla, text: impl Into<SharedString>) -> AnyElement {
+pub(super) fn form_hint(theme: &Theme, accent: Hsla, text: impl Into<SharedString>) -> AnyElement {
     div()
         .flex()
         .items_center()
@@ -2135,7 +2135,7 @@ fn form_hint(theme: &Theme, accent: Hsla, text: impl Into<SharedString>) -> AnyE
 }
 
 /// The standard outlined text button, ready for click and key handlers.
-fn outline_button(
+pub(super) fn outline_button(
     id: impl Into<ElementId>,
     label: impl Into<SharedString>,
     icon_path: Option<&'static str>,
@@ -2166,7 +2166,7 @@ fn outline_button(
 }
 
 /// A compact icon-plus-label button for confirm/cancel affordances.
-fn small_action_button(
+pub(super) fn small_action_button(
     id: impl Into<ElementId>,
     icon_path: &'static str,
     label: impl Into<SharedString>,
@@ -2192,7 +2192,7 @@ fn small_action_button(
         .child(label.into())
 }
 
-fn labeled_field(theme: &Theme, label: impl Into<SharedString>, field: impl IntoElement) -> Div {
+pub(super) fn labeled_field(theme: &Theme, label: impl Into<SharedString>, field: impl IntoElement) -> Div {
     div()
         .w_full()
         .flex()

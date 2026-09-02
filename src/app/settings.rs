@@ -19,7 +19,7 @@ const SETTINGS_SEARCH_CONTEXT: &str = "SettingsSidebar > ComposerInput";
 
 /// The sidebar's rows in display order, each with the keyword haystack the
 /// search field filters against.
-const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 6] = [
+const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
     (
         SettingsPage::General,
         "settings.general",
@@ -43,6 +43,12 @@ const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 6] = [
         "settings.skills",
         "icons/package.svg",
         "settings.skills_keywords",
+    ),
+    (
+        SettingsPage::McpServers,
+        "settings.mcp_servers",
+        "icons/wrench.svg",
+        "settings.mcp_servers_keywords",
     ),
     (
         SettingsPage::Daemon,
@@ -103,6 +109,12 @@ impl Waku {
             // A half-finished rename, model edit, or add form never survives
             // the visit; the roster selection itself does.
             self.reset_providers_page(cx);
+        }
+        if page == SettingsPage::McpServers {
+            // Same contract as Providers: transient editors drop, the roster
+            // selection survives, and the config is re-read so entries added
+            // with the CLI are already on the list.
+            self.reset_mcp_page(cx);
         }
         cx.notify();
     }
@@ -324,11 +336,14 @@ impl Waku {
             window,
             cx,
         );
-        // The Skills and Providers pages are mail-style splits that own the
-        // whole content column — no page title, no titlebar strip, no width
-        // cap, no card. Window dragging stays with the sidebar's own
+        // The Skills, Providers, and MCP pages are mail-style splits that own
+        // the whole content column — no page title, no titlebar strip, no
+        // width cap, no card. Window dragging stays with the sidebar's own
         // titlebar region.
-        if matches!(page, SettingsPage::Skills | SettingsPage::Providers) {
+        if matches!(
+            page,
+            SettingsPage::Skills | SettingsPage::Providers | SettingsPage::McpServers
+        ) {
             return div()
                 .flex_1()
                 .h_full()
@@ -351,6 +366,7 @@ impl Waku {
                         .min_h_0()
                         .child(match page {
                             SettingsPage::Skills => self.render_skills_settings(cx),
+                            SettingsPage::McpServers => self.render_mcp_page(cx),
                             _ => self.render_providers_page(cx),
                         }),
                 );
@@ -375,6 +391,7 @@ impl Waku {
                         SettingsPage::General => tr!("settings.general"),
                         SettingsPage::Providers => tr!("settings.providers"),
                         SettingsPage::Skills => tr!("settings.skills"),
+                        SettingsPage::McpServers => tr!("settings.mcp_servers"),
                         SettingsPage::Daemon => tr!("settings.daemon"),
                         SettingsPage::ComputerUse => tr!("settings.computer_use"),
                         SettingsPage::Appearance => tr!("settings.appearance"),
@@ -384,6 +401,7 @@ impl Waku {
                 SettingsPage::General => self.render_general_settings(cx),
                 SettingsPage::Providers => self.render_providers_page(cx),
                 SettingsPage::Skills => self.render_skills_settings(cx),
+                SettingsPage::McpServers => self.render_mcp_page(cx),
                 SettingsPage::Daemon => self.render_daemon_settings(cx),
                 SettingsPage::ComputerUse => self.render_computer_use_settings(cx),
                 SettingsPage::Appearance => self.render_appearance_settings(cx),

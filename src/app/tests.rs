@@ -1766,6 +1766,7 @@ fn settings_search_filters_pages_for_arrow_cycling() {
         SettingsPage::Appearance,
         SettingsPage::Providers,
         SettingsPage::Skills,
+        SettingsPage::McpServers,
         SettingsPage::Daemon,
     ];
     if cfg!(all(debug_assertions, target_os = "macos")) {

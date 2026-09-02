@@ -74,6 +74,8 @@ settings.daemon_keywords: デーモン サーバー リモート ウェブ ネ�
 settings.computer_use_keywords: コンピュータ 操作 画面収録 アクセシビリティ アプリ 制御 codex
 settings.back: 戻る
 settings.search: 設定を検索
+settings.mcp_servers: MCPサーバー
+settings.mcp_servers_keywords: MCP サーバー ツール stdio http sse ローカル リモート npx 環境変数 ヘッダー
 daemon.expose_title: 管理対象デーモンを公開
 daemon.expose_description: このマシン以外の fintwind クライアントから接続できるようにします。変更時はデーモンだけが再起動します。
 daemon.status_local: このマシンのみ
@@ -234,6 +236,50 @@ providers.duplicate_model: このモデル ID は既に存在します
 providers.sync_failed: "OpenCode のプロバイダー設定を更新できませんでした：%{error}"
 providers.builtin_managed: エンドポイントと API キーは opencode2 CLI が管理します（opencode2 auth login）。この一覧は OpenCode 自身の設定ファイルです。
 providers.default_model_badge: デフォルト
+
+mcp.search_placeholder: MCPサーバーを検索…
+mcp.section_local: ローカル
+mcp.section_remote: リモート
+mcp.count_zero: MCPサーバーはまだありません
+mcp.count_one: "%{count} 個のMCPサーバー"
+mcp.count_many: "%{count} 個のMCPサーバー"
+mcp.add_server: サーバーを追加
+mcp.empty_description: MCPサーバーはエージェントにできることを広げます。チャートやブラウザーなどのツールです。OpenCodeの設定に保存され、すべての新しいタスクに参加します。
+mcp.form_title: MCPサーバーを追加
+mcp.form_description: サーバーはすべての新しいタスクに参加します。OpenCodeはローカルサーバーを自身で起動し、リモートとはHTTPで通信します。
+mcp.name_label: 名前
+mcp.name_placeholder: "例: context7"
+mcp.type_label: 種類
+mcp.type_local: ローカル (stdio)
+mcp.type_remote: リモート (HTTP)
+mcp.command_label: コマンド
+mcp.command_placeholder: "例: npx -y @antv/mcp-server-chart"
+mcp.url_label: URL
+mcp.url_placeholder: "https://mcp.example.com"
+mcp.no_connection: コマンドまたはURLがまだありません
+mcp.environment_label: 環境変数
+mcp.headers_label: ヘッダー
+mcp.variables_empty: まだありません。ここの値はこのサーバーとのすべての呼び出しに渡されます。
+mcp.add_variable: 変数を追加
+mcp.add_header: ヘッダーを追加
+mcp.variable_key_placeholder: "例: API_KEY"
+mcp.variable_value_placeholder: 値
+mcp.edit_variable: 変数を編集
+mcp.delete_variable: 変数を削除
+mcp.action_enable: 有効にする
+mcp.action_disable: 無効にする
+mcp.rename: 名前を変更
+mcp.save: 保存
+mcp.delete_server: サーバーを削除
+mcp.confirm_delete_server: 削除しますか?
+mcp.added_toast: "サーバー %{name} を追加しました"
+mcp.deleted_toast: "サーバー %{name} を削除しました"
+mcp.duplicate_name: 同じ名前のサーバーが既に存在します
+mcp.duplicate_variable: この名前はこの表で既に使われています
+mcp.hint_need_command: サーバーを起動するコマンドを入力してください。
+mcp.hint_invalid_url: URLは http:// または https:// で始まる必要があります。
+mcp.sync_failed: "OpenCodeのMCP設定を更新できませんでした:%{error}"
+mcp.managed_note: このリストはOpenCode自身の設定ファイル(opencode.json)のmcpセクションです。CLIとTUIも同じサーバーを使い、OpenCodeはファイルをホットリロードします。timeout、cwd、oauth などの追加フィールドはそのまま保持されます。
 
 computer_use.allow_apps: fintwind にアプリの操作を許可
 computer_use.availability: コンピュータ操作は Codex、OpenCode、Grok、Pi で利用できます

@@ -8465,6 +8465,7 @@ dependencies = [
  "url",
  "uuid",
  "waku-protocol",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

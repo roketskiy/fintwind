@@ -2432,9 +2432,9 @@ impl Waku {
             )
             .detach();
 
-            // A normal Cmd-Q waits briefly for this future, so even an edit
-            // made inside the debounce window is durable before the process
-            // exits. Filesystem work still stays off the UI thread.
+            // Closing the window can leave the app running in the tray. On a
+            // true app quit, persist the final state before stopping the
+            // desktop-owned daemon and its OpenCode backend processes.
             cx.on_app_quit(|this, cx| {
                 this.capture_current_composer_draft(cx);
                 this.composer_draft_save_generation =
@@ -2442,33 +2442,14 @@ impl Waku {
                 let generation = this.composer_draft_save_generation;
                 let store = this.composer_draft_store.clone();
                 let drafts = this.composer_drafts.clone();
-                let save = cx
-                    .background_executor()
-                    .spawn(async move { store.save(drafts, generation) });
-                async move {
-                    let _ = save.await;
-                }
-            })
-            .detach();
-
-            // Window-frame changes are only mirrored in memory; the quit save
-            // is what lands the final position and size on disk.
-            cx.on_app_quit(|this, _| {
-                this.save();
-                async {}
-            })
-            .detach();
-
-            // Closing the window can leave the app running in the tray. Only a
-            // true app quit stops the desktop-owned daemon and its OpenCode
-            // backend processes; an externally managed daemon is left intact.
-            cx.on_app_quit(|this, cx| {
                 let daemon = this.daemon.clone();
-                let shutdown = cx
-                    .background_executor()
-                    .spawn(async move { daemon.shutdown() });
+                this.save();
+                let quit = cx.background_executor().spawn(async move {
+                    let _ = store.save(drafts, generation);
+                    daemon.shutdown();
+                });
                 async move {
-                    let _ = shutdown.await;
+                    let _ = quit.await;
                 }
             })
             .detach();

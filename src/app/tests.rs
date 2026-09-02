@@ -1799,122 +1799,128 @@ fn computer_use_navigation_is_macos_debug_only() {
 }
 
 #[test]
-fn picker_lists_favorites_and_models_for_the_single_provider() {
+fn picker_filters_models_by_dynamic_provider_tabs() {
     use super::ModelPickerTab;
-    use super::composer::visible_picker_models;
+    use super::composer::{visible_picker_models, visible_picker_tabs};
     use crate::model::{FavoriteModel, ProviderModel, ProviderProbe};
 
     let probe = ProviderProbe {
         installed: true,
         path: Some(std::path::PathBuf::from("/bin/opencode")),
         models: vec![
-            ProviderModel::new("sonnet", "Sonnet"),
-            ProviderModel::new("opus", "Opus"),
+            ProviderModel::new("openai/gpt-5", "GPT-5").sub_provider("OpenAI"),
+            ProviderModel::new("anthropic/claude", "Claude").sub_provider("Anthropic"),
+            ProviderModel::new("openai/gpt-5-mini", "GPT-5 Mini").sub_provider("OpenAI"),
+            ProviderModel::new("local/model", "Local").sub_provider("opencode"),
+            ProviderModel::new("fallback/model", "Fallback"),
         ],
         agent_presets: Vec::new(),
     };
     let probes = [probe];
     let favorites = [
         FavoriteModel {
-            model: "opus".into(),
+            model: "anthropic/claude".into(),
         },
         FavoriteModel {
-            model: "sonnet".into(),
+            model: "openai/gpt-5-mini".into(),
         },
     ];
 
-    // The provider rail lists every discovered model.
-    let models = visible_picker_models(&probes, &favorites, ModelPickerTab::Provider, "");
-    assert_eq!(models.len(), 2);
+    assert_eq!(
+        visible_picker_tabs(&probes),
+        vec![
+            ModelPickerTab::Favorites,
+            ModelPickerTab::Provider("OpenAI".into()),
+            ModelPickerTab::Provider("Anthropic".into()),
+            ModelPickerTab::Provider("OpenCode".into()),
+        ]
+    );
 
-    // The favorites rail lists only starred models.
-    let models = visible_picker_models(&probes, &favorites, ModelPickerTab::Favorites, "");
-    assert_eq!(models.len(), 2);
+    let models = visible_picker_models(
+        &probes,
+        &favorites,
+        ModelPickerTab::Provider("OpenAI".into()),
+        "",
+    );
     assert_eq!(
         models
             .iter()
             .map(|model| model.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["opus", "sonnet"]
+        vec!["openai/gpt-5", "openai/gpt-5-mini"]
     );
 
-    // Search narrows across the pooled list.
-    let models = visible_picker_models(&probes, &favorites, ModelPickerTab::Provider, "son");
-    assert_eq!(models.len(), 1);
-    assert_eq!(models[0].id, "sonnet");
-}
-
-#[test]
-fn model_picker_groups_models_by_provider_and_preserves_relative_order() {
-    use super::composer::{
-        ModelPickerGroup, model_picker_grouped_models, model_picker_groups,
-        model_picker_provider_label, model_picker_scroll_index,
-    };
-    use crate::model::ProviderModel;
-
-    let models = vec![
-        ProviderModel::new("openai/gpt-5", "GPT-5").sub_provider("OpenAI"),
-        ProviderModel::new("anthropic/claude", "Claude").sub_provider("Anthropic"),
-        ProviderModel::new("openai/gpt-5-mini", "GPT-5 Mini").sub_provider("OpenAI"),
-        ProviderModel::new("local/model", "Local").sub_provider("OpenCode"),
-        ProviderModel::new("fallback/model", "Fallback"),
-    ];
-
-    assert_eq!(
-        model_picker_groups(&models),
-        vec![
-            ModelPickerGroup {
-                label: "OpenAI".into(),
-                model_indices: vec![0, 2],
-            },
-            ModelPickerGroup {
-                label: "Anthropic".into(),
-                model_indices: vec![1],
-            },
-            ModelPickerGroup {
-                label: "OpenCode".into(),
-                model_indices: vec![3, 4],
-            },
-        ]
+    let models = visible_picker_models(
+        &probes,
+        &favorites,
+        ModelPickerTab::Provider("OpenCode".into()),
+        "",
     );
-    assert_eq!(model_picker_provider_label(Some("  ")), "OpenCode");
-    assert_eq!(model_picker_provider_label(Some("OpenCode")), "OpenCode");
-    let grouped = model_picker_grouped_models(models.clone());
     assert_eq!(
-        grouped
+        models
             .iter()
             .map(|model| model.id.as_str())
             .collect::<Vec<_>>(),
-        vec![
-            "openai/gpt-5",
-            "openai/gpt-5-mini",
-            "anthropic/claude",
-            "local/model",
-            "fallback/model",
-        ]
+        vec!["local/model", "fallback/model"]
     );
-    assert_eq!(model_picker_scroll_index(&grouped, 0), 1);
-    assert_eq!(model_picker_scroll_index(&grouped, 2), 4);
-    assert_eq!(model_picker_scroll_index(&grouped, 4), 7);
+
+    let models = visible_picker_models(&probes, &favorites, ModelPickerTab::Favorites, "");
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["anthropic/claude", "openai/gpt-5-mini"]
+    );
+
+    let models = visible_picker_models(
+        &probes,
+        &favorites,
+        ModelPickerTab::Provider("Anthropic".into()),
+        "openai",
+    );
+    assert_eq!(
+        models
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["openai/gpt-5", "openai/gpt-5-mini"]
+    );
 }
 
 #[test]
 fn model_picker_provider_label_normalizes_the_opencode_fallback() {
     use super::composer::model_picker_provider_label;
 
+    assert_eq!(model_picker_provider_label(Some("  ")), "OpenCode");
     assert_eq!(model_picker_provider_label(Some("OpenCode")), "OpenCode");
     assert_eq!(model_picker_provider_label(Some("OpenAI")), "OpenAI");
     assert_eq!(model_picker_provider_label(None), "OpenCode");
 }
 
 #[test]
-fn tab_cycle_walks_favorites_then_the_provider_rail() {
+fn tab_cycle_walks_favorites_then_dynamic_provider_rail() {
     use super::ModelPickerTab;
     use super::composer::visible_picker_tabs;
+    use crate::model::{ProviderModel, ProviderProbe};
 
-    // Favorites leads, OpenCode follows — the only two rails left.
+    let probes = [ProviderProbe {
+        installed: true,
+        path: Some(std::path::PathBuf::from("/bin/opencode")),
+        models: vec![
+            ProviderModel::new("openai/gpt", "GPT").sub_provider("OpenAI"),
+            ProviderModel::new("anthropic/claude", "Claude").sub_provider("Anthropic"),
+        ],
+        agent_presets: Vec::new(),
+    }];
+    let tabs = visible_picker_tabs(&probes);
     assert_eq!(
-        visible_picker_tabs(),
-        vec![ModelPickerTab::Favorites, ModelPickerTab::Provider]
+        tabs,
+        vec![
+            ModelPickerTab::Favorites,
+            ModelPickerTab::Provider("OpenAI".into()),
+            ModelPickerTab::Provider("Anthropic".into()),
+        ]
     );
+    assert_eq!(next_picker_highlight(Some(2), tabs.len(), "down"), Some(0));
 }

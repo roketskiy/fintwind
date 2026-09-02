@@ -191,10 +191,10 @@ enum StreamDeltaKind {
     Reasoning,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ModelPickerTab {
     Favorites,
-    Provider,
+    Provider(String),
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -2215,7 +2215,7 @@ impl Waku {
                 })
                 .ok();
         }
-        let model_picker_tab = ModelPickerTab::Provider;
+        let model_picker_tab = ModelPickerTab::Provider("OpenCode".into());
         let mut session_navigation = SessionNavigation::default();
         if let Some(session_id) = state.selected_session.filter(|session_id| {
             state
@@ -2468,15 +2468,7 @@ impl Waku {
                             this.reveal_selected_picker_model();
                         } else {
                             this.model_picker_highlight = Some(0);
-                            let models = crate::app::composer::model_picker_grouped_models(
-                                crate::app::composer::visible_picker_models(
-                                    &this.probes,
-                                    &this.state.favorite_models,
-                                    this.model_picker_tab,
-                                    &search.read(cx).content().trim().to_ascii_lowercase(),
-                                ),
-                            );
-                            this.scroll_to_model_picker_index(&models, 0);
+                            this.model_picker_scroll.scroll_to_item(0);
                         }
                         cx.notify();
                     }

@@ -821,7 +821,7 @@ impl Waku {
         let search_query = self.model_search.read(cx).content().to_owned();
         let normalized_query = search_query.trim().to_ascii_lowercase();
         let searching = !normalized_query.is_empty();
-        let selected_tab = self.model_picker_tab;
+        let selected_tab = self.model_picker_tab.clone();
         let selected_model = selected_model.map(str::to_owned);
         let probes = self.probes.clone();
         let pending_discoveries = self.provider_model_discoveries_pending.clone();
@@ -837,7 +837,7 @@ impl Waku {
             self.menu_handle_with(MODEL_PICKER_MENU_ID, cx, move |open, window, cx| {
                 let _ = reset_weak.update(cx, |this, cx| {
                     if open {
-                        this.model_picker_tab = ModelPickerTab::Provider;
+                        this.model_picker_tab = this.selected_model_picker_tab();
                         // Opening re-runs the tab's catalog discovery so models
                         // authored since launch appear without a restart.
                         this.refresh_provider_model_discovery();
@@ -879,16 +879,10 @@ impl Waku {
         // rendered rows index one ordering and cannot disagree about what
         // `enter` selects.
         let available_models = Rc::new(if handle.is_open() {
-            model_picker_grouped_models(visible_picker_models(
-                &probes,
-                &favorites,
-                selected_tab,
-                &normalized_query,
-            ))
+            visible_picker_models(&probes, &favorites, selected_tab.clone(), &normalized_query)
         } else {
             Vec::new()
         });
-        let model_groups = Rc::new(model_picker_groups(&available_models));
         let highlight = self
             .model_picker_highlight
             .filter(|index| *index < available_models.len());
@@ -909,7 +903,7 @@ impl Waku {
             move |popover, _window, _cx| {
                 let popover = popover.clone();
                 let available_models = available_models.clone();
-                let model_groups = model_groups.clone();
+                let picker_tabs = visible_picker_tabs(&probes);
 
                 let mut sidebar = div()
                     .w(px(50.0))
@@ -960,38 +954,66 @@ impl Waku {
                     )
                     .child(div().w(px(34.0)).h(px(1.0)).my(px(3.0)).bg(theme.border));
 
-                // One predicate with the `tab` cycle, so clicking and cycling
-                // agree on which tabs are usable. OpenCode is the only rail
-                // besides Favorites.
-                let tab_weak = weak.clone();
-                let selected = selected_tab == ModelPickerTab::Provider && !searching;
-                sidebar = sidebar.child(
-                    div()
-                        .id("model-tab-opencode")
-                        .w(px(40.0))
-                        .h(px(40.0))
-                        .rounded(px(8.0))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .cursor_default()
-                        .when(selected, |element| element.bg(theme.accent.opacity(0.12)))
-                        .hover(|element| element.bg(theme.overlay))
-                        .on_click(move |_, _, cx| {
-                            let _ = tab_weak.update(cx, |this, cx| {
-                                this.select_model_picker_tab(ModelPickerTab::Provider, cx);
-                            });
-                        })
-                        .child(icon(
-                            "icons/provider-opencode.svg",
-                            19.0,
-                            if selected {
-                                theme.accent
-                            } else {
-                                theme.text.opacity(0.82)
-                            },
-                        )),
-                );
+                let provider_tabs = picker_tabs
+                    .iter()
+                    .filter_map(|tab| match tab {
+                        ModelPickerTab::Provider(label) => Some((tab.clone(), label.clone())),
+                        ModelPickerTab::Favorites => None,
+                    })
+                    .collect::<Vec<_>>();
+                let provider_weak = weak.clone();
+                let mut provider_sidebar = div()
+                    .id("model-provider-tabs")
+                    .flex_1()
+                    .min_h_0()
+                    .w_full()
+                    .overflow_y_scroll();
+                for (provider_tab, provider_label) in provider_tabs {
+                    let is_selected = selected_tab == provider_tab && !searching;
+                    let icon_path = if provider_label.eq_ignore_ascii_case("opencode") {
+                        "icons/provider-opencode.svg"
+                    } else {
+                        "icons/hexagon.svg"
+                    };
+                    let tooltip = provider_label.clone();
+                    let select_tab = provider_tab.clone();
+                    let provider_weak = provider_weak.clone();
+                    provider_sidebar = provider_sidebar.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "model-tab-provider-{}",
+                                provider_label.to_ascii_lowercase()
+                            )))
+                            .w(px(40.0))
+                            .h(px(40.0))
+                            .flex_none()
+                            .rounded(px(8.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_default()
+                            .when(is_selected, |element| {
+                                element.bg(theme.accent.opacity(0.12))
+                            })
+                            .hover(|element| element.bg(theme.overlay))
+                            .tooltip(Tooltip::text(tooltip))
+                            .on_click(move |_, _, cx| {
+                                let _ = provider_weak.update(cx, |this, cx| {
+                                    this.select_model_picker_tab(select_tab.clone(), cx);
+                                });
+                            })
+                            .child(icon(
+                                icon_path,
+                                18.0,
+                                if is_selected {
+                                    theme.accent
+                                } else {
+                                    theme.text.opacity(0.82)
+                                },
+                            )),
+                    );
+                }
+                sidebar = sidebar.child(provider_sidebar);
 
                 let search_input = div()
                     .h(px(54.0))
@@ -1043,130 +1065,107 @@ impl Waku {
                     );
                 }
 
-                for group in model_groups.iter() {
-                    let header_model = &available_models[group.model_indices[0]];
+                for (row_index, model) in available_models.iter().enumerate() {
+                    let is_selected = selected_model.as_deref() == Some(model.id.as_str());
+                    let is_highlighted = highlight == Some(row_index);
+                    let is_favorite = favorites.iter().any(|favorite| favorite.model == model.id);
+                    let model_id = model.id.clone();
+                    let select_weak = weak.clone();
+                    let select_popover = popover.clone();
+                    let favorite_model_id = model.id.clone();
+                    let favorite_weak = weak.clone();
                     rows = rows.child(
                         div()
-                            .id(SharedString::from(format!(
-                                "model-provider-group-{}",
-                                header_model.id
-                            )))
-                            .h(px(28.0))
+                            .id(SharedString::from(format!("model-row-{}", model.id)))
+                            .h(px(60.0))
                             .px(px(12.0))
+                            .rounded(px(9.0))
                             .flex()
                             .items_center()
-                            .text_size(px(11.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.accent)
-                            .child(SharedString::from(group.label.clone())),
+                            .gap(px(10.0))
+                            .cursor_default()
+                            // Reserved on every row so highlighting one cannot
+                            // resize it and shift the list by a pixel.
+                            .border_1()
+                            .border_color(if is_selected {
+                                theme.accent.opacity(0.34)
+                            } else {
+                                gpui::transparent_black()
+                            })
+                            .when(is_selected, |element| {
+                                element.bg(theme.accent.opacity(0.10))
+                            })
+                            // The keyboard cursor reads as a ring rather than a
+                            // fill, so it stays legible on the current model's
+                            // already-filled row.
+                            .when(is_highlighted, |element| {
+                                element
+                                    .bg(theme.accent.opacity(0.14))
+                                    .border_color(theme.accent)
+                            })
+                            .hover(|element| element.bg(theme.overlay))
+                            .active(|element| element.opacity(0.85))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_size(px(13.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(theme.text)
+                                            .child(SharedString::from(model.name.clone())),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(4.0))
+                                            .truncate()
+                                            .text_size(px(11.5))
+                                            .text_color(theme.text_tertiary)
+                                            .child(SharedString::from(model.id.clone())),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("favorite-model-{}", model.id)))
+                                    .w(px(30.0))
+                                    .h(px(30.0))
+                                    .rounded(px(7.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .hover(|element| element.bg(theme.overlay_strong))
+                                    .child(icon(
+                                        if is_favorite {
+                                            "icons/star-filled.svg"
+                                        } else {
+                                            "icons/star.svg"
+                                        },
+                                        15.0,
+                                        if is_favorite {
+                                            theme.favorite
+                                        } else {
+                                            theme.text_ghost
+                                        },
+                                    ))
+                                    .on_click(move |_, _, cx| {
+                                        cx.stop_propagation();
+                                        let _ = favorite_weak.update(cx, |this, cx| {
+                                            this.toggle_favorite_model(
+                                                favorite_model_id.clone(),
+                                                cx,
+                                            );
+                                        });
+                                    }),
+                            )
+                            .on_click(move |_, window, cx| {
+                                let _ = select_weak.update(cx, |this, cx| {
+                                    this.choose_model(model_id.clone(), cx);
+                                });
+                                select_popover.close(window, cx);
+                            }),
                     );
-                    for &row_index in &group.model_indices {
-                        let model = &available_models[row_index];
-                        let is_selected = selected_model.as_deref() == Some(model.id.as_str());
-                        let is_highlighted = highlight == Some(row_index);
-                        let is_favorite =
-                            favorites.iter().any(|favorite| favorite.model == model.id);
-                        let model_id = model.id.clone();
-                        let select_weak = weak.clone();
-                        let select_popover = popover.clone();
-                        let favorite_model_id = model.id.clone();
-                        let favorite_weak = weak.clone();
-                        rows = rows.child(
-                            div()
-                                .id(SharedString::from(format!("model-row-{}", model.id)))
-                                .h(px(60.0))
-                                .px(px(12.0))
-                                .rounded(px(9.0))
-                                .flex()
-                                .items_center()
-                                .gap(px(10.0))
-                                .cursor_default()
-                                // Reserved on every row so highlighting one cannot
-                                // resize it and shift the list by a pixel.
-                                .border_1()
-                                .border_color(if is_selected {
-                                    theme.accent.opacity(0.34)
-                                } else {
-                                    gpui::transparent_black()
-                                })
-                                .when(is_selected, |element| {
-                                    element.bg(theme.accent.opacity(0.10))
-                                })
-                                // The keyboard cursor reads as a ring rather than a
-                                // fill, so it stays legible on the current model's
-                                // already-filled row.
-                                .when(is_highlighted, |element| {
-                                    element
-                                        .bg(theme.accent.opacity(0.14))
-                                        .border_color(theme.accent)
-                                })
-                                .hover(|element| element.bg(theme.overlay))
-                                .active(|element| element.opacity(0.85))
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .flex_1()
-                                        .child(
-                                            div()
-                                                .truncate()
-                                                .text_size(px(13.0))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_color(theme.text)
-                                                .child(SharedString::from(model.name.clone())),
-                                        )
-                                        .child(
-                                            div()
-                                                .mt(px(4.0))
-                                                .truncate()
-                                                .text_size(px(11.5))
-                                                .text_color(theme.text_tertiary)
-                                                .child(SharedString::from(model.id.clone())),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .id(SharedString::from(format!(
-                                            "favorite-model-{}",
-                                            model.id
-                                        )))
-                                        .w(px(30.0))
-                                        .h(px(30.0))
-                                        .rounded(px(7.0))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .hover(|element| element.bg(theme.overlay_strong))
-                                        .child(icon(
-                                            if is_favorite {
-                                                "icons/star-filled.svg"
-                                            } else {
-                                                "icons/star.svg"
-                                            },
-                                            15.0,
-                                            if is_favorite {
-                                                theme.favorite
-                                            } else {
-                                                theme.text_ghost
-                                            },
-                                        ))
-                                        .on_click(move |_, _, cx| {
-                                            cx.stop_propagation();
-                                            let _ = favorite_weak.update(cx, |this, cx| {
-                                                this.toggle_favorite_model(
-                                                    favorite_model_id.clone(),
-                                                    cx,
-                                                );
-                                            });
-                                        }),
-                                )
-                                .on_click(move |_, window, cx| {
-                                    let _ = select_weak.update(cx, |this, cx| {
-                                        this.choose_model(model_id.clone(), cx);
-                                    });
-                                    select_popover.close(window, cx);
-                                }),
-                        );
-                    }
                 }
 
                 let next_models = available_models.clone();
@@ -1260,7 +1259,7 @@ impl Waku {
             return;
         };
         self.model_picker_highlight = Some(next);
-        self.scroll_to_model_picker_index(models, next);
+        self.model_picker_scroll.scroll_to_item(next);
         cx.notify();
     }
 
@@ -1273,12 +1272,12 @@ impl Waku {
         if !self.model_search.read(cx).content().trim().is_empty() {
             return;
         }
-        let tabs = visible_picker_tabs();
+        let tabs = visible_picker_tabs(&self.probes);
         let current = tabs.iter().position(|tab| *tab == self.model_picker_tab);
         let Some(next) = next_picker_highlight(current, tabs.len(), key) else {
             return;
         };
-        self.select_model_picker_tab(tabs[next], cx);
+        self.select_model_picker_tab(tabs[next].clone(), cx);
     }
 
     /// Bring the current model's row into view whenever the picker shows the
@@ -1292,22 +1291,26 @@ impl Waku {
     pub(super) fn reveal_selected_picker_model(&self) {
         let session = self.selected_session();
         let selected_model = session.and_then(|session| self.model_for_session(session));
-        let models = model_picker_grouped_models(visible_picker_models(
+        let models = visible_picker_models(
             &self.probes,
             &self.state.favorite_models,
-            self.model_picker_tab,
+            self.model_picker_tab.clone(),
             "",
-        ));
+        );
         let index = models
             .iter()
             .position(|model| selected_model == Some(model.id.as_str()))
             .unwrap_or(0);
-        self.scroll_to_model_picker_index(&models, index);
+        self.model_picker_scroll.scroll_to_item(index);
     }
 
-    pub(super) fn scroll_to_model_picker_index(&self, models: &[ProviderModel], index: usize) {
-        self.model_picker_scroll
-            .scroll_to_item(model_picker_scroll_index(models, index));
+    pub(super) fn selected_model_picker_tab(&self) -> ModelPickerTab {
+        let selected_model = self
+            .selected_session()
+            .and_then(|session| self.model_metadata_for_session(session));
+        ModelPickerTab::Provider(model_picker_provider_label(
+            selected_model.and_then(|model| model.sub_provider.as_deref()),
+        ))
     }
 
     /// Take the row the selection is on, defaulting to the first so `enter`
@@ -3320,19 +3323,22 @@ pub(super) fn next_picker_highlight(
     }
 }
 
-/// The sidebar tabs the picker can land on, in rail order: favorites first,
-/// then OpenCode.
-///
-/// Shared by the rail's click gating and by `tab`'s cycle handler so the two
-/// agree on which tabs are usable.
-pub(super) fn visible_picker_tabs() -> Vec<ModelPickerTab> {
-    vec![ModelPickerTab::Favorites, ModelPickerTab::Provider]
-}
-
-#[derive(Debug, Eq, PartialEq)]
-pub(super) struct ModelPickerGroup {
-    pub(super) label: String,
-    pub(super) model_indices: Vec<usize>,
+/// The picker sidebar tabs, in stable rail order: favorites first, then one
+/// entry per installed model provider in first-appearance order.
+pub(super) fn visible_picker_tabs(probes: &[ProviderProbe]) -> Vec<ModelPickerTab> {
+    let mut tabs = vec![ModelPickerTab::Favorites];
+    for model in probes
+        .iter()
+        .filter(|probe| probe.installed)
+        .flat_map(|probe| &probe.models)
+    {
+        let provider = model_picker_provider_label(model.sub_provider.as_deref());
+        let tab = ModelPickerTab::Provider(provider);
+        if !tabs.contains(&tab) {
+            tabs.push(tab);
+        }
+    }
+    tabs
 }
 
 pub(super) fn model_picker_provider_label(sub_provider: Option<&str>) -> String {
@@ -3341,57 +3347,6 @@ pub(super) fn model_picker_provider_label(sub_provider: Option<&str>) -> String 
         Some(name) => name.to_owned(),
         None => "OpenCode".to_owned(),
     }
-}
-
-/// Partition models by provider without changing each provider's relative
-/// selectable order. Groups follow the provider's first appearance.
-pub(super) fn model_picker_groups(models: &[ProviderModel]) -> Vec<ModelPickerGroup> {
-    let mut groups: Vec<ModelPickerGroup> = Vec::new();
-    for (index, model) in models.iter().enumerate() {
-        let label = model_picker_provider_label(model.sub_provider.as_deref());
-        if let Some(group) = groups.iter_mut().find(|group| group.label == label) {
-            group.model_indices.push(index);
-        } else {
-            groups.push(ModelPickerGroup {
-                label,
-                model_indices: vec![index],
-            });
-        }
-    }
-    groups
-}
-
-/// Reorder the flat selectable sequence into provider groups while preserving
-/// the original order of models within every provider.
-pub(super) fn model_picker_grouped_models(models: Vec<ProviderModel>) -> Vec<ProviderModel> {
-    let groups = model_picker_groups(&models);
-    let mut grouped = Vec::with_capacity(models.len());
-    for group in groups {
-        grouped.extend(
-            group
-                .model_indices
-                .into_iter()
-                .map(|index| models[index].clone()),
-        );
-    }
-    grouped
-}
-
-/// Convert a selectable model index to its sibling index in the rendered list,
-/// which includes one non-selectable provider heading per group.
-pub(super) fn model_picker_scroll_index(models: &[ProviderModel], model_index: usize) -> usize {
-    let groups = model_picker_groups(models);
-    let mut rendered_index = 0;
-    for group in &groups {
-        rendered_index += 1;
-        for &index in &group.model_indices {
-            if index == model_index {
-                return rendered_index;
-            }
-            rendered_index += 1;
-        }
-    }
-    rendered_index
 }
 
 /// The models the picker lists, in display order.
@@ -3422,11 +3377,13 @@ pub(super) fn visible_picker_models(
                     .split_whitespace()
                     .all(|token| searchable.contains(token));
             }
-            match selected_tab {
+            match &selected_tab {
                 ModelPickerTab::Favorites => {
                     favorites.iter().any(|favorite| favorite.model == model.id)
                 }
-                ModelPickerTab::Provider => true,
+                ModelPickerTab::Provider(provider) => {
+                    model_picker_provider_label(model.sub_provider.as_deref()) == *provider
+                }
             }
         })
         .collect();

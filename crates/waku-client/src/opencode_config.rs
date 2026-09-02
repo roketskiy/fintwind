@@ -312,6 +312,225 @@ fn set_or_remove_string(map: &mut Map<String, Value>, key: &str, value: &str) {
     }
 }
 
+/// One MCP server under opencode.json's top-level `mcp` map. Verified
+/// against opencode's published schema: a `local` server carries `command`
+/// (an argv vector) plus `environment`, a `remote` server carries `url`
+/// plus `headers`; both may carry `enabled` and unknown fields (`cwd`,
+/// `timeout`, `oauth`, …) which ride along in [`McpServer::raw`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpServer {
+    /// The entry's key in the `mcp` map — also its display name.
+    pub name: String,
+    pub kind: McpServerKind,
+    /// `local` only: the argv vector the server is launched with.
+    pub command: Vec<String>,
+    /// `remote` only: the server endpoint.
+    pub url: String,
+    /// The entry's `environment` object, as ordered pairs. Parsed whatever
+    /// the kind, so re-typing a server never silently turns its environment
+    /// into headers or loses it. Entries with empty keys are dropped on
+    /// save.
+    pub environment: Vec<(String, String)>,
+    /// The entry's `headers` object, as ordered pairs.
+    pub headers: Vec<(String, String)>,
+    pub enabled: bool,
+    /// The original record, preserved so unknown fields ride along on save.
+    pub raw: Value,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum McpServerKind {
+    #[default]
+    Local,
+    Remote,
+}
+
+impl McpServerKind {
+    pub fn as_config(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Remote => "remote",
+        }
+    }
+}
+
+/// Load the user-configured MCP servers from OpenCode's configuration. The
+/// file holds exactly what the UI presents as editable servers.
+pub fn load_mcp_servers() -> io::Result<Vec<McpServer>> {
+    load_mcp_servers_at(&config_path())
+}
+
+pub fn load_mcp_servers_at(path: &Path) -> io::Result<Vec<McpServer>> {
+    let bytes = std::fs::read(path)?;
+    let document: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let servers = document
+        .get("mcp")
+        .and_then(Value::as_object)
+        .map(|entries| {
+            entries
+                .iter()
+                .map(|(key, entry)| mcp_server_from_config(key, entry))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(servers)
+}
+
+fn mcp_server_from_config(key: &str, entry: &Value) -> McpServer {
+    let kind = match entry.get("type").and_then(Value::as_str) {
+        Some("remote") => McpServerKind::Remote,
+        // OpenCode's schema requires an explicit type; a hand-written entry
+        // without one — or with an unknown one, which OpenCode's validation
+        // would reject — still loads as local so it stays visible and
+        // fixable instead of vanishing.
+        _ => McpServerKind::Local,
+    };
+    let string_pairs = |table_key: &str| {
+        entry
+            .get(table_key)
+            .and_then(Value::as_object)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        value.as_str().map(|value| (key.clone(), value.to_owned()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    McpServer {
+        name: key.to_owned(),
+        kind,
+        command: entry
+            .get("command")
+            .and_then(Value::as_array)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        url: entry
+            .get("url")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        environment: string_pairs("environment"),
+        headers: string_pairs("headers"),
+        // OpenCode runs servers whose entries omit `enabled`, so absence
+        // loads as on and the UI's toggle then writes the flag explicitly.
+        enabled: entry
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true),
+        raw: entry.clone(),
+    }
+}
+
+/// Commit the working roster to OpenCode's configuration. The `mcp` map is
+/// rebuilt from `servers` (per-entry unknown fields ride along in
+/// [`McpServer::raw`]); everything outside it is preserved. An empty roster
+/// drops the key entirely.
+pub fn save_mcp_servers(servers: &[McpServer]) -> io::Result<()> {
+    save_mcp_servers_at(&config_path(), servers)
+}
+
+pub fn save_mcp_servers_at(path: &Path, servers: &[McpServer]) -> io::Result<()> {
+    let mut document: Map<String, Value> = match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let mut document = Map::new();
+            document.insert(
+                "$schema".into(),
+                Value::String("https://opencode.ai/config.json".into()),
+            );
+            document
+        }
+        Err(error) => return Err(error),
+    };
+
+    if servers.is_empty() {
+        document.remove("mcp");
+    } else {
+        let mut map = Map::new();
+        for server in servers {
+            map.insert(server.name.clone(), mcp_server_entry(server));
+        }
+        document.insert("mcp".into(), Value::Object(map));
+    }
+
+    write_json_atomically(path, &Value::Object(document))
+}
+
+/// The server entry as it should sit in the configuration: the original
+/// record with only the UI-owned keys rewritten, and the keys of the other
+/// kind dropped so switching a server's type cannot leave a hybrid entry
+/// OpenCode's schema rejects.
+fn mcp_server_entry(server: &McpServer) -> Value {
+    let mut entry = match server.raw.as_object() {
+        Some(raw) => raw.clone(),
+        None => Map::new(),
+    };
+    entry.insert(
+        "type".into(),
+        Value::String(server.kind.as_config().to_owned()),
+    );
+
+    // Only the kind's own table is written (and only when non-empty); the
+    // other kind's key is dropped. The inactive table stays on the working
+    // roster, so flipping a server's type back and forth in the UI never
+    // loses what the user typed — it just is not in the file while inactive.
+    match server.kind {
+        McpServerKind::Local => {
+            set_or_remove_string_table(&mut entry, "environment", &server.environment);
+            entry.remove("headers");
+            entry.insert(
+                "command".into(),
+                Value::Array(
+                    server
+                        .command
+                        .iter()
+                        .map(|part| Value::String(part.clone()))
+                        .collect(),
+                ),
+            );
+            entry.remove("url");
+        }
+        McpServerKind::Remote => {
+            set_or_remove_string_table(&mut entry, "headers", &server.headers);
+            entry.remove("environment");
+            set_or_remove_string(&mut entry, "url", &server.url);
+            entry.remove("command");
+        }
+    }
+
+    entry.insert("enabled".into(), Value::from(server.enabled));
+    Value::Object(entry)
+}
+
+/// Insert `pairs` as an object under `key`, dropping blank keys and removing
+/// the key entirely when nothing remains.
+fn set_or_remove_string_table(entry: &mut Map<String, Value>, key: &str, pairs: &[(String, String)]) {
+    let mut table = Map::new();
+    for (name, value) in pairs {
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        table.insert(name.to_owned(), Value::String(value.clone()));
+    }
+    if table.is_empty() {
+        entry.remove(key);
+    } else {
+        entry.insert(key.into(), Value::Object(table));
+    }
+}
+
 fn write_json_atomically(path: &Path, document: &Value) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -581,6 +800,163 @@ mod tests {
         // The stored value round-trips through the UI's free-text field.
         let window = parse_context_window(&format_context_window(1_000_000)).unwrap();
         assert_eq!(window, 1_000_000);
+    }
+
+    fn sample_mcp_document() -> Value {
+        serde_json::json!({
+            "$schema": "https://opencode.ai/config.json",
+            "provider": {"deepseek": {"models": {"deepseek-chat": {"name": "DeepSeek Chat"}}}},
+            "mcp": {
+                "charts": {
+                    "type": "local",
+                    "command": ["npx", "-y", "@antv/mcp-server-chart"],
+                    "environment": {"NODE_ENV": "production", "DEBUG": "1"},
+                    "timeout": 9000,
+                    "enabled": false
+                },
+                "context7": {"type": "remote", "url": "https://mcp.example.com", "headers": {"Authorization": "Bearer sk-test"}, "enabled": true},
+                "no-type": {"command": ["bun", "x", "some-server"]},
+                "org-remote": {"type": "remote", "url": "https://org.example.com/mcp", "oauth": false}
+            }
+        })
+    }
+
+    #[test]
+    fn load_mcp_reads_kinds_variables_and_enabled_flags() {
+        let directory =
+            std::env::temp_dir().join(format!("waku-oc-mcp-load-{}", std::process::id()));
+        let path = write_fixture(&directory, &sample_mcp_document());
+
+        let servers = load_mcp_servers_at(&path).unwrap();
+        assert_eq!(servers.len(), 4);
+
+        let charts = servers.iter().find(|s| s.name == "charts").unwrap();
+        assert_eq!(charts.kind, McpServerKind::Local);
+        assert_eq!(charts.command, vec!["npx", "-y", "@antv/mcp-server-chart"]);
+        assert_eq!(
+            // serde_json's map iterates keys in sorted order.
+            charts.environment,
+            vec![
+                ("DEBUG".to_owned(), "1".to_owned()),
+                ("NODE_ENV".to_owned(), "production".to_owned())
+            ]
+        );
+        assert!(charts.headers.is_empty());
+        assert!(!charts.enabled);
+
+        let context7 = servers.iter().find(|s| s.name == "context7").unwrap();
+        assert_eq!(context7.kind, McpServerKind::Remote);
+        assert_eq!(context7.url, "https://mcp.example.com");
+        assert_eq!(
+            context7.headers,
+            vec![("Authorization".to_owned(), "Bearer sk-test".to_owned())]
+        );
+        assert!(context7.enabled);
+
+        // An entry without a type still loads, from the command it carries.
+        let no_type = servers.iter().find(|s| s.name == "no-type").unwrap();
+        assert_eq!(no_type.kind, McpServerKind::Local);
+        assert!(no_type.enabled);
+
+        // An org remote without `enabled` loads as on, matching OpenCode.
+        let org = servers.iter().find(|s| s.name == "org-remote").unwrap();
+        assert_eq!(org.kind, McpServerKind::Remote);
+        assert!(org.enabled);
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn save_mcp_preserves_unknown_keys_and_drops_cross_kind_fields() {
+        let directory =
+            std::env::temp_dir().join(format!("waku-oc-mcp-save-{}", std::process::id()));
+        let path = write_fixture(&directory, &sample_mcp_document());
+        let mut servers = load_mcp_servers_at(&path).unwrap();
+
+        // Re-type the local charts server as remote with a URL; its command
+        // and environment must not survive into the entry.
+        let charts = servers.iter_mut().find(|s| s.name == "charts").unwrap();
+        charts.kind = McpServerKind::Remote;
+        charts.url = "https://charts.example.com/mcp".into();
+        let context7 = servers.iter_mut().find(|s| s.name == "context7").unwrap();
+        context7.enabled = false;
+        context7.headers.clear();
+        // Drop no-type entirely; keep org-remote untouched.
+        servers.retain(|server| server.name != "no-type");
+
+        save_mcp_servers_at(&path, &servers).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+
+        // Unrelated top-level keys survive verbatim.
+        assert_eq!(
+            saved["provider"]["deepseek"]["models"]["deepseek-chat"]["name"],
+            "DeepSeek Chat"
+        );
+
+        let charts = &saved["mcp"]["charts"];
+        assert_eq!(charts["type"], "remote");
+        assert_eq!(charts["url"], "https://charts.example.com/mcp");
+        assert!(charts.get("command").is_none());
+        assert!(charts.get("environment").is_none());
+        assert_eq!(charts["timeout"], 9000);
+
+        let context7 = &saved["mcp"]["context7"];
+        assert_eq!(context7["enabled"], false);
+        assert!(context7.get("headers").is_none());
+        assert_eq!(context7["url"], "https://mcp.example.com");
+
+        // The dropped entry is gone; the untouched one kept its unknowns.
+        assert!(saved["mcp"].get("no-type").is_none());
+        assert_eq!(saved["mcp"]["org-remote"]["oauth"], false);
+
+        // Round-trip: the saved file loads back to the same roster.
+        let reloaded = load_mcp_servers_at(&path).unwrap();
+        assert_eq!(reloaded.len(), 3);
+        let charts = reloaded.iter().find(|s| s.name == "charts").unwrap();
+        assert_eq!(charts.kind, McpServerKind::Remote);
+
+        // An empty roster drops the key; the rest of the document survives.
+        save_mcp_servers_at(&path, &[]).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(saved.get("mcp").is_none());
+        assert!(saved.get("provider").is_some());
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn save_mcp_drops_blank_variables_and_writes_fresh_documents() {
+        let directory =
+            std::env::temp_dir().join(format!("waku-oc-mcp-fresh-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("opencode.json");
+
+        let server = McpServer {
+            name: "fresh-server".into(),
+            kind: McpServerKind::Local,
+            command: vec!["bun".into(), "x".into(), "some-server".into()],
+            url: String::new(),
+            environment: vec![
+                ("KEY".to_owned(), "value".to_owned()),
+                (String::new(), "dropped".to_owned()),
+                ("   ".to_owned(), "dropped".to_owned()),
+            ],
+            headers: Vec::new(),
+            enabled: true,
+            raw: Value::Null,
+        };
+        save_mcp_servers_at(&path, &[server]).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+
+        // A fresh file gains OpenCode's schema pin alongside the entry.
+        assert_eq!(saved["$schema"], "https://opencode.ai/config.json");
+        let entry = &saved["mcp"]["fresh-server"];
+        assert_eq!(entry["type"], "local");
+        assert_eq!(entry["command"], serde_json::json!(["bun", "x", "some-server"]));
+        assert_eq!(entry["environment"], serde_json::json!({"KEY": "value"}));
+        assert_eq!(entry["enabled"], true);
+
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]

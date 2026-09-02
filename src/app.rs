@@ -215,6 +215,7 @@ enum SettingsPage {
     General,
     Providers,
     Skills,
+    McpServers,
     Daemon,
     ComputerUse,
     Appearance,
@@ -1372,6 +1373,50 @@ pub struct Waku {
     providers_list_scrollbar: Rc<ScrollbarState>,
     providers_detail_scroll: ScrollHandle,
     providers_detail_scrollbar: Rc<ScrollbarState>,
+    /// The MCP page's roster selection — a server name from OpenCode's
+    /// `mcp` map. `None` falls back to the first visible row.
+    mcp_selected: Option<String>,
+    /// The MCP page is showing the add-server form instead of a server's
+    /// detail.
+    mcp_adding: bool,
+    /// The selected server's name is being renamed inline.
+    mcp_renaming: bool,
+    /// The selected server whose delete button is armed for its confirming
+    /// second click.
+    mcp_delete_arming: Option<String>,
+    /// The inline variable editor over the selected server's environment or
+    /// headers table.
+    mcp_variable_editor: Option<mcp_page::McpVariableEditor>,
+    /// Generation token for the debounced commit of keystroke-level field
+    /// edits; a newer edit supersedes the pending one.
+    mcp_commit_generation: u64,
+    /// The MCP server roster, loaded from and committed back to OpenCode's
+    /// own configuration file. A working copy, exactly like the provider
+    /// roster.
+    mcp_servers: Vec<waku_client::opencode_config::McpServer>,
+    /// Generation token for the background config load; a newer load
+    /// supersedes an older one's result.
+    mcp_load_generation: usize,
+    /// The MCP list pane's search field.
+    mcp_search: Entity<ComposerInput>,
+    /// The selected server's editable connection fields, one per kind.
+    mcp_command_input: Entity<ComposerInput>,
+    mcp_url_input: Entity<ComposerInput>,
+    mcp_rename_input: Entity<ComposerInput>,
+    /// Shared key and value fields of the inline variable editor.
+    mcp_variable_key_input: Entity<ComposerInput>,
+    mcp_variable_value_input: Entity<ComposerInput>,
+    mcp_form_name: Entity<ComposerInput>,
+    mcp_form_command: Entity<ComposerInput>,
+    mcp_form_url: Entity<ComposerInput>,
+    /// The kind picked in the add-server form.
+    mcp_form_kind: waku_client::opencode_config::McpServerKind,
+    /// Scroll positions of the MCP page's panes, tracked so they can draw
+    /// scrollbars and reset per selection.
+    mcp_list_scroll: ScrollHandle,
+    mcp_list_scrollbar: Rc<ScrollbarState>,
+    mcp_detail_scroll: ScrollHandle,
+    mcp_detail_scrollbar: Rc<ScrollbarState>,
     /// Scroll position of the settings content column, tracked so the pane
     /// can draw a scrollbar and mark the titlebar boundary once content
     /// slides under it.
@@ -1522,6 +1567,7 @@ mod composer;
 mod drafts;
 mod file_search;
 mod image_preview;
+mod mcp_page;
 mod native_sessions;
 mod providers_page;
 mod render;
@@ -1943,6 +1989,47 @@ impl Waku {
             ComposerInput::new(window, cx)
                 .search_field()
                 .placeholder(tr!("providers.api_key_placeholder"))
+        });
+        let mcp_search = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.search_placeholder"))
+        });
+        let mcp_command_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.command_placeholder"))
+        });
+        let mcp_url_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.url_placeholder"))
+        });
+        let mcp_rename_input = cx.new(|cx| ComposerInput::new(window, cx).search_field());
+        let mcp_variable_key_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.variable_key_placeholder"))
+        });
+        let mcp_variable_value_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.variable_value_placeholder"))
+        });
+        let mcp_form_name = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.name_placeholder"))
+        });
+        let mcp_form_command = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.command_placeholder"))
+        });
+        let mcp_form_url = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.url_placeholder"))
         });
         let session_rename_input = cx.new(|cx| ComposerInput::new(window, cx).search_field());
         let right_panel_diff_filter = cx.new(|cx| {
@@ -2527,6 +2614,57 @@ impl Waku {
                 .detach();
             }
             cx.subscribe(
+                &mcp_search,
+                |_: &mut Self, _, event: &ComposerEvent, cx| {
+                    if matches!(event, ComposerEvent::Edited) {
+                        cx.notify();
+                    }
+                },
+            )
+            .detach();
+            for (input, field) in [
+                (&mcp_command_input, mcp_page::McpField::Command),
+                (&mcp_url_input, mcp_page::McpField::Url),
+            ] {
+                cx.subscribe(input, move |this, input, event: &ComposerEvent, cx| {
+                    if matches!(event, ComposerEvent::Edited) {
+                        this.mcp_field_edited(
+                            field,
+                            input.read(cx).content().to_owned(),
+                            cx,
+                        );
+                    }
+                })
+                .detach();
+            }
+            cx.subscribe(
+                &mcp_rename_input,
+                |this: &mut Self, _, event: &ComposerEvent, cx| {
+                    if matches!(event, ComposerEvent::Submit(_)) {
+                        this.confirm_mcp_rename(cx);
+                    }
+                },
+            )
+            .detach();
+            for variable_input in [&mcp_variable_key_input, &mcp_variable_value_input] {
+                cx.subscribe(variable_input, |this, _, event, cx| match event {
+                    ComposerEvent::Submit(_) => this.confirm_mcp_variable_editor(cx),
+                    ComposerEvent::Edited if this.mcp_variable_editor.is_some() => cx.notify(),
+                    _ => {}
+                })
+                .detach();
+            }
+            for form_input in [&mcp_form_name, &mcp_form_command, &mcp_form_url] {
+                cx.subscribe(form_input, |this, _, event, cx| match event {
+                    // The add form submits only when its fields validate, so
+                    // Return in any field is an honest attempt to save.
+                    ComposerEvent::Submit(_) => this.submit_mcp_form(cx),
+                    ComposerEvent::Edited if this.mcp_adding => cx.notify(),
+                    _ => {}
+                })
+                .detach();
+            }
+            cx.subscribe(
                 &right_panel_diff_filter,
                 |this: &mut Self, _, event: &ComposerEvent, cx| {
                     if matches!(event, ComposerEvent::Edited) {
@@ -2851,6 +2989,28 @@ impl Waku {
                 providers_list_scrollbar: ScrollbarState::new(),
                 providers_detail_scroll: ScrollHandle::new(),
                 providers_detail_scrollbar: ScrollbarState::new(),
+                mcp_selected: None,
+                mcp_adding: false,
+                mcp_renaming: false,
+                mcp_delete_arming: None,
+                mcp_variable_editor: None,
+                mcp_commit_generation: 0,
+                mcp_servers: Vec::new(),
+                mcp_load_generation: 0,
+                mcp_search,
+                mcp_command_input,
+                mcp_url_input,
+                mcp_rename_input,
+                mcp_variable_key_input,
+                mcp_variable_value_input,
+                mcp_form_name,
+                mcp_form_command,
+                mcp_form_url,
+                mcp_form_kind: Default::default(),
+                mcp_list_scroll: ScrollHandle::new(),
+                mcp_list_scrollbar: ScrollbarState::new(),
+                mcp_detail_scroll: ScrollHandle::new(),
+                mcp_detail_scrollbar: ScrollbarState::new(),
                 settings_scroll: ScrollHandle::new(),
                 settings_scrollbar: ScrollbarState::new(),
                 header_drag_armed: false,
@@ -2951,6 +3111,8 @@ impl Waku {
             // the Providers page opens onto the CLI's providers — after the
             // one-time migration of the old app-managed mirror file.
             this.load_providers_from_config(cx);
+            // The MCP roster too, same file, same contract.
+            this.load_mcp_servers_from_config(cx);
             // The session roster too: the server is the single store, so the
             // sidebar must reconcile with what the CLI and TUI left there.
             // It retries once the provider probe finds the binary.

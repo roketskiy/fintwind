@@ -140,6 +140,10 @@ settings.back:
   en: Back
 settings.search:
   en: Search Settings
+settings.mcp_servers:
+  en: MCP Servers
+settings.mcp_servers_keywords:
+  en: mcp servers tools stdio http sse local remote npx environment variables headers
 daemon.expose_title:
   en: Expose managed daemon
 daemon.expose_description:
@@ -447,6 +451,93 @@ providers.builtin_managed:
   en: The endpoint and API key are managed by the opencode2 CLI (opencode2 auth login); this roster is OpenCode's own configuration file.
 providers.default_model_badge:
   en: Default
+
+mcp.search_placeholder:
+  en: Search MCP servers…
+mcp.section_local:
+  en: Local
+mcp.section_remote:
+  en: Remote
+mcp.count_zero:
+  en: No MCP servers yet
+mcp.count_one:
+  en: "%{count} MCP server"
+mcp.count_many:
+  en: "%{count} MCP servers"
+mcp.add_server:
+  en: Add server
+mcp.empty_description:
+  en: MCP servers extend what the agent can do — chart, browser, and other tools. They live in OpenCode's configuration and join every new task.
+mcp.form_title:
+  en: Add an MCP server
+mcp.form_description:
+  en: The server joins every new task. OpenCode launches local servers itself and speaks HTTP to remote ones.
+mcp.name_label:
+  en: Name
+mcp.name_placeholder:
+  en: "e.g. context7"
+mcp.type_label:
+  en: Type
+mcp.type_local:
+  en: Local (stdio)
+mcp.type_remote:
+  en: Remote (HTTP)
+mcp.command_label:
+  en: Command
+mcp.command_placeholder:
+  en: "e.g. npx -y @antv/mcp-server-chart"
+mcp.url_label:
+  en: URL
+mcp.url_placeholder:
+  en: "https://mcp.example.com"
+mcp.no_connection:
+  en: No command or URL yet
+mcp.environment_label:
+  en: Environment variables
+mcp.headers_label:
+  en: Headers
+mcp.variables_empty:
+  en: None yet. Values here are passed along with every call to this server.
+mcp.add_variable:
+  en: Add variable
+mcp.add_header:
+  en: Add header
+mcp.variable_key_placeholder:
+  en: "e.g. API_KEY"
+mcp.variable_value_placeholder:
+  en: Value
+mcp.edit_variable:
+  en: Edit variable
+mcp.delete_variable:
+  en: Delete variable
+mcp.action_enable:
+  en: Enable
+mcp.action_disable:
+  en: Disable
+mcp.rename:
+  en: Rename
+mcp.save:
+  en: Save
+mcp.delete_server:
+  en: Delete server
+mcp.confirm_delete_server:
+  en: Confirm delete?
+mcp.added_toast:
+  en: "Added server %{name}"
+mcp.deleted_toast:
+  en: "Deleted server %{name}"
+mcp.duplicate_name:
+  en: A server with this name already exists
+mcp.duplicate_variable:
+  en: This name is already used in this table
+mcp.hint_need_command:
+  en: Enter the command that launches the server.
+mcp.hint_invalid_url:
+  en: The URL must start with http:// or https://.
+mcp.sync_failed:
+  en: "Could not update OpenCode's MCP configuration: %{error}"
+mcp.managed_note:
+  en: This roster is the mcp section of OpenCode's own configuration file (opencode.json). The CLI and TUI see the same servers, and OpenCode hot-reloads the file. Extra fields like timeout, cwd, or oauth are preserved.
 
 computer_use.allow_apps:
   en: Let fintwind use apps

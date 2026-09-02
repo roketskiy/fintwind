@@ -70,6 +70,8 @@ settings.daemon_keywords: 守护进程 服务 远程 网页 网络 暴露 来源
 settings.computer_use_keywords: 电脑操作 屏幕录制 辅助功能 应用 控制 codex
 settings.back: 返回
 settings.search: 搜索设置
+settings.mcp_servers: MCP 服务器
+settings.mcp_servers_keywords: MCP 服务器 工具 stdio http sse 本地 远程 npx 环境变量 请求头
 daemon.expose_title: 暴露由 fintwind 管理的守护进程
 daemon.expose_description: 允许本机之外的 fintwind 客户端连接。更改此项只会重启守护进程。
 daemon.status_local: 仅本机
@@ -226,6 +228,50 @@ providers.duplicate_model: 该模型 ID 已存在
 providers.sync_failed: "无法更新 OpenCode 的供应商配置：%{error}"
 providers.builtin_managed: 端点与 API Key 由 opencode2 CLI 管理（opencode2 auth login）；供应商列表即 OpenCode 自己的配置文件。
 providers.default_model_badge: 默认
+
+mcp.search_placeholder: 搜索 MCP 服务器…
+mcp.section_local: 本地
+mcp.section_remote: 远程
+mcp.count_zero: 尚无 MCP 服务器
+mcp.count_one: "%{count} 个 MCP 服务器"
+mcp.count_many: "%{count} 个 MCP 服务器"
+mcp.add_server: 添加服务器
+mcp.empty_description: MCP 服务器扩展智能体能做到的事——图表、浏览器等工具。它们保存在 OpenCode 的配置中,并加入每个新任务。
+mcp.form_title: 添加 MCP 服务器
+mcp.form_description: 服务器会加入每个新任务。OpenCode 在本机启动本地服务器,并通过 HTTP 访问远程服务器。
+mcp.name_label: 名称
+mcp.name_placeholder: 例如 context7
+mcp.type_label: 类型
+mcp.type_local: 本地 (stdio)
+mcp.type_remote: 远程 (HTTP)
+mcp.command_label: 命令
+mcp.command_placeholder: 例如 npx -y @antv/mcp-server-chart
+mcp.url_label: URL
+mcp.url_placeholder: "https://mcp.example.com"
+mcp.no_connection: 尚无命令或 URL
+mcp.environment_label: 环境变量
+mcp.headers_label: 请求头
+mcp.variables_empty: 暂无内容。这里的值会随对该服务器的每次调用一同传递。
+mcp.add_variable: 添加变量
+mcp.add_header: 添加 Header
+mcp.variable_key_placeholder: 例如 API_KEY
+mcp.variable_value_placeholder: 值
+mcp.edit_variable: 编辑变量
+mcp.delete_variable: 删除变量
+mcp.action_enable: 启用
+mcp.action_disable: 停用
+mcp.rename: 重命名
+mcp.save: 保存
+mcp.delete_server: 删除服务器
+mcp.confirm_delete_server: 确认删除?
+mcp.added_toast: "已添加服务器 %{name}"
+mcp.deleted_toast: "已删除服务器 %{name}"
+mcp.duplicate_name: 已存在同名服务器
+mcp.duplicate_variable: 该名称已在此列表中使用
+mcp.hint_need_command: 请输入启动服务器的命令。
+mcp.hint_invalid_url: URL 必须以 http:// 或 https:// 开头。
+mcp.sync_failed: "无法更新 OpenCode 的 MCP 配置:%{error}"
+mcp.managed_note: 此名单来自 OpenCode 自己的配置文件(opencode.json)的 mcp 段。CLI 与 TUI 看到的是同一批服务器,OpenCode 会热加载该文件。timeout、cwd、oauth 等额外字段会原样保留。
 computer_use.allow_apps: 允许 fintwind 操作其他应用
 computer_use.availability: Codex、OpenCode、Grok 和 Pi 支持电脑操作功能
 computer_use.macos_access: macOS 权限

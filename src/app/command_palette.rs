@@ -636,6 +636,12 @@ impl Waku {
                 "settings preferences skills library create disable agent skill",
             ),
             (
+                SettingsPage::McpServers,
+                "settings.mcp_servers",
+                "icons/wrench.svg",
+                "settings preferences mcp servers tools stdio http sse local remote npx environment headers",
+            ),
+            (
                 SettingsPage::Daemon,
                 "settings.daemon",
                 "icons/server.svg",

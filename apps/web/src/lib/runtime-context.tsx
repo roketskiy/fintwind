@@ -1,12 +1,17 @@
 import { useQueryClient } from '@tanstack/react-query'
 import type {
+  ActivityItem,
   AgentSession,
+  AgentTurn,
+  BackgroundWorkTranscript as ProtocolBackgroundWorkTranscript,
   DaemonSettings,
+  Message,
   MessageAttachment,
   PlanUsage,
   Project,
   ProviderProbe,
   SequencedEvent,
+  TranscriptBlock,
   UserInputAnswer,
 } from '@waku/client'
 import {
@@ -95,9 +100,19 @@ export interface BackgroundWorkItem {
   status: BackgroundWorkStatus
 }
 
+export type BackgroundWorkTranscript = ProtocolBackgroundWorkTranscript
+
+type BackgroundWorkTranscriptEvent =
+  | { type: 'started'; key: BackgroundWorkKey; prompt: string | null }
+  | { type: 'textDelta'; key: BackgroundWorkKey; delta: string }
+  | { type: 'reasoningDelta'; key: BackgroundWorkKey; delta: string }
+  | { type: 'activity'; key: BackgroundWorkKey; activity: ActivityItem }
+  | { type: 'finished'; key: BackgroundWorkKey; success: boolean }
+
 type BackgroundWorkEvent =
   | { type: 'upsert'; item: BackgroundWorkItem }
   | { type: 'outputDelta'; key: BackgroundWorkKey; delta: string }
+  | { type: 'transcript'; event: BackgroundWorkTranscriptEvent }
   | { type: 'reconcileProcesses'; items: BackgroundWorkItem[] }
   | { type: 'reconcileLive'; items: BackgroundWorkItem[] }
   | { type: 'stopRequested'; key: BackgroundWorkKey }
@@ -108,6 +123,7 @@ interface RuntimeContextValue {
   permissions: Record<string, PendingPermission | undefined>
   userInputs: Record<string, PendingUserInput | undefined>
   backgroundWork: Record<string, BackgroundWorkItem[]>
+  backgroundWorkTranscripts: Record<string, Record<string, BackgroundWorkTranscript>>
   responseForks: Record<string, number | undefined>
   messageRewinds: Record<string, number | undefined>
   attachSession: (session: AgentSession) => Promise<boolean>
@@ -182,6 +198,9 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     Record<string, PendingUserInput | undefined>
   >({})
   const [backgroundWork, setBackgroundWork] = useState<Record<string, BackgroundWorkItem[]>>({})
+  const [backgroundWorkTranscripts, setBackgroundWorkTranscripts] = useState<
+    Record<string, Record<string, BackgroundWorkTranscript>>
+  >({})
   const [responseForks, setResponseForks] = useState<Record<string, number | undefined>>({})
   const [messageRewinds, setMessageRewinds] = useState<Record<string, number | undefined>>({})
 
@@ -467,6 +486,17 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
               ...current,
               [session.id]: reduceBackgroundWork(current[session.id] ?? [], backgroundEvent),
             }))
+            if (backgroundEvent.type === 'transcript') {
+              setBackgroundWorkTranscripts((current) => {
+                const sessionTranscripts = { ...(current[session.id] ?? {}) }
+                const key = backgroundKeyId(backgroundEvent.event.key)
+                sessionTranscripts[key] = reduceBackgroundTranscript(
+                  sessionTranscripts[key],
+                  backgroundEvent.event,
+                )
+                return { ...current, [session.id]: sessionTranscripts }
+              })
+            }
           }
         }
         if (event.event.kind === 'steerAccepted') {
@@ -1084,6 +1114,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     setPermissions({})
     setUserInputs({})
     setBackgroundWork({})
+    setBackgroundWorkTranscripts({})
     setResponseForks({})
     setMessageRewinds({})
     return () => {
@@ -1101,6 +1132,7 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
     permissions,
     userInputs,
     backgroundWork,
+    backgroundWorkTranscripts,
     responseForks,
     messageRewinds,
     attachSession,
@@ -1239,6 +1271,39 @@ const MAX_SETTLED_BACKGROUND_ITEMS = 24
 function decodeBackgroundWorkEvent(payload: unknown): BackgroundWorkEvent | null {
   const value = asObject(payload)
   if (!value || typeof value.type !== 'string') return null
+  if (value.type === 'transcript') {
+    const nested = asObject(value.event)
+      ?? asObject(value.data)
+      ?? asObject(value['0'])
+      ?? value
+    const variant = Object.entries(nested).find(([name]) => (
+      ['started', 'textDelta', 'reasoningDelta', 'activity', 'finished'].includes(name)
+    ))
+    if (!variant) return null
+    const [name, raw] = variant
+    const body = asObject(raw)
+    if (!body) return null
+    const key = backgroundKey(body.key)
+    if (!key) return null
+    if (name === 'started') {
+      const prompt = body.prompt == null ? null : String(body.prompt)
+      return { type: 'transcript', event: { type: 'started', key, prompt } }
+    }
+    if (name === 'textDelta' || name === 'reasoningDelta') {
+      return typeof body.delta === 'string'
+        ? { type: 'transcript', event: { type: name, key, delta: body.delta } }
+        : null
+    }
+    if (name === 'activity') {
+      const activity = body.activity as ActivityItem | undefined
+      return activity && typeof activity === 'object'
+        ? { type: 'transcript', event: { type: 'activity', key, activity } }
+        : null
+    }
+    return typeof body.success === 'boolean'
+      ? { type: 'transcript', event: { type: 'finished', key, success: body.success } }
+      : null
+  }
   if (value.type === 'outputDelta') {
     const key = backgroundKey(value.key)
     return key && typeof value.delta === 'string'
@@ -1269,6 +1334,152 @@ function decodeBackgroundWorkEvent(payload: unknown): BackgroundWorkEvent | null
   return null
 }
 
+function reduceBackgroundTranscript(
+  current: BackgroundWorkTranscript | undefined,
+  event: BackgroundWorkTranscriptEvent,
+): BackgroundWorkTranscript {
+  const next: BackgroundWorkTranscript = current
+    ? {
+        messages: [...current.messages],
+        transcriptBlocks: current.transcriptBlocks.map((block) => ({ ...block, content: block.content })),
+        turns: [...current.turns],
+      }
+    : { messages: [], transcriptBlocks: [], turns: [] }
+  if (event.type === 'started') {
+    // Deltas can legitimately arrive before Started (the child existed
+    // before the client attached). One turn per transcript, and the prompt
+    // message only when it would still come first.
+    if (next.turns.length === 0) {
+      const turnId = crypto.randomUUID()
+      next.turns.push({
+        id: turnId,
+        turn_count: 1,
+        status: 'running',
+        provider_turn_started: true,
+        provider_resume_at: null,
+        started_at: Math.floor(Date.now() / 1_000),
+        completed_at: null,
+        checkpoint: null,
+      })
+      if (event.prompt && next.messages.length === 0) {
+        next.messages.push({
+          id: crypto.randomUUID(),
+          turn_id: turnId,
+          role: 'user',
+          content: event.prompt,
+          display_content: null,
+          attachments: [],
+          created_at: Math.floor(Date.now() / 1_000),
+          streaming: false,
+        })
+      }
+    }
+  } else if (event.type === 'textDelta' && event.delta) {
+    const last = next.messages.at(-1)
+    if (last?.role === 'assistant' && last.streaming) {
+      next.messages[next.messages.length - 1] = { ...last, content: `${last.content}${event.delta}` }
+    } else {
+      next.messages.push({
+        id: crypto.randomUUID(),
+        turn_id: next.turns.at(-1)?.id ?? null,
+        role: 'assistant',
+        content: event.delta,
+        display_content: null,
+        attachments: [],
+        created_at: Math.floor(Date.now() / 1_000),
+        streaming: true,
+      })
+    }
+  } else if (event.type === 'reasoningDelta' && event.delta) {
+    const blocks = next.transcriptBlocks
+    const turnId = next.turns.at(-1)?.id ?? null
+    const lastBlock = blocks.at(-1)
+    // Only a block anchored at the current end of the message list may
+    // absorb more reasoning; anything older stays as history, matching the
+    // desktop projection.
+    const activities = lastBlock
+      && lastBlock.after_message === next.messages.length
+      && lastBlock.turn_id === turnId
+      && lastBlock.content.kind === 'activities'
+      ? lastBlock.content.data
+      : null
+    const lastActivity = activities?.at(-1)
+    if (lastActivity?.reasoning && !lastActivity.complete) {
+      const updated = { ...lastActivity, reasoning: { ...lastActivity.reasoning, content: `${lastActivity.reasoning.content}${event.delta}` } }
+      blocks[blocks.length - 1] = { ...lastBlock!, content: { kind: 'activities', data: [...activities!.slice(0, -1), updated] } }
+    } else {
+      const activity: ActivityItem = {
+        id: crypto.randomUUID(),
+        source_id: null,
+        kind: 'reasoning',
+        title: 'Reasoning',
+        detail: null,
+        arguments: null,
+        output: null,
+        image_urls: [],
+        failed: false,
+        complete: false,
+        file_changes: [],
+        display_target: null,
+        display_description: null,
+        reasoning: { content: event.delta, started_at_ms: Date.now(), finished_at_ms: Date.now() },
+      }
+      if (activities) {
+        blocks[blocks.length - 1] = {
+          ...lastBlock!,
+          content: { kind: 'activities', data: [...activities, activity] },
+        }
+      } else {
+        blocks.push({
+          after_message: next.messages.length,
+          turn_id: turnId,
+          content: { kind: 'activities', data: [activity] },
+        })
+      }
+    }
+  } else if (event.type === 'activity') {
+    const blocks = next.transcriptBlocks
+    // Newest first, matching the desktop projection: a repeated source_id
+    // belongs to the latest tool call that claimed it.
+    let updated = false
+    for (let blockIndex = blocks.length - 1; blockIndex >= 0 && !updated; blockIndex--) {
+      const block = blocks[blockIndex]
+      if (block.content.kind !== 'activities') continue
+      const activityIndex = block.content.data.findIndex((activity) => (
+        event.activity.source_id && activity.source_id === event.activity.source_id
+      ))
+      if (activityIndex < 0) continue
+      const data = block.content.data.slice()
+      data[activityIndex] = { ...event.activity, id: block.content.data[activityIndex].id }
+      blocks[blockIndex] = { ...block, content: { kind: 'activities', data } }
+      updated = true
+    }
+    if (!updated) {
+      const turnId = next.turns.at(-1)?.id ?? null
+      const lastBlock = blocks.at(-1)
+      if (lastBlock
+        && lastBlock.after_message === next.messages.length
+        && lastBlock.turn_id === turnId
+        && lastBlock.content.kind === 'activities'
+      ) {
+        blocks[blocks.length - 1] = {
+          ...lastBlock,
+          content: { kind: 'activities', data: [...lastBlock.content.data, event.activity] },
+        }
+      } else {
+        blocks.push({ after_message: next.messages.length, turn_id: turnId, content: { kind: 'activities', data: [event.activity] } })
+      }
+    }
+  } else if (event.type === 'finished') {
+    next.messages = next.messages.map((message) => message.role === 'assistant' ? { ...message, streaming: false } : message)
+    next.transcriptBlocks = next.transcriptBlocks.map((block) => block.content.kind === 'activities'
+      ? { ...block, content: { kind: 'activities', data: block.content.data.map((activity) => ({ ...activity, complete: true, failed: activity.reasoning ? !event.success : activity.failed })) } }
+      : block)
+    const turn = next.turns.at(-1)
+    if (turn?.status === 'running') next.turns[next.turns.length - 1] = { ...turn, status: event.success ? 'completed' : 'failed', completed_at: Math.floor(Date.now() / 1_000) }
+  }
+  return next
+}
 function reduceBackgroundWork(
   current: BackgroundWorkItem[],
   event: BackgroundWorkEvent,
@@ -1286,6 +1497,8 @@ function reduceBackgroundWork(
           updatedAtMs: Date.now(),
         }
       : item)
+  } else if (event.type === 'transcript') {
+    return next
   } else if (event.type === 'reconcileProcesses') {
     next = reconcileBackgroundItems(next, event.items, false)
   } else if (event.type === 'reconcileLive') {

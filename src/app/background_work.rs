@@ -13,6 +13,10 @@ pub(super) struct BackgroundWorkRegistry {
     /// when provider output changes, never from the panel's render path.
     rendered_output: HashMap<BackgroundWorkKey, SharedString>,
     dirty_output: HashSet<BackgroundWorkKey>,
+    /// Structured child-session transcript projections. Kept separate from
+    /// terminal output so a subagent's live conversation can render through
+    /// the same message/activity primitives as the main transcript.
+    transcripts: HashMap<BackgroundWorkKey, BackgroundWorkTranscript>,
     last_output_cache_refresh: Option<Instant>,
     output_viewports: HashMap<BackgroundWorkKey, BackgroundOutputViewport>,
     selection: TranscriptSelection,
@@ -235,6 +239,7 @@ impl BackgroundWorkRegistry {
         match event {
             BackgroundWorkEvent::Upsert(item) => self.upsert(item),
             BackgroundWorkEvent::OutputDelta { key, delta } => self.append_output(&key, &delta),
+            BackgroundWorkEvent::Transcript(event) => self.apply_transcript(event),
             BackgroundWorkEvent::ReconcileProcesses { items } => self.reconcile_processes(items),
             BackgroundWorkEvent::ReconcileLive { items } => self.reconcile_live(items),
             BackgroundWorkEvent::StopRequested(key) => {
@@ -347,12 +352,194 @@ impl BackgroundWorkRegistry {
         self.dirty_output.insert(key.clone());
     }
 
+    fn apply_transcript(&mut self, event: BackgroundWorkTranscriptEvent) {
+        match event {
+            BackgroundWorkTranscriptEvent::Started { key, prompt } => {
+                let transcript = self.transcripts.entry(key).or_default();
+                // Deltas can legitimately arrive before Started (the child
+                // existed before the driver attached). One turn per
+                // transcript, and the prompt message only when it would
+                // still come first.
+                if transcript.turns.is_empty() {
+                    let turn_id = uuid::Uuid::new_v4();
+                    transcript.turns.push(AgentTurn {
+                        id: turn_id,
+                        turn_count: 1,
+                        status: TurnStatus::Running,
+                        provider_turn_started: true,
+                        provider_resume_at: None,
+                        started_at: unix_time(),
+                        completed_at: None,
+                        checkpoint: None,
+                    });
+                    if let Some(prompt) = prompt.filter(|prompt| !prompt.trim().is_empty()) {
+                        if transcript.messages.is_empty() {
+                            transcript.messages.push(Message::new_for_turn(
+                                MessageRole::User,
+                                prompt,
+                                turn_id,
+                            ));
+                        }
+                    }
+                }
+            }
+            BackgroundWorkTranscriptEvent::TextDelta { key, delta } => {
+                Self::append_background_text(self.transcripts.entry(key).or_default(), &delta);
+            }
+            BackgroundWorkTranscriptEvent::ReasoningDelta { key, delta } => {
+                Self::append_background_reasoning(self.transcripts.entry(key).or_default(), &delta);
+            }
+            BackgroundWorkTranscriptEvent::Activity { key, activity } => {
+                Self::upsert_background_activity(
+                    self.transcripts.entry(key).or_default(),
+                    activity,
+                );
+            }
+            BackgroundWorkTranscriptEvent::Finished { key, success } => {
+                Self::finish_background_transcript(
+                    self.transcripts.entry(key).or_default(),
+                    success,
+                );
+            }
+        }
+    }
+
+    fn append_background_text(transcript: &mut BackgroundWorkTranscript, delta: &str) {
+        if delta.is_empty() {
+            return;
+        }
+        if let Some(message) = transcript
+            .messages
+            .last_mut()
+            .filter(|message| message.role == MessageRole::Assistant && message.streaming)
+        {
+            message.content.push_str(delta);
+            return;
+        }
+        let turn_id = transcript.turns.last().map(|turn| turn.id);
+        let mut message = turn_id
+            .map(|turn_id| Message::new_for_turn(MessageRole::Assistant, delta, turn_id))
+            .unwrap_or_else(|| Message::new(MessageRole::Assistant, delta));
+        message.streaming = true;
+        transcript.messages.push(message);
+    }
+
+    fn append_background_reasoning(transcript: &mut BackgroundWorkTranscript, delta: &str) {
+        if delta.is_empty() {
+            return;
+        }
+        let after_message = transcript.messages.len();
+        let turn_id = transcript.turns.last().map(|turn| turn.id);
+        if let Some(activity) = transcript
+            .transcript_blocks
+            .last_mut()
+            .filter(|block| block.after_message == after_message && block.turn_id == turn_id)
+            .and_then(|block| block.activities.last_mut())
+            .filter(|activity| activity.reasoning.is_some() && !activity.complete)
+        {
+            if let Some(reasoning) = activity.reasoning.as_mut() {
+                reasoning.content.push_str(delta);
+                reasoning.finished_at_ms = unix_time_millis();
+            }
+            return;
+        }
+        let mut activity = ActivityItem::from_reasoning(
+            ReasoningBlock {
+                content: delta.to_owned(),
+                started_at_ms: unix_time_millis(),
+                finished_at_ms: unix_time_millis(),
+            },
+            false,
+        );
+        activity.complete = false;
+        if let Some(block) = transcript
+            .transcript_blocks
+            .last_mut()
+            .filter(|block| block.after_message == after_message && block.turn_id == turn_id)
+        {
+            block.activities.push(activity);
+        } else {
+            transcript.transcript_blocks.push(TranscriptBlock {
+                after_message,
+                turn_id,
+                activities: vec![activity],
+            });
+        }
+    }
+
+    fn upsert_background_activity(
+        transcript: &mut BackgroundWorkTranscript,
+        incoming: ActivityItem,
+    ) {
+        let matching = transcript
+            .transcript_blocks
+            .iter_mut()
+            .rev()
+            .flat_map(|block| block.activities.iter_mut().rev())
+            .find(|activity| {
+                incoming
+                    .source_id
+                    .as_deref()
+                    .is_some_and(|source| activity.source_id.as_deref() == Some(source))
+            });
+        if let Some(current) = matching {
+            let id = current.id;
+            *current = incoming;
+            current.id = id;
+            return;
+        }
+        let turn_id = transcript.turns.last().map(|turn| turn.id);
+        let after_message = transcript.messages.len();
+        if let Some(block) = transcript
+            .transcript_blocks
+            .last_mut()
+            .filter(|block| block.after_message == after_message && block.turn_id == turn_id)
+        {
+            block.activities.push(incoming);
+        } else {
+            transcript.transcript_blocks.push(TranscriptBlock {
+                after_message,
+                turn_id,
+                activities: vec![incoming],
+            });
+        }
+    }
+
+    fn finish_background_transcript(transcript: &mut BackgroundWorkTranscript, success: bool) {
+        for message in &mut transcript.messages {
+            if message.role == MessageRole::Assistant {
+                message.streaming = false;
+            }
+        }
+        for block in &mut transcript.transcript_blocks {
+            for activity in &mut block.activities {
+                activity.complete = true;
+                if activity.reasoning.is_some() {
+                    activity.failed = !success;
+                }
+            }
+        }
+        if let Some(turn) = transcript
+            .turns
+            .last_mut()
+            .filter(|turn| turn.status == TurnStatus::Running)
+        {
+            turn.status = if success {
+                TurnStatus::Completed
+            } else {
+                TurnStatus::Failed
+            };
+            turn.completed_at = Some(unix_time());
+        }
+    }
+
     fn reconcile_processes(&mut self, items: Vec<BackgroundWorkItem>) {
         let present = items
             .iter()
             .map(|item| item.key.clone())
             .collect::<HashSet<_>>();
         let now = unix_time_millis();
+
         for item in self.items.values_mut() {
             if matches!(
                 item.key.kind,
@@ -384,13 +571,25 @@ impl BackgroundWorkRegistry {
                 item.updated_at_ms = now;
             }
         }
-        for item in items {
+        for mut item in items {
+            // The snapshot reflects the moment of the fetch: a child event
+            // may have settled the run after it was taken, and a slow or
+            // unknown server answer must not roll that state back. A snapshot
+            // may only move a status forward; being listed again recovers a
+            // previously Lost item.
+            if let Some(current) = self.items.get(&item.key) {
+                let recovered = current.status == BackgroundWorkStatus::Lost;
+                if !recovered && status_progress(current.status) >= status_progress(item.status) {
+                    item.status = current.status;
+                }
+            }
             self.upsert(item);
         }
     }
 
     fn remove(&mut self, key: &BackgroundWorkKey) {
         self.items.remove(key);
+        self.transcripts.remove(key);
         self.rendered_output.remove(key);
         self.dirty_output.remove(key);
         self.output_viewports.remove(key);
@@ -515,6 +714,22 @@ impl BackgroundWorkRegistry {
 fn merge_option<T>(target: &mut Option<T>, incoming: Option<T>) {
     if incoming.is_some() {
         *target = incoming;
+    }
+}
+
+/// Lifecycle progress of a status. Live reconciles describe the past (the
+/// moment of the fetch), so a snapshot may move a status forward but never
+/// back over an event that already arrived.
+fn status_progress(status: BackgroundWorkStatus) -> u8 {
+    match status {
+        BackgroundWorkStatus::Starting => 0,
+        BackgroundWorkStatus::Running
+        | BackgroundWorkStatus::Monitoring
+        | BackgroundWorkStatus::Stopping => 1,
+        BackgroundWorkStatus::Completed
+        | BackgroundWorkStatus::Failed
+        | BackgroundWorkStatus::Stopped
+        | BackgroundWorkStatus::Lost => 2,
     }
 }
 
@@ -1235,6 +1450,21 @@ impl Waku {
                     ),
             );
         }
+        if item.key.kind == BackgroundWorkKind::Subagent {
+            if let Some(transcript) = self
+                .state
+                .selected_session
+                .and_then(|session_id| self.background_work.get(&session_id))
+                .and_then(|registry| registry.transcripts.get(&item.key))
+            {
+                detail = detail.child(self.render_background_transcript(
+                    item,
+                    transcript,
+                    selection.clone(),
+                    cx,
+                ));
+            }
+        }
         let output = output.unwrap_or_else(|| SharedString::from(tr!("background.no_output")));
         let output_flat = md::render::flatten_plain(
             output,
@@ -1312,6 +1542,156 @@ impl Waku {
                         .child(background_work_selection_input(selection)),
                 ),
         )
+    }
+
+    fn render_background_transcript(
+        &self,
+        item: &BackgroundWorkItem,
+        transcript: &BackgroundWorkTranscript,
+        selection: TranscriptSelection,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let theme = Theme::current(cx);
+        let palette = MarkdownPalette::from_theme(&theme);
+        let mut content = div()
+            .border_t_1()
+            .border_color(theme.border)
+            .p(px(10.0))
+            .flex()
+            .flex_col()
+            .gap(px(10.0));
+        let mut markdown_views = self.message_markdown.borrow_mut();
+        let mut render_message = |message: &Message| {
+            let view = markdown_views.entry(message.id).or_default();
+            view.set_text(message.visible_content(), message.streaming);
+            let ctx = MarkdownCtx::new(
+                format!("background-message-{}-{}", item.key.provider_id, message.id),
+                &palette,
+                if message.role == MessageRole::User {
+                    MarkdownMetrics::USER_MESSAGE
+                } else {
+                    MarkdownMetrics::BODY
+                },
+                selection.clone(),
+            )
+            .with_streaming_animation(message.streaming && !cx.reduce_motion());
+            let body = md::render::markdown(view, &ctx).unwrap_or_else(|| {
+                md::render::plain_text(
+                    message.visible_content().to_owned(),
+                    md::render::SANS_FAMILY,
+                    FontWeight::NORMAL,
+                    theme.text,
+                    &ctx,
+                )
+            });
+            div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(if message.role == MessageRole::User {
+                            theme.accent
+                        } else {
+                            theme.text_tertiary
+                        })
+                        .child(if message.role == MessageRole::User {
+                            tr!("command_palette.you")
+                        } else {
+                            tr!("background.subagent")
+                        }),
+                )
+                .child(body)
+        };
+        // Group blocks by their anchor once per frame; the per-message filter
+        // below then costs one lookup instead of a full block scan.
+        let mut blocks_by_after: HashMap<usize, Vec<&TranscriptBlock>> = HashMap::new();
+        for block in &transcript.transcript_blocks {
+            blocks_by_after
+                .entry(block.after_message)
+                .or_default()
+                .push(block);
+        }
+        for after_message in 0..=transcript.messages.len() {
+            for block in blocks_by_after.get(&after_message).into_iter().flatten() {
+                for activity in &block.activities {
+                    let activity_color = if activity.failed {
+                        theme.danger
+                    } else if activity.complete {
+                        theme.text_tertiary
+                    } else {
+                        theme.accent
+                    };
+                    let mut card = div()
+                        .w_full()
+                        .min_w_0()
+                        .rounded(px(7.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .bg(theme.inset)
+                        .px(px(8.0))
+                        .py(px(7.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(6.0))
+                                .text_size(px(10.5))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(activity_color)
+                                .child(icon(activity_icon(activity.kind), 12.0, activity_color))
+                                .child(activity.title.clone())
+                                .child(
+                                    div().text_size(px(9.0)).text_color(theme.text_ghost).child(
+                                        if activity.failed {
+                                            tr!("background.status.failed")
+                                        } else if activity.complete {
+                                            tr!("background.status.completed")
+                                        } else {
+                                            tr!("background.status.running")
+                                        },
+                                    ),
+                                ),
+                        );
+                    if let Some(reasoning) = activity.reasoning.as_ref() {
+                        card = card.child(
+                            div()
+                                .text_size(px(10.5))
+                                .line_height(px(16.0))
+                                .text_color(theme.text_secondary)
+                                .child(reasoning.content.clone()),
+                        );
+                    }
+                    if let Some(output) = activity
+                        .output
+                        .as_deref()
+                        .filter(|output| !output.is_empty())
+                    {
+                        card = card.child(
+                            div()
+                                .text_size(px(10.0))
+                                .line_height(px(15.0))
+                                .font_family(md::render::MONO_FAMILY)
+                                .text_color(theme.text_secondary)
+                                .child(output.to_owned()),
+                        );
+                    }
+                    content = content.child(card);
+                }
+            }
+            if let Some(message) = transcript.messages.get(after_message) {
+                content = content.child(render_message(message));
+            }
+        }
+        drop(markdown_views);
+        content
     }
 }
 
@@ -2015,6 +2395,129 @@ mod tests {
         registry.upsert(item("one", BackgroundWorkStatus::Running, true));
         assert_eq!(registry.items[&key].status, BackgroundWorkStatus::Stopping);
         assert!(!registry.items[&key].status.is_stoppable());
+    }
+
+    fn subagent_item(id: &str, status: BackgroundWorkStatus) -> BackgroundWorkItem {
+        let mut item = BackgroundWorkItem::new(
+            BackgroundWorkKind::Subagent,
+            id,
+            format!("subagent {id}"),
+            status,
+        );
+        item.background = true;
+        item
+    }
+
+    fn reasoning_activity(source: &str, complete: bool) -> ActivityItem {
+        let mut activity = ActivityItem::from_reasoning(
+            ReasoningBlock {
+                content: "thinking".into(),
+                started_at_ms: 1,
+                finished_at_ms: 2,
+            },
+            complete,
+        );
+        activity.source_id = Some(source.to_owned());
+        activity
+    }
+
+    #[test]
+    fn late_started_after_deltas_creates_the_turn_without_reordering_messages() {
+        let mut registry = BackgroundWorkRegistry::default();
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::TextDelta {
+                key: key.clone(),
+                delta: "answer".into(),
+            },
+        ));
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::Started {
+                key: key.clone(),
+                prompt: Some("Inspect the repository".into()),
+            },
+        ));
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::Started {
+                key: key.clone(),
+                prompt: Some("Inspect the repository".into()),
+            },
+        ));
+        let transcript = &registry.transcripts[&key];
+        assert_eq!(transcript.turns.len(), 1, "Started is idempotent");
+        assert_eq!(transcript.messages.len(), 1);
+        // The prompt arrived after content, so it must not masquerade as
+        // the first message of the conversation.
+        assert_eq!(transcript.messages[0].role, MessageRole::Assistant);
+    }
+
+    #[test]
+    fn activity_updates_match_source_ids_and_keep_the_original_entry() {
+        let mut registry = BackgroundWorkRegistry::default();
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        let running = reasoning_activity("call_1", false);
+        let original_id = running.id;
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::Activity {
+                key: key.clone(),
+                activity: running,
+            },
+        ));
+        let mut settled = reasoning_activity("call_1", true);
+        settled.id = uuid::Uuid::new_v4();
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::Activity {
+                key: key.clone(),
+                activity: settled,
+            },
+        ));
+        let transcript = &registry.transcripts[&key];
+        let activities = transcript
+            .transcript_blocks
+            .iter()
+            .flat_map(|block| block.activities.iter())
+            .collect::<Vec<_>>();
+        assert_eq!(activities.len(), 1, "the update replaces, not appends");
+        assert!(activities[0].complete);
+        assert_eq!(activities[0].id, original_id);
+    }
+
+    #[test]
+    fn live_reconciliation_never_rolls_a_settled_child_back() {
+        let mut registry = BackgroundWorkRegistry::default();
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Running));
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Completed));
+        // A stale server snapshot taken before the completion event.
+        registry.reconcile_live(vec![subagent_item(
+            "ses_child",
+            BackgroundWorkStatus::Starting,
+        )]);
+        assert_eq!(registry.items[&key].status, BackgroundWorkStatus::Completed);
+
+        // A snapshot may still move a status forward…
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Running));
+        registry.reconcile_live(vec![subagent_item(
+            "ses_child",
+            BackgroundWorkStatus::Failed,
+        )]);
+        assert_eq!(registry.items[&key].status, BackgroundWorkStatus::Failed);
+        // …while a settled child is simply absent from a reconcile without
+        // being re-marked: only live work can be Lost.
+        registry.reconcile_live(Vec::new());
+        assert_eq!(registry.items[&key].status, BackgroundWorkStatus::Failed);
+
+        // A live child missing from the server goes Lost and recovers when
+        // the server lists it again.
+        let other = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_other");
+        registry.upsert(subagent_item("ses_other", BackgroundWorkStatus::Running));
+        registry.reconcile_live(Vec::new());
+        assert_eq!(registry.items[&other].status, BackgroundWorkStatus::Lost);
+        registry.reconcile_live(vec![subagent_item(
+            "ses_other",
+            BackgroundWorkStatus::Running,
+        )]);
+        assert_eq!(registry.items[&other].status, BackgroundWorkStatus::Running);
     }
 
     #[test]

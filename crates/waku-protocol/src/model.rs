@@ -20,9 +20,7 @@ pub const OPENCODE_PROVIDER: &str = "opencode";
     tag = "provider"
 )]
 pub enum ProviderResumeCursor {
-    OpenCode {
-        session_id: String,
-    },
+    OpenCode { session_id: String },
 }
 
 impl ProviderResumeCursor {
@@ -1500,6 +1498,52 @@ impl BackgroundWorkStatus {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct BackgroundWorkTranscript {
+    #[serde(default)]
+    pub messages: Vec<Message>,
+    #[serde(default)]
+    pub transcript_blocks: Vec<TranscriptBlock>,
+    #[serde(default)]
+    pub turns: Vec<AgentTurn>,
+}
+
+impl Default for BackgroundWorkTranscript {
+    fn default() -> Self {
+        Self {
+            messages: Vec::new(),
+            transcript_blocks: Vec::new(),
+            turns: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum BackgroundWorkTranscriptEvent {
+    Started {
+        key: BackgroundWorkKey,
+        prompt: Option<String>,
+    },
+    TextDelta {
+        key: BackgroundWorkKey,
+        delta: String,
+    },
+    ReasoningDelta {
+        key: BackgroundWorkKey,
+        delta: String,
+    },
+    Activity {
+        key: BackgroundWorkKey,
+        activity: ActivityItem,
+    },
+    Finished {
+        key: BackgroundWorkKey,
+        success: bool,
+    },
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundWorkKey {
@@ -1592,6 +1636,10 @@ pub enum BackgroundWorkEvent {
     ReconcileLive {
         items: Vec<BackgroundWorkItem>,
     },
+    /// Incremental structured transcript for a detached subagent. This is
+    /// separate from `output`, which remains the compatibility surface for
+    /// terminal-like providers.
+    Transcript(BackgroundWorkTranscriptEvent),
     StopRequested(BackgroundWorkKey),
     StopFailed {
         key: BackgroundWorkKey,

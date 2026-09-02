@@ -21,7 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -35,8 +35,10 @@ use crate::driver::{
     DriverControl, DriverEventSender, DriverEventSink, DriverStartOptions, SessionOptions,
 };
 use crate::model::{
-    ActivityKind, DriverEvent, InteractionMode, PermissionOption, ProviderResumeCursor,
-    RuntimeMode, UserInputAnswer, UserInputOption, UserInputQuestion,
+    ActivityItem, ActivityKind, BackgroundWorkEvent, BackgroundWorkItem, BackgroundWorkKey,
+    BackgroundWorkKind, BackgroundWorkStatus, BackgroundWorkTranscriptEvent, DriverEvent,
+    InteractionMode, PermissionOption, ProviderResumeCursor, RuntimeMode, UserInputAnswer,
+    UserInputOption, UserInputQuestion, unix_time_millis,
 };
 use crate::opencode_pool::PooledServer;
 use crate::opencode_session::{
@@ -101,6 +103,8 @@ pub struct OpenCodeDriver {
     // final process teardown runs on the worker rather than the UI thread.
     server: Option<PooledServer>,
     session_id: String,
+    events: DriverEventSender,
+    background_refresh_generation: Arc<AtomicU64>,
     commands: Sender<CommandMessage>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
     event_stream: Arc<OpenCodeEventStreamControl>,
@@ -133,9 +137,7 @@ impl OpenCodeDriver {
         };
 
         let computer_use = computer_use_enabled
-            .then(|| {
-                super::support::HeadlessComputerUseRuntime::start(events.clone())
-            })
+            .then(|| super::support::HeadlessComputerUseRuntime::start(events.clone()))
             .transpose()?;
         // The one-shot path handed Computer Use to OpenCode through the
         // environment; the resident server takes it exactly the same way.
@@ -390,6 +392,7 @@ impl OpenCodeDriver {
         let stream_port = server.port;
         let stream_session = session_id.clone();
         let stream_events = events.clone();
+        let stream_event_sink = stream_events.clone();
         let stream_commands = commands.clone();
         let stream_turn = turn_active.clone();
         let stream_usage_metadata = usage_metadata;
@@ -417,31 +420,71 @@ impl OpenCodeDriver {
                             let Ok(value) = serde_json::from_str::<Value>(payload.trim()) else {
                                 continue;
                             };
-                            // Another session's traffic must not reach this
-                            // task's transcript — except session lifecycle
-                            // news, which the app needs to keep its sidebar
-                            // in sync with the server's whole session list.
+                            let session = event_session_id(&value);
+                            let is_child = session
+                                .filter(|session| *session != stream_session)
+                                .is_some_and(|session| {
+                                    state.children.get(session).is_some_and(|child| {
+                                        child.item.parent_id.as_deref()
+                                            == Some(stream_session.as_str())
+                                    })
+                                });
+                            if is_child {
+                                handle_child_event(
+                                    &value,
+                                    &stream_session,
+                                    &stream_event_sink,
+                                    &stream_commands,
+                                    mode == RuntimeMode::FullAccess,
+                                    &mut state,
+                                );
+                                continue;
+                            }
+                            // Lifecycle events can announce a new child before
+                            // its session id is otherwise known. Route only
+                            // sessions whose payload explicitly points at this
+                            // foreground session; unrelated runtime traffic is
+                            // discarded.
+                            if matches!(
+                                value.get("type").and_then(Value::as_str),
+                                Some("session.created" | "session.updated")
+                            ) && child_parent_id(&value).as_deref()
+                                == Some(stream_session.as_str())
+                            {
+                                handle_child_event(
+                                    &value,
+                                    &stream_session,
+                                    &stream_event_sink,
+                                    &stream_commands,
+                                    mode == RuntimeMode::FullAccess,
+                                    &mut state,
+                                );
+                                continue;
+                            }
                             let lifecycle = matches!(
                                 value.get("type").and_then(Value::as_str),
                                 Some("session.created" | "session.updated" | "session.deleted")
                             );
-                            let session = value
-                                .pointer("/data/sessionID")
-                                .or_else(|| value.pointer("/properties/sessionID"))
-                                // `form.created` nests the session under the
-                                // form object.
-                                .or_else(|| value.pointer("/data/form/sessionID"))
-                                .and_then(Value::as_str);
-                            if !lifecycle && session.is_some_and(|session| session != stream_session)
-                            {
+                            if session.is_some_and(|session| session != stream_session) {
+                                // Other clients share this server; their
+                                // sessions never touch this transcript, but
+                                // the sidebar still reconciles against the
+                                // server's roster when one appears or goes.
+                                if lifecycle {
+                                    let _ =
+                                        stream_event_sink.send(DriverEvent::NativeSessionsChanged);
+                                }
+                                continue;
+                            }
+                            if !lifecycle && session.is_none() {
                                 continue;
                             }
                             handle_event(
                                 &value,
-                                &stream_events,
+                                &stream_event_sink,
                                 &stream_commands,
                                 &stream_turn,
-                                auto_approve,
+                                mode == RuntimeMode::FullAccess,
                                 &mut state,
                             );
                         }
@@ -449,7 +492,7 @@ impl OpenCodeDriver {
                     Ok(None) => {}
                     Err(error) => {
                         if !stream_control.is_cancelled() {
-                            let _ = stream_events.send(DriverEvent::Error(tr!(
+                            let _ = stream_event_sink.send(DriverEvent::Error(tr!(
                                 "errors.read_provider_event_stream",
                                 provider = "OpenCode",
                                 error = error
@@ -459,7 +502,7 @@ impl OpenCodeDriver {
                 }
                 stream_control.clear();
                 if !stream_control.is_cancelled() {
-                    let _ = stream_events.send(DriverEvent::ProcessExited);
+                    let _ = stream_event_sink.send(DriverEvent::ProcessExited);
                 }
             })?;
 
@@ -647,6 +690,8 @@ impl OpenCodeDriver {
         Ok(Self {
             server: Some(server),
             session_id,
+            events: stream_events,
+            background_refresh_generation: Arc::new(AtomicU64::new(0)),
             commands,
             permissions,
             event_stream,
@@ -661,6 +706,112 @@ impl OpenCodeDriver {
 impl DriverControl for OpenCodeDriver {
     fn prompt(&self, prompt: String) {
         let _ = self.commands.send(CommandMessage::Prompt(prompt));
+    }
+
+    fn refresh_background_work(&self) {
+        let Some(server) = self.server.as_ref() else {
+            return;
+        };
+        let generation = self
+            .background_refresh_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        let port = server.port;
+        let parent_id = self.session_id.clone();
+        let events = self.events.clone();
+        let generation_guard = Arc::clone(&self.background_refresh_generation);
+        let _ = thread::Builder::new()
+            .name("waku-opencode-subagents-refresh".into())
+            .spawn(move || {
+                let path = "/api/session?limit=200";
+                let response = crate::opencode_session::request_json_on_port(
+                    port,
+                    "GET",
+                    path,
+                    None,
+                    Duration::from_secs(10),
+                );
+                if generation_guard.load(Ordering::Acquire) != generation {
+                    return;
+                }
+                // A failed probe is not evidence that the children are gone:
+                // sending an empty reconcile would mark live subagents Lost
+                // until the next poll. Skip this round and keep the
+                // event-driven state.
+                let Some(sessions) = response
+                    .ok()
+                    .and_then(|value| value.get("data").and_then(Value::as_array).cloned())
+                else {
+                    return;
+                };
+                let items = sessions
+                    .into_iter()
+                    .filter_map(|payload| {
+                        let child_id = payload.get("id").and_then(Value::as_str)?;
+                        (payload
+                            .get("parentID")
+                            .or_else(|| payload.get("parentId"))
+                            .and_then(Value::as_str)
+                            == Some(parent_id.as_str()))
+                        .then(|| {
+                            let mut child =
+                                OpenCodeChildSession::new(child_id, &parent_id, &payload);
+                            let status = payload
+                                .pointer("/status/type")
+                                .or_else(|| payload.get("status"))
+                                .and_then(Value::as_str);
+                            child.item.status = match status {
+                                Some("busy" | "running" | "starting") => {
+                                    BackgroundWorkStatus::Running
+                                }
+                                Some("error" | "failed") => BackgroundWorkStatus::Failed,
+                                Some("idle" | "completed" | "success") => {
+                                    BackgroundWorkStatus::Completed
+                                }
+                                _ => BackgroundWorkStatus::Starting,
+                            };
+                            child.item.can_stop = child.item.status.is_stoppable();
+                            child.item
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let _ = events.send(DriverEvent::BackgroundWork(
+                    BackgroundWorkEvent::ReconcileLive { items },
+                ));
+            });
+    }
+
+    fn stop_background_work(&self, key: BackgroundWorkKey, control_id: String) {
+        if key.kind != BackgroundWorkKind::Subagent {
+            return;
+        }
+        let Some(server) = self.server.as_ref() else {
+            return;
+        };
+        let port = server.port;
+        let events = self.events.clone();
+        let _ = thread::Builder::new()
+            .name("waku-opencode-subagent-stop".into())
+            .spawn(move || {
+                let path = format!(
+                    "/api/session/{}/interrupt",
+                    encode_path_segment(&control_id)
+                );
+                if let Err(error) = crate::opencode_session::request_json_on_port(
+                    port,
+                    "POST",
+                    &path,
+                    None,
+                    Duration::from_secs(10),
+                ) {
+                    let _ = events.send(DriverEvent::BackgroundWork(
+                        BackgroundWorkEvent::StopFailed {
+                            key,
+                            message: error.to_string(),
+                        },
+                    ));
+                }
+            });
     }
 
     fn supports_steer(&self) -> bool {
@@ -815,9 +966,47 @@ fn open_event_stream(
 struct OpenCodeStreamState {
     tools: HashMap<String, (ActivityKind, String)>,
     reasoning_parts: HashSet<String>,
+    children: HashMap<String, OpenCodeChildSession>,
     usage_metadata: Arc<OpenCodeUsageMetadata>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
     forms: Arc<Mutex<OpenCodeFormState>>,
+}
+
+struct OpenCodeChildSession {
+    item: BackgroundWorkItem,
+    prompt: Option<String>,
+    tools: HashMap<String, (ActivityKind, String)>,
+    /// When the child's own execution began; the session row can exist
+    /// (and be listed) noticeably earlier.
+    execution_started_at_ms: Option<u64>,
+}
+
+impl OpenCodeChildSession {
+    fn new(session_id: &str, parent_id: &str, payload: &Value) -> Self {
+        let now = unix_time_millis();
+        let prompt = child_prompt(payload);
+        let mut item = BackgroundWorkItem::new(
+            BackgroundWorkKind::Subagent,
+            session_id,
+            child_title(payload).unwrap_or_else(|| tr!("background.subagent")),
+            BackgroundWorkStatus::Starting,
+        );
+        item.background = true;
+        item.can_stop = true;
+        item.control_id = Some(session_id.to_owned());
+        item.parent_id = Some(parent_id.to_owned());
+        item.started_at_ms = now;
+        item.updated_at_ms = now;
+        item.role = child_role(payload);
+        item.model = child_model(payload);
+        item.command = prompt.clone();
+        Self {
+            item,
+            prompt,
+            tools: HashMap::new(),
+            execution_started_at_ms: None,
+        }
+    }
 }
 
 /// Pending question forms and whether they were already announced.
@@ -976,6 +1165,373 @@ fn latest_opencode_usage_message(messages: &Value) -> Option<&Value> {
     })
 }
 
+fn event_payload(value: &Value) -> &Value {
+    value
+        .get("data")
+        .or_else(|| value.get("properties"))
+        .unwrap_or(&Value::Null)
+}
+
+fn event_session_id(value: &Value) -> Option<&str> {
+    let payload = event_payload(value);
+    payload
+        .get("sessionID")
+        .or_else(|| payload.get("sessionId"))
+        .and_then(Value::as_str)
+        .or_else(|| payload.pointer("/session/id").and_then(Value::as_str))
+        .or_else(|| {
+            payload
+                .pointer("/session/sessionID")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| payload.pointer("/info/id").and_then(Value::as_str))
+        .or_else(|| {
+            payload.get("id").and_then(Value::as_str).filter(|_| {
+                matches!(
+                    value.get("type").and_then(Value::as_str),
+                    Some("session.created" | "session.updated" | "session.deleted")
+                )
+            })
+        })
+        .or_else(|| payload.pointer("/form/sessionID").and_then(Value::as_str))
+}
+
+fn child_session_value(payload: &Value) -> &Value {
+    payload
+        .get("session")
+        .or_else(|| payload.get("info"))
+        .unwrap_or(payload)
+}
+
+fn child_parent_id(value: &Value) -> Option<String> {
+    let payload = event_payload(value);
+    let session = child_session_value(payload);
+    session
+        .get("parentID")
+        .or_else(|| session.get("parentId"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn child_prompt(payload: &Value) -> Option<String> {
+    let session = child_session_value(payload);
+    [
+        session.get("prompt"),
+        session.pointer("/prompt/text"),
+        session.get("text"),
+        session.pointer("/message/text"),
+        session.pointer("/info/prompt"),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(Value::as_str)
+    .map(str::trim)
+    .find(|text| !text.is_empty())
+    .map(str::to_owned)
+}
+
+fn child_title(payload: &Value) -> Option<String> {
+    let session = child_session_value(payload);
+    session
+        .get("title")
+        .or_else(|| session.pointer("/info/title"))
+        .or_else(|| session.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_owned)
+}
+
+fn child_role(payload: &Value) -> Option<String> {
+    let session = child_session_value(payload);
+    session
+        .get("agent")
+        .or_else(|| session.get("role"))
+        .or_else(|| session.pointer("/info/agent"))
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn child_model(payload: &Value) -> Option<String> {
+    let session = child_session_value(payload);
+    let model = session
+        .get("model")
+        .or_else(|| session.pointer("/info/model"))?;
+    if let Some(model) = model.as_str() {
+        return Some(model.to_owned());
+    }
+    let provider = model.get("providerID").and_then(Value::as_str)?;
+    let id = model.get("id").and_then(Value::as_str)?;
+    Some(format!("{provider}/{id}"))
+}
+
+fn child_activity_event(
+    key: &BackgroundWorkKey,
+    activity: ActivityItem,
+    events: &impl DriverEventSink,
+) {
+    let _ = events.send(DriverEvent::BackgroundWork(
+        BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Activity {
+            key: key.clone(),
+            activity,
+        }),
+    ));
+}
+
+fn child_update(
+    child: &mut OpenCodeChildSession,
+    events: &impl DriverEventSink,
+    status: Option<BackgroundWorkStatus>,
+    detail: Option<String>,
+) {
+    if let Some(status) = status {
+        child.item.status = status;
+        child.item.can_stop = status.is_stoppable();
+    }
+    if detail.is_some() {
+        child.item.detail = detail;
+    }
+    child.item.updated_at_ms = unix_time_millis();
+    let _ = events.send(DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(
+        child.item.clone(),
+    )));
+}
+
+fn handle_child_event(
+    value: &Value,
+    parent_id: &str,
+    events: &impl DriverEventSink,
+    commands: &Sender<CommandMessage>,
+    auto_approve: bool,
+    state: &mut OpenCodeStreamState,
+) {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let payload = event_payload(value);
+    let Some(session_id) = event_session_id(value).map(str::to_owned) else {
+        return;
+    };
+    if kind == "session.deleted" {
+        // Remove the entry before settling it: late deltas and a replayed
+        // `execution.started` must not revive a deleted child.
+        if let Some(mut child) = state.children.remove(&session_id) {
+            child_update(
+                &mut child,
+                events,
+                Some(BackgroundWorkStatus::Stopped),
+                Some(tr!("background.child_deleted")),
+            );
+            let _ = events.send(DriverEvent::BackgroundWork(
+                BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
+                    key: child.item.key.clone(),
+                    success: false,
+                }),
+            ));
+        }
+        return;
+    }
+    if kind == "session.created" {
+        if child_parent_id(value).as_deref() != Some(parent_id) {
+            return;
+        }
+        let child = state
+            .children
+            .entry(session_id.clone())
+            .or_insert_with(|| OpenCodeChildSession::new(&session_id, parent_id, payload));
+        child.prompt = child.prompt.clone().or_else(|| child_prompt(payload));
+        if let Some(title) = child_title(payload) {
+            child.item.title = title;
+        }
+        child.item.role = child.item.role.clone().or_else(|| child_role(payload));
+        child.item.model = child.item.model.clone().or_else(|| child_model(payload));
+        child.item.command = child.item.command.clone().or_else(|| child.prompt.clone());
+        let key = child.item.key.clone();
+        let prompt = child.prompt.clone();
+        child_update(child, events, None, None);
+        let _ = events.send(DriverEvent::BackgroundWork(
+            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Started { key, prompt }),
+        ));
+        return;
+    }
+
+    let Some(child) = state.children.get_mut(&session_id) else {
+        return;
+    };
+    // A settled child's stragglers on the event stream must not reopen its
+    // transcript; only metadata updates still apply.
+    if !child.item.status.is_live() && kind != "session.updated" {
+        return;
+    }
+    let key = child.item.key.clone();
+    match kind {
+        "session.updated" => {
+            if let Some(title) = child_title(payload) {
+                child.item.title = title;
+            }
+            child.item.role = child_role(payload).or_else(|| child.item.role.clone());
+            child.item.model = child_model(payload).or_else(|| child.item.model.clone());
+            child_update(child, events, None, None);
+        }
+        "session.execution.started" => {
+            child.execution_started_at_ms = Some(unix_time_millis());
+            child_update(child, events, Some(BackgroundWorkStatus::Running), None);
+            let _ = events.send(DriverEvent::BackgroundWork(
+                BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Started {
+                    key,
+                    prompt: child.prompt.clone(),
+                }),
+            ));
+        }
+        "session.text.delta" => {
+            if let Some(delta) = payload
+                .get("delta")
+                .and_then(Value::as_str)
+                .filter(|d| !d.is_empty())
+            {
+                let _ = events.send(DriverEvent::BackgroundWork(
+                    BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::TextDelta {
+                        key,
+                        delta: delta.to_owned(),
+                    }),
+                ));
+            }
+        }
+        "session.reasoning.delta" => {
+            if let Some(delta) = payload
+                .get("delta")
+                .and_then(Value::as_str)
+                .filter(|d| !d.is_empty())
+            {
+                let _ = events.send(DriverEvent::BackgroundWork(
+                    BackgroundWorkEvent::Transcript(
+                        BackgroundWorkTranscriptEvent::ReasoningDelta {
+                            key,
+                            delta: delta.to_owned(),
+                        },
+                    ),
+                ));
+            }
+        }
+        "session.tool.input.started" => {
+            if let (Some(id), Some(name)) = (
+                payload.get("id").and_then(Value::as_str),
+                payload.get("name").and_then(Value::as_str),
+            ) {
+                child.tools.insert(
+                    id.to_owned(),
+                    (super::support::classify_tool(name), name.to_owned()),
+                );
+            }
+        }
+        "session.tool.called" => {
+            if let Some(id) = payload.get("id").and_then(Value::as_str) {
+                let stored = child.tools.get(id).cloned();
+                let activity_kind = stored
+                    .as_ref()
+                    .map(|(kind, _)| *kind)
+                    .unwrap_or(ActivityKind::Tool);
+                let title = stored
+                    .map(|(_, title)| title)
+                    .unwrap_or_else(|| tr!("activity.tool"));
+                let arguments = payload.get("input");
+                let item = activity::tool_activity(
+                    Some(id.to_owned()),
+                    activity_kind,
+                    activity::input_title(arguments).unwrap_or(title),
+                    arguments,
+                    None,
+                    payload.get("input"),
+                    false,
+                    false,
+                );
+                child_activity_event(&key, item, events);
+            }
+        }
+        "session.tool.success" | "session.tool.error" | "session.tool.failed" => {
+            if let Some(id) = payload.get("id").and_then(Value::as_str) {
+                let failed = kind != "session.tool.success";
+                let stored = child.tools.remove(id);
+                let activity_kind = stored
+                    .as_ref()
+                    .map(|(kind, _)| *kind)
+                    .unwrap_or(ActivityKind::Tool);
+                let title = stored
+                    .map(|(_, title)| title)
+                    .unwrap_or_else(|| tr!("activity.tool"));
+                let output = failed
+                    .then(|| payload.pointer("/error").unwrap_or(&Value::Null).clone())
+                    .filter(|value| !value.is_null())
+                    .or_else(|| payload.get("content").cloned());
+                let item = activity::tool_activity(
+                    Some(id.to_owned()),
+                    activity_kind,
+                    title,
+                    payload.get("input"),
+                    output.as_ref(),
+                    Some(payload),
+                    failed,
+                    true,
+                );
+                child_activity_event(&key, item, events);
+            }
+        }
+        "session.execution.succeeded" | "session.execution.failed" => {
+            let success = kind.ends_with("succeeded");
+            let detail = (!success)
+                .then(|| {
+                    payload
+                        .pointer("/error/message")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .flatten();
+            child.item.duration_ms = Some(
+                unix_time_millis().saturating_sub(
+                    child
+                        .execution_started_at_ms
+                        .unwrap_or(child.item.started_at_ms),
+                ),
+            );
+            child_update(
+                child,
+                events,
+                Some(if success {
+                    BackgroundWorkStatus::Completed
+                } else {
+                    BackgroundWorkStatus::Failed
+                }),
+                detail,
+            );
+            let _ = events.send(DriverEvent::BackgroundWork(
+                BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
+                    key,
+                    success,
+                }),
+            ));
+        }
+        // A subagent can request permissions or ask the user questions
+        // exactly like the foreground session; the request ids are global,
+        // so the parent's reply plumbing answers them unchanged. Without
+        // this passthrough the child would stall on a prompt nobody sees.
+        _ if kind.starts_with("permission.") => {
+            request_permission(payload, events, commands, auto_approve, &state.permissions);
+        }
+        "form.created" => {
+            let _ = request_user_input_from_form(payload, &state.forms, events);
+        }
+        "form.replied" | "form.cancelled" => {
+            let form = payload.get("form").unwrap_or(payload);
+            if let Some(id) = form.get("id").and_then(Value::as_str) {
+                let mut forms = state.forms.lock();
+                forms.fields.remove(id);
+                forms.announced.remove(id);
+            }
+        }
+        _ => {}
+    }
+}
 fn handle_event(
     value: &Value,
     events: &impl DriverEventSink,
@@ -1114,13 +1670,7 @@ fn handle_event(
             tool_finished(payload, events, state, true);
         }
         _ if kind.starts_with("permission.") => {
-            request_permission(
-                payload,
-                events,
-                commands,
-                auto_approve,
-                &state.permissions,
-            );
+            request_permission(payload, events, commands, auto_approve, &state.permissions);
         }
         "question.asked" | "question.v2.asked" => request_user_input(payload, events),
         "question.replied"
@@ -1557,6 +2107,335 @@ mod tests {
     }
 
     #[test]
+    fn child_session_events_stream_as_background_work_without_finishing_parent() {
+        let (events, event_rx, _commands, _command_rx, turn, mut state) = harness();
+        let parent = "ses_parent";
+        let created = json!({
+            "type": "session.created",
+            "data": {"session": {"id": "ses_child", "parentID": parent, "title": "Research", "agent": "explore", "prompt": "Inspect the repository"}}
+        });
+        handle_child_event(&created, parent, &events, &_commands, false, &mut state);
+        handle_child_event(
+            &json!({"type":"session.execution.started","data":{"sessionID":"ses_child"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type":"session.reasoning.delta","data":{"sessionID":"ses_child","delta":"thinking"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type":"session.text.delta","data":{"sessionID":"ses_child","delta":"answer"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type":"session.tool.input.started","data":{"sessionID":"ses_child","id":"call_1","name":"read"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type":"session.tool.called","data":{"sessionID":"ses_child","id":"call_1","input":{"filePath":"README.md"}}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type":"session.tool.success","data":{"sessionID":"ses_child","id":"call_1","content":[{"type":"text","text":"ok"}]}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type":"session.execution.succeeded","data":{"sessionID":"ses_child"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+
+        let seen = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(
+            matches!(seen.first(), Some(DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))) if item.key.provider_id == "ses_child" && item.status == BackgroundWorkStatus::Starting)
+        );
+        assert!(seen.iter().any(|event| matches!(event, DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)) if item.status == BackgroundWorkStatus::Running)));
+        assert!(seen.iter().any(|event| matches!(event, DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::ReasoningDelta { delta, .. })) if delta == "thinking")));
+        assert!(seen.iter().any(|event| matches!(event, DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::TextDelta { delta, .. })) if delta == "answer")));
+        assert!(seen.iter().any(|event| matches!(event, DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Activity { activity, .. })) if activity.complete)));
+        assert!(seen.iter().any(|event| matches!(event, DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)) if item.status == BackgroundWorkStatus::Completed)));
+        assert!(seen.iter().any(|event| matches!(
+            event,
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(
+                BackgroundWorkTranscriptEvent::Finished { success: true, .. }
+            ))
+        )));
+        assert!(
+            *turn.lock(),
+            "child execution must not settle the foreground turn"
+        );
+    }
+
+    #[test]
+    fn settled_children_ignore_late_stream_events_but_keep_metadata() {
+        let (events, event_rx, _commands, _command_rx, _turn, mut state) = harness();
+        let parent = "ses_parent";
+        handle_child_event(
+            &json!({
+                "type": "session.created",
+                "data": {"session": {"id": "ses_child", "parentID": parent, "title": "Research"}}
+            }),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        while event_rx.try_recv().is_ok() {}
+
+        // Deltas after the settlement are dropped, and a duplicate execution
+        // event cannot finish the child a second time.
+        handle_child_event(
+            &json!({"type": "session.text.delta", "data": {"sessionID": "ses_child", "delta": "late"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.tool.called", "data": {"sessionID": "ses_child", "id": "call_1"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        assert!(event_rx.try_recv().is_err(), "settled children are quiet");
+
+        // A rename still applies, carrying the settled status with it.
+        handle_child_event(
+            &json!({
+                "type": "session.updated",
+                "data": {"session": {"id": "ses_child", "parentID": parent, "title": "Research notes"}}
+            }),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        let DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)) =
+            event_rx.try_recv().unwrap()
+        else {
+            panic!("the rename must still reach the panel");
+        };
+        assert_eq!(item.title, "Research notes");
+        assert_eq!(item.status, BackgroundWorkStatus::Completed);
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn child_created_twice_keeps_its_title_and_deleted_children_cannot_revive() {
+        let (events, event_rx, _commands, _command_rx, _turn, mut state) = harness();
+        let parent = "ses_parent";
+        let created = json!({
+            "type": "session.created",
+            "data": {"session": {"id": "ses_child", "parentID": parent, "title": "Research"}}
+        });
+        handle_child_event(&created, parent, &events, &_commands, false, &mut state);
+        handle_child_event(&created, parent, &events, &_commands, false, &mut state);
+        handle_child_event(
+            &json!({"type": "session.deleted", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        // Everything after the deletion must be dropped for the removed
+        // child: late deltas, a replayed execution start, even an update.
+        handle_child_event(
+            &json!({"type": "session.text.delta", "data": {"sessionID": "ses_child", "delta": "late"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({
+                "type": "session.updated",
+                "data": {"session": {"id": "ses_child", "parentID": parent, "title": "Zombie"}}
+            }),
+            parent,
+            &events,
+            &_commands,
+            false,
+            &mut state,
+        );
+
+        assert!(
+            state.children.is_empty(),
+            "a deleted child must leave the routing table"
+        );
+        let seen = event_rx.try_iter().collect::<Vec<_>>();
+        // One Finished from the deletion, and it is the last word: no event
+        // after it may reopen the transcript or flip the status back.
+        assert_eq!(
+            seen.iter()
+                .filter(|event| matches!(
+                    event,
+                    DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(
+                        BackgroundWorkTranscriptEvent::Finished { .. }
+                    ))
+                ))
+                .count(),
+            1
+        );
+        assert!(matches!(
+            seen.last(),
+            Some(DriverEvent::BackgroundWork(
+                BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
+                    success: false,
+                    ..
+                })
+            ))
+        ));
+        assert!(
+            !seen.iter().any(|event| matches!(
+                event,
+                DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
+                    if item.status == BackgroundWorkStatus::Running
+            )),
+            "late events must not mark the deleted child running again"
+        );
+        let stopped = seen
+            .iter()
+            .find_map(|event| match event {
+                DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
+                    if item.status == BackgroundWorkStatus::Stopped =>
+                {
+                    Some(item.title.clone())
+                }
+                _ => None,
+            })
+            .expect("the deletion must settle the child as stopped");
+        assert_eq!(stopped, "Research");
+    }
+
+    #[test]
+    fn child_permission_requests_surface_like_foreground_ones() {
+        let (events, event_rx, commands, command_rx, _turn, mut state) = harness();
+        handle_child_event(
+            &json!({
+                "type": "session.created",
+                "data": {"session": {"id": "ses_child", "parentID": "ses_parent", "title": "Research"}}
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        while event_rx.try_recv().is_ok() {}
+
+        // Supervised mode: a subagent's permission ask must reach the user
+        // through the same request plumbing as the foreground session's.
+        handle_child_event(
+            &json!({
+                "type": "permission.requested",
+                "data": {
+                    "id": "per_child",
+                    "sessionID": "ses_child",
+                    "permission": "bash",
+                    "patterns": ["rm -rf /tmp/waku-cache"]
+                }
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        let DriverEvent::Permission { request_id, .. } = event_rx.try_recv().unwrap() else {
+            panic!("a child permission ask must surface to the user");
+        };
+        assert_eq!(request_id, "per_child");
+        assert!(
+            command_rx.try_recv().is_err(),
+            "supervised asks wait for the user instead of auto-approving"
+        );
+
+        // Auto mode: the same ask is answered one-shot without prompting.
+        handle_child_event(
+            &json!({
+                "type": "permission.requested",
+                "data": {"id": "per_child_2", "sessionID": "ses_child", "permission": "bash"}
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            true,
+            &mut state,
+        );
+        let Ok(CommandMessage::Respond { request_id, .. }) = command_rx.try_recv() else {
+            panic!("auto mode must answer a child permission ask");
+        };
+        assert_eq!(request_id, "per_child_2");
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
     fn question_events_preserve_multiple_selection_and_option_copy() {
         let (events, event_rx) = unbounded();
         request_user_input(
@@ -1659,8 +2538,7 @@ mod tests {
                 }]
             }
         });
-        request_user_input_from_form(&form, &forms, &events)
-            .expect("the first sight must ask");
+        request_user_input_from_form(&form, &forms, &events).expect("the first sight must ask");
         assert!(
             request_user_input_from_form(&form, &forms, &events).is_none(),
             "the poll and the event must not ask twice"
@@ -1709,10 +2587,7 @@ mod tests {
                 answers: vec!["Red".into(), "Green".into()],
             },
         ];
-        let shapes = vec![
-            ("q0".to_owned(), true),
-            ("q1".to_owned(), false),
-        ];
+        let shapes = vec![("q0".to_owned(), true), ("q1".to_owned(), false)];
         assert_eq!(
             form_reply_answer(&shapes, &answers),
             json!({"q0": ["Blue"], "q1": ["Red", "Green"]})
@@ -1892,7 +2767,11 @@ mod tests {
                 _ => {}
             }
         }
-        assert_eq!(finished, Some(true), "the turn should settle after the reply");
+        assert_eq!(
+            finished,
+            Some(true),
+            "the turn should settle after the reply"
+        );
     }
 
     /// Proves steering through the actual driver: the message injected while

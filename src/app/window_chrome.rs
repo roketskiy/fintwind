@@ -161,20 +161,31 @@ impl Waku {
                 client_window_button(button, enabled, is_maximized, theme, cx)
             });
 
-            Some(
-                div()
-                    .id(side_id)
-                    .tab_group()
-                    .tab_stop(false)
-                    .h_full()
-                    .flex_none()
-                    .px(px(10.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .children(controls)
-                    .into_any_element(),
-            )
+            #[cfg(target_os = "windows")]
+            let controls = div()
+                .id(side_id)
+                .tab_group()
+                .tab_stop(false)
+                .h_full()
+                .flex_none()
+                .flex()
+                .items_center()
+                .children(controls);
+
+            #[cfg(target_os = "linux")]
+            let controls = div()
+                .id(side_id)
+                .tab_group()
+                .tab_stop(false)
+                .h_full()
+                .flex_none()
+                .px(px(10.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .children(controls);
+
+            Some(controls.into_any_element())
         }
 
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
@@ -233,16 +244,33 @@ fn client_window_button(
         WindowButton::Close => WindowControlArea::Close,
     });
 
-    control
-        .track_focus(&focus)
-        .tab_index(0)
-        .tab_stop(true)
+    #[cfg(target_os = "windows")]
+    let control = control
+        .w(px(46.0))
+        .h(px(32.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center();
+
+    #[cfg(target_os = "linux")]
+    let control = control
         .size(px(26.0))
         .flex_none()
         .rounded_full()
         .flex()
         .items_center()
-        .justify_center()
+        .justify_center();
+
+    #[cfg(target_os = "windows")]
+    let icon_size = 12.0;
+    #[cfg(target_os = "linux")]
+    let icon_size = 14.0;
+
+    control
+        .track_focus(&focus)
+        .tab_index(0)
+        .tab_stop(true)
         .cursor_default()
         .opacity(if enabled { 1.0 } else { 0.45 })
         .focus_visible(|style| style.border_1().border_color(theme.accent))
@@ -258,7 +286,7 @@ fn client_window_button(
                 .active(|style| style.bg(theme.overlay_strong))
         })
         .tooltip(Tooltip::text(label))
-        .child(icon(icon_path, 14.0, icon_color))
+        .child(icon(icon_path, icon_size, icon_color))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, cx| {
             cx.stop_propagation();

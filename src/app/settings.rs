@@ -162,14 +162,14 @@ impl Waku {
                         "settings-tab-{}",
                         label.to_lowercase()
                     )))
-                    .h(px(36.0))
+                    .h(px(38.0))
                     .px(px(11.0))
                     .rounded(px(8.0))
                     .flex()
                     .items_center()
                     .gap(px(10.0))
                     .cursor_default()
-                    .text_size(px(13.0))
+                    .text_size(px(13.5))
                     .text_color(if selected {
                         theme.text
                     } else {
@@ -182,7 +182,7 @@ impl Waku {
                     .active(|element| element.bg(theme.sidebar_item_background))
                     .child(icon(
                         icon_path,
-                        15.0,
+                        16.0,
                         if selected {
                             theme.text_secondary
                         } else {
@@ -224,18 +224,18 @@ impl Waku {
                 div().px(px(12.0)).child(
                     div()
                         .id("settings-back")
-                        .h(px(34.0))
+                        .h(px(36.0))
                         .px(px(9.0))
                         .rounded(px(8.0))
                         .flex()
                         .items_center()
                         .gap(px(9.0))
                         .cursor_default()
-                        .text_size(px(13.0))
+                        .text_size(px(13.5))
                         .text_color(theme.text_secondary)
                         .hover(|element| element.bg(theme.overlay))
                         .active(|element| element.bg(theme.overlay_strong))
-                        .child(icon("icons/arrow-left.svg", 15.0, theme.text_tertiary))
+                        .child(icon("icons/arrow-left.svg", 16.0, theme.text_tertiary))
                         .child(tr!("settings.back"))
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.settings_page = None;
@@ -360,16 +360,11 @@ impl Waku {
                         .justify_end()
                         .child(controls)
                 }))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_h_0()
-                        .child(match page {
-                            SettingsPage::Skills => self.render_skills_settings(cx),
-                            SettingsPage::McpServers => self.render_mcp_page(cx),
-                            _ => self.render_providers_page(cx),
-                        }),
-                );
+                .child(div().flex_1().min_h_0().child(match page {
+                    SettingsPage::Skills => self.render_skills_settings(cx),
+                    SettingsPage::McpServers => self.render_mcp_page(cx),
+                    _ => self.render_providers_page(cx),
+                }));
         }
         // The titlebar strip is transparent; once content slides under it, a
         // hairline marks the boundary so the clip edge reads as a header
@@ -635,16 +630,16 @@ impl Waku {
         let apply_button = div()
             .id("apply-daemon-settings")
             .tab_index(0)
-            .h(px(29.0))
-            .px(px(11.0))
-            .rounded(px(7.0))
+            .h(px(32.0))
+            .px(px(13.0))
+            .rounded(px(8.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
             .items_center()
             .justify_center()
             .cursor_default()
-            .text_size(px(10.5))
+            .text_size(px(12.0))
             .text_color(theme.text_secondary)
             .opacity(if apply_disabled { 0.55 } else { 1.0 })
             .focus_visible(|style| style.border_color(theme.accent))
@@ -675,16 +670,16 @@ impl Waku {
         let copy_url_button = div()
             .id("copy-daemon-url")
             .tab_index(0)
-            .h(px(27.0))
-            .px(px(9.0))
-            .rounded(px(6.0))
+            .h(px(30.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
             .items_center()
-            .gap(px(5.0))
+            .gap(px(6.0))
             .cursor_default()
-            .text_size(px(10.5))
+            .text_size(px(12.0))
             .text_color(theme.text_secondary)
             .focus_visible(|style| style.border_color(theme.accent))
             .hover(|element| element.bg(theme.overlay))
@@ -724,8 +719,8 @@ impl Waku {
         let reveal_token_button = div()
             .id("reveal-daemon-token")
             .tab_index(0)
-            .size(px(27.0))
-            .rounded(px(6.0))
+            .size(px(30.0))
+            .rounded(px(7.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
@@ -742,7 +737,7 @@ impl Waku {
                 } else {
                     "icons/eye.svg"
                 },
-                12.0,
+                13.5,
                 theme.text_tertiary,
             ))
             .tooltip(Tooltip::text(if token_revealed {
@@ -766,16 +761,16 @@ impl Waku {
         let copy_token_button = div()
             .id("copy-daemon-token")
             .tab_index(0)
-            .h(px(27.0))
-            .px(px(9.0))
-            .rounded(px(6.0))
+            .h(px(30.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
             .items_center()
-            .gap(px(5.0))
+            .gap(px(6.0))
             .cursor_default()
-            .text_size(px(10.5))
+            .text_size(px(12.0))
             .text_color(theme.text_secondary)
             .focus_visible(|style| style.border_color(theme.accent))
             .hover(|element| element.bg(theme.overlay))
@@ -810,15 +805,15 @@ impl Waku {
         let regenerate_button = div()
             .id("regenerate-daemon-token")
             .tab_index(0)
-            .h(px(27.0))
-            .px(px(9.0))
-            .rounded(px(6.0))
+            .h(px(30.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
             .items_center()
             .cursor_default()
-            .text_size(px(10.5))
+            .text_size(px(12.0))
             .text_color(theme.text_secondary)
             .opacity(if pending { 0.55 } else { 1.0 })
             .focus_visible(|style| style.border_color(theme.accent))
@@ -1462,15 +1457,15 @@ impl Waku {
                         .child(
                             div()
                                 .id(SharedString::from(format!("revoke-computer-app-{key}")))
-                                .h(px(25.0))
-                                .px(px(9.0))
-                                .rounded(px(6.0))
+                                .h(px(30.0))
+                                .px(px(10.0))
+                                .rounded(px(7.0))
                                 .border_1()
                                 .border_color(theme.border_strong)
                                 .flex()
                                 .items_center()
                                 .cursor_default()
-                                .text_size(px(10.5))
+                                .text_size(px(12.0))
                                 .text_color(theme.text_secondary)
                                 .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
                                 .child(tr!("common.revoke"))
@@ -1569,16 +1564,16 @@ impl Waku {
                         div().mt(px(11.0)).flex().items_center().gap(px(8.0)).child(
                             div()
                                 .id("recheck-computer-permissions")
-                                .h(px(28.0))
-                                .px(px(11.0))
-                                .rounded(px(7.0))
+                                .h(px(32.0))
+                                .px(px(13.0))
+                                .rounded(px(8.0))
                                 .border_1()
                                 .border_color(theme.border_strong)
                                 .text_color(theme.text_secondary)
                                 .flex()
                                 .items_center()
                                 .cursor_default()
-                                .text_size(px(10.5))
+                                .text_size(px(12.0))
                                 .opacity(if pending { 0.6 } else { 1.0 })
                                 .child(if pending {
                                     tr!("common.checking")
@@ -1824,29 +1819,29 @@ fn permission_status_row(
     let status = if granted {
         div()
             .id(id)
-            .h(px(25.0))
-            .px(px(4.0))
-            .rounded(px(6.0))
+            .h(px(28.0))
+            .px(px(5.0))
+            .rounded(px(7.0))
             .flex()
             .items_center()
             .gap(px(5.0))
             .cursor_default()
-            .text_size(px(10.0))
+            .text_size(px(10.5))
             .text_color(theme.success)
-            .child(icon("icons/check.svg", 12.0, theme.success))
+            .child(icon("icons/check.svg", 13.0, theme.success))
             .child(tr!("computer_use.access_granted"))
     } else {
         div()
             .id(id)
-            .h(px(25.0))
-            .px(px(9.0))
-            .rounded(px(6.0))
+            .h(px(30.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
             .items_center()
             .cursor_default()
-            .text_size(px(10.0))
+            .text_size(px(12.0))
             .text_color(theme.text_secondary)
             .hover(|element| element.bg(theme.overlay).text_color(theme.text))
             .child(tr!("computer_use.grant_access"))

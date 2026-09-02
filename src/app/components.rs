@@ -225,8 +225,8 @@ fn render_message_footer(
         .child(format_message_time(footer_time));
     let copy_button = div()
         .id(SharedString::from(format!("copy-message-{message_id}")))
-        .w(px(27.0))
-        .h(px(27.0))
+        .w(px(30.0))
+        .h(px(30.0))
         .rounded(px(8.0))
         .flex()
         .items_center()
@@ -239,7 +239,7 @@ fn render_message_footer(
             } else {
                 "icons/copy.svg"
             },
-            14.0,
+            15.0,
             footer_color,
         ))
         .tooltip(Tooltip::text(if copied {
@@ -271,14 +271,14 @@ fn render_message_footer(
         if let Some(action) = assistant_message_action {
             let fork_waku = waku.clone();
             let fork_icon = if action.preparing {
-                motion::spin(icon("icons/loader-circle.svg", 14.0, footer_color))
+                motion::spin(icon("icons/loader-circle.svg", 15.0, footer_color))
             } else {
-                icon("icons/fork.svg", 14.0, footer_color).into_any_element()
+                icon("icons/fork.svg", 15.0, footer_color).into_any_element()
             };
             let fork_button = div()
                 .id(SharedString::from(format!("fork-response-{message_id}")))
-                .w(px(27.0))
-                .h(px(27.0))
+                .w(px(30.0))
+                .h(px(30.0))
                 .rounded(px(8.0))
                 .flex()
                 .items_center()
@@ -615,15 +615,15 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                                         .id(SharedString::from(format!(
                                             "cancel-message-edit-{message_id}"
                                         )))
-                                        .h(px(26.0))
-                                        .px(px(10.0))
+                                        .h(px(30.0))
+                                        .px(px(11.0))
                                         .rounded(px(7.0))
                                         .border_1()
                                         .border_color(theme.border)
                                         .bg(theme.overlay)
                                         .flex()
                                         .items_center()
-                                        .text_size(px(11.5))
+                                        .text_size(px(12.5))
                                         .text_color(theme.text_secondary)
                                         .cursor_default()
                                         .hover(|element| element.bg(theme.overlay_strong))
@@ -639,8 +639,8 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                                         .id(SharedString::from(format!(
                                             "submit-message-edit-{message_id}"
                                         )))
-                                        .h(px(26.0))
-                                        .px(px(11.0))
+                                        .h(px(30.0))
+                                        .px(px(12.0))
                                         .rounded(px(7.0))
                                         .bg(if can_submit {
                                             theme.inverse
@@ -649,7 +649,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                                         })
                                         .flex()
                                         .items_center()
-                                        .text_size(px(11.5))
+                                        .text_size(px(12.5))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(if can_submit {
                                             theme.on_inverse

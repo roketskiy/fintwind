@@ -183,7 +183,11 @@ impl Waku {
         // asks when the thumb is let go: did the reader come to rest on the
         // tail?
         let scrollbar_dragging = self.transcript_scrollbar.is_grabbed();
-        if self.transcript_scrollbar_dragging.replace(scrollbar_dragging) != scrollbar_dragging {
+        if self
+            .transcript_scrollbar_dragging
+            .replace(scrollbar_dragging)
+            != scrollbar_dragging
+        {
             if scrollbar_dragging {
                 self.transcript_anchor_following.set(false);
                 self.transcript_is_scrolled.set(true);
@@ -259,7 +263,7 @@ impl Waku {
                         .id("transcript-scroll-to-bottom")
                         .track_focus(&focus)
                         .tab_index(0)
-                        .size(px(32.0))
+                        .size(px(34.0))
                         .rounded_full()
                         .border_1()
                         .border_color(theme.border_strong)
@@ -272,7 +276,7 @@ impl Waku {
                         .focus_visible(|style| style.border_color(theme.accent))
                         .hover(|style| style.bg(theme.raised))
                         .active(|style| style.bg(theme.overlay_strong))
-                        .child(icon("icons/arrow-down.svg", 16.0, theme.text))
+                        .child(icon("icons/arrow-down.svg", 17.0, theme.text))
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.scroll_transcript_to_bottom(cx);
                             cx.stop_propagation();
@@ -888,9 +892,9 @@ impl Waku {
             .id(SharedString::from(id))
             .track_focus(&focus)
             .tab_index(0)
-            .size(px(20.0))
+            .size(px(24.0))
             .flex_none()
-            .rounded(px(5.0))
+            .rounded(px(6.0))
             .flex()
             .items_center()
             .justify_center()
@@ -899,7 +903,7 @@ impl Waku {
             .hover(|button| button.bg(theme.overlay_strong))
             .child(icon(
                 "icons/file-bottom-left-arrow.svg",
-                14.0,
+                15.0,
                 theme.text_ghost,
             ))
             .tooltip(Tooltip::text(tr!("activity.open_file")))
@@ -1404,22 +1408,22 @@ impl Waku {
             )))
             .track_focus(&review_focus)
             .tab_index(0)
-            .h(px(28.0))
-            .px(px(10.0))
-            .rounded(px(7.0))
+            .h(px(32.0))
+            .px(px(11.0))
+            .rounded(px(8.0))
             .border_1()
             .border_color(theme.border_strong)
             .flex()
             .items_center()
-            .gap(px(5.0))
+            .gap(px(6.0))
             .cursor_default()
-            .text_size(px(11.5))
+            .text_size(px(12.5))
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_secondary)
             .focus_visible(|style| style.border_color(theme.accent))
             .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
             .active(|style| style.bg(theme.overlay))
-            .child(icon("icons/file-diff.svg", 12.0, theme.text_tertiary))
+            .child(icon("icons/file-diff.svg", 13.0, theme.text_tertiary))
             .child(tr_cow!("transcript.review_changes"))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.open_turn_diff(turn_id, cx);
@@ -1569,7 +1573,7 @@ impl Waku {
                     )))
                     .track_focus(&toggle_focus)
                     .tab_index(0)
-                    .h(px(34.0))
+                    .h(px(36.0))
                     .px(px(12.0))
                     .border_t_1()
                     .border_color(theme.border)
@@ -1577,7 +1581,7 @@ impl Waku {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_default()
-                    .text_size(px(11.5))
+                    .text_size(px(12.5))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_secondary)
                     .focus_visible(|style| style.bg(theme.overlay_strong))
@@ -1605,7 +1609,7 @@ impl Waku {
                         } else {
                             "icons/chevron-right.svg"
                         },
-                        11.0,
+                        12.0,
                         theme.text_tertiary,
                     ))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1638,7 +1642,7 @@ impl Waku {
             .unwrap_or_else(|| tr!("transcript.worked"));
         div()
             .w_full()
-            .h(px(24.0))
+            .h(px(28.0))
             .flex()
             .items_center()
             .gap(px(10.0))
@@ -1646,15 +1650,15 @@ impl Waku {
             .child(
                 div()
                     .id(SharedString::from(format!("turn-fold-{turn_id}")))
-                    .h(px(24.0))
-                    .px(px(2.0))
+                    .h(px(28.0))
+                    .px(px(3.0))
                     .flex_none()
                     .flex()
                     .items_center()
                     .gap(px(5.0))
                     .cursor_default()
-                    .text_size(px(11.5))
-                    .line_height(px(16.0))
+                    .text_size(px(12.5))
+                    .line_height(px(17.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_tertiary)
                     .child(SharedString::from(label))
@@ -1664,7 +1668,7 @@ impl Waku {
                         } else {
                             "icons/chevron-right.svg"
                         },
-                        10.0,
+                        11.0,
                         theme.text_tertiary,
                     ))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1783,12 +1787,12 @@ impl Waku {
                     .tab_index(0)
                     .w_full()
                     .min_w_0()
-                    .h(px(26.0))
+                    .h(px(30.0))
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .text_size(px(12.5))
-                    .line_height(px(16.0))
+                    .text_size(px(13.0))
+                    .line_height(px(17.0))
                     .cursor_default()
                     .focus_visible(|style| style.text_color(theme.text))
                     .hover(|style| style.text_color(theme.text))
@@ -1806,7 +1810,7 @@ impl Waku {
                         } else {
                             "icons/chevron-right.svg"
                         },
-                        10.0,
+                        11.0,
                         theme.text_tertiary,
                     ))
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -1855,16 +1859,16 @@ impl Waku {
                     .id(SharedString::from(format!("activity-background-{id}")))
                     .track_focus(&focus)
                     .tab_index(0)
-                    .h(px(20.0))
-                    .px(px(6.0))
-                    .rounded(px(5.0))
+                    .h(px(24.0))
+                    .px(px(7.0))
+                    .rounded(px(6.0))
                     .border_1()
                     .border_color(theme.border_strong)
                     .flex_none()
                     .flex()
                     .items_center()
                     .cursor_default()
-                    .text_size(px(9.5))
+                    .text_size(px(10.5))
                     .text_color(color)
                     .focus_visible(|style| style.border_color(theme.accent))
                     .hover(|style| style.bg(theme.overlay_strong))
@@ -1939,8 +1943,8 @@ impl Waku {
                     div()
                         .id(SharedString::from(format!("activity-item-{id}")))
                         // The parent owns a 1px border on each edge, so a
-                        // 28px row makes the visible activity header 30px.
-                        .h(px(28.0))
+                        // 32px row makes the visible activity header 34px.
+                        .h(px(32.0))
                         .px(px(8.0))
                         .flex()
                         .items_center()
@@ -1950,8 +1954,8 @@ impl Waku {
                         .when(!item_expanded, |element| {
                             element.rounded_bl(px(8.0)).rounded_br(px(8.0))
                         })
-                        .text_size(px(12.0))
-                        .line_height(px(16.0))
+                        .text_size(px(12.5))
+                        .line_height(px(17.0))
                         .when(has_detail, |element| {
                             element
                                 .track_focus(&item_focus)
@@ -1963,7 +1967,7 @@ impl Waku {
                         })
                         .child(icon(
                             activity_icon(activity.kind),
-                            12.0,
+                            13.0,
                             theme.text_tertiary,
                         ))
                         .child(
@@ -2006,7 +2010,7 @@ impl Waku {
                                 } else {
                                     "icons/chevron-right.svg"
                                 },
-                                10.0,
+                                11.0,
                                 theme.text_tertiary,
                             ))
                         })
@@ -2014,7 +2018,7 @@ impl Waku {
                             element
                                 .when(activity.failed, |element| {
                                     element.child(
-                                        icon("icons/x.svg", 10.0, theme.danger).into_any_element(),
+                                        icon("icons/x.svg", 11.0, theme.danger).into_any_element(),
                                     )
                                 })
                                 .when(!activity.complete && !activity.failed, |element| {
@@ -2183,7 +2187,7 @@ impl Waku {
                         });
                         section_view = section_view.child(
                             div()
-                                .h(px(20.0))
+                                .h(px(24.0))
                                 .flex()
                                 .items_center()
                                 .justify_between()
@@ -2201,8 +2205,8 @@ impl Waku {
                                                 id,
                                                 section_kind.id()
                                             )))
-                                            .size(px(20.0))
-                                            .rounded(px(5.0))
+                                            .size(px(24.0))
+                                            .rounded(px(6.0))
                                             .flex()
                                             .items_center()
                                             .justify_center()
@@ -2214,7 +2218,7 @@ impl Waku {
                                                 } else {
                                                     "icons/copy.svg"
                                                 },
-                                                11.0,
+                                                13.0,
                                                 theme.text_ghost,
                                             ))
                                             .tooltip(Tooltip::text(copy_tooltip.clone()))

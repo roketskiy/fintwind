@@ -1117,15 +1117,14 @@ mod tests {
     /// positioned fall back to the row index.
     #[test]
     fn diff_row_selection_keys_are_unique_even_without_line_numbers() {
-        let positionless = crate::review_diff::from_file_changes(&[
-            crate::model::ActivityFileChange {
+        let positionless =
+            crate::review_diff::from_file_changes(&[crate::model::ActivityFileChange {
                 path: "a.md".into(),
                 additions: Some(2),
                 deletions: Some(0),
                 status: None,
                 diff: Some("@@\n+one\n+two\n \n+three\n".into()),
-            },
-        ]);
+            }]);
         let keys = positionless
             .lines
             .iter()
@@ -2084,17 +2083,17 @@ impl Waku {
         let theme = Theme::current(cx);
         div()
             .id("toggle-right-panel")
-            .w(px(26.0))
-            .h(px(26.0))
+            .w(px(28.0))
+            .h(px(28.0))
             .flex_none()
-            .rounded(px(6.0))
+            .rounded(px(7.0))
             .flex()
             .items_center()
             .justify_center()
             .cursor_default()
             .hover(|element| element.bg(theme.overlay))
             .active(|element| element.bg(theme.overlay_strong))
-            .child(icon("icons/panel-right.svg", 14.0, theme.text_tertiary))
+            .child(icon("icons/panel-right.svg", 15.0, theme.text_tertiary))
             .tooltip(|window, cx| Tooltip::new(tr!("right_panel.toggle")).build(window, cx))
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();

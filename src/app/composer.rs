@@ -47,13 +47,13 @@ impl Waku {
                         "permission-{}-{}",
                         permission.request_id, option.id
                     )))
-                    .h(px(28.0))
-                    .px(px(13.0))
-                    .rounded(px(7.0))
+                    .h(px(32.0))
+                    .px(px(14.0))
+                    .rounded(px(8.0))
                     .flex()
                     .items_center()
                     .cursor_default()
-                    .text_size(px(11.5))
+                    .text_size(px(12.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .when(allow, |element| {
                         element
@@ -157,9 +157,9 @@ impl Waku {
                     .track_focus(&focus)
                     .tab_index(0)
                     .tab_stop(true)
-                    .min_h(px(36.0))
+                    .min_h(px(38.0))
                     .px(px(10.0))
-                    .py(px(5.0))
+                    .py(px(6.0))
                     .rounded(px(8.0))
                     .border_1()
                     .border_color(if is_selected {
@@ -187,7 +187,7 @@ impl Waku {
                             .min_w_0()
                             .child(
                                 div()
-                                    .text_size(px(11.5))
+                                    .text_size(px(12.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
                                     .child(SharedString::from(option.label.clone())),
@@ -195,15 +195,15 @@ impl Waku {
                             .children(option.description.as_ref().map(|description| {
                                 div()
                                     .mt(px(1.0))
-                                    .text_size(px(10.0))
-                                    .line_height(px(13.0))
+                                    .text_size(px(11.0))
+                                    .line_height(px(14.0))
                                     .text_color(theme.text_secondary)
                                     .whitespace_normal()
                                     .child(SharedString::from(description.clone()))
                             })),
                     )
                     .when(is_selected, |row| {
-                        row.child(icon("icons/check.svg", 12.0, theme.accent))
+                        row.child(icon("icons/check.svg", 13.0, theme.accent))
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.select_user_input_option(click_label.clone(), cx);
@@ -233,13 +233,13 @@ impl Waku {
                 .track_focus(&focus)
                 .tab_index(0)
                 .tab_stop(true)
-                .h(px(26.0))
-                .px(px(8.0))
-                .rounded(px(6.0))
+                .h(px(30.0))
+                .px(px(9.0))
+                .rounded(px(7.0))
                 .flex()
                 .items_center()
                 .cursor_default()
-                .text_size(px(10.5))
+                .text_size(px(12.0))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text_tertiary)
                 .focus_visible(|style| style.border_1().border_color(theme.accent))
@@ -261,13 +261,13 @@ impl Waku {
             .track_focus(&next_focus)
             .tab_index(0)
             .tab_stop(can_continue)
-            .h(px(26.0))
-            .px(px(10.0))
-            .rounded(px(6.0))
+            .h(px(30.0))
+            .px(px(11.0))
+            .rounded(px(7.0))
             .flex()
             .items_center()
             .cursor_default()
-            .text_size(px(10.5))
+            .text_size(px(12.0))
             .font_weight(FontWeight::SEMIBOLD)
             .bg(if can_continue {
                 theme.inverse
@@ -364,7 +364,7 @@ impl Waku {
                         } else {
                             4.0
                         }))
-                        .h(px(34.0))
+                        .h(px(36.0))
                         .px(px(10.0))
                         .rounded(px(8.0))
                         .border_1()
@@ -381,11 +381,11 @@ impl Waku {
                         .flex()
                         .items_center()
                         .gap(px(7.0))
-                        .text_size(px(11.5))
-                        .line_height(px(16.0))
+                        .text_size(px(12.5))
+                        .line_height(px(17.0))
                         .child(icon(
                             "icons/pencil.svg",
-                            11.0,
+                            12.0,
                             if has_custom {
                                 theme.accent
                             } else {
@@ -428,13 +428,13 @@ impl Waku {
                         "computer-permission-{}-{decision}",
                         permission.request.call_id
                     )))
-                    .h(px(29.0))
-                    .px(px(13.0))
-                    .rounded(px(7.0))
+                    .h(px(32.0))
+                    .px(px(14.0))
+                    .rounded(px(8.0))
                     .flex()
                     .items_center()
                     .cursor_default()
-                    .text_size(px(11.5))
+                    .text_size(px(12.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .when(primary, |element| {
                         element
@@ -654,15 +654,15 @@ impl Waku {
                                             .id(SharedString::from(format!(
                                                 "computer-use-preview-action-{window_id}"
                                             )))
-                                            .h(px(27.0))
-                                            .px(px(10.0))
+                                            .h(px(30.0))
+                                            .px(px(11.0))
                                             .rounded(px(7.0))
                                             .border_1()
                                             .border_color(theme.border_strong)
                                             .flex()
                                             .items_center()
                                             .cursor_default()
-                                            .text_size(px(10.0))
+                                            .text_size(px(11.5))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(if active {
                                                 theme.danger
@@ -879,12 +879,7 @@ impl Waku {
         // rendered rows index one ordering and cannot disagree about what
         // `enter` selects.
         let available_models = Rc::new(if handle.is_open() {
-            visible_picker_models(
-                &probes,
-                &favorites,
-                selected_tab,
-                &normalized_query,
-            )
+            visible_picker_models(&probes, &favorites, selected_tab, &normalized_query)
         } else {
             Vec::new()
         });
@@ -930,9 +925,9 @@ impl Waku {
                     .child(
                         div()
                             .id("model-tab-favorites")
-                            .w(px(38.0))
-                            .h(px(38.0))
-                            .rounded(px(7.0))
+                            .w(px(40.0))
+                            .h(px(40.0))
+                            .rounded(px(8.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -943,7 +938,7 @@ impl Waku {
                             .hover(|element| element.bg(theme.overlay))
                             .child(icon(
                                 "icons/star.svg",
-                                17.0,
+                                18.0,
                                 if favorites_selected {
                                     theme.text
                                 } else {
@@ -966,9 +961,9 @@ impl Waku {
                 sidebar = sidebar.child(
                     div()
                         .id("model-tab-opencode")
-                        .w(px(38.0))
-                        .h(px(38.0))
-                        .rounded(px(7.0))
+                        .w(px(40.0))
+                        .h(px(40.0))
+                        .rounded(px(8.0))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -982,13 +977,13 @@ impl Waku {
                         })
                         .child(icon(
                             "icons/provider-opencode.svg",
-                            18.0,
+                            19.0,
                             theme.text.opacity(if selected { 1.0 } else { 0.82 }),
                         )),
                 );
 
                 let search_input = div()
-                    .h(px(52.0))
+                    .h(px(54.0))
                     .px(px(12.0))
                     .pt(px(10.0))
                     .pb(px(8.0))
@@ -998,7 +993,7 @@ impl Waku {
                     .child(
                         div()
                             .w_full()
-                            .h(px(34.0))
+                            .h(px(36.0))
                             .px(px(10.0))
                             .rounded(px(9.0))
                             .bg(theme.raised)
@@ -1038,12 +1033,9 @@ impl Waku {
                 }
 
                 for (row_index, model) in available_models.iter().enumerate() {
-                    let is_selected =
-                        selected_model.as_deref() == Some(model.id.as_str());
+                    let is_selected = selected_model.as_deref() == Some(model.id.as_str());
                     let is_highlighted = highlight == Some(row_index);
-                    let is_favorite = favorites
-                        .iter()
-                        .any(|favorite| favorite.model == model.id);
+                    let is_favorite = favorites.iter().any(|favorite| favorite.model == model.id);
                     let model_id = model.id.clone();
                     let select_weak = weak.clone();
                     let select_popover = popover.clone();
@@ -1053,7 +1045,7 @@ impl Waku {
                     rows = rows.child(
                         div()
                             .id(SharedString::from(format!("model-row-{}", model.id)))
-                            .h(px(58.0))
+                            .h(px(60.0))
                             .px(px(12.0))
                             .rounded(px(9.0))
                             .flex()
@@ -1099,7 +1091,7 @@ impl Waku {
                                             .child(
                                                 div()
                                                     .truncate()
-                                                    .text_size(px(11.0))
+                                                    .text_size(px(11.5))
                                                     .text_color(theme.text_tertiary)
                                                     .child(SharedString::from(subtitle)),
                                             ),
@@ -1107,13 +1099,10 @@ impl Waku {
                             )
                             .child(
                                 div()
-                                    .id(SharedString::from(format!(
-                                        "favorite-model-{}",
-                                        model.id
-                                    )))
-                                    .w(px(28.0))
-                                    .h(px(28.0))
-                                    .rounded(px(6.0))
+                                    .id(SharedString::from(format!("favorite-model-{}", model.id)))
+                                    .w(px(30.0))
+                                    .h(px(30.0))
+                                    .rounded(px(7.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -1124,7 +1113,7 @@ impl Waku {
                                         } else {
                                             "icons/star.svg"
                                         },
-                                        14.0,
+                                        15.0,
                                         if is_favorite {
                                             theme.favorite
                                         } else {
@@ -1287,11 +1276,7 @@ impl Waku {
 
     /// Take the row the selection is on, defaulting to the first so `enter`
     /// works the moment the panel opens.
-    fn choose_highlighted_model(
-        &mut self,
-        models: &[ProviderModel],
-        cx: &mut Context<Self>,
-    ) {
+    fn choose_highlighted_model(&mut self, models: &[ProviderModel], cx: &mut Context<Self>) {
         let Some(model) = models.get(self.model_picker_highlight.unwrap_or(0)) else {
             return;
         };
@@ -1389,8 +1374,10 @@ impl Waku {
             });
 
         let fast = selected_tier == "fast" || tier_label.eq_ignore_ascii_case("fast");
-        let trigger_label = match (effort_label.unwrap_or_else(|| tier_label.clone()), window_label)
-        {
+        let trigger_label = match (
+            effort_label.unwrap_or_else(|| tier_label.clone()),
+            window_label,
+        ) {
             (label, Some(window)) => format!("{label} · {window}"),
             (label, None) => label,
         };
@@ -1524,11 +1511,11 @@ impl Waku {
                         MenuItem::custom(move |_, _| {
                             div()
                                 .w(px(288.0))
-                                .py(px(4.0))
+                                .py(px(5.0))
                                 .flex()
                                 .items_center()
                                 .gap(px(10.0))
-                                .child(icon(option.icon(), 14.0, theme.text_tertiary))
+                                .child(icon(option.icon(), 15.0, theme.text_tertiary))
                                 .child(
                                     div()
                                         .flex_1()
@@ -1537,7 +1524,7 @@ impl Waku {
                                             div()
                                                 .w_full()
                                                 .truncate()
-                                                .text_size(px(12.0))
+                                                .text_size(px(12.5))
                                                 .font_weight(if selected {
                                                     FontWeight::SEMIBOLD
                                                 } else {
@@ -1550,8 +1537,8 @@ impl Waku {
                                             div()
                                                 .w_full()
                                                 .mt(px(2.0))
-                                                .text_size(px(10.5))
-                                                .line_height(px(14.0))
+                                                .text_size(px(11.0))
+                                                .line_height(px(15.0))
                                                 .whitespace_normal()
                                                 .text_color(theme.text_tertiary)
                                                 .child(option.description()),
@@ -1560,7 +1547,7 @@ impl Waku {
                                 .when(selected, |element| {
                                     element.child(icon(
                                         "icons/check.svg",
-                                        11.0,
+                                        12.0,
                                         theme.text_tertiary,
                                     ))
                                 })
@@ -1589,15 +1576,15 @@ impl Waku {
         let weak = cx.entity().downgrade();
         div()
             .id("interaction-mode")
-            .h(px(24.0))
-            .px(px(7.0))
-            .rounded(px(6.0))
+            .h(px(28.0))
+            .px(px(9.0))
+            .rounded(px(7.0))
             .flex()
             .items_center()
-            .gap(px(6.0))
+            .gap(px(7.0))
             .cursor_default()
-            .text_size(px(11.5))
-            .line_height(px(14.0))
+            .text_size(px(12.5))
+            .line_height(px(16.0))
             .text_color(if mode == InteractionMode::Plan {
                 theme.accent
             } else {
@@ -1609,7 +1596,7 @@ impl Waku {
                 } else {
                     "icons/wrench.svg"
                 },
-                10.5,
+                12.0,
                 if mode == InteractionMode::Plan {
                     theme.accent
                 } else {
@@ -2024,8 +2011,8 @@ impl Waku {
                     .absolute()
                     .top(px(3.0))
                     .right(px(3.0))
-                    .w(px(16.0))
-                    .h(px(16.0))
+                    .w(px(18.0))
+                    .h(px(18.0))
                     .tab_index(0)
                     .rounded(px(5.0))
                     .flex()
@@ -2036,7 +2023,7 @@ impl Waku {
                     .focus_visible(|style| style.border_1().border_color(theme.accent))
                     .hover(|element| element.bg(theme.canvas.opacity(0.95)))
                     .active(|element| element.opacity(0.8))
-                    .child(icon("icons/x.svg", 9.0, theme.text_secondary))
+                    .child(icon("icons/x.svg", 10.0, theme.text_secondary))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
                         if index < this.composer_attachments.len() {
@@ -2102,22 +2089,22 @@ impl Waku {
                     .id(SharedString::from(format!(
                         "queued-message-steer-{message_id}"
                     )))
-                    .h(px(24.0))
-                    .px(px(7.0))
-                    .rounded(px(6.0))
+                    .h(px(28.0))
+                    .px(px(8.0))
+                    .rounded(px(7.0))
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
+                    .gap(px(6.0))
                     .cursor_default()
                     .tab_index(0)
                     .focus_visible(|style| style.border_1().border_color(theme.accent))
                     .hover(|element| element.bg(theme.overlay_strong))
                     .active(|element| element.opacity(0.8))
-                    .text_size(px(11.5))
+                    .text_size(px(12.5))
                     .text_color(theme.text_secondary)
                     .child(icon(
                         "icons/corner-down-right.svg",
-                        11.0,
+                        12.0,
                         theme.text_secondary,
                     ))
                     .child(tr!("composer.steer"))
@@ -2141,9 +2128,9 @@ impl Waku {
                     .id(SharedString::from(format!(
                         "queued-message-more-{message_id}"
                     )))
-                    .w(px(24.0))
-                    .h(px(24.0))
-                    .rounded(px(6.0))
+                    .w(px(26.0))
+                    .h(px(26.0))
+                    .rounded(px(7.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -2152,7 +2139,7 @@ impl Waku {
                     .when(menu_open, |element| element.bg(theme.overlay_strong))
                     .hover(|element| element.bg(theme.overlay_strong))
                     .active(|element| element.opacity(0.8))
-                    .child(icon("icons/ellipsis.svg", 12.5, theme.text_secondary)),
+                    .child(icon("icons/ellipsis.svg", 13.5, theme.text_secondary)),
                 SharedString::from(format!("queued-message-more-menu-{message_id}")),
                 &menu_handle,
                 MenuAlign::BelowRight,
@@ -2178,7 +2165,7 @@ impl Waku {
             list = list.child(
                 div()
                     .id(SharedString::from(format!("queued-message-{message_id}")))
-                    .h(px(30.0))
+                    .h(px(32.0))
                     .pl(px(12.0))
                     .pr(px(6.0))
                     .flex()
@@ -2189,13 +2176,13 @@ impl Waku {
                     .focus_visible(|style| style.border_1().border_color(theme.accent))
                     .hover(|element| element.bg(theme.overlay))
                     .tooltip(Tooltip::text(tr!("composer.edit_in_composer")))
-                    .child(icon("icons/queue.svg", 12.0, theme.text_tertiary))
+                    .child(icon("icons/queue.svg", 13.0, theme.text_tertiary))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(12.5))
+                            .text_size(px(13.0))
                             .text_color(theme.text)
                             .child(SharedString::from(content)),
                     )
@@ -2210,9 +2197,9 @@ impl Waku {
                                     .id(SharedString::from(format!(
                                         "queued-message-remove-{message_id}"
                                     )))
-                                    .w(px(24.0))
-                                    .h(px(24.0))
-                                    .rounded(px(6.0))
+                                    .w(px(26.0))
+                                    .h(px(26.0))
+                                    .rounded(px(7.0))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -2223,7 +2210,7 @@ impl Waku {
                                     })
                                     .hover(|element| element.bg(theme.overlay_strong))
                                     .active(|element| element.opacity(0.8))
-                                    .child(icon("icons/trash.svg", 12.0, theme.text_secondary))
+                                    .child(icon("icons/trash.svg", 13.0, theme.text_secondary))
                                     .tooltip(Tooltip::text(tr!("composer.remove_followup")))
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
@@ -2369,8 +2356,8 @@ impl Waku {
                         .child(match submit_action {
                             ComposerSubmitAction::Preparing => div()
                                 .id("send-or-stop")
-                                .w(px(26.0))
-                                .h(px(26.0))
+                                .w(px(30.0))
+                                .h(px(30.0))
                                 .rounded_full()
                                 .flex()
                                 .items_center()
@@ -2379,7 +2366,7 @@ impl Waku {
                                 .bg(theme.overlay_strong)
                                 .child(motion::spin(icon(
                                     "icons/loader-circle.svg",
-                                    15.0,
+                                    17.0,
                                     theme.text_secondary,
                                 )))
                                 .tooltip(Tooltip::text(tr!("composer.preparing_task"))),
@@ -2391,8 +2378,8 @@ impl Waku {
                                 .child(
                                     div()
                                         .id("send-or-stop")
-                                        .w(px(26.0))
-                                        .h(px(26.0))
+                                        .w(px(30.0))
+                                        .h(px(30.0))
                                         .rounded_full()
                                         .flex()
                                         .items_center()
@@ -2404,14 +2391,14 @@ impl Waku {
                                         .when(escape_stop_armed, |element| {
                                             element.child(
                                                 div()
-                                                    .text_size(px(10.0))
+                                                    .text_size(px(10.5))
                                                     .font_weight(FontWeight::SEMIBOLD)
                                                     .text_color(theme.text)
                                                     .child("Esc"),
                                             )
                                         })
                                         .when(!escape_stop_armed, |element| {
-                                            element.child(icon("icons/stop.svg", 18.0, theme.text))
+                                            element.child(icon("icons/stop.svg", 20.0, theme.text))
                                         })
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.cancel_turn(cx);
@@ -2421,8 +2408,8 @@ impl Waku {
                                     element.child(
                                         div()
                                             .id("queue-follow-up")
-                                            .w(px(26.0))
-                                            .h(px(26.0))
+                                            .w(px(30.0))
+                                            .h(px(30.0))
                                             .rounded_full()
                                             .flex()
                                             .items_center()
@@ -2433,7 +2420,7 @@ impl Waku {
                                             .active(|element| element.opacity(0.8))
                                             .child(icon(
                                                 "icons/arrow-up.svg",
-                                                16.0,
+                                                18.0,
                                                 theme.on_inverse,
                                             ))
                                             .tooltip(Tooltip::text(tr!("composer.queue_followup")))
@@ -2452,8 +2439,8 @@ impl Waku {
                                 }),
                             ComposerSubmitAction::Send => div()
                                 .id("send-or-stop")
-                                .w(px(26.0))
-                                .h(px(26.0))
+                                .w(px(30.0))
+                                .h(px(30.0))
                                 .rounded_full()
                                 .flex()
                                 .items_center()
@@ -2471,7 +2458,7 @@ impl Waku {
                                 })
                                 .child(icon(
                                     "icons/arrow-up.svg",
-                                    16.0,
+                                    18.0,
                                     if has_draft {
                                         theme.on_inverse
                                     } else {
@@ -2725,21 +2712,21 @@ impl Waku {
                                                 .hover(|element| element.bg(theme.overlay))
                                                 .active(|element| element.opacity(0.85))
                                         })
-                                        .child(icon("icons/git-branch.svg", 12.0, color))
+                                        .child(icon("icons/git-branch.svg", 13.0, color))
                                         .child(
                                             div()
                                                 .min_w_0()
                                                 .flex_1()
                                                 .truncate()
-                                                .text_size(px(11.5))
-                                                .line_height(px(15.0))
+                                                .text_size(px(12.5))
+                                                .line_height(px(16.0))
                                                 .text_color(color)
                                                 .child(SharedString::from(branch.name.clone())),
                                         )
                                         .when(selected, |element| {
                                             element.child(icon(
                                                 "icons/check.svg",
-                                                11.0,
+                                                12.0,
                                                 theme.text_secondary,
                                             ))
                                         });
@@ -2790,11 +2777,11 @@ impl Waku {
                             )
                             .hover(|element| element.bg(theme.overlay))
                             .active(|element| element.opacity(0.85))
-                            .child(icon("icons/plus.svg", 12.0, theme.text_secondary))
+                            .child(icon("icons/plus.svg", 13.0, theme.text_secondary))
                             .child(
                                 div()
-                                    .text_size(px(11.5))
-                                    .line_height(px(15.0))
+                                    .text_size(px(12.5))
+                                    .line_height(px(16.0))
                                     .text_color(theme.text)
                                     .child(tr!("branches.create_and_checkout_ellipsis")),
                             )
@@ -2811,7 +2798,7 @@ impl Waku {
                         .flex_col()
                         .child(
                             div()
-                                .h(px(52.0))
+                                .h(px(54.0))
                                 .px(px(12.0))
                                 .pt(px(10.0))
                                 .pb(px(8.0))
@@ -2821,7 +2808,7 @@ impl Waku {
                                 .child(
                                     div()
                                         .w_full()
-                                        .h(px(34.0))
+                                        .h(px(36.0))
                                         .px(px(10.0))
                                         .rounded(px(9.0))
                                         .bg(theme.surface)
@@ -3059,9 +3046,9 @@ impl Waku {
                     .w_full()
                     .max_w(px(CONTENT_MAX_WIDTH))
                     .mx_auto()
-                    .h(px(28.0))
-                    // The chip contributes 7px, lining its icon up with the
-                    // composer's 10px padding plus the controls' 7px inset.
+                    .h(px(32.0))
+                    // The chip contributes 9px, lining its icon up with the
+                    // composer's 10px padding plus the controls' 9px inset.
                     .pl(px(10.0))
                     .pr(px(10.0))
                     .flex()
@@ -3070,8 +3057,8 @@ impl Waku {
                     .tab_index(0)
                     .tab_group()
                     .tab_stop(false)
-                    .text_size(px(11.0))
-                    .line_height(px(14.0))
+                    .text_size(px(11.5))
+                    .line_height(px(15.0))
                     .child(project_selector)
                     .child(worktree_selector)
                     .children(branch_selector)
@@ -3343,9 +3330,9 @@ pub(super) fn visible_picker_models(
                     .all(|token| searchable.contains(token));
             }
             match selected_tab {
-                ModelPickerTab::Favorites => favorites
-                    .iter()
-                    .any(|favorite| favorite.model == model.id),
+                ModelPickerTab::Favorites => {
+                    favorites.iter().any(|favorite| favorite.model == model.id)
+                }
                 ModelPickerTab::Provider => true,
             }
         })

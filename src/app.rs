@@ -82,7 +82,7 @@ const CONTENT_MAX_WIDTH: f32 = 720.0;
 /// and the primary-modifier `/` toggle action.
 const MODEL_PICKER_MENU_ID: &str = "provider-model-picker";
 const BRANCH_PICKER_MENU_ID: &str = "workspace-branch-picker";
-const BRANCH_PICKER_ROW_HEIGHT: f32 = 26.0;
+const BRANCH_PICKER_ROW_HEIGHT: f32 = 30.0;
 const SIDEBAR_MIN_WIDTH: f32 = 180.0;
 const SIDEBAR_MAX_WIDTH: f32 = 420.0;
 const UPDATER_BUTTON_COLLAPSED_WIDTH: f32 = 20.0;
@@ -1961,10 +1961,8 @@ impl Waku {
                 .search_field()
                 .placeholder(tr!("providers.base_url_placeholder"))
         });
-        let provider_api_key_input =
-            cx.new(|cx| ComposerInput::new(window, cx).search_field());
-        let provider_rename_input =
-            cx.new(|cx| ComposerInput::new(window, cx).search_field());
+        let provider_api_key_input = cx.new(|cx| ComposerInput::new(window, cx).search_field());
+        let provider_rename_input = cx.new(|cx| ComposerInput::new(window, cx).search_field());
         let provider_model_id_input = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
@@ -2613,14 +2611,11 @@ impl Waku {
                 })
                 .detach();
             }
-            cx.subscribe(
-                &mcp_search,
-                |_: &mut Self, _, event: &ComposerEvent, cx| {
-                    if matches!(event, ComposerEvent::Edited) {
-                        cx.notify();
-                    }
-                },
-            )
+            cx.subscribe(&mcp_search, |_: &mut Self, _, event: &ComposerEvent, cx| {
+                if matches!(event, ComposerEvent::Edited) {
+                    cx.notify();
+                }
+            })
             .detach();
             for (input, field) in [
                 (&mcp_command_input, mcp_page::McpField::Command),
@@ -2628,11 +2623,7 @@ impl Waku {
             ] {
                 cx.subscribe(input, move |this, input, event: &ComposerEvent, cx| {
                     if matches!(event, ComposerEvent::Edited) {
-                        this.mcp_field_edited(
-                            field,
-                            input.read(cx).content().to_owned(),
-                            cx,
-                        );
+                        this.mcp_field_edited(field, input.read(cx).content().to_owned(), cx);
                     }
                 })
                 .detach();

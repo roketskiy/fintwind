@@ -352,6 +352,68 @@ impl Waku {
             .child(icon(icon_path, 15.0, theme.text_tertiary))
     }
 
+    /// The right-side header button that shows the selected session's project
+    /// folder in the desktop file manager. Absent while no session is
+    /// selected — there is no folder to offer before the first task exists.
+    fn render_reveal_project_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.selected_workspace_path()?;
+        let theme = Theme::current(cx);
+        let focus = cx.focus_handle();
+        Some(
+            div()
+                .id("reveal-project-folder")
+                .track_focus(&focus)
+                .tab_index(0)
+                .tab_stop(true)
+                .w(px(28.0))
+                .h(px(28.0))
+                .flex_none()
+                .rounded(px(7.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_default()
+                .focus_visible(|style| style.border_1().border_color(theme.accent))
+                .hover(|element| element.bg(theme.overlay))
+                .active(|element| element.bg(theme.overlay_strong))
+                .child(icon("icons/folder.svg", 15.0, theme.text_tertiary))
+                .tooltip(|window, cx| {
+                    Tooltip::new(tr!("session.reveal_project_folder")).build(window, cx)
+                })
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_click(cx.listener(|this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.reveal_selected_project_folder(cx);
+                }))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if !event.keystroke.modifiers.modified()
+                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    {
+                        this.reveal_selected_project_folder(cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .into_any_element(),
+        )
+    }
+
+    /// Reveals the selected session's workspace in the desktop file manager.
+    /// A remote session's folder lives on the daemon host and cannot be
+    /// opened locally, so it answers with the same explanation transcript
+    /// file links give.
+    fn reveal_selected_project_folder(&mut self, cx: &mut Context<Self>) {
+        if self.daemon.is_remote() {
+            self.show_toast(tr!("errors.remote_host_path"));
+            cx.notify();
+            return;
+        }
+        if let Some(path) = self.selected_workspace_path() {
+            crate::platform::reveal_in_file_manager(path, cx);
+        }
+    }
+
     fn render_sidebar_titlebar(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
         div()
             .id("sidebar-titlebar")
@@ -1336,6 +1398,7 @@ impl Waku {
                     cx,
                 ),
             )
+            .children(self.render_reveal_project_button(cx))
             .when(!self.right_panel_visible, |element| {
                 element
                     .when(self.fps_counter_visible, |element| {

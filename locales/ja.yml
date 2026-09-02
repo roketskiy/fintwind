@@ -301,6 +301,8 @@ common.rename: 名前を変更
 
 session.new_task: 新規タスク
 
+session.reveal_project_folder: ファイルマネージャーでプロジェクトフォルダを表示
+
 sidebar.today: 今日
 sidebar.search: 検索
 sidebar.yesterday: 昨日

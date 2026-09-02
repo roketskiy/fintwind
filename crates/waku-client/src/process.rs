@@ -129,6 +129,8 @@ pub fn parse_allowed_origins(text: &str) -> anyhow::Result<Vec<String>> {
 pub struct DaemonProcess {
     client: DaemonClient,
     child: Child,
+    #[cfg(windows)]
+    _job: windows_job::JobObject,
 }
 
 impl DaemonProcess {
@@ -173,6 +175,19 @@ impl DaemonProcess {
             .stderr(Stdio::inherit())
             .spawn()
             .with_context(|| format!("could not launch {}", executable.display()))?;
+        #[cfg(windows)]
+        let job = match windows_job::JobObject::new()
+            .and_then(|job| {
+                job.assign_process(child.id())?;
+                Ok(job)
+            }) {
+            Ok(job) => job,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error).context("could not contain fintwind daemon process tree");
+            }
+        };
         let stdout = child
             .stdout
             .take()
@@ -232,7 +247,12 @@ impl DaemonProcess {
                 return Err(error);
             }
         };
-        Ok(Self { client, child })
+        Ok(Self {
+            client,
+            child,
+            #[cfg(windows)]
+            _job: job,
+        })
     }
 
     pub fn client(&self) -> DaemonClient {
@@ -261,6 +281,81 @@ impl DaemonProcess {
 impl Drop for DaemonProcess {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(windows)]
+mod windows_job {
+    use anyhow::{Context as _, Result};
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, HANDLE},
+        System::{
+            JobObjects::{
+                AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
+                JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            },
+            Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE},
+        },
+    };
+
+    /// A job object whose remaining process tree is killed when the desktop
+    /// drops this handle or exits unexpectedly.
+    pub(super) struct JobObject(HANDLE);
+
+    // SAFETY: Windows job object handles can be used from any thread.
+    unsafe impl Send for JobObject {}
+    unsafe impl Sync for JobObject {}
+
+    impl JobObject {
+        pub(super) fn new() -> Result<Self> {
+            unsafe {
+                let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+                if job.is_null() {
+                    return Err(std::io::Error::last_os_error())
+                        .context("failed to create daemon job object");
+                }
+                let job = Self(job);
+                let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+                limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                if SetInformationJobObject(
+                    job.0,
+                    JobObjectExtendedLimitInformation,
+                    &limits as *const _ as *const _,
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                ) == 0
+                {
+                    return Err(std::io::Error::last_os_error())
+                        .context("failed to configure daemon job object");
+                }
+                Ok(job)
+            }
+        }
+
+        pub(super) fn assign_process(&self, pid: u32) -> Result<()> {
+            unsafe {
+                let process = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+                if process.is_null() {
+                    return Err(std::io::Error::last_os_error())
+                        .context("failed to open daemon process for job assignment");
+                }
+                let assigned = AssignProcessToJobObject(self.0, process) != 0;
+                let error = (!assigned).then(std::io::Error::last_os_error);
+                let _ = CloseHandle(process);
+                if let Some(error) = error {
+                    return Err(error).context("failed to assign daemon process to job object");
+                }
+                Ok(())
+            }
+        }
+    }
+
+    impl Drop for JobObject {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
     }
 }
 
@@ -668,6 +763,39 @@ mod tests {
         );
         assert!(parse_allowed_origins("https://app.waku.test/path").is_err());
         assert!(parse_allowed_origins("ws://app.waku.test").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn dropping_daemon_job_terminates_assigned_process() {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let mut child = Command::new("ping.exe")
+            .args(["-n", "60", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("failed to create test process");
+        let job = windows_job::JobObject::new().expect("failed to create test job object");
+        job.assign_process(child.id())
+            .expect("failed to assign test process to job object");
+        drop(job);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match child.try_wait().expect("failed to poll test process") {
+                Some(_) => break,
+                None => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "job object did not terminate assigned process"
+                    );
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+            }
+        }
     }
 
     #[test]

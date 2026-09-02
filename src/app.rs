@@ -2459,6 +2459,20 @@ impl Waku {
             })
             .detach();
 
+            // Closing the window can leave the app running in the tray. Only a
+            // true app quit stops the desktop-owned daemon and its OpenCode
+            // backend processes; an externally managed daemon is left intact.
+            cx.on_app_quit(|this, cx| {
+                let daemon = this.daemon.clone();
+                let shutdown = cx
+                    .background_executor()
+                    .spawn(async move { daemon.shutdown() });
+                async move {
+                    let _ = shutdown.await;
+                }
+            })
+            .detach();
+
             // A changed query re-filters the picker rows and renumbers them,
             // so the drawn selection cannot carry over. While a filter is
             // active the cursor lands on the first match so `enter` has a

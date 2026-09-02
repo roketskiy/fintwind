@@ -421,6 +421,34 @@ impl DaemonSupervisor {
         self.inner.executable.is_none()
     }
 
+    /// Stop the desktop-managed daemon and all of the backend processes it
+    /// owns. A daemon connected through an external address is left running.
+    ///
+    /// The caller should run this off the UI thread because graceful process
+    /// shutdown can wait for up to `SHUTDOWN_TIMEOUT`.
+    pub fn shutdown(&self) {
+        self.inner.running.store(false, Ordering::Release);
+        let _restart = self.inner.restart.lock();
+        let process = {
+            let mut target = self.inner.target.lock();
+            match &*target {
+                DaemonTarget::Local(process) => {
+                    let client = process.client();
+                    let previous =
+                        std::mem::replace(&mut *target, DaemonTarget::Restarting(client));
+                    match previous {
+                        DaemonTarget::Local(process) => Some(process),
+                        _ => unreachable!("local daemon target changed while locked"),
+                    }
+                }
+                DaemonTarget::Restarting(_) | DaemonTarget::Remote(_) => None,
+            }
+        };
+        // `DaemonProcess::drop` performs the graceful shutdown. The target
+        // lock is released first so no UI action can block behind teardown.
+        drop(process);
+    }
+
     pub fn settings(&self) -> DaemonSettings {
         self.inner.settings.lock().clone()
     }

@@ -290,13 +290,7 @@ common.remove: 移除
 common.rename: 重命名
 session.new_task: 新任务
 session.reveal_project_folder: 在文件管理器中显示项目文件夹
-sidebar.today: 今天
 sidebar.search: 搜索
-sidebar.yesterday: 昨天
-sidebar.this_week: 本周
-sidebar.this_month: 本月
-sidebar.this_year: 今年
-sidebar.more: 更早
 sidebar.working: 工作中 · %{elapsed}
 sidebar.just_now: 刚刚
 sidebar.minutes_ago: "%{count} 分钟前"

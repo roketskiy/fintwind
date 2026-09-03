@@ -654,6 +654,9 @@ pub struct AgentSession {
     pub transcript_blocks: Vec<TranscriptBlock>,
     #[serde(default)]
     pub turns: Vec<AgentTurn>,
+    /// Settled child-agent conversations retained with this parent session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub background_work: Vec<BackgroundWorkSnapshot>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queued_messages: Vec<QueuedMessage>,
     /// Whether the transcript has been read from the database.
@@ -706,6 +709,7 @@ impl AgentSession {
             messages: Vec::new(),
             transcript_blocks: Vec::new(),
             turns: Vec::new(),
+            background_work: Vec::new(),
             queued_messages: Vec::new(),
         }
     }
@@ -744,6 +748,7 @@ impl AgentSession {
             messages: Vec::new(),
             transcript_blocks: Vec::new(),
             turns: Vec::new(),
+            background_work: Vec::new(),
             queued_messages: Vec::new(),
             detail_loaded: false,
         }
@@ -1521,6 +1526,13 @@ impl Default for BackgroundWorkTranscript {
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct BackgroundWorkSnapshot {
+    pub item: BackgroundWorkItem,
+    pub transcript: BackgroundWorkTranscript,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
 pub enum BackgroundWorkTranscriptEvent {
     Started {
         key: BackgroundWorkKey,
@@ -1537,6 +1549,10 @@ pub enum BackgroundWorkTranscriptEvent {
     Activity {
         key: BackgroundWorkKey,
         activity: ActivityItem,
+    },
+    Snapshot {
+        key: BackgroundWorkKey,
+        transcript: BackgroundWorkTranscript,
     },
     Finished {
         key: BackgroundWorkKey,

@@ -105,6 +105,7 @@ pub struct OpenCodeDriver {
     session_id: String,
     events: DriverEventSender,
     background_refresh_generation: Arc<AtomicU64>,
+    background_transcript_hydrations: Arc<Mutex<HashSet<String>>>,
     commands: Sender<CommandMessage>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
     event_stream: Arc<OpenCodeEventStreamControl>,
@@ -692,6 +693,7 @@ impl OpenCodeDriver {
             session_id,
             events: stream_events,
             background_refresh_generation: Arc::new(AtomicU64::new(0)),
+            background_transcript_hydrations: Arc::new(Mutex::new(HashSet::new())),
             commands,
             permissions,
             event_stream,
@@ -712,6 +714,7 @@ impl DriverControl for OpenCodeDriver {
         let Some(server) = self.server.as_ref() else {
             return;
         };
+        let server = server.clone();
         let generation = self
             .background_refresh_generation
             .fetch_add(1, Ordering::AcqRel)
@@ -720,6 +723,7 @@ impl DriverControl for OpenCodeDriver {
         let parent_id = self.session_id.clone();
         let events = self.events.clone();
         let generation_guard = Arc::clone(&self.background_refresh_generation);
+        let transcript_hydrations = Arc::clone(&self.background_transcript_hydrations);
         let _ = thread::Builder::new()
             .name("waku-opencode-subagents-refresh".into())
             .spawn(move || {
@@ -775,9 +779,40 @@ impl DriverControl for OpenCodeDriver {
                         })
                     })
                     .collect::<Vec<_>>();
+                let child_ids = items
+                    .iter()
+                    .map(|item| item.key.provider_id.clone())
+                    .collect::<Vec<_>>();
                 let _ = events.send(DriverEvent::BackgroundWork(
                     BackgroundWorkEvent::ReconcileLive { items },
                 ));
+                for child_id in child_ids {
+                    if !transcript_hydrations.lock().insert(child_id.clone()) {
+                        continue;
+                    }
+                    match super::native::fetch_transcript(&server, &child_id) {
+                        Ok(transcript) => {
+                            let _ = events.send(DriverEvent::BackgroundWork(
+                                BackgroundWorkEvent::Transcript(
+                                    BackgroundWorkTranscriptEvent::Snapshot {
+                                        key: BackgroundWorkKey::new(
+                                            BackgroundWorkKind::Subagent,
+                                            child_id,
+                                        ),
+                                        transcript: crate::model::BackgroundWorkTranscript {
+                                            messages: transcript.messages,
+                                            transcript_blocks: transcript.blocks,
+                                            turns: transcript.turns,
+                                        },
+                                    },
+                                ),
+                            ));
+                        }
+                        Err(_) => {
+                            transcript_hydrations.lock().remove(&child_id);
+                        }
+                    }
+                }
             });
     }
 

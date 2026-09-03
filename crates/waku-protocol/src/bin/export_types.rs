@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use ts_rs::{Config, TS};
 use waku_protocol::model::{
     BackgroundWorkEvent, BackgroundWorkItem, BackgroundWorkKey, BackgroundWorkKind,
-    BackgroundWorkStatus, BackgroundWorkTranscript, BackgroundWorkTranscriptEvent,
+    BackgroundWorkSnapshot, BackgroundWorkStatus, BackgroundWorkTranscript,
+    BackgroundWorkTranscriptEvent,
 };
 use waku_protocol::{
     ClientMessage, DaemonReady, MAX_WIRE_MESSAGE_BYTES, PROTOCOL_VERSION, ServerMessage,
@@ -45,6 +46,7 @@ fn export_to(output: &Path) -> Result<(), Box<dyn std::error::Error>> {
     BackgroundWorkKey::export_all(&config)?;
     BackgroundWorkKind::export_all(&config)?;
     BackgroundWorkStatus::export_all(&config)?;
+    BackgroundWorkSnapshot::export_all(&config)?;
     BackgroundWorkTranscript::export_all(&config)?;
     BackgroundWorkTranscriptEvent::export_all(&config)?;
     strip_trailing_whitespace(output)?;

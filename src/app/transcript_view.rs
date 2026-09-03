@@ -1289,6 +1289,7 @@ impl Waku {
                             copied,
                             assistant_message_action,
                             user_message_action,
+                            user_message_fill_width: false,
                             message_edit_input,
                             attachment_menus,
                             attachment_images,
@@ -1636,161 +1637,58 @@ impl Waku {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let expanded = self.expanded_turns.contains(&turn_id);
-        let session_id = self.state.selected_session;
-        let mut seen = HashSet::new();
-        let subagents = (!expanded)
-            .then(|| {
-                self.selected_session()
-                    .into_iter()
-                    .flat_map(|session| &session.transcript_blocks)
-                    .filter(|block| block.turn_id == Some(turn_id))
-                    .flat_map(|block| &block.activities)
-                    .filter_map(|activity| activity.source_id.as_deref())
-                    .filter_map(|source_id| {
-                        let item = self.background_work_for_activity(session_id?, source_id)?;
-                        (item.key.kind == BackgroundWorkKind::Subagent
-                            && seen.insert(item.key.clone()))
-                        .then(|| item.clone())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
         let label = self
             .selected_session()
             .map(|session| turn_fold_label(session, turn_id))
             .unwrap_or_else(|| tr!("transcript.worked"));
         let fold_focus = self.transcript_control_focus(format!("turn-fold-{turn_id}"), cx);
-        let mut row = div().w_full().flex().flex_col().gap(px(6.0)).child(
-            div()
-                .w_full()
-                .h(px(28.0))
-                .flex()
-                .items_center()
-                .gap(px(10.0))
-                .child(div().h(px(1.0)).flex_1().bg(theme.border))
-                .child(
-                    div()
-                        .id(SharedString::from(format!("turn-fold-{turn_id}")))
-                        .track_focus(&fold_focus)
-                        .tab_index(0)
-                        .h(px(28.0))
-                        .px(px(3.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .gap(px(5.0))
-                        .cursor_default()
-                        .text_size(px(12.5))
-                        .line_height(px(17.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_tertiary)
-                        .focus_visible(|style| style.text_color(theme.text))
-                        .hover(|style| style.text_color(theme.text))
-                        .child(SharedString::from(label))
-                        .child(icon(
-                            if expanded {
-                                "icons/chevron-down.svg"
-                            } else {
-                                "icons/chevron-right.svg"
-                            },
-                            11.0,
-                            theme.text_tertiary,
-                        ))
-                        .on_click(cx.listener(move |this, _, _, cx| {
+        div()
+            .w_full()
+            .h(px(28.0))
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .child(div().h(px(1.0)).flex_1().bg(theme.border))
+            .child(
+                div()
+                    .id(SharedString::from(format!("turn-fold-{turn_id}")))
+                    .track_focus(&fold_focus)
+                    .tab_index(0)
+                    .h(px(28.0))
+                    .px(px(3.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(5.0))
+                    .cursor_default()
+                    .text_size(px(12.5))
+                    .line_height(px(17.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_tertiary)
+                    .focus_visible(|style| style.text_color(theme.text))
+                    .hover(|style| style.text_color(theme.text))
+                    .child(SharedString::from(label))
+                    .child(icon(
+                        if expanded {
+                            "icons/chevron-down.svg"
+                        } else {
+                            "icons/chevron-right.svg"
+                        },
+                        11.0,
+                        theme.text_tertiary,
+                    ))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_turn_fold(turn_id, expanded, cx);
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                             this.toggle_turn_fold(turn_id, expanded, cx);
-                        }))
-                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                this.toggle_turn_fold(turn_id, expanded, cx);
-                                cx.stop_propagation();
-                            }
-                        })),
-                )
-                .child(div().h(px(1.0)).flex_1().bg(theme.border)),
-        );
-        for item in subagents {
-            let Some(session_id) = session_id else {
-                continue;
-            };
-            let focus = self
-                .transcript_control_focus(format!("fold-subagent-{}", item.key.provider_id), cx);
-            let click_key = item.key.clone();
-            let key_key = item.key.clone();
-            let status_color = work_status_color(item.status, *theme);
-            let mut entry = div()
-                .id(SharedString::from(format!(
-                    "fold-subagent-{}",
-                    item.key.provider_id
-                )))
-                .track_focus(&focus)
-                .tab_index(0)
-                .relative()
-                .overflow_hidden()
-                .w_full()
-                .h(px(38.0))
-                .px(px(10.0))
-                .rounded(px(8.0))
-                .border_1()
-                .border_color(theme.border_strong)
-                .bg(theme.surface)
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .cursor_default()
-                .focus_visible(|style| style.bg(theme.overlay_strong))
-                .hover(|style| style.bg(theme.overlay))
-                .child(icon("icons/bot.svg", 14.0, theme.text_secondary))
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .truncate()
-                        .text_size(px(12.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child(item.title.clone()),
-                )
-                .child(super::background_work::rendered_work_status_icon(
-                    item.status,
-                    11.0,
-                    status_color,
-                ))
-                .child(
-                    div()
-                        .text_size(px(10.5))
-                        .text_color(status_color)
-                        .child(work_status_label(item.status)),
-                )
-                .child(icon("icons/chevron-right.svg", 11.0, theme.text_tertiary))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.open_background_work_surface(session_id, click_key.clone(), cx);
-                }))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                        this.open_background_work_surface(session_id, key_key.clone(), cx);
-                        cx.stop_propagation();
-                    }
-                }));
-            if item.status.is_live() {
-                let accent = theme.accent;
-                entry = entry.child(
-                    motion::pulse(Duration::from_millis(1800), move |phase| {
-                        let opacity =
-                            0.35 + 0.65 * (((phase * std::f32::consts::TAU).sin() + 1.0) / 2.0);
-                        div()
-                            .absolute()
-                            .inset_0()
-                            .rounded(px(8.0))
-                            .border_1()
-                            .border_color(accent.opacity(opacity))
-                            .into_any_element()
-                    })
-                    .every(2),
-                );
-            }
-            row = row.child(entry);
-        }
-        row.into_any_element()
+                            cx.stop_propagation();
+                        }
+                    })),
+            )
+            .child(div().h(px(1.0)).flex_1().bg(theme.border))
+            .into_any_element()
     }
 
     /// The live turn's closing row: pulsing dots and "Working for Ns". It is

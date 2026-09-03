@@ -32,8 +32,9 @@ use crate::input::{ComposerAttachmentPaste, ComposerEvent, ComposerInput};
 use crate::md;
 use crate::model::{
     ActivityItem, ActivityKind, AgentSession, AgentTurn, BackgroundWorkEvent, BackgroundWorkItem,
-    BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkStatus, BackgroundWorkTranscript,
-    BackgroundWorkTranscriptEvent, Checkpoint, CheckpointStatus, ContextUsage, DriverEvent,
+    BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkSnapshot, BackgroundWorkStatus,
+    BackgroundWorkTranscript, BackgroundWorkTranscriptEvent, Checkpoint, CheckpointStatus,
+    ContextUsage, DriverEvent,
     FavoriteModel, InteractionMode, Message, MessageAttachment, MessageRole, OPENCODE_PROVIDER,
     PendingPermission, Project, ProviderModel, ProviderProbe, ProviderResumeCursor, QueuedMessage,
     ReasoningBlock, RuntimeMode, SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus,
@@ -1210,9 +1211,9 @@ pub struct Waku {
     /// One stable field reused across sidebar rows so virtualization never
     /// replaces the focused editor while a rename is in progress.
     session_rename_input: Entity<ComposerInput>,
-    /// Date groups the user has folded in the sidebar. This is intentionally
-    /// runtime-only, like transcript disclosure state.
-    sidebar_collapsed_groups: HashSet<SessionDateGroup>,
+    /// Projects the user has folded in the sidebar, by project id. This is
+    /// intentionally runtime-only, like transcript disclosure state.
+    sidebar_collapsed_groups: HashSet<Uuid>,
     sidebar_visible: bool,
     sidebar_width: f32,
     right_panel_visible: bool,
@@ -1598,7 +1599,7 @@ use components::*;
 pub use image_preview::init as init_image_preview_keys;
 pub use settings::init as init_settings_keys;
 pub use sidebar::init as init_sidebar_keys;
-use sidebar::{SessionDateGroup, SidebarRow};
+use sidebar::SidebarRow;
 pub use skills_page::init as init_skills_keys;
 use streaming::*;
 use transcript::*;
@@ -3083,6 +3084,9 @@ impl Waku {
         // that there is an entity to notify and deliberately not before the
         // first frame.
         entity.update(cx, |this, cx| {
+            if let Some(session_id) = this.state.selected_session {
+                this.restore_background_work(session_id);
+            }
             this.restart_task_state_sync();
             for session_id in startup_live_session_ids {
                 this.start_runtime_attachment(session_id, cx);

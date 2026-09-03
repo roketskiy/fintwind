@@ -13,8 +13,11 @@ TS_RS_LARGE_INT = "number"
 # is unpacked. Windows on Arm makes the failure routine rather than rare — an
 # arm64 machine almost never has the arm64 redistributable already, so a
 # dynamically linked build dies at startup on `VCRUNTIME140.dll`.
+#
+# Link with the toolchain-bundled rust-lld instead of MSVC link.exe: faster
+# final links on incremental rebuilds, and no external LLVM install needed.
 [target.'cfg(target_os = "windows")']
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "linker=rust-lld"]
 
 [build]
 jobs = 4

@@ -351,6 +351,7 @@ pub(super) struct MessageRender<'a> {
     pub(super) copied: bool,
     pub(super) assistant_message_action: Option<AssistantMessageAction>,
     pub(super) user_message_action: Option<UserMessageAction>,
+    pub(super) user_message_fill_width: bool,
     pub(super) message_edit_input: Option<Entity<ComposerInput>>,
     pub(super) attachment_menus: Vec<ContextMenuHandle>,
     pub(super) attachment_images: Vec<Option<Arc<gpui::Image>>>,
@@ -547,6 +548,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         copied,
         assistant_message_action,
         user_message_action,
+        user_message_fill_width,
         message_edit_input,
         attachment_menus,
         attachment_images,
@@ -679,6 +681,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                         div()
                             .max_w(px(540.0))
                             .min_w_0()
+                            .when(user_message_fill_width, |element| element.w_full())
                             .rounded(px(12.0))
                             .bg(theme.raised)
                             .px(px(12.0))

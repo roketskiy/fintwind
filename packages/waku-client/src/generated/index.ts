@@ -13,6 +13,7 @@ export type { BackgroundWorkEvent } from "./BackgroundWorkEvent";
 export type { BackgroundWorkItem } from "./BackgroundWorkItem";
 export type { BackgroundWorkKey } from "./BackgroundWorkKey";
 export type { BackgroundWorkKind } from "./BackgroundWorkKind";
+export type { BackgroundWorkSnapshot } from "./BackgroundWorkSnapshot";
 export type { BackgroundWorkStatus } from "./BackgroundWorkStatus";
 export type { BackgroundWorkTranscript } from "./BackgroundWorkTranscript";
 export type { BackgroundWorkTranscriptEvent } from "./BackgroundWorkTranscriptEvent";

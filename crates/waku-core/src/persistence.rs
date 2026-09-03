@@ -1195,6 +1195,7 @@ impl StateStore {
         let stored = serde_json::from_str::<AgentSession>(&data).map_err(to_io_error)?;
         session.transcript_blocks = stored.transcript_blocks;
         session.turns = stored.turns;
+        session.background_work = stored.background_work;
         session.queued_messages = stored.queued_messages;
         session.workspace = stored.workspace;
         session.provider_cursor = stored.provider_cursor;
@@ -1506,6 +1507,7 @@ fn session_skeleton(row: SessionColumns) -> Option<AgentSession> {
         messages: Vec::new(),
         transcript_blocks: Vec::new(),
         turns: Vec::new(),
+        background_work: Vec::new(),
         queued_messages: Vec::new(),
         detail_loaded: false,
     })
@@ -1776,7 +1778,9 @@ fn normalize_computer_app_grants(grants: &mut Vec<ComputerAppGrant>) {
 mod tests {
     use super::*;
     use crate::model::{
-        ActivityItem, ActivityKind, FavoriteModel, MessageRole, ReasoningBlock, TranscriptBlock,
+        ActivityItem, ActivityKind, BackgroundWorkItem, BackgroundWorkKind, BackgroundWorkSnapshot,
+        BackgroundWorkStatus, BackgroundWorkTranscript, FavoriteModel, MessageRole, ReasoningBlock,
+        TranscriptBlock,
     };
     use base64::Engine as _;
 
@@ -2923,6 +2927,41 @@ mod tests {
             assert_eq!(restored.created_at, expected.created_at);
             assert_eq!(restored.streaming, expected.streaming);
         }
+
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn background_work_round_trips_through_session_hydration() {
+        let directory = temporary_directory();
+        let store = store_in(&directory);
+        let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
+        state.sessions[0].begin_turn("Parent prompt");
+        state.sessions[0].background_work.push(BackgroundWorkSnapshot {
+            item: BackgroundWorkItem::new(
+                BackgroundWorkKind::Subagent,
+                "child-session",
+                "Child session",
+                BackgroundWorkStatus::Starting,
+            ),
+            transcript: BackgroundWorkTranscript {
+                messages: vec![crate::model::Message::new(
+                    MessageRole::Assistant,
+                    "restored child answer",
+                )],
+                transcript_blocks: Vec::new(),
+                turns: Vec::new(),
+            },
+        });
+        store.save(&mut state).unwrap();
+
+        let restored = load_hydrated(&store_in(&directory));
+        let snapshot = &restored.sessions[0].background_work[0];
+        assert_eq!(snapshot.item.key.provider_id, "child-session");
+        assert_eq!(
+            snapshot.transcript.messages[0].content,
+            "restored child answer"
+        );
 
         fs::remove_dir_all(directory).ok();
     }

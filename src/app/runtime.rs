@@ -2783,6 +2783,7 @@ impl Waku {
             Self::collect_runtime_events(&mut runtime);
             let mut runtime_changed = false;
             let mut background_changed = false;
+            let mut background_persisted = false;
             let mut markdown_changed = false;
             let mut keep_runtime = true;
             while let Some(event) = runtime.pending_events.front() {
@@ -2799,6 +2800,13 @@ impl Waku {
                 let background_output_delta = matches!(
                     event,
                     DriverEvent::BackgroundWork(BackgroundWorkEvent::OutputDelta { .. })
+                );
+                background_persisted |= matches!(
+                    &event,
+                    DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(
+                        BackgroundWorkTranscriptEvent::Finished { .. }
+                            | BackgroundWorkTranscriptEvent::Snapshot { .. }
+                    ))
                 );
                 force_save |= matches!(
                     event,
@@ -2841,7 +2849,8 @@ impl Waku {
                 self.runtimes.insert(session_id, runtime);
             }
             changed |= runtime_changed || background_changed;
-            persisted_state_changed |= runtime_changed;
+            persisted_state_changed |= runtime_changed || background_persisted;
+            force_save |= background_persisted;
             if self.state.selected_session == Some(session_id)
                 && (runtime_changed || follow_up_remeasure)
             {

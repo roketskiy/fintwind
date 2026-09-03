@@ -579,20 +579,8 @@ session.new_task:
 session.reveal_project_folder:
   en: Show project folder in file manager
 
-sidebar.today:
-  en: Today
 sidebar.search:
   en: Search
-sidebar.yesterday:
-  en: Yesterday
-sidebar.this_week:
-  en: This Week
-sidebar.this_month:
-  en: This Month
-sidebar.this_year:
-  en: This Year
-sidebar.more:
-  en: More
 sidebar.working:
   en: Working for %{elapsed}
 sidebar.just_now:

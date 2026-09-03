@@ -162,6 +162,7 @@ impl Waku {
             self.store_selected_right_panel_state();
         }
         self.state.selected_session = Some(session_id);
+        self.restore_background_work(session_id);
         if let Some((project_id, model, reasoning_effort, service_tier, context_window)) =
             self.selected_session().map(|session| {
                 (

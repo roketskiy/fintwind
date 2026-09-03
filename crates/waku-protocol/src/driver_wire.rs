@@ -263,7 +263,8 @@ mod tests {
     use super::*;
     use crate::model::{
         ActivityItem, BackgroundWorkEvent, BackgroundWorkKey, BackgroundWorkKind,
-        BackgroundWorkTranscriptEvent, ReasoningBlock, UserInputOption, UserInputQuestion,
+        BackgroundWorkTranscript, BackgroundWorkTranscriptEvent, ReasoningBlock, UserInputOption,
+        UserInputQuestion,
     };
 
     #[test]
@@ -329,6 +330,10 @@ mod tests {
             BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Activity {
                 key: key.clone(),
                 activity: activity.clone(),
+            }),
+            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Snapshot {
+                key: key.clone(),
+                transcript: BackgroundWorkTranscript::default(),
             }),
             BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
                 key: key.clone(),

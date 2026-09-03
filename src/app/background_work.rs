@@ -235,6 +235,25 @@ fn todo_entry_from_item(item: &serde_json::Value) -> Option<TodoEntry> {
 }
 
 impl BackgroundWorkRegistry {
+    fn from_snapshots(snapshots: &[BackgroundWorkSnapshot]) -> Self {
+        let mut registry = Self::default();
+        for snapshot in snapshots {
+            registry.upsert(snapshot.item.clone());
+            registry
+                .transcripts
+                .insert(snapshot.item.key.clone(), snapshot.transcript.clone());
+        }
+        registry
+    }
+
+    fn snapshot(&self, key: &BackgroundWorkKey) -> Option<BackgroundWorkSnapshot> {
+        let item = self.items.get(key)?.clone();
+        Some(BackgroundWorkSnapshot {
+            item,
+            transcript: self.transcripts.get(key)?.clone(),
+        })
+    }
+
     fn apply(&mut self, event: BackgroundWorkEvent) {
         match event {
             BackgroundWorkEvent::Upsert(item) => self.upsert(item),
@@ -394,6 +413,12 @@ impl BackgroundWorkRegistry {
                     self.transcripts.entry(key).or_default(),
                     activity,
                 );
+            }
+            BackgroundWorkTranscriptEvent::Snapshot { key, transcript } => {
+                let current = self.transcripts.entry(key).or_default();
+                if current.messages.is_empty() && current.transcript_blocks.is_empty() {
+                    *current = transcript;
+                }
             }
             BackgroundWorkTranscriptEvent::Finished { key, success } => {
                 Self::finish_background_transcript(
@@ -758,6 +783,24 @@ fn status_progress(status: BackgroundWorkStatus) -> u8 {
     }
 }
 
+fn recover_subagent_origin(session: &AgentSession, item: &mut BackgroundWorkItem) {
+    if item.key.kind != BackgroundWorkKind::Subagent || item.origin_activity_id.is_some() {
+        return;
+    }
+    let marker = format!("sessionID=\"{}\"", item.key.provider_id);
+    item.origin_activity_id = session
+        .transcript_blocks
+        .iter()
+        .flat_map(|block| &block.activities)
+        .find(|activity| {
+            activity
+                .output
+                .as_deref()
+                .is_some_and(|output| output.contains(&marker))
+        })
+        .and_then(|activity| activity.source_id.clone());
+}
+
 fn bound_output(item: &mut BackgroundWorkItem) {
     let Some(output) = item.output.as_mut() else {
         return;
@@ -936,12 +979,62 @@ impl Waku {
     pub(super) fn handle_background_work_event(
         &mut self,
         session_id: Uuid,
-        event: BackgroundWorkEvent,
+        mut event: BackgroundWorkEvent,
     ) {
-        self.background_work
-            .entry(session_id)
-            .or_default()
-            .apply(event);
+        if let Some(session) = self.state.sessions.iter().find(|session| session.id == session_id) {
+            match &mut event {
+                BackgroundWorkEvent::Upsert(item) => recover_subagent_origin(session, item),
+                BackgroundWorkEvent::ReconcileLive { items } => {
+                    for item in items {
+                        recover_subagent_origin(session, item);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let snapshot_key = match &event {
+            BackgroundWorkEvent::Transcript(
+                BackgroundWorkTranscriptEvent::Finished { key, .. }
+                | BackgroundWorkTranscriptEvent::Snapshot { key, .. },
+            ) => Some(key.clone()),
+            _ => None,
+        };
+        let registry = self.background_work.entry(session_id).or_default();
+        registry.apply(event);
+        let snapshot = snapshot_key.and_then(|key| registry.snapshot(&key));
+        if let Some(snapshot) = snapshot
+            && let Some(session) = self.state.session_mut(session_id)
+        {
+            session
+                .background_work
+                .retain(|stored| stored.item.key != snapshot.item.key);
+            session.background_work.push(snapshot);
+            let excess = session
+                .background_work
+                .len()
+                .saturating_sub(MAX_SETTLED_BACKGROUND_ITEMS);
+            session.background_work.drain(..excess);
+        }
+    }
+
+    pub(super) fn restore_background_work(&mut self, session_id: Uuid) {
+        if self.background_work.contains_key(&session_id) {
+            return;
+        }
+        let Some(snapshots) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| session.background_work.as_slice())
+            .filter(|snapshots| !snapshots.is_empty())
+        else {
+            return;
+        };
+        self.background_work.insert(
+            session_id,
+            BackgroundWorkRegistry::from_snapshots(snapshots),
+        );
     }
 
     pub(super) fn mark_background_work_lost(&mut self, session_id: Uuid) {
@@ -1661,6 +1754,7 @@ impl Waku {
                     copied: false,
                     assistant_message_action: None,
                     user_message_action: None,
+                    user_message_fill_width: true,
                     message_edit_input: None,
                     attachment_menus: Vec::new(),
                     attachment_images: Vec::new(),
@@ -2626,6 +2720,73 @@ mod tests {
         assert_eq!(transcript.messages[1].content, "Before tool.");
         assert_eq!(transcript.messages[2].content, "After tool.");
         assert_eq!(transcript.transcript_blocks[0].after_message, 2);
+    }
+
+    #[test]
+    fn settled_subagent_snapshot_survives_session_round_trip() {
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        let mut parent = AgentSession::new(uuid::Uuid::new_v4());
+        let mut activity = ActivityItem::new(
+            Some("call_parent".into()),
+            ActivityKind::Tool,
+            "Task",
+            None,
+            true,
+        );
+        activity.output = Some("<subagent sessionID=\"ses_child\">done</subagent>".into());
+        parent.transcript_blocks.push(TranscriptBlock {
+            after_message: 0,
+            turn_id: None,
+            activities: vec![activity],
+        });
+
+        let mut item = subagent_item("ses_child", BackgroundWorkStatus::Completed);
+        recover_subagent_origin(&parent, &mut item);
+        let mut registry = BackgroundWorkRegistry::default();
+        registry.upsert(item);
+        registry.apply_transcript(BackgroundWorkTranscriptEvent::Snapshot {
+            key: key.clone(),
+            transcript: BackgroundWorkTranscript {
+                messages: vec![Message::new(MessageRole::Assistant, "child answer")],
+                transcript_blocks: Vec::new(),
+                turns: Vec::new(),
+            },
+        });
+        parent.background_work.push(registry.snapshot(&key).unwrap());
+
+        let stored = serde_json::to_string(&parent).unwrap();
+        let restored_session: AgentSession = serde_json::from_str(&stored).unwrap();
+        let mut restored = BackgroundWorkRegistry::from_snapshots(&restored_session.background_work);
+        restored.apply_transcript(BackgroundWorkTranscriptEvent::Snapshot {
+            key: key.clone(),
+            transcript: BackgroundWorkTranscript::default(),
+        });
+
+        assert_eq!(
+            restored.items[&key].origin_activity_id.as_deref(),
+            Some("call_parent")
+        );
+        assert_eq!(restored.transcripts[&key].messages[0].content, "child answer");
+    }
+
+    #[test]
+    fn native_snapshot_is_persistable_before_status_is_known() {
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        let mut registry = BackgroundWorkRegistry::default();
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Starting));
+        registry.apply_transcript(BackgroundWorkTranscriptEvent::Snapshot {
+            key: key.clone(),
+            transcript: BackgroundWorkTranscript {
+                messages: vec![Message::new(MessageRole::Assistant, "child answer")],
+                transcript_blocks: Vec::new(),
+                turns: Vec::new(),
+            },
+        });
+
+        assert_eq!(
+            registry.snapshot(&key).unwrap().transcript.messages[0].content,
+            "child answer"
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
-import type { AgentSession, SessionMessageMatch } from '@waku/client'
+import type { AgentSession, SessionMessageMatch } from '@fintwind/client'
 import { useEffect, useRef, useState } from 'react'
-import { ProviderIcon, WakuIcon, type WakuIconName } from '@/components/waku-icon'
+import { ProviderIcon, FintwindIcon, type FintwindIconName } from '@/components/fintwind-icon'
 import type { SettingsPageId } from '@/components/settings-view'
 import { SETTINGS_PAGES } from '@/components/settings-view'
 import { displayTitle, searchSessionMessages, type TaskState } from '@/lib/daemon-api'
@@ -21,7 +21,7 @@ interface PaletteItem {
   label: string
   detail?: string
   content?: { source: string; snippet: string }
-  icon?: WakuIconName
+  icon?: FintwindIconName
   provider?: AgentSession['provider']
   shortcut?: string
   keywords: string
@@ -237,7 +237,7 @@ export function CommandPalette({
           {!items.length && !searchPending ? (
             <div className="grid h-[180px] place-items-center text-center">
               <div>
-                <WakuIcon className="mx-auto size-[18px] text-[var(--text-ghost)]" name="search" />
+                <FintwindIcon className="mx-auto size-[18px] text-[var(--text-ghost)]" name="search" />
                 <div className="mt-3 text-[13px] font-medium text-[var(--text-secondary)]">{t('command_palette.no_results')}</div>
                 <div className="mt-[5px] text-[11.5px] text-[var(--text-tertiary)]">{t('command_palette.no_results_hint')}</div>
               </div>
@@ -293,7 +293,7 @@ function PaletteRows({
           <span className="grid size-5 shrink-0 place-items-center text-[var(--text-secondary)]">
             {item.provider
               ? <ProviderIcon className="size-4" provider={item.provider} />
-              : item.icon && <WakuIcon className="size-4" name={item.icon} />}
+              : item.icon && <FintwindIcon className="size-4" name={item.icon} />}
           </span>
           <span className="min-w-0 flex-1">
             <span className="flex min-w-0 items-baseline gap-[7px]">
@@ -447,7 +447,7 @@ function command(
   id: string,
   section: PaletteSection,
   label: string,
-  icon: WakuIconName,
+  icon: FintwindIconName,
   shortcut: string | undefined,
   keywords: string,
   run: () => void,

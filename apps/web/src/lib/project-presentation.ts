@@ -1,4 +1,4 @@
-import type { Project } from '@waku/client'
+import type { Project } from '@fintwind/client'
 
 export const PROJECTLESS_NAME = 'No project'
 

@@ -10,7 +10,7 @@
 //! OpenCode hot-reloads the file, and a commit re-probes so the composer's
 //! picker picks up the new catalog. The built-in OpenCode provider stays
 //! read-only: its endpoint, key, and catalog belong to the CLI (see
-//! `waku_client::opencode_config`).
+//! `fintwind_client::opencode_config`).
 //!
 //! Field edits debounce their commit; discrete actions (add, delete, toggle,
 //! rename) commit immediately, the same one-shot-action allowance the Skills
@@ -18,7 +18,7 @@
 
 use gpui::{ElementId, KeyDownEvent};
 
-use waku_client::custom_providers::{self, CustomProvider, CustomProviderModel, ProviderApiFormat};
+use fintwind_client::custom_providers::{self, CustomProvider, CustomProviderModel, ProviderApiFormat};
 
 use super::*;
 
@@ -72,7 +72,7 @@ fn base_url_valid(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 
-impl Waku {
+impl Fintwind {
     // ── Selection & state ──────────────────────────────────────────────────
 
     /// The provider id the detail pane shows: the stored selection while it
@@ -159,8 +159,8 @@ impl Waku {
             let migrated = cx
                 .background_executor()
                 .spawn(async move {
-                    waku_client::opencode_config::migrate_legacy_override_file();
-                    waku_client::opencode_config::load_providers()
+                    fintwind_client::opencode_config::migrate_legacy_override_file();
+                    fintwind_client::opencode_config::load_providers()
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -203,7 +203,7 @@ impl Waku {
     /// watches the file and hot-reloads, so running serves pick the change up
     /// without a restart.
     fn commit_custom_providers(&mut self, cx: &mut Context<Self>) {
-        if let Err(error) = waku_client::opencode_config::save_providers(&self.providers_store) {
+        if let Err(error) = fintwind_client::opencode_config::save_providers(&self.providers_store) {
             self.show_toast(tr!("providers.sync_failed", error = error.to_string()));
         }
         self.refresh_provider_detection();

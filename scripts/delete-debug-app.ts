@@ -8,7 +8,7 @@ import { createInterface } from "node:readline/promises";
 const projectRoot = resolve(import.meta.dir, "..");
 const userHome = homedir();
 const library = join(userHome, "Library");
-const debugBundleIdentifiers = ["sh.waku.dev", "codes.waku.dev"];
+const debugBundleIdentifiers = ["sh.fintwind.dev", "codes.fintwind.dev"];
 
 type Target = {
   path: string;
@@ -64,9 +64,9 @@ async function existingTargets(): Promise<Target[]> {
 
 // Checkout-local state and build artifacts. Keep the release cache intact.
 addCandidate(join(projectRoot, "temp"));
-addCandidate(join(projectRoot, ".waku-cache", "computer-use", "debug"));
+addCandidate(join(projectRoot, ".fintwind-cache", "computer-use", "debug"));
 addCandidate(join(projectRoot, "target", "debug", "fintwind Debug.app"));
-addCandidate(join(projectRoot, "target", "debug", "Waku Debug.app"));
+addCandidate(join(projectRoot, "target", "debug", "Fintwind Debug.app"));
 
 if (process.env.CARGO_TARGET_DIR) {
   const debugDirectory = join(
@@ -74,30 +74,30 @@ if (process.env.CARGO_TARGET_DIR) {
     "debug",
   );
   addCandidate(join(debugDirectory, "fintwind Debug.app"));
-  addCandidate(join(debugDirectory, "Waku Debug.app"));
+  addCandidate(join(debugDirectory, "Fintwind Debug.app"));
 }
 
 // Debug app bundles that may have been copied outside the checkout.
 addCandidate(join(userHome, "Applications", "fintwind Debug.app"));
-addCandidate(join(userHome, "Applications", "Waku Debug.app"));
+addCandidate(join(userHome, "Applications", "Fintwind Debug.app"));
 addCandidate("/Applications/fintwind Debug.app");
-addCandidate("/Applications/Waku Debug.app");
+addCandidate("/Applications/Fintwind Debug.app");
 
 // Debug-only app data retains the original directory name for compatibility.
-addCandidate(join(library, "Application Support", "Waku Debug"));
+addCandidate(join(library, "Application Support", "Fintwind Debug"));
 addCandidate(
   join(
     library,
     "Application Support",
-    "Waku",
+    "Fintwind",
     "Computer Use",
     "fintwind Debug Computer Use.app",
   ),
 );
-addCandidate(join(library, "Caches", "Waku Debug"));
-addCandidate(join(library, "Logs", "Waku Debug"));
+addCandidate(join(library, "Caches", "Fintwind Debug"));
+addCandidate(join(library, "Logs", "Fintwind Debug"));
 
-// codes.waku.dev was Waku Debug's bundle ID before sh.waku.dev.
+// codes.fintwind.dev was Fintwind Debug's bundle ID before sh.fintwind.dev.
 for (const bundleIdentifier of debugBundleIdentifiers) {
   for (const path of [
     join(library, "Application Support", bundleIdentifier),
@@ -153,8 +153,8 @@ for (const target of targets) {
 const runningProcesses = [
   "fintwind Debug",
   "fintwind Debug Computer Use",
-  "Waku Debug",
-  "Waku Debug Computer Use",
+  "Fintwind Debug",
+  "Fintwind Debug Computer Use",
 ].filter(
   (name) =>
     Bun.spawnSync(["/usr/bin/pgrep", "-x", name], {

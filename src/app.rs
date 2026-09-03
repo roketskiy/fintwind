@@ -133,7 +133,7 @@ const STREAM_SAVE_INTERVAL: Duration = Duration::from_secs(1);
 const DEFAULT_TOAST_DURATION: Duration = Duration::from_secs(5);
 const MINIMUM_TOAST_RESUME_DURATION: Duration = Duration::from_millis(800);
 const TOAST_ANIMATION_DURATION: Duration = Duration::from_millis(150);
-const TASK_NOTIFICATION_TAG_PREFIX: &str = "waku-task:";
+const TASK_NOTIFICATION_TAG_PREFIX: &str = "fintwind-task:";
 
 pub(crate) fn task_notification_tag(session_id: Uuid) -> String {
     format!("{TASK_NOTIFICATION_TAG_PREFIX}{session_id}")
@@ -536,11 +536,11 @@ struct DriverStartRequest {
     session_id: Uuid,
     options: DriverStartOptions,
     event_wake: smol::channel::Sender<()>,
-    daemon_client: waku_client::DaemonClient,
+    daemon_client: fintwind_client::DaemonClient,
 }
 
 /// A provider process that has started off-thread but is not installed into
-/// Waku's runtime map yet. Its event receiver safely buffers early events.
+/// Fintwind's runtime map yet. Its event receiver safely buffers early events.
 struct PreparedDriver {
     handle: DriverHandle,
     events: Receiver<DriverEvent>,
@@ -627,7 +627,7 @@ enum EventPumpSchedule {
 }
 
 /// One cached island of the root view: a region rendered by delegating back
-/// into [`Waku`] under its own view identity.
+/// into [`Fintwind`] under its own view identity.
 ///
 /// All state stays on the root entity; what the island buys is scope for
 /// gpui's cached-view machinery. The pulse clock and the streaming veil lease
@@ -637,25 +637,25 @@ enum EventPumpSchedule {
 /// invalidation semantics exactly — any root notify still re-renders every
 /// island — so caching cannot show state the single-view architecture would
 /// have repainted.
-struct WakuPane {
-    waku: Option<WeakEntity<Waku>>,
-    content: fn(&mut Waku, &mut Window, &mut Context<Waku>) -> AnyElement,
+struct FintwindPane {
+    fintwind: Option<WeakEntity<Fintwind>>,
+    content: fn(&mut Fintwind, &mut Window, &mut Context<Fintwind>) -> AnyElement,
 }
 
-impl WakuPane {
+impl FintwindPane {
     fn new(
-        content: fn(&mut Waku, &mut Window, &mut Context<Waku>) -> AnyElement,
+        content: fn(&mut Fintwind, &mut Window, &mut Context<Fintwind>) -> AnyElement,
         cx: &mut App,
     ) -> Entity<Self> {
         cx.new(|_| Self {
-            waku: None,
+            fintwind: None,
             content,
         })
     }
 
-    fn bind(&mut self, waku: &Entity<Waku>, cx: &mut Context<Self>) {
-        self.waku = Some(waku.downgrade());
-        cx.observe(waku, |_, waku, cx| {
+    fn bind(&mut self, fintwind: &Entity<Fintwind>, cx: &mut Context<Self>) {
+        self.fintwind = Some(fintwind.downgrade());
+        cx.observe(fintwind, |_, fintwind, cx| {
             // A panel slide notifies the root at display rate for its 200ms,
             // and this fan-out would price every one of those ticks at a
             // three-island rebuild. Skipping it hands the decision to the
@@ -667,7 +667,7 @@ impl WakuPane {
             // (terminal output, pulse leases) dirty their ancestor pane
             // without this observer, and the slide's retirement notify
             // below re-runs the fan-out, so nothing outlasts the 200ms.
-            if !waku.read(cx).panels_sliding() {
+            if !fintwind.read(cx).panels_sliding() {
                 cx.notify();
             }
         })
@@ -675,13 +675,13 @@ impl WakuPane {
     }
 }
 
-impl Render for WakuPane {
+impl Render for FintwindPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(waku) = self.waku.as_ref().and_then(WeakEntity::upgrade) else {
+        let Some(fintwind) = self.fintwind.as_ref().and_then(WeakEntity::upgrade) else {
             return gpui::div().into_any_element();
         };
         let content = self.content;
-        waku.update(cx, |waku, cx| content(waku, window, cx))
+        fintwind.update(cx, |fintwind, cx| content(fintwind, window, cx))
     }
 }
 
@@ -1001,11 +1001,11 @@ impl Default for ActivityScrollViewport {
     }
 }
 
-pub struct Waku {
+pub struct Fintwind {
     /// Owns the headless provider process for exactly as long as the desktop
     /// app entity. Debug builds can replace it independently after a rebuild;
     /// all live driver handles below are lightweight RPC proxies.
-    daemon: waku_client::DaemonSupervisor,
+    daemon: fintwind_client::DaemonSupervisor,
     /// Cached once at construction for the Daemon settings connection URL;
     /// rendering must not query account or network configuration.
     daemon_hostname: String,
@@ -1345,7 +1345,7 @@ pub struct Waku {
     /// configuration file. The app keeps no separate store — this is a
     /// working copy that only lives between a config load and the next
     /// commit.
-    providers_store: Vec<waku_client::custom_providers::CustomProvider>,
+    providers_store: Vec<fintwind_client::custom_providers::CustomProvider>,
     /// Generation token for the background config load; a newer load
     /// supersedes an older one's result.
     providers_load_generation: usize,
@@ -1361,7 +1361,7 @@ pub struct Waku {
     /// the last attempt succeeded (or none ran yet).
     native_reconcile_error: Option<String>,
     /// The API format picked in the add-provider form.
-    providers_form_format: waku_client::custom_providers::ProviderApiFormat,
+    providers_form_format: fintwind_client::custom_providers::ProviderApiFormat,
     /// Model draft rows of the add-provider form: id + context window.
     providers_form_models: Vec<(Entity<ComposerInput>, Entity<ComposerInput>)>,
     /// The selected provider's editable endpoint and key fields.
@@ -1399,7 +1399,7 @@ pub struct Waku {
     /// The MCP server roster, loaded from and committed back to OpenCode's
     /// own configuration file. A working copy, exactly like the provider
     /// roster.
-    mcp_servers: Vec<waku_client::opencode_config::McpServer>,
+    mcp_servers: Vec<fintwind_client::opencode_config::McpServer>,
     /// Generation token for the background config load; a newer load
     /// supersedes an older one's result.
     mcp_load_generation: usize,
@@ -1416,7 +1416,7 @@ pub struct Waku {
     mcp_form_command: Entity<ComposerInput>,
     mcp_form_url: Entity<ComposerInput>,
     /// The kind picked in the add-server form.
-    mcp_form_kind: waku_client::opencode_config::McpServerKind,
+    mcp_form_kind: fintwind_client::opencode_config::McpServerKind,
     /// Scroll positions of the MCP page's panes, tracked so they can draw
     /// scrollbars and reset per selection.
     mcp_list_scroll: ScrollHandle,
@@ -1547,10 +1547,10 @@ pub struct Waku {
     menus: RefCell<HashMap<SharedString, ContextMenuHandle>>,
     navigation_rail: Entity<ConversationNavigationRail>,
     navigation_rail_reset_generation: Cell<u64>,
-    /// Cached islands of the root view; see [`WakuPane`].
-    sidebar_pane: Entity<WakuPane>,
-    transcript_pane: Entity<WakuPane>,
-    right_panel_pane: Entity<WakuPane>,
+    /// Cached islands of the root view; see [`FintwindPane`].
+    sidebar_pane: Entity<FintwindPane>,
+    transcript_pane: Entity<FintwindPane>,
+    right_panel_pane: Entity<FintwindPane>,
     /// The unix second the pending time-label wake-up targets, or `None` when
     /// none is armed. See `schedule_time_label_wake`.
     time_label_wake: Cell<Option<u64>>,
@@ -1636,7 +1636,7 @@ pub(super) fn next_time_label_change(sessions: &[AgentSession], now: u64) -> Opt
 
 fn migrate_legacy_projectless_projects(
     state: &mut PersistedState,
-    workspace: &waku_client::WorkspaceClient,
+    workspace: &fintwind_client::WorkspaceClient,
 ) -> (bool, Option<anyhow::Error>) {
     let legacy_indices = state
         .projects
@@ -1654,9 +1654,9 @@ fn migrate_legacy_projectless_projects(
     for index in legacy_indices {
         let path = state.projects[index].path.clone();
         let response = workspace
-            .request(waku_client::WorkspaceOperation::MigrateProjectlessWorkspace { path });
+            .request(fintwind_client::WorkspaceOperation::MigrateProjectlessWorkspace { path });
         let cwd = match response {
-            Ok(waku_client::WorkspaceResult::ProjectlessWorkspace { cwd }) => cwd,
+            Ok(fintwind_client::WorkspaceResult::ProjectlessWorkspace { cwd }) => cwd,
             Ok(_) => {
                 return (
                     changed,
@@ -1674,7 +1674,7 @@ fn migrate_legacy_projectless_projects(
     (changed, None)
 }
 
-impl Waku {
+impl Fintwind {
     fn updater_button_expanded(&self) -> bool {
         self.updater_button_hovered || self.updater_button_focused
     }
@@ -1877,7 +1877,7 @@ impl Waku {
     pub fn new(
         window: &mut Window,
         cx: &mut App,
-        daemon: waku_client::DaemonSupervisor,
+        daemon: fintwind_client::DaemonSupervisor,
     ) -> Entity<Self> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let store = StateStore::remote(daemon.clone());
@@ -2042,10 +2042,10 @@ impl Waku {
                 .placeholder(tr!("diff.filter_files"))
         });
         let navigation_rail = cx.new(|_| ConversationNavigationRail::new());
-        let sidebar_pane = WakuPane::new(Waku::sidebar_pane_content, cx);
-        let transcript_pane = WakuPane::new(Waku::transcript_pane_content, cx);
-        let right_panel_pane = WakuPane::new(Waku::right_panel_pane_content, cx);
-        let workspace_client = waku_client::WorkspaceClient::new(daemon.client());
+        let sidebar_pane = FintwindPane::new(Fintwind::sidebar_pane_content, cx);
+        let transcript_pane = FintwindPane::new(Fintwind::transcript_pane_content, cx);
+        let right_panel_pane = FintwindPane::new(Fintwind::right_panel_pane_content, cx);
+        let workspace_client = fintwind_client::WorkspaceClient::new(daemon.client());
         let (projectless_migrated, projectless_migration_error) =
             migrate_legacy_projectless_projects(&mut state, &workspace_client);
         let projectless_save_error = projectless_migrated
@@ -2202,14 +2202,14 @@ impl Waku {
             let event_wake = event_wake_tx.clone();
             let daemon = daemon.client();
             std::thread::Builder::new()
-                .name("waku-computer-permission-probe".into())
+                .name("fintwind-computer-permission-probe".into())
                 .spawn(move || {
                     let result = match daemon.request(
                         Uuid::nil(),
                         Uuid::nil(),
-                        waku_client::Command::ProbeComputerPermissions { prompt: false },
+                        fintwind_client::Command::ProbeComputerPermissions { prompt: false },
                     ) {
-                        Ok(waku_client::ResponsePayload::ComputerPermissions { permissions }) => {
+                        Ok(fintwind_client::ResponsePayload::ComputerPermissions { permissions }) => {
                             Ok(permissions)
                         }
                         Ok(_) => Err("the daemon returned an invalid permission response".into()),
@@ -2428,7 +2428,7 @@ impl Waku {
             .detach();
 
             // Clipboard images and Finder file copies are attachment payloads,
-            // not text paths. The input owns representation priority; Waku
+            // not text paths. The input owns representation priority; Fintwind
             // owns durable staging and composer/session state.
             cx.subscribe(
                 &composer,
@@ -2760,10 +2760,10 @@ impl Waku {
             .detach();
 
             let markdown_link_handler: md::render::LinkHandler = {
-                let waku = cx.entity().downgrade();
+                let fintwind = cx.entity().downgrade();
                 Rc::new(move |target, _, cx| {
-                    let handled = waku
-                        .update(cx, |waku, cx| waku.open_transcript_link(target, cx))
+                    let handled = fintwind
+                        .update(cx, |fintwind, cx| fintwind.open_transcript_link(target, cx))
                         .unwrap_or(false);
                     if !handled {
                         cx.open_url(target);
@@ -3074,7 +3074,7 @@ impl Waku {
                 fps_value: 0,
             }
         });
-        navigation_rail.update(cx, |rail, _| rail.set_waku(entity.downgrade()));
+        navigation_rail.update(cx, |rail, _| rail.set_fintwind(entity.downgrade()));
         for pane in [&sidebar_pane, &transcript_pane, &right_panel_pane] {
             pane.update(cx, |pane, cx| pane.bind(&entity, cx));
         }

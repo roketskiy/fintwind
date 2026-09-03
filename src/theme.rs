@@ -1,6 +1,6 @@
 use gpui::{App, Global, Hsla, Window, WindowAppearance, hsla, rgb, transparent_black};
 
-pub use waku_client::theme::ThemePreference;
+pub use fintwind_client::theme::ThemePreference;
 
 fn resolves_to_dark(preference: ThemePreference, system_appearance: WindowAppearance) -> bool {
     match preference {
@@ -21,7 +21,7 @@ fn native_override(preference: ThemePreference) -> Option<bool> {
     }
 }
 
-/// Waku's visual language, take two: neutral graphite surfaces in the spirit
+/// Fintwind's visual language, take two: neutral graphite surfaces in the spirit
 /// of Cursor — color is reserved for meaning. On macOS the sidebar's semantic
 /// tint is installed as a native layer above Sidebar vibrancy; keeping this
 /// GPUI surface clear avoids incorrectly accumulating the alpha of nested Metal
@@ -79,8 +79,8 @@ pub struct Theme {
 
 impl Theme {
     pub fn current(cx: &App) -> Self {
-        if cx.has_global::<ActiveWakuTheme>() {
-            cx.global::<ActiveWakuTheme>().0
+        if cx.has_global::<ActiveFintwindTheme>() {
+            cx.global::<ActiveFintwindTheme>().0
         } else {
             Self::dark()
         }
@@ -182,14 +182,14 @@ impl Theme {
 }
 
 #[derive(Clone, Copy)]
-struct ActiveWakuTheme(Theme);
+struct ActiveFintwindTheme(Theme);
 
-impl Global for ActiveWakuTheme {}
+impl Global for ActiveFintwindTheme {}
 
 /// Publish the resolved palette. [`Theme::current`] reads it back from the
 /// global, which is how every view gets its colors.
 fn set_active_theme(theme: Theme, cx: &mut App) {
-    cx.set_global(ActiveWakuTheme(theme));
+    cx.set_global(ActiveFintwindTheme(theme));
 }
 
 /// Resolve and publish the startup palette, before any window exists.

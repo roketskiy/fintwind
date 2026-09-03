@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Editor } from '@pierre/diffs/edit'
-import type { ActivityItem, AgentSession, Message, Project, ReviewDiffSource, TranscriptBlock, WorkingTreeEntry } from '@waku/client'
+import type { ActivityItem, AgentSession, Message, Project, ReviewDiffSource, TranscriptBlock, WorkingTreeEntry } from '@fintwind/client'
 import { GhosttyCore } from '@wterm/ghostty'
 import { Terminal, useTerminal } from '@wterm/react'
 import {
@@ -23,7 +23,7 @@ import { toast } from 'sonner'
 import { ControlMenu } from '@/components/control-menu'
 import { PanelResizeHandle } from '@/components/panel-resize-handle'
 import { Button } from '@/components/ui/button'
-import { FileTypeIcon, WakuIcon, type WakuIconName } from '@/components/waku-icon'
+import { FileTypeIcon, FintwindIcon, type FintwindIconName } from '@/components/fintwind-icon'
 import type { CodeDiffSurfaceHandle, DiffSurfaceFile } from '@/components/code-surfaces'
 import {
   collectWorkspaceDiff,
@@ -378,11 +378,11 @@ export function RightPanel({
               },
             ]}
           >
-            <WakuIcon className="size-3.5" name="plus" />
+            <FintwindIcon className="size-3.5" name="plus" />
           </ControlMenu>
         )}
         <Button aria-label={t('right_panel.hide')} size="icon-sm" variant="ghost" onClick={() => onOpenChange(false)}>
-          <WakuIcon name="panelRight" />
+          <FintwindIcon name="panelRight" />
         </Button>
       </header>
 
@@ -493,7 +493,7 @@ function PanelTabButton({
     >
       {(tab.surface === 'files' || tab.surface === 'file') && tab.selectedFile
         ? <FileTypeIcon className="size-[13px]" path={tab.selectedFile} />
-        : <WakuIcon className="size-[13px] text-[var(--text-secondary)]" name={icon} />}
+        : <FintwindIcon className="size-[13px] text-[var(--text-secondary)]" name={icon} />}
       <span className="min-w-0 flex-1 truncate">{title}</span>
       {tab.dirty && (
         <span
@@ -513,7 +513,7 @@ function PanelTabButton({
           onClose()
         }}
       >
-        <WakuIcon className="size-2.5 text-[var(--text-tertiary)]" name="x" />
+        <FintwindIcon className="size-2.5 text-[var(--text-tertiary)]" name="x" />
       </button>
     </div>
   )
@@ -527,9 +527,9 @@ function PanelChooser({ onSelect }: { onSelect: (surface: PanelSurface) => void 
         <h3 className="text-[13px] font-medium">{t('right_panel.open_surface')}</h3>
         <p className="mt-[5px] text-[11px] text-[var(--text-tertiary)]">{t('right_panel.choose_surface')}</p>
         <div className="mt-5 grid grid-cols-2 gap-2 text-left">
-          <PanelCard icon={<WakuIcon className="size-[18px]" name="terminal" />} label={t('right_panel.terminal')} description={t('right_panel.terminal_description')} onClick={() => onSelect('terminal')} />
-          <PanelCard icon={<WakuIcon className="size-[18px]" name="folder" />} label={t('right_panel.files')} description={t('right_panel.files_description')} onClick={() => onSelect('files')} />
-          <PanelCard icon={<WakuIcon className="size-[18px]" name="fileDiff" />} label={t('right_panel.diff')} description={t('right_panel.diff_description')} onClick={() => onSelect('changes')} />
+          <PanelCard icon={<FintwindIcon className="size-[18px]" name="terminal" />} label={t('right_panel.terminal')} description={t('right_panel.terminal_description')} onClick={() => onSelect('terminal')} />
+          <PanelCard icon={<FintwindIcon className="size-[18px]" name="folder" />} label={t('right_panel.files')} description={t('right_panel.files_description')} onClick={() => onSelect('files')} />
+          <PanelCard icon={<FintwindIcon className="size-[18px]" name="fileDiff" />} label={t('right_panel.diff')} description={t('right_panel.diff_description')} onClick={() => onSelect('changes')} />
         </div>
       </div>
     </div>
@@ -600,7 +600,7 @@ function FilesPanel({
   const treeList = useRef<VirtuosoHandle>(null)
   const buffersRef = useRef(buffers)
   buffersRef.current = buffers
-  const [treeWidth, setTreeWidth] = useState(() => readStoredWidth('waku.fileTreeWidth', 184, 140, 360))
+  const [treeWidth, setTreeWidth] = useState(() => readStoredWidth('fintwind.fileTreeWidth', 184, 140, 360))
   const treeWidthRef = useRef(treeWidth)
   treeWidthRef.current = treeWidth
   const root = session && project ? sessionCwd(session, project) : undefined
@@ -628,7 +628,7 @@ function FilesPanel({
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      window.localStorage.setItem('waku.fileTreeWidth', String(Math.round(treeWidth)))
+      window.localStorage.setItem('fintwind.fileTreeWidth', String(Math.round(treeWidth)))
     }, 150)
     return () => window.clearTimeout(timer)
   }, [treeWidth])
@@ -818,7 +818,7 @@ function FilesPanel({
         />
       )}
       <div className="flex h-[42px] shrink-0 items-center gap-2 border-b px-4 text-[11.5px] font-medium text-[var(--text-secondary)]">
-        <WakuIcon className="size-[13px] text-[var(--text-tertiary)]" name="folder" />
+        <FintwindIcon className="size-[13px] text-[var(--text-tertiary)]" name="folder" />
         <span className="min-w-0 flex-1 truncate">
           {project ? projectDisplayName(project, t('project.no_project_name')) : ''}
         </span>
@@ -936,11 +936,11 @@ function TreeRow({
     >
       {entry.isDir
         ? expanded
-          ? <WakuIcon className="size-2.5 shrink-0 text-[var(--text-ghost)]" name="chevronDown" />
-          : <WakuIcon className="size-2.5 shrink-0 text-[var(--text-ghost)]" name="chevronRight" />
+          ? <FintwindIcon className="size-2.5 shrink-0 text-[var(--text-ghost)]" name="chevronDown" />
+          : <FintwindIcon className="size-2.5 shrink-0 text-[var(--text-ghost)]" name="chevronRight" />
         : <span className="size-2.5 shrink-0" />}
       {entry.isDir
-        ? <WakuIcon className="size-3.5 shrink-0 text-[var(--text-tertiary)]" name="folder" />
+        ? <FintwindIcon className="size-3.5 shrink-0 text-[var(--text-tertiary)]" name="folder" />
         : <FileTypeIcon className="size-3.5" path={entry.name} />}
       <span className="truncate">{entry.name}</span>
     </button>
@@ -969,7 +969,7 @@ function ChangesPanel({
   const [focusedDiffRow, setFocusedDiffRow] = useState<string | null>(null)
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set())
   const [filter, setFilter] = useState('')
-  const [treeWidth, setTreeWidth] = useState(() => readStoredWidth('waku.diffTreeWidth', 184, 140, 360))
+  const [treeWidth, setTreeWidth] = useState(() => readStoredWidth('fintwind.diffTreeWidth', 184, 140, 360))
   const root = session && project ? sessionCwd(session, project) : undefined
   const maxTreeWidth = Math.max(140, Math.min(360, panelWidth - 140))
   const fittedTreeWidth = clamp(treeWidth, 140, maxTreeWidth)
@@ -999,7 +999,7 @@ function ChangesPanel({
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      window.localStorage.setItem('waku.diffTreeWidth', String(Math.round(treeWidth)))
+      window.localStorage.setItem('fintwind.diffTreeWidth', String(Math.round(treeWidth)))
     }, 150)
     return () => window.clearTimeout(timer)
   }, [treeWidth])
@@ -1134,7 +1134,7 @@ function ChangesPanel({
             onChange={setTreeWidth}
           />
           <label className="flex h-11 shrink-0 items-center gap-2 border-b px-2">
-            <WakuIcon className="size-[13px] shrink-0 text-[var(--text-tertiary)]" name="search" />
+            <FintwindIcon className="size-[13px] shrink-0 text-[var(--text-tertiary)]" name="search" />
             <input
               aria-label={t('diff.filter_files')}
               className="min-w-0 flex-1 bg-transparent text-[11px] outline-none placeholder:text-[var(--text-ghost)]"
@@ -1166,8 +1166,8 @@ function ChangesPanel({
                 onFocus={() => setFocusedDiffRow(diffTreeRowKey(row))}
                 onKeyDown={(event) => handleDiffTreeKeyDown(event, row, index)}
               >
-                <WakuIcon className="size-2.5 shrink-0 text-[var(--text-ghost)]" name={row.expanded ? 'chevronDown' : 'chevronRight'} />
-                <WakuIcon className="size-[13px] shrink-0 text-[var(--text-tertiary)]" name="folder" />
+                <FintwindIcon className="size-2.5 shrink-0 text-[var(--text-ghost)]" name={row.expanded ? 'chevronDown' : 'chevronRight'} />
+                <FintwindIcon className="size-[13px] shrink-0 text-[var(--text-tertiary)]" name="folder" />
                 <span className="min-w-0 flex-1 truncate font-medium">{row.name}</span>
               </button>
             ) : (
@@ -1225,7 +1225,7 @@ function ChangesPanel({
         )}
         <div className="flex-1" />
         <button aria-label={t('diff.refresh')} className="rounded p-1 hover:bg-accent" type="button" onClick={() => void diff.refetch()}>
-          <WakuIcon className={cn('size-3.5', diff.isFetching && 'motion-safe:animate-spin')} name="rotateCw" />
+          <FintwindIcon className={cn('size-3.5', diff.isFetching && 'motion-safe:animate-spin')} name="rotateCw" />
         </button>
       </div>
       {reviewContent}
@@ -1339,7 +1339,7 @@ function BackgroundWorkPanel({
     return (
       <div className="grid min-h-0 flex-1 place-items-center p-6 text-center">
         <div>
-          <WakuIcon className="mx-auto size-[22px] text-[var(--text-ghost)]" name={backgroundWorkKindIcon(workKey.kind)} />
+          <FintwindIcon className="mx-auto size-[22px] text-[var(--text-ghost)]" name={backgroundWorkKindIcon(workKey.kind)} />
           <p className="mt-2 text-[12px] text-[var(--text-secondary)]">{t('background.unavailable')}</p>
         </div>
       </div>
@@ -1359,7 +1359,7 @@ function BackgroundWorkPanel({
     <div className="min-h-0 flex-1 overflow-auto p-3">
       <div className="overflow-hidden rounded-[9px] border bg-card">
         <div className="flex min-h-[54px] items-center gap-2.5 px-[11px] py-2">
-          <WakuIcon className="size-[15px] text-[var(--text-secondary)]" name={backgroundWorkKindIcon(item.key.kind)} />
+          <FintwindIcon className="size-[15px] text-[var(--text-secondary)]" name={backgroundWorkKindIcon(item.key.kind)} />
           <div className="min-w-0 flex-1">
             <div className="truncate text-[12px] font-medium">{item.title}</div>
             <div className="mt-1 flex items-center gap-1.5 text-[10px] text-[var(--text-tertiary)]">
@@ -1376,7 +1376,7 @@ function BackgroundWorkPanel({
               variant="outline"
               onClick={() => void stopBackgroundWork(session.id, item).catch(() => {})}
             >
-              <WakuIcon className="size-[11px] text-destructive" name="stopFilled" />
+              <FintwindIcon className="size-[11px] text-destructive" name="stopFilled" />
               {t('background.stop')}
             </Button>
           )}
@@ -1479,7 +1479,7 @@ function BackgroundActivityCard({ activity, t }: { activity: ActivityItem; t: Tr
 }
 
 function BackgroundStatusIcon({ status }: { status: BackgroundWorkStatus }) {
-  const icon: WakuIconName = status === 'completed'
+  const icon: FintwindIconName = status === 'completed'
     ? 'check'
     : status === 'failed'
       ? 'x'
@@ -1489,7 +1489,7 @@ function BackgroundStatusIcon({ status }: { status: BackgroundWorkStatus }) {
           ? 'stop'
           : 'loaderCircle'
   return (
-    <WakuIcon
+    <FintwindIcon
       className={cn(
         'size-[9px]',
         isStoppableBackgroundStatus(status) && 'motion-safe:animate-spin text-ring',
@@ -1580,7 +1580,7 @@ function TerminalPanel({
       {core && (
         <Terminal
           autoResize
-          className="waku-terminal size-full"
+          className="fintwind-terminal size-full"
           core={core}
           cursorBlink
           ref={ref}
@@ -1768,7 +1768,7 @@ function sameBackgroundWorkKey(left: BackgroundWorkKey, right: BackgroundWorkKey
   return left.kind === right.kind && left.providerId === right.providerId
 }
 
-function backgroundWorkKindIcon(kind?: BackgroundWorkKey['kind']): WakuIconName {
+function backgroundWorkKindIcon(kind?: BackgroundWorkKey['kind']): FintwindIconName {
   return kind === 'subagent' ? 'bot' : 'terminalSquare'
 }
 
@@ -1801,7 +1801,7 @@ function stripAnsi(value: string) {
 }
 
 function requireClient<T>(client: T | null): T {
-  if (!client) throw new Error('Waku daemon is disconnected')
+  if (!client) throw new Error('Fintwind daemon is disconnected')
   return client
 }
 

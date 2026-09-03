@@ -3,11 +3,11 @@
 ## Install
 
 ```sh
-curl -fsSL https://waku.sh/install.sh | sh
+curl -fsSL https://fintwind.sh/install.sh | sh
 ```
 
 The script needs no root. It unpacks the release tarball into
-`~/.local/waku.app` and installs the desktop entry into
+`~/.local/fintwind.app` and installs the desktop entry into
 `~/.local/share/applications`, so **fintwind appears in your applications menu** —
 you can also launch it from a terminal via `fintwind` command. Run the script again to
 upgrade; it replaces the previous install rather than merging into it.
@@ -23,20 +23,20 @@ fintwind expects:
 - **x86_64 or aarch64.** Other architectures build from source.
 - `xdg-desktop-portal` for native file dialogs.
 
-Set `WAKU_VERSION` to install a specific version rather than the latest.
+Set `FINTWIND_VERSION` to install a specific version rather than the latest.
 
 ## Installing manually
 
 The script is a convenience, not a requirement. Download
 `fintwind-<version>-<target>.tar.gz` from
-[releases.waku.sh](https://releases.waku.sh) or the
-[GitHub release](https://github.com/egoist/waku/releases), then unpack it
+[releases.fintwind.sh](https://releases.fintwind.sh) or the
+[GitHub release](https://github.com/egoist/fintwind/releases), then unpack it
 wherever you like:
 
 ```sh
-mkdir -p ~/.local/waku.app
-tar -xzf fintwind-<version>-<target>.tar.gz --strip-components=1 -C ~/.local/waku.app
-ln -sf ~/.local/waku.app/bin/fintwind ~/.local/bin/fintwind   # optional
+mkdir -p ~/.local/fintwind.app
+tar -xzf fintwind-<version>-<target>.tar.gz --strip-components=1 -C ~/.local/fintwind.app
+ln -sf ~/.local/fintwind.app/bin/fintwind ~/.local/bin/fintwind   # optional
 ```
 
 The archive uses an install-prefix layout (`bin/`, `share/`) beneath one
@@ -49,18 +49,18 @@ A symlink is fine — fintwind resolves it back to the real path.
 
 Installing the desktop entry is the part that matters — it is how the app is
 launched normally, and it is what associates the running window with its icon
-and name (fintwind reports the Wayland `app_id` / X11 `WM_CLASS` `sh.waku`, which
+and name (fintwind reports the Wayland `app_id` / X11 `WM_CLASS` `sh.fintwind`, which
 matches the entry's filename). Install the packaged file and point it at the
-install (the packaged copy uses bare `Exec=fintwind` and `Icon=sh.waku` names so it
+install (the packaged copy uses bare `Exec=fintwind` and `Icon=sh.fintwind` names so it
 can be relocated):
 
 ```sh
-install -D ~/.local/waku.app/share/applications/sh.waku.desktop \
+install -D ~/.local/fintwind.app/share/applications/sh.fintwind.desktop \
   -t ~/.local/share/applications
-sed -i "s|^Exec=fintwind$|Exec=$HOME/.local/waku.app/bin/fintwind|" \
-  ~/.local/share/applications/sh.waku.desktop
-sed -i "s|^Icon=sh.waku$|Icon=$HOME/.local/waku.app/share/icons/hicolor/256x256/apps/sh.waku.png|" \
-  ~/.local/share/applications/sh.waku.desktop
+sed -i "s|^Exec=fintwind$|Exec=$HOME/.local/fintwind.app/bin/fintwind|" \
+  ~/.local/share/applications/sh.fintwind.desktop
+sed -i "s|^Icon=sh.fintwind$|Icon=$HOME/.local/fintwind.app/share/icons/hicolor/256x256/apps/sh.fintwind.png|" \
+  ~/.local/share/applications/sh.fintwind.desktop
 ```
 
 ## Updating
@@ -71,11 +71,11 @@ install script to upgrade.
 ## Uninstalling
 
 ```sh
-curl -fsSL https://waku.sh/install.sh | sh -s -- --uninstall
+curl -fsSL https://fintwind.sh/install.sh | sh -s -- --uninstall
 ```
 
-This removes `~/.local/waku.app`, the symlink, and the desktop entry. Projects
-and settings stay in `~/.waku`; delete that directory to remove them too.
+This removes `~/.local/fintwind.app`, the symlink, and the desktop entry. Projects
+and settings stay in `~/.fintwind`; delete that directory to remove them too.
 
 ## Building from source
 
@@ -89,7 +89,7 @@ produce the same archive this page installs with:
 To exercise the install script against that local build:
 
 ```sh
-WAKU_BUNDLE_PATH=target/release/fintwind-<version>-<target>.tar.gz \
+FINTWIND_BUNDLE_PATH=target/release/fintwind-<version>-<target>.tar.gz \
   sh website/public/install.sh
 ```
 

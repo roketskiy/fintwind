@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "waku",
+      "name": "fintwind-workspace",
       "devDependencies": {
         "@libsql/client": "^0.17.4",
         "@types/bun": "latest",
@@ -13,9 +13,10 @@
       },
     },
     "apps/web": {
-      "name": "@waku/web",
+      "name": "@fintwind/web",
       "dependencies": {
         "@base-ui/react": "^1.7.0",
+        "@fintwind/client": "workspace:*",
         "@fontsource-variable/geist": "^5.3.0",
         "@pierre/diffs": "1.3.5",
         "@tanstack/charts": "0.13.0",
@@ -23,7 +24,6 @@
         "@tanstack/react-router": "^1.170.27",
         "@tanstack/react-router-ssr-query": "^1.167.1",
         "@tanstack/react-start": "^1.168.44",
-        "@waku/client": "workspace:*",
         "@wterm/dom": "0.3.3",
         "@wterm/ghostty": "0.3.3",
         "@wterm/react": "0.3.3",
@@ -57,8 +57,8 @@
         "wrangler": "^4.74.0",
       },
     },
-    "packages/waku-client": {
-      "name": "@waku/client",
+    "packages/fintwind-client": {
+      "name": "@fintwind/client",
       "version": "0.1.0",
     },
     "website": {
@@ -241,6 +241,10 @@
     "@esbuild/win32-ia32": ["@esbuild/win32-ia32@0.25.12", "", { "os": "win32", "cpu": "ia32" }, "sha512-HkqnmmBoCbCwxUKKNPBixiWDGCpQGVsrQfJoVGYLPT41XWF8lHuE5N6WhVia2n4o5QK5M4tYr21827fNhi4byQ=="],
 
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.12", "", { "os": "win32", "cpu": "x64" }, "sha512-alJC0uCZpTFrSL0CCDjcgleBXPnCrEAhTBILpeAp7M/OFgoqtAetfBzX0xM00MUsVVPpVjlPuMbREqnZCXaTnA=="],
+
+    "@fintwind/client": ["@fintwind/client@workspace:packages/fintwind-client"],
+
+    "@fintwind/web": ["@fintwind/web@workspace:apps/web"],
 
     "@floating-ui/core": ["@floating-ui/core@1.8.0", "", { "dependencies": { "@floating-ui/utils": "^0.2.12" } }, "sha512-0CIZ5itps/8x7BG8dEIhs53BvCUH2PCoogtakwRTut+Arm58sJooJ0AuZhLw2HJYIR5cMLNPBSS728sPho2khQ=="],
 
@@ -603,10 +607,6 @@
     "@ungap/structured-clone": ["@ungap/structured-clone@1.3.3", "", {}, "sha512-60YRaenCQcVjYEKOcG824+DRGGIQ3VKErcBoAEDJZz5bKIs2ZG+X/H9Nk+Q6EVkwJk5QNApxbrc5QtBSwtrXAg=="],
 
     "@vitejs/plugin-react": ["@vitejs/plugin-react@6.0.5", "", { "dependencies": { "@rolldown/pluginutils": "^1.0.1" }, "peerDependencies": { "@rolldown/plugin-babel": "^0.1.7 || ^0.2.0", "babel-plugin-react-compiler": "^1.0.0", "vite": "^8.0.0" }, "optionalPeers": ["@rolldown/plugin-babel", "babel-plugin-react-compiler"] }, "sha512-BOVzne/NL162sMdResB25mUv+vWMF5NoAjNf09TeGlE7ZpszZWSD3winycicLJw72yeVsoCn/2kOhEuCvEShMA=="],
-
-    "@waku/client": ["@waku/client@workspace:packages/waku-client"],
-
-    "@waku/web": ["@waku/web@workspace:apps/web"],
 
     "@wterm/core": ["@wterm/core@0.3.3", "", {}, "sha512-UIDr0HLD92VV3pMkSo6XKu8WJ+41CPLhROuDaomHCVe4aYydfoc17zQSZxMvZCx9xFtKzVcacJ/mR5lOD8HD3A=="],
 

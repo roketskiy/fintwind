@@ -9,7 +9,7 @@
     <key>CFBundleExecutable</key>
     <string>fintwind Computer Use</string>
     <key>CFBundleIdentifier</key>
-    <string>sh.waku.computer-use</string>
+    <string>sh.fintwind.computer-use</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

@@ -18,7 +18,7 @@ use super::*;
 /// server round trip.
 const RECONCILE_DEBOUNCE: Duration = Duration::from_millis(600);
 
-impl Waku {
+impl Fintwind {
     /// Request a reconcile after a short debounce. Safe to call often.
     pub(super) fn schedule_native_session_reconcile(&mut self, cx: &mut Context<Self>) {
         self.native_reconcile_generation += 1;
@@ -69,7 +69,7 @@ impl Waku {
             let listed = cx
                 .background_executor()
                 .spawn(async move {
-                    waku_client::persistence::StateStore::remote(daemon)
+                    fintwind_client::persistence::StateStore::remote(daemon)
                         .list_provider_sessions(binary, directory)
                 })
                 .await;
@@ -116,7 +116,7 @@ impl Waku {
     /// Merge one server listing into the local roster.
     fn apply_native_session_roster(
         &mut self,
-        summaries: Vec<waku_client::provider_session::NativeSessionSummary>,
+        summaries: Vec<fintwind_client::provider_session::NativeSessionSummary>,
         cx: &mut Context<Self>,
     ) {
         self.native_reconcile_error = None;
@@ -286,7 +286,7 @@ impl Waku {
             let fetched = cx
                 .background_executor()
                 .spawn(async move {
-                    waku_client::persistence::StateStore::remote(daemon)
+                    fintwind_client::persistence::StateStore::remote(daemon)
                         .fetch_native_transcript(binary, directory, native_session_id)
                 })
                 .await;
@@ -351,7 +351,7 @@ impl Waku {
         let daemon = self.daemon.clone();
         cx.background_executor()
             .spawn(async move {
-                let _ = waku_client::persistence::StateStore::remote(daemon)
+                let _ = fintwind_client::persistence::StateStore::remote(daemon)
                     .rename_provider_session(binary, directory, native_session_id, title);
             })
             .detach();
@@ -386,7 +386,7 @@ impl Waku {
         let daemon = self.daemon.clone();
         cx.background_executor()
             .spawn(async move {
-                let _ = waku_client::persistence::StateStore::remote(daemon)
+                let _ = fintwind_client::persistence::StateStore::remote(daemon)
                     .delete_provider_session(binary, project_path, native_session_id);
             })
             .detach();

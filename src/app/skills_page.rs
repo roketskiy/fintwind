@@ -4,7 +4,7 @@
 //! and delete management.
 //!
 //! Discovery is filesystem work and lives on the background executor
-//! ([`Waku::ensure_skills_catalog`]); frames read only the cached catalog.
+//! ([`Fintwind::ensure_skills_catalog`]); frames read only the cached catalog.
 //! Mutations are one-shot user actions — each a single rename, write, or
 //! trash call — so they run synchronously in their click handlers and then
 //! invalidate the catalog.
@@ -18,7 +18,7 @@ use crate::skills::{SkillEntry, SkillSource, SkillsCatalog};
 
 use super::*;
 
-actions!(waku_skills, [ClearSkillsSearch]);
+actions!(fintwind_skills, [ClearSkillsSearch]);
 
 /// Key context the left pane declares around its search field.
 const SKILLS_PANE_CONTEXT: &str = "SkillsPane";
@@ -59,7 +59,7 @@ pub fn init(cx: &mut App) {
 }
 
 /// One row of the virtualized skills list. Equality drives the prefix splice
-/// in [`Waku::sync_skills_rows`]: a changed row — catalog identity, enabled
+/// in [`Fintwind::sync_skills_rows`]: a changed row — catalog identity, enabled
 /// state, or selection — re-measures from that point on.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum SkillsRow {
@@ -74,7 +74,7 @@ pub(super) enum SkillsRow {
     },
 }
 
-impl Waku {
+impl Fintwind {
     // ── Catalog ────────────────────────────────────────────────────────────
 
     /// Start a background library scan unless a current-enough catalog (or an
@@ -103,9 +103,9 @@ impl Waku {
                     match daemon.request(
                         Uuid::nil(),
                         Uuid::nil(),
-                        waku_client::Command::LoadSkills { projects },
+                        fintwind_client::Command::LoadSkills { projects },
                     )? {
-                        waku_client::ResponsePayload::SkillsCatalog { catalog } => Ok(catalog),
+                        fintwind_client::ResponsePayload::SkillsCatalog { catalog } => Ok(catalog),
                         _ => anyhow::bail!("the daemon returned an invalid skills response"),
                     }
                 })
@@ -206,7 +206,7 @@ impl Waku {
                     daemon.request(
                         Uuid::nil(),
                         Uuid::nil(),
-                        waku_client::Command::SetSkillsEnabled { dirs, enabled },
+                        fintwind_client::Command::SetSkillsEnabled { dirs, enabled },
                     )
                 })
                 .await;
@@ -270,7 +270,7 @@ impl Waku {
                     daemon.request(
                         Uuid::nil(),
                         Uuid::nil(),
-                        waku_client::Command::TrashSkills { dirs },
+                        fintwind_client::Command::TrashSkills { dirs },
                     )
                 })
                 .await;

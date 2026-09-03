@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { AgentSession, Project } from '@waku/client'
+import type { AgentSession, Project } from '@fintwind/client'
 import {
   dateGroup,
   formatTimeAgo,
@@ -65,7 +65,7 @@ describe('desktop sidebar presentation', () => {
     const project: Project = {
       id: 'project',
       name: 'No project',
-      path: '/home/me/.waku/projects/session',
+      path: '/home/me/.fintwind/projects/session',
       created_at: 1,
     }
     const groups = groupSessions(

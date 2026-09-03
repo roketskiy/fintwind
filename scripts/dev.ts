@@ -6,13 +6,13 @@ import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
 const isMacOS = process.platform === "darwin";
-const appName = "Waku Debug";
+const appName = "Fintwind Debug";
 const targetDir = resolve(root, process.env.CARGO_TARGET_DIR || "target");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
 const appPath = isMacOS
-  ? join(targetDir, "debug/Waku Debug.app")
+  ? join(targetDir, "debug/Fintwind Debug.app")
   : join(targetDir, `debug/fintwind${executableSuffix}`);
-const daemonPath = join(targetDir, `debug/waku-debug-daemon${executableSuffix}`);
+const daemonPath = join(targetDir, `debug/fintwind-debug-daemon${executableSuffix}`);
 const watchedDirectories = ["src", "crates", "assets", "resources", "locales"];
 const watchedFiles = ["Cargo.toml", "Cargo.lock", "build.rs"];
 const rebuildDebounceMs = 1_000;
@@ -35,27 +35,27 @@ async function build(target: BuildTarget): Promise<boolean> {
     return buildDaemon();
   }
 
-  console.log(`[waku-dev] Building ${isMacOS ? "app bundle" : "app"}...`);
+  console.log(`[fintwind-dev] Building ${isMacOS ? "app bundle" : "app"}...`);
   if (!(await buildDaemon())) {
-    console.error("[waku-dev] Daemon build failed; keeping the current app open.");
+    console.error("[fintwind-dev] Daemon build failed; keeping the current app open.");
     return false;
   }
   const result = isMacOS
     ? await $`${join(root, "scripts/bundle.sh")} debug`.nothrow()
-    : await $`cargo build --package waku --bin fintwind --bin waku_js_repl`.nothrow();
+    : await $`cargo build --package fintwind --bin fintwind --bin fintwind_js_repl`.nothrow();
   if (result.exitCode !== 0) {
-    console.error("[waku-dev] Build failed; keeping the current app open.");
+    console.error("[fintwind-dev] Build failed; keeping the current app open.");
     return false;
   }
   return true;
 }
 
 async function buildDaemon(): Promise<boolean> {
-  console.log("[waku-dev] Building daemon...");
+  console.log("[fintwind-dev] Building daemon...");
   const result =
-    await $`cargo build --package waku-daemon --features dev-binary --bin waku-debug-daemon`.nothrow();
+    await $`cargo build --package fintwind-daemon --features dev-binary --bin fintwind-debug-daemon`.nothrow();
   if (result.exitCode !== 0) {
-    console.error("[waku-dev] Daemon build failed; keeping the current daemon running.");
+    console.error("[fintwind-dev] Daemon build failed; keeping the current daemon running.");
     return false;
   }
   return true;
@@ -75,11 +75,11 @@ async function stopApp(): Promise<void> {
 }
 
 function launchApp(): ReturnType<typeof Bun.spawn> {
-  console.log(`[waku-dev] Launching ${appPath}`);
+  console.log(`[fintwind-dev] Launching ${appPath}`);
   const command = isMacOS ? ["open", "-n", "-W", appPath] : [appPath];
   const launchedApp = Bun.spawn(command, {
     cwd: root,
-    env: { ...process.env, WAKU_DAEMON_PATH: daemonPath },
+    env: { ...process.env, FINTWIND_DAEMON_PATH: daemonPath },
     stdout: "inherit",
     stderr: "inherit",
   });
@@ -89,7 +89,7 @@ function launchApp(): ReturnType<typeof Bun.spawn> {
     stopping = true;
     closeWatchers();
     clearRebuildTimer();
-    console.log("[waku-dev] App exited; stopping the watcher.");
+    console.log("[fintwind-dev] App exited; stopping the watcher.");
     process.exitCode = exitCode;
   });
   return launchedApp;
@@ -106,7 +106,7 @@ function closeWatchers(): void {
 }
 
 function reportWatcherError(error: Error): void {
-  console.error("[waku-dev] File watcher failed:", error);
+  console.error("[fintwind-dev] File watcher failed:", error);
   process.exitCode = 1;
   void cleanup();
 }
@@ -122,8 +122,8 @@ function targetForChange(directory: string, filename: string | Buffer | null): B
   if (directory !== "crates" || filename === null) return "app";
   const relativePath = filename.toString().replaceAll("\\", "/");
   if (
-    relativePath.startsWith("waku-daemon/") ||
-    relativePath.startsWith("waku-core/")
+    relativePath.startsWith("fintwind-daemon/") ||
+    relativePath.startsWith("fintwind-core/")
   ) {
     return "daemon";
   }
@@ -178,7 +178,7 @@ async function drainBuildQueue(): Promise<void> {
       if (target === "daemon") {
         if (daemonChangeRevision === buildDaemonRevision) {
           console.log(
-            "[waku-dev] Daemon rebuilt; fintwind will swap the process without relaunching.",
+            "[fintwind-dev] Daemon rebuilt; fintwind will swap the process without relaunching.",
           );
         }
         continue;
@@ -189,7 +189,7 @@ async function drainBuildQueue(): Promise<void> {
       // up the independently rebuilt daemon.
       if (appChangeRevision !== buildAppRevision) {
         console.log(
-          "[waku-dev] More changes arrived during the build; waiting to rebuild.",
+          "[fintwind-dev] More changes arrived during the build; waiting to rebuild.",
         );
         continue;
       }
@@ -206,7 +206,7 @@ async function drainBuildQueue(): Promise<void> {
 async function cleanup(): Promise<void> {
   if (stopping) return;
   stopping = true;
-  console.log("[waku-dev] Stopping watcher and app...");
+  console.log("[fintwind-dev] Stopping watcher and app...");
   closeWatchers();
   clearRebuildTimer();
   await stopApp();
@@ -230,11 +230,11 @@ if (appChangeRevision === initialAppRevision) {
   app = launchApp();
 } else {
   console.log(
-    "[waku-dev] Changes arrived during the initial build; waiting to rebuild.",
+    "[fintwind-dev] Changes arrived during the initial build; waiting to rebuild.",
   );
   if (queuedBuild !== undefined) void drainBuildQueue();
 }
 
 console.log(
-  "[waku-dev] Watching for source changes. Daemon-only edits hot-reload without relaunching fintwind.",
+  "[fintwind-dev] Watching for source changes. Daemon-only edits hot-reload without relaunching fintwind.",
 );

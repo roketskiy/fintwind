@@ -1,6 +1,6 @@
-import type { AgentSession, ProviderKind } from '@waku/client'
+import type { AgentSession, ProviderKind } from '@fintwind/client'
 
-const STORAGE_KEY = 'waku.composer-preferences.v1'
+const STORAGE_KEY = 'fintwind.composer-preferences.v1'
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem'>
 

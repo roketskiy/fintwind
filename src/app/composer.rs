@@ -23,7 +23,7 @@ pub(super) fn composer_submit_action(
     }
 }
 
-impl Waku {
+impl Fintwind {
     // ── Permission ─────────────────────────────────────────────────────────
 
     pub(super) fn render_permission(&self, cx: &mut Context<Self>) -> Option<Div> {
@@ -1185,7 +1185,7 @@ impl Waku {
                     .flex()
                     // The filter field keeps focus and the selected row is only
                     // drawn, never focused — the same split Zed's picker uses.
-                    // These arrive as actions bound to `WakuMenu > ComposerInput`,
+                    // These arrive as actions bound to `FintwindMenu > ComposerInput`,
                     // which is the only way to claim a key out from under a
                     // focused text field.
                     .on_action(move |_: &SelectNextEntry, _, cx| {
@@ -1678,7 +1678,7 @@ impl Waku {
         let paths = paths.to_vec();
         let daemon = self.daemon.clone();
         let draft_owner = self.selected_composer_draft_key();
-        cx.spawn(async move |waku, cx| {
+        cx.spawn(async move |fintwind, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
@@ -1694,9 +1694,9 @@ impl Waku {
                         let response = daemon.client().request(
                             Uuid::nil(),
                             Uuid::nil(),
-                            waku_client::Command::ImportAttachment { name, upload },
+                            fintwind_client::Command::ImportAttachment { name, upload },
                         )?;
-                        let waku_client::ResponsePayload::AttachmentStored { attachment } =
+                        let fintwind_client::ResponsePayload::AttachmentStored { attachment } =
                             response
                         else {
                             anyhow::bail!("the daemon returned an invalid attachment response");
@@ -1706,14 +1706,14 @@ impl Waku {
                     Ok::<_, anyhow::Error>(stored)
                 })
                 .await;
-            let _ = waku.update(cx, |waku, cx| match result {
+            let _ = fintwind.update(cx, |fintwind, cx| match result {
                 Ok(stored) => {
-                    if waku.selected_composer_draft_key() != draft_owner {
+                    if fintwind.selected_composer_draft_key() != draft_owner {
                         return;
                     }
                     let mut changed = false;
                     for (attachment, preview_image, is_image) in stored {
-                        changed |= waku.stage_daemon_attachment(
+                        changed |= fintwind.stage_daemon_attachment(
                             attachment.path,
                             attachment.name,
                             attachment.is_dir,
@@ -1723,12 +1723,12 @@ impl Waku {
                         );
                     }
                     if changed {
-                        waku.schedule_composer_draft_save(cx);
+                        fintwind.schedule_composer_draft_save(cx);
                         cx.notify();
                     }
                 }
                 Err(error) => {
-                    waku.show_toast(error.to_string());
+                    fintwind.show_toast(error.to_string());
                     cx.notify();
                 }
             });
@@ -1769,7 +1769,7 @@ impl Waku {
     }
 
     /// Stage the clipboard's primary image/file representation. On-disk paths
-    /// reuse drop handling immediately; raw image bytes are copied into Waku's
+    /// reuse drop handling immediately; raw image bytes are copied into Fintwind's
     /// durable blob store on the background executor before their chip appears.
     pub(super) fn stage_pasted_attachments(
         &mut self,
@@ -1794,7 +1794,7 @@ impl Waku {
 
         let daemon = self.daemon.clone();
         let draft_owner = self.selected_composer_draft_key();
-        cx.spawn(async move |waku, cx| {
+        cx.spawn(async move |fintwind, cx| {
             let stored = cx
                 .background_executor()
                 .spawn(async move {
@@ -1810,13 +1810,13 @@ impl Waku {
                                 .request(
                                     Uuid::nil(),
                                     Uuid::nil(),
-                                    waku_client::Command::StoreBlob {
+                                    fintwind_client::Command::StoreBlob {
                                         mime_type: preview_image.format.mime_type().to_owned(),
                                         bytes,
                                     },
                                 )
                                 .map_err(|error| error.to_string())?;
-                            let waku_client::ResponsePayload::BlobStored { reference, path } =
+                            let fintwind_client::ResponsePayload::BlobStored { reference, path } =
                                 response
                             else {
                                 return Err("the daemon returned an invalid blob response".into());
@@ -1835,14 +1835,14 @@ impl Waku {
                         .collect::<Result<Vec<_>, _>>()
                 })
                 .await;
-            let _ = waku.update(cx, |waku, cx| match stored {
+            let _ = fintwind.update(cx, |fintwind, cx| match stored {
                 Ok(stored) => {
-                    if waku.selected_composer_draft_key() != draft_owner {
+                    if fintwind.selected_composer_draft_key() != draft_owner {
                         return;
                     }
                     let mut staged = false;
                     for (path, name, reference, preview_image) in stored {
-                        staged |= waku.stage_daemon_attachment(
+                        staged |= fintwind.stage_daemon_attachment(
                             path,
                             name,
                             false,
@@ -1852,12 +1852,12 @@ impl Waku {
                         );
                     }
                     if staged {
-                        waku.schedule_composer_draft_save(cx);
+                        fintwind.schedule_composer_draft_save(cx);
                         cx.notify();
                     }
                 }
                 Err(error) => {
-                    waku.show_toast(tr!("errors.store_pasted_image", error = error));
+                    fintwind.show_toast(tr!("errors.store_pasted_image", error = error));
                     cx.notify();
                 }
             });
@@ -3144,7 +3144,7 @@ pub(super) fn visible_branch_entries(
 // Base64 keeps the authenticated JSON transport browser-compatible but adds
 // one third of wire overhead. Stay comfortably below tungstenite's default
 // message limit until uploads move to a streaming content endpoint.
-const MAX_ATTACHMENT_BYTES: u64 = waku_client::attachments::MAX_ATTACHMENT_BYTES as u64;
+const MAX_ATTACHMENT_BYTES: u64 = fintwind_client::attachments::MAX_ATTACHMENT_BYTES as u64;
 
 /// Reads a client-local drop into an upload payload. This is the explicit
 /// client/daemon boundary: none of these source paths are persisted or handed
@@ -3153,7 +3153,7 @@ fn attachment_upload_from_path(
     source: &Path,
 ) -> anyhow::Result<(
     String,
-    waku_client::attachments::AttachmentUpload,
+    fintwind_client::attachments::AttachmentUpload,
     Option<Vec<u8>>,
 )> {
     let metadata = std::fs::symlink_metadata(source)
@@ -3179,7 +3179,7 @@ fn attachment_upload_from_path(
         let is_image = is_image_attachment_path(source);
         return Ok((
             name,
-            waku_client::attachments::AttachmentUpload::File {
+            fintwind_client::attachments::AttachmentUpload::File {
                 data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
             },
             is_image.then_some(bytes),
@@ -3215,10 +3215,10 @@ fn attachment_upload_from_path(
             if !metadata.is_file() {
                 continue;
             }
-            if entries.len() >= waku_client::attachments::MAX_ATTACHMENT_FILES {
+            if entries.len() >= fintwind_client::attachments::MAX_ATTACHMENT_FILES {
                 anyhow::bail!(
                     "attachment directory contains more than {} files",
-                    waku_client::attachments::MAX_ATTACHMENT_FILES
+                    fintwind_client::attachments::MAX_ATTACHMENT_FILES
                 );
             }
             total_bytes = total_bytes.saturating_add(metadata.len());
@@ -3231,7 +3231,7 @@ fn attachment_upload_from_path(
                 .to_path_buf();
             let bytes = std::fs::read(&path)
                 .with_context(|| format!("could not read attachment {}", path.display()))?;
-            entries.push(waku_client::attachments::AttachmentUploadEntry {
+            entries.push(fintwind_client::attachments::AttachmentUploadEntry {
                 relative_path,
                 data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
             });
@@ -3239,7 +3239,7 @@ fn attachment_upload_from_path(
     }
     Ok((
         name,
-        waku_client::attachments::AttachmentUpload::Directory { entries },
+        fintwind_client::attachments::AttachmentUpload::Directory { entries },
         None,
     ))
 }

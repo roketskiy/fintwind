@@ -8,7 +8,7 @@ type JsonObject = Record<string, unknown>;
 const jsToolDescription =
   "Run JavaScript in fintwind's persistent QuickJS kernel for Computer Use. Initialize `sky` lazily with `await setupComputerUseRuntime({ globals: globalThis })`. Calls time out after 30000 ms (30 seconds) unless `timeout_ms` is provided. Use `nodeRepl.write(...)` for text and `await nodeRepl.emitImage(...)` for images. Bindings and scheduled timers persist until the JavaScript kernel is reset.";
 
-class WakuMcpClient {
+class FintwindMcpClient {
   private child: ChildProcessWithoutNullStreams | undefined;
   private starting: Promise<void> | undefined;
   private nextId = 0;
@@ -29,9 +29,9 @@ class WakuMcpClient {
   }
 
   private async start(): Promise<void> {
-    const executable = process.env.WAKU_JS_REPL_SERVER;
+    const executable = process.env.FINTWIND_JS_REPL_SERVER;
     if (!executable) {
-      throw new Error("WAKU_JS_REPL_SERVER is not configured");
+      throw new Error("FINTWIND_JS_REPL_SERVER is not configured");
     }
     const child = spawn(executable, [], {
       env: process.env,
@@ -57,7 +57,7 @@ class WakuMcpClient {
     await this.requestWithoutStart("initialize", {
       protocolVersion: "2025-06-18",
       capabilities: {},
-      clientInfo: { name: "waku-pi", version: "1" },
+      clientInfo: { name: "fintwind-pi", version: "1" },
     });
     this.notify("notifications/initialized", {});
   }
@@ -152,8 +152,8 @@ function toolResult(result: JsonObject) {
   return { content, details: result._meta ?? {} };
 }
 
-export default function wakuComputerUse(pi: ExtensionAPI) {
-  const client = new WakuMcpClient();
+export default function fintwindComputerUse(pi: ExtensionAPI) {
+  const client = new FintwindMcpClient();
 
   pi.registerTool({
     name: "js",

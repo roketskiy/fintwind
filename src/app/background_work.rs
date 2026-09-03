@@ -103,7 +103,7 @@ pub(super) struct TodoEntry {
 
 /// Read-only display model for the capsule's Todo section: the newest
 /// `ActivityKind::Plan` activity in the transcript. Built off the render
-/// path — see [`Waku::rebuild_todo_summary`].
+/// path — see [`Fintwind::rebuild_todo_summary`].
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct TodoSummary {
     pub entries: Vec<TodoEntry>,
@@ -936,7 +936,7 @@ fn work_elapsed(item: &BackgroundWorkItem) -> String {
     }
 }
 
-impl Waku {
+impl Fintwind {
     pub(super) fn background_output_refresh_delay(&self) -> Option<Duration> {
         self.background_work
             .values()
@@ -1762,7 +1762,7 @@ impl Waku {
                     markdown: Some(view),
                     ctx: &ctx,
                     menu,
-                    waku: cx.entity().downgrade(),
+                    fintwind: cx.entity().downgrade(),
                     composer: self.composer.clone(),
                 },
                 cx,
@@ -1932,7 +1932,7 @@ fn render_task_capsule_card(
     environment: Option<EnvironmentSummary>,
     todo: Rc<TodoSummary>,
     entries: Rc<Vec<BackgroundSummaryEntry>>,
-    weak: WeakEntity<Waku>,
+    weak: WeakEntity<Fintwind>,
     cx: &mut App,
 ) -> AnyElement {
     let theme = Theme::current(cx);
@@ -2023,7 +2023,7 @@ fn render_capsule_section_header(id: &'static str, label: String, theme: &Theme)
 fn render_git_tools_section(
     environment: EnvironmentSummary,
     handle: ContextMenuHandle,
-    weak: WeakEntity<Waku>,
+    weak: WeakEntity<Fintwind>,
     theme: &Theme,
 ) -> Div {
     let counts = (environment.has_changes).then(|| {
@@ -2335,7 +2335,7 @@ fn render_background_summary_section(
     entries: Vec<BackgroundSummaryEntry>,
     session_id: Uuid,
     handle: ContextMenuHandle,
-    weak: WeakEntity<Waku>,
+    weak: WeakEntity<Fintwind>,
     theme: &Theme,
     empty_label: String,
 ) -> Div {
@@ -2378,7 +2378,7 @@ fn render_background_summary_row(
     entry: BackgroundSummaryEntry,
     session_id: Uuid,
     handle: ContextMenuHandle,
-    weak: WeakEntity<Waku>,
+    weak: WeakEntity<Fintwind>,
     theme: &Theme,
 ) -> Stateful<Div> {
     let item = entry.item;

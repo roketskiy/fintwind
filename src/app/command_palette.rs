@@ -13,7 +13,7 @@ use nucleo_matcher::{Matcher, Utf32Str};
 use super::*;
 
 actions!(
-    waku_command_palette,
+    fintwind_command_palette,
     [
         SelectNext,
         SelectPrevious,
@@ -314,7 +314,7 @@ impl CommandPaletteUi {
     }
 }
 
-impl Waku {
+impl Fintwind {
     pub(super) fn toggle_command_palette_action(
         &mut self,
         _: &ToggleCommandPalette,

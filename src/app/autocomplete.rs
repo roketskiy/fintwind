@@ -99,7 +99,7 @@ impl AutocompleteUi {
     }
 }
 
-impl Waku {
+impl Fintwind {
     /// Refresh the drawn command and file indexes for the selected session.
     ///
     /// A cache hit lands immediately; a miss starts discovery on the
@@ -147,26 +147,26 @@ impl Waku {
                     self.slash_command_index_key = None;
                 }
                 let path = project_path.clone();
-                let workspace = waku_client::WorkspaceClient::new(self.daemon.client());
-                cx.spawn(async move |waku, cx| {
+                let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
+                cx.spawn(async move |fintwind, cx| {
                     let commands = cx
                         .background_executor()
                         .spawn(async move {
                             match workspace.request(
-                                waku_client::WorkspaceOperation::DiscoverSlashCommands {
+                                fintwind_client::WorkspaceOperation::DiscoverSlashCommands {
                                     project_root: path,
                                 },
                             ) {
-                                Ok(waku_client::WorkspaceResult::SlashCommands { commands }) => {
+                                Ok(fintwind_client::WorkspaceResult::SlashCommands { commands }) => {
                                     commands
                                 }
                                 Ok(_) | Err(_) => Vec::new(),
                             }
                         })
                         .await;
-                    waku.update(cx, |waku, cx| {
-                        if waku.slash_commands.fulfill(token, commands) {
-                            waku.refresh_composer_sources(cx);
+                    fintwind.update(cx, |fintwind, cx| {
+                        if fintwind.slash_commands.fulfill(token, commands) {
+                            fintwind.refresh_composer_sources(cx);
                             cx.notify();
                         }
                     })
@@ -193,27 +193,27 @@ impl Waku {
                     self.mention_file_index_path = None;
                 }
                 let path = project_path.clone();
-                let workspace = waku_client::WorkspaceClient::new(self.daemon.client());
-                cx.spawn(async move |waku, cx| {
+                let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
+                cx.spawn(async move |fintwind, cx| {
                     let files = cx
                         .background_executor()
                         .spawn(async move {
                             match workspace.request(
-                                waku_client::WorkspaceOperation::ListProjectFiles {
+                                fintwind_client::WorkspaceOperation::ListProjectFiles {
                                     root: path,
                                     cap: FILE_INDEX_CAP,
                                 },
                             ) {
-                                Ok(waku_client::WorkspaceResult::ProjectFiles { entries }) => {
+                                Ok(fintwind_client::WorkspaceResult::ProjectFiles { entries }) => {
                                     entries
                                 }
                                 Ok(_) | Err(_) => Vec::new(),
                             }
                         })
                         .await;
-                    waku.update(cx, |waku, cx| {
-                        if waku.mention_files.fulfill(token, files) {
-                            waku.refresh_composer_sources(cx);
+                    fintwind.update(cx, |fintwind, cx| {
+                        if fintwind.mention_files.fulfill(token, files) {
+                            fintwind.refresh_composer_sources(cx);
                             cx.notify();
                         }
                     })

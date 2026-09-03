@@ -38,7 +38,7 @@ fn export_sparkle_public_key() {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| panic!("{PLIST} has no SUPublicEDKey"));
 
-    println!("cargo:rustc-env=WAKU_SPARKLE_PUBLIC_ED_KEY={value}");
+    println!("cargo:rustc-env=FINTWIND_SPARKLE_PUBLIC_ED_KEY={value}");
 }
 
 #[cfg(target_os = "windows")]
@@ -101,7 +101,7 @@ END
     );
 
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
-    let script = out_dir.join("waku.rc");
+    let script = out_dir.join("fintwind.rc");
     std::fs::write(&script, resources).expect("write the resource script");
 
     // GPUI embeds the application manifest through its own resource script,

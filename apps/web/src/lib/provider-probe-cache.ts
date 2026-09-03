@@ -1,6 +1,6 @@
-import type { ProviderKind, ProviderProbe } from '@waku/client'
+import type { ProviderKind, ProviderProbe } from '@fintwind/client'
 
-const CACHE_KEY = 'waku.provider-probes.v1'
+const CACHE_KEY = 'fintwind.provider-probes.v1'
 const CACHE_VERSION = 1
 const CACHE_MAX_AGE = 30 * 24 * 60 * 60 * 1_000
 const CACHE_MAX_ENTRIES = 32

@@ -2210,6 +2210,136 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
+name = "fintwind"
+version = "0.1.7"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "base64",
+ "block2 0.6.2",
+ "chrono",
+ "crossbeam-channel",
+ "dirs",
+ "ed25519-dalek",
+ "embed-resource",
+ "fintwind-client",
+ "fintwind-protocol",
+ "futures",
+ "futures-lite",
+ "gpui",
+ "gpui_platform",
+ "image",
+ "libc",
+ "nucleo-matcher",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
+ "objc2-user-notifications",
+ "objc2-web-kit",
+ "parking_lot",
+ "pulldown-cmark",
+ "raw-window-handle",
+ "regex",
+ "ropey",
+ "rquickjs",
+ "rust-i18n",
+ "rust-umami",
+ "serde",
+ "serde_json",
+ "smol",
+ "tokio",
+ "unicode-segmentation",
+ "url",
+ "uuid",
+ "webview2-com",
+ "windows 0.61.3",
+ "windows-core 0.61.2",
+ "windows-sys 0.61.2",
+ "wry",
+]
+
+[[package]]
+name = "fintwind-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "dirs",
+ "fintwind-protocol",
+ "libc",
+ "nucleo-matcher",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "smol",
+ "tungstenite",
+ "url",
+ "uuid",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "fintwind-core"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "alacritty_terminal",
+ "anyhow",
+ "base64",
+ "chrono",
+ "crossbeam-channel",
+ "dirs",
+ "fintwind-client",
+ "fintwind-protocol",
+ "libc",
+ "nucleo-matcher",
+ "objc2-foundation 0.3.2",
+ "parking_lot",
+ "rusqlite",
+ "rust-i18n",
+ "serde",
+ "serde_json",
+ "smol",
+ "subtle",
+ "toml 0.8.23",
+ "trash",
+ "tungstenite",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "fintwind-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "fintwind-core",
+ "fintwind-protocol",
+ "libc",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "fintwind-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "chrono",
+ "dirs",
+ "objc2-foundation 0.3.2",
+ "rust-i18n",
+ "serde",
+ "serde_json",
+ "similar",
+ "ts-rs",
+ "uuid",
+]
+
+[[package]]
 name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8286,136 +8416,6 @@ name = "waker-fn"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "317211a0dc0ceedd78fb2ca9a44aed3d7b9b26f81870d485c07122b4350673b7"
-
-[[package]]
-name = "waku"
-version = "0.1.7"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "base64",
- "block2 0.6.2",
- "chrono",
- "crossbeam-channel",
- "dirs",
- "ed25519-dalek",
- "embed-resource",
- "futures",
- "futures-lite",
- "gpui",
- "gpui_platform",
- "image",
- "libc",
- "nucleo-matcher",
- "objc2 0.6.4",
- "objc2-app-kit 0.3.2",
- "objc2-core-graphics",
- "objc2-foundation 0.3.2",
- "objc2-quartz-core 0.3.2",
- "objc2-user-notifications",
- "objc2-web-kit",
- "parking_lot",
- "pulldown-cmark",
- "raw-window-handle",
- "regex",
- "ropey",
- "rquickjs",
- "rust-i18n",
- "rust-umami",
- "serde",
- "serde_json",
- "smol",
- "tokio",
- "unicode-segmentation",
- "url",
- "uuid",
- "waku-client",
- "waku-protocol",
- "webview2-com",
- "windows 0.61.3",
- "windows-core 0.61.2",
- "windows-sys 0.61.2",
- "wry",
-]
-
-[[package]]
-name = "waku-client"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossbeam-channel",
- "dirs",
- "libc",
- "nucleo-matcher",
- "parking_lot",
- "serde",
- "serde_json",
- "smol",
- "tungstenite",
- "url",
- "uuid",
- "waku-protocol",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "waku-core"
-version = "0.1.0"
-dependencies = [
- "agent-client-protocol",
- "alacritty_terminal",
- "anyhow",
- "base64",
- "chrono",
- "crossbeam-channel",
- "dirs",
- "libc",
- "nucleo-matcher",
- "objc2-foundation 0.3.2",
- "parking_lot",
- "rusqlite",
- "rust-i18n",
- "serde",
- "serde_json",
- "smol",
- "subtle",
- "toml 0.8.23",
- "trash",
- "tungstenite",
- "url",
- "uuid",
- "waku-client",
- "waku-protocol",
-]
-
-[[package]]
-name = "waku-daemon"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "serde_json",
- "waku-core",
- "waku-protocol",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "waku-protocol"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64",
- "chrono",
- "dirs",
- "objc2-foundation 0.3.2",
- "rust-i18n",
- "serde",
- "serde_json",
- "similar",
- "ts-rs",
- "uuid",
-]
 
 [[package]]
 name = "walkdir"

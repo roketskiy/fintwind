@@ -17,7 +17,7 @@
 //! `{data:[...],cursor}`, and events arrive as `{type,data}` lines on
 //! `/api/event`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::Arc;
@@ -965,6 +965,7 @@ fn open_event_stream(
 #[derive(Default)]
 struct OpenCodeStreamState {
     tools: HashMap<String, (ActivityKind, String)>,
+    pending_subagents: VecDeque<(String, Option<String>)>,
     reasoning_parts: HashSet<String>,
     children: HashMap<String, OpenCodeChildSession>,
     usage_metadata: Arc<OpenCodeUsageMetadata>,
@@ -1007,6 +1008,23 @@ impl OpenCodeChildSession {
             execution_started_at_ms: None,
         }
     }
+}
+
+fn is_subagent_tool(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "task" | "subagent"
+    )
+}
+
+fn subagent_prompt(input: Option<&Value>) -> Option<String> {
+    let input = input?;
+    ["prompt", "message", "task", "description"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
 }
 
 /// Pending question forms and whether they were already announced.
@@ -1336,10 +1354,15 @@ fn handle_child_event(
         if child_parent_id(value).as_deref() != Some(parent_id) {
             return;
         }
+        let is_new = !state.children.contains_key(&session_id);
         let child = state
             .children
             .entry(session_id.clone())
             .or_insert_with(|| OpenCodeChildSession::new(&session_id, parent_id, payload));
+        if is_new && let Some((activity_id, prompt)) = state.pending_subagents.pop_front() {
+            child.item.origin_activity_id = Some(activity_id);
+            child.prompt = child.prompt.clone().or(prompt);
+        }
         child.prompt = child.prompt.clone().or_else(|| child_prompt(payload));
         if let Some(title) = child_title(payload) {
             child.item.title = title;
@@ -1598,6 +1621,7 @@ fn handle_event(
             state.reasoning_parts.clear();
             state.permissions.lock().pending.clear();
             state.tools.clear();
+            state.pending_subagents.clear();
             if std::mem::take(&mut *turn_active.lock()) {
                 let _ = events.send(DriverEvent::TurnFinished {
                     success: true,
@@ -1609,6 +1633,7 @@ fn handle_event(
             state.reasoning_parts.clear();
             state.permissions.lock().pending.clear();
             state.tools.clear();
+            state.pending_subagents.clear();
             // The failure payload carries the provider error; surface it so
             // the transcript explains why the turn settled unsuccessfully.
             let message = payload
@@ -1716,6 +1741,14 @@ fn tool_called(payload: &Value, events: &impl DriverEventSink, state: &mut OpenC
         .map(|(_, title)| title.clone())
         .unwrap_or_else(|| tr!("activity.tool"));
     let arguments = payload.get("input");
+    if stored
+        .as_ref()
+        .is_some_and(|(_, name)| is_subagent_tool(name))
+    {
+        state
+            .pending_subagents
+            .push_back((id.to_owned(), subagent_prompt(arguments)));
+    }
     let display = activity::input_title(arguments);
     let item = activity::tool_activity(
         Some(id.to_owned()),
@@ -1742,6 +1775,15 @@ fn tool_finished(
         return;
     };
     let stored = state.tools.remove(id);
+    if failed
+        && stored
+            .as_ref()
+            .is_some_and(|(_, name)| is_subagent_tool(name))
+    {
+        state
+            .pending_subagents
+            .retain(|(activity_id, _)| activity_id != id);
+    }
     let kind = stored
         .as_ref()
         .map(|(kind, _)| *kind)
@@ -2191,6 +2233,57 @@ mod tests {
             *turn.lock(),
             "child execution must not settle the foreground turn"
         );
+    }
+
+    #[test]
+    fn parent_subagent_tool_seeds_and_links_the_child_transcript() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        handle_event(
+            &json!({
+                "type": "session.tool.input.started",
+                "data": {"id": "call_task", "name": "task"}
+            }),
+            &events,
+            &commands,
+            &turn,
+            false,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.tool.called",
+                "data": {"id": "call_task", "input": {"prompt": "Inspect the repository"}}
+            }),
+            &events,
+            &commands,
+            &turn,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({
+                "type": "session.created",
+                "data": {"session": {"id": "ses_child", "parentID": "ses_parent"}}
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+
+        let emitted = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(emitted.iter().any(|event| matches!(
+            event,
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
+                if item.origin_activity_id.as_deref() == Some("call_task")
+        )));
+        assert!(emitted.iter().any(|event| matches!(
+            event,
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(
+                BackgroundWorkTranscriptEvent::Started { prompt, .. }
+            )) if prompt.as_deref() == Some("Inspect the repository")
+        )));
     }
 
     #[test]

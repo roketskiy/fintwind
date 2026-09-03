@@ -408,6 +408,7 @@ impl BackgroundWorkRegistry {
         if delta.is_empty() {
             return;
         }
+        Self::finish_live_background_reasoning(transcript);
         if let Some(message) = transcript
             .messages
             .last_mut()
@@ -428,6 +429,7 @@ impl BackgroundWorkRegistry {
         if delta.is_empty() {
             return;
         }
+        Self::finish_live_background_message(transcript);
         let after_message = transcript.messages.len();
         let turn_id = transcript.turns.last().map(|turn| turn.id);
         if let Some(activity) = transcript
@@ -471,6 +473,8 @@ impl BackgroundWorkRegistry {
         transcript: &mut BackgroundWorkTranscript,
         incoming: ActivityItem,
     ) {
+        Self::finish_live_background_message(transcript);
+        Self::finish_live_background_reasoning(transcript);
         let matching = transcript
             .transcript_blocks
             .iter_mut()
@@ -502,6 +506,27 @@ impl BackgroundWorkRegistry {
                 turn_id,
                 activities: vec![incoming],
             });
+        }
+    }
+
+    fn finish_live_background_message(transcript: &mut BackgroundWorkTranscript) {
+        if let Some(message) = transcript
+            .messages
+            .last_mut()
+            .filter(|message| message.role == MessageRole::Assistant && message.streaming)
+        {
+            message.streaming = false;
+        }
+    }
+
+    fn finish_live_background_reasoning(transcript: &mut BackgroundWorkTranscript) {
+        if let Some(activity) = transcript
+            .transcript_blocks
+            .last_mut()
+            .and_then(|block| block.activities.last_mut())
+            .filter(|activity| activity.reasoning.is_some() && !activity.complete)
+        {
+            activity.complete = true;
         }
     }
 
@@ -812,7 +837,11 @@ fn background_summary_process_status_icon(
     }
 }
 
-fn rendered_work_status_icon(status: BackgroundWorkStatus, size: f32, color: Hsla) -> AnyElement {
+pub(super) fn rendered_work_status_icon(
+    status: BackgroundWorkStatus,
+    size: f32,
+    color: Hsla,
+) -> AnyElement {
     let icon = icon(work_status_icon(status), size, color);
     if matches!(
         status,
@@ -1322,6 +1351,77 @@ impl Waku {
                     })
             })
         });
+        if item.key.kind == BackgroundWorkKind::Subagent {
+            let transcript = registry.and_then(|registry| registry.transcripts.get(key));
+            return div()
+                .id("background-work-surface")
+                .tab_group()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .bg(theme.surface)
+                .child(
+                    div()
+                        .h(px(52.0))
+                        .px(px(14.0))
+                        .flex_none()
+                        .border_b_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .items_center()
+                        .gap(px(9.0))
+                        .child(icon("icons/bot.svg", 15.0, theme.text_secondary))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .flex()
+                                .flex_col()
+                                .gap(px(2.0))
+                                .child(
+                                    div()
+                                        .truncate()
+                                        .text_size(px(13.0))
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(theme.text)
+                                        .child(item.title.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(5.0))
+                                        .text_size(px(10.5))
+                                        .text_color(status_color)
+                                        .child(rendered_work_status_icon(
+                                            item.status,
+                                            9.0,
+                                            status_color,
+                                        ))
+                                        .child(work_status_label(item.status)),
+                                ),
+                        )
+                        .when_some(stop, |header, stop| header.child(stop)),
+                )
+                .child(
+                    div()
+                        .id("background-transcript-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .px(px(16.0))
+                        .py(px(12.0))
+                        .children(transcript.map(|transcript| {
+                            self.render_background_transcript(
+                                item,
+                                transcript,
+                                selection.clone(),
+                                cx,
+                            )
+                        })),
+                );
+        }
         let card = div()
             .w_full()
             .flex()
@@ -1406,13 +1506,8 @@ impl Waku {
         let theme = Theme::current(cx);
         let mut detail = div().w_full().flex().flex_col().bg(theme.surface);
         let mut metadata = Vec::new();
-        // A subagent's "command" is the prompt it was launched with.
-        let command_label = match item.key.kind {
-            BackgroundWorkKind::Subagent => tr!("background.prompt"),
-            BackgroundWorkKind::Process | BackgroundWorkKind::Monitor => tr!("background.command"),
-        };
         for (label, value) in [
-            (command_label, item.command.as_ref()),
+            (tr!("background.command"), item.command.as_ref()),
             (tr!("background.cwd"), item.cwd.as_ref()),
             (tr!("background.role"), item.role.as_ref()),
             (tr!("background.model"), item.model.as_ref()),
@@ -1449,21 +1544,6 @@ impl Waku {
                             .child(value),
                     ),
             );
-        }
-        if item.key.kind == BackgroundWorkKind::Subagent {
-            if let Some(transcript) = self
-                .state
-                .selected_session
-                .and_then(|session_id| self.background_work.get(&session_id))
-                .and_then(|registry| registry.transcripts.get(&item.key))
-            {
-                detail = detail.child(self.render_background_transcript(
-                    item,
-                    transcript,
-                    selection.clone(),
-                    cx,
-                ));
-            }
         }
         let output = output.unwrap_or_else(|| SharedString::from(tr!("background.no_output")));
         let output_flat = md::render::flatten_plain(
@@ -1553,17 +1633,8 @@ impl Waku {
     ) -> Div {
         let theme = Theme::current(cx);
         let palette = MarkdownPalette::from_theme(&theme);
-        let mut content = div()
-            .border_t_1()
-            .border_color(theme.border)
-            .p(px(10.0))
-            .flex()
-            .flex_col()
-            .gap(px(10.0));
-        let mut markdown_views = self.message_markdown.borrow_mut();
-        let mut render_message = |message: &Message| {
-            let view = markdown_views.entry(message.id).or_default();
-            view.set_text(message.visible_content(), message.streaming);
+        let mut content = div().w_full().min_w_0().flex().flex_col().gap(px(8.0));
+        let render_message_row = |message: &Message, cx: &mut Context<Self>| {
             let ctx = MarkdownCtx::new(
                 format!("background-message-{}-{}", item.key.provider_id, message.id),
                 &palette,
@@ -1574,38 +1645,34 @@ impl Waku {
                 },
                 selection.clone(),
             )
+            .with_link_handler(self.markdown_link_handler.clone())
             .with_streaming_animation(message.streaming && !cx.reduce_motion());
-            let body = md::render::markdown(view, &ctx).unwrap_or_else(|| {
-                md::render::plain_text(
-                    message.visible_content().to_owned(),
-                    md::render::SANS_FAMILY,
-                    FontWeight::NORMAL,
-                    theme.text,
-                    &ctx,
-                )
-            });
-            div()
-                .w_full()
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .text_size(px(10.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(if message.role == MessageRole::User {
-                            theme.accent
-                        } else {
-                            theme.text_tertiary
-                        })
-                        .child(if message.role == MessageRole::User {
-                            tr!("command_palette.you")
-                        } else {
-                            tr!("background.subagent")
-                        }),
-                )
-                .child(body)
+            let menu = self.menu_handle(format!("background-message-{}", message.id), cx);
+            let mut markdown_views = self.message_markdown.borrow_mut();
+            let view = markdown_views.entry(message.id).or_default();
+            view.set_text(message.visible_content(), message.streaming);
+            render_message(
+                MessageRender {
+                    theme: &theme,
+                    message,
+                    assistant_footer_copy_content: None,
+                    assistant_footer_time: None,
+                    assistant_before_footer: None,
+                    copied: false,
+                    assistant_message_action: None,
+                    user_message_action: None,
+                    message_edit_input: None,
+                    attachment_menus: Vec::new(),
+                    attachment_images: Vec::new(),
+                    attachments_can_reveal: false,
+                    markdown: Some(view),
+                    ctx: &ctx,
+                    menu,
+                    waku: cx.entity().downgrade(),
+                    composer: self.composer.clone(),
+                },
+                cx,
+            )
         };
         // Group blocks by their anchor once per frame; the per-message filter
         // below then costs one lookup instead of a full block scan.
@@ -1618,80 +1685,117 @@ impl Waku {
         }
         for after_message in 0..=transcript.messages.len() {
             for block in blocks_by_after.get(&after_message).into_iter().flatten() {
-                for activity in &block.activities {
-                    let activity_color = if activity.failed {
-                        theme.danger
-                    } else if activity.complete {
-                        theme.text_tertiary
-                    } else {
-                        theme.accent
-                    };
-                    let mut card = div()
-                        .w_full()
-                        .min_w_0()
-                        .rounded(px(7.0))
-                        .border_1()
+                if block.activities.is_empty() {
+                    continue;
+                }
+                let disclosure_id = block.activities[0].id;
+                let expanded = self
+                    .expanded_activity_items
+                    .get(&disclosure_id)
+                    .copied()
+                    .unwrap_or(false);
+                let click_weak = cx.entity().downgrade();
+                let key_weak = cx.entity().downgrade();
+                let focus = self
+                    .transcript_control_focus(format!("background-activity-{disclosure_id}"), cx);
+                let mut cluster = div().w_full().min_w_0().flex().flex_col().child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "background-activity-{disclosure_id}"
+                        )))
+                        .track_focus(&focus)
+                        .tab_index(0)
+                        .h(px(30.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .cursor_default()
+                        .text_size(px(12.5))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text_secondary)
+                        .focus_visible(|style| style.text_color(theme.text))
+                        .hover(|style| style.text_color(theme.text))
+                        .child(activity_header_title(&block.activities, false, None))
+                        .child(icon(
+                            if expanded {
+                                "icons/chevron-down.svg"
+                            } else {
+                                "icons/chevron-right.svg"
+                            },
+                            11.0,
+                            theme.text_tertiary,
+                        ))
+                        .on_click(move |_, _, cx| {
+                            let _ = click_weak.update(cx, |this, cx| {
+                                this.expanded_activity_items
+                                    .insert(disclosure_id, !expanded);
+                                cx.notify();
+                            });
+                        })
+                        .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                let _ = key_weak.update(cx, |this, cx| {
+                                    this.expanded_activity_items
+                                        .insert(disclosure_id, !expanded);
+                                    cx.notify();
+                                });
+                                cx.stop_propagation();
+                            }
+                        }),
+                );
+                if expanded {
+                    let mut activities = div()
+                        .ml(px(6.0))
+                        .pl(px(12.0))
+                        .border_l_1()
                         .border_color(theme.border)
-                        .bg(theme.inset)
-                        .px(px(8.0))
-                        .py(px(7.0))
                         .flex()
                         .flex_col()
-                        .gap(px(4.0))
-                        .child(
+                        .gap(px(6.0));
+                    for activity in &block.activities {
+                        let color = if activity.failed {
+                            theme.danger
+                        } else if activity.complete {
+                            theme.text_tertiary
+                        } else {
+                            theme.accent
+                        };
+                        let detail = activity_row_detail(activity, false);
+                        activities = activities.child(
                             div()
+                                .min_h(px(28.0))
                                 .flex()
                                 .items_center()
-                                .gap(px(6.0))
-                                .text_size(px(10.5))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(activity_color)
-                                .child(icon(activity_icon(activity.kind), 12.0, activity_color))
-                                .child(activity.title.clone())
+                                .gap(px(7.0))
+                                .text_size(px(11.5))
+                                .text_color(theme.text_secondary)
+                                .child(icon(activity_icon(activity.kind), 12.0, color))
                                 .child(
-                                    div().text_size(px(9.0)).text_color(theme.text_ghost).child(
-                                        if activity.failed {
-                                            tr!("background.status.failed")
-                                        } else if activity.complete {
-                                            tr!("background.status.completed")
-                                        } else {
-                                            tr!("background.status.running")
-                                        },
-                                    ),
-                                ),
-                        );
-                    if let Some(reasoning) = activity.reasoning.as_ref() {
-                        card = card.child(
-                            div()
-                                .text_size(px(10.5))
-                                .line_height(px(16.0))
-                                .text_color(theme.text_secondary)
-                                .child(reasoning.content.clone()),
+                                    div()
+                                        .flex_none()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child(activity_action_label(activity)),
+                                )
+                                .when(!detail.is_empty(), |row| {
+                                    row.child(div().min_w_0().flex_1().truncate().child(detail))
+                                })
+                                .when(activity.failed, |row| {
+                                    row.child(icon("icons/x.svg", 10.0, theme.danger))
+                                })
+                                .when(!activity.complete && !activity.failed, |row| {
+                                    row.child(pulse_dot(5.0, theme.accent))
+                                }),
                         );
                     }
-                    if let Some(output) = activity
-                        .output
-                        .as_deref()
-                        .filter(|output| !output.is_empty())
-                    {
-                        card = card.child(
-                            div()
-                                .text_size(px(10.0))
-                                .line_height(px(15.0))
-                                .font_family(md::render::MONO_FAMILY)
-                                .text_color(theme.text_secondary)
-                                .child(output.to_owned()),
-                        );
-                    }
-                    content = content.child(card);
+                    cluster = cluster.child(activities);
                 }
+                content = content.child(cluster);
             }
             if let Some(message) = transcript.messages.get(after_message) {
-                content = content.child(render_message(message));
+                content = content.child(render_message_row(message, cx));
             }
         }
-        drop(markdown_views);
-        content
+        content.child(background_work_selection_input(selection))
     }
 }
 
@@ -2480,6 +2584,48 @@ mod tests {
         assert_eq!(activities.len(), 1, "the update replaces, not appends");
         assert!(activities[0].complete);
         assert_eq!(activities[0].id, original_id);
+    }
+
+    #[test]
+    fn subagent_text_and_tools_keep_event_order() {
+        let mut registry = BackgroundWorkRegistry::default();
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::Started {
+                key: key.clone(),
+                prompt: Some("Find the answer".into()),
+            },
+        ));
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::TextDelta {
+                key: key.clone(),
+                delta: "Before tool.".into(),
+            },
+        ));
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::Activity {
+                key: key.clone(),
+                activity: ActivityItem::new(
+                    Some("call_1".into()),
+                    ActivityKind::Search,
+                    "Search",
+                    None,
+                    true,
+                ),
+            },
+        ));
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::TextDelta {
+                key: key.clone(),
+                delta: "After tool.".into(),
+            },
+        ));
+
+        let transcript = &registry.transcripts[&key];
+        assert_eq!(transcript.messages.len(), 3);
+        assert_eq!(transcript.messages[1].content, "Before tool.");
+        assert_eq!(transcript.messages[2].content, "After tool.");
+        assert_eq!(transcript.transcript_blocks[0].after_message, 2);
     }
 
     #[test]

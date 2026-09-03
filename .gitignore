@@ -12,4 +12,9 @@ temp/
 .agents/
 gpui-component-main/
 
+# Agent skill packs (UI skills), local only
+.claude/skills/
+.zcode/skills/
+skills-lock.json
+
 .DS_Store

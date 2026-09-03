@@ -154,7 +154,8 @@ where
     }
 }
 
-/// Brand hue for the OpenCode mark.
+/// Neutral tint for a provider icon: near-ink in either theme, so the
+/// letterform or brand mark carries the identity rather than a hue.
 pub fn provider_color(theme: &Theme, _provider: &str) -> Hsla {
     if theme.is_dark {
         rgb(0xF3F3F3).into()
@@ -163,9 +164,55 @@ pub fn provider_color(theme: &Theme, _provider: &str) -> Hsla {
     }
 }
 
-/// Recognizable OpenCode mark, matching the model picker vocabulary.
-pub fn provider_icon(_provider: &str) -> &'static str {
-    "icons/provider-opencode.svg"
+/// Icon for a model provider. OpenCode keeps its brand mark; every other
+/// provider gets a letter glyph keyed by the first letter of its name, so a
+/// provider configured later still reads as itself without a bespoke asset.
+pub fn provider_icon(provider: &str) -> &'static str {
+    if provider.trim().eq_ignore_ascii_case("opencode") {
+        return "icons/provider-opencode.svg";
+    }
+    provider_letter_icon(provider)
+}
+
+/// Letter glyph for a provider name, drawn from its first ASCII letter so
+/// digits, punctuation, and non-Latin prefixes still land on the letter that
+/// leads the readable part of the name. Names without any ASCII letter fall
+/// back to the generic mark.
+fn provider_letter_icon(provider: &str) -> &'static str {
+    let letter = provider
+        .trim()
+        .chars()
+        .find(|ch| ch.is_ascii_alphabetic())
+        .map(|ch| ch.to_ascii_uppercase());
+    match letter {
+        Some('A') => "icons/letters/a.svg",
+        Some('B') => "icons/letters/b.svg",
+        Some('C') => "icons/letters/c.svg",
+        Some('D') => "icons/letters/d.svg",
+        Some('E') => "icons/letters/e.svg",
+        Some('F') => "icons/letters/f.svg",
+        Some('G') => "icons/letters/g.svg",
+        Some('H') => "icons/letters/h.svg",
+        Some('I') => "icons/letters/i.svg",
+        Some('J') => "icons/letters/j.svg",
+        Some('K') => "icons/letters/k.svg",
+        Some('L') => "icons/letters/l.svg",
+        Some('M') => "icons/letters/m.svg",
+        Some('N') => "icons/letters/n.svg",
+        Some('O') => "icons/letters/o.svg",
+        Some('P') => "icons/letters/p.svg",
+        Some('Q') => "icons/letters/q.svg",
+        Some('R') => "icons/letters/r.svg",
+        Some('S') => "icons/letters/s.svg",
+        Some('T') => "icons/letters/t.svg",
+        Some('U') => "icons/letters/u.svg",
+        Some('V') => "icons/letters/v.svg",
+        Some('W') => "icons/letters/w.svg",
+        Some('X') => "icons/letters/x.svg",
+        Some('Y') => "icons/letters/y.svg",
+        Some('Z') => "icons/letters/z.svg",
+        _ => "icons/hexagon.svg",
+    }
 }
 
 pub fn status_color(theme: &Theme, status: SessionStatus) -> Hsla {
@@ -188,6 +235,44 @@ pub fn activity_icon(kind: ActivityKind) -> &'static str {
         ActivityKind::Search => "icons/search.svg",
         ActivityKind::Plan => "icons/list.svg",
         ActivityKind::Tool => "icons/wrench.svg",
+    }
+}
+
+/// Per-tool glyph for a transcript activity row. Recognizable tool names get
+/// a purpose-picked icon; everything else falls back to the category icon for
+/// [`ActivityKind`], so an unfamiliar tool still reads as "a tool call".
+pub fn activity_tool_icon(tool_name: &str, kind: ActivityKind) -> &'static str {
+    let normalized = tool_name.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    if normalized.is_empty() {
+        return activity_icon(kind);
+    }
+    // Claude-style MCP tools (`mcp__server__tool`) have arbitrary leaf names,
+    // so the whole family shares one glyph instead of borrowing a built-in
+    // tool's icon by coincidence.
+    if normalized.contains("__") {
+        return "icons/package.svg";
+    }
+    let leaf = normalized
+        .rsplit([':', '.', '/'])
+        .next()
+        .unwrap_or(&normalized)
+        .replace('_', "");
+    match leaf.as_str() {
+        "webfetch" | "fetch" | "urlfetch" | "openurl" | "browser" | "openbrowser" | "navigate" => {
+            "icons/globe.svg"
+        }
+        "websearch" | "searchweb" | "search" => "icons/search.svg",
+        "task" | "agent" | "newagent" | "spawnagent" | "dispatchagent" | "subagent" => {
+            "icons/bot.svg"
+        }
+        "question" | "ask" | "askuser" | "askuserquestion" | "requestinput" | "userinput" => {
+            "icons/info.svg"
+        }
+        "screenshot" | "computerscreenshot" | "computer" | "computeruse" => "icons/eye.svg",
+        "applypatch" | "patch" => "icons/file-diff.svg",
+        name if name.starts_with("github") => "icons/github.svg",
+        name if name.starts_with("git") => "icons/git-branch.svg",
+        _ => activity_icon(kind),
     }
 }
 
@@ -468,6 +553,14 @@ mod tests {
             "icons/trash.svg",
             "icons/provider-opencode.svg",
         ];
+        // Every branch of `provider_icon` must resolve to an embedded asset,
+        // so a renamed letter glyph fails this test instead of vanishing from
+        // the model chip at runtime.
+        paths.push(provider_icon("opencode"));
+        paths.push(provider_icon("——"));
+        for letter in 'A'..='Z' {
+            paths.push(provider_letter_icon(&letter.to_string()));
+        }
         for kind in [
             ActivityKind::Reasoning,
             ActivityKind::Command,
@@ -481,11 +574,101 @@ mod tests {
         ] {
             paths.push(activity_icon(kind));
         }
+        // Every branch of `activity_tool_icon` must resolve to an embedded
+        // asset, so a renamed SVG fails this test instead of vanishing from
+        // the transcript at runtime.
+        for name in [
+            "webfetch",
+            "websearch",
+            "task",
+            "question",
+            "mcp__deepwiki__read_wiki",
+            "screenshot",
+            "github_create_pull_request",
+            "git_status",
+            "apply_patch",
+            "bash",
+            "read",
+            "glob",
+            "ls",
+            "todowrite",
+            "totally_unknown_tool",
+        ] {
+            paths.push(activity_tool_icon(name, ActivityKind::Tool));
+        }
         for path in paths {
             assert!(
                 Assets.load(path).unwrap().is_some(),
                 "missing embedded icon: {path}"
             );
         }
+    }
+
+    #[test]
+    fn provider_icons_key_off_the_first_letter() {
+        // The built-in provider keeps its brand mark regardless of case or
+        // surrounding whitespace, mirroring `model_picker_provider_label`.
+        assert_eq!(provider_icon("opencode"), "icons/provider-opencode.svg");
+        assert_eq!(provider_icon(" OpenCode "), "icons/provider-opencode.svg");
+        assert_eq!(provider_icon("anthropic"), "icons/letters/a.svg");
+        assert_eq!(provider_icon("OpenAI"), "icons/letters/o.svg");
+        assert_eq!(provider_icon("google-vertex"), "icons/letters/g.svg");
+        assert_eq!(provider_icon("xai"), "icons/letters/x.svg");
+        // The letter scan skips a leading non-letter so names like these
+        // still land on their readable initial.
+        assert_eq!(provider_icon("360gpt"), "icons/letters/g.svg");
+        // No ASCII letter anywhere: generic mark.
+        assert_eq!(provider_icon("  "), "icons/hexagon.svg");
+        assert_eq!(provider_icon("云雾"), "icons/hexagon.svg");
+    }
+
+    #[test]
+    fn tool_icons_follow_the_tool_name_before_the_kind() {
+        use crate::model::ActivityKind;
+
+        assert_eq!(
+            activity_tool_icon("webfetch", ActivityKind::Search),
+            "icons/globe.svg"
+        );
+        assert_eq!(
+            activity_tool_icon("Web Search", ActivityKind::Search),
+            "icons/search.svg"
+        );
+        assert_eq!(activity_tool_icon("task", ActivityKind::Tool), "icons/bot.svg");
+        assert_eq!(
+            activity_tool_icon("AskUserQuestion", ActivityKind::Tool),
+            "icons/info.svg"
+        );
+        assert_eq!(
+            activity_tool_icon("mcp__deepwiki__read_wiki", ActivityKind::Tool),
+            "icons/package.svg"
+        );
+        assert_eq!(
+            activity_tool_icon("computer/screenshot", ActivityKind::Tool),
+            "icons/eye.svg"
+        );
+        assert_eq!(
+            activity_tool_icon("apply_patch", ActivityKind::FileChange),
+            "icons/file-diff.svg"
+        );
+        assert_eq!(
+            activity_tool_icon("github_search_repos", ActivityKind::Tool),
+            "icons/github.svg"
+        );
+        assert_eq!(
+            activity_tool_icon("git_status", ActivityKind::Tool),
+            "icons/git-branch.svg"
+        );
+        // Unrecognized names keep the category glyph, and empty titles
+        // degrade to it too.
+        assert_eq!(
+            activity_tool_icon("create_thread", ActivityKind::Tool),
+            "icons/wrench.svg"
+        );
+        assert_eq!(
+            activity_tool_icon("read", ActivityKind::FileRead),
+            "icons/file.svg"
+        );
+        assert_eq!(activity_tool_icon("", ActivityKind::Plan), "icons/list.svg");
     }
 }

@@ -28,18 +28,16 @@ impl Waku {
     }
 
     fn complete_reasoning_activity(&mut self, session_id: Uuid) {
-        let Some(session) = self.state.session_mut(session_id) else {
-            return;
-        };
-        let reasoning = session
-            .transcript_blocks
-            .iter_mut()
-            .rev()
-            .flat_map(|block| block.activities.iter_mut().rev())
-            .find(|activity| activity.reasoning.is_some() && !activity.complete);
-        if let Some(reasoning) = reasoning {
-            reasoning.complete = true;
-            session.updated_at = unix_time();
+        let completed_block = self
+            .state
+            .session_mut(session_id)
+            .and_then(complete_latest_reasoning_activity);
+        // Live reasoning auto-collapses on a phase change and may already sit
+        // outside the three-row streaming remeasure window.
+        if self.state.selected_session == Some(session_id)
+            && let Some(block_index) = completed_block
+        {
+            self.remeasure_transcript_block(block_index);
         }
     }
 
@@ -716,6 +714,25 @@ impl Waku {
         }
         runtime.computer_use_previews.push(preview);
     }
+}
+
+pub(super) fn complete_latest_reasoning_activity(session: &mut AgentSession) -> Option<usize> {
+    let (block_index, reasoning) = session
+        .transcript_blocks
+        .iter_mut()
+        .enumerate()
+        .rev()
+        .find_map(|(block_index, block)| {
+            block
+                .activities
+                .iter_mut()
+                .rev()
+                .find(|activity| activity.reasoning.is_some() && !activity.complete)
+                .map(|activity| (block_index, activity))
+        })?;
+    reasoning.complete = true;
+    session.updated_at = unix_time();
+    Some(block_index)
 }
 
 /// A completed edit or shell command is the earliest provider-neutral point at

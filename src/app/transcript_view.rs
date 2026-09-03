@@ -2002,7 +2002,7 @@ impl Waku {
                                 .active(|element| element.bg(activity_active_surface))
                         })
                         .child(icon(
-                            activity_icon(activity.kind),
+                            activity_tool_icon(&activity.title, activity.kind),
                             13.0,
                             theme.text_tertiary,
                         ))

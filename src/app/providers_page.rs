@@ -627,7 +627,7 @@ impl Waku {
                 SharedString::from(format!("provider-row-{index}")),
                 provider.id.clone(),
                 provider.name.clone(),
-                "icons/hexagon.svg",
+                provider_icon(&provider.name),
                 selected_id == provider.id,
                 provider.enabled,
                 theme,
@@ -1303,7 +1303,7 @@ impl Waku {
                         .flex()
                         .items_center()
                         .gap(px(12.0))
-                        .child(provider_tile(theme, "icons/hexagon.svg", enabled))
+                        .child(provider_tile(theme, provider_icon(&provider.name), enabled))
                         .child(
                             div()
                                 .flex_1()

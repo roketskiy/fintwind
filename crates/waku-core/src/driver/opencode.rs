@@ -1180,12 +1180,16 @@ fn opencode_model_context_windows(response: &Value) -> HashMap<String, u64> {
         .collect()
 }
 
-/// The token total of an opencode2 usage payload: assistant messages carry
-/// `tokens` at the top level and the event stream reports the same shape on
-/// `session.usage.updated`. There is no `total`, so input/output plus cache
-/// define the meter.
+/// The context size carried by an opencode2 assistant message: `tokens` on
+/// the message info (and on `session.step.ended`) is the normalized shape —
+/// `input` excludes cached tokens, `output` excludes reasoning, so the
+/// disjoint fields sum to the context, and `total` reports the same number
+/// outright when the provider sent it.
 fn opencode_message_tokens(message: &Value) -> Option<u64> {
     let tokens = message.get("tokens")?;
+    if let Some(total) = tokens.get("total").and_then(Value::as_u64).filter(|total| *total > 0) {
+        return Some(total);
+    }
     let total = [
         tokens.get("input"),
         tokens.get("output"),
@@ -1197,6 +1201,26 @@ fn opencode_message_tokens(message: &Value) -> Option<u64> {
     .flatten()
     .filter_map(Value::as_u64)
     .fold(0_u64, u64::saturating_add);
+    (total > 0).then_some(total)
+}
+
+/// The context size carried by a `session.usage.updated` payload. Unlike the
+/// message shape above, this is the raw provider usage: AI SDK v6 normalizes
+/// every provider's `inputTokens` to include cached tokens, and `outputTokens`
+/// to include reasoning, so the cache and reasoning fields are subsets of
+/// `input`/`output` rather than additions. Summing all five — as if normalized
+/// — double-counts the cache and reads roughly twice the real context on a
+/// cache-heavy turn. `total`, when present, already equals `input + output`.
+fn opencode_session_usage_tokens(payload: &Value) -> Option<u64> {
+    let tokens = payload.get("tokens")?;
+    if let Some(total) = tokens.get("total").and_then(Value::as_u64).filter(|total| *total > 0) {
+        return Some(total);
+    }
+    let total = [tokens.get("input"), tokens.get("output")]
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_u64)
+        .fold(0_u64, u64::saturating_add);
     (total > 0).then_some(total)
 }
 
@@ -1637,11 +1661,12 @@ fn handle_event(
             }
         }
         "session.usage.updated" => {
-            // The payload carries tokens but no model; the window comes from
-            // the model announced by `session.step.started`.
+            // The payload carries raw provider usage (its `input` already
+            // includes cached tokens) but no model; the window comes from the
+            // model announced by `session.step.started`.
             let (context_tokens, context_window) = {
                 let metadata = &state.usage_metadata;
-                let tokens = opencode_message_tokens(payload);
+                let tokens = opencode_session_usage_tokens(payload);
                 let window = metadata.current_context_window();
                 (tokens, window)
             };
@@ -3069,7 +3094,8 @@ mod tests {
             .lock()
             .insert("glmcoding/glm-5.3-flash".into(), 200_000);
 
-        // The step announces the model; the usage event then carries tokens.
+        // The step announces the model; the usage event then carries the raw
+        // provider usage, whose `input` already includes the cached tokens.
         handle_event(
             &json!({
                 "type": "session.step.started",
@@ -3095,7 +3121,7 @@ mod tests {
                         "input": 13_399,
                         "output": 10,
                         "reasoning": 0,
-                        "cache": {"read": 1792, "write": 0}
+                        "cache": {"read": 1_792, "write": 0}
                     }
                 }
             }),
@@ -3109,11 +3135,65 @@ mod tests {
         assert!(matches!(
             event_rx.try_recv().unwrap(),
             DriverEvent::UsageUpdated {
-                context_tokens: Some(15_201),
+                context_tokens: Some(13_409),
                 context_window: Some(200_000)
             }
         ));
         assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn session_usage_events_do_not_double_count_the_cache() {
+        // Shape captured live from opencode2: the same turn whose assistant
+        // message reported `{input: 205, cache.read: 8_704, output: 3}` — a
+        // ~8.9k context — published this raw usage payload. Summing all five
+        // fields reads 19_339, about twice the real context; the raw shape
+        // totals `input + output` because its cache entry is already inside
+        // `input`.
+        let payload = json!({
+            "sessionID": "ses_1",
+            "cost": 0.002_190_308,
+            "tokens": {
+                "input": 9_598,
+                "output": 37,
+                "reasoning": 0,
+                "cache": {"read": 8_704, "write": 0}
+            }
+        });
+        assert_eq!(opencode_session_usage_tokens(&payload), Some(9_635));
+
+        // A `total`, when the provider reports one, is the context outright.
+        let payload = json!({"tokens": {
+            "total": 500,
+            "input": 9_598,
+            "output": 37,
+            "reasoning": 0,
+            "cache": {"read": 8_704, "write": 0}
+        }});
+        assert_eq!(opencode_session_usage_tokens(&payload), Some(500));
+    }
+
+    #[test]
+    fn message_tokens_sum_disjoint_fields_and_honor_total() {
+        // The normalized message shape: cache and reasoning are separate from
+        // input/output, so the disjoint fields sum to the context.
+        let message = json!({"tokens": {
+            "input": 246,
+            "output": 83,
+            "reasoning": 0,
+            "cache": {"read": 78_592, "write": 0}
+        }});
+        assert_eq!(opencode_message_tokens(&message), Some(78_921));
+
+        // `total`, when present, is that same context reported outright.
+        let message = json!({"tokens": {
+            "total": 78_921,
+            "input": 300,
+            "output": 83,
+            "reasoning": 0,
+            "cache": {"read": 78_592, "write": 0}
+        }});
+        assert_eq!(opencode_message_tokens(&message), Some(78_921));
     }
 
     #[test]

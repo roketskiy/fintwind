@@ -1863,7 +1863,11 @@ impl Waku {
                                 .gap(px(7.0))
                                 .text_size(px(11.5))
                                 .text_color(theme.text_secondary)
-                                .child(icon(activity_icon(activity.kind), 12.0, color))
+                                .child(icon(
+                                    activity_tool_icon(&activity.title, activity.kind),
+                                    12.0,
+                                    color,
+                                ))
                                 .child(
                                     div()
                                         .flex_none()

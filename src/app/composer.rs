@@ -791,7 +791,7 @@ impl Waku {
     pub(super) fn render_provider_model_control(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let session = self.selected_session();
-        let provider = OPENCODE_PROVIDER.to_owned();
+        let provider = self.selected_model_provider_label();
         let selected_model = session.and_then(|session| self.model_for_session(session));
         let selected_model_name = self.model_display_name(selected_model);
         let picker_enabled = session.is_some_and(|session| session.can_choose_model());
@@ -970,11 +970,7 @@ impl Waku {
                     .overflow_y_scroll();
                 for (provider_tab, provider_label) in provider_tabs {
                     let is_selected = selected_tab == provider_tab && !searching;
-                    let icon_path = if provider_label.eq_ignore_ascii_case("opencode") {
-                        "icons/provider-opencode.svg"
-                    } else {
-                        "icons/hexagon.svg"
-                    };
+                    let icon_path = provider_icon(&provider_label);
                     let tooltip = provider_label.clone();
                     let select_tab = provider_tab.clone();
                     let provider_weak = provider_weak.clone();
@@ -1305,12 +1301,18 @@ impl Waku {
     }
 
     pub(super) fn selected_model_picker_tab(&self) -> ModelPickerTab {
-        let selected_model = self
-            .selected_session()
-            .and_then(|session| self.model_metadata_for_session(session));
-        ModelPickerTab::Provider(model_picker_provider_label(
-            selected_model.and_then(|model| model.sub_provider.as_deref()),
-        ))
+        ModelPickerTab::Provider(self.selected_model_provider_label())
+    }
+
+    /// Display label of the provider backing the selected session's model —
+    /// the key the model chip's icon and the picker's active tab share, so
+    /// both always describe the same provider.
+    pub(super) fn selected_model_provider_label(&self) -> String {
+        model_picker_provider_label(
+            self.selected_session()
+                .and_then(|session| self.model_metadata_for_session(session))
+                .and_then(|model| model.sub_provider.as_deref()),
+        )
     }
 
     /// Take the row the selection is on, defaulting to the first so `enter`

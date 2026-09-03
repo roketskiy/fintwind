@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { ComposerDraftChange, DaemonSettings, Project, WakuClient } from '@waku/client'
+import type { ComposerDraftChange, DaemonSettings, Project, FintwindClient } from '@fintwind/client'
 import {
   applyComposerDraftChanges,
   beginTurn,
@@ -25,7 +25,7 @@ describe('applyComposerDraftChanges', () => {
         command = next
         return { type: 'ack' }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
     const changes: ComposerDraftChange[] = [{
       target: { type: 'session', sessionId: 'session' },
       draft: { text: 'keep this', attachments: [] },
@@ -69,7 +69,7 @@ describe('browseDaemonDirectory', () => {
         command = next
         return { type: 'workspace', result }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
 
     await expect(browseDaemonDirectory(client, '/Users/me')).resolves.toEqual(result)
     expect(command).toEqual({
@@ -93,7 +93,7 @@ describe('browseDaemonDirectory', () => {
         command = next
         return { type: 'workspace', result }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
 
     await expect(browseDaemonDirectory(client, null)).resolves.toEqual(result)
     expect(command).toEqual({
@@ -111,14 +111,14 @@ describe('turn checkpoints', () => {
         command = next
         return { type: 'workspace', result: { type: 'ack' } }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
 
-    await expect(captureTurnStart(client, '/srv/waku', 'session', 2)).resolves.toBeUndefined()
+    await expect(captureTurnStart(client, '/srv/fintwind', 'session', 2)).resolves.toBeUndefined()
     expect(command).toEqual({
       type: 'workspace',
       operation: {
         type: 'captureTurnStart',
-        cwd: '/srv/waku',
+        cwd: '/srv/fintwind',
         session_id: 'session',
         turn_count: 2,
       },
@@ -129,7 +129,7 @@ describe('turn checkpoints', () => {
     let command: unknown
     const checkpoint = {
       turn_count: 2,
-      git_ref: 'refs/waku/session-session-turn-2',
+      git_ref: 'refs/fintwind/session-session-turn-2',
       status: 'ready' as const,
       files: [],
       additions: 0,
@@ -141,15 +141,15 @@ describe('turn checkpoints', () => {
         command = next
         return { type: 'workspace', result: { type: 'checkpoint', checkpoint } }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
 
-    await expect(captureTurnCheckpoint(client, '/srv/waku', 'session', 2))
+    await expect(captureTurnCheckpoint(client, '/srv/fintwind', 'session', 2))
       .resolves.toEqual(checkpoint)
     expect(command).toEqual({
       type: 'workspace',
       operation: {
         type: 'captureTurn',
-        cwd: '/srv/waku',
+        cwd: '/srv/fintwind',
         session_id: 'session',
         turn_count: 2,
       },
@@ -168,14 +168,14 @@ describe('probeProvider', () => {
           probe: {
             provider: 'codex',
             installed: true,
-            path: '/opt/waku/codex',
+            path: '/opt/fintwind/codex',
             models: [],
             agent_presets: [],
           },
           version: null,
         }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
     // Empty override maps are omitted by serde even though the generated
     // TypeScript type currently marks the field as required.
     const settings = {} as DaemonSettings
@@ -183,7 +183,7 @@ describe('probeProvider', () => {
     await expect(probeProvider(client, 'codex', settings, {
       discoverModels: false,
       probeVersion: false,
-    })).resolves.toMatchObject({ installed: true, path: '/opt/waku/codex' })
+    })).resolves.toMatchObject({ installed: true, path: '/opt/fintwind/codex' })
     expect(command).toEqual({
       type: 'probeProvider',
       provider: 'codex',
@@ -202,16 +202,16 @@ describe('writeWorkspaceTextFile', () => {
         command = next
         return { type: 'workspace', result: { type: 'ack' } }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
 
     await expect(
-      writeWorkspaceTextFile(client, '/srv/waku', 'src/app.ts', 'export const ready = true\n'),
+      writeWorkspaceTextFile(client, '/srv/fintwind', 'src/app.ts', 'export const ready = true\n'),
     ).resolves.toBeUndefined()
     expect(command).toEqual({
       type: 'workspace',
       operation: {
         type: 'writeTextFile',
-        root: '/srv/waku',
+        root: '/srv/fintwind',
         relative_path: 'src/app.ts',
         content: 'export const ready = true\n',
       },
@@ -222,8 +222,8 @@ describe('writeWorkspaceTextFile', () => {
 describe('createProject', () => {
   test('normalizes a remote absolute path without collapsing the root', () => {
     expect(createProject('/').path).toBe('/')
-    expect(createProject('/srv/waku/').path).toBe('/srv/waku')
-    expect(createProject('/srv/waku/').name).toBe('waku')
+    expect(createProject('/srv/fintwind/').path).toBe('/srv/fintwind')
+    expect(createProject('/srv/fintwind/').name).toBe('fintwind')
   })
 
   test('rejects paths that depend on the browser process cwd', () => {
@@ -234,7 +234,7 @@ describe('createProject', () => {
 describe('persistProject', () => {
   test('adds a daemon-host project without creating a session', async () => {
     const existing = project('existing', 'existing', '/srv/existing')
-    const candidate = project('new', 'waku', '/srv/waku')
+    const candidate = project('new', 'fintwind', '/srv/fintwind')
     const commands: unknown[] = []
     const client = {
       request: async (command: unknown) => {
@@ -245,12 +245,12 @@ describe('persistProject', () => {
             projects: [existing],
             sessions: [{ id: 'session' }],
             defaultCwd: '/srv',
-            projectlessRoot: '/srv/.waku/projects',
+            projectlessRoot: '/srv/.fintwind/projects',
           }
         }
         return { type: 'taskStateSaved', sessions: [] }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
 
     const result = await persistProject(client, candidate)
 
@@ -268,7 +268,7 @@ describe('persistProject', () => {
   })
 
   test('reuses a project already persisted for the same daemon path', async () => {
-    const existing = project('existing', 'waku', '/srv/waku')
+    const existing = project('existing', 'fintwind', '/srv/fintwind')
     const commands: unknown[] = []
     const client = {
       request: async (command: unknown) => {
@@ -278,12 +278,12 @@ describe('persistProject', () => {
           projects: [existing],
           sessions: [],
           defaultCwd: '/srv',
-          projectlessRoot: '/srv/.waku/projects',
+          projectlessRoot: '/srv/.fintwind/projects',
         }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
 
-    const result = await persistProject(client, project('duplicate', 'waku', '/srv/waku'))
+    const result = await persistProject(client, project('duplicate', 'fintwind', '/srv/fintwind'))
 
     expect(result.project).toEqual(existing)
     expect(commands).toEqual([{ type: 'loadTaskState' }])
@@ -299,7 +299,7 @@ describe('persistSession', () => {
         commands.push(command)
         return { type: 'taskStateSaved', sessions: [saved] }
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
 
     await expect(persistSession(client, saved)).resolves.toEqual(saved)
     expect(commands).toEqual([{
@@ -313,9 +313,9 @@ describe('persistSession', () => {
 
 describe('selectableProjects', () => {
   test('represents projectless tasks as one choice while preserving the selected workspace', () => {
-    const ordinary = project('repo', 'waku', '/srv/waku')
-    const first = project('one', 'No project', '/home/me/.waku/projects/one')
-    const selected = project('two', 'No project', '/home/me/.waku/projects/two')
+    const ordinary = project('repo', 'fintwind', '/srv/fintwind')
+    const first = project('one', 'No project', '/home/me/.fintwind/projects/one')
+    const selected = project('two', 'No project', '/home/me/.fintwind/projects/two')
 
     expect(selectableProjects([ordinary, first, selected], selected)).toEqual([
       selected,
@@ -339,12 +339,12 @@ describe('removeSession', () => {
             projects: [],
             sessions: [{ id: 'keep' }],
             defaultCwd: '/srv',
-            projectlessRoot: '/srv/.waku/projects',
+            projectlessRoot: '/srv/.fintwind/projects',
           }
         }
         throw new Error('unexpected command')
       },
-    } as unknown as WakuClient
+    } as unknown as FintwindClient
 
     const next = await removeSession(client, 'remove')
 

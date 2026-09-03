@@ -1,4 +1,4 @@
-import type { ProviderKind, ProviderModel } from '@waku/client'
+import type { ProviderKind, ProviderModel } from '@fintwind/client'
 
 export interface ModelPickerRow {
   provider: ProviderKind

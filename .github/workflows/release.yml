@@ -310,9 +310,9 @@ jobs:
 
       - name: Release
         env:
-          WAKU_SIGNING_IDENTITY: ${{ secrets.WAKU_SIGNING_IDENTITY }}
-          WAKU_ANALYTICS_ENDPOINT: ${{ secrets.WAKU_ANALYTICS_ENDPOINT }}
-          WAKU_ANALYTICS_WEBSITE_ID: ${{ secrets.WAKU_ANALYTICS_WEBSITE_ID }}
+          FINTWIND_SIGNING_IDENTITY: ${{ secrets.FINTWIND_SIGNING_IDENTITY }}
+          FINTWIND_ANALYTICS_ENDPOINT: ${{ secrets.FINTWIND_ANALYTICS_ENDPOINT }}
+          FINTWIND_ANALYTICS_WEBSITE_ID: ${{ secrets.FINTWIND_ANALYTICS_WEBSITE_ID }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: bun run release --local
 
@@ -371,7 +371,7 @@ jobs:
           # their entries; a first run simply starts from nothing.
           for arch in x86_64 aarch64; do
             curl -fsSL --max-time 30 \
-              "https://releases.waku.sh/appcast-windows-$arch.xml" \
+              "https://releases.fintwind.sh/appcast-windows-$arch.xml" \
               -o "artifacts/appcast-windows-$arch.xml" || true
           done
           bun scripts/appcast-windows.ts artifacts "$VERSION"

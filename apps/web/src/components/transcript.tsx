@@ -3,14 +3,14 @@ import type {
   AgentSession,
   MessageAttachment,
   ReviewDiffSource,
-} from '@waku/client'
+} from '@fintwind/client'
 import { ContextMenu } from '@base-ui/react/context-menu'
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Virtuoso, type ListItem, type VirtuosoHandle } from 'react-virtuoso'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PreviewableImage } from '@/components/image-preview'
-import { FileTypeIcon, WakuIcon, type WakuIconName } from '@/components/waku-icon'
+import { FileTypeIcon, FintwindIcon, type FintwindIconName } from '@/components/fintwind-icon'
 import { readAttachmentImage } from '@/lib/attachments'
 import { useDaemon } from '@/lib/daemon-context'
 import { activitiesForBlock } from '@/lib/event-reducer'
@@ -206,7 +206,7 @@ export function Transcript({
       {empty ? (
         <div className="absolute inset-0 grid place-items-center pb-8">
           <div className="text-center">
-            <WakuIcon className="mx-auto size-5 text-ring" name="sparkle" />
+            <FintwindIcon className="mx-auto size-5 text-ring" name="sparkle" />
             <h2 className="mt-3 text-xl font-medium tracking-tight">
               {t('onboarding.what_should_we_build')}
             </h2>
@@ -322,7 +322,7 @@ export function Transcript({
             behavior: 'auto',
           })}
         >
-          <WakuIcon className="size-4" name="arrowDown" />
+          <FintwindIcon className="size-4" name="arrowDown" />
         </button>
       )}
       </div>
@@ -506,7 +506,7 @@ function ConversationNavigationRail({
       />
       {emphasizedIndex !== null && (
         <div
-          className="waku-popover-surface pointer-events-none absolute left-[60px] z-20 flex max-h-[126px] w-80 flex-col gap-1.5 overflow-hidden rounded-[14px] px-[15px] py-3 text-popover-foreground"
+          className="fintwind-popover-surface pointer-events-none absolute left-[60px] z-20 flex max-h-[126px] w-80 flex-col gap-1.5 overflow-hidden rounded-[14px] px-[15px] py-3 text-popover-foreground"
           style={{ top: previewTop }}
         >
           <div className="truncate text-sm font-semibold leading-5">
@@ -939,7 +939,7 @@ function TurnFold({
         onClick={onToggle}
       >
         {label}
-        <WakuIcon className="size-2.5" name={expanded ? 'chevronDown' : 'chevronRight'} />
+        <FintwindIcon className="size-2.5" name={expanded ? 'chevronDown' : 'chevronRight'} />
       </button>
       <div className="h-px flex-1 bg-border" />
     </div>
@@ -1173,7 +1173,7 @@ function MessageEditBubble({
           disabled={!canSubmit || pending}
           type="submit"
         >
-          {pending && <WakuIcon className="size-3 motion-safe:animate-spin" name="loaderCircle" />}
+          {pending && <FintwindIcon className="size-3 motion-safe:animate-spin" name="loaderCircle" />}
           {t('common.send')}
         </button>
       </div>
@@ -1225,7 +1225,7 @@ function MessageFooter({
           }, 2_000)
         }}
       >
-        <WakuIcon className="size-3.5" name={copied ? 'check' : 'copy'} />
+        <FintwindIcon className="size-3.5" name={copied ? 'check' : 'copy'} />
       </button>
       {alignRight && rewindAction && (
         <button
@@ -1236,7 +1236,7 @@ function MessageFooter({
           type="button"
           onClick={rewindAction.onBegin}
         >
-          <WakuIcon
+          <FintwindIcon
             className={cn('size-3.5', rewindAction.pending && 'motion-safe:animate-spin')}
             name={rewindAction.pending ? 'loaderCircle' : 'rewind'}
           />
@@ -1251,7 +1251,7 @@ function MessageFooter({
           type="button"
           onClick={() => forkAction.onFork(forkAction.turnCount)}
         >
-          <WakuIcon
+          <FintwindIcon
             className={cn('size-3.5', forkAction.pending && 'motion-safe:animate-spin')}
             name={forkAction.pending ? 'loaderCircle' : 'fork'}
           />
@@ -1289,48 +1289,48 @@ function MessageContextMenu({
       <ContextMenu.Portal>
         <ContextMenu.Positioner className="z-[100] outline-none">
           <ContextMenu.Popup
-            className="waku-menu-surface"
+            className="fintwind-menu-surface"
             finalFocus={false}
           >
             {selectedText && (
               <ContextMenu.Item
-                className="waku-menu-item"
+                className="fintwind-menu-item"
                 onClick={() => void navigator.clipboard.writeText(selectedText)}
               >
-                <WakuIcon className="size-3" name="copy" /> {t('common.copy_selection')}
+                <FintwindIcon className="size-3" name="copy" /> {t('common.copy_selection')}
               </ContextMenu.Item>
             )}
             <ContextMenu.Item
-              className="waku-menu-item"
+              className="fintwind-menu-item"
               onClick={() => void navigator.clipboard.writeText(content)}
             >
-              <WakuIcon className="size-3" name="copy" /> {t('common.copy_message_title')}
+              <FintwindIcon className="size-3" name="copy" /> {t('common.copy_message_title')}
             </ContextMenu.Item>
             {copyToComposer && (
               <ContextMenu.Item
-                className="waku-menu-item"
+                className="fintwind-menu-item"
                 onClick={copyToComposer}
               >
-                <WakuIcon className="size-3" name="compose" /> {t('common.copy_to_composer')}
+                <FintwindIcon className="size-3" name="compose" /> {t('common.copy_to_composer')}
               </ContextMenu.Item>
             )}
             {code && (
               <ContextMenu.Item
-                className="waku-menu-item"
+                className="fintwind-menu-item"
                 onClick={() => void navigator.clipboard.writeText(code)}
               >
-                <WakuIcon className="size-3" name="copy" /> {t('common.copy_code')}
+                <FintwindIcon className="size-3" name="copy" /> {t('common.copy_code')}
               </ContextMenu.Item>
             )}
             {rewindAction && (
               <>
-                <ContextMenu.Separator className="waku-menu-separator" />
+                <ContextMenu.Separator className="fintwind-menu-separator" />
                 <ContextMenu.Item
-                  className="waku-menu-item"
+                  className="fintwind-menu-item"
                   disabled={rewindAction.pending}
                   onClick={rewindAction.onBegin}
                 >
-                  <WakuIcon
+                  <FintwindIcon
                     className={cn('size-3', rewindAction.pending && 'motion-safe:animate-spin')}
                     name={rewindAction.pending ? 'loaderCircle' : 'rewind'}
                   />
@@ -1340,13 +1340,13 @@ function MessageContextMenu({
             )}
             {forkAction && (
               <>
-                <ContextMenu.Separator className="waku-menu-separator" />
+                <ContextMenu.Separator className="fintwind-menu-separator" />
                 <ContextMenu.Item
-                  className="waku-menu-item"
+                  className="fintwind-menu-item"
                   disabled={forkAction.pending}
                   onClick={() => forkAction.onFork(forkAction.turnCount)}
                 >
-                  <WakuIcon
+                  <FintwindIcon
                     className={cn('size-3', forkAction.pending && 'motion-safe:animate-spin')}
                     name={forkAction.pending ? 'loaderCircle' : 'fork'}
                   />
@@ -1439,7 +1439,7 @@ function ActivityGroup({
         onClick={() => setExpanded((value) => !value)}
       >
         <span className="min-w-0 truncate text-left text-[12.5px] font-medium text-[var(--text-secondary)]">{activityHeaderTitle(activities, liveTurn, t)}</span>
-        <WakuIcon className="size-2.5 shrink-0" name={expanded ? 'chevronDown' : 'chevronRight'} />
+        <FintwindIcon className="size-2.5 shrink-0" name={expanded ? 'chevronDown' : 'chevronRight'} />
       </button>
       {expanded && (
         <div className="ml-1.5 flex min-w-0 flex-col gap-2 border-l pb-0.5 pl-3">
@@ -1519,7 +1519,7 @@ function ActivityRow({
           type="button"
           onClick={() => setExpanded((value) => !value)}
         >
-          <WakuIcon className="size-3 shrink-0 text-[var(--text-tertiary)]" name={iconName} />
+          <FintwindIcon className="size-3 shrink-0 text-[var(--text-tertiary)]" name={iconName} />
           <span className="shrink-0 font-semibold text-[var(--text-secondary)]">{actionLabel}</span>
           {rowDetail && (
             <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">
@@ -1681,7 +1681,7 @@ function ActivitySection({
                 }, 2_000)
               }}
             >
-              <WakuIcon className="size-[11px]" name={copied ? 'check' : 'copy'} />
+              <FintwindIcon className="size-[11px]" name={copied ? 'check' : 'copy'} />
             </button>
           )}
         </div>
@@ -1754,9 +1754,9 @@ function ActivityState({
   hasDetail: boolean
   t: Translator
 }) {
-  if (hasDetail) return <WakuIcon className="size-2.5 text-[var(--text-tertiary)]" name={expanded ? 'chevronDown' : 'chevronRight'} />
+  if (hasDetail) return <FintwindIcon className="size-2.5 text-[var(--text-tertiary)]" name={expanded ? 'chevronDown' : 'chevronRight'} />
   if (activity.reasoning) return null
-  if (activity.failed) return <WakuIcon label={t('background.status.failed')} className="size-3 text-destructive" name="alert" />
+  if (activity.failed) return <FintwindIcon label={t('background.status.failed')} className="size-3 text-destructive" name="alert" />
   if (activity.complete) return null
   return <span aria-label={t('background.status.running')} className="size-1.5 rounded-full bg-ring motion-safe:animate-pulse" role="img" />
 }
@@ -1781,7 +1781,7 @@ function ChangedFilesCard({
     <div className="overflow-hidden rounded-xl border bg-accent">
       <div className="flex min-h-[58px] items-center gap-2.5 px-3 py-[9px]">
         <span className="grid size-9 shrink-0 place-items-center rounded-[9px] bg-[var(--raised)]">
-          <WakuIcon className="size-4 text-[var(--text-tertiary)]" name="fileDiff" />
+          <FintwindIcon className="size-4 text-[var(--text-tertiary)]" name="fileDiff" />
         </span>
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12.5px] font-medium">
@@ -1800,7 +1800,7 @@ function ChangedFilesCard({
             type="button"
             onClick={onReview}
           >
-            <WakuIcon className="size-3 text-[var(--text-tertiary)]" name="fileDiff" />
+            <FintwindIcon className="size-3 text-[var(--text-tertiary)]" name="fileDiff" />
             {t('transcript.review_changes')}
           </button>
         )}
@@ -1828,7 +1828,7 @@ function ChangedFilesCard({
               </span>
             )}
             <span className="flex-1" />
-            <WakuIcon className="size-[11px] text-[var(--text-tertiary)]" name={expanded ? 'chevronDown' : 'chevronRight'} />
+            <FintwindIcon className="size-[11px] text-[var(--text-tertiary)]" name={expanded ? 'chevronDown' : 'chevronRight'} />
           </button>
         )}
       </div>
@@ -1844,7 +1844,7 @@ function Attachment({ attachment }: { attachment: MessageAttachment }) {
       title={attachment.name}
     >
       {attachment.is_dir
-        ? <WakuIcon className="size-[18px] text-[var(--text-tertiary)]" name="folder" />
+        ? <FintwindIcon className="size-[18px] text-[var(--text-tertiary)]" name="folder" />
         : <FileTypeIcon className="size-[18px]" path={attachment.mention || attachment.name} />}
       <span className="w-full truncate text-center text-[9.5px] text-[var(--text-secondary)]">
         {attachment.name}
@@ -1926,7 +1926,7 @@ function ActivityImage({ reference, t }: { reference: string; t: Translator }) {
   )
 }
 
-function activityIcon(activity: ActivityItem): WakuIconName {
+function activityIcon(activity: ActivityItem): FintwindIconName {
   if (activity.reasoning || activity.kind === 'reasoning') return 'sparkle'
   if (activity.kind === 'command') return 'terminal'
   if (activity.kind === 'search' || activity.kind === 'fileSearch') return 'search'

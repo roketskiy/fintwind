@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Waku. This file is the **source of truth for the release
+All notable changes to Fintwind. This file is the **source of truth for the release
 notes shown in the in-app updater**: [`scripts/release.ts`](scripts/release.ts)
 extracts the section whose heading matches the version being released
 (`MARKETING_VERSION`) and publishes it next to the update, so Sparkle shows it in
@@ -40,7 +40,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [0.1.0]
 
-- Add standalone Waku daemon and browser client
+- Add standalone Fintwind daemon and browser client
 - Add Linux support (X11 and Wayland, you need to build from source for now)
 - Answer agent questions directly in the composer
 - Redesign queued follow-ups as composer cards with per-message steering

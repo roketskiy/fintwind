@@ -4,8 +4,8 @@ export interface ConnectionConfig {
   remember: boolean
 }
 
-const SESSION_KEY = 'waku.remote.session.v1'
-const PERSISTENT_KEY = 'waku.remote.persistent.v1'
+const SESSION_KEY = 'fintwind.remote.session.v1'
+const PERSISTENT_KEY = 'fintwind.remote.persistent.v1'
 
 type ConnectionTranslator = (key: string) => string
 
@@ -37,7 +37,7 @@ export function normalizeDaemonAddress(
     window.location.protocol === 'https:' &&
     url.protocol !== 'wss:'
   ) {
-    throw new Error(t?.('web.error_secure_websocket_required') ?? 'A secure Waku Web page can only connect through wss://')
+    throw new Error(t?.('web.error_secure_websocket_required') ?? 'A secure Fintwind Web page can only connect through wss://')
   }
 
   url.pathname = ''

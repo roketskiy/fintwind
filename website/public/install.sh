@@ -2,36 +2,36 @@
 set -eu
 
 # Installs fintwind for Linux into ~/.local — no root, no package manager.
-# Downloads the release tarball from https://releases.waku.sh, unpacks it as
-# ~/.local/waku.app, links the binary onto PATH, and registers the desktop
+# Downloads the release tarball from https://releases.fintwind.sh, unpacks it as
+# ~/.local/fintwind.app, links the binary onto PATH, and registers the desktop
 # entry. docs/linux.md documents the equivalent manual steps.
 #
-#   curl -fsSL https://waku.sh/install.sh | sh
+#   curl -fsSL https://fintwind.sh/install.sh | sh
 #
 # Environment:
-#   WAKU_VERSION        install this version instead of the latest
-#   WAKU_BUNDLE_PATH    install a local tarball instead of downloading
-#   WAKU_RELEASES_URL   base URL to download from
+#   FINTWIND_VERSION        install this version instead of the latest
+#   FINTWIND_BUNDLE_PATH    install a local tarball instead of downloading
+#   FINTWIND_RELEASES_URL   base URL to download from
 
 usage() {
     cat <<'USAGE'
 Install fintwind for Linux into ~/.local.
 
 Usage:
-  curl -fsSL https://waku.sh/install.sh | sh
-  curl -fsSL https://waku.sh/install.sh | sh -s -- --uninstall
+  curl -fsSL https://fintwind.sh/install.sh | sh
+  curl -fsSL https://fintwind.sh/install.sh | sh -s -- --uninstall
 
 Options:
-  --uninstall   Remove fintwind, leaving ~/.waku (projects and settings) alone
+  --uninstall   Remove fintwind, leaving ~/.fintwind (projects and settings) alone
   --help        Show this help
 USAGE
 }
 
 main() {
-    app_dir="$HOME/.local/waku.app"
+    app_dir="$HOME/.local/fintwind.app"
     bin_link="$HOME/.local/bin/fintwind"
-    desktop_file="$HOME/.local/share/applications/sh.waku.desktop"
-    releases="${WAKU_RELEASES_URL:-https://releases.waku.sh}"
+    desktop_file="$HOME/.local/share/applications/sh.fintwind.desktop"
+    releases="${FINTWIND_RELEASES_URL:-https://releases.fintwind.sh}"
 
     case "${1:-}" in
         --uninstall) uninstall; return ;;
@@ -47,7 +47,7 @@ main() {
     platform="$(uname -s)"
     if [ "$platform" = "Darwin" ]; then
         echo "fintwind for macOS ships as a signed .dmg that updates itself." >&2
-        echo "Download it from https://waku.sh" >&2
+        echo "Download it from https://fintwind.sh" >&2
         exit 1
     fi
     if [ "$platform" != "Linux" ]; then
@@ -61,7 +61,7 @@ main() {
         aarch64 | arm64) target="aarch64-unknown-linux-gnu" ;;
         *)
             echo "Unsupported architecture: $machine" >&2
-            echo "Build from source: https://github.com/egoist/waku" >&2
+            echo "Build from source: https://github.com/egoist/fintwind" >&2
             exit 1
             ;;
     esac
@@ -75,19 +75,19 @@ main() {
         exit 1
     fi
 
-    temp="$(mktemp -d "${TMPDIR:-/tmp}/waku-XXXXXX")"
+    temp="$(mktemp -d "${TMPDIR:-/tmp}/fintwind-XXXXXX")"
     staging="$app_dir.new"
     trap 'rm -rf -- "$temp" "$staging"' EXIT INT TERM
 
-    archive="$temp/waku.tar.gz"
-    if [ -n "${WAKU_BUNDLE_PATH:-}" ]; then
-        cp "$WAKU_BUNDLE_PATH" "$archive"
+    archive="$temp/fintwind.tar.gz"
+    if [ -n "${FINTWIND_BUNDLE_PATH:-}" ]; then
+        cp "$FINTWIND_BUNDLE_PATH" "$archive"
     else
-        version="${WAKU_VERSION:-}"
+        version="${FINTWIND_VERSION:-}"
         if [ -z "$version" ]; then
             if ! version="$(fetch "$releases/latest-linux.txt")"; then
                 echo "Could not reach $releases/latest-linux.txt." >&2
-                echo "Pass WAKU_VERSION to install a specific version." >&2
+                echo "Pass FINTWIND_VERSION to install a specific version." >&2
                 exit 1
             fi
             version="$(printf '%s' "$version" | tr -d '[:space:]')"
@@ -118,7 +118,7 @@ main() {
 
     # fintwind resolves fintwind-daemon next to its own executable, so the two must
     # stay together in bin/. Linking only the binary onto PATH is safe —
-    # current_exe() resolves the symlink back into waku.app.
+    # current_exe() resolves the symlink back into fintwind.app.
     for binary in fintwind fintwind-daemon; do
         if [ ! -x "$staging/bin/$binary" ]; then
             echo "Archive is missing bin/$binary." >&2
@@ -131,12 +131,12 @@ main() {
     mv "$staging" "$app_dir"
     ln -sf "$app_dir/bin/fintwind" "$bin_link"
 
-    entry="$app_dir/share/applications/sh.waku.desktop"
+    entry="$app_dir/share/applications/sh.fintwind.desktop"
     if [ -f "$entry" ]; then
         # The packaged entry is relocatable (bare Exec/Icon names). Pin both to
         # this install so the launcher works without PATH or icon-theme setup.
         sed -e "s|^Exec=fintwind$|Exec=$app_dir/bin/fintwind|" \
-            -e "s|^Icon=sh.waku$|Icon=$app_dir/share/icons/hicolor/256x256/apps/sh.waku.png|" \
+            -e "s|^Icon=sh.fintwind$|Icon=$app_dir/share/icons/hicolor/256x256/apps/sh.fintwind.png|" \
             "$entry" >"$desktop_file"
         if command -v update-desktop-database >/dev/null 2>&1; then
             update-desktop-database "$(dirname "$desktop_file")" 2>/dev/null || true
@@ -171,7 +171,7 @@ uninstall() {
         rm -f "$desktop_file"
     fi
     rm -rf "$app_dir"
-    echo "fintwind is uninstalled. Projects and settings remain in ~/.waku."
+    echo "fintwind is uninstalled. Projects and settings remain in ~/.fintwind."
 }
 
 main "$@"

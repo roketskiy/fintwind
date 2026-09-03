@@ -6,12 +6,12 @@ and keeps projects, sessions, transcripts on your machine.
 
 ## Install
 
-On macOS, [download the signed `.dmg`](https://waku.sh). It updates itself.
+On macOS, [download the signed `.dmg`](https://fintwind.sh). It updates itself.
 
 On Linux:
 
 ```sh
-curl -fsSL https://waku.sh/install.sh | sh
+curl -fsSL https://fintwind.sh/install.sh | sh
 ```
 
 The script installs into `~/.local` without root. See
@@ -19,7 +19,7 @@ The script installs into `~/.local` without root. See
 uninstalling.
 
 On Windows, run `fintwind-<version>-<arch>-Setup.exe` from the
-[latest release](https://github.com/egoist/waku/releases/latest). It installs
+[latest release](https://github.com/egoist/fintwind/releases/latest). It installs
 per-user and updates itself. A portable `.zip` is published alongside it. See
 [docs/windows.md](docs/windows.md) for requirements and what is not available
 there yet.
@@ -51,17 +51,17 @@ structured protocol and session continuity.
 ## Architecture
 
 The native desktop is an RPC client of the standalone `fintwind-daemon` process.
-Provider sessions run in [`waku-core`](crates/waku-core), behind the
+Provider sessions run in [`fintwind-core`](crates/fintwind-core), behind the
 authenticated, versioned WebSocket contract in
-[`waku-protocol`](crates/waku-protocol). fintwind Desktop depends on
-[`waku-client`](crates/waku-client), not on the daemon implementation. The
+[`fintwind-protocol`](crates/fintwind-protocol). fintwind Desktop depends on
+[`fintwind-client`](crates/fintwind-client), not on the daemon implementation. The
 daemon owns task SQLite data, uploaded attachments, provider-native session
 forks, and all workspace filesystem and Git operations; paths returned by it
 always refer to the daemon host. The desktop retains only presentation state
 and a disposable preview cache.
 
 The browser client lives at [`apps/web`](apps/web) and uses the generated
-browser transport in [`packages/waku-client`](packages/waku-client). Its
+browser transport in [`packages/fintwind-client`](packages/fintwind-client). Its
 checked-in types are generated directly from the Rust protocol, while its
 WebSocket client implements the same handshake, request IDs, subscriptions,
 sequence deduplication, and replay cursors as the Rust client. Run
@@ -69,12 +69,12 @@ sequence deduplication, and replay cursors as the Rust client. Run
 `bun run protocol:check` to verify that generated files are current.
 
 Projectless task workspaces live on the daemon host under
-`~/.waku/projects/<date>/<slug>`. The daemon moves workspaces created by the
-older `~/.waku/<date>/<slug>` layout on first load.
+`~/.fintwind/projects/<date>/<slug>`. The daemon moves workspaces created by the
+older `~/.fintwind/<date>/<slug>` layout on first load.
 
 Configuration ownership is separate too: the Release desktop writes
-`~/.waku/app.json`, while Debug stays isolated at `temp/app.json`. Daemon
-provider and Computer Use settings live in `~/.waku/settings.json`. The
+`~/.fintwind/app.json`, while Debug stays isolated at `temp/app.json`. Daemon
+provider and Computer Use settings live in `~/.fintwind/settings.json`. The
 desktop's Settings → Daemon page can explicitly
 expose the child daemon on a fixed port, configure exact browser origins, and
 copy its stable authentication token. It remains loopback-only by default.
@@ -86,7 +86,7 @@ terminal-stream endpoints; files, diffs, Git, skills, usage, task state, and
 attachments already use daemon RPC.
 
 Release apps bundle and sign `fintwind-daemon`. Development keeps the daemon at
-`target/debug/waku-debug-daemon`, allowing provider-only edits to rebuild and
+`target/debug/fintwind-debug-daemon`, allowing provider-only edits to rebuild and
 replace the daemon without relaunching fintwind Debug.
 
 ## Development

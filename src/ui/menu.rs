@@ -34,7 +34,7 @@ use gpui::{
 };
 
 actions!(
-    waku_menu,
+    fintwind_menu,
     [
         DismissMenu,
         SelectNextEntry,
@@ -46,7 +46,7 @@ actions!(
 );
 
 /// Key context the open menu declares, and the scope its bindings live in.
-const MENU_CONTEXT: &str = "WakuMenu";
+const MENU_CONTEXT: &str = "FintwindMenu";
 
 /// Vertical gap between a trigger and its anchored card.
 const TRIGGER_GAP: f32 = 4.0;
@@ -58,7 +58,7 @@ const TRIGGER_GAP: f32 = 4.0;
 /// be claimed from under the focused field, and only a binding can do that:
 /// `enter`, `tab`, and the arrows reach the field as *actions*, and an action
 /// consumes the keystroke before any `on_key_down` listener above it ever runs.
-const PANEL_FIELD_CONTEXT: &str = "WakuMenu > ComposerInput";
+const PANEL_FIELD_CONTEXT: &str = "FintwindMenu > ComposerInput";
 
 /// Bind the menu's own keys. Called once at startup.
 ///

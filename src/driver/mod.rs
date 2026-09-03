@@ -1,4 +1,4 @@
-//! Desktop proxy for the provider runtime owned by `waku-daemon`.
+//! Desktop proxy for the provider runtime owned by `fintwind-daemon`.
 
 use std::sync::Arc;
 
@@ -7,24 +7,24 @@ use crate::model::{
     BackgroundWorkKey, DriverEvent, ProviderResumeCursor, RuntimeEventCursor,
 };
 
-pub use waku_client::driver::{
+pub use fintwind_client::driver::{
     DriverControl, DriverEventSender, DriverHandle, DriverStartOptions, SessionOptions,
     event_channel,
 };
 
 pub(crate) fn start_remote(
-    client: waku_client::DaemonClient,
+    client: fintwind_client::DaemonClient,
     session_id: uuid::Uuid,
     options: DriverStartOptions,
     events: DriverEventSender,
 ) -> anyhow::Result<DriverHandle> {
     let runtime_id = uuid::Uuid::new_v4();
-    let command = waku_client::Command::Start {
-        options: waku_client::WireDriverStartOptions {
+    let command = fintwind_client::Command::Start {
+        options: fintwind_client::WireDriverStartOptions {
             binary: options.binary,
             cwd: options.cwd,
-            mode: waku_client::encode_enum(options.mode)?,
-            interaction_mode: waku_client::encode_enum(options.interaction_mode)?,
+            mode: fintwind_client::encode_enum(options.mode)?,
+            interaction_mode: fintwind_client::encode_enum(options.interaction_mode)?,
             model: options.model,
             reasoning_effort: options.reasoning_effort,
             service_tier: options.service_tier,
@@ -38,7 +38,7 @@ pub(crate) fn start_remote(
         },
     };
     let supports_steer = match client.request(session_id, runtime_id, command) {
-        Ok(waku_client::ResponsePayload::Started { supports_steer }) => supports_steer,
+        Ok(fintwind_client::ResponsePayload::Started { supports_steer }) => supports_steer,
         Ok(_) => anyhow::bail!("fintwind daemon returned an invalid start response"),
         Err(error) => return Err(error),
     };
@@ -46,7 +46,7 @@ pub(crate) fn start_remote(
 }
 
 pub(crate) fn attach_remote(
-    client: waku_client::DaemonClient,
+    client: fintwind_client::DaemonClient,
     session_id: uuid::Uuid,
     runtime_id: uuid::Uuid,
     supports_steer: bool,
@@ -64,7 +64,7 @@ pub(crate) fn attach_remote(
 }
 
 fn connect_remote(
-    client: waku_client::DaemonClient,
+    client: fintwind_client::DaemonClient,
     session_id: uuid::Uuid,
     runtime_id: uuid::Uuid,
     supports_steer: bool,
@@ -75,7 +75,7 @@ fn connect_remote(
     let forwarding_events = events.clone();
     let thread_client = client.clone();
     let spawn = std::thread::Builder::new()
-        .name(format!("waku-daemon-session-{session_id}"))
+        .name(format!("fintwind-daemon-session-{session_id}"))
         .spawn(move || {
             let mut saw_process_exit = false;
             while let Ok(sequenced) = remote_events.recv() {
@@ -91,7 +91,7 @@ fn connect_remote(
                     epoch: sequenced.epoch,
                     sequence: sequenced.sequence,
                 };
-                let event = match waku_client::event_from_wire(sequenced.event) {
+                let event = match fintwind_client::event_from_wire(sequenced.event) {
                     Ok(event) => event,
                     Err(error) => {
                         DriverEvent::Error(format!("fintwind daemon sent an invalid event: {error}"))
@@ -129,7 +129,7 @@ fn connect_remote(
 }
 
 struct RemoteDriverControl {
-    client: waku_client::DaemonClient,
+    client: fintwind_client::DaemonClient,
     session_id: uuid::Uuid,
     runtime_id: uuid::Uuid,
     supports_steer: bool,
@@ -137,7 +137,7 @@ struct RemoteDriverControl {
 }
 
 impl RemoteDriverControl {
-    fn notify(&self, command: waku_client::Command) {
+    fn notify(&self, command: fintwind_client::Command) {
         if let Err(error) = self
             .client
             .notify(self.session_id, self.runtime_id, command)
@@ -151,7 +151,7 @@ impl RemoteDriverControl {
 
 impl DriverControl for RemoteDriverControl {
     fn prompt(&self, prompt: String) {
-        self.notify(waku_client::Command::Prompt { prompt });
+        self.notify(fintwind_client::Command::Prompt { prompt });
     }
 
     fn supports_steer(&self) -> bool {
@@ -159,24 +159,24 @@ impl DriverControl for RemoteDriverControl {
     }
 
     fn steer(&self, prompt: String) {
-        self.notify(waku_client::Command::Steer { prompt });
+        self.notify(fintwind_client::Command::Steer { prompt });
     }
 
     fn cancel(&self) {
-        self.notify(waku_client::Command::Cancel);
+        self.notify(fintwind_client::Command::Cancel);
     }
 
     fn cancel_computer_use(&self) {
-        self.notify(waku_client::Command::CancelComputerUse);
+        self.notify(fintwind_client::Command::CancelComputerUse);
     }
 
     fn refresh_background_work(&self) {
-        self.notify(waku_client::Command::RefreshBackgroundWork);
+        self.notify(fintwind_client::Command::RefreshBackgroundWork);
     }
 
     fn stop_background_work(&self, key: BackgroundWorkKey, control_id: String) {
         match serde_json::to_value(key) {
-            Ok(key) => self.notify(waku_client::Command::StopBackgroundWork { key, control_id }),
+            Ok(key) => self.notify(fintwind_client::Command::StopBackgroundWork { key, control_id }),
             Err(error) => {
                 let _ = self.events.send(DriverEvent::Error(format!(
                     "could not encode background-work command: {error}"
@@ -186,7 +186,7 @@ impl DriverControl for RemoteDriverControl {
     }
 
     fn respond(&self, request_id: String, option_id: String) {
-        self.notify(waku_client::Command::Respond {
+        self.notify(fintwind_client::Command::Respond {
             request_id,
             option_id,
         });
@@ -195,17 +195,17 @@ impl DriverControl for RemoteDriverControl {
     fn respond_user_input(
         &self,
         request_id: String,
-        answers: Vec<waku_protocol::model::UserInputAnswer>,
+        answers: Vec<fintwind_protocol::model::UserInputAnswer>,
     ) {
-        self.notify(waku_client::Command::RespondUserInput {
+        self.notify(fintwind_client::Command::RespondUserInput {
             request_id,
             answers,
         });
     }
 
     fn run_computer_tool(&self, request: ComputerToolRequest) {
-        self.notify(waku_client::Command::RunComputerTool {
-            request: waku_client::WireComputerToolRequest {
+        self.notify(fintwind_client::Command::RunComputerTool {
+            request: fintwind_client::WireComputerToolRequest {
                 call_id: request.call_id,
                 tool: request.tool,
                 arguments: request.arguments,
@@ -214,8 +214,8 @@ impl DriverControl for RemoteDriverControl {
     }
 
     fn reject_computer_tool(&self, request: ComputerToolRequest, reason: String) {
-        self.notify(waku_client::Command::RejectComputerTool {
-            request: waku_client::WireComputerToolRequest {
+        self.notify(fintwind_client::Command::RejectComputerTool {
+            request: fintwind_client::WireComputerToolRequest {
                 call_id: request.call_id,
                 tool: request.tool,
                 arguments: request.arguments,
@@ -226,9 +226,9 @@ impl DriverControl for RemoteDriverControl {
 
     fn apply_options(&self, options: SessionOptions) -> bool {
         let options = (|| {
-            Ok::<_, anyhow::Error>(waku_client::WireSessionOptions {
-                mode: waku_client::encode_enum(options.mode)?,
-                interaction_mode: waku_client::encode_enum(options.interaction_mode)?,
+            Ok::<_, anyhow::Error>(fintwind_client::WireSessionOptions {
+                mode: fintwind_client::encode_enum(options.mode)?,
+                interaction_mode: fintwind_client::encode_enum(options.interaction_mode)?,
                 model: options.model,
                 reasoning_effort: options.reasoning_effort,
                 service_tier: options.service_tier,
@@ -242,9 +242,9 @@ impl DriverControl for RemoteDriverControl {
             self.client.request(
                 self.session_id,
                 self.runtime_id,
-                waku_client::Command::ApplyOptions { options }
+                fintwind_client::Command::ApplyOptions { options }
             ),
-            Ok(waku_client::ResponsePayload::OptionsApplied { applied: true })
+            Ok(fintwind_client::ResponsePayload::OptionsApplied { applied: true })
         )
     }
 
@@ -252,9 +252,9 @@ impl DriverControl for RemoteDriverControl {
         match self.client.request(
             self.session_id,
             self.runtime_id,
-            waku_client::Command::Rollback { turns },
+            fintwind_client::Command::Rollback { turns },
         )? {
-            waku_client::ResponsePayload::Cursor { cursor } => cursor
+            fintwind_client::ResponsePayload::Cursor { cursor } => cursor
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(Into::into),
@@ -266,9 +266,9 @@ impl DriverControl for RemoteDriverControl {
         match self.client.request(
             self.session_id,
             self.runtime_id,
-            waku_client::Command::Fork { turns_to_remove },
+            fintwind_client::Command::Fork { turns_to_remove },
         )? {
-            waku_client::ResponsePayload::Cursor {
+            fintwind_client::ResponsePayload::Cursor {
                 cursor: Some(cursor),
             } => serde_json::from_value(cursor).map_err(Into::into),
             _ => anyhow::bail!("fintwind daemon returned an invalid fork response"),
@@ -276,7 +276,7 @@ impl DriverControl for RemoteDriverControl {
     }
 
     fn close(&self) {
-        self.notify(waku_client::Command::CloseSession);
+        self.notify(fintwind_client::Command::CloseSession);
     }
 }
 

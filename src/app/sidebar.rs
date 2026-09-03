@@ -2,7 +2,7 @@ use gpui::{KeyBinding, actions};
 
 use super::*;
 
-actions!(waku_sidebar, [CancelSessionRename]);
+actions!(fintwind_sidebar, [CancelSessionRename]);
 
 const SESSION_RENAME_PARENT_CONTEXT: &str = "SessionRename";
 const SESSION_RENAME_FIELD_CONTEXT: &str = "SessionRename > ComposerInput";
@@ -165,7 +165,7 @@ pub(super) enum SidebarRow {
     GroupSpacer,
 }
 
-impl Waku {
+impl Fintwind {
     pub(super) fn window_drag_region(
         &self,
         region: Stateful<Div>,
@@ -1094,7 +1094,7 @@ impl Waku {
                 .child(SharedString::from(localized_session_title(session)))
                 .into_any_element()
         };
-        let waku = cx.entity().downgrade();
+        let fintwind = cx.entity().downgrade();
         let menu = self.menu_handle(format!("session-{session_id}"), cx);
         let row_focus = menu.trigger_focus_handle().clone();
         let keyboard_menu = menu.clone();
@@ -1188,18 +1188,18 @@ impl Waku {
                 SharedString::from(format!("session-menu-{session_id}")),
                 &menu,
                 move |_| {
-                    let rename_waku = waku.clone();
-                    let remove_waku = waku.clone();
+                    let rename_fintwind = fintwind.clone();
+                    let remove_fintwind = fintwind.clone();
                     vec![
                         MenuItem::new(tr!("common.rename"), move |window, cx| {
-                            let _ = rename_waku.update(cx, |waku, cx| {
-                                waku.begin_session_rename(session_id, window, cx);
+                            let _ = rename_fintwind.update(cx, |fintwind, cx| {
+                                fintwind.begin_session_rename(session_id, window, cx);
                             });
                         }),
                         MenuItem::Separator,
                         MenuItem::new(tr!("common.remove"), move |_, cx| {
-                            let _ = remove_waku
-                                .update(cx, |waku, cx| waku.remove_session(session_id, cx));
+                            let _ = remove_fintwind
+                                .update(cx, |fintwind, cx| fintwind.remove_session(session_id, cx));
                         }),
                     ]
                 },

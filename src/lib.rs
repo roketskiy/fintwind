@@ -45,7 +45,7 @@ mod theme;
 mod ui;
 mod updater;
 
-pub use waku_client::{
+pub use fintwind_client::{
     checkpoint, command_env, composer_complete, git_branch, git_commit, i18n, identity, model,
     model_catalog, persistence, projectless, skills, usage, worktree,
 };
@@ -55,10 +55,10 @@ use gpui::{
     WindowBackgroundAppearance, WindowBounds, WindowOptions, actions, point, px, size,
 };
 
-use crate::app::Waku;
+use crate::app::Fintwind;
 use crate::identity::{APP_ID, APP_NAME};
 actions!(
-    waku,
+    fintwind,
     [
         Quit,
         About,
@@ -166,11 +166,11 @@ fn restored_window_placement(cx: &App) -> (WindowBounds, Option<gpui::DisplayId>
     (window_bounds, display_id)
 }
 
-trait WakuApplicationExt {
+trait FintwindApplicationExt {
     fn with_main_window_reopen(self) -> Self;
 }
 
-impl WakuApplicationExt for Application {
+impl FintwindApplicationExt for Application {
     fn with_main_window_reopen(self) -> Self {
         self.on_reopen(|cx| {
             if let Some(window) = cx.windows().into_iter().next() {
@@ -209,7 +209,7 @@ pub fn run() {
             crate::platform::init_reduce_motion(cx);
 
             // Sparkle only runs from a bundled release build (or when forced
-            // via WAKU_FORCE_UPDATER=1); everywhere else the menu item is
+            // via FINTWIND_FORCE_UPDATER=1); everywhere else the menu item is
             // omitted along with the updater itself.
             let updater = crate::updater::Updater::init();
             let updater_available = updater.is_some();
@@ -232,21 +232,21 @@ pub fn run() {
                 KeyBinding::new("secondary-shift-b", ToggleRightPanel, None),
                 KeyBinding::new("secondary-k", ToggleCommandPalette, None),
                 KeyBinding::new("secondary-alt-shift-f", ToggleFpsCounter, None),
-                KeyBinding::new("secondary-[", NavigateBack, Some("Waku")),
-                KeyBinding::new("secondary-]", NavigateForward, Some("Waku")),
+                KeyBinding::new("secondary-[", NavigateBack, Some("Fintwind")),
+                KeyBinding::new("secondary-]", NavigateForward, Some("Fintwind")),
                 KeyBinding::new("secondary-l", FocusComposer, None),
                 KeyBinding::new("secondary-/", ToggleModelPicker, None),
                 KeyBinding::new("secondary-u", ToggleUsagePanel, None),
                 KeyBinding::new("secondary-s", SaveFile, None),
-                KeyBinding::new("escape", CancelTurn, Some("Waku")),
-                KeyBinding::new("secondary-c", CopySelection, Some("Waku")),
+                KeyBinding::new("escape", CancelTurn, Some("Fintwind")),
+                KeyBinding::new("secondary-c", CopySelection, Some("Fintwind")),
                 // Find and replace in the right panel's file editor, on the
                 // conventional VS Code bindings. The primary shortcut + G cycles matches from
                 // the editor without moving focus to the bar.
-                KeyBinding::new("secondary-f", OpenFind, Some("Waku")),
-                KeyBinding::new("secondary-alt-f", OpenFindReplace, Some("Waku")),
-                KeyBinding::new("secondary-g", FindNext, Some("Waku")),
-                KeyBinding::new("secondary-shift-g", FindPrevious, Some("Waku")),
+                KeyBinding::new("secondary-f", OpenFind, Some("Fintwind")),
+                KeyBinding::new("secondary-alt-f", OpenFindReplace, Some("Fintwind")),
+                KeyBinding::new("secondary-g", FindNext, Some("Fintwind")),
+                KeyBinding::new("secondary-shift-g", FindPrevious, Some("Fintwind")),
                 // Scoped to the editor pane: escape closes the bar there and
                 // falls through to CancelTurn anywhere else.
                 KeyBinding::new("escape", CloseFind, Some("FileEditorPane")),
@@ -263,7 +263,7 @@ pub fn run() {
                 KeyBinding::new("secondary-alt-r", ToggleFindRegex, Some("FileEditorPane")),
                 KeyBinding::new("shift-enter", FindPrevious, Some("FindBar")),
                 KeyBinding::new("secondary-alt-enter", ReplaceAllMatches, Some("FindBar")),
-                // Browser surface. Deeper than "Waku", so while focus is on the
+                // Browser surface. Deeper than "Fintwind", so while focus is on the
                 // page or its address bar the browser reads the platform's
                 // conventional navigation shortcuts; the same keys elsewhere
                 // keep their app meanings. The clipboard trio is rebound
@@ -305,7 +305,7 @@ pub fn run() {
                             // Windows creates the window without `WS_CAPTION`
                             // either way; asking for the transparent titlebar
                             // is what extends the client area over the frame
-                            // so Waku's own header can host the caption
+                            // so Fintwind's own header can host the caption
                             // buttons and drag region.
                             appears_transparent: cfg!(any(
                                 target_os = "macos",
@@ -314,7 +314,7 @@ pub fn run() {
                             traffic_light_position: cfg!(target_os = "macos")
                                 .then(|| point(px(16.0), px(17.0))),
                         }),
-                        // Waku moves its custom macOS titlebar explicitly. Keep
+                        // Fintwind moves its custom macOS titlebar explicitly. Keep
                         // the NSWindow movable so native controls and Window-menu
                         // tiling remain enabled.
                         is_movable: true,
@@ -327,7 +327,7 @@ pub fn run() {
                         app_id: Some(APP_ID.to_owned()),
                         // GPUI defaults to compositor/server decorations. If a
                         // Wayland compositor declines them, it reports the
-                        // client fallback and Waku renders that frame itself.
+                        // client fallback and Fintwind renders that frame itself.
                         #[cfg(target_os = "linux")]
                         icon: crate::platform::linux_app_icon(),
                         window_bounds: Some(window_bounds),
@@ -337,10 +337,10 @@ pub fn run() {
                     },
                     move |window, cx| {
                         crate::platform::configure_main_window_close_behavior(window, cx);
-                        let waku = Waku::new(window, cx, daemon);
-                        let composer_focus = waku.read(cx).composer_focus(cx);
+                        let fintwind = Fintwind::new(window, cx, daemon);
+                        let composer_focus = fintwind.read(cx).composer_focus(cx);
                         window.focus(&composer_focus, cx);
-                        waku
+                        fintwind
                     },
                 )
                 .expect("failed to open fintwind window");
@@ -353,8 +353,8 @@ pub fn run() {
                         return;
                     };
                     window
-                        .update(cx, |waku, window, cx| {
-                            waku.open_task_from_notification(session_id, cx);
+                        .update(cx, |fintwind, window, cx| {
+                            fintwind.open_task_from_notification(session_id, cx);
                             window.activate_window();
                             cx.activate(true);
                         })

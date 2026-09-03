@@ -2,7 +2,7 @@
 
 ## 1. 背景与目标
 
-Waku 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CLI、Cursor CLI、DeepSeek Harness、OpenCode、Grok Build、Pi**。目标是把应用收敛为 **仅支持 OpenCode** 一个 provider，彻底删除其余 7 个的代码路径，包括：
+Fintwind 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CLI、Cursor CLI、DeepSeek Harness、OpenCode、Grok Build、Pi**。目标是把应用收敛为 **仅支持 OpenCode** 一个 provider，彻底删除其余 7 个的代码路径，包括：
 
 - `ProviderKind` 枚举类型本身（用户决策：彻底删除类型，而非收缩为单变体）
 - 各 provider 的驱动、会话辅助、进程池、模型目录、斜杠命令、commit 消息、技能扫描分支
@@ -18,20 +18,20 @@ Waku 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CLI、
 
 | 层 | 位置 | 现状 |
 | --- | --- | --- |
-| 核心枚举 | `crates/waku-protocol/src/model.rs:10` | `ProviderKind` 8 变体 + `ALL` 常量 + `id/display_name/short_name/command` + 能力谓词 |
-| 恢复游标 | `crates/waku-protocol/src/model.rs:132` | `ProviderResumeCursor` 8 变体，字段各异（thread_id / session_id / session_file / fork_context / resume_at） |
-| 设置 | `crates/waku-protocol/src/settings.rs` | `disabled_providers: Vec<ProviderKind>`、`provider_binary_overrides: HashMap<ProviderKind, String>` |
-| 驱动 | `crates/waku-core/src/driver/` | `codex.rs`(3080)、`claude.rs`(2305)、`acp.rs`(1762，Cursor+Grok 共用)、`deepseek.rs`(1618)、`pi.rs`(1520)、`amp.rs`(786)、`opencode.rs`(1785)；`mod.rs:199 start_local` 按 provider 路由 |
-| 会话辅助 | `crates/waku-core/src/` | `amp_session.rs`(315)、`claude_session.rs`(509)、`cursor_session.rs`(121)、`deepseek_session.rs`(827)、`deepseek_pool.rs`(162)、`grok_session.rs`(387)、`opencode_session.rs`(612)、`opencode_pool.rs`(365) |
-| 模型目录 | `crates/waku-core/src/model_catalog.rs`、`crates/waku-protocol/src/model_catalog.rs` | 每 provider 各自的模型发现/固定目录（Claude 固定列表、Codex `model/list`、Pi `get_available_models`、ACP handshake 等） |
-| 斜杠命令 | `crates/waku-core/src/composer_complete.rs` | 按 provider 的 `.claude/command`、`.codex/skills` 等补齐与 `discover_slash_commands` |
-| Commit 消息 | `crates/waku-core/src/git_commit.rs` | 按 provider 分支构造 commit 风格 |
-| 技能 | `crates/waku-core/src/skills.rs` | `SkillSource::Provider(ProviderKind)` 扫描 `.claude/skills`、`.codex/skills`、`.cursor/skills`、`.opencode/skills`、`.pi/skills`、`~/.claude/...` 等 |
-| 用量历史 | `crates/waku-protocol/src/usage_history.rs`、`crates/waku-core/src/usage_history.rs` | `UsageProvider` 仅 Claude/Codex；扫描 `~/.claude/projects` 与 `~/.codex/sessions` |
-| Plan 用量 | `crates/waku-core/src/usage.rs` | Claude OAuth、Codex rate-limit、OpenCode Go、Grok 四个 fetch 函数 |
-| 协议消息 | `crates/waku-protocol/src/protocol.rs`、`provider_session.rs`、`workspace.rs`、`git.rs`、`skills.rs` | `Command::ProbeProvider`、`FetchPlanUsage`、`ProviderSessionForkRequest`（claude/amp/cursor/openCode/grok 5 变体）、`WorkspaceOperation::DiscoverSlashCommands`、`AgentInvocation`、`SkillSource` 均携带 provider |
+| 核心枚举 | `crates/fintwind-protocol/src/model.rs:10` | `ProviderKind` 8 变体 + `ALL` 常量 + `id/display_name/short_name/command` + 能力谓词 |
+| 恢复游标 | `crates/fintwind-protocol/src/model.rs:132` | `ProviderResumeCursor` 8 变体，字段各异（thread_id / session_id / session_file / fork_context / resume_at） |
+| 设置 | `crates/fintwind-protocol/src/settings.rs` | `disabled_providers: Vec<ProviderKind>`、`provider_binary_overrides: HashMap<ProviderKind, String>` |
+| 驱动 | `crates/fintwind-core/src/driver/` | `codex.rs`(3080)、`claude.rs`(2305)、`acp.rs`(1762，Cursor+Grok 共用)、`deepseek.rs`(1618)、`pi.rs`(1520)、`amp.rs`(786)、`opencode.rs`(1785)；`mod.rs:199 start_local` 按 provider 路由 |
+| 会话辅助 | `crates/fintwind-core/src/` | `amp_session.rs`(315)、`claude_session.rs`(509)、`cursor_session.rs`(121)、`deepseek_session.rs`(827)、`deepseek_pool.rs`(162)、`grok_session.rs`(387)、`opencode_session.rs`(612)、`opencode_pool.rs`(365) |
+| 模型目录 | `crates/fintwind-core/src/model_catalog.rs`、`crates/fintwind-protocol/src/model_catalog.rs` | 每 provider 各自的模型发现/固定目录（Claude 固定列表、Codex `model/list`、Pi `get_available_models`、ACP handshake 等） |
+| 斜杠命令 | `crates/fintwind-core/src/composer_complete.rs` | 按 provider 的 `.claude/command`、`.codex/skills` 等补齐与 `discover_slash_commands` |
+| Commit 消息 | `crates/fintwind-core/src/git_commit.rs` | 按 provider 分支构造 commit 风格 |
+| 技能 | `crates/fintwind-core/src/skills.rs` | `SkillSource::Provider(ProviderKind)` 扫描 `.claude/skills`、`.codex/skills`、`.cursor/skills`、`.opencode/skills`、`.pi/skills`、`~/.claude/...` 等 |
+| 用量历史 | `crates/fintwind-protocol/src/usage_history.rs`、`crates/fintwind-core/src/usage_history.rs` | `UsageProvider` 仅 Claude/Codex；扫描 `~/.claude/projects` 与 `~/.codex/sessions` |
+| Plan 用量 | `crates/fintwind-core/src/usage.rs` | Claude OAuth、Codex rate-limit、OpenCode Go、Grok 四个 fetch 函数 |
+| 协议消息 | `crates/fintwind-protocol/src/protocol.rs`、`provider_session.rs`、`workspace.rs`、`git.rs`、`skills.rs` | `Command::ProbeProvider`、`FetchPlanUsage`、`ProviderSessionForkRequest`（claude/amp/cursor/openCode/grok 5 变体）、`WorkspaceOperation::DiscoverSlashCommands`、`AgentInvocation`、`SkillSource` 均携带 provider |
 | 桌面 UI | `src/` | `app/composer.rs` provider 选择 tabs（`visible_picker_tabs` 遍历 `ProviderKind::ALL`）、`app/settings.rs` provider 设置页、`app/runtime.rs`(41 处 provider 分支)、`app/usage_page.rs` 历史页、`app/usage_meter.rs` plan 用量、`app/skills_page.rs`、`app/sessions.rs`、`app/sidebar.rs`、`app/background_work.rs`、`ui/mod.rs` provider 颜色/图标映射、`app/tests.rs`(56 处 fixture) |
-| Web 前端 | `apps/web/src`、`packages/waku-client/src/generated` | provider 选择、settings-view、model-picker、usage-chart/usage-settings、waku-icon、provider-probe-cache、composer-preferences、daemon-api |
+| Web 前端 | `apps/web/src`、`packages/fintwind-client/src/generated` | provider 选择、settings-view、model-picker、usage-chart/usage-settings、fintwind-icon、provider-probe-cache、composer-preferences、daemon-api |
 | 资源 | `assets/icons/provider-*.svg` | amp、claude、cursor、deepseek、grok、openai、opencode、pi 共 8 个 |
 | 本地化 | `locales/*.yml` | `providers.*`、`settings.providers*`、`usage_error.*` 等键 |
 | 文档 | `docs/providers.md`(740 行) | 8 provider 集成细节；`AGENTS.md`、`README.md` 亦有提及 |
@@ -39,32 +39,32 @@ Waku 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CLI、
 ### 2.2 `ProviderKind` 引用分布（行数）
 
 ```
-83  crates/waku-protocol/src/model.rs        28  crates/waku-core/src/daemon.rs
-56  src/app/tests.rs                         28  crates/waku-core/src/model_catalog.rs
-41  src/app/runtime.rs                       24  crates/waku-core/src/composer_complete.rs
-37  crates/waku-core/src/persistence.rs      22  crates/waku-core/src/git_commit.rs
+83  crates/fintwind-protocol/src/model.rs        28  crates/fintwind-core/src/daemon.rs
+56  src/app/tests.rs                         28  crates/fintwind-core/src/model_catalog.rs
+41  src/app/runtime.rs                       24  crates/fintwind-core/src/composer_complete.rs
+37  crates/fintwind-core/src/persistence.rs      22  crates/fintwind-core/src/git_commit.rs
 21  src/app.rs                               21  src/ui/mod.rs
-17  crates/waku-core/src/skills.rs           15  src/app/composer.rs
-14  src/app/sessions.rs                      14  crates/waku-client/src/persistence.rs
-12  crates/waku-core/src/driver/acp.rs       10  src/app/usage_meter.rs
-10  crates/waku-protocol/src/model_catalog.rs 9  crates/waku-core/src/driver/mod.rs
+17  crates/fintwind-core/src/skills.rs           15  src/app/composer.rs
+14  src/app/sessions.rs                      14  crates/fintwind-client/src/persistence.rs
+12  crates/fintwind-core/src/driver/acp.rs       10  src/app/usage_meter.rs
+10  crates/fintwind-protocol/src/model_catalog.rs 9  crates/fintwind-core/src/driver/mod.rs
  9  apps/web/src/lib/daemon-api.ts           8  apps/web/src/components/settings-view.tsx
  7  src/app/usage_page.rs                    7  apps/web/src/lib/composer-preferences.ts
- 7  crates/waku-client/src/composer_complete.rs 7  crates/waku-core/src/server.rs
- 6  src/app/settings.rs                      6  apps/web/src/components/waku-icon.tsx
+ 7  crates/fintwind-client/src/composer_complete.rs 7  crates/fintwind-core/src/server.rs
+ 6  src/app/settings.rs                      6  apps/web/src/components/fintwind-icon.tsx
  6  src/app/skills_page.rs                   5  apps/web/src/components/model-picker.tsx
- 5  apps/web/src/hooks/use-daemon-data.ts    4  crates/waku-core/src/driver/support.rs
- 4  crates/waku-core/src/model.rs            4  apps/web/src/lib/provider-probe-cache.ts
- 3  crates/waku-protocol/src/settings.rs     3  apps/web/src/lib/model-picker-presentation.ts
- 3  crates/waku-protocol/src/protocol.rs     3  src/app/sidebar.rs
- 3  crates/waku-protocol/src/usage_history.rs 2  src/app/render.rs
- 2  crates/waku-protocol/src/skills.rs       2  crates/waku-protocol/src/git.rs
- 2  src/driver/mod.rs                        2  crates/waku-core/src/settings.rs
- 2  crates/waku-core/src/cursor_session.rs   2  crates/waku-core/src/driver/opencode.rs
+ 5  apps/web/src/hooks/use-daemon-data.ts    4  crates/fintwind-core/src/driver/support.rs
+ 4  crates/fintwind-core/src/model.rs            4  apps/web/src/lib/provider-probe-cache.ts
+ 3  crates/fintwind-protocol/src/settings.rs     3  apps/web/src/lib/model-picker-presentation.ts
+ 3  crates/fintwind-protocol/src/protocol.rs     3  src/app/sidebar.rs
+ 3  crates/fintwind-protocol/src/usage_history.rs 2  src/app/render.rs
+ 2  crates/fintwind-protocol/src/skills.rs       2  crates/fintwind-protocol/src/git.rs
+ 2  src/driver/mod.rs                        2  crates/fintwind-core/src/settings.rs
+ 2  crates/fintwind-core/src/cursor_session.rs   2  crates/fintwind-core/src/driver/opencode.rs
  2  apps/web/src/components/skills-settings.tsx 2  apps/web/src/lib/composer-autocomplete.ts
- 2  crates/waku-protocol/src/workspace.rs    1  src/app/command_palette.rs
- 1  src/app/background_work.rs               1  crates/waku-core/src/driver/opencode.rs
- 1  packages/waku-client/src/generated/ProviderKind.ts
+ 2  crates/fintwind-protocol/src/workspace.rs    1  src/app/command_palette.rs
+ 1  src/app/background_work.rs               1  crates/fintwind-core/src/driver/opencode.rs
+ 1  packages/fintwind-client/src/generated/ProviderKind.ts
 ```
 
 约 60 个源文件直接引用 `ProviderKind`，另有大量文件间接依赖（驱动内部实现、usage 扫描、测试 fixture 等）。
@@ -87,24 +87,24 @@ Waku 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CLI、
 
 按依赖顺序分 6 个阶段，每阶段可独立编译、提交。**阶段 0–2 完成后 Rust 侧应 `cargo check` 全绿**；阶段 3 后跑 `bun run db:generate` 确认无 schema 变化、重新生成 TS 绑定；阶段 5 在调试应用中按真实 OpenCode 交互验证。
 
-### 阶段 0：协议层类型收缩（`waku-protocol`）
+### 阶段 0：协议层类型收缩（`fintwind-protocol`）
 
-1. `crates/waku-protocol/src/model.rs`
+1. `crates/fintwind-protocol/src/model.rs`
    - 删除 `ProviderKind` 枚举、`ALL`、全部能力谓词（`supports_*`）。
    - `ProviderResumeCursor` 只留 `OpenCode { session_id }`；`from_session_id`/`provider`/`native_id` 化简为无分支。
    - `AgentSession.provider: ProviderKind` → `String`；`AgentSession::new` 固定写入 `"opencode"`，加 `pub const PROVIDER: &'static str = "opencode"`（或直接内联）。
-   - `AgentInvocation`（`crates/waku-protocol/src/git.rs` 附近）删除 `provider` 字段。
+   - `AgentInvocation`（`crates/fintwind-protocol/src/git.rs` 附近）删除 `provider` 字段。
    - 清理 `model_catalog.rs` 中 Claude 固定列表与其他 provider 目录函数，只留 OpenCode 的。
    - 测试：fixture 中 `ProviderKind::Codex` 等全部替换（模型层测试较少，先改）。
-2. `crates/waku-protocol/src/settings.rs`：删 `disabled_providers`、`provider_binary_overrides` 及默认值；迁移旧设置文件的读取（见 §5）。
-3. `crates/waku-protocol/src/protocol.rs`：`Command::ProbeProvider` 删 provider 参数（保留命令本身，便于 UI 复用探测逻辑）；`FetchPlanUsage` 删 provider 参数；`WireDriverStartOptions` 删 provider 字段。
-4. `crates/waku-protocol/src/provider_session.rs`：`ProviderSessionForkRequest` 只留 `openCode` 变体（或整体删除，改由通用结构承载）。
-5. `crates/waku-protocol/src/workspace.rs`：`WorkspaceOperation::DiscoverSlashCommands` 删 provider 字段。
-6. `crates/waku-protocol/src/skills.rs`：`SkillSource` 删 `Provider(ProviderKind)` 变体；若只剩 `Shared`，评估是否直接删除该类型并在 `waku-core/src/skills.rs` 用常量路径替代。
-7. `crates/waku-protocol/src/usage_history.rs`：整文件删除（用量历史类型全部移除）。
-8. `crates/waku-protocol/src/driver_wire.rs`、`runtime_event.rs` 等：顺带清理引用。
+2. `crates/fintwind-protocol/src/settings.rs`：删 `disabled_providers`、`provider_binary_overrides` 及默认值；迁移旧设置文件的读取（见 §5）。
+3. `crates/fintwind-protocol/src/protocol.rs`：`Command::ProbeProvider` 删 provider 参数（保留命令本身，便于 UI 复用探测逻辑）；`FetchPlanUsage` 删 provider 参数；`WireDriverStartOptions` 删 provider 字段。
+4. `crates/fintwind-protocol/src/provider_session.rs`：`ProviderSessionForkRequest` 只留 `openCode` 变体（或整体删除，改由通用结构承载）。
+5. `crates/fintwind-protocol/src/workspace.rs`：`WorkspaceOperation::DiscoverSlashCommands` 删 provider 字段。
+6. `crates/fintwind-protocol/src/skills.rs`：`SkillSource` 删 `Provider(ProviderKind)` 变体；若只剩 `Shared`，评估是否直接删除该类型并在 `fintwind-core/src/skills.rs` 用常量路径替代。
+7. `crates/fintwind-protocol/src/usage_history.rs`：整文件删除（用量历史类型全部移除）。
+8. `crates/fintwind-protocol/src/driver_wire.rs`、`runtime_event.rs` 等：顺带清理引用。
 
-### 阶段 1：核心层（`waku-core`）
+### 阶段 1：核心层（`fintwind-core`）
 
 1. **删除文件**：
    - `src/driver/{acp,amp,claude,codex,deepseek,pi}.rs`
@@ -121,7 +121,7 @@ Waku 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CLI、
 9. `src/model_catalog.rs`：删其他 provider 的模型发现（throwaway 进程探测、ACP handshake 目录等），只留 OpenCode 的。
 10. `src/daemon.rs`、`src/server.rs`、`src/persistence.rs`、`src/workspace.rs`、`src/projectless.rs`、`src/computer_use.rs`（若含 provider 分支）、`src/checkpoint.rs`：清理 provider 参数与分支；`provider_probe`、`fetch_plan_usage` 处理器不再按 provider 分发。
 11. `src/settings.rs`：`DaemonSettings` 读写适配新结构；旧设置文件中的 `disabled_providers`/`provider_binary_overrides` 在读取时忽略（serde 默认丢未知字段，确认无 `deny_unknown_fields`）。
-12. `crates/waku-client/src/persistence.rs`、`crates/waku-client/src/composer_complete.rs`：同步清理。
+12. `crates/fintwind-client/src/persistence.rs`、`crates/fintwind-client/src/composer_complete.rs`：同步清理。
 13. 核心层测试：`server.rs`、`settings.rs`、`git_commit.rs`、`composer_complete.rs`、`skills.rs`、`usage.rs` 等测试的 fixture 全部改为 OpenCode 路径；删除针对已删驱动的测试（codex/claude/pi/amp/acp/deepseek 的单元与 `#[ignore]` 集成测试）。
 
 ### 阶段 2：桌面 UI（`src`）
@@ -137,14 +137,14 @@ Waku 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CLI、
 9. `src/driver/mod.rs`（UI 侧代理）：`start_remote` 删 provider 参数。
 10. `src/app/tests.rs`（56 处）：fixture 的 `AgentSession::new(project_id, ProviderKind::Codex)` 等全部改为 `AgentSession::new(project_id)`；按新签名调整。
 
-### 阶段 3：Web 前端与 TS 绑定（`apps/web`、`packages/waku-client`）
+### 阶段 3：Web 前端与 TS 绑定（`apps/web`、`packages/fintwind-client`）
 
-1. `bun run codegen`（或项目既有的 ts-rs 生成脚本）重新生成 `packages/waku-client/src/generated/*.ts`：`ProviderKind.ts` 删除；`ProviderKind` 类型引用从各生成文件消失。
+1. `bun run codegen`（或项目既有的 ts-rs 生成脚本）重新生成 `packages/fintwind-client/src/generated/*.ts`：`ProviderKind.ts` 删除；`ProviderKind` 类型引用从各生成文件消失。
 2. `apps/web/src`：
    - 删除 provider 选择 UI（composer 中的 provider 切换、`composer-preferences.ts` 中的 provider 偏好）。
    - `settings-view.tsx` 删除 providers 设置区（disabled、binary override、探测）。
    - 删除 `usage-chart.tsx`、`usage-settings.tsx` 及用量历史页面/路由（保留 plan 用量展示若有）。
-   - `waku-icon.tsx`、`model-picker.tsx`、`model-picker-presentation.ts`、`provider-probe-cache.ts`、`daemon-api.ts`、`use-daemon-data.ts`、`skills-settings.tsx`、`composer-autocomplete.ts`、`transcript.tsx`、`sidebar-presentation.ts` 等清理 provider 引用。
+   - `fintwind-icon.tsx`、`model-picker.tsx`、`model-picker-presentation.ts`、`provider-probe-cache.ts`、`daemon-api.ts`、`use-daemon-data.ts`、`skills-settings.tsx`、`composer-autocomplete.ts`、`transcript.tsx`、`sidebar-presentation.ts` 等清理 provider 引用。
    - 相关 `.test.ts`/`.test.tsx` 同步更新。
 3. `apps/web/src/lib/event-reducer.ts`、`runtime-context.tsx`：清理 `session.provider` 分支（若仍读取该字段，保持 String 读取即可）。
 
@@ -185,10 +185,10 @@ Waku 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CLI、
 1. **反序列化兼容**（最高风险）：`ProviderResumeCursor` 收缩后旧 `session_details` 无法反序列化。必须在阶段 0 一并加宽容反序列化层，并用旧数据实测（见阶段 5-4）。
 2. **测试面大**：`src/app/tests.rs`、`server.rs` 等大量测试以 `ProviderKind::Codex` 为默认 fixture，删除类型后编译错误会集中爆发；建议在阶段 0 就批量替换为无参构造，而不是等编译器逐个报错。
 3. **Web 端生成代码**：`generated/*.ts` 由 ts-rs 生成，必须与 Rust 端同步重新生成，否则 TS 编译失败；CI 中若有生成校验需保持一致。
-4. **usage 页面删除影响面**：`usage_page.rs` 入口在 sidebar/composer 多处；删除时同步清理路由、locale 键、`daemon-api.ts` 中的 `LoadUsageHistory`/`UsageHistory` 消息与 `waku-client` 类型。
+4. **usage 页面删除影响面**：`usage_page.rs` 入口在 sidebar/composer 多处；删除时同步清理路由、locale 键、`daemon-api.ts` 中的 `LoadUsageHistory`/`UsageHistory` 消息与 `fintwind-client` 类型。
 5. **`computer_use`**：目前 Codex/Pi/OpenCode/Grok 各自实现；只保留 OpenCode 的 `OPENCODE_CONFIG_CONTENT` 路径，确认 `computer_use.rs` 与 `src/computer_use.rs` 无其他 provider 残留。
 6. **`agent_preset`**：目前仅 DeepSeek Harness 使用；删除 DeepSeek 后可评估是否移除该字段（保留亦可，OpenCode 无需）。
-7. **icon 引用**：`ui/mod.rs` 与 web `waku-icon.tsx` 引用图标路径，删除 svg 前先清引用，避免 asset 加载报错。
+7. **icon 引用**：`ui/mod.rs` 与 web `fintwind-icon.tsx` 引用图标路径，删除 svg 前先清引用，避免 asset 加载报错。
 
 ## 7. 验收标准
 

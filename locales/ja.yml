@@ -86,7 +86,7 @@ daemon.port_description: 公開中は、すべてのネットワークインタ�
 daemon.port_placeholder: "34123"
 daemon.allowed_origins: 許可するブラウザオリジン
 daemon.allowed_origins_description: WebSocket を開ける正確な http:// または https:// オリジンです。
-daemon.allowed_origins_placeholder: https://waku.example.com, http://localhost:3001
+daemon.allowed_origins_placeholder: https://fintwind.example.com, http://localhost:3001
 daemon.apply: 適用
 daemon.restarting: 再起動中…
 daemon.credentials_title: 接続情報
@@ -677,9 +677,9 @@ session.agent_declined_turn: エージェントはこのターンを辞退しま
 session.agent_stopped_reason: "エージェントが停止しました：%{reason}"
 
 errors.open_session: "そのタスクを開けませんでした：%{error}"
-errors.create_projectless_task: "~/.waku/projects 内にタスクを作成できませんでした：%{error}"
+errors.create_projectless_task: "~/.fintwind/projects 内にタスクを作成できませんでした：%{error}"
 errors.save_projectless_migration: "プロジェクトなしタスクの移行を保存できませんでした：%{error}"
-errors.move_projectless_task: "以前のルート直下のプロジェクトなしタスクを ~/.waku/projects 内に移動できませんでした：%{error}"
+errors.move_projectless_task: "以前のルート直下のプロジェクトなしタスクを ~/.fintwind/projects 内に移動できませんでした：%{error}"
 errors.remote_host_path: このパスはデーモンホスト上にあるため、デスクトップアプリでは開けません
 errors.change_branch: "ブランチを変更できませんでした：%{error}"
 errors.capture_pre_turn_checkpoint: "ターン開始前のチェックポイントを取得できませんでした：%{error}"
@@ -690,7 +690,7 @@ errors.provider_native_session_unavailable: "%{provider} のネイティブセ�
 errors.provider_native_thread_unavailable: "%{provider} のネイティブスレッドは利用できません"
 errors.provider_native_cursor_unavailable: "%{provider} のネイティブセッションカーソルは利用できません"
 errors.provider_native_thread_cursor_unavailable: "%{provider} のネイティブスレッドカーソルは利用できません"
-errors.provider_waku_task_unavailable: "%{provider} の fintwind タスクは利用できません"
+errors.provider_fintwind_task_unavailable: "%{provider} の fintwind タスクは利用できません"
 errors.provider_not_installed: "%{provider} はインストールされていません"
 errors.provider_not_found: "%{provider} はインストールされていないか、見つかりませんでした"
 errors.claude_fork_checkpoint_missing: Claude からフォーク用チェックポイントが返されませんでした

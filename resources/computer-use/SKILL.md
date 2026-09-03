@@ -1,12 +1,12 @@
 ---
-name: waku-computer-use
+name: fintwind-computer-use
 description: Control local Mac apps through fintwind Computer Use for tasks that require reading or operating app UI. Prefer purpose-built connectors, APIs, or CLIs when available.
 ---
 
-## waku_js_repl + fintwind Computer Use
+## fintwind_js_repl + fintwind Computer Use
 
-* Use the `js` tool from `waku_js_repl` for all Computer Use actions.
-* Do not use other technologies besides `waku_js_repl` for computer interactions, unless specifically requested by the user (e.g. AppleScript, `osascript`, JXA, System Events, CGEvent synthesis).
+* Use the `js` tool from `fintwind_js_repl` for all Computer Use actions.
+* Do not use other technologies besides `fintwind_js_repl` for computer interactions, unless specifically requested by the user (e.g. AppleScript, `osascript`, JXA, System Events, CGEvent synthesis).
 * Prefer a dedicated plugin or skill when it can complete the task; use Computer Use for app interactions that are not exposed through a more specific interface.
 * The QuickJS state is persistent across `js` calls.
 * For text output, use `nodeRepl.write(...)`. `nodeRepl.write(...)` takes a string. If you would like to read a whole object, wrap it with `JSON.stringify(...)`.
@@ -15,7 +15,7 @@ description: Control local Mac apps through fintwind Computer Use for tasks that
 
 fintwind exposes the native Computer Use runtime directly to QuickJS, but initializes `sky` lazily. Do not import `@oai/sky` or call the raw Computer Use helper.
 
-Run this once per fresh `waku_js_repl` session:
+Run this once per fresh `fintwind_js_repl` session:
 
 ```js
 if (!globalThis.sky) {

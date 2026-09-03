@@ -21,11 +21,11 @@ import type {
   SkillsCatalog,
   UsageHistory,
   UsageWindow,
-  WakuClient,
+  FintwindClient,
   WorkingTreeEntry,
   WorkspaceOperation,
   WorkspaceResult,
-} from '@waku/client'
+} from '@fintwind/client'
 
 export type TaskState = Extract<ResponsePayload, { type: 'taskState' }>
 export type DaemonDirectory = Extract<WorkspaceResult, { type: 'directory' }>
@@ -67,11 +67,11 @@ export const daemonKeys = {
     ['daemon', address, 'workspace-diff', cwd, JSON.stringify(source)] as const,
 }
 
-export async function loadTaskState(client: WakuClient): Promise<TaskState> {
+export async function loadTaskState(client: FintwindClient): Promise<TaskState> {
   return expectResponse(await client.request({ type: 'loadTaskState' }), 'taskState')
 }
 
-export async function loadComposerDrafts(client: WakuClient): Promise<ComposerDrafts> {
+export async function loadComposerDrafts(client: FintwindClient): Promise<ComposerDrafts> {
   const response = expectResponse(
     await client.request({ type: 'loadComposerDrafts' }),
     'composerDrafts',
@@ -80,7 +80,7 @@ export async function loadComposerDrafts(client: WakuClient): Promise<ComposerDr
 }
 
 export async function applyComposerDraftChanges(
-  client: WakuClient,
+  client: FintwindClient,
   changes: ComposerDraftChange[],
 ): Promise<void> {
   if (!changes.length) return
@@ -88,7 +88,7 @@ export async function applyComposerDraftChanges(
 }
 
 export async function hydrateSession(
-  client: WakuClient,
+  client: FintwindClient,
   sessionId: string,
 ): Promise<AgentSession | null> {
   const response = expectResponse(
@@ -99,7 +99,7 @@ export async function hydrateSession(
 }
 
 export async function attachSession(
-  client: WakuClient,
+  client: FintwindClient,
   sessionId: string,
 ): Promise<{ runtimeId: string; supportsSteer: boolean } | null> {
   const response = expectResponse(
@@ -112,7 +112,7 @@ export async function attachSession(
 }
 
 export async function searchSessionMessages(
-  client: WakuClient,
+  client: FintwindClient,
   query: string,
   limit = 40,
 ): Promise<SessionMessageMatch[]> {
@@ -124,7 +124,7 @@ export async function searchSessionMessages(
 }
 
 export async function loadDaemonSettings(
-  client: WakuClient,
+  client: FintwindClient,
 ): Promise<DaemonSettings> {
   const response = expectResponse(await client.request({ type: 'getSettings' }), 'settings')
   return {
@@ -134,14 +134,14 @@ export async function loadDaemonSettings(
 }
 
 export async function updateDaemonSettings(
-  client: WakuClient,
+  client: FintwindClient,
   settings: DaemonSettings,
 ): Promise<void> {
   expectResponse(await client.request({ type: 'updateSettings', settings }), 'ack')
 }
 
 export async function probeProvider(
-  client: WakuClient,
+  client: FintwindClient,
   provider: ProviderKind,
   settings: DaemonSettings,
   options: { discoverModels?: boolean; probeVersion?: boolean } = {},
@@ -161,7 +161,7 @@ export async function probeProvider(
 }
 
 export async function loadSkills(
-  client: WakuClient,
+  client: FintwindClient,
   projects: Project[],
 ): Promise<SkillsCatalog> {
   const response = expectResponse(
@@ -175,19 +175,19 @@ export async function loadSkills(
 }
 
 export async function setSkillsEnabled(
-  client: WakuClient,
+  client: FintwindClient,
   dirs: string[],
   enabled: boolean,
 ): Promise<void> {
   expectResponse(await client.request({ type: 'setSkillsEnabled', dirs, enabled }), 'ack')
 }
 
-export async function trashSkills(client: WakuClient, dirs: string[]): Promise<void> {
+export async function trashSkills(client: FintwindClient, dirs: string[]): Promise<void> {
   expectResponse(await client.request({ type: 'trashSkills', dirs }), 'ack')
 }
 
 export async function loadUsageHistory(
-  client: WakuClient,
+  client: FintwindClient,
   window: UsageWindow,
   projects: Project[],
 ): Promise<UsageHistory> {
@@ -203,7 +203,7 @@ export async function loadUsageHistory(
 }
 
 export async function fetchPlanUsage(
-  client: WakuClient,
+  client: FintwindClient,
   provider: ProviderKind,
   settings: DaemonSettings,
   version: string | null,
@@ -221,7 +221,7 @@ export async function fetchPlanUsage(
 }
 
 export async function persistSession(
-  client: WakuClient,
+  client: FintwindClient,
   session: AgentSession,
   project?: Project,
 ): Promise<AgentSession> {
@@ -241,7 +241,7 @@ export async function persistSession(
 }
 
 export async function removeSession(
-  client: WakuClient,
+  client: FintwindClient,
   sessionId: string,
 ): Promise<TaskState> {
   expectResponse(
@@ -252,7 +252,7 @@ export async function removeSession(
 }
 
 export async function listWorkspaceTree(
-  client: WakuClient,
+  client: FintwindClient,
   root: string,
   expandedPaths: string[],
 ): Promise<WorkingTreeEntry[]> {
@@ -266,7 +266,7 @@ export async function listWorkspaceTree(
 }
 
 export async function browseDaemonDirectory(
-  client: WakuClient,
+  client: FintwindClient,
   path: string | null,
 ): Promise<DaemonDirectory> {
   const result = await workspaceRequest(client, {
@@ -280,7 +280,7 @@ export async function browseDaemonDirectory(
 }
 
 export async function readWorkspaceTextFile(
-  client: WakuClient,
+  client: FintwindClient,
   root: string,
   relativePath: string,
 ): Promise<string> {
@@ -294,7 +294,7 @@ export async function readWorkspaceTextFile(
 }
 
 export async function writeWorkspaceTextFile(
-  client: WakuClient,
+  client: FintwindClient,
   root: string,
   relativePath: string,
   content: string,
@@ -309,7 +309,7 @@ export async function writeWorkspaceTextFile(
 }
 
 export async function inspectWorkspaceBranches(
-  client: WakuClient,
+  client: FintwindClient,
   cwd: string,
 ): Promise<BranchSnapshot | null> {
   const result = await workspaceRequest(client, { type: 'inspectBranches', cwd })
@@ -318,7 +318,7 @@ export async function inspectWorkspaceBranches(
 }
 
 export async function listSessionTurnRefs(
-  client: WakuClient,
+  client: FintwindClient,
   cwd: string,
   sessionId: string,
 ): Promise<number[]> {
@@ -334,7 +334,7 @@ export async function listSessionTurnRefs(
 }
 
 export async function captureTurnStart(
-  client: WakuClient,
+  client: FintwindClient,
   cwd: string,
   sessionId: string,
   turnCount: number,
@@ -351,7 +351,7 @@ export async function captureTurnStart(
 }
 
 export async function captureTurnCheckpoint(
-  client: WakuClient,
+  client: FintwindClient,
   cwd: string,
   sessionId: string,
   turnCount: number,
@@ -369,7 +369,7 @@ export async function captureTurnCheckpoint(
 }
 
 export async function listComposerFiles(
-  client: WakuClient,
+  client: FintwindClient,
   root: string,
   cap = 50_000,
 ): Promise<FileEntry[]> {
@@ -381,7 +381,7 @@ export async function listComposerFiles(
 }
 
 export async function discoverComposerCommands(
-  client: WakuClient,
+  client: FintwindClient,
   provider: ProviderKind,
   projectRoot: string,
 ): Promise<SlashCommand[]> {
@@ -397,7 +397,7 @@ export async function discoverComposerCommands(
 }
 
 export async function checkoutWorkspaceBranch(
-  client: WakuClient,
+  client: FintwindClient,
   cwd: string,
   branch: string,
   create = false,
@@ -413,7 +413,7 @@ export async function checkoutWorkspaceBranch(
 }
 
 export async function collectWorkspaceDiff(
-  client: WakuClient,
+  client: FintwindClient,
   cwd: string,
   source: ReviewDiffSource = 'uncommitted',
 ): Promise<ReviewDiffData> {
@@ -427,7 +427,7 @@ export async function collectWorkspaceDiff(
 }
 
 export async function inspectWorkspaceCommit(
-  client: WakuClient,
+  client: FintwindClient,
   cwd: string,
 ): Promise<CommitSnapshot> {
   const result = await workspaceRequest(client, { type: 'inspectCommit', cwd })
@@ -438,7 +438,7 @@ export async function inspectWorkspaceCommit(
 }
 
 export async function generateWorkspaceCommitMessage(
-  client: WakuClient,
+  client: FintwindClient,
   cwd: string,
   includeUnstaged: boolean,
   invocation: AgentInvocation,
@@ -456,7 +456,7 @@ export async function generateWorkspaceCommitMessage(
 }
 
 export async function commitWorkspace(
-  client: WakuClient,
+  client: FintwindClient,
   cwd: string,
   message: string,
   includeUnstaged: boolean,
@@ -472,13 +472,13 @@ export async function commitWorkspace(
   if (result.type !== 'ack') throw new Error('The daemon returned an unexpected commit response')
 }
 
-export async function pushWorkspace(client: WakuClient, cwd: string): Promise<void> {
+export async function pushWorkspace(client: FintwindClient, cwd: string): Promise<void> {
   const result = await workspaceRequest(client, { type: 'push', cwd })
   if (result.type !== 'ack') throw new Error('The daemon returned an unexpected push response')
 }
 
 async function workspaceRequest(
-  client: WakuClient,
+  client: FintwindClient,
   operation: WorkspaceOperation,
 ): Promise<WorkspaceResult> {
   const response = expectResponse(
@@ -489,7 +489,7 @@ async function workspaceRequest(
 }
 
 export async function createProjectlessWorkspace(
-  client: WakuClient,
+  client: FintwindClient,
 ): Promise<string> {
   const response = expectResponse(
     await client.request({
@@ -505,7 +505,7 @@ export async function createProjectlessWorkspace(
 }
 
 export async function materializeWorktree(
-  client: WakuClient,
+  client: FintwindClient,
   session: AgentSession,
   project: Project,
   prompt: string,
@@ -554,7 +554,7 @@ export function createProject(path: string): Project {
 }
 
 export async function persistProject(
-  client: WakuClient,
+  client: FintwindClient,
   candidate: Project,
 ): Promise<{ project: Project; taskState: TaskState }> {
   const current = await loadTaskState(client)

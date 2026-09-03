@@ -1,11 +1,11 @@
-# Waku Web
+# Fintwind Web
 
-Browser client for an existing Waku daemon. The Cloudflare Worker serves the
+Browser client for an existing Fintwind daemon. The Cloudflare Worker serves the
 TanStack Start application only; it does not start, proxy, or store credentials
 for a daemon.
 
 ```sh
-bun --filter @waku/web dev
+bun --filter @fintwind/web dev
 ```
 
 Then add a daemon WebSocket URL and token in the connection screen. The daemon
@@ -14,20 +14,20 @@ exact browser origin in its `--allow-origin` list. For local development the
 origin is `http://localhost:3001`.
 
 ```sh
-WAKU_DAEMON_TOKEN=replace-me cargo run -p waku-daemon --bin waku-daemon -- \
+FINTWIND_DAEMON_TOKEN=replace-me cargo run -p fintwind-daemon --bin fintwind-daemon -- \
   --bind 127.0.0.1:34123 \
   --allow-origin http://localhost:3001
 ```
 
-Waku Desktop can expose the daemon it manages from Settings → Daemon, where you
+Fintwind Desktop can expose the daemon it manages from Settings → Daemon, where you
 choose the port and exact browser origins and copy the URL/token. A standalone
 daemon requires the explicit `--allow-non-loopback` flag for a non-loopback
 bind. For access outside a private network, put a trusted TLS reverse proxy or
 tunnel in front of the listener, forward WebSockets, and use `wss://`.
 
 ```sh
-bun --filter @waku/web build
-bun --filter @waku/web deploy
+bun --filter @fintwind/web build
+bun --filter @fintwind/web deploy
 ```
 
 The token is a full-control daemon capability. It is sent directly from the

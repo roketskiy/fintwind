@@ -2,7 +2,7 @@
 //
 // Build and package the Windows release: a portable zip and the Inno Setup
 // installer the in-app updater re-runs silently. Mirrors bundle-linux.sh for
-// the archive half and resources/windows/waku.iss for the installer half.
+// the archive half and resources/windows/fintwind.iss for the installer half.
 //
 // Usage:
 //   bun scripts/bundle-windows.ts
@@ -17,7 +17,7 @@ import { copyFile, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const packageName = "waku";
+const packageName = "fintwind";
 const projectRoot = resolve(import.meta.dir, "..");
 
 /** The updater picks its feed by Rust arch name, so the installer carries
@@ -123,9 +123,9 @@ const installer = join(
   `fintwind-${version}-${architecture}-Setup.exe`,
 );
 
-await $`cargo build --locked --release --package waku --bin fintwind --package waku-daemon --bin fintwind-daemon`;
+await $`cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon`;
 
-const staging = await mkdtemp(join(tmpdir(), "waku-bundle-"));
+const staging = await mkdtemp(join(tmpdir(), "fintwind-bundle-"));
 try {
   // Both executables stay side by side: the app resolves the daemon next to
   // itself, so the layout is what makes an extracted zip runnable in place.
@@ -166,7 +166,7 @@ try {
   // The installer is what the in-app updater downloads and re-runs, so it
   // ships from the same signed staging directory as the zip.
   await rm(installer, { force: true });
-  await $`${findInnoSetupCompiler()} ${`/DAppVersion=${version}`} ${`/DArch=${architecture}`} ${`/DStageDir=${packageDirectory}`} ${`/DOutputDir=${releaseDirectory}`} ${join(projectRoot, "resources", "windows", "waku.iss")}`;
+  await $`${findInnoSetupCompiler()} ${`/DAppVersion=${version}`} ${`/DArch=${architecture}`} ${`/DStageDir=${packageDirectory}`} ${`/DOutputDir=${releaseDirectory}`} ${join(projectRoot, "resources", "windows", "fintwind.iss")}`;
   if (!existsSync(installer)) {
     throw new Error(`ISCC did not produce ${installer}`);
   }

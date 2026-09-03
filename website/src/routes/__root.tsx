@@ -9,7 +9,7 @@ import type { QueryClient } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import appCss from '@/styles.css?url'
 
-const SITE_URL = 'https://waku.sh'
+const SITE_URL = 'https://fintwind.sh'
 const TITLE = 'fintwind — native Windows desktop for OpenCode 2'
 const DESCRIPTION =
   'A native Windows desktop app for OpenCode 2. Sessions, transcripts, tool activity, and checkpoints — entirely on your machine.'

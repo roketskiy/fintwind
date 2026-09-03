@@ -21,7 +21,7 @@ const PLAN_USAGE_REFRESH: Duration = Duration::from_secs(300);
 const PLAN_USAGE_REFRESH_STALE: Duration = Duration::from_secs(30);
 const PLAN_USAGE_RETRY: Duration = Duration::from_secs(90);
 
-impl Waku {
+impl Fintwind {
     /// Start a background fetch of the plan meter whose snapshot is due.
     /// The slow maintenance clock and explicit panel-open requests call this;
     /// a guard keeps it to one in-flight fetch.
@@ -53,12 +53,12 @@ impl Waku {
                 let result = match daemon.request(
                     Uuid::nil(),
                     Uuid::nil(),
-                    waku_client::Command::FetchPlanUsage {
+                    fintwind_client::Command::FetchPlanUsage {
                         binary_override: None,
                         cli_version: None,
                     },
                 ) {
-                    Ok(waku_client::ResponsePayload::PlanUsage { usage }) => Ok(usage),
+                    Ok(fintwind_client::ResponsePayload::PlanUsage { usage }) => Ok(usage),
                     Ok(_) => Err(anyhow::anyhow!(
                         "the daemon returned an invalid plan usage response"
                     )),

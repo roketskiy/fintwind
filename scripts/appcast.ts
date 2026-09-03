@@ -13,16 +13,16 @@
 // Env overrides:
 //   SPARKLE_BIN                dir containing the Sparkle tools
 //   SPARKLE_PRIVATE_KEY        EdDSA private key (CI; otherwise the keychain)
-//   WAKU_DOWNLOAD_URL_PREFIX   base URL for enclosure links
+//   FINTWIND_DOWNLOAD_URL_PREFIX   base URL for enclosure links
 import { existsSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const projectRoot = resolve(import.meta.dir, "..");
 
-export const defaultDownloadUrlPrefix = "https://releases.waku.sh/";
+export const defaultDownloadUrlPrefix = "https://releases.fintwind.sh/";
 
 /** Locate Sparkle's `generate_appcast`: SPARKLE_BIN first, then the pinned
- *  distribution scripts/bundle.sh caches under .waku-cache, then PATH. */
+ *  distribution scripts/bundle.sh caches under .fintwind-cache, then PATH. */
 export function findGenerateAppcast(): string | null {
   const fromEnv = process.env.SPARKLE_BIN;
   if (fromEnv) {
@@ -30,7 +30,7 @@ export function findGenerateAppcast(): string | null {
     if (existsSync(candidate)) return candidate;
   }
 
-  const cacheRoot = join(projectRoot, ".waku-cache", "sparkle");
+  const cacheRoot = join(projectRoot, ".fintwind-cache", "sparkle");
   if (existsSync(cacheRoot)) {
     const versionOrder = new Intl.Collator("en", { numeric: true });
     const versions = readdirSync(cacheRoot)
@@ -54,7 +54,7 @@ export async function generateAppcast(
   if (!generator) {
     throw new Error(
       "generate_appcast not found. Run scripts/bundle.sh once to populate " +
-        ".waku-cache/sparkle, or set SPARKLE_BIN to a Sparkle tools bin/ dir.",
+        ".fintwind-cache/sparkle, or set SPARKLE_BIN to a Sparkle tools bin/ dir.",
     );
   }
   console.log(`Using: ${generator}`);
@@ -110,6 +110,6 @@ if (import.meta.main) {
     process.exit(1);
   }
   const prefix =
-    process.env.WAKU_DOWNLOAD_URL_PREFIX ?? defaultDownloadUrlPrefix;
+    process.env.FINTWIND_DOWNLOAD_URL_PREFIX ?? defaultDownloadUrlPrefix;
   await generateAppcast(updatesDir, prefix);
 }

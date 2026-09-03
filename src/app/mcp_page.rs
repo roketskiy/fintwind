@@ -17,8 +17,8 @@
 
 use gpui::KeyDownEvent;
 
-use waku_client::custom_providers::unique_provider_slug;
-use waku_client::opencode_config::{McpServer, McpServerKind};
+use fintwind_client::custom_providers::unique_provider_slug;
+use fintwind_client::opencode_config::{McpServer, McpServerKind};
 
 use super::providers_page::{
     enabled_badge, form_hint, info_note, labeled_field, outline_button, provider_tile,
@@ -154,7 +154,7 @@ fn mcp_row_caption(server: &McpServer) -> String {
     }
 }
 
-impl Waku {
+impl Fintwind {
     // ── Selection & state ──────────────────────────────────────────────────
 
     /// The server the detail pane shows: the stored selection while it still
@@ -242,7 +242,7 @@ impl Waku {
         cx.spawn(async move |this, cx| {
             let loaded = cx
                 .background_executor()
-                .spawn(async move { waku_client::opencode_config::load_mcp_servers() })
+                .spawn(async move { fintwind_client::opencode_config::load_mcp_servers() })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.mcp_load_generation != generation || this.mcp_commit_generation != 0 {
@@ -289,7 +289,7 @@ impl Waku {
     /// OpenCode watches the file and hot-reloads, so running serves pick the
     /// change up without a restart.
     fn commit_mcp_servers(&mut self, cx: &mut Context<Self>) {
-        if let Err(error) = waku_client::opencode_config::save_mcp_servers(&self.mcp_servers) {
+        if let Err(error) = fintwind_client::opencode_config::save_mcp_servers(&self.mcp_servers) {
             self.show_toast(tr!("mcp.sync_failed", error = error.to_string()));
         }
         cx.notify();

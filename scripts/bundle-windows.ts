@@ -73,6 +73,18 @@ function findSigntool(): string {
   throw new Error(`signtool.exe was not found under ${root}.`);
 }
 
+/** The zip writer. Git Bash's GNU tar reads a Windows drive path as a remote
+ *  host ("Cannot connect to E:"), so pin the bsdtar that ships with Windows. */
+function findTar(): string {
+  const bsdtar = join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "tar.exe",
+  );
+  if (existsSync(bsdtar)) return bsdtar;
+  return "tar";
+}
+
 async function sign(
   signtool: string,
   certificate: string,
@@ -160,7 +172,7 @@ try {
   // Windows 10 1803 and later ship bsdtar, which writes a zip when the output
   // name says so — no PowerShell, and the same one-versioned-directory layout
   // the Linux tarball uses.
-  await $`tar -a -c -f ${archive} -C ${staging} ${packageDirectoryName}`;
+  await $`${findTar()} -a -c -f ${archive} -C ${staging} ${packageDirectoryName}`;
   console.log(`Created ${archive}`);
 
   // The installer is what the in-app updater downloads and re-runs, so it

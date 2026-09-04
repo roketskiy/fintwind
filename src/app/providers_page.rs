@@ -91,7 +91,7 @@ impl Fintwind {
 
     fn select_provider(&mut self, id: String, cx: &mut Context<Self>) {
         self.providers_selected = Some(id.clone());
-        self.providers_adding = false;
+        self.exit_provider_form(cx);
         self.providers_renaming = false;
         self.providers_api_key_revealed = false;
         self.providers_delete_arming = None;
@@ -131,7 +131,7 @@ impl Fintwind {
     /// last visit is already on the roster. Called when the page opens; a
     /// half-finished rename or model edit never survives the visit.
     pub(super) fn reset_providers_page(&mut self, cx: &mut Context<Self>) {
-        self.providers_adding = false;
+        self.exit_provider_form(cx);
         self.providers_renaming = false;
         self.providers_api_key_revealed = false;
         self.providers_delete_arming = None;
@@ -281,6 +281,12 @@ impl Fintwind {
         self.providers_api_key_revealed = false;
         self.providers_form_format = ProviderApiFormat::default();
         self.providers_form_models.clear();
+        // A fresh blank form: an in-flight fetch or probe from a previous
+        // visit must not land its result here.
+        self.providers_form_model_catalog.clear();
+        self.providers_form_connectivity = None;
+        self.providers_form_fetch_generation += 1;
+        self.providers_form_probe_generation += 1;
         for input in [
             &self.provider_form_name,
             &self.provider_form_base_url,
@@ -315,10 +321,14 @@ impl Fintwind {
                 continue;
             }
             let context = context.read(cx).content();
+            // A fetch's merge knows more about this id than the fields can
+            // hold — its display name and output limit ride along.
+            let known = self.providers_form_model_catalog.get(&id);
             models.push(CustomProviderModel {
                 id,
                 context_window: custom_providers::parse_context_window(&context),
-                ..Default::default()
+                name: known.and_then(|model| model.name.clone()),
+                output_limit: known.and_then(|model| model.output_limit),
             });
         }
 
@@ -350,6 +360,7 @@ impl Fintwind {
         let id = provider.id.clone();
         self.providers_store.push(provider);
         self.commit_custom_providers(cx);
+        self.exit_provider_form(cx);
         self.select_provider(id, cx);
         self.show_success_toast(tr!("providers.added_toast", name = name));
     }
@@ -1826,6 +1837,9 @@ impl Fintwind {
                         MenuItem::new(api_format_label(format), move |_, cx| {
                             let _ = weak.update(cx, |this, cx| {
                                 this.providers_form_format = format;
+                                // The form's probe spoke the old format's
+                                // dialect; its verdict no longer stands.
+                                this.providers_form_connectivity = None;
                                 cx.notify();
                             });
                         })
@@ -1939,9 +1953,10 @@ impl Fintwind {
                             tr!("providers.api_format_label"),
                             format_selector,
                         ))
+                        .child(self.render_form_connectivity_field(theme, cx))
                         .child(
                             div()
-                                .child(section_label(theme, tr!("providers.models_label"), true))
+                                .child(self.render_form_models_section_header(theme, cx))
                                 .child(
                                     div()
                                         .mt(px(8.0))
@@ -2033,8 +2048,7 @@ impl Fintwind {
                                 theme,
                             )
                             .on_click(cx.listener(|this, _, _, cx| {
-                                this.providers_adding = false;
-                                cx.notify();
+                                this.exit_provider_form(cx);
                             })),
                         )
                         .child(submit_button),

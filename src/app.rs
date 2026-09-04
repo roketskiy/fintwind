@@ -1788,6 +1788,30 @@ impl Fintwind {
         self.show_toast_with_tone(message, ToastTone::Success);
     }
 
+    /// Opens a daemon-host path with its default application. A remote
+    /// session's paths exist only on the daemon host, so every such
+    /// affordance explains that instead of pointing this machine's desktop
+    /// at a path that was never here.
+    pub(super) fn open_host_path(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        if self.daemon.is_remote() {
+            self.show_toast(tr!("errors.remote_host_path"));
+            cx.notify();
+        } else {
+            crate::platform::open_with_default_app(path, cx);
+        }
+    }
+
+    /// Like [`Fintwind::open_host_path`], but selects `path` in the file
+    /// manager rather than opening it.
+    pub(super) fn reveal_host_path(&mut self, path: &std::path::Path, cx: &mut Context<Self>) {
+        if self.daemon.is_remote() {
+            self.show_toast(tr!("errors.remote_host_path"));
+            cx.notify();
+        } else {
+            crate::platform::reveal_in_file_manager(path, cx);
+        }
+    }
+
     fn show_toast_with_tone(&mut self, message: impl Into<String>, tone: ToastTone) {
         self.toast_selection.selection.borrow_mut().clear();
         self.toast_selection.registry.borrow_mut().clear();

@@ -820,6 +820,10 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("fintwind-checkpoints-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         git_ok(&directory, &["init", "--quiet"]);
+        // Pin line-ending behavior: with the machine's global autocrlf on,
+        // restoring a checkpoint would hand back CRLF where the fixture wrote
+        // LF.
+        git_ok(&directory, &["config", "core.autocrlf", "false"]);
         fs::write(directory.join("tracked.txt"), "baseline\n").unwrap();
         git_ok(&directory, &["add", "tracked.txt"]);
         git_ok(
@@ -860,6 +864,10 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("fintwind-checkpoints-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         git_ok(&directory, &["init", "--quiet"]);
+        // Pin line-ending behavior: with the machine's global autocrlf on,
+        // restoring a checkpoint would hand back CRLF where the fixture wrote
+        // LF.
+        git_ok(&directory, &["config", "core.autocrlf", "false"]);
         fs::write(directory.join("tracked.txt"), "baseline\n").unwrap();
         git_ok(&directory, &["add", "tracked.txt"]);
         git_ok(
@@ -935,6 +943,10 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("fintwind-checkpoints-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         git_ok(&directory, &["init", "--quiet"]);
+        // Pin line-ending behavior: with the machine's global autocrlf on,
+        // restoring a checkpoint would hand back CRLF where the fixture wrote
+        // LF.
+        git_ok(&directory, &["config", "core.autocrlf", "false"]);
         fs::write(directory.join("tracked.txt"), "baseline\n").unwrap();
         git_ok(&directory, &["add", "tracked.txt"]);
         git_ok(

@@ -1349,7 +1349,9 @@ mod tests {
 
     #[test]
     fn render_reads_only_the_cached_result_snapshot() {
-        let source = include_str!("./command_palette.rs");
+        // A Windows checkout may hand `include_str!` CRLF text; normalize so
+        // the `\n\n` markers below match regardless of line endings.
+        let source = include_str!("./command_palette.rs").replace("\r\n", "\n");
         let start = source
             .find("\n    pub(super) fn render_command_palette(")
             .expect("render function must exist");

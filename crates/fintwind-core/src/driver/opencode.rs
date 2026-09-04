@@ -1046,13 +1046,32 @@ fn open_event_stream(
     request.push_str("\r\n");
     write!(stream, "{request}")?;
     stream.flush()?;
-    // Skip the response head; every later line is stream payload.
+    // Skip the response head; every later line is stream payload. The head
+    // read polls a short timeout instead of blocking forever: on Windows a
+    // WFP/AV layer intercepting loopback can delay shutdown's wake of a
+    // blocked recv indefinitely (observed WSAETIMEDOUT after seconds), and
+    // cancellation must stay responsive regardless of the network stack.
+    stream.set_read_timeout(Some(Duration::from_millis(200)))?;
     let mut reader = BufReader::new(stream.try_clone()?);
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line)? == 0 {
-            return Err(anyhow!("OpenCode closed the event stream during setup"));
+        match reader.read_line(&mut line) {
+            Ok(0) => return Err(anyhow!("OpenCode closed the event stream during setup")),
+            Ok(_) => {}
+            // A timed-out read keeps its partial bytes buffered; keep polling
+            // until the head completes or cancellation wins.
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                if control.is_cancelled() {
+                    let _ = stream.shutdown(Shutdown::Both);
+                    return Err(anyhow!("OpenCode event stream was cancelled during setup"));
+                }
+                continue;
+            }
+            Err(error) => return Err(error.into()),
         }
         if line.trim().is_empty() {
             break;
@@ -3999,15 +4018,18 @@ mod tests {
             done.send(()).unwrap();
         });
         let (_peer, _) = listener.accept().unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while control.socket.lock().is_none() && std::time::Instant::now() < deadline {
             thread::sleep(Duration::from_millis(5));
         }
         assert!(control.socket.lock().is_some());
 
         control.cancel();
+        // The shutdown must end the blocked response-head read. On Windows a
+        // WFP/AV layer intercepting loopback can delay the wake by seconds
+        // (observed WSAETIMEDOUT ~2s), so the deadline is generous.
         finished
-            .recv_timeout(Duration::from_secs(1))
+            .recv_timeout(Duration::from_secs(10))
             .expect("cancellation should unblock the response-head read");
         reader.join().unwrap();
         assert!(control.is_cancelled());

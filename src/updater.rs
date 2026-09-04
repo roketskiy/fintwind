@@ -1345,8 +1345,8 @@ mod windows {
         /// below came from that script with a throwaway key.
         #[test]
         fn a_signature_from_the_release_script_verifies_here() {
-            const PUBLIC: &str = "7gZ3dbx+MPQD4vc2dk7olL9QU66JIjpJ1iqNNafU2lQ=";
-            const SIGNATURE: &str = "eBIPKGvQSxFIVNwOzNjzHYs/AGiYFIe3pGulv0TeocoMN0+0l28OJZrlJ2ZuQnNBfif10VW3virGo+7GP3TwCw==";
+            const PUBLIC: &str = "2bTWke9Y6El4FjH/8byJJneWGNSTNG7g8A5eLK8RZSE=";
+            const SIGNATURE: &str = "v1nxeQzI6c4h0sD8bDcfdWS8mgbbzt0Muuee5w1IEKUxyH/kWPwsCxkG776HvUOi71eHd0gg/OT79mIPFZlxAA==";
             const PAYLOAD: &[u8] = b"Fintwind-0.0.0-x86_64-Setup.exe contents";
 
             let decode = |value: &str| {

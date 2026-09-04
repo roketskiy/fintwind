@@ -116,7 +116,10 @@ fn markdown_file_link_path(target: &str) -> Option<PathBuf> {
         return None;
     };
     let path = PathBuf::from(percent_decode_file_path(path));
-    path.is_absolute().then_some(path)
+    // Daemon-host workspaces are POSIX, so their links start with `/`. On
+    // Windows that shape is rooted but not `is_absolute()` (no drive letter),
+    // yet it still routes lexically — which is all this function promises.
+    (path.is_absolute() || path.has_root()).then_some(path)
 }
 
 fn normalized_path(path: &Path) -> PathBuf {
@@ -139,7 +142,8 @@ fn workspace_relative_file_path(workspace: &Path, target: &Path) -> Option<Strin
         if relative.as_os_str().is_empty() {
             return None;
         }
-        Some(relative.to_string_lossy().into_owned())
+        // Display convention is forward slashes, whatever the host separator is.
+        Some(relative.to_string_lossy().replace('\\', "/"))
     }
 
     let workspace = normalized_path(workspace);
@@ -728,7 +732,9 @@ fn visible_working_tree_entries(
             let expanded = is_dir && expanded_paths.contains(&absolute_path);
             let file_icon = (!is_dir).then(|| file_icon_for_name(&name));
             entries.push(WorkingTreeEntry {
-                relative_path: relative_path.to_string_lossy().into_owned(),
+                // Display convention is forward slashes, whatever the host
+                // separator is; `absolute_path` keeps the native form for I/O.
+                relative_path: relative_path.to_string_lossy().replace('\\', "/"),
                 absolute_path: absolute_path.clone(),
                 name,
                 is_dir,

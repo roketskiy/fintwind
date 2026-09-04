@@ -806,9 +806,16 @@ mod tests {
         std::fs::write(directory.join("faux-provider.cmd"), "@echo off\n")
             .expect("write shim fixture");
 
+        // The resolver appends the extension exactly as `PATHEXT` spells it
+        // (`.CMD` uppercase on most machines), which NTFS matches to the
+        // lowercase file — so compare case-insensitively.
+        let resolved = resolve_executable_file(&directory.join("faux-provider"));
+        let expected = directory.join("faux-provider.cmd");
         assert_eq!(
-            resolve_executable_file(&directory.join("faux-provider")),
-            Some(directory.join("faux-provider.cmd"))
+            resolved
+                .as_ref()
+                .map(|path| path.to_string_lossy().to_ascii_lowercase()),
+            Some(expected.to_string_lossy().to_ascii_lowercase())
         );
         assert_eq!(resolve_executable_file(&directory.join("absent")), None);
 

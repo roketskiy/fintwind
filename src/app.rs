@@ -1383,6 +1383,20 @@ pub struct Fintwind {
     providers_form_format: fintwind_client::custom_providers::ProviderApiFormat,
     /// Model draft rows of the add-provider form: id + context window.
     providers_form_models: Vec<(Entity<ComposerInput>, Entity<ComposerInput>)>,
+    /// Model metadata the add form's fields cannot hold — the names and
+    /// output limits a fetch's merge filled in — keyed by model id, so a
+    /// submitted draft keeps what the fetch learned.
+    providers_form_model_catalog:
+        HashMap<String, fintwind_client::custom_providers::CustomProviderModel>,
+    /// The add-provider form's connectivity probe: the form's own network
+    /// verdict while the provider it describes does not exist yet.
+    providers_form_connectivity: Option<providers_fetch::ProviderConnectivityState>,
+    /// The add-provider form's model-list fetch is in flight.
+    providers_form_fetching: bool,
+    /// Generation tokens for the form's in-flight fetch and probe; leaving
+    /// the form supersedes both, so a late result cannot land in a fresh one.
+    providers_form_fetch_generation: usize,
+    providers_form_probe_generation: usize,
     /// The selected provider's editable endpoint and key fields.
     provider_base_url_input: Entity<ComposerInput>,
     provider_api_key_input: Entity<ComposerInput>,
@@ -2623,11 +2637,20 @@ impl Fintwind {
                 &provider_form_base_url,
                 &provider_form_api_key,
             ] {
-                cx.subscribe(form_input, |this, _, event, cx| match event {
+                cx.subscribe(form_input, |this, input, event, cx| match event {
                     // The add form submits only when its fields validate, so
                     // Return in any field is an honest attempt to save.
                     ComposerEvent::Submit(_) => this.submit_provider_form(cx),
-                    ComposerEvent::Edited if this.providers_adding => cx.notify(),
+                    ComposerEvent::Edited if this.providers_adding => {
+                        // An endpoint or key edit voids the form's probe
+                        // verdict; it no longer describes these fields.
+                        if input == this.provider_form_base_url
+                            || input == this.provider_form_api_key
+                        {
+                            this.providers_form_connectivity = None;
+                        }
+                        cx.notify();
+                    }
                     _ => {}
                 })
                 .detach();
@@ -2995,6 +3018,11 @@ impl Fintwind {
                 native_reconcile_error: None,
                 providers_form_format: Default::default(),
                 providers_form_models: Vec::new(),
+                providers_form_model_catalog: HashMap::new(),
+                providers_form_connectivity: None,
+                providers_form_fetching: false,
+                providers_form_fetch_generation: 0,
+                providers_form_probe_generation: 0,
                 provider_base_url_input,
                 provider_api_key_input,
                 provider_rename_input,

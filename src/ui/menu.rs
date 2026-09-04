@@ -30,7 +30,8 @@ use gpui::{
     AnyElement, App, Bounds, Display, Element, ElementId, FocusHandle, FontWeight, GlobalElementId,
     InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayoutId, MouseButton,
     MouseDownEvent, ParentElement, Pixels, Point, Position, RenderOnce, SharedString, Size, Style,
-    Styled, Window, actions, anchored, canvas, deferred, div, prelude::FluentBuilder, px,
+    StatefulInteractiveElement, Styled, Window, actions, anchored, canvas, deferred, div,
+    prelude::FluentBuilder, px,
 };
 
 actions!(
@@ -1037,6 +1038,10 @@ fn row(
             element
                 .cursor_default()
                 .hover(move |element| element.bg(hover))
+                // Press reads as the keyboard highlight: the row acknowledges
+                // the click the instant the button goes down, before the menu
+                // closes.
+                .active(move |element| element.bg(highlight))
                 .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                     handle.close(window, cx);
                     on_click(window, cx);

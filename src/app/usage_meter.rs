@@ -221,14 +221,15 @@ impl Fintwind {
 
         let trigger = div()
             .id("usage-meter")
-            .h(px(20.0))
-            .px(px(5.0))
+            .h(px(24.0))
+            .px(px(6.0))
             .rounded(px(5.0))
             .flex()
             .items_center()
             .flex_none()
             .cursor_default()
             .hover(|element| element.bg(theme.overlay))
+            .active(|element| element.bg(theme.overlay_strong))
             .when(handle.is_open(), |element| element.bg(theme.overlay_strong))
             .tooltip(Tooltip::text(tooltip))
             .child(context_gauge(percent, theme.border_strong, fill));

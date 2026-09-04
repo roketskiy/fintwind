@@ -694,6 +694,8 @@ impl Fintwind {
                                 .w_full()
                                 .rounded(px(11.0))
                                 .overflow_hidden()
+                                .border_1()
+                                .border_color(theme.border)
                                 .bg(rgb(0x101010))
                                 .when_some(screenshot, |element, screenshot| {
                                     element.child(
@@ -937,6 +939,7 @@ impl Fintwind {
                                 element.bg(theme.accent.opacity(0.12))
                             })
                             .hover(|element| element.bg(theme.overlay))
+                            .active(|element| element.bg(theme.overlay_strong))
                             .child(icon(
                                 "icons/star.svg",
                                 18.0,
@@ -992,6 +995,7 @@ impl Fintwind {
                                 element.bg(theme.accent.opacity(0.12))
                             })
                             .hover(|element| element.bg(theme.overlay))
+                            .active(|element| element.bg(theme.overlay_strong))
                             .tooltip(Tooltip::text(tooltip))
                             .on_click(move |_, _, cx| {
                                 let _ = provider_weak.update(cx, |this, cx| {
@@ -1132,6 +1136,7 @@ impl Fintwind {
                                     .items_center()
                                     .justify_center()
                                     .hover(|element| element.bg(theme.overlay_strong))
+                                    .active(|element| element.opacity(0.8))
                                     .child(icon(
                                         if is_favorite {
                                             "icons/star-filled.svg"
@@ -1646,6 +1651,7 @@ impl Fintwind {
             ))
             .child(mode.label())
             .hover(|element| element.bg(theme.overlay))
+            .active(|element| element.bg(theme.overlay_strong))
             .on_click(move |_, _, cx| {
                 let _ = weak.update(cx, |this, cx| {
                     this.set_interaction_mode(next_mode, cx);
@@ -1979,6 +1985,8 @@ impl Fintwind {
                             )))
                             .size_full()
                             .cursor_default()
+                            .hover(|element| element.opacity(0.85))
+                            .active(|element| element.opacity(0.72))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.open_image_preview(
                                     preview_image.clone(),
@@ -2050,12 +2058,12 @@ impl Fintwind {
                         "composer-attachment-remove-{index}"
                     )))
                     .absolute()
-                    .top(px(3.0))
-                    .right(px(3.0))
-                    .w(px(18.0))
-                    .h(px(18.0))
+                    .top(px(2.0))
+                    .right(px(2.0))
+                    .w(px(24.0))
+                    .h(px(24.0))
                     .tab_index(0)
-                    .rounded(px(5.0))
+                    .rounded(px(6.0))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -2216,6 +2224,7 @@ impl Fintwind {
                     .tab_index(0)
                     .focus_visible(|style| style.border_1().border_color(theme.accent))
                     .hover(|element| element.bg(theme.overlay))
+                    .active(|element| element.bg(theme.overlay_strong))
                     .tooltip(Tooltip::text(tr!("composer.edit_in_composer")))
                     .child(icon("icons/queue.svg", 13.0, theme.text_tertiary))
                     .child(

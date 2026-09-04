@@ -951,7 +951,7 @@ impl Fintwind {
                 .child(
                     div()
                         .id("find-toggle-replace")
-                        .w(px(18.0))
+                        .w(px(24.0))
                         .h(px(24.0))
                         .flex_none()
                         .rounded(px(4.0))
@@ -1061,7 +1061,7 @@ fn find_toggle(
 ) -> Stateful<Div> {
     div()
         .id(id)
-        .size(px(20.0))
+        .size(px(24.0))
         .flex_none()
         .rounded(px(5.0))
         .flex()
@@ -1075,9 +1075,16 @@ fn find_toggle(
         } else {
             gpui::transparent_black()
         })
-        .when(active, |element| element.bg(theme.accent.opacity(0.22)))
+        .when(active, |element| {
+            element
+                .bg(theme.accent.opacity(0.22))
+                .hover(|element| element.bg(theme.accent.opacity(0.3)))
+                .active(|element| element.bg(theme.accent.opacity(0.38)))
+        })
         .when(!active, |element| {
-            element.hover(|element| element.bg(theme.overlay_strong))
+            element
+                .hover(|element| element.bg(theme.overlay))
+                .active(|element| element.bg(theme.overlay_strong))
         })
         .child(icon(
             icon_path,

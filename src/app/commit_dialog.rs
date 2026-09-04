@@ -540,7 +540,9 @@ impl Fintwind {
                 .h(px(44.0))
                 .w_full()
                 .px(px(12.0))
-                .rounded(px(9.0))
+                // Concentric with the dialog card: 18px shell minus the 8px
+                // row wrapper inset.
+                .rounded(px(10.0))
                 .flex()
                 .items_center()
                 .gap(px(10.0))
@@ -548,6 +550,7 @@ impl Fintwind {
                 .focus_visible(|style| style.border_1().border_color(theme.accent))
                 .when(include_enabled, |row| {
                     row.hover(|style| style.bg(theme.overlay))
+                        .active(|style| style.bg(theme.overlay_strong))
                 })
                 .child(
                     div()
@@ -807,7 +810,9 @@ fn render_commit_action_row(
         .h(px(40.0))
         .w_full()
         .px(px(10.0))
-        .rounded(px(9.0))
+        // Concentric with the dialog card: 18px shell minus the 8px row
+        // wrapper inset.
+        .rounded(px(10.0))
         .flex()
         .items_center()
         .gap(px(10.0))
@@ -817,6 +822,7 @@ fn render_commit_action_row(
         .focus_visible(|style| style.border_1().border_color(theme.accent))
         .when(enabled, |row| {
             row.hover(|style| style.bg(theme.overlay_strong))
+                .active(|style| style.opacity(0.85))
         })
         .child(indicator)
         .child(div().min_w_0().flex_1().truncate().child(label))

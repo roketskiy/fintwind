@@ -64,7 +64,7 @@ settings.daemon: デーモン
 settings.computer_use: コンピュータ操作
 settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン
 settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語
-settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 claude codex cursor opencode amp grok pi
+settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
 settings.skills: スキル
 settings.skills_keywords: スキル ライブラリ エージェント 無効 有効 削除 claude codex cursor opencode pi amp 共有
 settings.usage_keywords: 使用状況 トークン コスト 支出 キャッシュ 日別 グラフ モデル 内訳 履歴 claude codex
@@ -209,6 +209,7 @@ providers.api_key_label: API Key
 providers.api_key_placeholder: API キーを入力
 providers.api_format_label: API 形式
 providers.api_format_openai: Chat Completions（OpenAI 互換）
+providers.api_format_openai_responses: Responses API（OpenAI）
 providers.api_format_anthropic: Anthropic Messages
 providers.models_label: モデル一覧
 providers.models_empty: モデルが未設定です。追加するとチャットで使用できます。
@@ -234,6 +235,38 @@ providers.duplicate_model: このモデル ID は既に存在します
 providers.sync_failed: "OpenCode のプロバイダー設定を更新できませんでした：%{error}"
 providers.builtin_managed: エンドポイントと API キーは opencode2 CLI が管理します（opencode2 auth login）。この一覧は OpenCode 自身の設定ファイルです。
 providers.default_model_badge: デフォルト
+providers.fetch_models: モデルを取得
+providers.fetching_models: 取得中…
+providers.fetch_models_tooltip: プロバイダーの API でモデル一覧を取得し、models.dev のデータで名前とコンテキストウィンドウを補完します
+providers.fetch_up_to_date: モデル一覧は最新です
+providers.fetch_result: "%{count} 件のモデルを取得：追加 %{added} 件、補完 %{updated} 件"
+providers.fetch_failed: "モデル一覧を取得できませんでした：%{error}"
+
+providers.connectivity_label: 接続状態
+providers.test_connection: 接続テスト
+providers.testing_connection: テスト中…
+providers.connection_tooltip: エンドポイントにモデル一覧を要求し応答を測定します
+providers.connection_ok: "応答あり · %{latency} · %{count}モデル"
+providers.connection_failed: "接続失敗：%{error}"
+providers.error_invalid_url: Base URL が http(s) アドレスではありません
+providers.error_auth: "エンドポイントがAPI Keyを拒否しました（HTTP %{status}）"
+providers.error_list_missing: モデル一覧のパスが見つかりません（HTTP 404）。Base URL を確認してください
+providers.error_status: "HTTP %{status}"
+providers.error_unreachable: "エンドポイントから応答がありません：%{error}"
+providers.error_no_list: "応答にモデル一覧が含まれていません：%{error}"
+providers.latency_test_tooltip: 最初のトークンまでの時間を測定
+providers.ttft_result: "最初のトークンまで %{latency}"
+providers.ttft_failed: 失敗
+providers.ttft_error_auth: "API Keyを拒否されました（HTTP %{status}）"
+providers.ttft_error_model: モデルが見つかりません（HTTP 404）
+providers.ttft_error_no_stream: エンドポイントはストリーミングトークンを返しませんでした
+providers.ttft_error_timeout: "%{seconds}秒以内に最初のトークンが届きませんでした"
+providers.modality_tooltip: "入力モダリティ：%{modalities}"
+modality.text: テキスト
+modality.image: 画像
+modality.audio: 音声
+modality.video: 動画
+modality.pdf: PDF
 
 mcp.search_placeholder: MCPサーバーを検索…
 mcp.section_local: ローカル
@@ -1129,10 +1162,4 @@ usage_error.keychain_item_missing: キーチェーンに %{service} の項目が
 usage_error.claude_credentials_invalid: Claude Code の認証情報は有効な JSON ではありません
 usage_error.claude_oauth_missing: Claude Code の認証情報に claudeAiOauth の項目がありません
 usage_error.claude_access_token_missing: Claude Code の認証情報にアクセストークンがありません
-usage_error.run_curl: /usr/bin/curl を実行できませんでした
-usage_error.curl_stdin_unavailable: curl の標準入力を利用できません
-usage_error.configure_curl: curl に設定を渡せませんでした
-usage_error.curl_did_not_finish: curl がリクエストを完了しませんでした
 usage_error.curl_failed: "curl に失敗しました：%{error}"
-usage_error.unknown_error: 不明なエラー
-usage_error.curl_no_status: curl から HTTP ステータス行が返されませんでした

@@ -10,6 +10,7 @@ pub mod composer_complete;
 pub mod computer_use;
 pub mod custom_providers;
 pub mod driver;
+pub mod models_dev;
 pub mod opencode_config;
 pub mod persistence;
 mod process;

@@ -60,7 +60,7 @@ settings.daemon: 守护进程
 settings.computer_use: 电脑操作
 settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本
 settings.appearance_keywords: 外观 主题 系统 浅色 深色 语言 英语 中文 简体
-settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key Base URL 端点 模型列表 命令行 版本 安装 检测 claude codex cursor opencode amp grok pi
+settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key Base URL 端点 模型列表 命令行 版本 安装 检测 获取模型 models.dev 连通 测试 延迟 首字 模态 responses claude codex cursor opencode amp grok pi
 settings.skills: 技能
 settings.skills_keywords: 技能 技能库 智能体 禁用 启用 删除 claude codex cursor opencode pi amp 共享
 settings.usage_keywords: 用量 令牌 费用 支出 缓存 每日 图表 模型 明细 历史 claude codex
@@ -201,6 +201,7 @@ providers.api_key_label: API Key
 providers.api_key_placeholder: 输入 API Key
 providers.api_format_label: API 格式
 providers.api_format_openai: Chat Completions（OpenAI 兼容）
+providers.api_format_openai_responses: Responses API（OpenAI）
 providers.api_format_anthropic: Anthropic Messages
 providers.models_label: 模型列表
 providers.models_empty: 当前没有配置模型，添加模型后可在聊天中使用。
@@ -226,6 +227,38 @@ providers.duplicate_model: 该模型 ID 已存在
 providers.sync_failed: "无法更新 OpenCode 的供应商配置：%{error}"
 providers.builtin_managed: 端点与 API Key 由 opencode2 CLI 管理（opencode2 auth login）；供应商列表即 OpenCode 自己的配置文件。
 providers.default_model_badge: 默认
+providers.fetch_models: 获取模型
+providers.fetching_models: 获取中…
+providers.fetch_models_tooltip: 通过供应商 API 获取模型列表，并匹配 models.dev 数据表补全名称与上下文窗口
+providers.fetch_up_to_date: 模型列表已是最新
+providers.fetch_result: "已获取 %{count} 个模型：新增 %{added} 个，补全 %{updated} 个"
+providers.fetch_failed: "无法获取模型列表：%{error}"
+
+providers.connectivity_label: 连通性
+providers.test_connection: 测试连接
+providers.testing_connection: 测试中…
+providers.connection_tooltip: 向端点发送模型列表请求并测量响应
+providers.connection_ok: "已连通 · %{latency} · %{count} 个模型"
+providers.connection_failed: "连接失败：%{error}"
+providers.error_invalid_url: Base URL 不是 http(s) 地址
+providers.error_auth: "端点拒绝了该 API Key（HTTP %{status}）"
+providers.error_list_missing: 未找到模型列表路径（HTTP 404），请检查 Base URL
+providers.error_status: "HTTP %{status}"
+providers.error_unreachable: "端点无响应：%{error}"
+providers.error_no_list: "响应中没有模型列表：%{error}"
+providers.latency_test_tooltip: 测试首字延迟
+providers.ttft_result: "首字延迟 %{latency}"
+providers.ttft_failed: 失败
+providers.ttft_error_auth: "API Key 被拒绝（HTTP %{status}）"
+providers.ttft_error_model: 未找到该模型（HTTP 404）
+providers.ttft_error_no_stream: 端点未返回流式内容
+providers.ttft_error_timeout: "%{seconds} 秒内未收到首字"
+providers.modality_tooltip: "输入模态：%{modalities}"
+modality.text: 文本
+modality.image: 图像
+modality.audio: 音频
+modality.video: 视频
+modality.pdf: PDF
 
 mcp.search_placeholder: 搜索 MCP 服务器…
 mcp.section_local: 本地
@@ -1076,10 +1109,4 @@ usage_error.keychain_item_missing: 钥匙串中没有 %{service} 项
 usage_error.claude_credentials_invalid: Claude Code 凭据不是有效的 JSON
 usage_error.claude_oauth_missing: Claude Code 凭据中没有 claudeAiOauth 项
 usage_error.claude_access_token_missing: Claude Code 凭据中没有访问令牌
-usage_error.run_curl: 无法运行 /usr/bin/curl
-usage_error.curl_stdin_unavailable: curl 的标准输入不可用
-usage_error.configure_curl: 无法向 curl 传递配置
-usage_error.curl_did_not_finish: curl 未能完成请求
 usage_error.curl_failed: "curl 失败：%{error}"
-usage_error.unknown_error: 未知错误
-usage_error.curl_no_status: curl 未返回 HTTP 状态行

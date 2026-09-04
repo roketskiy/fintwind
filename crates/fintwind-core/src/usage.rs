@@ -6,20 +6,10 @@
 //! run on the background executor. Render reads only the parsed snapshot the
 //! app entity stores.
 
-use std::io::Write as _;
-use std::process::Stdio;
-
 use anyhow::{Context as _, anyhow};
 use serde_json::Value;
 
 const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
-
-/// The absolute path keeps a shadowed `curl` on `PATH` out of the credential
-/// exchange. Windows 10 build 17063 and later ship the same tool in System32.
-#[cfg(not(windows))]
-const CURL_PATH: &str = "/usr/bin/curl";
-#[cfg(windows)]
-const CURL_PATH: &str = r"C:\Windows\System32\curl.exe";
 
 pub use fintwind_protocol::usage::{PlanUsage, PlanWindow, format_tokens, reset_label};
 
@@ -126,57 +116,10 @@ fn parse_opencode_go_plan_usage(body: &Value) -> Option<PlanUsage> {
     })
 }
 
-/// `curl`-based HTTPS GET with the headers passed over curl's own config
-/// mechanism, so credentials never appear in a process list. `-D -` prefixes
-/// the body with the response headers; [`split_status_and_body`] reads the
-/// status line and returns the body.
-pub fn http_get(url: &str, headers: &[String]) -> anyhow::Result<(u16, String)> {
-    let mut child = crate::command_env::plain_command(CURL_PATH)
-        .args(["-sS", "--max-time", "15", "-D", "-", "-K", "-", url])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context(tr!("usage_error.run_curl"))?;
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| anyhow!(tr!("usage_error.curl_stdin_unavailable")))?;
-        for header in headers {
-            writeln!(stdin, "header = \"{header}\"").context(tr!("usage_error.configure_curl"))?;
-        }
-    }
-    let output = child
-        .wait_with_output()
-        .context(tr!("usage_error.curl_did_not_finish"))?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let error = stderr
-            .lines()
-            .last()
-            .map(str::trim)
-            .filter(|error| !error.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(|| tr!("usage_error.unknown_error"));
-        return Err(anyhow!(tr!("usage_error.curl_failed", error = error)));
-    }
-    split_status_and_body(&String::from_utf8_lossy(&output.stdout))
-}
-
-/// `-D -` prefixes the body with the response headers; the status code is on
-/// the first line and the body follows the blank separator line.
-fn split_status_and_body(raw: &str) -> anyhow::Result<(u16, String)> {
-    let status = raw
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| anyhow!(tr!("usage_error.curl_no_status")))?;
-    let body = raw
-        .split_once("\r\n\r\n")
-        .or_else(|| raw.split_once("\n\n"))
-        .map(|(_, body)| body.to_owned())
-        .unwrap_or_default();
-    Ok((status, body))
+/// The request goes through the workspace's one curl helper
+/// (`fintwind_protocol::http`); its plain-English failure details are wrapped
+/// in the usage page's localized wording here.
+fn http_get(url: &str, headers: &[String]) -> anyhow::Result<(u16, String)> {
+    fintwind_protocol::http::http_get(url, headers, 15)
+        .map_err(|error| anyhow!(tr!("usage_error.curl_failed", error = error.to_string())))
 }

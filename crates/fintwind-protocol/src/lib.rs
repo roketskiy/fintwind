@@ -33,6 +33,7 @@ pub mod composer;
 pub mod computer_use;
 mod driver_wire;
 pub mod git;
+pub mod http;
 pub mod i18n;
 pub mod identity;
 pub mod model;

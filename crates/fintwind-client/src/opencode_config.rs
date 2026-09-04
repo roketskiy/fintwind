@@ -91,8 +91,12 @@ pub fn load_providers_at(path: &Path) -> io::Result<Vec<CustomProvider>> {
 
 fn provider_from_config(key: &str, entry: &Value, disabled: &HashSet<String>) -> CustomProvider {
     let npm = entry.get("npm").and_then(Value::as_str);
+    // OpenCode speaks the Responses API to whatever carries the
+    // `@ai-sdk/openai` package and Chat Completions to
+    // `@ai-sdk/openai-compatible`; the UI's format mirrors that choice.
     let api_format = match npm {
         Some("@ai-sdk/anthropic") => ProviderApiFormat::Anthropic,
+        Some("@ai-sdk/openai") => ProviderApiFormat::OpenAiResponses,
         _ => ProviderApiFormat::OpenAi,
     };
     let options = entry.get("options");
@@ -108,6 +112,10 @@ fn provider_from_config(key: &str, entry: &Value, disabled: &HashSet<String>) ->
                         .pointer("/limit/context")
                         .and_then(Value::as_u64)
                         .or_else(|| spec.get("contextWindow").and_then(Value::as_u64)),
+                    // Stored as recorded; whether a name is worth showing is
+                    // `CustomProviderModel::display_name`'s one decision.
+                    name: spec.get("name").and_then(Value::as_str).map(str::to_owned),
+                    output_limit: spec.pointer("/limit/output").and_then(Value::as_u64),
                 })
                 .collect()
         })
@@ -254,10 +262,18 @@ fn provider_entry(provider: &CustomProvider) -> Value {
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        // OpenCode's model display name; entries recorded without one show
-        // the model id, so only fill it in when missing.
-        spec.entry("name".to_owned())
-            .or_insert_with(|| Value::String(model.id.clone()));
+        // OpenCode's model display name. A catalog-filled name is the
+        // roster's value and is written over any stale one; an entry recorded
+        // without a real name keeps what it has and otherwise shows the id.
+        match model.display_name() {
+            Some(name) => {
+                spec.insert("name".into(), Value::String(name.to_owned()));
+            }
+            None => {
+                spec.entry("name".to_owned())
+                    .or_insert_with(|| Value::String(model.id.clone()));
+            }
+        }
         // `limit.context` carries the recorded context window. OpenCode's
         // schema requires `output` beside it — a context-only `limit`
         // invalidates the whole provider (verified: the entry silently
@@ -270,9 +286,13 @@ fn provider_entry(provider: &CustomProvider) -> Value {
                     .cloned()
                     .unwrap_or_default();
                 limit.insert("context".into(), Value::from(window));
+                // A fetched output limit fills the missing slot; an output the
+                // entry already carries is never overwritten.
                 limit
                     .entry("output".to_owned())
-                    .or_insert_with(|| Value::from(DEFAULT_OUTPUT_LIMIT));
+                    .or_insert_with(|| {
+                        Value::from(model.output_limit.unwrap_or(DEFAULT_OUTPUT_LIMIT))
+                    });
                 spec.insert("limit".into(), Value::Object(limit));
             }
             None => {
@@ -615,6 +635,39 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_with_the_openai_package_loads_as_the_responses_format() {
+        let directory =
+            std::env::temp_dir().join(format!("fintwind-oc-cfg-resp-{}", std::process::id()));
+        let document = serde_json::json!({
+            "provider": {
+                "my-relay": {
+                    "npm": "@ai-sdk/openai",
+                    "name": "My Relay",
+                    "options": {"apiKey": "sk-relay", "baseURL": "https://relay.example.com/v1"},
+                    "models": {"gpt-5.4": {"name": "GPT 5.4"}}
+                }
+            }
+        });
+        let path = write_fixture(&directory, &document);
+
+        let providers = load_providers_at(&path).unwrap();
+        let relay = providers.iter().find(|p| p.slug == "my-relay").unwrap();
+        // OpenCode instantiates this package with `.responses(...)`, so the
+        // roster shows the Responses format without rewriting the entry.
+        assert_eq!(relay.api_format, ProviderApiFormat::OpenAiResponses);
+        assert_eq!(relay.npm_touched, false);
+
+        // Saving without a format change keeps the original package.
+        // Path-scoped save: the global `save_providers` would rewrite the
+        // user's real configuration from this fixture's roster.
+        save_providers_at(&path, &providers).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["provider"]["my-relay"]["npm"], "@ai-sdk/openai");
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn load_reads_roster_with_enabled_flags_and_context_windows() {
         let directory =
             std::env::temp_dir().join(format!("fintwind-oc-cfg-load-{}", std::process::id()));
@@ -680,6 +733,7 @@ mod tests {
             vec![CustomProviderModel {
                 id: "relay-large".into(),
                 context_window: Some(200_000),
+                ..Default::default()
             }],
         ));
 

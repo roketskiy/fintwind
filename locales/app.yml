@@ -123,7 +123,7 @@ settings.general_keywords:
 settings.appearance_keywords:
   en: appearance theme system light dark language english chinese simplified
 settings.providers_keywords:
-  en: providers agents models custom add api key base url endpoint cli version install detect claude codex cursor opencode amp grok pi
+  en: providers agents models custom add api key base url endpoint cli version install detect fetch models.dev connectivity test latency first token modality responses claude codex cursor opencode amp grok pi
 settings.skills:
   en: Skills
 settings.skills_keywords:
@@ -397,6 +397,8 @@ providers.api_format_label:
   en: API format
 providers.api_format_openai:
   en: Chat Completions (OpenAI-compatible)
+providers.api_format_openai_responses:
+  en: Responses API (OpenAI)
 providers.api_format_anthropic:
   en: Anthropic Messages
 providers.models_label:
@@ -447,6 +449,69 @@ providers.builtin_managed:
   en: The endpoint and API key are managed by the opencode2 CLI (opencode2 auth login); this roster is OpenCode's own configuration file.
 providers.default_model_badge:
   en: Default
+providers.fetch_models:
+  en: Fetch models
+providers.fetching_models:
+  en: Fetching…
+providers.fetch_models_tooltip:
+  en: List this provider's models via its API, then fill in names and context windows from models.dev
+providers.fetch_up_to_date:
+  en: Models already match the provider's list
+providers.fetch_result:
+  en: "Fetched %{count} models: %{added} added, %{updated} filled in"
+providers.fetch_failed:
+  en: "Could not fetch the model list: %{error}"
+
+providers.connectivity_label:
+  en: Connectivity
+providers.test_connection:
+  en: Test connection
+providers.testing_connection:
+  en: Testing…
+providers.connection_tooltip:
+  en: Send a model-list request to the endpoint and measure the response
+providers.connection_ok:
+  en: "Reachable · %{latency} · %{count} models"
+providers.connection_failed:
+  en: "Unreachable: %{error}"
+providers.error_invalid_url:
+  en: The Base URL is not an http(s) address
+providers.error_auth:
+  en: "the endpoint rejected the API key (HTTP %{status})"
+providers.error_list_missing:
+  en: the model-list path was not found (HTTP 404), check the Base URL
+providers.error_status:
+  en: "HTTP %{status}"
+providers.error_unreachable:
+  en: "no response from the endpoint: %{error}"
+providers.error_no_list:
+  en: "the response carries no model list: %{error}"
+providers.latency_test_tooltip:
+  en: Measure first-token latency
+providers.ttft_result:
+  en: "first token in %{latency}"
+providers.ttft_failed:
+  en: Failed
+providers.ttft_error_auth:
+  en: "the API key was rejected (HTTP %{status})"
+providers.ttft_error_model:
+  en: the model was not found (HTTP 404)
+providers.ttft_error_no_stream:
+  en: the endpoint returned no streamed tokens
+providers.ttft_error_timeout:
+  en: "no first token within %{seconds} s"
+providers.modality_tooltip:
+  en: "Input modalities: %{modalities}"
+modality.text:
+  en: text
+modality.image:
+  en: image
+modality.audio:
+  en: audio
+modality.video:
+  en: video
+modality.pdf:
+  en: PDF
 
 mcp.search_placeholder:
   en: Search MCP servers…
@@ -2167,17 +2232,5 @@ usage_error.claude_oauth_missing:
   en: Claude Code credentials have no claudeAiOauth entry
 usage_error.claude_access_token_missing:
   en: Claude Code credentials have no access token
-usage_error.run_curl:
-  en: Failed to run /usr/bin/curl
-usage_error.curl_stdin_unavailable:
-  en: curl stdin is unavailable
-usage_error.configure_curl:
-  en: Failed to pass the configuration to curl
-usage_error.curl_did_not_finish:
-  en: curl did not finish
 usage_error.curl_failed:
   en: "curl failed: %{error}"
-usage_error.unknown_error:
-  en: unknown error
-usage_error.curl_no_status:
-  en: curl returned no HTTP status line

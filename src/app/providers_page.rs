@@ -64,12 +64,9 @@ pub(super) enum ProvidersModelEditor {
 pub(super) fn api_format_label(format: ProviderApiFormat) -> String {
     match format {
         ProviderApiFormat::OpenAi => tr!("providers.api_format_openai"),
+        ProviderApiFormat::OpenAiResponses => tr!("providers.api_format_openai_responses"),
         ProviderApiFormat::Anthropic => tr!("providers.api_format_anthropic"),
     }
-}
-
-fn base_url_valid(url: &str) -> bool {
-    url.starts_with("http://") || url.starts_with("https://")
 }
 
 impl Fintwind {
@@ -144,6 +141,8 @@ impl Fintwind {
             self.load_provider_fields(&id, cx);
         }
         self.load_providers_from_config(cx);
+        // The modality badges need the metadata table; load it for the visit.
+        self.ensure_models_dev_table(cx);
     }
 
     // ── Persistence ────────────────────────────────────────────────────────
@@ -202,7 +201,7 @@ impl Fintwind {
     /// re-probe so the composer's picker picks up the new catalog. OpenCode
     /// watches the file and hot-reloads, so running serves pick the change up
     /// without a restart.
-    fn commit_custom_providers(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn commit_custom_providers(&mut self, cx: &mut Context<Self>) {
         if let Err(error) = fintwind_client::opencode_config::save_providers(&self.providers_store) {
             self.show_toast(tr!("providers.sync_failed", error = error.to_string()));
         }
@@ -263,6 +262,10 @@ impl Fintwind {
             }
         };
         if changed {
+            // The endpoint or key just changed: this provider's connectivity
+            // and first-token verdicts no longer describe it.
+            let provider_id = provider.id.clone();
+            self.clear_provider_probe_results(&provider_id);
             self.schedule_custom_providers_commit(cx);
             cx.notify();
         }
@@ -315,13 +318,14 @@ impl Fintwind {
             models.push(CustomProviderModel {
                 id,
                 context_window: custom_providers::parse_context_window(&context),
+                ..Default::default()
             });
         }
 
         if name.is_empty() {
             return;
         }
-        if !base_url_valid(&base_url) {
+        if !custom_providers::base_url_valid(&base_url) {
             self.show_toast(tr!("providers.hint_invalid_url"));
             return;
         }
@@ -358,6 +362,7 @@ impl Fintwind {
             .map(|provider| provider.name.clone());
         self.providers_store.retain(|provider| provider.id != id);
         self.providers_delete_arming = None;
+        self.clear_provider_probe_results(&id);
         self.commit_custom_providers(cx);
         if self.providers_selected.as_deref() == Some(id.as_str()) {
             self.select_provider(OPENCODE_PROVIDER.to_owned(), cx);
@@ -511,9 +516,10 @@ impl Fintwind {
                 return;
             }
         };
-        let model = CustomProviderModel {
-            id: model_id,
+        let mut model = CustomProviderModel {
+            id: model_id.clone(),
             context_window,
+            ..Default::default()
         };
         if let Some(provider) = self
             .providers_store
@@ -524,6 +530,13 @@ impl Fintwind {
                 ProvidersModelEditor::Add => provider.models.push(model),
                 ProvidersModelEditor::Edit(index) => {
                     if let Some(slot) = provider.models.get_mut(index) {
+                        // The editor only owns the id and the context window;
+                        // catalog-filled basics ride along unless the id now
+                        // names a different model.
+                        if slot.id == model_id {
+                            model.name = slot.name.take();
+                            model.output_limit = slot.output_limit;
+                        }
                         *slot = model;
                     }
                 }
@@ -575,7 +588,7 @@ impl Fintwind {
         cx.notify();
     }
 
-    fn selected_custom_provider(&self) -> Option<CustomProvider> {
+    pub(super) fn selected_custom_provider(&self) -> Option<CustomProvider> {
         let selected = self.providers_selected.clone();
         self.providers_store
             .iter()
@@ -965,6 +978,14 @@ impl Fintwind {
         }
         if let Some(probe) = probe {
             for (index, model) in probe.models.iter().enumerate() {
+                // The CLI's catalog qualifies ids with their sub-provider
+                // (`anthropic/claude-…`); the metadata table knows bare ids.
+                let bare_id = model.id.rsplit('/').next().unwrap_or(&model.id);
+                let modality_pill = self.model_modality_pill(
+                    theme,
+                    bare_id,
+                    SharedString::from(format!("builtin-modality-{index}")),
+                );
                 model_rows = model_rows.child(
                     div()
                         .px(px(10.0))
@@ -993,6 +1014,7 @@ impl Fintwind {
                                 .text_color(theme.text_tertiary)
                                 .child(SharedString::from(model.id.clone())),
                         )
+                        .children(modality_pill)
                         .when(model.is_default, |element| {
                             element.child(small_pill(
                                 theme,
@@ -1298,6 +1320,7 @@ impl Fintwind {
             },
         );
         let format_field = labeled_field(theme, tr!("providers.api_format_label"), format_selector);
+        let connectivity_field = self.render_connectivity_field(provider, theme, cx);
 
         let models_section = self.render_provider_models(provider, theme, cx);
 
@@ -1339,7 +1362,8 @@ impl Fintwind {
                         .gap(px(14.0))
                         .child(base_url_field)
                         .child(api_key_field)
-                        .child(format_field),
+                        .child(format_field)
+                        .child(connectivity_field),
                 )
                 .child(models_section),
         )
@@ -1464,6 +1488,18 @@ impl Fintwind {
                 continue;
             }
             let id = provider.id.clone();
+            // A models.dev-filled name reads as the model's title; the raw id
+            // stays beside it in mono. Without a name the id is the title.
+            let named = model.display_name();
+            let modality_pill =
+                self.model_modality_pill(theme, &model.id, SharedString::from(format!("modality-{index}")));
+            let latency_cluster = self.render_model_latency_cluster(
+                &provider.id,
+                &model.id,
+                index,
+                theme,
+                cx,
+            );
             rows = rows.child(
                 div()
                     .px(px(10.0))
@@ -1474,15 +1510,30 @@ impl Fintwind {
                     .when(separator, |element| {
                         element.border_t_1().border_color(theme.border)
                     })
+                    .when_some(named, |element, name| {
+                        element.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(px(11.0))
+                                .text_color(theme.text)
+                                .child(SharedString::from(name.to_owned())),
+                        )
+                    })
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
                             .font_family(crate::md::render::MONO_FAMILY)
-                            .text_size(px(11.0))
-                            .text_color(theme.text)
+                            .text_size(px(if named.is_some() { 9.5 } else { 11.0 }))
+                            .text_color(if named.is_some() {
+                                theme.text_tertiary
+                            } else {
+                                theme.text
+                            })
                             .child(SharedString::from(model.id.clone())),
                     )
+                    .children(modality_pill)
                     .when_some(model.context_window, |element, window| {
                         element.child(small_pill(
                             theme,
@@ -1491,6 +1542,7 @@ impl Fintwind {
                         ))
                     })
                     .child(div().flex_1())
+                    .child(latency_cluster)
                     .child(
                         icon_button(
                             SharedString::from(format!("edit-model-{index}")),
@@ -1555,7 +1607,7 @@ impl Fintwind {
 
         div()
             .mt(px(18.0))
-            .child(section_label(theme, tr!("providers.models_label"), true))
+            .child(self.render_models_section_header(theme, cx))
             .child(
                 div()
                     .mt(px(8.0))
@@ -1751,7 +1803,7 @@ impl Fintwind {
             );
         }
         let models_empty = draft_count == 0;
-        let valid = !name.is_empty() && base_url_valid(&base_url) && model_count > 0;
+        let valid = !name.is_empty() && custom_providers::base_url_valid(&base_url) && model_count > 0;
 
         let current_format = self.providers_form_format;
         let weak = cx.entity().downgrade();
@@ -1822,9 +1874,9 @@ impl Fintwind {
             })
             .child(tr!("providers.add_provider"));
 
-        let hint: Option<AnyElement> = if !base_url.is_empty() && !base_url_valid(&base_url) {
+        let hint: Option<AnyElement> = if !base_url.is_empty() && !custom_providers::base_url_valid(&base_url) {
             Some(form_hint(theme, accent, tr!("providers.hint_invalid_url")))
-        } else if base_url_valid(&base_url) && model_count == 0 && !name.is_empty() {
+        } else if custom_providers::base_url_valid(&base_url) && model_count == 0 && !name.is_empty() {
             Some(form_hint(theme, accent, tr!("providers.hint_need_model")))
         } else {
             None
@@ -2045,7 +2097,7 @@ pub(super) fn enabled_badge(theme: &Theme, accent: Hsla, enabled: bool) -> Div {
         })
 }
 
-fn small_pill(theme: &Theme, label: String, color: Option<Hsla>) -> Div {
+pub(super) fn small_pill(theme: &Theme, label: String, color: Option<Hsla>) -> Div {
     div()
         .px(px(6.0))
         .py(px(1.5))
@@ -2055,6 +2107,88 @@ fn small_pill(theme: &Theme, label: String, color: Option<Hsla>) -> Div {
         .text_color(color.unwrap_or(theme.text_tertiary))
         .bg(theme.overlay)
         .child(SharedString::from(label))
+}
+
+// ── Modality badges ────────────────────────────────────────────────────────
+
+/// The stroke icon for a catalog modality; `None` for anything the catalog
+/// may add later — unknown modalities still appear in the pill's tooltip.
+fn modality_icon_path(modality: &str) -> Option<&'static str> {
+    match modality {
+        "text" => Some("icons/modality-text.svg"),
+        "image" => Some("icons/modality-image.svg"),
+        "audio" => Some("icons/modality-audio.svg"),
+        "video" => Some("icons/modality-video.svg"),
+        "pdf" => Some("icons/modality-pdf.svg"),
+        _ => None,
+    }
+}
+
+/// The modality's word for the badge's tooltip.
+fn modality_label(modality: &str) -> String {
+    match modality {
+        "text" => tr!("modality.text"),
+        "image" => tr!("modality.image"),
+        "audio" => tr!("modality.audio"),
+        "video" => tr!("modality.video"),
+        "pdf" => tr!("modality.pdf"),
+        other => other.to_owned(),
+    }
+}
+
+fn modality_labels(modalities: &[String]) -> String {
+    modalities
+        .iter()
+        .map(|modality| modality_label(modality))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+impl Fintwind {
+    /// The modality badge for one model id: a quiet pill holding one small
+    /// stroke icon per input modality the model accepts, with the spelled-out
+    /// modalities in its tooltip. `None` when the metadata table holds
+    /// nothing for the id — the badge waits for a table rather than guessing.
+    pub(super) fn model_modality_pill(
+        &self,
+        theme: &Theme,
+        model_id: &str,
+        id: impl Into<ElementId>,
+    ) -> Option<AnyElement> {
+        let input = self
+            .models_dev_table
+            .as_deref()?
+            .resolve_input_modalities(model_id);
+        if input.is_empty() {
+            return None;
+        }
+        let mut glyphs = div().flex().items_center().gap(px(3.0));
+        for modality in &input {
+            if let Some(path) = modality_icon_path(modality) {
+                glyphs = glyphs.child(icon(path, 11.0, theme.text_tertiary));
+            }
+        }
+        Some(
+            div()
+                .id(id.into())
+                .flex_none()
+                .tooltip(Tooltip::text(tr!(
+                    "providers.modality_tooltip",
+                    modalities = modality_labels(&input)
+                )))
+                .child(
+                    div()
+                        .px(px(5.0))
+                        .py(px(3.0))
+                        .rounded_full()
+                        .bg(theme.overlay)
+                        .flex()
+                        .items_center()
+                        .child(glyphs),
+                )
+                .into_any_element(),
+        )
+    }
 }
 
 pub(super) fn info_note(theme: &Theme, icon_path: &'static str, text: String) -> Div {

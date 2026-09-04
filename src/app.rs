@@ -1352,6 +1352,22 @@ pub struct Fintwind {
     /// Generation token for the background config load; a newer load
     /// supersedes an older one's result.
     providers_load_generation: usize,
+    /// The models.dev metadata table from the latest successful fetch. It
+    /// answers the Providers page's fetch-models action while fresh and
+    /// serves as the offline fallback; render reads it only for the in-memory
+    /// lookups behind the model rows' modality badges.
+    models_dev_table: Option<std::sync::Arc<fintwind_client::models_dev::ModelsDevTable>>,
+    /// The Providers page's fetch-models download is in flight.
+    models_dev_fetching: bool,
+    /// The Providers page's page-open catalog load is in flight.
+    models_dev_loading: bool,
+    /// The Providers page's connectivity probes, keyed by provider id. The
+    /// page's one network-status memory; render reads only what a finished
+    /// probe stored.
+    provider_connectivity: HashMap<String, providers_fetch::ProviderConnectivityState>,
+    /// The Providers page's first-token probes, keyed by (provider id,
+    /// model id).
+    model_latency: HashMap<(String, String), providers_fetch::ModelLatencyState>,
     /// Generation token for the debounced native-session reconcile.
     native_reconcile_generation: u64,
     /// Server transcript version (local fetch timestamp) already applied to
@@ -1578,6 +1594,7 @@ mod file_search;
 mod image_preview;
 mod mcp_page;
 mod native_sessions;
+mod providers_fetch;
 mod providers_page;
 mod render;
 mod right_panel;
@@ -2967,6 +2984,11 @@ impl Fintwind {
                 providers_commit_generation: 0,
                 providers_store: Vec::new(),
                 providers_load_generation: 0,
+                models_dev_table: None,
+                models_dev_fetching: false,
+                models_dev_loading: false,
+                provider_connectivity: HashMap::new(),
+                model_latency: HashMap::new(),
                 native_reconcile_generation: 0,
                 imported_transcript_fetched: HashMap::new(),
                 imported_transcript_fetches: HashSet::new(),

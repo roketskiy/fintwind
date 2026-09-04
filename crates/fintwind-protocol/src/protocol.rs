@@ -90,6 +90,10 @@ pub enum Command {
     Steer {
         prompt: String,
     },
+    /// Ask the provider to compact this session's context. Admission is
+    /// asynchronous: outcomes arrive as `DriverEvent::CompactionUpdated`,
+    /// and the provider coalesces repeated requests while one is pending.
+    CompactSession,
     Cancel,
     CancelComputerUse,
     RefreshBackgroundWork,

@@ -162,6 +162,10 @@ impl DriverControl for RemoteDriverControl {
         self.notify(fintwind_client::Command::Steer { prompt });
     }
 
+    fn compact(&self) {
+        self.notify(fintwind_client::Command::CompactSession);
+    }
+
     fn cancel(&self) {
         self.notify(fintwind_client::Command::Cancel);
     }

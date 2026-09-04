@@ -82,6 +82,8 @@ command_palette.open_project:
   en: Open project…
 command_palette.choose_model:
   en: Choose model…
+command_palette.compact_context:
+  en: Compact context
 command_palette.show_sidebar:
   en: Show sidebar
 command_palette.hide_sidebar:
@@ -1220,8 +1222,8 @@ commands.commit_description:
   en: Stage and commit the current changes
 commands.fast_description:
   en: Toggle fast mode
-commands.claude_compact:
-  en: Free up context by summarizing the conversation
+commands.compact_description:
+  en: Summarize the conversation to free up context
 commands.claude_context:
   en: Show what is occupying the context window
 commands.claude_cost:
@@ -1330,6 +1332,14 @@ session.steer_rejected:
   en: The agent couldn't be steered (%{error}); the message was queued as a follow-up
 session.steer_rejected_plain:
   en: The agent couldn't be steered; the message was queued as a follow-up
+session.compaction_requested:
+  en: Compaction requested — the provider will summarize at the next safe point
+session.compaction_completed:
+  en: Context compacted
+session.compaction_failed:
+  en: Context compaction failed
+session.compaction_unavailable:
+  en: No live provider to compact this session
 session.agent_ran_out_of_context:
   en: The agent ran out of context for this turn
 session.agent_declined_turn:
@@ -2147,6 +2157,16 @@ usage.shortcut:
   en: Usage (%{shortcut})
 usage.context_window:
   en: Context window
+usage.total_tokens:
+  en: Total tokens
+usage.cache_hit_rate:
+  en: Cache hit rate
+usage.compacting:
+  en: Compacting context…
+usage.compaction_failed:
+  en: Compaction failed
+usage.compaction_retry:
+  en: Retry compaction
 usage.plan_limits:
   en: Plan usage limits
 usage.plan_limits_named:

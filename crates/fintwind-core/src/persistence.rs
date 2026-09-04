@@ -1500,6 +1500,8 @@ fn session_skeleton(row: SessionColumns) -> Option<AgentSession> {
         provider_cursor: None,
         available_commands: Vec::new(),
         context_usage: None,
+        // The detail blob carries it; a list skeleton re-seeds on hydration.
+        compaction: None,
         runtime_event_cursor: None,
         imported,
         native_session_id,

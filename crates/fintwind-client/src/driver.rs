@@ -53,6 +53,10 @@ impl DriverHandle {
         self.inner.steer(prompt);
     }
 
+    pub fn compact(&self) {
+        self.inner.compact();
+    }
+
     pub fn cancel(&self) {
         self.inner.cancel();
     }
@@ -108,6 +112,9 @@ pub trait DriverControl: Send + Sync {
         false
     }
     fn steer(&self, _prompt: String) {}
+    /// Ask the provider to compact this session's context. Outcomes arrive
+    /// asynchronously as `DriverEvent::CompactionUpdated`.
+    fn compact(&self) {}
     fn cancel(&self);
     fn cancel_computer_use(&self) {}
     fn refresh_background_work(&self) {}

@@ -34,11 +34,11 @@ use crate::model::{
     ActivityItem, ActivityKind, AgentSession, AgentTurn, BackgroundWorkEvent, BackgroundWorkItem,
     BackgroundWorkKey, BackgroundWorkKind, BackgroundWorkSnapshot, BackgroundWorkStatus,
     BackgroundWorkTranscript, BackgroundWorkTranscriptEvent, Checkpoint, CheckpointStatus,
-    ContextUsage, DriverEvent,
-    FavoriteModel, InteractionMode, Message, MessageAttachment, MessageRole, OPENCODE_PROVIDER,
-    PendingPermission, Project, ProviderModel, ProviderProbe, ProviderResumeCursor, QueuedMessage,
-    ReasoningBlock, RuntimeMode, SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus,
-    UserInputAnswer, UserInputQuestion, compact_path, unix_time, unix_time_millis,
+    CompactionState, CompactionStatus, ContextUsage, DriverEvent, FavoriteModel, InteractionMode,
+    Message, MessageAttachment, MessageRole, OPENCODE_PROVIDER, PendingPermission, Project,
+    ProviderModel, ProviderProbe, ProviderResumeCursor, QueuedMessage, ReasoningBlock, RuntimeMode,
+    SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer,
+    UserInputQuestion, compact_path, unix_time, unix_time_millis,
 };
 use unicode_segmentation::UnicodeSegmentation;
 

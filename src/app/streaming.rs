@@ -471,9 +471,13 @@ impl Fintwind {
             DriverEvent::UsageUpdated {
                 context_tokens,
                 context_window,
+                session_total,
+                cache_read,
+                prompt_tokens,
             } => {
                 // Meta about the conversation, not turn output: it applies
-                // even while a rewound or cancelled turn's tail drains.
+                // even while a rewound or cancelled turn's tail drains. Every
+                // value is absolute, so re-delivery merges idempotently.
                 if let Some(session) = self.state.session_mut(session_id) {
                     let usage = session.context_usage.get_or_insert(ContextUsage::default());
                     if let Some(tokens) = context_tokens {
@@ -482,7 +486,50 @@ impl Fintwind {
                     if let Some(window) = context_window {
                         usage.window = Some(window);
                     }
+                    if let Some(total) = session_total {
+                        usage.total_tokens = Some(total);
+                    }
+                    if let Some(read) = cache_read {
+                        usage.cache_read = Some(read);
+                    }
+                    if let Some(prompt) = prompt_tokens {
+                        usage.prompt_tokens = Some(prompt);
+                    }
                     self.state.mark_session_dirty(session_id);
+                }
+            }
+            DriverEvent::CompactionUpdated(state) => {
+                // Compaction is conversation plumbing, not turn output: it can
+                // start, settle, or fail while no turn is live — the
+                // provider's own automatic overflow compaction emits the same
+                // events — so like usage it bypasses `accepts_turn_output`.
+                let previous = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .and_then(|session| session.compaction.as_ref().map(|c| c.status));
+                if let Some(session) = self.state.session_mut(session_id) {
+                    if session.compaction.as_ref() != Some(&state) {
+                        session.compaction = Some(state.clone());
+                        self.state.mark_session_dirty(session_id);
+                    }
+                }
+                // Only transitions surface. Re-delivery and attach-time
+                // seeding replay the stored state and must not re-toast an
+                // outcome the user has already seen; a withdrawal (the user
+                // or the provider aborted) just clears the indicator.
+                if previous != Some(state.status) && self.state.selected_session == Some(session_id)
+                {
+                    match state.status {
+                        CompactionStatus::Completed => {
+                            self.show_toast(tr!("session.compaction_completed"));
+                        }
+                        CompactionStatus::Failed => {
+                            self.show_toast(tr!("session.compaction_failed"));
+                        }
+                        CompactionStatus::Running | CompactionStatus::Cancelled => {}
+                    }
                 }
             }
             DriverEvent::TurnFinished { success, summary } => {

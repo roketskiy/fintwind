@@ -89,6 +89,10 @@ impl DriverHandle {
         self.inner.steer(prompt);
     }
 
+    pub fn compact(&self) {
+        self.inner.compact();
+    }
+
     pub fn cancel(&self) {
         self.inner.cancel();
     }
@@ -143,6 +147,11 @@ pub trait DriverControl: Send + Sync {
     /// the outcome asynchronously through `DriverEvent::SteerAccepted` or
     /// `DriverEvent::SteerRejected`.
     fn steer(&self, _prompt: String) {}
+    /// Ask the provider to compact this session's context. The provider
+    /// admits the request durably — it runs at the next safe step boundary,
+    /// or immediately when idle — and reports every outcome asynchronously
+    /// through `DriverEvent::CompactionUpdated`.
+    fn compact(&self) {}
     fn cancel(&self);
     fn cancel_computer_use(&self) {}
     fn refresh_background_work(&self) {}

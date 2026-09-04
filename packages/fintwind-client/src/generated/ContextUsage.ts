@@ -5,6 +5,25 @@
  * model call. `tokens` is prompt + cache + output of that call; `window` is
  * the model's context size, which the provider only reports once a turn
  * settles — `None` means "not known yet", and the meter degrades to a bare
- * token count.
+ * token count. The optional tail carries the session's cumulative token
+ * throughput and the latest call's cache split; each stays `None` until the
+ * provider first reports it.
  */
-export type ContextUsage = { tokens: number, window?: number | null, };
+export type ContextUsage = { tokens: number, window?: number | null,
+/**
+ * Every step's prompt + output summed across the session — the tokens
+ * the provider actually processed. Absolute, accumulated by the driver;
+ * a driver restart re-seeds it from the newest stored messages, so it is
+ * a floor, never an over-count.
+ */
+total_tokens?: number | null,
+/**
+ * Cached prompt tokens of the latest call; the numerator of the cache
+ * hit rate.
+ */
+cache_read?: number | null,
+/**
+ * The latest call's full prompt — cache read, cache write, and uncached
+ * input together; the denominator of the cache hit rate.
+ */
+prompt_tokens?: number | null, };

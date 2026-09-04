@@ -96,14 +96,23 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::UsageUpdated {
             context_tokens,
             context_window,
+            session_total,
+            cache_read,
+            prompt_tokens,
         } => (
             "usageUpdated",
             json!({
                 "contextTokens": context_tokens,
                 "contextWindow": context_window,
+                "sessionTotal": session_total,
+                "cacheRead": cache_read,
+                "promptTokens": prompt_tokens,
             }),
         ),
         DriverEvent::PlanUsageUpdated(usage) => ("planUsageUpdated", serde_json::to_value(usage)?),
+        DriverEvent::CompactionUpdated(state) => {
+            ("compactionUpdated", serde_json::to_value(state)?)
+        }
         DriverEvent::TurnFinished { success, summary } => (
             "turnFinished",
             json!({ "success": success, "summary": summary }),
@@ -183,9 +192,15 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
             DriverEvent::UsageUpdated {
                 context_tokens: usage.context_tokens,
                 context_window: usage.context_window,
+                session_total: usage.session_total,
+                cache_read: usage.cache_read,
+                prompt_tokens: usage.prompt_tokens,
             }
         }
         "planUsageUpdated" => DriverEvent::PlanUsageUpdated(serde_json::from_value(payload)?),
+        "compactionUpdated" => {
+            DriverEvent::CompactionUpdated(serde_json::from_value(payload)?)
+        }
         "turnFinished" => {
             let finished: TurnFinishedWire = serde_json::from_value(payload)?;
             DriverEvent::TurnFinished {
@@ -250,6 +265,12 @@ struct RejectedSteerWire {
 struct UsageWire {
     context_tokens: Option<u64>,
     context_window: Option<u64>,
+    #[serde(default)]
+    session_total: Option<u64>,
+    #[serde(default)]
+    cache_read: Option<u64>,
+    #[serde(default)]
+    prompt_tokens: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -263,8 +284,8 @@ mod tests {
     use super::*;
     use crate::model::{
         ActivityItem, BackgroundWorkEvent, BackgroundWorkKey, BackgroundWorkKind,
-        BackgroundWorkTranscript, BackgroundWorkTranscriptEvent, ReasoningBlock, UserInputOption,
-        UserInputQuestion,
+        BackgroundWorkTranscript, BackgroundWorkTranscriptEvent, CompactionState,
+        CompactionStatus, ReasoningBlock, UserInputOption, UserInputQuestion,
     };
 
     #[test]
@@ -295,6 +316,46 @@ mod tests {
         assert_eq!(request_id, "request-1");
         assert_eq!(questions[0].id, "deployment");
         assert_eq!(questions[0].options[0].label, "Preview");
+    }
+
+    #[test]
+    fn compaction_snapshots_round_trip_through_the_daemon_wire() {
+        let snapshots = vec![
+            CompactionState {
+                status: CompactionStatus::Running,
+                reason: Some("manual".into()),
+                model: None,
+                error: None,
+            },
+            CompactionState {
+                status: CompactionStatus::Completed,
+                reason: Some("auto".into()),
+                model: Some("anthropic/claude-sonnet-4".into()),
+                error: None,
+            },
+            CompactionState {
+                status: CompactionStatus::Failed,
+                reason: None,
+                model: None,
+                error: Some("provider rejected the summary call".into()),
+            },
+            CompactionState {
+                status: CompactionStatus::Cancelled,
+                reason: Some("manual".into()),
+                model: None,
+                error: None,
+            },
+        ];
+        for state in snapshots {
+            let wire = event_to_wire(DriverEvent::CompactionUpdated(state.clone())).unwrap();
+            assert_eq!(wire.kind, "compactionUpdated");
+            let DriverEvent::CompactionUpdated(round_tripped) =
+                event_from_wire(wire).unwrap()
+            else {
+                panic!("the event changed variants during its wire round trip");
+            };
+            assert_eq!(round_tripped, state);
+        }
     }
 
     #[test]

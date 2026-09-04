@@ -1124,6 +1124,7 @@ fn handle_driver_command(
     match command {
         Command::Prompt { prompt } => driver.prompt(prompt),
         Command::Steer { prompt } => driver.steer(prompt),
+        Command::CompactSession => driver.compact(),
         Command::Cancel => driver.cancel(),
         Command::CancelComputerUse => driver.cancel_computer_use(),
         Command::RefreshBackgroundWork => driver.refresh_background_work(),
@@ -1321,14 +1322,23 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::UsageUpdated {
             context_tokens,
             context_window,
+            session_total,
+            cache_read,
+            prompt_tokens,
         } => (
             "usageUpdated",
             json!({
                 "contextTokens": context_tokens,
                 "contextWindow": context_window,
+                "sessionTotal": session_total,
+                "cacheRead": cache_read,
+                "promptTokens": prompt_tokens,
             }),
         ),
         DriverEvent::PlanUsageUpdated(usage) => ("planUsageUpdated", serde_json::to_value(usage)?),
+        DriverEvent::CompactionUpdated(state) => {
+            ("compactionUpdated", serde_json::to_value(state)?)
+        }
         DriverEvent::TurnFinished { success, summary } => (
             "turnFinished",
             json!({ "success": success, "summary": summary }),
@@ -1407,9 +1417,15 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
             DriverEvent::UsageUpdated {
                 context_tokens: usage.context_tokens,
                 context_window: usage.context_window,
+                session_total: usage.session_total,
+                cache_read: usage.cache_read,
+                prompt_tokens: usage.prompt_tokens,
             }
         }
         "planUsageUpdated" => DriverEvent::PlanUsageUpdated(serde_json::from_value(payload)?),
+        "compactionUpdated" => {
+            DriverEvent::CompactionUpdated(serde_json::from_value(payload)?)
+        }
         "turnFinished" => {
             let finished: TurnFinishedWire = serde_json::from_value(payload)?;
             DriverEvent::TurnFinished {
@@ -1474,6 +1490,12 @@ struct RejectedSteerWire {
 struct UsageWire {
     context_tokens: Option<u64>,
     context_window: Option<u64>,
+    #[serde(default)]
+    session_total: Option<u64>,
+    #[serde(default)]
+    cache_read: Option<u64>,
+    #[serde(default)]
+    prompt_tokens: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -1596,6 +1618,24 @@ mod tests {
         assert!(matches!(
             event_from_wire(wire).unwrap(),
             DriverEvent::TextDelta(text) if text == "hello"
+        ));
+    }
+
+    // The daemon keeps its own wire copy; this pins the compaction encoding
+    // here so the duplicate cannot drift from the protocol crate's.
+    #[test]
+    fn wire_event_round_trip_preserves_compaction_snapshots() {
+        let state = fintwind_protocol::model::CompactionState {
+            status: fintwind_protocol::model::CompactionStatus::Failed,
+            reason: Some("manual".into()),
+            model: None,
+            error: Some("provider rejected the summary".into()),
+        };
+        let wire = event_to_wire(DriverEvent::CompactionUpdated(state.clone())).unwrap();
+        assert_eq!(wire.kind, "compactionUpdated");
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::CompactionUpdated(round) if round == state
         ));
     }
 }

@@ -26,6 +26,8 @@ export type { ClientMessage } from "./ClientMessage";
 export type { Command } from "./Command";
 export type { CommandScope } from "./CommandScope";
 export type { CommitSnapshot } from "./CommitSnapshot";
+export type { CompactionState } from "./CompactionState";
+export type { CompactionStatus } from "./CompactionStatus";
 export type { ComposerDraft } from "./ComposerDraft";
 export type { ComposerDraftAttachment } from "./ComposerDraftAttachment";
 export type { ComposerDraftChange } from "./ComposerDraftChange";

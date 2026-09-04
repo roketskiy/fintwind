@@ -1,10 +1,11 @@
 //! The usage meter under the composer: a circular context-window gauge that
-//! opens a panel with the session's context occupancy and the account's
-//! rate-limit lanes, mirroring Claude Code's `/usage` rows. Context numbers
-//! stream in from the OpenCode transport; plan lanes come from OpenCode Go's
-//! usage endpoint. Frames read only snapshots stored on the entity.
+//! opens a panel with the session's context occupancy, its cumulative token
+//! throughput and cache hit rate, and the account's rate-limit lanes,
+//! mirroring Claude Code's `/usage` rows. Context numbers stream in from the
+//! OpenCode transport; plan lanes come from OpenCode Go's usage endpoint.
+//! Frames read only snapshots stored on the entity.
 
-use gpui::{PathBuilder, relative};
+use gpui::{PathBuilder, WeakEntity, relative};
 
 use super::*;
 use crate::usage::{PlanUsage, format_tokens, reset_label};
@@ -154,6 +155,8 @@ impl Fintwind {
         let session = self.selected_session()?;
         let provider = PLAN_USAGE_PROVIDER.to_owned();
         let context = session.context_usage;
+        let compaction = session.compaction.clone();
+        let session_id = session.id;
         let theme = Theme::current(cx);
         let plan = self.plan_usage.get(&provider).cloned();
         let error = self.plan_usage_error.get(&provider).cloned();
@@ -164,6 +167,7 @@ impl Fintwind {
             && !self.plan_usage_unconfigured.contains(&provider);
 
         let weak = cx.entity().downgrade();
+        let panel_weak = cx.entity().downgrade();
         let handle = self.menu_handle_with(USAGE_METER_MENU_ID, cx, move |open, window, cx| {
             if open {
                 let mut card_focus = None;
@@ -242,9 +246,12 @@ impl Fintwind {
                 usage_panel(
                     handle,
                     context,
+                    compaction.clone(),
                     plan.clone(),
                     error.as_deref(),
                     plan_loading,
+                    session_id,
+                    panel_weak.clone(),
                     cx,
                 )
             },
@@ -336,9 +343,12 @@ fn context_gauge(percent: Option<f64>, track: Hsla, fill: Hsla) -> impl IntoElem
 fn usage_panel(
     handle: &ContextMenuHandle,
     context: Option<ContextUsage>,
+    compaction: Option<CompactionState>,
     plan: Option<PlanUsage>,
     error: Option<&str>,
     plan_loading: bool,
+    session_id: Uuid,
+    weak: WeakEntity<Fintwind>,
     cx: &App,
 ) -> AnyElement {
     let theme = Theme::current(cx);
@@ -359,7 +369,9 @@ fn usage_panel(
         .text_size(px(12.0));
 
     // The context row always renders; a session with nothing measured yet
-    // reads "0" over an empty track, exactly like the CLI's own panel.
+    // reads "0" over an empty track, exactly like the CLI's own panel. The
+    // totals row beneath it only renders once the provider has reported
+    // something — an unknown number stays absent rather than reading zero.
     let usage = context.unwrap_or_default();
     let percent = context_percent(usage);
     let value = match (usage.window, percent) {
@@ -371,31 +383,43 @@ fn usage_panel(
         // The transport reports occupancy but not the window size.
         _ => format_tokens(usage.tokens),
     };
-    panel = panel.child(
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(7.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_color(theme.text)
-                            .child(tr!("usage.context_window")),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(theme.text_tertiary)
-                            .child(SharedString::from(value)),
-                    ),
-            )
-            .child(meter_bar(&theme, percent.unwrap_or(0.0))),
-    );
+    let mut context_section = div()
+        .flex()
+        .flex_col()
+        .gap(px(7.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_color(theme.text)
+                        .child(tr!("usage.context_window")),
+                )
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_tertiary)
+                        .child(SharedString::from(value)),
+                ),
+        )
+        .child(meter_bar(&theme, percent.unwrap_or(0.0)));
+    if let Some(totals) = usage_totals_row(&theme, usage) {
+        context_section = context_section.child(totals);
+    }
+    panel = panel.child(context_section);
+    // Only a live or failed attempt renders; a completed compaction shows
+    // through the context numbers above, which the provider re-reports
+    // smaller on its next call.
+    if let Some(state) = compaction.as_ref().filter(|state| {
+        matches!(state.status, CompactionStatus::Running | CompactionStatus::Failed)
+    }) {
+        panel = panel
+            .child(div().h(px(1.0)).flex_none().bg(theme.border))
+            .child(compaction_row(&theme, state, session_id, weak));
+    }
     if plan.is_some() || error.is_some() || plan_loading {
         panel = panel.child(div().h(px(1.0)).flex_none().bg(theme.border));
     }
@@ -479,6 +503,133 @@ fn usage_panel(
     }
 
     panel.into_any_element()
+}
+
+/// The context section's second row: the session's cumulative token
+/// throughput on the left, the latest call's cache hit rate on the right.
+/// A metric the provider hasn't reported yet renders as a dash so the row
+/// holds still while numbers stream in; a row with neither metric reported
+/// is omitted entirely.
+fn usage_totals_row(theme: &Theme, usage: ContextUsage) -> Option<Div> {
+    let total = usage.total_tokens.map(format_tokens);
+    let hit = match (usage.cache_read, usage.prompt_tokens) {
+        (Some(read), Some(prompt)) if prompt > 0 => Some(format!(
+            "{:.0}%",
+            read.min(prompt) as f64 * 100.0 / prompt as f64
+        )),
+        _ => None,
+    };
+    if total.is_none() && hit.is_none() {
+        return None;
+    }
+    let cell = move |label: String,
+                     value: Option<String>,
+                     theme: &Theme| {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(5.0))
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_tertiary)
+                    .child(label),
+            )
+            .child(
+                div()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(value.unwrap_or_else(|| "—".into()))),
+            )
+    };
+    Some(
+        div()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(cell(tr!("usage.total_tokens"), total, theme))
+            .child(div().flex_1())
+            .child(cell(tr!("usage.cache_hit_rate"), hit, theme)),
+    )
+}
+
+/// The compaction action row: a pulsing progress label while the provider
+/// summarizes, the failure notice with a retry button while the last attempt
+/// failed. The retry re-asks the provider, which coalesces or runs it as
+/// usual; `escape` and the row labels stay readable in both themes.
+fn compaction_row(
+    theme: &Theme,
+    state: &CompactionState,
+    session_id: Uuid,
+    weak: WeakEntity<Fintwind>,
+) -> Div {
+    // The pulse closure outlives the borrow, so the theme rides along owned.
+    let theme = *theme;
+    match state.status {
+        CompactionStatus::Running => {
+            let label = tr!("usage.compacting").to_owned();
+            div()
+                .flex()
+                .items_center()
+                .min_h(px(22.0))
+                .gap(px(8.0))
+                .child(
+                    motion::pulse(Duration::from_millis(1400), move |phase| {
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme.text_tertiary)
+                            .child(SharedString::from(label.clone()))
+                            .opacity(pulsating_between(0.5, 1.0)(phase))
+                            .into_any_element()
+                    })
+                    .every(2)
+                    .into_any_element(),
+                )
+        }
+        CompactionStatus::Failed => {
+            let detail = state.error.as_deref().unwrap_or_default();
+            div()
+                .flex()
+                .items_center()
+                .min_h(px(22.0))
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .id("usage-compaction-error")
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .truncate()
+                        .text_size(px(11.0))
+                        .text_color(theme.warning)
+                        .when(!detail.is_empty(), |element| {
+                            element.tooltip(Tooltip::text(detail.to_owned()))
+                        })
+                        .child(tr!("usage.compaction_failed")),
+                )
+                .child(
+                    div()
+                        .id("usage-compaction-retry")
+                        .flex_none()
+                        .h(px(22.0))
+                        .px(px(8.0))
+                        .rounded(px(5.0))
+                        .flex()
+                        .items_center()
+                        .text_size(px(11.0))
+                        .text_color(theme.text)
+                        .cursor_default()
+                        .hover(|element| element.bg(theme.overlay))
+                        .active(|element| element.bg(theme.overlay_strong))
+                        .on_click(move |_, _, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.request_context_compaction(session_id, cx)
+                            });
+                        })
+                        .child(tr!("usage.compaction_retry")),
+                )
+        }
+        CompactionStatus::Completed | CompactionStatus::Cancelled => div(),
+    }
 }
 
 /// Placeholder for the plan section while its first fetch is in flight:

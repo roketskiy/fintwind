@@ -553,12 +553,64 @@ pub struct AgentTurn {
 /// model call. `tokens` is prompt + cache + output of that call; `window` is
 /// the model's context size, which the provider only reports once a turn
 /// settles — `None` means "not known yet", and the meter degrades to a bare
-/// token count.
+/// token count. The optional tail carries the session's cumulative token
+/// throughput and the latest call's cache split; each stays `None` until the
+/// provider first reports it.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
 pub struct ContextUsage {
     pub tokens: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<u64>,
+    /// Every step's prompt + output summed across the session — the tokens
+    /// the provider actually processed. Absolute, accumulated by the driver;
+    /// a driver restart re-seeds it from the newest stored messages, so it is
+    /// a floor, never an over-count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    /// Cached prompt tokens of the latest call; the numerator of the cache
+    /// hit rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read: Option<u64>,
+    /// The latest call's full prompt — cache read, cache write, and uncached
+    /// input together; the denominator of the cache hit rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u64>,
+}
+
+/// The lifecycle of one provider-side context compaction. A session has at
+/// most one live compaction — the provider coalesces repeated requests while
+/// one is pending — so this state, not a list, is the whole model.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum CompactionStatus {
+    /// Admitted by the provider; it summarizes the conversation at the next
+    /// safe step boundary, or immediately when the session is idle.
+    Running,
+    Completed,
+    Failed,
+    /// The request was withdrawn before it ran (an interrupt or provider
+    /// abort). Not a failure — the UI clears its indicator instead.
+    Cancelled,
+}
+
+/// Provider-side context compaction for one session. Every status arrives as
+/// a complete snapshot — the terminal one supersedes `Running`, never merges
+/// with it — so re-delivery and attach-time seeding are idempotent.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct CompactionState {
+    pub status: CompactionStatus,
+    /// Why the provider ran it: `"manual"` for a user request, `"auto"` for
+    /// the provider's own overflow preflight. `Running` may not carry it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The model that produced the summary, when the provider reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Failure detail. A user-initiated abort is reported as
+    /// [`CompactionStatus::Cancelled`] instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Last daemon event incorporated into a session's persisted projection.
@@ -629,6 +681,10 @@ pub struct AgentSession {
     /// session's meter starts where the conversation left off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_usage: Option<ContextUsage>,
+    /// Provider-side context compaction, kept so a resumed session still
+    /// shows the last attempt's outcome instead of silently forgetting it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<CompactionState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_event_cursor: Option<RuntimeEventCursor>,
     /// The session was discovered on the OpenCode server (created by the CLI,
@@ -702,6 +758,7 @@ impl AgentSession {
             provider_cursor: None,
             available_commands: Vec::new(),
             context_usage: None,
+            compaction: None,
             runtime_event_cursor: None,
             imported: false,
             native_session_id: None,
@@ -741,6 +798,7 @@ impl AgentSession {
             provider_cursor: None,
             available_commands: Vec::new(),
             context_usage: None,
+            compaction: None,
             runtime_event_cursor: None,
             imported: self.imported,
             native_session_id: self.native_session_id.clone(),
@@ -1447,15 +1505,24 @@ pub enum DriverEvent {
     /// Context-window occupancy reported by the live stream. Fields arrive at
     /// different moments — token counts with each assistant message, the
     /// window size with the settled turn — so each is optional and the app
-    /// merges them into [`ContextUsage`].
+    /// merges them into [`ContextUsage`]. The tail mirrors [`ContextUsage`]'s
+    /// optional fields; every value is absolute, so late or repeated delivery
+    /// merges idempotently.
     UsageUpdated {
         context_tokens: Option<u64>,
         context_window: Option<u64>,
+        session_total: Option<u64>,
+        cache_read: Option<u64>,
+        prompt_tokens: Option<u64>,
     },
     /// Account-level rate-limit meters carried by the provider's own stream
     /// (Codex's `account/rateLimits/updated`). Same shape the OAuth fetcher
     /// produces for Claude, so the panel renders both identically.
     PlanUsageUpdated(crate::usage::PlanUsage),
+    /// Provider-side context compaction progressed. Conversation plumbing,
+    /// not turn output: it can start, settle, or fail while no turn is live,
+    /// and it arrives for the provider's own automatic compaction too.
+    CompactionUpdated(CompactionState),
     TurnFinished {
         success: bool,
         summary: Option<String>,

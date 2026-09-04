@@ -36,9 +36,9 @@ use crate::driver::{
 };
 use crate::model::{
     ActivityItem, ActivityKind, BackgroundWorkEvent, BackgroundWorkItem, BackgroundWorkKey,
-    BackgroundWorkKind, BackgroundWorkStatus, BackgroundWorkTranscriptEvent, DriverEvent,
-    InteractionMode, PermissionOption, ProviderResumeCursor, RuntimeMode, UserInputAnswer,
-    UserInputOption, UserInputQuestion, unix_time_millis,
+    BackgroundWorkKind, BackgroundWorkStatus, BackgroundWorkTranscriptEvent, CompactionState,
+    CompactionStatus, DriverEvent, InteractionMode, PermissionOption, ProviderResumeCursor,
+    RuntimeMode, UserInputAnswer, UserInputOption, UserInputQuestion, unix_time_millis,
 };
 use crate::opencode_pool::PooledServer;
 use crate::opencode_session::{
@@ -54,6 +54,7 @@ const PERMISSION_POLL_INTERVAL: Duration = Duration::from_millis(400);
 enum CommandMessage {
     Prompt(String),
     Steer(String),
+    Compact,
     Cancel,
     Respond {
         request_id: String,
@@ -217,22 +218,47 @@ impl OpenCodeDriver {
             "/api/session/{}/message?limit=20",
             encode_path_segment(&session_id)
         );
-        let previous_info = server
-            .request("GET", &previous_usage_path, None)
-            .ok()
-            .and_then(|messages| latest_opencode_usage_message(&messages).cloned());
+        let previous_usage = server.request("GET", &previous_usage_path, None).ok();
+        let previous_info = previous_usage
+            .as_ref()
+            .and_then(|messages| latest_opencode_usage_message(messages).cloned());
         if let Some(info) = previous_info.as_ref() {
             if let Some(model) = opencode_message_model_key(info) {
                 *usage_metadata.last_model.lock() = Some(model);
             }
-            if let Some(tokens) = opencode_message_tokens(info) {
-                let _ = events.send(DriverEvent::UsageUpdated {
-                    context_tokens: Some(tokens),
-                    context_window: None,
-                });
-            }
         } else if let Some(model) = model.as_ref() {
             *usage_metadata.last_model.lock() = Some(model.clone());
+        }
+        // A fresh driver republishes the newest stored step so the meter and
+        // the new totals row are populated before the first live step lands.
+        // The seed only ever adds to the accumulator; live steps then grow
+        // it from there.
+        if let Some((seeded_total, newest)) = previous_usage.as_ref().and_then(|messages| {
+            let seeds = opencode_usage_seeds(messages);
+            (seeds.0.is_some() || seeds.1.is_some()).then_some(seeds)
+        }) {
+            if let Some(total) = seeded_total {
+                *usage_metadata.session_total.lock() = total;
+            }
+            if let Some(usage) = newest {
+                let _ = events.send(DriverEvent::UsageUpdated {
+                    context_tokens: Some(usage.context),
+                    context_window: None,
+                    session_total: Some(*usage_metadata.session_total.lock()),
+                    cache_read: (usage.prompt > 0).then_some(usage.cache_read),
+                    prompt_tokens: (usage.prompt > 0).then_some(usage.prompt),
+                });
+            }
+        }
+        // A compaction is durable and can outlive this driver: republish the
+        // newest native compaction record so a restarted session still shows
+        // the last attempt's outcome. One that was still running re-announces
+        // itself through `session.compaction.delta` even without `started`.
+        if let Some(state) = previous_usage
+            .as_ref()
+            .and_then(|messages| latest_opencode_compaction(messages))
+        {
+            let _ = events.send(DriverEvent::CompactionUpdated(state));
         }
 
         // `/api/model` can be cold on the first server in a directory. Resolve
@@ -283,6 +309,9 @@ impl OpenCodeDriver {
                     let _ = metadata_events.send(DriverEvent::UsageUpdated {
                         context_tokens: None,
                         context_window: Some(window),
+                        session_total: None,
+                        cache_read: None,
+                        prompt_tokens: None,
                     });
                 }
             })?;
@@ -593,6 +622,38 @@ impl OpenCodeDriver {
                                 }
                             }
                         }
+                        CommandMessage::Compact => {
+                            // Compaction admission is durable: steer delivery
+                            // runs at the next safe step boundary of a busy
+                            // session, an idle one starts immediately, and a
+                            // repeat while one is pending coalesces
+                            // server-side — so a double-submit cannot
+                            // double-compact. Outcomes ride the event stream
+                            // as `session.compaction.*`.
+                            let path = format!(
+                                "/api/session/{}/compact",
+                                encode_path_segment(&worker_session)
+                            );
+                            if let Err(error) = worker_server.request("POST", &path, Some(&json!({})))
+                            {
+                                // A 409 means a compaction is already
+                                // admitted — that is success from the user's
+                                // point of view, and the event stream owns
+                                // the outcome, so stay quiet rather than
+                                // reporting a failure that is really
+                                // "already running".
+                                if !error.to_string().contains("HTTP 409") {
+                                    let _ = worker_events.send(DriverEvent::CompactionUpdated(
+                                        CompactionState {
+                                            status: CompactionStatus::Failed,
+                                            reason: Some("manual".into()),
+                                            model: None,
+                                            error: Some(error.to_string()),
+                                        },
+                                    ));
+                                }
+                            }
+                        }
                         CommandMessage::Cancel => {
                             let path = format!(
                                 "/api/session/{}/interrupt",
@@ -708,6 +769,10 @@ impl OpenCodeDriver {
 impl DriverControl for OpenCodeDriver {
     fn prompt(&self, prompt: String) {
         let _ = self.commands.send(CommandMessage::Prompt(prompt));
+    }
+
+    fn compact(&self) {
+        let _ = self.commands.send(CommandMessage::Compact);
     }
 
     fn refresh_background_work(&self) {
@@ -1006,6 +1071,12 @@ struct OpenCodeStreamState {
     usage_metadata: Arc<OpenCodeUsageMetadata>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
     forms: Arc<Mutex<OpenCodeFormState>>,
+    /// A compaction is live on the server (`started` seen, no terminal event
+    /// yet). The summary's `delta` events only re-announce the running state
+    /// when this flag is down — a driver restarted mid-compaction never sees
+    /// the durable `started`, and the first delta promotes the session
+    /// instead of leaving it silent.
+    compaction_live: bool,
 }
 
 struct OpenCodeChildSession {
@@ -1081,6 +1152,11 @@ struct OpenCodeFormState {
 struct OpenCodeUsageMetadata {
     model_context_windows: Mutex<HashMap<String, u64>>,
     last_model: Mutex<Option<String>>,
+    /// Cumulative tokens the provider has processed for this session —
+    /// every settled step's prompt + output, seeded from the newest stored
+    /// messages at attach. Absolute values flow outward, so consumers never
+    /// re-sum and replays cannot double-count.
+    session_total: Mutex<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -1180,30 +1256,6 @@ fn opencode_model_context_windows(response: &Value) -> HashMap<String, u64> {
         .collect()
 }
 
-/// The context size carried by an opencode2 assistant message: `tokens` on
-/// the message info (and on `session.step.ended`) is the normalized shape —
-/// `input` excludes cached tokens, `output` excludes reasoning, so the
-/// disjoint fields sum to the context, and `total` reports the same number
-/// outright when the provider sent it.
-fn opencode_message_tokens(message: &Value) -> Option<u64> {
-    let tokens = message.get("tokens")?;
-    if let Some(total) = tokens.get("total").and_then(Value::as_u64).filter(|total| *total > 0) {
-        return Some(total);
-    }
-    let total = [
-        tokens.get("input"),
-        tokens.get("output"),
-        tokens.get("reasoning"),
-        tokens.pointer("/cache/read"),
-        tokens.pointer("/cache/write"),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(Value::as_u64)
-    .fold(0_u64, u64::saturating_add);
-    (total > 0).then_some(total)
-}
-
 /// The context size carried by a `session.usage.updated` payload. Unlike the
 /// message shape above, this is the raw provider usage: AI SDK v6 normalizes
 /// every provider's `inputTokens` to include cached tokens, and `outputTokens`
@@ -1224,6 +1276,92 @@ fn opencode_session_usage_tokens(payload: &Value) -> Option<u64> {
     (total > 0).then_some(total)
 }
 
+/// One model call's usage in a single semantics: `prompt` is the full prompt
+/// the call charged — cache read, cache write, and uncached input together —
+/// and the denominator of the cache hit rate; `context` is prompt + output,
+/// i.e. the occupancy number the meter already shows.
+#[derive(Clone, Copy, Debug)]
+struct UsageBreakdown {
+    context: u64,
+    prompt: u64,
+    cache_read: u64,
+}
+
+/// The normalized usage shape carried by an assistant message and by
+/// `session.step.ended`: `input` excludes cached tokens, so the cache fields
+/// are additions rather than subsets. `total`, when present, reports the
+/// same context outright.
+fn opencode_normalized_usage(message: &Value) -> Option<UsageBreakdown> {
+    let tokens = message.get("tokens")?;
+    let input = tokens.get("input").and_then(Value::as_u64).unwrap_or(0);
+    let output = tokens.get("output").and_then(Value::as_u64).unwrap_or(0);
+    let reasoning = tokens.get("reasoning").and_then(Value::as_u64).unwrap_or(0);
+    let cache_read = tokens
+        .pointer("/cache/read")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_write = tokens
+        .pointer("/cache/write")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let prompt = input.saturating_add(cache_read).saturating_add(cache_write);
+    let context = tokens
+        .get("total")
+        .and_then(Value::as_u64)
+        .filter(|total| *total > 0)
+        .unwrap_or_else(|| prompt.saturating_add(output).saturating_add(reasoning));
+    (context > 0).then_some(UsageBreakdown {
+        context,
+        prompt,
+        cache_read,
+    })
+}
+
+/// The raw usage shape carried by `session.usage.updated`, where `input`
+/// already includes the cached tokens.
+fn opencode_raw_usage(payload: &Value) -> Option<UsageBreakdown> {
+    let tokens = payload.get("tokens")?;
+    let input = tokens.get("input").and_then(Value::as_u64)?;
+    let output = tokens.get("output").and_then(Value::as_u64).unwrap_or(0);
+    let cache_read = tokens
+        .pointer("/cache/read")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let context = tokens
+        .get("total")
+        .and_then(Value::as_u64)
+        .filter(|total| *total > 0)
+        .unwrap_or_else(|| input.saturating_add(output));
+    (context > 0).then_some(UsageBreakdown {
+        context,
+        prompt: input,
+        cache_read,
+    })
+}
+
+/// The cumulative seed and newest call's split carried by the stored
+/// assistant messages of a session (newest first). Only the fetched tail is
+/// summed: a driver restart on a long session yields a floor for the true
+/// total, never an over-count.
+fn opencode_usage_seeds(messages: &Value) -> (Option<u64>, Option<UsageBreakdown>) {
+    let Some(data) = messages.pointer("/data").and_then(Value::as_array) else {
+        return (None, None);
+    };
+    let mut total = 0_u64;
+    let mut newest = None;
+    for message in data {
+        if message.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(usage) = opencode_normalized_usage(message) else {
+            continue;
+        };
+        total = total.saturating_add(usage.context);
+        newest.get_or_insert(usage);
+    }
+    ((total > 0).then_some(total), newest)
+}
+
 /// The model key (`provider/id`) of an opencode2 assistant message or
 /// `session.step.started` payload, where `model` is an object.
 fn opencode_message_model_key(message: &Value) -> Option<String> {
@@ -1231,6 +1369,53 @@ fn opencode_message_model_key(message: &Value) -> Option<String> {
     let provider = model.get("providerID").and_then(Value::as_str)?;
     let id = model.get("id").and_then(Value::as_str)?;
     Some(format!("{provider}/{id}"))
+}
+
+/// The compaction summary's model, reported by `session.compaction.ended`.
+/// The wire has carried both a bare `provider/id` string and the step
+/// events' `{providerID, id}` object; accept either.
+fn opencode_compaction_model(payload: &Value) -> Option<String> {
+    match payload.get("model") {
+        Some(Value::String(model)) => Some(model.clone()),
+        // The step events' `{providerID, id}` object, read off the payload
+        // itself — the key helper expects the enveloping object.
+        Some(Value::Object(_)) => opencode_message_model_key(payload),
+        _ => None,
+    }
+}
+
+/// The newest native compaction record in a stored message list, as app
+/// state. The endpoint answers newest-first, so the first compaction entry
+/// is the latest attempt; records whose status is unknown are skipped
+/// rather than guessed at.
+fn latest_opencode_compaction(messages: &Value) -> Option<CompactionState> {
+    let data = messages.pointer("/data").and_then(Value::as_array)?;
+    let record = data
+        .iter()
+        .find(|message| message.get("type").and_then(Value::as_str) == Some("compaction"))?;
+    let status = match record.get("status").and_then(Value::as_str) {
+        Some("completed") => CompactionStatus::Completed,
+        Some("failed") => CompactionStatus::Failed,
+        Some("running") | Some("pending") => CompactionStatus::Running,
+        _ => return None,
+    };
+    Some(CompactionState {
+        status,
+        reason: record
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        model: opencode_compaction_model(record),
+        error: record
+            .get("error")
+            .and_then(|error| {
+                error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .or_else(|| error.as_str())
+            })
+            .map(str::to_owned),
+    })
 }
 
 fn latest_opencode_usage_message(messages: &Value) -> Option<&Value> {
@@ -1663,18 +1848,130 @@ fn handle_event(
         "session.usage.updated" => {
             // The payload carries raw provider usage (its `input` already
             // includes cached tokens) but no model; the window comes from the
-            // model announced by `session.step.started`.
-            let (context_tokens, context_window) = {
+            // model announced by `session.step.started`. The cumulative total
+            // only rides along — growth happens on `session.step.ended`.
+            let (context_tokens, context_window, breakdown) = {
                 let metadata = &state.usage_metadata;
                 let tokens = opencode_session_usage_tokens(payload);
                 let window = metadata.current_context_window();
-                (tokens, window)
+                (tokens, window, opencode_raw_usage(payload))
             };
             if context_tokens.is_some() || context_window.is_some() {
+                let (cache_read, prompt_tokens) = breakdown
+                    .filter(|usage| usage.prompt > 0)
+                    .map(|usage| (Some(usage.cache_read), Some(usage.prompt)))
+                    .unwrap_or((None, None));
+                // A zero total means nothing settled yet — stay silent so
+                // the panel can tell "not known" from "nothing used".
+                let total = *state.usage_metadata.session_total.lock();
                 let _ = events.send(DriverEvent::UsageUpdated {
                     context_tokens,
                     context_window,
+                    session_total: (total > 0).then_some(total),
+                    cache_read,
+                    prompt_tokens,
                 });
+            }
+        }
+        "session.step.ended" => {
+            // One settled model call: its tokens land here exactly once per
+            // step, so this — not the possibly-repeated usage event — is
+            // where the session's cumulative throughput grows.
+            if let Some(usage) = opencode_normalized_usage(payload) {
+                let window = state.usage_metadata.current_context_window();
+                let total = {
+                    let mut total = state.usage_metadata.session_total.lock();
+                    *total = total.saturating_add(usage.context);
+                    *total
+                };
+                let _ = events.send(DriverEvent::UsageUpdated {
+                    context_tokens: Some(usage.context),
+                    context_window: window,
+                    session_total: Some(total),
+                    cache_read: (usage.prompt > 0).then_some(usage.cache_read),
+                    prompt_tokens: (usage.prompt > 0).then_some(usage.prompt),
+                });
+            }
+        }
+        "session.compaction.started" => {
+            // Durable admission: the provider will summarize at its next
+            // safe step boundary. `reason` distinguishes a user request
+            // from the provider's own overflow preflight.
+            state.compaction_live = true;
+            let _ = events.send(DriverEvent::CompactionUpdated(CompactionState {
+                status: CompactionStatus::Running,
+                reason: payload
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                model: None,
+                error: None,
+            }));
+        }
+        "session.compaction.delta" => {
+            // The summary streams here, but the app shows progress rather
+            // than the partial text, so re-announcing per delta would only
+            // flood the wire. The first delta after a driver restart still
+            // promotes the session: a compaction is durable, and one that
+            // outlived this driver never replays its `started`.
+            if !state.compaction_live {
+                state.compaction_live = true;
+                let _ = events.send(DriverEvent::CompactionUpdated(CompactionState {
+                    status: CompactionStatus::Running,
+                    reason: None,
+                    model: None,
+                    error: None,
+                }));
+            }
+        }
+        "session.compaction.ended" => {
+            state.compaction_live = false;
+            let _ = events.send(DriverEvent::CompactionUpdated(CompactionState {
+                status: CompactionStatus::Completed,
+                reason: payload
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                model: opencode_compaction_model(payload),
+                error: None,
+            }));
+        }
+        "session.compaction.failed" => {
+            state.compaction_live = false;
+            let error = payload.get("error");
+            let aborted = error
+                .and_then(|error| error.get("type"))
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("aborted"));
+            if aborted {
+                // An interrupt or provider abort withdraws the request; it
+                // is not a failure to report.
+                let _ = events.send(DriverEvent::CompactionUpdated(CompactionState {
+                    status: CompactionStatus::Cancelled,
+                    reason: payload
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    model: None,
+                    error: None,
+                }));
+            } else {
+                let _ = events.send(DriverEvent::CompactionUpdated(CompactionState {
+                    status: CompactionStatus::Failed,
+                    reason: payload
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    model: None,
+                    error: error
+                        .and_then(|error| {
+                            error
+                                .get("message")
+                                .and_then(Value::as_str)
+                                .or_else(|| error.as_str())
+                        })
+                        .map(str::to_owned),
+                }));
             }
         }
         "session.execution.succeeded" => {
@@ -2806,6 +3103,7 @@ mod tests {
                 DriverEvent::UsageUpdated {
                     context_tokens: tokens,
                     context_window: window,
+                    ..
                 } => {
                     context_tokens = tokens.or(context_tokens);
                     context_window = window.or(context_window);
@@ -3048,7 +3346,8 @@ mod tests {
             &seen[4],
             DriverEvent::UsageUpdated {
                 context_tokens: Some(2),
-                context_window: None
+                context_window: None,
+                ..
             }
         ));
         assert!(matches!(
@@ -3136,10 +3435,238 @@ mod tests {
             event_rx.try_recv().unwrap(),
             DriverEvent::UsageUpdated {
                 context_tokens: Some(13_409),
-                context_window: Some(200_000)
+                context_window: Some(200_000),
+                session_total: None,
+                cache_read: Some(1_792),
+                prompt_tokens: Some(13_399)
             }
         ));
         assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn step_ended_grows_the_session_total_exactly_once_per_step() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+
+        // Two settled steps in the normalized shape (input excludes the
+        // cached tokens); each contributes once to the cumulative total.
+        for (input, output) in [(11_607, 10), (12_198, 25)] {
+            handle_event(
+                &json!({
+                    "type": "session.step.ended",
+                    "data": {
+                        "sessionID": "ses_1",
+                        "tokens": {
+                            "input": input,
+                            "output": output,
+                            "reasoning": 0,
+                            "cache": {"read": 1_792, "write": 0}
+                        }
+                    }
+                }),
+                &events,
+                &commands,
+                &turn,
+                true,
+                &mut state,
+            );
+        }
+
+        let mut total = 0;
+        let mut contexts = Vec::new();
+        while let Ok(DriverEvent::UsageUpdated {
+            context_tokens,
+            session_total: Some(session_total),
+            ..
+        }) = event_rx.try_recv()
+        {
+            total = session_total;
+            contexts.push(context_tokens);
+        }
+        assert_eq!(
+            contexts,
+            vec![Some(13_409), Some(14_015)],
+            "each step should publish its own context"
+        );
+        assert_eq!(total, 13_409 + 14_015, "steps should sum exactly once");
+    }
+
+    #[test]
+    fn compaction_events_report_the_full_lifecycle() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+
+        handle_event(
+            &json!({
+                "type": "session.compaction.started",
+                "data": {"sessionID": "ses_1", "reason": "manual"}
+            }),
+            &events,
+            &commands,
+            &turn,
+            true,
+            &mut state,
+        );
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::CompactionUpdated(CompactionState {
+                status: CompactionStatus::Running,
+                reason: Some(reason),
+                ..
+            }) if reason == "manual"
+        ));
+
+        handle_event(
+            &json!({
+                "type": "session.compaction.ended",
+                "data": {
+                    "sessionID": "ses_1",
+                    "reason": "manual",
+                    "model": {"id": "glm-5.3-flash", "providerID": "glmcoding"}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            true,
+            &mut state,
+        );
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::CompactionUpdated(CompactionState {
+                status: CompactionStatus::Completed,
+                model: Some(model),
+                ..
+            }) if model == "glmcoding/glm-5.3-flash"
+        ));
+        assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn compaction_deltas_promote_a_restarted_driver_exactly_once() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+
+        // A compaction outlived this driver: `started` predates it, so the
+        // first delta promotes the session, and later deltas stay silent.
+        for _ in 0..2 {
+            handle_event(
+                &json!({
+                    "type": "session.compaction.delta",
+                    "data": {"sessionID": "ses_1", "delta": "summary so far"}
+                }),
+                &events,
+                &commands,
+                &turn,
+                true,
+                &mut state,
+            );
+        }
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::CompactionUpdated(CompactionState {
+                status: CompactionStatus::Running,
+                ..
+            })
+        ));
+        assert!(event_rx.try_recv().is_err());
+
+        // An interrupt withdraws the request instead of failing it, and the
+        // live flag resets so a later attempt re-announces from `started`.
+        handle_event(
+            &json!({
+                "type": "session.compaction.failed",
+                "data": {"sessionID": "ses_1", "error": {"type": "aborted"}}
+            }),
+            &events,
+            &commands,
+            &turn,
+            true,
+            &mut state,
+        );
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::CompactionUpdated(CompactionState {
+                status: CompactionStatus::Cancelled,
+                ..
+            })
+        ));
+
+        handle_event(
+            &json!({
+                "type": "session.compaction.started",
+                "data": {"sessionID": "ses_1", "reason": "auto"}
+            }),
+            &events,
+            &commands,
+            &turn,
+            true,
+            &mut state,
+        );
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::CompactionUpdated(CompactionState {
+                status: CompactionStatus::Running,
+                reason: Some(reason),
+                ..
+            }) if reason == "auto"
+        ));
+    }
+
+    #[test]
+    fn compaction_failures_carry_the_provider_error() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+
+        handle_event(
+            &json!({
+                "type": "session.compaction.failed",
+                "data": {
+                    "sessionID": "ses_1",
+                    "reason": "manual",
+                    "error": {"type": "CompactionError", "message": "model rejected the summary"}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            true,
+            &mut state,
+        );
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::CompactionUpdated(CompactionState {
+                status: CompactionStatus::Failed,
+                error: Some(error),
+                ..
+            }) if error == "model rejected the summary"
+        ));
+    }
+
+    #[test]
+    fn latest_opencode_compaction_seeds_the_newest_record() {
+        // The message endpoint answers newest-first, so the first compaction
+        // entry is the latest attempt and wins the seed.
+        let messages = json!({
+            "data": [
+                {"id": "msg_3", "type": "user", "text": "next prompt"},
+                {"id": "msg_2", "type": "compaction", "status": "failed",
+                 "error": {"message": "provider 500"}},
+                {"id": "msg_1", "type": "compaction", "status": "completed",
+                 "model": "glmcoding/glm-5.3-flash"}
+            ]
+        });
+        let seeded = latest_opencode_compaction(&messages).unwrap();
+        assert_eq!(seeded.status, CompactionStatus::Failed);
+        assert_eq!(seeded.error.as_deref(), Some("provider 500"));
+
+        // Conversations without a compaction seed nothing, and unknown
+        // statuses are skipped rather than guessed at.
+        assert!(latest_opencode_compaction(&json!({"data": [
+            {"id": "msg_1", "type": "assistant", "tokens": {}}
+        ]}))
+        .is_none());
+        assert!(latest_opencode_compaction(&json!({"data": [
+            {"id": "msg_1", "type": "compaction", "status": "mysterious"}
+        ]}))
+        .is_none());
     }
 
     #[test]
@@ -3174,16 +3701,20 @@ mod tests {
     }
 
     #[test]
-    fn message_tokens_sum_disjoint_fields_and_honor_total() {
+    fn message_usage_splits_prompt_from_context_and_honors_total() {
         // The normalized message shape: cache and reasoning are separate from
-        // input/output, so the disjoint fields sum to the context.
+        // input/output, so the disjoint fields sum to the context while the
+        // prompt unifies the cache with the uncached input.
         let message = json!({"tokens": {
             "input": 246,
             "output": 83,
             "reasoning": 0,
             "cache": {"read": 78_592, "write": 0}
         }});
-        assert_eq!(opencode_message_tokens(&message), Some(78_921));
+        let usage = opencode_normalized_usage(&message).unwrap();
+        assert_eq!(usage.context, 78_921);
+        assert_eq!(usage.prompt, 78_838);
+        assert_eq!(usage.cache_read, 78_592);
 
         // `total`, when present, is that same context reported outright.
         let message = json!({"tokens": {
@@ -3193,7 +3724,44 @@ mod tests {
             "reasoning": 0,
             "cache": {"read": 78_592, "write": 0}
         }});
-        assert_eq!(opencode_message_tokens(&message), Some(78_921));
+        assert_eq!(opencode_normalized_usage(&message).unwrap().context, 78_921);
+    }
+
+    #[test]
+    fn raw_usage_reads_the_cache_inside_the_input() {
+        let payload = json!({"tokens": {
+            "input": 9_598,
+            "output": 37,
+            "reasoning": 0,
+            "cache": {"read": 8_704, "write": 0}
+        }});
+        let usage = opencode_raw_usage(&payload).unwrap();
+        assert_eq!(usage.context, 9_635);
+        assert_eq!(usage.prompt, 9_598);
+        assert_eq!(usage.cache_read, 8_704);
+    }
+
+    #[test]
+    fn usage_seeds_sum_the_stored_tail_and_take_the_newest_call() {
+        // Newest first, exactly as the messages endpoint returns them.
+        let messages = json!({
+            "data": [
+                {"type": "assistant", "id": "msg_2", "tokens": {
+                    "input": 246, "output": 83, "reasoning": 0,
+                    "cache": {"read": 78_592, "write": 0}
+                }},
+                {"type": "user", "id": "msg_1", "text": "hi"},
+                {"type": "assistant", "id": "msg_0", "tokens": {
+                    "input": 10, "output": 5, "reasoning": 0,
+                    "cache": {"read": 0, "write": 0}
+                }}
+            ]
+        });
+        let (total, newest) = opencode_usage_seeds(&messages);
+        assert_eq!(total, Some(78_921 + 15));
+        let newest = newest.expect("newest assistant usage");
+        assert_eq!(newest.context, 78_921);
+        assert_eq!(newest.prompt, 78_838);
     }
 
     #[test]
@@ -3224,7 +3792,10 @@ mod tests {
         });
 
         let latest = latest_opencode_usage_message(&messages).expect("latest assistant usage");
-        assert_eq!(opencode_message_tokens(latest), Some(500));
+        assert_eq!(
+            opencode_normalized_usage(latest).map(|usage| usage.context),
+            Some(500)
+        );
         assert_eq!(
             opencode_message_model_key(latest).as_deref(),
             Some("glmcoding/glm-5.3-flash")

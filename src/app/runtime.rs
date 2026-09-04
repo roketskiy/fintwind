@@ -2189,6 +2189,42 @@ impl Fintwind {
         handle
     }
 
+    /// Whether the composer text is the compaction request rather than a
+    /// prompt. `/compact` is a UI-intercepted command: Fintwind asks the
+    /// provider to summarize the context, so the text must never reach the
+    /// model — not even steered into a running turn.
+    pub(super) fn is_compact_submission(prompt: &str) -> bool {
+        prompt.trim().split_whitespace().next() == Some("/compact")
+    }
+
+    /// Ask the provider to compact the session's context. The request is
+    /// durable — a busy session compacts at its next safe step boundary, an
+    /// idle one starts immediately — and every outcome arrives as
+    /// `DriverEvent::CompactionUpdated`.
+    pub(super) fn request_context_compaction(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        let already_running = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.compaction.as_ref().map(|c| c.status))
+            == Some(CompactionStatus::Running);
+        if already_running {
+            // The provider coalesces repeats while one is pending; the
+            // indicator is already up, so stay quiet.
+            return;
+        }
+        if let Some(runtime) = self.runtimes.get(&session_id) {
+            runtime.driver.compact();
+            if self.state.selected_session == Some(session_id) {
+                self.show_toast(tr!("session.compaction_requested"));
+            }
+        } else if self.state.selected_session == Some(session_id) {
+            self.show_toast(tr!("session.compaction_unavailable"));
+        }
+        cx.notify();
+    }
+
     pub(super) fn submit_composer_submission(
         &mut self,
         submission: ComposerSubmission,
@@ -2198,6 +2234,10 @@ impl Fintwind {
             return;
         };
         if self.response_fork_preparations.contains_key(&session.id) {
+            return;
+        }
+        if Self::is_compact_submission(&submission.prompt) {
+            self.request_context_compaction(session.id, cx);
             return;
         }
         if session.is_busy() {
@@ -2220,6 +2260,13 @@ impl Fintwind {
         let Some(session) = self.selected_session().cloned() else {
             return;
         };
+        if Self::is_compact_submission(&submission.prompt) {
+            // Steer delivery is exactly what the compaction request wants of
+            // a busy session: it runs at the next safe step boundary, ahead
+            // of any queued or steered prompts.
+            self.request_context_compaction(session.id, cx);
+            return;
+        }
         if !session.is_busy() {
             self.submit_composer_submission(submission, cx);
             return;

@@ -130,6 +130,19 @@ fn builtin_fintwind_commands() -> Vec<SlashCommand> {
         template: Some(template),
     })
     .collect::<Vec<_>>();
+    let mut commands = commands;
+    // `/compact` is not a prompt template: Fintwind intercepts it and asks
+    // the provider to compact the session's context, so it must expand to
+    // nothing (`template: None`) and never reach the model as text. The
+    // provider's own report carries the same name; discovery keeps our
+    // localized description for it.
+    commands.push(SlashCommand {
+        name: "compact".to_owned(),
+        description: tr!("commands.compact_description"),
+        scope: CommandScope::Builtin,
+        argument_hint: None,
+        template: None,
+    });
     commands
 }
 

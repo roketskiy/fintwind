@@ -100,6 +100,7 @@ enum PaletteAction {
     FocusComposer,
     ChooseModel,
     ToggleUsage,
+    CompactContext,
     ToggleSidebar,
     ToggleRightPanel,
     OpenSettings(SettingsPage),
@@ -579,6 +580,15 @@ impl Fintwind {
                     "toggle usage limits rate quota panel",
                     next(),
                 ));
+                commands.push(CommandPaletteItem::command(
+                    PaletteSection::Commands,
+                    tr!("command_palette.compact_context"),
+                    "icons/sparkle.svg",
+                    None,
+                    PaletteAction::CompactContext,
+                    "compact summarize context window free tokens history",
+                    next(),
+                ));
             }
             commands.extend([
                 CommandPaletteItem::command(
@@ -918,6 +928,13 @@ impl Fintwind {
                 self.select_session(session_id, cx);
                 let focus = self.composer_focus(cx);
                 window.focus(&focus, cx);
+            }
+            PaletteAction::CompactContext => {
+                // The palette is only open over a session; the usage gate on
+                // the entry guarantees the selection exists here.
+                if let Some(session_id) = self.selected_session().map(|session| session.id) {
+                    self.request_context_compaction(session_id, cx);
+                }
             }
             PaletteAction::ChooseModel | PaletteAction::ToggleUsage => {
                 // These popovers are rendered by the composer. If the command

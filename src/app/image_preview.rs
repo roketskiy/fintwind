@@ -206,8 +206,17 @@ impl Fintwind {
             .justify_center()
             .cursor_default()
             .child(
+                // Constrain rather than fill: gpui sizes an unconstrained img
+                // from the bitmap's aspect ratio, so the box hugs the visible
+                // image and the hairline + shadow read on the image edge, not
+                // on a letterbox around it.
                 img(image_source)
-                    .size_full()
+                    .max_w(gpui::relative(1.0))
+                    .max_h(gpui::relative(1.0))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.1))
+                    .shadow_lg()
                     .object_fit(ObjectFit::Contain)
                     .with_fallback(move || {
                         div()

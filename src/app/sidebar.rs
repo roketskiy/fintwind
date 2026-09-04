@@ -417,8 +417,8 @@ impl Fintwind {
         div().flex().items_center().child(
             div()
                 .id("add-project")
-                .w(px(20.0))
-                .h(px(20.0))
+                .w(px(24.0))
+                .h(px(24.0))
                 .rounded(px(6.0))
                 .flex()
                 .items_center()
@@ -426,7 +426,7 @@ impl Fintwind {
                 .cursor_default()
                 .hover(|element| element.bg(theme.overlay))
                 .active(|element| element.bg(theme.overlay_strong))
-                .child(icon("icons/folder-new.svg", 15.0, theme.text_ghost))
+                .child(icon("icons/folder-new.svg", 16.0, theme.text_ghost))
                 .on_click(cx.listener(|this, _, _, cx| this.add_project(cx))),
         )
     }
@@ -544,7 +544,7 @@ impl Fintwind {
             .track_focus(&self.updater_button_focus)
             .when(available, |button| button.tab_index(0))
             .w(px(UPDATER_BUTTON_COLLAPSED_WIDTH))
-            .h(px(20.0))
+            .h(px(24.0))
             .flex_none()
             .overflow_hidden()
             .rounded_full()
@@ -899,6 +899,8 @@ impl Fintwind {
                     .gap(px(5.0))
                     .cursor_default()
                     .focus_visible(|style| style.border_1().border_color(theme.accent))
+                    .hover(|element| element.bg(theme.overlay))
+                    .active(|element| element.bg(theme.overlay_strong))
                     .child(icon("icons/folder.svg", 12.0, theme.text_ghost))
                     .child(
                         div()
@@ -1114,7 +1116,7 @@ impl Fintwind {
                 element.bg(theme.sidebar_item_background)
             })
             .hover(|element| element.bg(theme.sidebar_item_background))
-            .active(|element| element.bg(theme.sidebar_item_background))
+            .active(|element| element.bg(theme.overlay_strong))
             .child(title)
             .when(working, |element| {
                 element.child(motion::spin_slow(icon(

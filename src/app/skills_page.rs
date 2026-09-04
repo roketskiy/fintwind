@@ -771,7 +771,9 @@ impl Fintwind {
                         element.bg(theme.sidebar_item_background)
                     })
                     .when(!selected, |element| {
-                        element.hover(|element| element.bg(theme.overlay))
+                        element
+                            .hover(|element| element.bg(theme.overlay))
+                            .active(|element| element.bg(theme.overlay_strong))
                     })
                     .flex()
                     .items_center()
@@ -781,7 +783,9 @@ impl Fintwind {
                             .w(px(28.0))
                             .h(px(28.0))
                             .flex_none()
-                            .rounded(px(7.0))
+                            // Concentric with the row: 8px row radius minus
+                            // the 7-9px row padding leaves almost no arc.
+                            .rounded(px(2.0))
                             .bg(theme.overlay)
                             .flex()
                             .items_center()
@@ -967,7 +971,9 @@ impl Fintwind {
                 .tab_index(0)
                 .focus_visible(|style| style.border_color(theme.accent))
                 .h(px(30.0))
-                .px(px(11.0))
+                // Leading-icon button: icon side 2px tighter than the text side.
+                .pl(px(9.0))
+                .pr(px(11.0))
                 .rounded(px(7.0))
                 .border_1()
                 .border_color(theme.border_strong)
@@ -979,6 +985,7 @@ impl Fintwind {
                 .text_size(px(12.0))
                 .text_color(theme.text_secondary)
                 .hover(|element| element.bg(theme.overlay))
+                .active(|element| element.bg(theme.overlay_strong))
                 .child(icon(icon_path, 12.5, theme.text_tertiary))
                 .child(SharedString::from(label))
         };
@@ -1070,6 +1077,7 @@ impl Fintwind {
                 theme.text_secondary
             })
             .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
+            .active(|element| element.bg(theme.danger.opacity(0.18)).text_color(theme.danger))
             .child(icon(
                 "icons/trash.svg",
                 12.5,

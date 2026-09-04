@@ -725,7 +725,9 @@ impl Fintwind {
                     .cursor_default()
                     .when(selected, |element| element.bg(accent.opacity(0.13)))
                     .when(!selected, |element| {
-                        element.hover(|element| element.bg(theme.overlay))
+                        element
+                            .hover(|element| element.bg(theme.overlay))
+                            .active(|element| element.bg(theme.overlay_strong))
                     })
                     .flex()
                     .items_center()
@@ -735,7 +737,9 @@ impl Fintwind {
                             .w(px(28.0))
                             .h(px(28.0))
                             .flex_none()
-                            .rounded(px(7.0))
+                            // Concentric with the row: 8px row radius minus
+                            // the 7-9px row padding leaves almost no arc.
+                            .rounded(px(2.0))
                             .bg(theme.overlay)
                             .flex()
                             .items_center()
@@ -816,7 +820,9 @@ impl Fintwind {
                         theme.text_secondary
                     })
                     .when(!adding, |element| {
-                        element.hover(|element| element.bg(theme.overlay).text_color(theme.text))
+                        element
+                            .hover(|element| element.bg(theme.overlay).text_color(theme.text))
+                            .active(|element| element.bg(theme.overlay_strong))
                     })
                     .child(icon(
                         "icons/plus.svg",
@@ -1196,6 +1202,7 @@ impl Fintwind {
                 theme.text_secondary
             })
             .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
+            .active(|element| element.bg(theme.danger.opacity(0.18)).text_color(theme.danger))
             .child(icon(
                 "icons/trash.svg",
                 12.5,
@@ -1629,6 +1636,7 @@ impl Fintwind {
                             .bg(accent)
                             .text_color(on_providers_accent(theme))
                             .hover(|element| element.bg(accent.opacity(0.85)))
+                            .active(|element| element.bg(accent.opacity(0.72)))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.confirm_model_editor(cx);
                             }))
@@ -1793,6 +1801,7 @@ impl Fintwind {
                     .bg(accent)
                     .text_color(on_providers_accent(theme))
                     .hover(|element| element.bg(accent.opacity(0.85)))
+                    .active(|element| element.bg(accent.opacity(0.72)))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.submit_provider_form(cx);
                     }))
@@ -2099,7 +2108,10 @@ pub(super) fn outline_button(
         .tab_index(0)
         .focus_visible(|style| style.border_color(providers_accent(theme)))
         .h(px(30.0))
-        .px(px(12.0))
+        // Trailing-icon button: the icon side carries the glyph's whitespace,
+        // so it takes the smaller share.
+        .pl(px(12.0))
+        .pr(px(10.0))
         .rounded(px(7.0))
         .border_1()
         .border_color(theme.border_strong)
@@ -2111,6 +2123,7 @@ pub(super) fn outline_button(
         .text_size(px(12.0))
         .text_color(theme.text_secondary)
         .hover(|element| element.bg(theme.overlay))
+        .active(|element| element.bg(theme.overlay_strong))
         .child(label.into());
     if let Some(icon_path) = icon_path {
         button = button.child(icon(icon_path, 12.5, theme.text_tertiary));
@@ -2131,7 +2144,9 @@ pub(super) fn small_action_button(
         .tab_index(0)
         .focus_visible(|style| style.border_color(providers_accent(theme)))
         .h(px(30.0))
-        .px(px(10.0))
+        // Leading-icon button: icon side 2px tighter than the text side.
+        .pl(px(8.0))
+        .pr(px(10.0))
         .rounded(px(7.0))
         .flex()
         .flex_none()
@@ -2141,6 +2156,7 @@ pub(super) fn small_action_button(
         .text_size(px(12.0))
         .text_color(color)
         .hover(|element| element.bg(theme.overlay))
+        .active(|element| element.bg(theme.overlay_strong))
         .child(icon(icon_path, 12.5, color))
         .child(label.into())
 }

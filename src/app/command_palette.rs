@@ -1039,7 +1039,9 @@ impl Fintwind {
                         .id(SharedString::from(format!("command-palette-row-{index}")))
                         .h(px(command_palette_row_height(item)))
                         .px(px(11.0))
-                        .rounded(px(9.0))
+                        // Concentric with the palette card: 15px shell minus
+                        // the 8px results inset.
+                        .rounded(px(7.0))
                         .border_1()
                         .border_color(if highlighted {
                             theme.border_strong

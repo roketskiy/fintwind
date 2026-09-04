@@ -646,6 +646,7 @@ impl Fintwind {
             .when(!apply_disabled, |element| {
                 element
                     .hover(|element| element.bg(theme.overlay))
+                    .active(|element| element.bg(theme.overlay_strong))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.apply_daemon_exposure_fields(cx);
                     }))
@@ -683,6 +684,7 @@ impl Fintwind {
             .text_color(theme.text_secondary)
             .focus_visible(|style| style.border_color(theme.accent))
             .hover(|element| element.bg(theme.overlay))
+            .active(|element| element.bg(theme.overlay_strong))
             .child(icon(
                 if url_copied {
                     "icons/check.svg"
@@ -774,6 +776,7 @@ impl Fintwind {
             .text_color(theme.text_secondary)
             .focus_visible(|style| style.border_color(theme.accent))
             .hover(|element| element.bg(theme.overlay))
+            .active(|element| element.bg(theme.overlay_strong))
             .child(icon(
                 if token_copied {
                     "icons/check.svg"
@@ -820,6 +823,7 @@ impl Fintwind {
             .when(!pending, |element| {
                 element
                     .hover(|element| element.bg(theme.overlay))
+                    .active(|element| element.bg(theme.overlay_strong))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.regenerate_daemon_token(cx);
                     }))
@@ -1468,6 +1472,9 @@ impl Fintwind {
                                 .text_size(px(12.0))
                                 .text_color(theme.text_secondary)
                                 .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
+                                .active(|element| {
+                                    element.bg(theme.danger.opacity(0.18)).text_color(theme.danger)
+                                })
                                 .child(tr!("common.revoke"))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.revoke_computer_app(&key, cx);
@@ -1575,6 +1582,11 @@ impl Fintwind {
                                 .cursor_default()
                                 .text_size(px(12.0))
                                 .opacity(if pending { 0.6 } else { 1.0 })
+                                .when(!pending, |element| {
+                                    element
+                                        .hover(|element| element.bg(theme.overlay))
+                                        .active(|element| element.bg(theme.overlay_strong))
+                                })
                                 .child(if pending {
                                     tr!("common.checking")
                                 } else {
@@ -1844,6 +1856,7 @@ fn permission_status_row(
             .text_size(px(12.0))
             .text_color(theme.text_secondary)
             .hover(|element| element.bg(theme.overlay).text_color(theme.text))
+            .active(|element| element.bg(theme.overlay_strong).text_color(theme.text))
             .child(tr!("computer_use.grant_access"))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.request_computer_permissions(true, cx);

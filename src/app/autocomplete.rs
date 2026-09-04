@@ -446,13 +446,16 @@ impl Fintwind {
             .id(index)
             .h(px(30.0))
             .px(px(8.0))
-            .rounded(px(6.0))
+            // Concentric with the popup card: 11px shell minus the 4px list
+            // padding.
+            .rounded(px(7.0))
             .flex()
             .items_center()
             .gap(px(8.0))
             .cursor_default()
             .when(highlighted, |element| element.bg(theme.overlay_strong))
             .hover(|element| element.bg(theme.overlay))
+            .active(|element| element.bg(theme.overlay_strong))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, window, cx| {

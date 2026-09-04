@@ -900,7 +900,8 @@ impl Fintwind {
             .justify_center()
             .cursor_default()
             .focus_visible(|button| button.bg(theme.overlay_strong))
-            .hover(|button| button.bg(theme.overlay_strong))
+            .hover(|button| button.bg(theme.overlay))
+            .active(|button| button.bg(theme.overlay_strong))
             .child(icon(
                 "icons/file-bottom-left-arrow.svg",
                 15.0,
@@ -1422,8 +1423,8 @@ impl Fintwind {
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_secondary)
             .focus_visible(|style| style.border_color(theme.accent))
-            .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
-            .active(|style| style.bg(theme.overlay))
+            .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+            .active(|style| style.bg(theme.overlay_strong).text_color(theme.text))
             .child(icon("icons/file-diff.svg", 13.0, theme.text_tertiary))
             .child(tr_cow!("transcript.review_changes"))
             .on_click(cx.listener(move |this, _, _, cx| {
@@ -1446,9 +1447,7 @@ impl Fintwind {
             .w_full()
             .min_w_0()
             .rounded(px(12.0))
-            .border_1()
-            .border_color(theme.border_strong)
-            .bg(theme.overlay)
+            .bg(theme.raised)
             .tab_index(0)
             .tab_group()
             .tab_stop(false)
@@ -1465,7 +1464,7 @@ impl Fintwind {
                         div()
                             .size(px(36.0))
                             .flex_none()
-                            .rounded(px(9.0))
+                            .rounded(px(3.0))
                             .bg(theme.overlay_strong)
                             .flex()
                             .items_center()
@@ -1586,8 +1585,8 @@ impl Fintwind {
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_secondary)
                     .focus_visible(|style| style.bg(theme.overlay_strong))
-                    .hover(|style| style.bg(theme.overlay_strong).text_color(theme.text))
-                    .active(|style| style.bg(theme.overlay))
+                    .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                    .active(|style| style.bg(theme.overlay_strong).text_color(theme.text))
                     .child(SharedString::from(label))
                     .when(clipped, |row| {
                         row.child(
@@ -1667,6 +1666,7 @@ impl Fintwind {
                     .text_color(theme.text_tertiary)
                     .focus_visible(|style| style.text_color(theme.text))
                     .hover(|style| style.text_color(theme.text))
+                    .active(|style| style.text_color(theme.text_ghost))
                     .child(SharedString::from(label))
                     .child(icon(
                         if expanded {
@@ -1808,6 +1808,7 @@ impl Fintwind {
                     .cursor_default()
                     .focus_visible(|style| style.text_color(theme.text))
                     .hover(|style| style.text_color(theme.text))
+                    .active(|style| style.text_color(theme.text_ghost))
                     .child(
                         div()
                             .min_w_0()
@@ -1888,6 +1889,7 @@ impl Fintwind {
                     .text_color(color)
                     .focus_visible(|style| style.border_color(theme.accent))
                     .hover(|style| style.bg(theme.overlay_strong))
+                    .active(|style| style.bg(theme.overlay_strong).opacity(0.8))
                     .child(work_status_label(status))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -2261,7 +2263,8 @@ impl Fintwind {
                                             .items_center()
                                             .justify_center()
                                             .cursor_default()
-                                            .hover(|button| button.bg(theme.overlay_strong))
+                                            .hover(|button| button.bg(theme.overlay))
+                                            .active(|button| button.bg(theme.overlay_strong))
                                             .child(icon(
                                                 if copied {
                                                     "icons/check.svg"
@@ -2780,6 +2783,8 @@ fn render_activity_image(
             .max_h(px(ACTIVITY_IMAGE_HEIGHT))
             .mt(px(8.0))
             .rounded(px(4.0))
+            .border_1()
+            .border_color(theme.border)
             .object_fit(ObjectFit::Contain)
             .into_any_element();
     }
@@ -2793,6 +2798,8 @@ fn render_activity_image(
             .h(px(80.0))
             .mt(px(8.0))
             .rounded(px(4.0))
+            .border_1()
+            .border_color(theme.border)
             .bg(theme.inset)
             .flex()
             .items_center()
@@ -2811,6 +2818,8 @@ fn render_activity_image(
     .max_h(px(ACTIVITY_IMAGE_HEIGHT))
     .mt(px(8.0))
     .rounded(px(4.0))
+    .border_1()
+    .border_color(theme.border)
     .object_fit(ObjectFit::Contain)
     .into_any_element()
 }

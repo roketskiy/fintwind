@@ -124,8 +124,8 @@ where
         .id(id)
         .tab_index(0)
         .focus_visible(|style| style.border_color(theme.accent))
-        .w(px(40.0))
-        .h(px(22.0))
+        .w(px(42.0))
+        .h(px(24.0))
         .p(px(3.0))
         .flex_none()
         .rounded_full()
@@ -141,7 +141,7 @@ where
         .flex()
         .items_center()
         .when(on, |element| element.justify_end())
-        .child(div().w(px(16.0)).h(px(16.0)).rounded_full().bg(if on {
+        .child(div().w(px(18.0)).h(px(18.0)).rounded_full().bg(if on {
             theme.on_inverse
         } else {
             theme.text_tertiary
@@ -409,7 +409,9 @@ impl RenderOnce for MenuChip {
             })
             .when(self.selected, |element| element.bg(theme.overlay))
             .when(!self.disabled, |element| {
-                element.hover(|element| element.bg(theme.overlay))
+                element
+                    .hover(|element| element.bg(theme.overlay))
+                    .active(|element| element.bg(theme.overlay_strong))
             })
             .when(self.disabled, |element| element.opacity(0.7))
             .when_some(self.icon, |element, (path, color)| {

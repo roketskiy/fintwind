@@ -2372,7 +2372,9 @@ impl Fintwind {
                     })
                     .when(active, |element| element.bg(theme.overlay_strong))
                     .when(!active, |element| {
-                        element.hover(|element| element.bg(theme.overlay))
+                        element
+                            .hover(|element| element.bg(theme.overlay))
+                            .active(|element| element.bg(theme.overlay_strong))
                     })
                     .child(if uses_file_icon {
                         file_icon(icon_path, 13.0).into_any_element()
@@ -2414,13 +2416,16 @@ impl Fintwind {
                     .child(
                         div()
                             .id(SharedString::from(format!("close-right-panel-tab-{index}")))
-                            .w(px(16.0))
-                            .h(px(16.0))
-                            .rounded(px(4.0))
+                            .w(px(20.0))
+                            .h(px(20.0))
+                            .mx(px(-2.0))
+                            .flex_none()
+                            .rounded(px(5.0))
                             .flex()
                             .items_center()
                             .justify_center()
                             .hover(|element| element.bg(theme.overlay_strong))
+                            .active(|element| element.opacity(0.7))
                             .child(icon("icons/x.svg", 10.0, theme.text_tertiary))
                             .on_click(move |_, _, cx| {
                                 cx.stop_propagation();
@@ -2708,6 +2713,7 @@ impl Fintwind {
                 .cursor_default()
                 .when(selected, |element| element.bg(theme.overlay_strong))
                 .hover(|element| element.bg(theme.overlay))
+                .active(|element| element.bg(theme.overlay_strong))
                 .child(if is_dir {
                     icon(
                         if entry.expanded {
@@ -3462,6 +3468,7 @@ impl Fintwind {
             .cursor_default()
             .focus_visible(|style| style.border_1().border_color(theme.accent))
             .hover(|style| style.bg(theme.overlay))
+            .active(|style| style.bg(theme.overlay_strong))
             .child(refresh_icon)
             .tooltip(|window, cx| Tooltip::new(tr!("diff.refresh")).build(window, cx))
             .on_click(cx.listener(|this, _, _, cx| this.refresh_right_panel_diff(cx)))
@@ -3806,8 +3813,8 @@ impl Fintwind {
                 button.border_b_1().border_color(theme.border)
             })
             .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .hover(|style| style.bg(theme.overlay_strong))
-            .active(|style| style.bg(theme.overlay))
+            .hover(|style| style.bg(theme.overlay))
+            .active(|style| style.bg(theme.overlay_strong))
             .tooltip(Tooltip::text(tooltip))
             .child(icon(icon_path, 11.0, theme.text_tertiary))
             .on_click(cx.listener(move |this, event: &gpui::ClickEvent, _, cx| {
@@ -3969,7 +3976,10 @@ impl Fintwind {
                         .gap(px(6.0))
                         .cursor_default()
                         .when(cursor, |row| row.bg(theme.overlay_strong))
-                        .when(!cursor, |row| row.hover(|row| row.bg(theme.overlay)))
+                        .when(!cursor, |row| {
+                            row.hover(|row| row.bg(theme.overlay))
+                                .active(|row| row.bg(theme.overlay_strong))
+                        })
                         .child(icon(
                             if expanded {
                                 "icons/chevron-down.svg"
@@ -4037,6 +4047,7 @@ impl Fintwind {
                             .when(selected ^ cursor, |row| row.bg(theme.overlay))
                             .when(!selected && !cursor, |row| {
                                 row.hover(|row| row.bg(theme.overlay))
+                                    .active(|row| row.bg(theme.overlay_strong))
                             })
                             .child(file_icon(file_icon_for_path(&path), 13.0))
                             .child(

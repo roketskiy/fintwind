@@ -87,7 +87,7 @@ const BRANCH_PICKER_MENU_ID: &str = "workspace-branch-picker";
 const BRANCH_PICKER_ROW_HEIGHT: f32 = 30.0;
 const SIDEBAR_MIN_WIDTH: f32 = 180.0;
 const SIDEBAR_MAX_WIDTH: f32 = 420.0;
-const UPDATER_BUTTON_COLLAPSED_WIDTH: f32 = 20.0;
+const UPDATER_BUTTON_COLLAPSED_WIDTH: f32 = 24.0;
 const UPDATER_BUTTON_EXPANDED_WIDTH: f32 = 58.0;
 const RIGHT_PANEL_MIN_WIDTH: f32 = 280.0;
 const RIGHT_PANEL_MAX_WIDTH: f32 = 1000.0;
@@ -109,7 +109,10 @@ const NAVIGATION_RAIL_TICK_GAP: f32 = 10.0;
 const NAVIGATION_RAIL_INACTIVE_OPACITY: f32 = 0.45;
 const NAVIGATION_RAIL_TURN_HEIGHT: f32 = NAVIGATION_RAIL_TICK_HEIGHT + NAVIGATION_RAIL_TICK_GAP;
 const NAVIGATION_RAIL_FADE_HEIGHT: f32 = 20.0;
-const NAVIGATION_RAIL_ANIMATION_DURATION: Duration = Duration::from_millis(300);
+/// Hover on the navigation rail is high-frequency — scrubbing the cursor
+/// re-arms the tween on every tick it passes — so the sweep stays at or under
+/// the 150 ms motion-restraint bound despite the rail's larger travel.
+const NAVIGATION_RAIL_ANIMATION_DURATION: Duration = Duration::from_millis(150);
 const ESCAPE_STOP_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(3);
 /// Presentation pacing only. The app sleeps until a provider or background
 /// result wakes it, then uses this cadence while streamed chunks remain.

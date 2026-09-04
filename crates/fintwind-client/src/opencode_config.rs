@@ -200,6 +200,10 @@ pub fn save_providers_at(path: &Path, providers: &[CustomProvider]) -> io::Resul
             disabled.push(provider.slug.clone());
         }
     }
+    // A stable, order-independent list: the roster's arrival order follows
+    // the config map's iteration order, which varies with serde_json's
+    // `preserve_order` feature.
+    disabled.sort();
     if disabled.is_empty() {
         document.remove("disabled_providers");
     } else {
@@ -411,12 +415,18 @@ fn mcp_server_from_config(key: &str, entry: &Value) -> McpServer {
             .get(table_key)
             .and_then(Value::as_object)
             .map(|entries| {
-                entries
+                let mut pairs: Vec<(String, String)> = entries
                     .iter()
                     .filter_map(|(key, value)| {
                         value.as_str().map(|value| (key.clone(), value.to_owned()))
                     })
-                    .collect()
+                    .collect();
+                // Sort by key: serde_json's map iteration order depends on
+                // whether `preserve_order` entered the dependency graph
+                // (sorted BTreeMap vs insertion-ordered IndexMap), and the
+                // config must not shuffle with it.
+                pairs.sort_by(|a, b| a.0.cmp(&b.0));
+                pairs
             })
             .unwrap_or_default()
     };

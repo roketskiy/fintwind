@@ -52,6 +52,13 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-client = { path = "crates/fintwind-client" }
 fintwind-protocol = { path = "crates/fintwind-protocol" }
 pulldown-cmark = "0.13"
+# Inline math renders as Unicode text; display math rasterizes on a background
+# thread through the RaTeX family (KaTeX-compatible, fonts embedded in-binary).
+unicodeit = "0.2"
+ratex-parser = "0.1"
+ratex-layout = "0.1"
+ratex-types = "0.1"
+ratex-render = { version = "0.1", features = ["embed-fonts"] }
 regex = "1"
 rust-i18n = "4"
 rust-umami = "0.1.1"

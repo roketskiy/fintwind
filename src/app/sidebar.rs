@@ -34,10 +34,8 @@ fn append_project_group_rows(
     sessions: &[Uuid],
     collapsed: bool,
 ) {
-    if sessions.is_empty() {
-        return;
-    }
-
+    // A project with no started sessions keeps its header so every added
+    // project stays visible; it just lists nothing beneath it.
     rows.push(SidebarRow::Header(Some(project_id)));
     if !collapsed {
         rows.extend(sessions.iter().copied().map(SidebarRow::Session));
@@ -79,7 +77,7 @@ fn updater_button_available_content(
 /// Height of a session card plus the separation reserved beneath it in the
 /// virtualized sidebar list. Keep the gap inside the list row so measured and
 /// estimated heights stay identical for off-screen sessions.
-const SIDEBAR_SESSION_CARD_HEIGHT: f32 = 32.0;
+const SIDEBAR_SESSION_CARD_HEIGHT: f32 = 36.0;
 const SIDEBAR_SESSION_ROW_GAP: f32 = 1.0;
 const SIDEBAR_SESSION_ROW_HEIGHT: f32 = SIDEBAR_SESSION_CARD_HEIGHT + SIDEBAR_SESSION_ROW_GAP;
 const SIDEBAR_ACTION_ROW_HEIGHT: f32 = 32.0;
@@ -125,29 +123,52 @@ pub(super) fn format_time_ago(seconds: u64) -> String {
 }
 
 /// Started sessions grouped by project. Groups are ordered by each project's
-/// most recent activity, and sessions are newest first within a group, so the
-/// global recency order is preserved inside the grouping. Sessions whose
-/// project record is gone still group under their project id and fall back to
-/// a generic label at render time.
-fn sidebar_project_groups(sessions: &[AgentSession]) -> Vec<(Uuid, Vec<Uuid>)> {
+/// most recent activity — a project with no started sessions falls back to its
+/// own `created_at` — and sessions are newest first within a group, so the
+/// global recency order is preserved inside the grouping. Every non-projectless
+/// project keeps a group even before its first task starts, so a freshly added
+/// project is visible in the sidebar right away; sessions whose project record
+/// is gone still group under their project id and fall back to a generic label
+/// at render time.
+fn sidebar_project_groups(
+    sessions: &[AgentSession],
+    projects: &[Project],
+) -> Vec<(Uuid, Vec<Uuid>)> {
     let mut sorted_sessions = sessions
         .iter()
         .filter(|session| session.has_started())
         .collect::<Vec<_>>();
-    sorted_sessions
-        .sort_by_key(|session| std::cmp::Reverse(sidebar_session_timestamp(session)));
+    sorted_sessions.sort_by_key(|session| std::cmp::Reverse(sidebar_session_timestamp(session)));
 
-    let mut groups: Vec<(Uuid, Vec<Uuid>)> = Vec::new();
+    let mut groups: Vec<(Uuid, u64, Vec<Uuid>)> = Vec::new();
     for session in sorted_sessions {
         match groups
             .iter_mut()
-            .find(|(project_id, _)| *project_id == session.project_id)
+            .find(|(project_id, _, _)| *project_id == session.project_id)
         {
-            Some((_, group)) => group.push(session.id),
-            None => groups.push((session.project_id, vec![session.id])),
+            // Sessions arrive newest first, so the group's recency is already
+            // its most recent session's.
+            Some((_, _, group)) => group.push(session.id),
+            None => groups.push((
+                session.project_id,
+                sidebar_session_timestamp(session),
+                vec![session.id],
+            )),
         }
     }
+    for project in projects.iter().filter(|project| !project.is_projectless()) {
+        if !groups
+            .iter()
+            .any(|(project_id, _, _)| *project_id == project.id)
+        {
+            groups.push((project.id, project.created_at, Vec::new()));
+        }
+    }
+    groups.sort_by_key(|&(_, recency, _)| std::cmp::Reverse(recency));
     groups
+        .into_iter()
+        .map(|(project_id, _, sessions)| (project_id, sessions))
+        .collect()
 }
 
 /// One row of the virtualized sidebar session history.
@@ -765,8 +786,9 @@ impl Fintwind {
     /// started session — far too much per tick for values that move at most
     /// once per stream commit. The fingerprint is an allocation-free scan of
     /// exactly what [`Self::sidebar_rows`] reads: started sessions with their
-    /// recency timestamps and project, the collapsed-project set, and the
-    /// language the headers are localized in.
+    /// recency timestamps and project, the projects that seed sessionless
+    /// groups with their `created_at` recency, the collapsed-project set, and
+    /// the language the headers are localized in.
     fn sidebar_rows_cached(&self) -> Rc<Vec<SidebarRow>> {
         let mut fingerprint = mix(0x51de_ba5e_5eed_c0de, self.state.language as u64);
         for session in &self.state.sessions {
@@ -776,6 +798,10 @@ impl Fintwind {
             fingerprint = mix_uuid(fingerprint, session.id);
             fingerprint = mix(fingerprint, sidebar_session_timestamp(session));
             fingerprint = mix_uuid(fingerprint, session.project_id);
+        }
+        for project in &self.state.projects {
+            fingerprint = mix_uuid(fingerprint, project.id);
+            fingerprint = mix(fingerprint, project.created_at);
         }
         // A set has no stable iteration order; combine order-independently.
         let collapsed = self
@@ -798,9 +824,12 @@ impl Fintwind {
     /// Snapshot the session history as a flat list of lightweight rows,
     /// grouped by project. The most recently active project comes first, and
     /// sessions inside a project keep global recency order, newest first.
+    /// Projects without history keep a bare header so they stay reachable.
     fn sidebar_rows(&self) -> Vec<SidebarRow> {
         let mut rows = vec![SidebarRow::Search];
-        for (project_id, sessions) in sidebar_project_groups(&self.state.sessions) {
+        for (project_id, sessions) in
+            sidebar_project_groups(&self.state.sessions, &self.state.projects)
+        {
             append_project_group_rows(
                 &mut rows,
                 project_id,
@@ -1589,7 +1618,7 @@ mod tests {
         let a_new = session_started_at(project_a, 100);
         let b_only = session_started_at(project_b, 50);
 
-        let groups = sidebar_project_groups(&[a_old.clone(), b_only.clone(), a_new.clone()]);
+        let groups = sidebar_project_groups(&[a_old.clone(), b_only.clone(), a_new.clone()], &[]);
         assert_eq!(
             groups,
             vec![
@@ -1603,7 +1632,38 @@ mod tests {
     fn unstarted_sessions_stay_out_of_the_sidebar() {
         let project = Uuid::new_v4();
         let draft = AgentSession::new(project);
-        assert!(sidebar_project_groups(&[draft]).is_empty());
+        assert!(sidebar_project_groups(&[draft], &[]).is_empty());
+    }
+
+    #[test]
+    fn projects_without_sessions_keep_a_group() {
+        let active = Uuid::new_v4();
+        let session = session_started_at(active, 50);
+        let mut stale = Project::from_path("C:\\stale".into());
+        stale.created_at = 10;
+        let mut fresh = Project::from_path("C:\\fresh".into());
+        fresh.created_at = 100;
+
+        let groups = sidebar_project_groups(&[session.clone()], &[stale.clone(), fresh.clone()]);
+        assert_eq!(
+            groups,
+            vec![
+                (fresh.id, vec![]),
+                (active, vec![session.id]),
+                (stale.id, vec![])
+            ]
+        );
+    }
+
+    #[test]
+    fn projectless_projects_wait_for_a_started_session() {
+        // `is_projectless` classifies by path, so anchor the pseudo-project
+        // under a dedicated workspace root for the duration of the check.
+        let root = std::env::temp_dir().join("fintwind-sidebar-projectless-test");
+        fintwind_protocol::projectless::set_workspace_root(Some(root.clone()));
+        let projectless = Project::from_path(root.join("scratch"));
+        assert!(projectless.is_projectless());
+        assert!(sidebar_project_groups(&[], &[projectless]).is_empty());
     }
 
     #[test]

@@ -67,12 +67,13 @@ pub struct ListItem {
     pub blocks: Vec<Block>,
 }
 
-/// One piece of inline content. Images interrupt a run of text rather than
-/// styling it, so they cannot be an [`InlineStyle`] flag.
+/// One piece of inline content. Images and display math interrupt a run of
+/// text rather than styling it, so they cannot be an [`InlineStyle`] flag.
 #[derive(Clone, Debug, PartialEq)]
 enum InlinePiece {
     Run(InlineRun),
     Image { url: String, alt: String },
+    DisplayMath { latex: String },
 }
 
 /// A markdown block. Containers nest.
@@ -86,6 +87,11 @@ pub enum Block {
     Image {
         url: String,
         alt: String,
+    },
+    /// A `$$…$$` formula. Rendered as typeset math on its own block; inline
+    /// `$…$` formulas degrade to Unicode text inside the text runs instead.
+    DisplayMath {
+        latex: String,
     },
     Heading {
         level: u8,
@@ -134,7 +140,10 @@ impl BlockTree {
 // ── Full parse ─────────────────────────────────────────────────────────────
 
 fn options() -> Options {
-    Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS
+    Options::ENABLE_TABLES
+        | Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TASKLISTS
+        | Options::ENABLE_MATH
 }
 
 /// Parse a whole source into a [`BlockTree`].
@@ -431,8 +440,8 @@ fn parse_inline_container(cursor: &mut Cursor) -> Vec<InlinePiece> {
     merge_pieces(pieces)
 }
 
-/// Split inline pieces into blocks, so images become their own block and the
-/// text around them keeps its order.
+/// Split inline pieces into blocks, so images and display math become their
+/// own blocks and the text around them keeps its order.
 fn pieces_into_blocks(pieces: Vec<InlinePiece>) -> Vec<Block> {
     let mut blocks = Vec::new();
     let mut runs: Vec<InlineRun> = Vec::new();
@@ -447,6 +456,14 @@ fn pieces_into_blocks(pieces: Vec<InlinePiece>) -> Vec<Block> {
                 }
                 blocks.push(Block::Image { url, alt });
             }
+            InlinePiece::DisplayMath { latex } => {
+                if !runs.is_empty() {
+                    blocks.push(Block::Paragraph {
+                        runs: std::mem::take(&mut runs),
+                    });
+                }
+                blocks.push(Block::DisplayMath { latex });
+            }
         }
     }
     if !runs.is_empty() {
@@ -455,7 +472,9 @@ fn pieces_into_blocks(pieces: Vec<InlinePiece>) -> Vec<Block> {
     blocks
 }
 
-/// Flatten pieces to runs for contexts that cannot host a block-level image.
+/// Flatten pieces to runs for contexts that cannot host a block-level image or
+/// formula. Display math degrades to the same Unicode rendering inline math
+/// gets, rather than dropping the content.
 fn pieces_into_runs(pieces: Vec<InlinePiece>) -> Vec<InlineRun> {
     merge_runs(
         pieces
@@ -463,6 +482,9 @@ fn pieces_into_runs(pieces: Vec<InlinePiece>) -> Vec<InlineRun> {
             .map(|piece| match piece {
                 InlinePiece::Run(run) => run,
                 InlinePiece::Image { alt, .. } => InlineRun::plain(alt),
+                InlinePiece::DisplayMath { latex } => {
+                    InlineRun::plain(super::math::to_unicode(&latex))
+                }
             })
             .collect(),
     )
@@ -550,7 +572,16 @@ fn parse_inline_event(cursor: &mut Cursor, pieces: &mut Vec<InlinePiece>, style:
             text: if checked { "[x] " } else { "[ ] " }.to_owned(),
             style: style.clone(),
         }),
-        Event::End(_) | Event::Rule | Event::InlineMath(_) | Event::DisplayMath(_) => {}
+        // Inline math has no block geometry to preserve: it degrades to
+        // Unicode text in the run flow, styled like the prose around it.
+        Event::InlineMath(latex) => push_run(InlineRun {
+            text: super::math::to_unicode(&latex),
+            style: style.clone(),
+        }),
+        Event::DisplayMath(latex) => pieces.push(InlinePiece::DisplayMath {
+            latex: latex.to_string(),
+        }),
+        Event::End(_) | Event::Rule => {}
     }
 }
 
@@ -1034,6 +1065,55 @@ mod tests {
     fn soft_breaks_become_newlines_in_the_run() {
         let tree = parse("first\nsecond");
         assert_eq!(paragraph_text(&tree.blocks[0].block), "first\nsecond");
+    }
+
+    /// Inline `$…$` degrades to Unicode text inside the surrounding run flow;
+    /// the dollars disappear with it.
+    #[test]
+    fn inline_math_becomes_unicode_text() {
+        let tree = parse("given $x^2 + y^2$ obviously");
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("expected a paragraph");
+        };
+        assert_eq!(paragraph_text(&tree.blocks[0].block), "given x² + y² obviously");
+        assert!(runs.iter().all(|run| !run.text.contains('$')));
+    }
+
+    /// A standalone `$$…$$` becomes its own typed block carrying the raw
+    /// LaTeX, which the renderer hands to the background raster pipeline.
+    #[test]
+    fn display_math_becomes_its_own_block() {
+        let latex = r"\int_a^b f(x)\,dx";
+        let tree = parse(&format!("$${latex}$$"));
+        assert_eq!(tree.len(), 1);
+        assert_eq!(
+            tree.blocks[0].block,
+            Block::DisplayMath {
+                latex: latex.to_owned()
+            }
+        );
+    }
+
+    /// Display math mid-paragraph splits blocks, exactly as images do, so the
+    /// text before and after keeps its order.
+    #[test]
+    fn display_math_splits_its_paragraph() {
+        let tree = parse("before $$x$$ after");
+        assert_eq!(tree.len(), 3);
+        assert_eq!(paragraph_text(&tree.blocks[0].block), "before ");
+        assert!(matches!(tree.blocks[1].block, Block::DisplayMath { .. }));
+        assert_eq!(paragraph_text(&tree.blocks[2].block), " after");
+    }
+
+    /// A table cell cannot host block-level math, so it degrades to the same
+    /// Unicode rendering inline math gets rather than dropping content.
+    #[test]
+    fn display_math_in_table_cells_falls_back_to_unicode() {
+        let tree = parse("| a | b |\n|---|---|\n| $$x^2$$ | plain |\n");
+        let Block::Table { rows, .. } = &tree.blocks[0].block else {
+            panic!("expected a table");
+        };
+        assert_eq!(rows[0][0][0].text, "x²");
     }
 
     /// The incremental path must agree with a full parse at every prefix —

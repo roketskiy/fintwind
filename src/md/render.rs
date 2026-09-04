@@ -1059,6 +1059,7 @@ fn render_block(block: &Block, ctx: &Ctx) -> AnyElement {
                 .into_any_element()
         }
         Block::Image { url, alt } => render_image(url, alt, ctx),
+        Block::DisplayMath { latex } => render_math_block(latex, ctx),
         Block::CodeBlock { language, code } => render_code_block(language.as_deref(), code, ctx),
         Block::BlockQuote { children } => {
             let rendered = children
@@ -1239,6 +1240,66 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
                     .child(SharedString::from(alt.to_owned())),
             )
         })
+        .into_any_element()
+}
+
+/// A `$$…$$` formula. The typeset raster comes from the background math cache
+/// (`math::ensure_rendered`, kicked by a zero-size canvas sibling below);
+/// until it arrives — or permanently, for malformed LaTeX — the raw source
+/// shows as selectable mono text so the content is never lost.
+fn render_math_block(latex: &str, ctx: &Ctx) -> AnyElement {
+    let key = ctx.next_key();
+    let font_size = ctx.metrics.text_size;
+    let color = ctx.palette.text;
+
+    let body = match super::math::cached(latex, font_size, color) {
+        Some((image, width, height)) => img(image)
+            .id(SharedString::from(format!("math-{}-{}", key.row, key.index)))
+            .w(px(width))
+            .h(px(height))
+            .max_w(relative(1.0))
+            .object_fit(gpui::ObjectFit::ScaleDown)
+            .into_any_element(),
+        None => {
+            let flat = ctx.flat(key.index, || {
+                flatten_plain(
+                    latex.to_owned(),
+                    MONO_FAMILY,
+                    FontWeight::NORMAL,
+                    ctx.palette.secondary,
+                )
+            });
+            div()
+                .min_w_0()
+                .text_size(px(ctx.metrics.code_text_size))
+                .line_height(px(ctx.metrics.code_line_height))
+                .text_color(ctx.palette.secondary)
+                .child(text_element(&flat, key.clone(), ctx))
+                .into_any_element()
+        }
+    };
+
+    div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .justify_center()
+        .py(px(2.0))
+        .child(body)
+        .child(
+            canvas(
+                |_, _, _| (),
+                {
+                    let latex = latex.to_owned();
+                    move |_, _, _, cx| {
+                        super::math::ensure_rendered(&latex, font_size, color, cx)
+                    }
+                },
+            )
+            .absolute()
+            .w(px(0.0))
+            .h(px(0.0)),
+        )
         .into_any_element()
 }
 

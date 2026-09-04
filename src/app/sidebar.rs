@@ -368,18 +368,10 @@ impl Fintwind {
         )
     }
 
-    /// Reveals the selected session's workspace in the desktop file manager.
-    /// A remote session's folder lives on the daemon host and cannot be
-    /// opened locally, so it answers with the same explanation transcript
-    /// file links give.
+    /// Opens the selected session's workspace folder on the desktop.
     fn reveal_selected_project_folder(&mut self, cx: &mut Context<Self>) {
-        if self.daemon.is_remote() {
-            self.show_toast(tr!("errors.remote_host_path"));
-            cx.notify();
-            return;
-        }
-        if let Some(path) = self.selected_workspace_path() {
-            crate::platform::open_with_default_app(path, cx);
+        if let Some(path) = self.selected_workspace_path().map(|path| path.to_path_buf()) {
+            self.open_host_path(&path, cx);
         }
     }
 

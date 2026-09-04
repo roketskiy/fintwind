@@ -17,6 +17,15 @@
 //! is a provider entry edited in an editor between a page load and a commit
 //! — the roster read at page open wins.
 //!
+//! Map iteration order is a build property, not a data property. serde_json
+//! iterates maps in insertion order when the `preserve_order` feature is in
+//! the dependency graph (gpui pulls it in, so app builds see the file's own
+//! order) and in sorted key order without it. Lists this module writes back
+//! or asserts on — `disabled_providers`, MCP `environment`/`headers` pairs —
+//! are sorted explicitly so they cannot shuffle with the build; loaded entity
+//! lists (providers, models, servers) keep the map's order, and no test
+//! asserts it.
+//!
 //! Verified against `opencode2` 0.0.0-beta-18743:
 //! - a model `limit` without `output` fails validation and silently drops
 //!   the WHOLE provider from the catalog, so a fresh `limit` is always
@@ -200,9 +209,8 @@ pub fn save_providers_at(path: &Path, providers: &[CustomProvider]) -> io::Resul
             disabled.push(provider.slug.clone());
         }
     }
-    // A stable, order-independent list: the roster's arrival order follows
-    // the config map's iteration order, which varies with serde_json's
-    // `preserve_order` feature.
+    // This list is written back to disk; sort it so it cannot shuffle with
+    // the build's map iteration order (see the module note).
     disabled.sort();
     if disabled.is_empty() {
         document.remove("disabled_providers");
@@ -421,10 +429,7 @@ fn mcp_server_from_config(key: &str, entry: &Value) -> McpServer {
                         value.as_str().map(|value| (key.clone(), value.to_owned()))
                     })
                     .collect();
-                // Sort by key: serde_json's map iteration order depends on
-                // whether `preserve_order` entered the dependency graph
-                // (sorted BTreeMap vs insertion-ordered IndexMap), and the
-                // config must not shuffle with it.
+                // Sort by key — see the module note on map iteration order.
                 pairs.sort_by(|a, b| a.0.cmp(&b.0));
                 pairs
             })
@@ -898,7 +903,8 @@ mod tests {
         assert_eq!(charts.kind, McpServerKind::Local);
         assert_eq!(charts.command, vec!["npx", "-y", "@antv/mcp-server-chart"]);
         assert_eq!(
-            // serde_json's map iterates keys in sorted order.
+            // Sorted by `mcp_server_from_config`; see the module note on map
+            // iteration order.
             charts.environment,
             vec![
                 ("DEBUG".to_owned(), "1".to_owned()),

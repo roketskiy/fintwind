@@ -136,14 +136,19 @@ fn normalized_path(path: &Path) -> PathBuf {
     normalized
 }
 
+/// Display convention is forward slashes, whatever the host separator is;
+/// `PathBuf`s keep the native form for I/O.
+fn display_slashes(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn workspace_relative_file_path(workspace: &Path, target: &Path) -> Option<String> {
     fn relative(workspace: &Path, target: &Path) -> Option<String> {
         let relative = target.strip_prefix(workspace).ok()?;
         if relative.as_os_str().is_empty() {
             return None;
         }
-        // Display convention is forward slashes, whatever the host separator is.
-        Some(relative.to_string_lossy().replace('\\', "/"))
+        Some(display_slashes(relative))
     }
 
     let workspace = normalized_path(workspace);
@@ -732,9 +737,7 @@ fn visible_working_tree_entries(
             let expanded = is_dir && expanded_paths.contains(&absolute_path);
             let file_icon = (!is_dir).then(|| file_icon_for_name(&name));
             entries.push(WorkingTreeEntry {
-                // Display convention is forward slashes, whatever the host
-                // separator is; `absolute_path` keeps the native form for I/O.
-                relative_path: relative_path.to_string_lossy().replace('\\', "/"),
+                relative_path: display_slashes(&relative_path),
                 absolute_path: absolute_path.clone(),
                 name,
                 is_dir,
@@ -1711,14 +1714,7 @@ impl Fintwind {
                 self.open_right_panel_surface(RightPanelSurface::Files, cx);
                 self.open_right_panel_file(relative_path, cx);
             }
-            TranscriptLinkRoute::Finder(path) => {
-                if self.daemon.is_remote() {
-                    self.show_toast(tr!("errors.remote_host_path"));
-                    cx.notify();
-                } else {
-                    crate::platform::reveal_in_file_manager(&path, cx);
-                }
-            }
+            TranscriptLinkRoute::Finder(path) => self.reveal_host_path(&path, cx),
             TranscriptLinkRoute::External => return false,
         }
         true

@@ -44,10 +44,11 @@ fn attach_driver(
     let Some(session) = fintwind_client::persistence::hydrate_session(&daemon, session_id)? else {
         return Ok(None);
     };
-    let response =
-        daemon
-            .client()
-            .request(session_id, Uuid::nil(), fintwind_client::Command::AttachSession)?;
+    let response = daemon.client().request(
+        session_id,
+        Uuid::nil(),
+        fintwind_client::Command::AttachSession,
+    )?;
     let fintwind_client::ResponsePayload::SessionRuntime {
         runtime_id,
         supports_steer,
@@ -152,17 +153,18 @@ fn prepare_submission(
             if project.is_projectless() {
                 anyhow::bail!("a projectless task cannot create a Git worktree");
             }
-            let created =
-                match workspace_client.request(fintwind_client::WorkspaceOperation::CreateWorktree {
+            let created = match workspace_client.request(
+                fintwind_client::WorkspaceOperation::CreateWorktree {
                     project_path: project.path.clone(),
                     project_id: project.id,
                     session_id,
                     prompt: prompt.to_owned(),
                     base_branch,
-                })? {
-                    fintwind_client::WorkspaceResult::WorktreeCreated { worktree } => worktree,
-                    _ => anyhow::bail!("the daemon returned an invalid worktree response"),
-                };
+                },
+            )? {
+                fintwind_client::WorkspaceResult::WorktreeCreated { worktree } => worktree,
+                _ => anyhow::bail!("the daemon returned an invalid worktree response"),
+            };
             SessionWorkspace::Worktree {
                 path: created.path,
                 branch: created.branch,
@@ -253,7 +255,10 @@ fn perform_message_rewind(
         return Err(tr!("session.pre_turn_checkpoint_missing"));
     }
 
-    let safety_ref = format!("refs/fintwind/revert-backup-{session_id}-{}", Uuid::new_v4());
+    let safety_ref = format!(
+        "refs/fintwind/revert-backup-{session_id}-{}",
+        Uuid::new_v4()
+    );
     workspace_ack(
         &request.workspace_client,
         fintwind_client::WorkspaceOperation::CaptureRef {
@@ -370,9 +375,9 @@ fn perform_provider_rewind(
     }
 
     let cursor = if let Some(driver) = request.driver.as_ref() {
-        driver.rollback(request.rollback_turns)?.ok_or_else(|| {
-            anyhow::anyhow!("OpenCode returned no cursor for the rewound session")
-        })?
+        driver
+            .rollback(request.rollback_turns)?
+            .ok_or_else(|| anyhow::anyhow!("OpenCode returned no cursor for the rewound session"))?
     } else {
         let Some(ProviderResumeCursor::OpenCode {
             session_id: native_session_id,
@@ -951,7 +956,8 @@ impl Fintwind {
             return;
         };
         self.provider_model_discoveries.insert(provider.clone());
-        self.provider_model_discoveries_pending.insert(provider.clone());
+        self.provider_model_discoveries_pending
+            .insert(provider.clone());
         let provider_probe_tx = self.provider_probe_tx.clone();
         let event_wake = self.event_wake_tx.clone();
         let daemon = self.daemon.client();
@@ -1000,11 +1006,10 @@ impl Fintwind {
     /// drain loop; render reads only that map.
     pub(super) fn request_provider_version_probes(&mut self) {
         let provider = OPENCODE_PROVIDER.to_owned();
-        if !self
-            .probes
-            .first()
-            .is_some_and(|probe| probe.installed)
-            || !self.provider_version_probes_pending.insert(provider.clone())
+        if !self.probes.first().is_some_and(|probe| probe.installed)
+            || !self
+                .provider_version_probes_pending
+                .insert(provider.clone())
         {
             return;
         }
@@ -1089,8 +1094,7 @@ impl Fintwind {
         }
         // A refresh means "re-check everything": clearing the per-launch guard
         // lets catalog discovery run again as its detection lands below.
-        self.provider_model_discoveries
-            .remove(OPENCODE_PROVIDER);
+        self.provider_model_discoveries.remove(OPENCODE_PROVIDER);
     }
 
     pub(super) fn drain_provider_detection_events(&mut self) -> bool {
@@ -1296,71 +1300,77 @@ impl Fintwind {
                         }
                     })
                     .await;
-                fintwind.update(cx, |fintwind, cx| {
-                    fintwind.checkpoint_captures_in_flight
-                        .remove(&(session_id, turn_count));
-                    let selected = fintwind.state.selected_session == Some(session_id);
-                    if selected {
-                        fintwind.sync_transcript_rows();
-                    }
-                    let previous_kinds = if selected {
-                        fintwind.transcript_row_kinds.borrow().clone()
-                    } else {
-                        Vec::new()
-                    };
-                    let checkpoint = match captured {
-                        Ok(checkpoint) => checkpoint,
-                        Err(error) => {
-                            fintwind.show_toast(tr!("errors.capture_turn_checkpoint", error = error));
-                            Checkpoint {
-                                turn_count,
-                                git_ref: checkpoint::checkpoint_ref(session_id, turn_count),
-                                status: CheckpointStatus::Error,
-                                files: Vec::new(),
-                                additions: 0,
-                                deletions: 0,
-                                created_at: unix_time(),
-                            }
+                fintwind
+                    .update(cx, |fintwind, cx| {
+                        fintwind
+                            .checkpoint_captures_in_flight
+                            .remove(&(session_id, turn_count));
+                        let selected = fintwind.state.selected_session == Some(session_id);
+                        if selected {
+                            fintwind.sync_transcript_rows();
                         }
-                    };
-                    fintwind.invalidate_checkpoint_refs();
-                    let mut attached_turn_id = None;
-                    if let Some(session) = fintwind.state.session_mut(session_id)
-                        && let Some(turn) = session
-                            .turns
-                            .iter_mut()
-                            .find(|turn| turn.turn_count == turn_count)
-                    {
-                        turn.checkpoint = Some(checkpoint);
-                        attached_turn_id = Some(turn.id);
-                    }
-                    if let Some(turn_id) = attached_turn_id
-                        && selected
-                    {
-                        // Reconcile a standalone card by row identity, then
-                        // remeasure the terminal response when the card is
-                        // hosted inline before its footer.
-                        fintwind.splice_transcript_rows_after_visibility_change(&previous_kinds);
-                        fintwind.remeasure_changed_files(turn_id);
-                    }
-                    let resume_queue = fintwind.pending_queue_drains.contains(&session_id);
-                    if resume_queue {
-                        fintwind.pending_queue_drains.retain(|id| *id != session_id);
-                        fintwind.drain_queued_message(session_id, cx);
-                    }
-                    cx.notify();
-                    if attached_turn_id.is_some() {
-                        // Let the new transcript row paint before SQLite work.
-                        // Without this save, a checkpoint that lands after the
-                        // turn's final stream save can disappear on relaunch.
-                        cx.spawn(async move |fintwind, cx| {
-                            cx.background_executor().timer(STREAM_FRAME_INTERVAL).await;
-                            let _ = fintwind.update(cx, |fintwind, _| fintwind.save());
-                        })
-                        .detach();
-                    }
-                })
-                .ok();
+                        let previous_kinds = if selected {
+                            fintwind.transcript_row_kinds.borrow().clone()
+                        } else {
+                            Vec::new()
+                        };
+                        let checkpoint = match captured {
+                            Ok(checkpoint) => checkpoint,
+                            Err(error) => {
+                                fintwind.show_toast(tr!(
+                                    "errors.capture_turn_checkpoint",
+                                    error = error
+                                ));
+                                Checkpoint {
+                                    turn_count,
+                                    git_ref: checkpoint::checkpoint_ref(session_id, turn_count),
+                                    status: CheckpointStatus::Error,
+                                    files: Vec::new(),
+                                    additions: 0,
+                                    deletions: 0,
+                                    created_at: unix_time(),
+                                }
+                            }
+                        };
+                        fintwind.invalidate_checkpoint_refs();
+                        let mut attached_turn_id = None;
+                        if let Some(session) = fintwind.state.session_mut(session_id)
+                            && let Some(turn) = session
+                                .turns
+                                .iter_mut()
+                                .find(|turn| turn.turn_count == turn_count)
+                        {
+                            turn.checkpoint = Some(checkpoint);
+                            attached_turn_id = Some(turn.id);
+                        }
+                        if let Some(turn_id) = attached_turn_id
+                            && selected
+                        {
+                            // Reconcile a standalone card by row identity, then
+                            // remeasure the terminal response when the card is
+                            // hosted inline before its footer.
+                            fintwind
+                                .splice_transcript_rows_after_visibility_change(&previous_kinds);
+                            fintwind.remeasure_changed_files(turn_id);
+                        }
+                        let resume_queue = fintwind.pending_queue_drains.contains(&session_id);
+                        if resume_queue {
+                            fintwind.pending_queue_drains.retain(|id| *id != session_id);
+                            fintwind.drain_queued_message(session_id, cx);
+                        }
+                        cx.notify();
+                        if attached_turn_id.is_some() {
+                            // Let the new transcript row paint before SQLite work.
+                            // Without this save, a checkpoint that lands after the
+                            // turn's final stream save can disappear on relaunch.
+                            cx.spawn(async move |fintwind, cx| {
+                                cx.background_executor().timer(STREAM_FRAME_INTERVAL).await;
+                                let _ = fintwind.update(cx, |fintwind, _| fintwind.save());
+                            })
+                            .detach();
+                        }
+                    })
+                    .ok();
             })
             .detach();
         }
@@ -1427,10 +1437,7 @@ impl Fintwind {
             .count();
         let binary = self.probes.first().and_then(|probe| probe.path.clone());
         if binary.is_none() {
-            self.show_toast(tr!(
-                "errors.provider_not_installed",
-                provider = "OpenCode"
-            ));
+            self.show_toast(tr!("errors.provider_not_installed", provider = "OpenCode"));
             cx.notify();
             return;
         }
@@ -1725,10 +1732,7 @@ impl Fintwind {
         }
         let rollback_turns = source.provider_turns_after(retained_turn_count);
         if rollback_turns > 0 && source.provider_cursor.is_none() {
-            self.show_toast(tr!(
-                "session.provider_cannot_rewind",
-                provider = "OpenCode"
-            ));
+            self.show_toast(tr!("session.provider_cannot_rewind", provider = "OpenCode"));
             cx.notify();
             return;
         }
@@ -1757,10 +1761,7 @@ impl Fintwind {
             .then(|| self.probes.first().and_then(|probe| probe.path.clone()))
             .flatten();
         if needs_binary && binary.is_none() {
-            self.show_toast(tr!(
-                "errors.provider_not_found",
-                provider = "OpenCode"
-            ));
+            self.show_toast(tr!("errors.provider_not_found", provider = "OpenCode"));
             cx.notify();
             return;
         }
@@ -1996,14 +1997,27 @@ impl Fintwind {
                 .map(|model| model.id.clone())
         });
         let model_metadata = self.model_metadata_for_session(session);
-        let reasoning_effort = session.reasoning_effort.clone().filter(|effort| {
-            model_metadata.is_some_and(|model| {
-                model
-                    .reasoning_efforts
-                    .iter()
-                    .any(|option| option.id == *effort)
+        let reasoning_effort = session
+            .reasoning_effort
+            .clone()
+            .filter(|effort| {
+                model_metadata.is_some_and(|model| {
+                    model
+                        .reasoning_efforts
+                        .iter()
+                        .any(|option| option.id == *effort)
+                })
             })
-        });
+            .or_else(|| {
+                model_metadata.and_then(|model| {
+                    model.default_reasoning_effort.clone().or_else(|| {
+                        model
+                            .reasoning_efforts
+                            .first()
+                            .map(|option| option.id.clone())
+                    })
+                })
+            });
         let service_tier = session.service_tier.clone().filter(|tier| {
             tier == "default"
                 || model_metadata.is_some_and(|model| {

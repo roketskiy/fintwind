@@ -113,6 +113,7 @@ pub struct OpenCodeDriver {
     mode: RuntimeMode,
     interaction_mode: InteractionMode,
     model: Option<String>,
+    reasoning_effort: Option<String>,
     computer_use: Option<super::support::HeadlessComputerUseRuntime>,
 }
 
@@ -124,7 +125,7 @@ impl OpenCodeDriver {
             mode,
             interaction_mode,
             model,
-            reasoning_effort: _,
+            reasoning_effort,
             service_tier: _,
             context_window: _,
             agent_preset: _,
@@ -204,12 +205,14 @@ impl OpenCodeDriver {
         // would ride the same endpoint. The model reference on this wire is
         // `{id, providerID}`, unlike v1's `{providerID, modelID}`.
         if let Some(model) = model.as_ref() {
-            if let Some((provider_id, model_id)) = model.split_once('/') {
-                let _ = server.request(
-                    "POST",
-                    &format!("/api/session/{}/model", encode_path_segment(&session_id)),
-                    Some(&json!({"model": {"id": model_id, "providerID": provider_id}})),
-                );
+            if let Some(model_ref) = opencode_model_ref(model, reasoning_effort.as_deref()) {
+                server
+                    .request(
+                        "POST",
+                        &format!("/api/session/{}/model", encode_path_segment(&session_id)),
+                        Some(&json!({"model": model_ref})),
+                    )
+                    .context("switch OpenCode model/variant")?;
             }
         }
 
@@ -634,7 +637,8 @@ impl OpenCodeDriver {
                                 "/api/session/{}/compact",
                                 encode_path_segment(&worker_session)
                             );
-                            if let Err(error) = worker_server.request("POST", &path, Some(&json!({})))
+                            if let Err(error) =
+                                worker_server.request("POST", &path, Some(&json!({})))
                             {
                                 // A 409 means a compaction is already
                                 // admitted — that is success from the user's
@@ -762,8 +766,18 @@ impl OpenCodeDriver {
             interaction_mode,
             model,
             computer_use,
+            reasoning_effort,
         })
     }
+}
+
+fn opencode_model_ref(model: &str, variant: Option<&str>) -> Option<Value> {
+    let (provider_id, model_id) = model.split_once('/')?;
+    let mut reference = json!({"id": model_id, "providerID": provider_id});
+    if let Some(variant) = variant {
+        reference["variant"] = json!(variant);
+    }
+    Some(reference)
 }
 
 impl DriverControl for OpenCodeDriver {
@@ -951,11 +965,12 @@ impl DriverControl for OpenCodeDriver {
     }
 
     fn apply_options(&self, options: SessionOptions) -> bool {
-        // The agent and model are session-level settings, so either changing
-        // one requires a fresh driver to apply the new session configuration.
+        // Agent, model and variant are session-level settings. Changing any
+        // of them requires a fresh driver to apply the new configuration.
         options.mode == self.mode
             && options.interaction_mode == self.interaction_mode
             && options.model == self.model
+            && options.reasoning_effort == self.reasoning_effort
     }
 
     fn rollback(&self, turns: usize) -> anyhow::Result<Option<ProviderResumeCursor>> {
@@ -1284,7 +1299,11 @@ fn opencode_model_context_windows(response: &Value) -> HashMap<String, u64> {
 /// cache-heavy turn. `total`, when present, already equals `input + output`.
 fn opencode_session_usage_tokens(payload: &Value) -> Option<u64> {
     let tokens = payload.get("tokens")?;
-    if let Some(total) = tokens.get("total").and_then(Value::as_u64).filter(|total| *total > 0) {
+    if let Some(total) = tokens
+        .get("total")
+        .and_then(Value::as_u64)
+        .filter(|total| *total > 0)
+    {
         return Some(total);
     }
     let total = [tokens.get("input"), tokens.get("output")]
@@ -2516,6 +2535,14 @@ fn permission_responses(
 mod tests {
     use super::*;
 
+    #[test]
+    fn model_reference_carries_variant_and_preserves_nested_model_ids() {
+        assert_eq!(opencode_model_ref("gateway/vendor/model", Some("high")),
+            Some(json!({"id": "vendor/model", "providerID": "gateway", "variant": "high"})));
+        assert_eq!(opencode_model_ref("gateway/model", None),
+            Some(json!({"id": "model", "providerID": "gateway"})));
+    }
+
     fn harness() -> (
         Sender<DriverEvent>,
         crossbeam_channel::Receiver<DriverEvent>,
@@ -3396,7 +3423,8 @@ mod tests {
     #[test]
     #[ignore = "requires opencode2, credentials and FINTWIND_TEST_MODEL"]
     fn tool_input_is_visible_before_execution_against_a_real_server() {
-        let cwd = std::env::temp_dir().join(format!("fintwind-tool-stream-{}", uuid::Uuid::new_v4()));
+        let cwd =
+            std::env::temp_dir().join(format!("fintwind-tool-stream-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&cwd).unwrap();
         let (events, event_rx) = crate::driver::test_event_channel();
         let driver = OpenCodeDriver::start(
@@ -3406,11 +3434,22 @@ mod tests {
                 mode: RuntimeMode::FullAccess,
                 interaction_mode: InteractionMode::Build,
                 model: Some(std::env::var("FINTWIND_TEST_MODEL").expect("set a test model")),
-                reasoning_effort: None, service_tier: None, context_window: None,
-                agent_preset: None, computer_use_enabled: false, provider_cursor: None,
-            }, events,
-        ).unwrap();
-        assert!(matches!(event_rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap(), DriverEvent::Connected { .. }));
+                reasoning_effort: None,
+                service_tier: None,
+                context_window: None,
+                agent_preset: None,
+                computer_use_enabled: false,
+                provider_cursor: None,
+            },
+            events,
+        )
+        .unwrap();
+        assert!(matches!(
+            event_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap(),
+            DriverEvent::Connected { .. }
+        ));
         driver.prompt("Use the write tool to create probe.txt in the current directory with 200 numbered lines, each containing a different short sentence about software testing. Generate the full file in a single tool call. Do not use shell commands or read any other files. Then reply DONE.".into());
         let began = std::time::Instant::now();
         let mut pending = HashMap::new();
@@ -3418,27 +3457,45 @@ mod tests {
         let mut completed = HashSet::new();
         let mut success = false;
         while began.elapsed() < std::time::Duration::from_secs(180) {
-            let Ok(event) = event_rx.recv_timeout(std::time::Duration::from_secs(5)) else { continue; };
+            let Ok(event) = event_rx.recv_timeout(std::time::Duration::from_secs(5)) else {
+                continue;
+            };
             match event {
                 DriverEvent::RichActivity(item) => {
-                    let Some(id) = item.source_id else { continue; };
+                    let Some(id) = item.source_id else {
+                        continue;
+                    };
                     if !item.complete && item.arguments.is_none() {
                         pending.insert(id, began.elapsed());
                     } else if !item.complete {
-                        assert!(pending.contains_key(&id), "arguments arrived before the pending activity");
-                        eprintln!("tool pending at {:?}, arguments at {:?}", pending[&id], began.elapsed());
+                        assert!(
+                            pending.contains_key(&id),
+                            "arguments arrived before the pending activity"
+                        );
+                        eprintln!(
+                            "tool pending at {:?}, arguments at {:?}",
+                            pending[&id],
+                            began.elapsed()
+                        );
                         enriched.insert(id);
                     } else {
                         assert!(!item.failed, "test tool failed");
                         completed.insert(id);
                     }
                 }
-                DriverEvent::TurnFinished { success: finished, .. } => { success = finished; break; }
+                DriverEvent::TurnFinished {
+                    success: finished, ..
+                } => {
+                    success = finished;
+                    break;
+                }
                 DriverEvent::Error(error) => panic!("provider error: {error}"),
                 _ => {}
             }
         }
-        if !success { driver.cancel(); }
+        if !success {
+            driver.cancel();
+        }
         assert!(success, "test turn did not complete");
         assert!(!enriched.is_empty());
         assert!(enriched.iter().all(|id| completed.contains(id)));
@@ -3749,14 +3806,18 @@ mod tests {
 
         // Conversations without a compaction seed nothing, and unknown
         // statuses are skipped rather than guessed at.
-        assert!(latest_opencode_compaction(&json!({"data": [
-            {"id": "msg_1", "type": "assistant", "tokens": {}}
-        ]}))
-        .is_none());
-        assert!(latest_opencode_compaction(&json!({"data": [
-            {"id": "msg_1", "type": "compaction", "status": "mysterious"}
-        ]}))
-        .is_none());
+        assert!(
+            latest_opencode_compaction(&json!({"data": [
+                {"id": "msg_1", "type": "assistant", "tokens": {}}
+            ]}))
+            .is_none()
+        );
+        assert!(
+            latest_opencode_compaction(&json!({"data": [
+                {"id": "msg_1", "type": "compaction", "status": "mysterious"}
+            ]}))
+            .is_none()
+        );
     }
 
     #[test]

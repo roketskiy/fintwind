@@ -328,6 +328,12 @@ fn provider_entry(provider: &CustomProvider) -> Value {
         // The pre-OpenCode-config mirror wrote `contextWindow`; superseded
         // by `limit.context` and never read back once `limit` exists.
         spec.remove("contextWindow");
+        crate::provider_thinking::fill_model_variants(
+            &mut spec,
+            &model.id,
+            model.display_name(),
+            provider.api_format,
+        );
         models.insert(model.id.clone(), Value::Object(spec));
     }
     entry.insert("models".into(), Value::Object(models));
@@ -679,6 +685,32 @@ mod tests {
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["provider"]["my-relay"]["npm"], "@ai-sdk/openai");
 
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn saving_a_new_provider_writes_thinking_modes_and_survives_reload() {
+        let directory = std::env::temp_dir().join(format!(
+            "fintwind-thinking-config-{}", uuid::Uuid::new_v4()
+        ));
+        let path = write_fixture(&directory, &serde_json::json!({"instructions": ["keep.md"]}));
+        let providers = vec![CustomProvider::new(
+            "thinking-test".into(), "Thinking test".into(),
+            "https://example.invalid/v1".into(), ProviderApiFormat::OpenAiResponses,
+            "test-key".into(), vec![CustomProviderModel {
+                id: "gpt-5.5".into(), ..Default::default()
+            }],
+        )];
+        save_providers_at(&path, &providers).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let model = &saved["provider"]["thinking-test"]["models"]["gpt-5.5"];
+        assert_eq!(model["variants"].as_object().unwrap().len(), 6);
+        assert_eq!(model["options"]["reasoningEffort"], "xhigh");
+        assert_eq!(saved["instructions"], serde_json::json!(["keep.md"]));
+        let loaded = load_providers_at(&path).unwrap();
+        save_providers_at(&path, &loaded).unwrap();
+        let reloaded: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved, reloaded);
         let _ = std::fs::remove_dir_all(directory);
     }
 

@@ -12,6 +12,7 @@ pub mod custom_providers;
 pub mod driver;
 pub mod models_dev;
 pub mod opencode_config;
+mod provider_thinking;
 pub mod persistence;
 mod process;
 mod workspace_client;

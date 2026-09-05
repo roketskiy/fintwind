@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::model::{ProviderAgentPreset, ProviderModel};
+use crate::model::{ProviderAgentPreset, ProviderModel, ProviderModelOption};
 
 pub fn fallback_models() -> Vec<ProviderModel> {
     // OpenCode's catalog depends on the user's configured providers. An
@@ -78,12 +78,118 @@ fn write_models_file(path: &Path, models: &[ProviderModel]) -> std::io::Result<(
 }
 
 fn discover_opencode_models(binary: &Path) -> Vec<ProviderModel> {
+    // The plain `models` listing discards variants. Query the V2 catalog
+    // through the CLI so discovery shares its authentication/service context.
+    let query = std::env::current_dir()
+        .ok()
+        .map(|directory| {
+            url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("location[directory]", &directory.to_string_lossy())
+                .finish()
+        })
+        .unwrap_or_default();
+    let mut activation_command = crate::command_env::command(binary);
+    activation_command.args([
+        "api",
+        "post",
+        &format!("/api/plugin/await-activation?{query}"),
+    ]);
+    let _ = crate::command_env::output(&mut activation_command);
+    let mut catalog_command = crate::command_env::command(binary);
+    catalog_command.args(["api", "get", &format!("/api/model?{query}")]);
+    if let Ok(output) = crate::command_env::output(&mut catalog_command)
+        && output.status.success()
+        && let Ok(value) = serde_json::from_slice(&output.stdout)
+    {
+        let models = parse_opencode_catalog(&value);
+        if !models.is_empty() {
+            return models;
+        }
+    }
     let mut command = crate::command_env::command(binary);
     command.arg("models");
     let Ok(output) = crate::command_env::output(&mut command) else {
         return Vec::new();
     };
-    parse_opencode_models(&String::from_utf8_lossy(&output.stdout))
+    let models = parse_opencode_models(&String::from_utf8_lossy(&output.stdout));
+    let cached: std::collections::HashMap<_, _> = cached_models()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|model| (model.id.clone(), model))
+        .collect();
+    models
+        .into_iter()
+        .map(|model| cached.get(&model.id).cloned().unwrap_or(model))
+        .collect()
+}
+
+fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {
+    use serde_json::Value;
+    value
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.get("enabled").and_then(Value::as_bool) != Some(false))
+        .filter_map(|entry| {
+            let id = entry.get("id")?.as_str()?;
+            let provider = entry.get("providerID")?.as_str()?;
+            let name = entry.get("name").and_then(Value::as_str).unwrap_or(id);
+            let reference = fintwind_protocol::thinking_modes::find(id, Some(name));
+            let mut model = ProviderModel::new(format!("{provider}/{id}"), name)
+                .sub_provider(display_name_from_slug(provider));
+            model.reasoning_efforts = entry
+                .get("variants")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(|variant| {
+                    let id = variant.get("id")?.as_str()?;
+                    let label = reference
+                        .and_then(|model| {
+                            model.thinking_modes.iter().find(|mode| mode.mode_key == id)
+                        })
+                        .map(|mode| mode.name_en.as_str())
+                        .unwrap_or(id);
+                    Some(ProviderModelOption::new(id, label))
+                })
+                .collect();
+            // Only select defaults that actually exist in this server's catalog.
+            let configured_default = entry
+                .get("variants")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .find(|variant| {
+                    variant
+                        .get("settings")
+                        .and_then(Value::as_object)
+                        .is_some_and(|settings| {
+                            !settings.is_empty()
+                                && settings.iter().all(|(key, value)| {
+                                    entry.get("settings").and_then(|settings| settings.get(key))
+                                        == Some(value)
+                                })
+                        })
+                })
+                .and_then(|variant| variant.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            model.default_reasoning_effort = configured_default
+                .or_else(|| {
+                    reference
+                        .and_then(|model| model.thinking_modes.iter().find(|mode| mode.is_default))
+                        .map(|mode| mode.mode_key.clone())
+                })
+                .filter(|id| {
+                    model
+                        .reasoning_efforts
+                        .iter()
+                        .any(|option| &option.id == id)
+                });
+            Some(model)
+        })
+        .collect()
 }
 
 fn parse_opencode_models(output: &str) -> Vec<ProviderModel> {
@@ -163,6 +269,21 @@ fn deduplicate(models: Vec<ProviderModel>) -> Vec<ProviderModel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_keeps_server_variants_and_filters_unavailable_models() {
+        let models = parse_opencode_catalog(&serde_json::json!({"data": [
+            {"id": "gpt-5.5", "providerID": "gateway", "enabled": true,
+             "name": "GPT-5.5", "variants": [{"id": "low"}, {"id": "xhigh"}]},
+            {"id": "hidden", "providerID": "gateway", "enabled": false},
+            {"id": "custom", "providerID": "gateway", "variants": [{"id": "my-budget"}]}
+        ]}));
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].reasoning_efforts.len(), 2);
+        assert_eq!(models[0].default_reasoning_effort.as_deref(), Some("xhigh"));
+        assert_eq!(models[1].reasoning_efforts[0].id, "my-budget");
+        assert!(models[1].default_reasoning_effort.is_none());
+    }
 
     #[test]
     fn model_cache_round_trips_and_rejects_empty_or_invalid_files() {

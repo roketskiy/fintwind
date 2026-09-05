@@ -5,3 +5,4 @@ pub mod parser;
 pub mod render;
 pub mod selection;
 pub mod veil;
+pub mod virtualized;

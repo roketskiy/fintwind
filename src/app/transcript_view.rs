@@ -2092,96 +2092,122 @@ impl Fintwind {
                         })),
                 );
             if item_expanded && let Some(reasoning) = reasoning {
-                // Reasoning remains model prose even though it now shares the
-                // activity stream, so keep selectable markdown rather than
-                // presenting it as monospace tool output.
-                let mut palette = MarkdownPalette::from_theme(theme);
-                palette.text = theme.text_secondary;
-                palette.secondary = theme.text_tertiary;
-                let ctx = self.markdown_ctx(
-                    format!("reasoning-{id}"),
-                    &palette,
-                    MarkdownMetrics::COMPACT,
-                    reasoning_live && !cx.reduce_motion(),
-                );
-                let reasoning_viewport = self
-                    .activity_scroll_viewports
-                    .borrow_mut()
-                    .entry(id)
-                    .or_default()
-                    .clone();
-                let mut views = self.activity_markdown.borrow_mut();
-                let view = views.entry(id).or_default();
-                if reasoning_live {
-                    let start = self.live_reasoning_window_start(id, &reasoning.content, view);
-                    view.set_text(&reasoning.content[start..], true);
-                } else {
-                    self.reasoning_window_starts.borrow_mut().remove(&id);
-                    view.set_text(&reasoning.content, false);
-                }
-                let wheel_scroll = reasoning_viewport.scroll_handle.clone();
-                let wheel_follow_tail = reasoning_viewport.follow_tail.clone();
-                let markdown = if reasoning_live {
-                    // The live peek pins to the tail of a growing document;
-                    // building every block of a long think per pulse tick was
-                    // the remaining 40%-CPU streaming path.
-                    md::render::markdown_tail(view, &ctx, LIVE_REASONING_TAIL_BLOCKS)
-                } else {
-                    md::render::markdown(view, &ctx)
-                };
-                if reasoning_live && !cx.reduce_motion() && view.is_fading() {
-                    // The reasoning dissolve rides the half-rate lease: fast
-                    // thinking keeps a fade active for the whole phase, every
-                    // tick rebuilds each visible transcript row, and 15 fps
-                    // alpha on the dim 11.5px peek is indistinguishable. The
-                    // answer text keeps the full-rate dissolve.
-                    motion::pulse_lease_slow(window.current_view(), cx);
-                }
-                item = item.child(
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .relative()
-                        .max_h(px(400.0))
-                        .overflow_hidden()
-                        .border_t_1()
-                        .border_color(theme.border_strong)
-                        .child(
-                            div()
-                                .id(SharedString::from(format!("reasoning-scroll-{id}")))
-                                .w_full()
-                                .min_w_0()
-                                .max_h(px(400.0))
-                                .overflow_y_scroll()
-                                .track_scroll(&reasoning_viewport.scroll_handle)
-                                .px(px(12.0))
-                                .py(px(8.0))
-                                .children(markdown)
-                                .on_scroll_wheel(move |_, window, cx| {
-                                    contain_scroll(&wheel_scroll, cx);
-                                    let scroll = wheel_scroll.clone();
-                                    let follow_tail = wheel_follow_tail.clone();
-                                    window.defer(cx, move |_, _| {
-                                        follow_tail.set(activity_scroll_at_bottom(&scroll));
-                                    });
-                                }),
+                if reasoning.content.len() > md::virtualized::THRESHOLD
+                    || self.reasoning_views.borrow().contains_key(&id)
+                {
+                    let view = self
+                        .reasoning_views
+                        .borrow_mut()
+                        .entry(id)
+                        .or_insert_with(|| {
+                            cx.new(|cx| {
+                                md::virtualized::ReasoningView::new(
+                                    format!("reasoning-{id}"),
+                                    self.transcript_selection.clone(),
+                                    self.markdown_link_handler.clone(),
+                                    self.activity_scroll_viewports.borrow().get(&id)
+                                        .filter(|viewport| !viewport.follow_tail.get())
+                                        .map(|viewport| -viewport.scroll_handle.offset().y),
+                                    cx,
+                                )
+                            })
+                        })
+                        .clone();
+                    view.update(cx, |view, cx| {
+                        view.set_source(
+                            &reasoning.content,
+                            (reasoning.started_at_ms, reasoning.finished_at_ms),
+                            reasoning_live,
+                            cx,
                         )
-                        .child(activity_scroll_fade(
-                            reasoning_viewport.scroll_handle.clone(),
-                            ActivityScrollFadeSide::Top,
-                            activity_surface,
-                        ))
-                        .child(activity_scroll_fade(
-                            reasoning_viewport.scroll_handle.clone(),
-                            ActivityScrollFadeSide::Bottom,
-                            activity_surface,
-                        ))
-                        .child(scrollbar::vertical(
-                            &reasoning_viewport.scroll_handle,
-                            &reasoning_viewport.scrollbar,
-                        ))
-                        .child(activity_scroll_guard(reasoning_viewport, reasoning_live)),
-                );
+                    });
+                    item = item.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .border_t_1()
+                            .border_color(theme.border_strong)
+                            .child(view),
+                    );
+                } else {
+                    // Reasoning remains model prose even though it now shares the
+                    // activity stream, so keep selectable markdown rather than
+                    // presenting it as monospace tool output.
+                    let mut palette = MarkdownPalette::from_theme(theme);
+                    palette.text = theme.text_secondary;
+                    palette.secondary = theme.text_tertiary;
+                    let ctx = self.markdown_ctx(
+                        format!("reasoning-{id}"),
+                        &palette,
+                        MarkdownMetrics::COMPACT,
+                        reasoning_live && !cx.reduce_motion(),
+                    );
+                    let reasoning_viewport = self
+                        .activity_scroll_viewports
+                        .borrow_mut()
+                        .entry(id)
+                        .or_default()
+                        .clone();
+                    let mut views = self.activity_markdown.borrow_mut();
+                    let view = views.entry(id).or_default();
+                    view.set_text(&reasoning.content, reasoning_live);
+                    let wheel_scroll = reasoning_viewport.scroll_handle.clone();
+                    let wheel_follow_tail = reasoning_viewport.follow_tail.clone();
+                    let markdown = md::render::markdown(view, &ctx);
+                    if reasoning_live && !cx.reduce_motion() && view.is_fading() {
+                        // The reasoning dissolve rides the half-rate lease: fast
+                        // thinking keeps a fade active for the whole phase, every
+                        // tick rebuilds each visible transcript row, and 15 fps
+                        // alpha on the dim 11.5px peek is indistinguishable. The
+                        // answer text keeps the full-rate dissolve.
+                        motion::pulse_lease_slow(window.current_view(), cx);
+                    }
+                    item = item.child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .relative()
+                            .max_h(px(400.0))
+                            .overflow_hidden()
+                            .border_t_1()
+                            .border_color(theme.border_strong)
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!("reasoning-scroll-{id}")))
+                                    .w_full()
+                                    .min_w_0()
+                                    .max_h(px(400.0))
+                                    .overflow_y_scroll()
+                                    .track_scroll(&reasoning_viewport.scroll_handle)
+                                    .px(px(12.0))
+                                    .py(px(8.0))
+                                    .children(markdown)
+                                    .on_scroll_wheel(move |_, window, cx| {
+                                        contain_scroll(&wheel_scroll, cx);
+                                        let scroll = wheel_scroll.clone();
+                                        let follow_tail = wheel_follow_tail.clone();
+                                        window.defer(cx, move |_, _| {
+                                            follow_tail.set(activity_scroll_at_bottom(&scroll));
+                                        });
+                                    }),
+                            )
+                            .child(activity_scroll_fade(
+                                reasoning_viewport.scroll_handle.clone(),
+                                ActivityScrollFadeSide::Top,
+                                activity_surface,
+                            ))
+                            .child(activity_scroll_fade(
+                                reasoning_viewport.scroll_handle.clone(),
+                                ActivityScrollFadeSide::Bottom,
+                                activity_surface,
+                            ))
+                            .child(scrollbar::vertical(
+                                &reasoning_viewport.scroll_handle,
+                                &reasoning_viewport.scrollbar,
+                            ))
+                            .child(activity_scroll_guard(reasoning_viewport, reasoning_live)),
+                    );
+                }
             }
             if item_expanded && shows_diff {
                 let diff = self.activity_diff_rows(activity);
@@ -2631,61 +2657,6 @@ fn activity_scroll_follow_state(
     }
 }
 
-/// Pure window arithmetic behind [`Fintwind::live_reasoning_window_start`]:
-/// given the cached start and the current content, the byte offset the
-/// window should render from. Every returned offset is a character boundary
-/// of `content`, so callers may slice with it directly.
-fn live_reasoning_window_anchor(cached: usize, content: &str) -> usize {
-    // A restarted block can leave the cached start past the end of the new
-    // content or inside a multibyte character; either way the window is
-    // stale (`is_char_boundary` is false past the end too), so restart it.
-    let cached = if content.is_char_boundary(cached) {
-        cached
-    } else {
-        0
-    };
-    if content.len() - cached <= LIVE_REASONING_WINDOW_MAX {
-        return cached;
-    }
-    // Slide: re-anchor near the tail, preferring a block boundary so the
-    // window opens on whole markdown. The raw cut is an arbitrary byte
-    // offset, so advance it to a character boundary before slicing; the
-    // end of the string is always a boundary, so this terminates.
-    let mut cut = content.len() - LIVE_REASONING_WINDOW_TARGET;
-    while !content.is_char_boundary(cut) {
-        cut += 1;
-    }
-    content[cut..]
-        .find("\n\n")
-        .map(|found| cut + found + 2)
-        .unwrap_or(cut)
-}
-
-impl Fintwind {
-    /// Byte offset the live reasoning peek renders from, slid forward as the
-    /// thought grows. The peek pins a 400 px viewport to the tail, but
-    /// markdown cost is O(rendered source) per pulse tick regardless of block
-    /// shape, so the window keeps parse, flatten, elements, and veil all
-    /// O(window); the full trace renders once the turn settles. A slide
-    /// re-anchors at a block boundary and reseeds the view so already-shown
-    /// text never re-dissolves.
-    fn live_reasoning_window_start(
-        &self,
-        id: Uuid,
-        content: &str,
-        view: &mut MarkdownView,
-    ) -> usize {
-        let mut starts = self.reasoning_window_starts.borrow_mut();
-        let start = starts.entry(id).or_insert(0);
-        let next = live_reasoning_window_anchor(*start, content);
-        if next != *start {
-            *start = next;
-            *view = MarkdownView::seeded();
-        }
-        *start
-    }
-}
-
 fn activity_scroll_guard(viewport: ActivityScrollViewport, live: bool) -> impl IntoElement {
     canvas(
         move |_, window, cx| {
@@ -2879,57 +2850,5 @@ mod activity_scroll_tests {
             px(120.0),
             px(240.0),
         ));
-    }
-}
-
-#[cfg(test)]
-mod live_reasoning_window_tests {
-    use super::*;
-
-    #[test]
-    fn slide_lands_on_a_character_boundary_in_multibyte_content() {
-        // A body of 3-byte chars with two ASCII bytes at the end leaves the
-        // naive cut mid-character while both tuning consts are KiB multiples;
-        // the guard assert keeps the test honest if they are ever retuned.
-        let content = "界".repeat(LIVE_REASONING_WINDOW_MAX / 3 + 1) + "zz";
-        assert!(content.len() > LIVE_REASONING_WINDOW_MAX);
-        assert!(
-            !content.is_char_boundary(content.len() - LIVE_REASONING_WINDOW_TARGET),
-            "setup must place the naive cut mid-character to cover the panic",
-        );
-        let start = live_reasoning_window_anchor(0, &content);
-        assert!(content.is_char_boundary(start));
-        assert!(content.len() - start <= LIVE_REASONING_WINDOW_TARGET);
-        assert!(!content[start..].is_empty());
-    }
-
-    #[test]
-    fn stale_start_from_a_restarted_block_resets_to_zero() {
-        let content = "思".repeat(64);
-        assert!(!content.is_char_boundary(4));
-        assert_eq!(live_reasoning_window_anchor(4, &content), 0);
-        assert_eq!(live_reasoning_window_anchor(content.len() + 1, &content), 0);
-    }
-
-    #[test]
-    fn stale_start_still_slides_when_the_new_content_is_long() {
-        let content = "界".repeat(LIVE_REASONING_WINDOW_MAX);
-        assert!(!content.is_char_boundary(5));
-        let start = live_reasoning_window_anchor(5, &content);
-        assert!(content.is_char_boundary(start));
-        assert!(content.len() - start <= LIVE_REASONING_WINDOW_TARGET);
-    }
-
-    #[test]
-    fn slide_reanchors_after_a_block_boundary_when_one_is_near() {
-        let content = format!("{}\n\ntail", "a".repeat(LIVE_REASONING_WINDOW_MAX));
-        let start = live_reasoning_window_anchor(0, &content);
-        assert_eq!(&content[start..], "tail");
-    }
-
-    #[test]
-    fn window_below_the_threshold_keeps_the_cached_start() {
-        let content = "a".repeat(LIVE_REASONING_WINDOW_MAX);
-        assert_eq!(live_reasoning_window_anchor(7, &content), 7);
     }
 }

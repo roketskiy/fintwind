@@ -14,9 +14,168 @@
 
 use super::*;
 
+use fintwind_client::provider_session::NativeSessionSummary;
+
 /// Debounce for reconcile requests, so a burst of lifecycle events costs one
 /// server round trip.
 const RECONCILE_DEBOUNCE: Duration = Duration::from_millis(600);
+
+/// Local rows and server summaries stamp their times with different clocks
+/// (the app's, or a remote OpenCode server's). A pair within this window is
+/// the same conversation; beyond it, a title collision is too likely.
+const TWIN_CLAIM_WINDOW_SECS: u64 = 5 * 60;
+
+/// What one roster summary should do to the local roster.
+#[derive(Debug, Eq, PartialEq)]
+enum RosterTarget {
+    /// Refresh the row already tracking this native session.
+    Update(Uuid),
+    /// Hand the native id to a local row that describes the same conversation
+    /// but never recorded it, instead of importing a twin.
+    Claim(Uuid),
+    /// A legacy twin pair: an imported skeleton tracks the session while an
+    /// untracked local row describes the same conversation. Keep the local
+    /// row and drop the skeleton.
+    HealTwin { claim: Uuid, remove: Uuid },
+    /// No local row describes this native session; import one.
+    Import,
+}
+
+/// Does a local row already track this native session? Skeletons carry
+/// the native id in its list column, live sessions in their cursor.
+fn finds_native_row(sessions: &[AgentSession], native_id: &str) -> Option<Uuid> {
+    sessions
+        .iter()
+        .find(|session| {
+            session.native_session_id.as_deref() == Some(native_id)
+                || session
+                    .provider_cursor
+                    .as_ref()
+                    .is_some_and(|cursor| cursor.native_id() == native_id)
+        })
+        .map(|session| session.id)
+}
+
+/// The local side of a legacy twin pair: a started session that never
+/// recorded its native id — an older build, or the window between the server
+/// creating the session and `Connected` landing locally — describing the same
+/// conversation as `summary`: same project, no id or cursor of its own, a
+/// matching title, and a recency within [`TWIN_CLAIM_WINDOW_SECS`].
+fn untracked_twin_row(
+    sessions: &[AgentSession],
+    project_id: Uuid,
+    summary: &NativeSessionSummary,
+) -> Option<Uuid> {
+    let title = summary.title.as_deref()?;
+    sessions
+        .iter()
+        .find(|session| {
+            session.project_id == project_id
+                && session.has_started()
+                && !session.imported
+                && session.native_session_id.is_none()
+                && session.provider_cursor.is_none()
+                && ((session.title != AgentSession::DEFAULT_TITLE && session.title == title)
+                    || session.auto_title.as_deref() == Some(title))
+                && session
+                    .last_reply_at
+                    .unwrap_or(session.created_at)
+                    .abs_diff(summary.updated_at)
+                    <= TWIN_CLAIM_WINDOW_SECS
+        })
+        .map(|session| session.id)
+}
+
+/// Decide what `summary` should do to the roster.
+fn resolve_roster_target(
+    sessions: &[AgentSession],
+    project_id: Uuid,
+    summary: &NativeSessionSummary,
+) -> RosterTarget {
+    let tracked = finds_native_row(sessions, &summary.session_id);
+    let claimable = untracked_twin_row(sessions, project_id, summary);
+    match (tracked, claimable) {
+        (Some(tracked), Some(claim)) if tracked != claim => {
+            // Only a skeleton is droppable: an app-created row that already
+            // tracks the session may hold state the claimant lacks, and the
+            // pair may be two genuinely distinct conversations.
+            let tracked_is_skeleton = sessions
+                .iter()
+                .find(|session| session.id == tracked)
+                .is_some_and(|session| session.imported);
+            if tracked_is_skeleton {
+                RosterTarget::HealTwin {
+                    claim,
+                    remove: tracked,
+                }
+            } else {
+                RosterTarget::Update(tracked)
+            }
+        }
+        (Some(tracked), _) => RosterTarget::Update(tracked),
+        (None, Some(claim)) => RosterTarget::Claim(claim),
+        (None, None) => RosterTarget::Import,
+    }
+}
+
+/// Imported rows of one project the server no longer holds. Only that
+/// project's rows are judged: the listing belongs to its directory, so
+/// another project's imports must survive a reconcile they were never part
+/// of — sweeping them made sessions vanish whenever the selection moved,
+/// until some later reconcile happened to re-import them.
+fn stale_imported_rows(
+    sessions: &[AgentSession],
+    project_id: Uuid,
+    known: &std::collections::HashSet<&str>,
+) -> Vec<Uuid> {
+    sessions
+        .iter()
+        .filter(|session| session.imported && session.project_id == project_id)
+        .filter(|session| {
+            session
+                .native_session_id
+                .as_deref()
+                .is_some_and(|native| !known.contains(native))
+        })
+        .map(|session| session.id)
+        .collect()
+}
+
+/// Rows sharing a native id are one conversation; keep the app-created row
+/// when there is one (it may hold hydrated state the skeleton lacks) and
+/// drop the rest. Legacy stores can already contain such pairs.
+fn duplicate_native_rows(sessions: &[AgentSession]) -> Vec<Uuid> {
+    let mut keepers: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut remove: Vec<Uuid> = Vec::new();
+    for (index, session) in sessions.iter().enumerate() {
+        let Some(native) = session.native_session_id.as_deref() else {
+            continue;
+        };
+        match keepers.get(native) {
+            Some(&keeper) => {
+                if sessions[keeper].imported && !session.imported {
+                    remove.push(sessions[keeper].id);
+                    keepers.insert(native, index);
+                } else {
+                    remove.push(session.id);
+                }
+            }
+            None => {
+                keepers.insert(native, index);
+            }
+        }
+    }
+    remove
+}
+
+/// A connecting session has had its native session created on the server but
+/// has not recorded the id locally yet — `Connected` has not arrived.
+/// Applying a roster in that window imports a twin for it.
+fn has_starting_session(sessions: &[AgentSession]) -> bool {
+    sessions
+        .iter()
+        .any(|session| session.status == SessionStatus::Connecting)
+}
 
 impl Fintwind {
     /// Request a reconcile after a short debounce. Safe to call often.
@@ -42,10 +201,15 @@ impl Fintwind {
             .filter(|path| path.is_file())
     }
 
-    /// The workspace directory whose sessions the sidebar reconciles: the
-    /// selected project's checkout.
-    fn native_reconcile_directory(&self) -> Option<PathBuf> {
-        let project_id = self.state.selected_project?;
+    /// The workspace directory whose native surface a session talks to: its
+    /// own project's checkout, not whichever project happens to be selected.
+    fn native_session_directory(&self, session_id: Uuid) -> Option<PathBuf> {
+        let project_id = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)?
+            .project_id;
         self.state
             .projects
             .iter()
@@ -53,17 +217,37 @@ impl Fintwind {
             .map(|project| project.path.clone())
     }
 
-    /// List the server's sessions for the current workspace and merge them
-    /// into the local roster. The listing RPC is blocking, so it runs on the
-    /// background executor.
+    /// List the server's sessions for the selected project's workspace and
+    /// merge them into the local roster. The listing RPC is blocking, so it
+    /// runs on the background executor.
     pub(super) fn reconcile_native_sessions(&mut self, cx: &mut Context<Self>) {
         let Some(binary) = self.native_binary_path() else {
             return;
         };
-        let Some(directory) = self.native_reconcile_directory() else {
+        // The listing belongs to one project: capture it together with the
+        // directory, so a late apply cannot pair an old directory's roster
+        // with a newly selected project.
+        let Some(project_id) = self.state.selected_project else {
             return;
         };
+        let Some(directory) = self
+            .state
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(|project| project.path.clone())
+        else {
+            return;
+        };
+        // A connecting session would be twinned by this roster; wait for its
+        // `Connected` to land. The next lifecycle event or window focus
+        // re-requests the reconcile.
+        if has_starting_session(&self.state.sessions) {
+            self.schedule_native_session_reconcile(cx);
+            return;
+        }
         self.native_reconcile_generation += 1;
+        let generation = self.native_reconcile_generation;
         let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
             let listed = cx
@@ -74,8 +258,13 @@ impl Fintwind {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
+                // A newer reconcile superseded this listing; applying it
+                // would re-import under a stale project pairing.
+                if this.native_reconcile_generation != generation {
+                    return;
+                }
                 match listed {
-                    Ok(sessions) => this.apply_native_session_roster(sessions, cx),
+                    Ok(sessions) => this.apply_native_session_roster(project_id, sessions, cx),
                     Err(error) => {
                         // Reconciliation is best-effort: a server that cannot
                         // be reached leaves the current roster in place. Only
@@ -84,10 +273,7 @@ impl Fintwind {
                         let first_failure = this.native_reconcile_error.is_none();
                         this.native_reconcile_error = Some(error.to_string());
                         if first_failure {
-                            this.show_toast(tr!(
-                                "sessions.sync_failed",
-                                error = error.to_string()
-                            ));
+                            this.show_toast(tr!("sessions.sync_failed", error = error.to_string()));
                         }
                         cx.notify();
                     }
@@ -97,105 +283,46 @@ impl Fintwind {
         .detach();
     }
 
-    /// Does a local row already track this native session? Skeletons carry
-    /// the native id in its list column, live sessions in their cursor.
-    fn finds_native_session(&self, native_id: &str) -> Option<Uuid> {
-        self.state
-            .sessions
-            .iter()
-            .find(|session| {
-                session.native_session_id.as_deref() == Some(native_id)
-                    || session
-                        .provider_cursor
-                        .as_ref()
-                        .is_some_and(|cursor| cursor.native_id() == native_id)
-            })
-            .map(|session| session.id)
-    }
-
-    /// Merge one server listing into the local roster.
+    /// Merge one server listing into the local roster. The listing belongs
+    /// to `project_id`'s workspace; imports are homed there and only that
+    /// project's rows are ever dropped for missing from it.
     fn apply_native_session_roster(
         &mut self,
+        project_id: Uuid,
         summaries: Vec<fintwind_client::provider_session::NativeSessionSummary>,
         cx: &mut Context<Self>,
     ) {
         self.native_reconcile_error = None;
-        let Some(project_id) = self.state.selected_project else {
-            return;
-        };
         let mut changed = false;
 
         for summary in &summaries {
-            match self.finds_native_session(&summary.session_id) {
-                Some(session_id) => {
-                    // Compare first: a no-op reconcile (the common case on
-                    // every window focus) must not dirty the roster and
-                    // trigger a save.
-                    let before = self
-                        .state
-                        .sessions
-                        .iter()
-                        .find(|session| session.id == session_id)
-                        .map(|session| {
-                            (
-                                session.imported,
-                                session.auto_title.clone(),
-                                session.model.clone(),
-                                session.last_reply_at,
-                                session.updated_at,
-                            )
-                        });
-                    let Some((imported, old_title, old_model, old_last_reply, old_updated)) =
-                        before
-                    else {
-                        continue;
-                    };
-                    let new_title = if imported {
-                        summary.title.clone()
-                    } else {
-                        old_title.clone()
-                    };
-                    let new_model = match &old_model {
-                        Some(_) => old_model.clone(),
-                        None => summary.model.clone(),
-                    };
-                    let new_last_reply = Some(old_last_reply.unwrap_or(0).max(summary.updated_at));
-                    let new_updated = old_updated.max(summary.updated_at);
-                    let unchanged = old_title == new_title
-                        && old_model == new_model
-                        && old_last_reply == new_last_reply
-                        && old_updated == new_updated;
-                    if unchanged {
-                        continue;
-                    }
-                    if let Some(session) = self.state.session_mut(session_id) {
-                        if imported {
-                            // The server's view of title wins for sessions
-                            // the app did not create; the title rides in
-                            // `auto_title` so a user-owned name still
-                            // outranks it in the UI.
-                            session.auto_title = new_title;
-                            session.model = new_model;
-                        } else if session.model.is_none() {
-                            session.model = new_model;
-                        }
-                        // Freshness: a server update newer than what the
-                        // local transcript reflects invalidates the fetched
-                        // snapshot.
-                        session.last_reply_at = new_last_reply;
-                        session.updated_at = new_updated;
-                    }
-                    if old_last_reply.unwrap_or(0) < summary.updated_at {
-                        self.imported_transcript_fetched.remove(&session_id);
-                    }
+            match resolve_roster_target(&self.state.sessions, project_id, summary) {
+                RosterTarget::Update(session_id) => {
+                    changed |= self.update_session_from_summary(session_id, summary);
+                }
+                RosterTarget::Claim(session_id) => {
+                    self.claim_native_session(session_id, summary);
+                    self.update_session_from_summary(session_id, summary);
                     changed = true;
                 }
-                None => {
+                RosterTarget::HealTwin { claim, remove } => {
+                    // The user may be looking at the twin; keep the
+                    // conversation open on the surviving row.
+                    if self.state.selected_session == Some(remove) {
+                        self.state.selected_session = Some(claim);
+                    }
+                    self.drop_roster_row(remove);
+                    self.claim_native_session(claim, summary);
+                    self.update_session_from_summary(claim, summary);
+                    changed = true;
+                }
+                RosterTarget::Import => {
                     let mut session = AgentSession::new(project_id);
                     session.imported = true;
                     session.native_session_id = Some(summary.session_id.clone());
-                    session.provider_cursor =
-                        Some(ProviderResumeCursor::from_session_id(summary.session_id.clone()));
+                    session.provider_cursor = Some(ProviderResumeCursor::from_session_id(
+                        summary.session_id.clone(),
+                    ));
                     session.auto_title = summary.title.clone();
                     session.model = summary.model.clone();
                     // The server's own timestamps are authoritative for
@@ -210,32 +337,19 @@ impl Fintwind {
             }
         }
 
+        // Legacy stores can already hold two rows for one native session.
+        for session_id in duplicate_native_rows(&self.state.sessions) {
+            self.drop_roster_row(session_id);
+            changed = true;
+        }
+
         // Imported sessions the server no longer holds are removed locally.
         let known: std::collections::HashSet<&str> = summaries
             .iter()
             .map(|summary| summary.session_id.as_str())
             .collect();
-        for session_id in self
-            .state
-            .sessions
-            .iter()
-            .filter(|session| session.imported)
-            .filter(|session| {
-                session
-                    .native_session_id
-                    .as_deref()
-                    .is_some_and(|native| !known.contains(native))
-            })
-            .map(|session| session.id)
-            .collect::<Vec<_>>()
-        {
-            self.state.sessions.retain(|session| session.id != session_id);
-            self.remove_right_panel_session_state(session_id);
-            self.imported_transcript_fetched.remove(&session_id);
-            self.state.selected_session = self
-                .state
-                .selected_session
-                .filter(|selected| *selected != session_id);
+        for session_id in stale_imported_rows(&self.state.sessions, project_id, &known) {
+            self.drop_roster_row(session_id);
             changed = true;
         }
 
@@ -245,11 +359,109 @@ impl Fintwind {
         }
     }
 
+    /// Point an untracked local row at its native session so later rosters
+    /// match it instead of importing a twin.
+    fn claim_native_session(&mut self, session_id: Uuid, summary: &NativeSessionSummary) {
+        if let Some(session) = self.state.session_mut(session_id) {
+            session.native_session_id = Some(summary.session_id.clone());
+            if session.auto_title.is_none() {
+                session.auto_title = summary.title.clone();
+            }
+        }
+    }
+
+    /// Refresh one tracked row from a summary. Returns whether anything
+    /// moved: a no-op reconcile (the common case on every window focus) must
+    /// not dirty the roster and trigger a save.
+    fn update_session_from_summary(
+        &mut self,
+        session_id: Uuid,
+        summary: &NativeSessionSummary,
+    ) -> bool {
+        let Some(before) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| {
+                (
+                    session.imported,
+                    session.auto_title.clone(),
+                    session.model.clone(),
+                    session.last_reply_at,
+                    session.updated_at,
+                )
+            })
+        else {
+            return false;
+        };
+        let (imported, old_title, old_model, old_last_reply, old_updated) = before;
+        let new_title = if imported {
+            summary.title.clone()
+        } else {
+            old_title.clone()
+        };
+        let new_model = match &old_model {
+            Some(_) => old_model.clone(),
+            None => summary.model.clone(),
+        };
+        let new_last_reply = Some(old_last_reply.unwrap_or(0).max(summary.updated_at));
+        let new_updated = old_updated.max(summary.updated_at);
+        let unchanged = old_title == new_title
+            && old_model == new_model
+            && old_last_reply == new_last_reply
+            && old_updated == new_updated;
+        if unchanged {
+            return false;
+        }
+        if let Some(session) = self.state.session_mut(session_id) {
+            if imported {
+                // The server's view of title wins for sessions
+                // the app did not create; the title rides in
+                // `auto_title` so a user-owned name still
+                // outranks it in the UI.
+                session.auto_title = new_title;
+                session.model = new_model;
+            } else if session.model.is_none() {
+                session.model = new_model;
+            }
+            // Freshness: a server update newer than what the
+            // local transcript reflects invalidates the fetched
+            // snapshot.
+            session.last_reply_at = new_last_reply;
+            session.updated_at = new_updated;
+        }
+        if old_last_reply.unwrap_or(0) < summary.updated_at {
+            self.imported_transcript_fetched.remove(&session_id);
+        }
+        true
+    }
+
+    /// Remove one roster row and its satellite state. Unlike
+    /// [`Self::remove_session`] this is reconciliation bookkeeping: the
+    /// native session may still exist on the server, and runtimes, stored
+    /// rows, drafts, and navigation history are not touched.
+    fn drop_roster_row(&mut self, session_id: Uuid) {
+        self.state
+            .sessions
+            .retain(|session| session.id != session_id);
+        self.remove_right_panel_session_state(session_id);
+        self.imported_transcript_fetched.remove(&session_id);
+        self.state.selected_session = self
+            .state
+            .selected_session
+            .filter(|selected| *selected != session_id);
+    }
+
     /// Make sure an imported session shows its server-side transcript.
     /// Called when a session is activated (after local hydration).
     pub(super) fn ensure_imported_transcript(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
-        let Some((native_session_id, binary, directory)) =
-            self.state.sessions.iter().find(|s| s.id == session_id).and_then(|session| {
+        let Some((native_session_id, binary, directory)) = self
+            .state
+            .sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .and_then(|session| {
                 if !session.imported {
                     return None;
                 }
@@ -272,7 +484,7 @@ impl Fintwind {
                 Some((
                     session.native_session_id.clone()?,
                     self.native_binary_path()?,
-                    self.native_reconcile_directory()?,
+                    self.native_session_directory(session_id)?,
                 ))
             })
         else {
@@ -341,7 +553,7 @@ impl Fintwind {
         let Some(binary) = self.native_binary_path() else {
             return;
         };
-        let Some(directory) = self.native_reconcile_directory() else {
+        let Some(directory) = self.native_session_directory(session_id) else {
             return;
         };
         let title = title.trim().to_owned();
@@ -376,7 +588,7 @@ impl Fintwind {
         else {
             return;
         };
-        let Some(project_path) = project_path.or_else(|| self.native_reconcile_directory())
+        let Some(project_path) = project_path.or_else(|| self.native_session_directory(session_id))
         else {
             return;
         };
@@ -390,5 +602,149 @@ impl Fintwind {
                     .delete_provider_session(binary, project_path, native_session_id);
             })
             .detach();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn native_summary(session_id: &str, title: &str, updated_at: u64) -> NativeSessionSummary {
+        NativeSessionSummary {
+            session_id: session_id.to_owned(),
+            title: Some(title.to_owned()),
+            created_at: updated_at - 60,
+            updated_at,
+            model: None,
+        }
+    }
+
+    fn started_session(project_id: Uuid, title: &str, replied_at: u64) -> AgentSession {
+        let mut session = AgentSession::new(project_id);
+        session.begin_turn("Start it");
+        session.set_title(title);
+        // `begin_turn` stamps the wall clock; the fixture's recency is what
+        // the decision must follow.
+        session.created_at = replied_at - 60;
+        session.last_reply_at = Some(replied_at);
+        session
+    }
+
+    fn imported_session(
+        project_id: Uuid,
+        native_id: &str,
+        title: &str,
+        updated_at: u64,
+    ) -> AgentSession {
+        let mut session = AgentSession::new(project_id);
+        session.imported = true;
+        session.native_session_id = Some(native_id.to_owned());
+        session.provider_cursor = Some(ProviderResumeCursor::from_session_id(native_id.to_owned()));
+        session.auto_title = Some(title.to_owned());
+        session.created_at = updated_at - 60;
+        session.updated_at = updated_at;
+        session.last_reply_at = Some(updated_at);
+        session.detail_loaded = false;
+        session
+    }
+
+    #[test]
+    fn stale_imported_rows_only_judge_the_reconciled_project() {
+        let project_a = Uuid::new_v4();
+        let project_b = Uuid::new_v4();
+        let stale = imported_session(project_a, "ses_a", "A", 100);
+        let other_project = imported_session(project_b, "ses_b", "B", 100);
+        let still_listed = imported_session(project_a, "ses_c", "C", 100);
+        let stale_id = stale.id;
+        let known: std::collections::HashSet<&str> = ["ses_c"].into_iter().collect();
+
+        assert_eq!(
+            stale_imported_rows(&[stale, other_project, still_listed], project_a, &known),
+            vec![stale_id]
+        );
+    }
+
+    #[test]
+    fn an_untracked_local_row_is_claimed_instead_of_imported() {
+        let project = Uuid::new_v4();
+        let local = started_session(project, "问候交流", 1_000);
+        let summary = native_summary("ses_1", "问候交流", 1_030);
+
+        assert_eq!(
+            resolve_roster_target(std::slice::from_ref(&local), project, &summary),
+            RosterTarget::Claim(local.id)
+        );
+    }
+
+    #[test]
+    fn an_imported_skeleton_twin_is_healed_onto_the_local_row() {
+        let project = Uuid::new_v4();
+        let local = started_session(project, "问候交流", 1_000);
+        let twin = imported_session(project, "ses_1", "问候交流", 1_030);
+        let local_id = local.id;
+        let twin_id = twin.id;
+        let summary = native_summary("ses_1", "问候交流", 1_030);
+
+        assert_eq!(
+            resolve_roster_target(&[local, twin], project, &summary),
+            RosterTarget::HealTwin {
+                claim: local_id,
+                remove: twin_id,
+            }
+        );
+    }
+
+    #[test]
+    fn a_claim_rejects_other_titles_projects_and_stale_recency() {
+        let project = Uuid::new_v4();
+        let other_project = Uuid::new_v4();
+        let local = started_session(project, "问候交流", 1_000);
+
+        let other_title = native_summary("ses_1", "打招呼", 1_030);
+        assert_eq!(
+            resolve_roster_target(std::slice::from_ref(&local), project, &other_title),
+            RosterTarget::Import
+        );
+
+        let other_project_summary = native_summary("ses_1", "问候交流", 1_030);
+        assert_eq!(
+            resolve_roster_target(
+                std::slice::from_ref(&local),
+                other_project,
+                &other_project_summary
+            ),
+            RosterTarget::Import
+        );
+
+        let long_ago = native_summary("ses_1", "问候交流", 1_000 + 60 * 60);
+        assert_eq!(
+            resolve_roster_target(std::slice::from_ref(&local), project, &long_ago),
+            RosterTarget::Import
+        );
+    }
+
+    #[test]
+    fn duplicate_native_rows_keep_the_app_created_row() {
+        let project = Uuid::new_v4();
+        let mut local = started_session(project, "问候交流", 1_000);
+        local.native_session_id = Some("ses_1".to_owned());
+        let twin = imported_session(project, "ses_1", "问候交流", 1_030);
+        let twin_id = twin.id;
+
+        assert_eq!(
+            duplicate_native_rows(&[local.clone(), twin.clone()]),
+            vec![twin_id]
+        );
+        assert_eq!(duplicate_native_rows(&[twin, local]), vec![twin_id]);
+        assert!(duplicate_native_rows(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_connecting_session_defers_the_roster() {
+        let mut session = started_session(Uuid::new_v4(), "问候交流", 1_000);
+        assert!(!has_starting_session(std::slice::from_ref(&session)));
+        session.status = SessionStatus::Connecting;
+        assert!(has_starting_session(std::slice::from_ref(&session)));
+        assert!(!has_starting_session(&[]));
     }
 }

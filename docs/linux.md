@@ -90,7 +90,7 @@ To exercise the install script against that local build:
 
 ```sh
 FINTWIND_BUNDLE_PATH=target/release/fintwind-<version>-<target>.tar.gz \
-  sh website/public/install.sh
+  sh scripts/install.sh
 ```
 
 ## Running in a virtual machine

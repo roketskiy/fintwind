@@ -1709,6 +1709,7 @@ fn handle_child_event(
                     id.to_owned(),
                     (super::support::classify_tool(name), name.to_owned()),
                 );
+                child_activity_event(&key, pending_tool_activity(id, name), events);
             }
         }
         "session.tool.called" => {
@@ -2053,6 +2054,7 @@ fn handle_event(
             ) {
                 let kind = super::support::classify_tool(name);
                 state.tools.insert(id.to_owned(), (kind, name.to_owned()));
+                let _ = events.send(DriverEvent::RichActivity(pending_tool_activity(id, name)));
             }
         }
         "session.tool.called" => {
@@ -2101,8 +2103,18 @@ fn handle_event(
     }
 }
 
-/// `session.tool.called` opens a tool activity with the arguments the tool
-/// will run with; the name was recorded by `session.tool.input.started`.
+fn pending_tool_activity(id: &str, name: &str) -> ActivityItem {
+    ActivityItem::new(
+        Some(id.to_owned()),
+        super::support::classify_tool(name),
+        name.to_owned(),
+        None,
+        false,
+    )
+}
+
+/// Enrich the activity opened by `session.tool.input.started` once its
+/// arguments are complete. Large inputs can take minutes to generate.
 fn tool_called(payload: &Value, events: &impl DriverEventSink, state: &mut OpenCodeStreamState) {
     let Some(id) = payload.get("id").and_then(Value::as_str) else {
         return;
@@ -3356,13 +3368,17 @@ mod tests {
         assert!(matches!(&seen[0], DriverEvent::TextDelta(text) if text == "OK"));
         assert!(matches!(&seen[1], DriverEvent::ReasoningDelta(text) if text == "thinking"));
         assert!(matches!(&seen[2], DriverEvent::RichActivity(item)
+                if item.source_id.as_deref() == Some("call_1")
+                    && item.kind == ActivityKind::FileRead && !item.complete
+                    && item.arguments.is_none()));
+        assert!(matches!(&seen[3], DriverEvent::RichActivity(item)
                 if item.kind == ActivityKind::FileRead
                     && !item.complete
                     && item.display_target.as_deref() == Some("a.txt")));
-        assert!(matches!(&seen[3], DriverEvent::RichActivity(item)
+        assert!(matches!(&seen[4], DriverEvent::RichActivity(item)
                 if item.complete && item.title == "read"));
         assert!(matches!(
-            &seen[4],
+            &seen[5],
             DriverEvent::UsageUpdated {
                 context_tokens: Some(2),
                 context_window: None,
@@ -3370,11 +3386,66 @@ mod tests {
             }
         ));
         assert!(matches!(
-            &seen[5],
+            &seen[6],
             DriverEvent::TurnFinished { success: true, .. }
         ));
-        assert_eq!(seen.len(), 6, "non-transcript events leaked");
+        assert_eq!(seen.len(), 7, "non-transcript events leaked");
         assert!(!*turn.lock(), "the turn should be settled exactly once");
+    }
+
+    #[test]
+    #[ignore = "requires opencode2, credentials and FINTWIND_TEST_MODEL"]
+    fn tool_input_is_visible_before_execution_against_a_real_server() {
+        let cwd = std::env::temp_dir().join(format!("fintwind-tool-stream-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&cwd).unwrap();
+        let (events, event_rx) = crate::driver::test_event_channel();
+        let driver = OpenCodeDriver::start(
+            DriverStartOptions {
+                binary: crate::command_env::find_executable("opencode2").unwrap(),
+                cwd: cwd.clone(),
+                mode: RuntimeMode::FullAccess,
+                interaction_mode: InteractionMode::Build,
+                model: Some(std::env::var("FINTWIND_TEST_MODEL").expect("set a test model")),
+                reasoning_effort: None, service_tier: None, context_window: None,
+                agent_preset: None, computer_use_enabled: false, provider_cursor: None,
+            }, events,
+        ).unwrap();
+        assert!(matches!(event_rx.recv_timeout(std::time::Duration::from_secs(30)).unwrap(), DriverEvent::Connected { .. }));
+        driver.prompt("Use the write tool to create probe.txt in the current directory with 200 numbered lines, each containing a different short sentence about software testing. Generate the full file in a single tool call. Do not use shell commands or read any other files. Then reply DONE.".into());
+        let began = std::time::Instant::now();
+        let mut pending = HashMap::new();
+        let mut enriched = HashSet::new();
+        let mut completed = HashSet::new();
+        let mut success = false;
+        while began.elapsed() < std::time::Duration::from_secs(180) {
+            let Ok(event) = event_rx.recv_timeout(std::time::Duration::from_secs(5)) else { continue; };
+            match event {
+                DriverEvent::RichActivity(item) => {
+                    let Some(id) = item.source_id else { continue; };
+                    if !item.complete && item.arguments.is_none() {
+                        pending.insert(id, began.elapsed());
+                    } else if !item.complete {
+                        assert!(pending.contains_key(&id), "arguments arrived before the pending activity");
+                        eprintln!("tool pending at {:?}, arguments at {:?}", pending[&id], began.elapsed());
+                        enriched.insert(id);
+                    } else {
+                        assert!(!item.failed, "test tool failed");
+                        completed.insert(id);
+                    }
+                }
+                DriverEvent::TurnFinished { success: finished, .. } => { success = finished; break; }
+                DriverEvent::Error(error) => panic!("provider error: {error}"),
+                _ => {}
+            }
+        }
+        if !success { driver.cancel(); }
+        assert!(success, "test turn did not complete");
+        assert!(!enriched.is_empty());
+        assert!(enriched.iter().all(|id| completed.contains(id)));
+        assert!(std::fs::metadata(cwd.join("probe.txt")).unwrap().len() > 1_000);
+        std::fs::remove_file(cwd.join("probe.txt")).unwrap();
+        // OpenCode may leave workspace metadata; do not remove unknown files.
+        let _ = std::fs::remove_dir(cwd);
     }
 
     #[test]

@@ -750,6 +750,14 @@ impl IncrementalParser {
         &self.tree
     }
 
+    pub fn stable_prefix(&self) -> usize {
+        if self.full_reparse_only {
+            0
+        } else {
+            self.stable_prefix
+        }
+    }
+
     /// Point the parser at `text`. Appends reparse incrementally; any other
     /// change falls back to a full reparse.
     pub fn set_text(&mut self, text: &str) {

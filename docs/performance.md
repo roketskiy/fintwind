@@ -102,19 +102,22 @@ moment any scrollbar became visible.
   [src/app/sidebar.rs](../src/app/sidebar.rs)). A fingerprint must hash at
   display granularity: the sidebar row cache keys session recency, and hashing
   raw seconds would bust it on every commit.
-- The live reasoning peek renders a **byte window** of the tail
-  (`live_reasoning_window_start`,
-  [src/app/transcript_view.rs](../src/app/transcript_view.rs)): markdown cost
-  is O(rendered source) per tick regardless of block shape — a wall-of-text
-  think is one giant paragraph and a bulleted think one giant list, so a
-  block-count cap bounds neither. The slide hysteresis is wide
-  (`LIVE_REASONING_WINDOW_MAX`) because fast reasoning appends several KB per
-  commit and each slide rebuilds the window from a fresh view. The full trace
-  renders once the turn settles.
-- `markdown_tail` and block-index element ordinals
-  (`block_ix << 16 | position`, [src/md/render.rs](../src/md/render.rs)) let
-  a capped walk hand settled blocks the same flatten-cache and veil keys as a
-  full walk.
+- Long reasoning uses a **virtualized full document**
+  ([src/md/virtualized.rs](../src/md/virtualized.rs)). The short view hands off
+  at 6 KiB; no source is discarded. An owned incremental parser runs on the
+  background executor, queues appends while busy, and returns changed rows.
+  Generation checks reject results from a replaced source. Paragraphs and
+  code are split into at most 2 KiB text fragments after parsing, and lists
+  are flattened into decorated rows, so one giant block cannot defeat
+  virtualization. Full code remains available to the copy action.
+- The reasoning list uses GPUI's native tail-follow mode. Scrolling up pauses
+  following; updates remeasure changed rows without replacing existing scroll
+  anchors. Completed thoughts keep the same virtualized view. Long reasoning
+  does not lease an animation clock; stream commits and background results
+  drive its updates.
+- Block-index element ordinals (`block_ix << 16 | position`,
+  [src/md/render.rs](../src/md/render.rs)) give virtualized rows stable
+  flatten-cache and selection keys.
 - `MarkdownView::set_text` derives the mended display tail only when content
   or the streaming flag changed — the derivation re-parses the final block and
   runs for every visible row every frame.

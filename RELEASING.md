@@ -215,7 +215,7 @@ assets — including the signed `appcast.xml` — to R2.
 `appcast.xml`, `latest-linux.txt`, and `latest-windows.txt` are the bucket's
 mutable pointers and upload with a short cache lifetime; everything else is
 versioned and cached forever. Linux users install from that bucket via
-[`website/public/install.sh`](website/public/install.sh), served at
+[`scripts/install.sh`](scripts/install.sh), served at
 `https://fintwind.sh/install.sh` — see [docs/linux.md](docs/linux.md).
 
 Publishing that GitHub release (or running **Sync release** from Actions)

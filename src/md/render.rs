@@ -388,6 +388,11 @@ impl MarkdownView {
         self.parser.text().len()
     }
 
+    pub(super) fn invalidate_rows_from(&mut self, row: usize) {
+        let ordinal = block_ordinal_base(row);
+        self.flats.get_mut().retain(|key, _| *key < ordinal);
+    }
+
     pub fn set_text(&mut self, text: &str, mend: bool) {
         let was_streaming = self.streaming.replace(mend);
         if !mend && was_streaming {
@@ -946,9 +951,8 @@ pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection)
 /// Per-top-level-block ordinal stride: an element's ordinal is
 /// `block_index << 16 | position_within_block`. Deriving keys from the
 /// block's document index rather than a running document counter means a
-/// walk that skips leading blocks ([`markdown_tail`]) hands every rendered
-/// block exactly the flatten-cache and veil keys a full walk would, so the
-/// two can alternate without thrashing either.
+/// virtualized walk hands every rendered block stable flatten-cache and
+/// selection keys across frames.
 const BLOCK_ORDINAL_STRIDE_BITS: u32 = 16;
 
 fn block_ordinal_base(block_ix: usize) -> usize {
@@ -957,26 +961,6 @@ fn block_ordinal_base(block_ix: usize) -> usize {
 
 /// Render a markdown body. Returns `None` when it has no content.
 pub fn markdown<'a>(view: &'a MarkdownView, ctx: &Ctx<'a>) -> Option<AnyElement> {
-    markdown_capped(view, ctx, usize::MAX)
-}
-
-/// Like [`markdown`], but builds only the trailing `max_blocks` top-level
-/// blocks. The live reasoning peek shows a tail-pinned viewport while a
-/// thought streams, and building the whole growing document every pulse tick
-/// made a long think O(document) per frame; the cap makes it O(window).
-pub fn markdown_tail<'a>(
-    view: &'a MarkdownView,
-    ctx: &Ctx<'a>,
-    max_blocks: usize,
-) -> Option<AnyElement> {
-    markdown_capped(view, ctx, max_blocks.max(1))
-}
-
-fn markdown_capped<'a>(
-    view: &'a MarkdownView,
-    ctx: &Ctx<'a>,
-    max_blocks: usize,
-) -> Option<AnyElement> {
     let blocks = view.blocks().collect::<Vec<_>>();
     let Some((&last, leading)) = blocks.split_last() else {
         if ctx.animate_streaming && view.streaming.get() {
@@ -992,14 +976,12 @@ fn markdown_capped<'a>(
     if ctx.animate_streaming && view.streaming.get() {
         view.veil.borrow_mut().begin_frame();
     }
-    let first = blocks.len().saturating_sub(max_blocks);
-    let mut children = Vec::with_capacity(blocks.len() - first);
-    for (block_ix, block) in leading.iter().enumerate().skip(first) {
+    let mut children = Vec::with_capacity(blocks.len());
+    for (block_ix, block) in leading.iter().enumerate() {
         ctx.next_ordinal.set(block_ordinal_base(block_ix));
         children.push(render_block(block, &ctx));
         debug_assert!(
-            ctx.next_ordinal.get() - block_ordinal_base(block_ix)
-                < 1 << BLOCK_ORDINAL_STRIDE_BITS,
+            ctx.next_ordinal.get() - block_ordinal_base(block_ix) < 1 << BLOCK_ORDINAL_STRIDE_BITS,
             "a single block overflowed its ordinal stride"
         );
     }
@@ -1029,6 +1011,94 @@ fn markdown_capped<'a>(
 
 fn render_block(block: &Block, ctx: &Ctx) -> AnyElement {
     ctx.starts_block.set(true);
+    render_block_content(block, ctx)
+}
+
+pub(super) fn virtual_row(
+    row: &super::virtualized::Row,
+    index: usize,
+    codes: &HashMap<usize, std::sync::Arc<str>>,
+    cache: &MarkdownView,
+    ctx: &Ctx,
+) -> AnyElement {
+    use super::virtualized::Decoration;
+    cache.sync_style(ctx.palette, &ctx.metrics);
+    let ctx = ctx.with_cache(cache);
+    ctx.next_ordinal.set(block_ordinal_base(index));
+    ctx.starts_block.set(row.gap);
+    let mut body = match (&row.block, row.code) {
+        (Block::CodeBlock { language, code }, Some((source, first, last))) => render_code_fragment(
+            language.as_deref(),
+            code,
+            Some((codes[&source].clone(), first, last)),
+            &ctx,
+        ),
+        (Block::Table { header, align, .. }, _) if row.table.is_some() => {
+            let part = row.table.as_ref().unwrap();
+            table_row(
+                header,
+                &part.widths,
+                align,
+                &ctx,
+                if part.header {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::NORMAL
+                },
+                !part.last,
+            )
+            .border_x_1()
+            .border_color(ctx.palette.border)
+            .when(part.first, |el| el.border_t_1().rounded_t(px(6.0)))
+            .when(part.last, |el| el.border_b_1().rounded_b(px(6.0)))
+            .when(part.header, |el| el.bg(ctx.palette.inset))
+            .into_any_element()
+        }
+        _ => render_block_content(&row.block, &ctx),
+    };
+    for decoration in row.decorations.iter().rev() {
+        let (width, marker) = match decoration {
+            Decoration::Quote => (
+                12.0,
+                div()
+                    .w(px(2.0))
+                    .h_full()
+                    .bg(ctx.palette.border)
+                    .into_any_element(),
+            ),
+            Decoration::List {
+                marker,
+                task,
+                ordered,
+            } => {
+                let width = if *ordered { 22.0 } else { 14.0 };
+                let element = if let Some(checked) = task {
+                    checkbox(*checked, &ctx)
+                } else if let Some(marker) = marker {
+                    marker_text(marker.clone(), width, &ctx)
+                } else {
+                    div().into_any_element()
+                };
+                (width, element)
+            }
+        };
+        body = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .child(div().w(px(width)).flex_none().child(marker))
+            .child(div().flex_1().min_w_0().child(body))
+            .into_any_element();
+    }
+    div()
+        .w_full()
+        .min_w_0()
+        .when(row.gap && index > 0, |el| el.pt(px(ctx.metrics.block_gap)))
+        .child(body)
+        .into_any_element()
+}
+
+fn render_block_content(block: &Block, ctx: &Ctx) -> AnyElement {
     match block {
         Block::Paragraph { runs } => {
             let key = ctx.next_key();
@@ -1354,6 +1424,17 @@ pub fn decode_data_url(url: &str) -> Option<std::sync::Arc<gpui::Image>> {
 }
 
 fn render_code_block(language: Option<&str>, code: &str, ctx: &Ctx) -> AnyElement {
+    render_code_fragment(language, code, None, ctx)
+}
+
+fn render_code_fragment(
+    language: Option<&str>,
+    code: &str,
+    fragment: Option<(std::sync::Arc<str>, bool, bool)>,
+    ctx: &Ctx,
+) -> AnyElement {
+    let first = fragment.as_ref().is_none_or(|(_, first, _)| *first);
+    let last = fragment.as_ref().is_none_or(|(_, _, last)| *last);
     let key = ctx.next_key();
     // Tokenizing is the most expensive flatten in the document, so a settled
     // code block is exactly the case the cache exists for.
@@ -1374,7 +1455,10 @@ fn render_code_block(language: Option<&str>, code: &str, ctx: &Ctx) -> AnyElemen
     // Reuse the cached shaped string. Settled code blocks render every frame,
     // so cloning the whole source here would turn the copy affordance into a
     // permanent O(code length) render cost; allocate only when it is invoked.
-    let copy_content = flat.text.clone();
+    let copy_content = fragment.map_or_else(
+        || flat.text.clone(),
+        |(code, _, _)| SharedString::from(code),
+    );
     let keyboard_copy_content = copy_content.clone();
     let copy_feedback = ctx.cache.map(|view| view.copied_code_blocks.clone());
     let copied = copy_feedback
@@ -1436,36 +1520,39 @@ fn render_code_block(language: Option<&str>, code: &str, ctx: &Ctx) -> AnyElemen
         .tab_stop(false)
         .w_full()
         .min_w_0()
-        .rounded(px(8.0))
-        .border_1()
+        .border_x_1()
+        .when(first, |el| el.rounded_t(px(8.0)).border_t_1())
+        .when(last, |el| el.rounded_b(px(8.0)).border_b_1())
         .border_color(ctx.palette.border)
         .bg(ctx.palette.inset)
         .overflow_hidden()
-        .child(
-            div()
-                .w_full()
-                .h(px(28.0))
-                .pl(px(10.0))
-                .pr(px(2.0))
-                .flex()
-                .items_center()
-                .border_b_1()
-                .border_color(ctx.palette.border)
-                .child(
-                    div()
-                        .min_w_0()
-                        .flex_1()
-                        .truncate()
-                        .text_size(px(10.0))
-                        .line_height(px(14.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(ctx.palette.ghost)
-                        .when_some(label, |element, label| {
-                            element.child(SharedString::from(label))
-                        }),
-                )
-                .child(copy_button),
-        )
+        .when(first, |el| {
+            el.child(
+                div()
+                    .w_full()
+                    .h(px(28.0))
+                    .pl(px(10.0))
+                    .pr(px(2.0))
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(ctx.palette.border)
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .truncate()
+                            .text_size(px(10.0))
+                            .line_height(px(14.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(ctx.palette.ghost)
+                            .when_some(label, |element, label| {
+                                element.child(SharedString::from(label))
+                            }),
+                    )
+                    .child(copy_button),
+            )
+        })
         .child(
             div()
                 .id(SharedString::from(format!(
@@ -1475,7 +1562,8 @@ fn render_code_block(language: Option<&str>, code: &str, ctx: &Ctx) -> AnyElemen
                 .w_full()
                 .min_w_0()
                 .px(px(10.0))
-                .py(px(8.0))
+                .when(first, |el| el.pt(px(8.0)))
+                .when(last, |el| el.pb(px(8.0)))
                 .child(
                     div()
                         .w_full()
@@ -1622,7 +1710,7 @@ fn table_row(
 
 /// Content-proportional column widths as fractions of the table, floored so a
 /// narrow column stays readable.
-fn column_widths(
+pub(super) fn column_widths(
     header: &[Vec<InlineRun>],
     rows: &[Vec<Vec<InlineRun>>],
     columns: usize,

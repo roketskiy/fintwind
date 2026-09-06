@@ -2184,6 +2184,7 @@ impl Fintwind {
                 pending_steers: VecDeque::new(),
                 stream_phase: None,
                 stream_remeasure_pending: false,
+                provider_phase: None,
                 pending_permission: None,
                 pending_user_input: None,
                 pending_computer_approval: None,
@@ -2691,12 +2692,11 @@ impl Fintwind {
         };
         self.invalidate_checkpoint_refs();
         if let Some(runtime) = self.runtimes.get_mut(&session_id) {
-            runtime
-                .pending_events
-                .retain(|event| matches!(event, DriverEvent::BackgroundWork(_)));
+            runtime.pending_events.retain(|event| matches!(event, DriverEvent::BackgroundWork(_)));
             runtime.pending_steers.clear();
             runtime.stream_remeasure_pending = false;
             runtime.stream_phase = None;
+            runtime.provider_phase = None;
             runtime.pending_permission = None;
             runtime.pending_user_input = None;
             runtime.pending_computer_approval = None;

@@ -284,6 +284,7 @@ impl Fintwind {
             }
             DriverEvent::TurnStarted => {
                 runtime.last_driver_error = None;
+                runtime.provider_phase = None;
                 if let Some(session) = self.state.session_mut(session_id)
                     && session.active_turn_id().is_some()
                 {
@@ -291,13 +292,37 @@ impl Fintwind {
                     session.status = SessionStatus::Working;
                 }
             }
+            DriverEvent::ProviderBusy => {
+                if self.accepts_turn_output(session_id) {
+                    runtime.provider_phase = Some(ProviderPhase::Responding {
+                        since: unix_time(),
+                    });
+                }
+            }
+            DriverEvent::ProviderRetry {
+                attempt,
+                message,
+                action,
+                next_at_ms,
+            } => {
+                if self.accepts_turn_output(session_id) {
+                    runtime.provider_phase = Some(ProviderPhase::Retrying {
+                        attempt,
+                        message,
+                        action,
+                        next_at_ms,
+                    });
+                }
+            }
             DriverEvent::TextDelta(delta) => {
                 if self.accepts_turn_output(session_id) {
+                    runtime.provider_phase = None;
                     self.append_text_delta(session_id, runtime, delta);
                 }
             }
             DriverEvent::ReasoningDelta(delta) => {
                 if self.accepts_turn_output(session_id) {
+                    runtime.provider_phase = None;
                     self.append_reasoning_delta(session_id, runtime, delta);
                 }
             }
@@ -313,6 +338,7 @@ impl Fintwind {
                         && self.state.selected_session == Some(session_id);
                     let item = ActivityItem::new(id, kind, title, detail, complete);
                     self.observe_foreground_command_activity(session_id, &item);
+                    runtime.provider_phase = None;
                     self.update_activity(session_id, runtime, item);
                     if kind == ActivityKind::Plan {
                         self.rebuild_todo_summary(session_id);
@@ -328,6 +354,7 @@ impl Fintwind {
                         should_refresh_branch_after_activity(item.kind, item.complete)
                             && self.state.selected_session == Some(session_id);
                     self.observe_foreground_command_activity(session_id, &item);
+                    runtime.provider_phase = None;
                     let plan_activity = item.kind == ActivityKind::Plan;
                     self.update_activity(session_id, runtime, item);
                     if plan_activity {
@@ -351,6 +378,7 @@ impl Fintwind {
                 options,
             } => {
                 if self.accepts_turn_output(session_id) {
+                    runtime.provider_phase = None;
                     runtime.pending_permission = Some(PendingPermission {
                         request_id,
                         title,
@@ -367,6 +395,7 @@ impl Fintwind {
                 questions,
             } => {
                 if self.accepts_turn_output(session_id) && !questions.is_empty() {
+                    runtime.provider_phase = None;
                     runtime.pending_user_input = Some(PendingUserInput::new(request_id, questions));
                     if self.state.selected_session == Some(session_id) {
                         self.user_input_answer
@@ -588,6 +617,7 @@ impl Fintwind {
                 self.finish_streaming_assistant(session_id);
                 self.complete_turn_blocks(session_id);
                 runtime.stream_phase = None;
+                runtime.provider_phase = None;
                 let needs_fallback = !self.turn_has_assistant_message(session_id);
                 if let Some(session) = self.state.session_mut(session_id) {
                     session.status = if success {
@@ -689,6 +719,7 @@ impl Fintwind {
                 self.finish_streaming_assistant(session_id);
                 self.complete_turn_blocks(session_id);
                 runtime.stream_phase = None;
+                runtime.provider_phase = None;
                 runtime.pending_permission = None;
                 runtime.pending_user_input = None;
                 runtime.pending_computer_approval = None;

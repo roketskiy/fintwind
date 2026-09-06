@@ -517,6 +517,8 @@ impl OpenCodeDriver {
                                 &stream_event_sink,
                                 &stream_commands,
                                 &stream_turn,
+                                stream_port,
+                                &stream_session,
                                 mode == RuntimeMode::FullAccess,
                                 &mut state,
                             );
@@ -1843,6 +1845,8 @@ fn handle_event(
     events: &impl DriverEventSink,
     commands: &Sender<CommandMessage>,
     turn_active: &Mutex<bool>,
+    port: u16,
+    session_id: &str,
     auto_approve: bool,
     state: &mut OpenCodeStreamState,
 ) {
@@ -2013,6 +2017,46 @@ fn handle_event(
                 }));
             }
         }
+        "session.status" => {
+            let status = payload.get("status");
+            match status
+                .and_then(|status| status.get("type"))
+                .and_then(Value::as_str)
+            {
+                Some("busy") => {
+                    let _ = events.send(DriverEvent::ProviderBusy);
+                }
+                Some("retry") => {
+                    let _ = events.send(DriverEvent::ProviderRetry {
+                        attempt: status
+                            .and_then(|status| status.get("attempt"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0)
+                            .min(u32::MAX as u64) as u32,
+                        message: status
+                            .and_then(|status| status.get("message"))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        action: status
+                            .and_then(|status| status.get("action"))
+                            .filter(|action| action.is_object())
+                            .and_then(|action| serde_json::from_value(action.clone()).ok()),
+                        next_at_ms: status
+                            .and_then(|status| status.get("next"))
+                            .and_then(Value::as_u64),
+                    });
+                }
+                // The runner's idle report may precede the execution event or
+                // replace it entirely; either way a turn the app still holds
+                // open must be settled (see `settle_on_idle_report`).
+                Some("idle") => settle_on_idle_report(port, session_id, turn_active, events),
+                _ => {}
+            }
+        }
+        // Deprecated companion of `session.status idle` (both publish on the
+        // same transition); the second settlement attempt is a no-op.
+        "session.idle" => settle_on_idle_report(port, session_id, turn_active, events),
         "session.execution.succeeded" => {
             state.reasoning_parts.clear();
             state.permissions.lock().pending.clear();
@@ -2120,6 +2164,67 @@ fn handle_event(
         // heartbeat comment lines are not transcript content.
         _ => {}
     }
+}
+
+/// Settles a still-active turn when the server's runner reports idle.
+///
+/// Turn settlement otherwise hangs on `session.execution.succeeded`/`failed`,
+/// so a lost or reordered execution event would leave the task in Working
+/// forever. The runner's idle report is the durable backstop: it always
+/// publishes at the end of a run — including failures, where it precedes
+/// `session.execution.failed` — so the outcome is resolved from the newest
+/// assistant message (its `error` field records a failed run) instead of
+/// assuming success. An unfetchable outcome stays untouched: the execution
+/// event or the stream's own exit still has a chance to settle the turn.
+fn settle_on_idle_report(
+    port: u16,
+    session_id: &str,
+    turn_active: &Mutex<bool>,
+    events: &impl DriverEventSink,
+) {
+    if !*turn_active.lock() {
+        return;
+    }
+    let messages = crate::opencode_session::request_json_on_port(
+        port,
+        "GET",
+        &format!(
+            "/api/session/{}/message?limit=5",
+            encode_path_segment(session_id)
+        ),
+        None,
+        Duration::from_secs(3),
+    )
+    .ok();
+    let Some(messages) = messages else {
+        return;
+    };
+    let failure = newest_assistant_error(&messages);
+    if std::mem::take(&mut *turn_active.lock()) {
+        let _ = events.send(DriverEvent::TurnFinished {
+            success: failure.is_none(),
+            summary: failure,
+        });
+    }
+}
+
+/// The provider error recorded on the newest assistant message, if any. The
+/// message list is newest-first, and user or synthetic entries never carry a
+/// live turn's error.
+fn newest_assistant_error(messages: &Value) -> Option<String> {
+    let data = messages.pointer("/data").and_then(Value::as_array)?;
+    data.iter()
+        .find(|message| message.get("type").and_then(Value::as_str) == Some("assistant"))
+        .and_then(|message| message.get("error"))
+        .filter(|error| !error.is_null())
+        .and_then(|error| {
+            error
+                .get("message")
+                .or_else(|| error.pointer("/data/message"))
+                .and_then(Value::as_str)
+                .or_else(|| error.as_str())
+                .map(str::to_owned)
+        })
 }
 
 fn pending_tool_activity(id: &str, name: &str) -> ActivityItem {
@@ -2563,6 +2668,196 @@ mod tests {
         )
     }
 
+    /// One-shot loopback server answering a single GET with a canned JSON
+    /// body, so the idle settlement's message fetch runs without an installed
+    /// opencode2.
+    fn serve_one_message_response(body: String) -> u16 {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0_u8; 4096];
+            let _ = std::io::Read::read(&mut stream, &mut buffer);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            std::io::Write::write_all(&mut stream, response.as_bytes()).unwrap();
+        });
+        port
+    }
+
+    #[test]
+    fn session_status_busy_and_retry_surface_as_provider_signals() {
+        let (events, event_rx, _commands, _command_rx, turn, mut state) = harness();
+        handle_event(
+            &json!({
+                "type": "session.status",
+                "data": {"sessionID": "ses_1", "status": {"type": "busy"}}
+            }),
+            &events,
+            &_commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        assert!(matches!(event_rx.recv(), Ok(DriverEvent::ProviderBusy)));
+
+        handle_event(
+            &json!({
+                "type": "session.status",
+                "data": {
+                    "sessionID": "ses_1",
+                    "status": {
+                        "type": "retry",
+                        "attempt": 2,
+                        "message": "429 Too Many Requests",
+                        "next": 1_700_000_008_000_u64,
+                        "action": {
+                            "reason": "free_tier_limit",
+                            "provider": "zen",
+                            "title": "Free limit reached",
+                            "message": "Subscribe to OpenCode Go",
+                            "label": "subscribe",
+                            "link": "https://opencode.ai/go"
+                        }
+                    }
+                }
+            }),
+            &events,
+            &_commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        match event_rx.recv() {
+            Ok(DriverEvent::ProviderRetry {
+                attempt,
+                message,
+                action,
+                next_at_ms,
+            }) => {
+                assert_eq!(attempt, 2);
+                assert_eq!(message, "429 Too Many Requests");
+                let action = action.expect("the upsell action rides the retry");
+                assert_eq!(action.reason, "free_tier_limit");
+                assert_eq!(action.link.as_deref(), Some("https://opencode.ai/go"));
+                assert_eq!(next_at_ms, Some(1_700_000_008_000));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn idle_report_settles_a_lost_turn_by_the_newest_assistant_error() {
+        let (events, event_rx, _commands, _command_rx, turn, mut state) = harness();
+        let port = serve_one_message_response(
+            json!({"data": [
+                {"type": "assistant", "id": "msg_2", "error": {"type": "APIError", "message": "rate limited"}},
+                {"type": "assistant", "id": "msg_1"}
+            ]})
+            .to_string(),
+        );
+        handle_event(
+            &json!({
+                "type": "session.status",
+                "data": {"sessionID": "ses_1", "status": {"type": "idle"}}
+            }),
+            &events,
+            &_commands,
+            &turn,
+            port,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        match event_rx.recv() {
+            Ok(DriverEvent::TurnFinished { success, summary }) => {
+                assert!(!success);
+                assert_eq!(summary.as_deref(), Some("rate limited"));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+        // The flag was consumed: a late execution event cannot double-settle.
+        assert!(!*turn.lock());
+    }
+
+    #[test]
+    fn idle_report_settles_successfully_and_ignores_inactive_turns() {
+        // An idle report for a turn nobody holds open must stay silent.
+        {
+            let (events, event_rx, _commands, _command_rx, turn, mut state) = harness();
+            *turn.lock() = false;
+            handle_event(
+                &json!({
+                    "type": "session.status",
+                    "data": {"sessionID": "ses_1", "status": {"type": "idle"}}
+                }),
+                &events,
+                &_commands,
+                &turn,
+                0,
+                "ses_1",
+                false,
+                &mut state,
+            );
+            assert!(event_rx.try_recv().is_err());
+        }
+        // A clean run settles successfully even when the execution event is
+        // the one that went missing.
+        {
+            let (events, event_rx, _commands, _command_rx, turn, mut state) = harness();
+            let port = serve_one_message_response(
+                json!({"data": [{"type": "user"}, {"type": "assistant", "id": "msg_1"}]}).to_string(),
+            );
+            handle_event(
+                &json!({
+                    "type": "session.idle",
+                    "data": {"sessionID": "ses_1"}
+                }),
+                &events,
+                &_commands,
+                &turn,
+                port,
+                "ses_1",
+                false,
+                &mut state,
+            );
+            assert!(matches!(
+                event_rx.recv(),
+                Ok(DriverEvent::TurnFinished {
+                    success: true,
+                    summary: None
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn an_unfetchable_outcome_leaves_the_turn_open() {
+        let (events, event_rx, _commands, _command_rx, turn, mut state) = harness();
+        // Port 0 refuses the connection: no outcome, no settlement.
+        handle_event(
+            &json!({
+                "type": "session.status",
+                "data": {"sessionID": "ses_1", "status": {"type": "idle"}}
+            }),
+            &events,
+            &_commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        assert!(event_rx.try_recv().is_err());
+        assert!(*turn.lock());
+    }
+
     #[test]
     fn child_session_events_stream_as_background_work_without_finishing_parent() {
         let (events, event_rx, _commands, _command_rx, turn, mut state) = harness();
@@ -2661,6 +2956,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             false,
             &mut state,
         );
@@ -2672,6 +2969,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             false,
             &mut state,
         );
@@ -3195,6 +3494,79 @@ mod tests {
         assert_ne!(fork_session_id, source_session_id);
     }
 
+    /// The provider status pipeline against a real `opencode2`: a plain turn
+    /// over `deepseek/deepseek-v4-flash` must surface the runner's
+    /// `session.status busy` as `ProviderBusy` before the first delta and
+    /// still settle through the execution event. Run with
+    /// `cargo test -p fintwind-core provider_status_signals -- --ignored`.
+    #[test]
+    #[ignore = "requires an installed, authenticated opencode2"]
+    fn provider_status_signals_flow_against_a_real_server() {
+        let binary =
+            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+        let (events, event_rx) = crate::driver::test_event_channel();
+        let driver = OpenCodeDriver::start(
+            DriverStartOptions {
+                binary,
+                cwd: std::env::temp_dir(),
+                mode: RuntimeMode::FullAccess,
+                interaction_mode: InteractionMode::Build,
+                model: Some("deepseek/deepseek-v4-flash".into()),
+                reasoning_effort: None,
+                service_tier: None,
+                context_window: None,
+                agent_preset: None,
+                computer_use_enabled: false,
+                provider_cursor: None,
+            },
+            events,
+        )
+        .expect("the server should start and open a session");
+        let _connected = event_rx
+            .recv_timeout(std::time::Duration::from_secs(90))
+            .expect("the server should report its session");
+
+        driver.prompt("Reply with exactly: OK. Do not use any tools.".into());
+        let mut saw_busy = false;
+        let mut retries = Vec::new();
+        let mut text = String::new();
+        let mut finished = None;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+        while std::time::Instant::now() < deadline {
+            let Ok(event) = event_rx.recv_timeout(std::time::Duration::from_secs(5)) else {
+                continue;
+            };
+            match event {
+                DriverEvent::ProviderBusy => saw_busy = true,
+                DriverEvent::ProviderRetry { attempt, message, .. } => {
+                    retries.push((attempt, message))
+                }
+                DriverEvent::TextDelta(delta) => text.push_str(&delta),
+                DriverEvent::TurnFinished { success, .. } => finished = Some(success),
+                DriverEvent::Error(error) => panic!("the server reported: {error}"),
+                _ => {}
+            }
+            if finished.is_some() {
+                break;
+            }
+        }
+        assert_eq!(finished, Some(true), "the turn should settle successfully");
+        assert!(
+            text.contains("OK"),
+            "expected the reply to stream through, got {text:?}"
+        );
+        assert!(
+            saw_busy,
+            "the runner's busy status must surface as ProviderBusy"
+        );
+        // Retries only fire on provider failures, so their absence is fine —
+        // but any that did fire must have carried a non-empty reason.
+        assert!(
+            retries.iter().all(|(_, message)| !message.is_empty()),
+            "retry events must carry the provider's reason: {retries:?}"
+        );
+    }
+
     /// Drives the `question` tool against a real `opencode2`: the prompt
     /// must arrive as a form (`form.created`, not the question events older
     /// docs describe), surface as a structured question request, and the
@@ -3385,7 +3757,7 @@ mod tests {
             json!({"type":"session.execution.succeeded","data":{"sessionID":"ses_1"}}),
         ];
         for event in wire {
-            handle_event(&event, &events, &commands, &turn, true, &mut state);
+            handle_event(&event, &events, &commands, &turn, 0, "ses_1", true, &mut state);
         }
 
         let mut seen = Vec::new();
@@ -3517,7 +3889,7 @@ mod tests {
             json!({"type":"session.execution.succeeded","data":{"sessionID":"ses_1"}}),
         ];
         for event in wire {
-            handle_event(&event, &events, &commands, &turn, true, &mut state);
+            handle_event(&event, &events, &commands, &turn, 0, "ses_1", true, &mut state);
         }
 
         let seen = event_rx.try_iter().collect::<Vec<_>>();
@@ -3554,6 +3926,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             true,
             &mut state,
         );
@@ -3574,6 +3948,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             true,
             &mut state,
         );
@@ -3614,6 +3990,8 @@ mod tests {
                 &events,
                 &commands,
                 &turn,
+                0,
+                "ses_1",
                 true,
                 &mut state,
             );
@@ -3650,6 +4028,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             true,
             &mut state,
         );
@@ -3674,6 +4054,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             true,
             &mut state,
         );
@@ -3703,6 +4085,8 @@ mod tests {
                 &events,
                 &commands,
                 &turn,
+                0,
+                "ses_1",
                 true,
                 &mut state,
             );
@@ -3726,6 +4110,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             true,
             &mut state,
         );
@@ -3745,6 +4131,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             true,
             &mut state,
         );
@@ -3774,6 +4162,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             true,
             &mut state,
         );
@@ -3976,6 +4366,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             true,
             &mut state,
         );
@@ -4002,7 +4394,7 @@ mod tests {
             }
         });
 
-        handle_event(&permission, &events, &commands, &turn, false, &mut state);
+        handle_event(&permission, &events, &commands, &turn, 0, "ses_1", false, &mut state);
         let DriverEvent::Permission {
             request_id,
             options,
@@ -4036,7 +4428,7 @@ mod tests {
                 "always": ["rm -rf *"]
             }
         });
-        handle_event(&repeated, &events, &commands, &turn, false, &mut state);
+        handle_event(&repeated, &events, &commands, &turn, 0, "ses_1", false, &mut state);
         let Ok(CommandMessage::Respond { option_id, .. }) = command_rx.try_recv() else {
             panic!("the driver's remembered rule should answer without asking again");
         };
@@ -4044,7 +4436,7 @@ mod tests {
         assert!(event_rx.try_recv().is_err());
 
         let mut isolated = OpenCodeStreamState::default();
-        handle_event(&repeated, &events, &commands, &turn, false, &mut isolated);
+        handle_event(&repeated, &events, &commands, &turn, 0, "ses_1", false, &mut isolated);
         assert!(matches!(
             event_rx.try_recv().unwrap(),
             DriverEvent::Permission { request_id, .. } if request_id == "per_def"
@@ -4072,6 +4464,8 @@ mod tests {
             &events,
             &commands,
             &turn,
+            0,
+            "ses_1",
             true,
             &mut state,
         );

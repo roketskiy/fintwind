@@ -1331,7 +1331,7 @@ impl Fintwind {
             TranscriptRowKind::ChangedFiles(turn_id) => self
                 .render_changed_files_row(turn_id, &theme, cx)
                 .unwrap_or_else(|| div().into_any_element()),
-            TranscriptRowKind::WorkingIndicator => self.render_working_indicator_row(&theme),
+            TranscriptRowKind::WorkingIndicator => self.render_working_indicator_row(&theme, cx),
         };
         div()
             .w_full()
@@ -1694,14 +1694,22 @@ impl Fintwind {
     /// The live turn's closing row: pulsing dots and "Working for Ns". It is
     /// on screen from the moment the prompt lands — before the provider has
     /// produced a single chunk — and stays below whatever streams in until
-    /// the turn settles into its "Worked for N" fold.
-    fn render_working_indicator_row(&self, theme: &Theme) -> AnyElement {
+    /// the turn settles into its "Worked for N" fold. Quiet stretches carry
+    /// the provider's own busy/retry label, or the bare silence counter.
+    fn render_working_indicator_row(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let elapsed = self
             .selected_session()
             .and_then(|session| session.turns.last())
             .filter(|turn| turn.status == TurnStatus::Running)
             .map(|turn| unix_time().saturating_sub(turn.started_at))
             .unwrap_or(0);
+        let phase = self.selected_runtime().and_then(|runtime| {
+            working_phase(
+                runtime.provider_phase.as_ref(),
+                runtime.last_active_at.elapsed().as_secs(),
+                unix_time_millis(),
+            )
+        });
         div()
             .h(px(22.0))
             .flex()
@@ -1719,7 +1727,92 @@ impl Fintwind {
                         duration = format_working_elapsed(elapsed)
                     ))),
             )
+            .children(phase.map(|phase| self.render_working_phase(phase, theme, cx)))
             .into_any_element()
+    }
+
+    fn render_working_phase(
+        &self,
+        phase: WorkingPhase,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let (text, color) = match &phase {
+            WorkingPhase::Responding { elapsed_secs } => (
+                tr!(
+                    "transcript.provider_responding",
+                    duration = format_working_elapsed(*elapsed_secs)
+                ),
+                theme.text_tertiary,
+            ),
+            WorkingPhase::Awaiting { quiet_secs } => (
+                tr!(
+                    "transcript.awaiting_response",
+                    duration = format_working_elapsed(*quiet_secs)
+                ),
+                theme.text_tertiary,
+            ),
+            WorkingPhase::Retrying { text, .. } => (text.clone(), theme.warning),
+        };
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .line_height(px(16.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(color)
+                    .child(SharedString::from(format!("· {text}"))),
+            )
+            .into_any_element();
+        if let WorkingPhase::Retrying {
+            action_label,
+            action_link: Some(link),
+            ..
+        } = phase
+        {
+            let action_label = action_label.unwrap_or_else(|| link.clone());
+            let focus = self.transcript_control_focus("working-phase-link", cx);
+            row = div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .child(row)
+                .child(
+                    div()
+                        .id("working-phase-link")
+                        .track_focus(&focus)
+                        .tab_index(0)
+                        .px(px(2.0))
+                        .text_size(px(11.5))
+                        .line_height(px(16.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(color)
+                        .underline()
+                        .cursor_pointer()
+                        .focus_visible(|style| style.text_color(theme.text))
+                        .hover(|style| style.text_color(theme.text))
+                        .active(|style| style.text_color(theme.text_ghost))
+                        .child(SharedString::from(action_label))
+                        .on_click({
+                            let link = link.clone();
+                            cx.listener(move |_, _, _, cx| cx.open_url(link.as_str()))
+                        })
+                        .on_key_down({
+                            let link = link.clone();
+                            cx.listener(move |_, event: &KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    cx.open_url(link.as_str());
+                                    cx.stop_propagation();
+                                }
+                            })
+                        }),
+                )
+                .into_any_element();
+        }
+        row
     }
 
     /// The turn's tool activity as a disclosure: the summary line toggles the
@@ -2588,6 +2681,85 @@ impl Fintwind {
             ),
         }
     }
+}
+
+/// Silence from the provider this long — with no busy/retry report and no
+/// visible output — is worth labeling: provider stalls and lost event
+/// streams both present exactly this way, and the elapsed ticker alone
+/// reads as a frozen app.
+pub(super) const PROVIDER_QUIET_RESPONSE_SECS: u64 = 30;
+
+/// The working row's quiet-stretch label, resolved from the runtime's
+/// provider phase. `quiet_secs` is how long the session has heard nothing at
+/// all; `now_ms` prices the retry countdown against the server's next-attempt
+/// stamp. Pure so the fallbacks stay testable.
+pub(super) fn working_phase(
+    phase: Option<&ProviderPhase>,
+    quiet_secs: u64,
+    now_ms: u64,
+) -> Option<WorkingPhase> {
+    match phase {
+        Some(ProviderPhase::Responding { since }) => Some(WorkingPhase::Responding {
+            elapsed_secs: unix_time().saturating_sub(*since),
+        }),
+        Some(ProviderPhase::Retrying {
+            attempt,
+            message,
+            action,
+            next_at_ms,
+        }) => {
+            let detail = match compact_provider_retry_message(message) {
+                detail if !detail.is_empty() => detail,
+                _ => tr!("transcript.provider_retry_unknown"),
+            };
+            let mut text = tr!("transcript.provider_retry", attempt = attempt, message = detail);
+            if let Some(next_at_ms) = next_at_ms {
+                let wait = next_at_ms.saturating_sub(now_ms) / 1000;
+                text.push_str(" · ");
+                text.push_str(&tr!(
+                    "transcript.provider_retry_eta",
+                    duration = format_working_elapsed(wait)
+                ));
+            }
+            Some(WorkingPhase::Retrying {
+                text,
+                action_label: action.as_ref().map(|action| action.label.clone()),
+                action_link: action.as_ref().and_then(|action| action.link.clone()),
+            })
+        }
+        None if quiet_secs >= PROVIDER_QUIET_RESPONSE_SECS => Some(WorkingPhase::Awaiting {
+            quiet_secs,
+        }),
+        None => None,
+    }
+}
+
+/// The quiet-stretch states the working row can label, beyond its elapsed
+/// ticker. `Retrying` carries its ready-made sentence (attempt, reason, and
+/// countdown already localized together) plus the provider's optional
+/// upsell action, kept separate because the link is interactive.
+#[derive(Clone, Debug)]
+pub(super) enum WorkingPhase {
+    Responding { elapsed_secs: u64 },
+    Retrying {
+        text: String,
+        action_label: Option<String>,
+        action_link: Option<String>,
+    },
+    Awaiting { quiet_secs: u64 },
+}
+
+/// Provider retry reasons are error strings; the working row gets one calm
+/// line — the first line, clipped.
+pub(super) fn compact_provider_retry_message(message: &str) -> String {
+    const MAX_CHARS: usize = 64;
+    let line = message.lines().next().unwrap_or_default().trim();
+    if line.chars().count() <= MAX_CHARS {
+        return line.to_owned();
+    }
+    let mut compact: String = line.chars().take(MAX_CHARS).collect();
+    compact.push('…');
+    compact
 }
 
 /// The separator between two hunks of the same file.

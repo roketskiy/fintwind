@@ -971,6 +971,11 @@ transcript.worked: 已完成
 transcript.worked_for: 用时 %{duration}
 transcript.you_stopped_after: 你在工作 %{duration} 后停止了
 transcript.working_for: 工作中 · %{duration}
+transcript.provider_responding: 模型响应中 · %{duration}
+transcript.awaiting_response: 等待响应 · %{duration}
+transcript.provider_retry: 重试 %{attempt} · %{message}
+transcript.provider_retry_eta: "%{duration}后重试"
+transcript.provider_retry_unknown: provider 错误
 transcript.thinking: 正在思考
 transcript.thought_for: 思考用时 %{duration}
 transcript.changed_file: 更改了 %{count} 个文件

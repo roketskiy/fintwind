@@ -1021,6 +1021,11 @@ transcript.worked: 完了
 transcript.worked_for: 作業時間 %{duration}
 transcript.you_stopped_after: "%{duration} 後にタスクを停止しました"
 transcript.working_for: 作業中 · %{duration}
+transcript.provider_responding: 応答を生成中 · %{duration}
+transcript.awaiting_response: 応答待ち · %{duration}
+transcript.provider_retry: "再試行 %{attempt} · %{message}"
+transcript.provider_retry_eta: "%{duration}後に再試行"
+transcript.provider_retry_unknown: プロバイダーエラー
 transcript.thinking: 思考中
 transcript.thought_for: 思考時間 %{duration}
 transcript.changed_file: "%{count} 個のファイルを変更"

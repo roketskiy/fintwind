@@ -20,7 +20,7 @@ use crate::computer_use::{ComputerTarget, ComputerUsePhase, ComputerUseState};
 use crate::driver::{self, DriverHandle, DriverStartOptions, SessionOptions};
 use crate::model::{
     ActivityKind, AgentSession, Checkpoint, CheckpointStatus, DriverEvent, PermissionOption,
-    Project, ProviderResumeCursor, SessionStatus,
+    Project, ProviderResumeCursor, ProviderRetryAction, SessionStatus,
 };
 use crate::persistence::{ComposerDraftStore, PersistedState, StateStore};
 use crate::settings::DaemonSettingsStore;
@@ -1339,6 +1339,21 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::CompactionUpdated(state) => {
             ("compactionUpdated", serde_json::to_value(state)?)
         }
+        DriverEvent::ProviderBusy => ("providerBusy", Value::Null),
+        DriverEvent::ProviderRetry {
+            attempt,
+            message,
+            action,
+            next_at_ms,
+        } => (
+            "providerRetry",
+            json!({
+                "attempt": attempt,
+                "message": message,
+                "action": action,
+                "nextAtMs": next_at_ms,
+            }),
+        ),
         DriverEvent::TurnFinished { success, summary } => (
             "turnFinished",
             json!({ "success": success, "summary": summary }),
@@ -1426,6 +1441,16 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "compactionUpdated" => {
             DriverEvent::CompactionUpdated(serde_json::from_value(payload)?)
         }
+        "providerBusy" => DriverEvent::ProviderBusy,
+        "providerRetry" => {
+            let retry: ProviderRetryWire = serde_json::from_value(payload)?;
+            DriverEvent::ProviderRetry {
+                attempt: retry.attempt,
+                message: retry.message,
+                action: retry.action,
+                next_at_ms: retry.next_at_ms,
+            }
+        }
         "turnFinished" => {
             let finished: TurnFinishedWire = serde_json::from_value(payload)?;
             DriverEvent::TurnFinished {
@@ -1502,6 +1527,15 @@ struct UsageWire {
 struct TurnFinishedWire {
     success: bool,
     summary: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderRetryWire {
+    attempt: u32,
+    message: String,
+    action: Option<ProviderRetryAction>,
+    next_at_ms: Option<u64>,
 }
 
 #[cfg(test)]
@@ -1618,6 +1652,44 @@ mod tests {
         assert!(matches!(
             event_from_wire(wire).unwrap(),
             DriverEvent::TextDelta(text) if text == "hello"
+        ));
+    }
+
+    #[test]
+    fn wire_event_round_trip_preserves_provider_status_signals() {
+        let wire = event_to_wire(DriverEvent::ProviderBusy).unwrap();
+        assert_eq!(wire.kind, "providerBusy");
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::ProviderBusy
+        ));
+
+        let action = ProviderRetryAction {
+            reason: "free_tier_limit".into(),
+            provider: "zen".into(),
+            title: "Free limit reached".into(),
+            message: "Subscribe to OpenCode Go".into(),
+            label: "subscribe".into(),
+            link: Some("https://opencode.ai/go".into()),
+        };
+        let retry = DriverEvent::ProviderRetry {
+            attempt: 3,
+            message: "429 Too Many Requests".into(),
+            action: Some(action),
+            next_at_ms: Some(1_700_000_008_000),
+        };
+        let wire = event_to_wire(retry).unwrap();
+        assert_eq!(wire.kind, "providerRetry");
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::ProviderRetry {
+                attempt: 3,
+                message,
+                action: Some(action),
+                next_at_ms: Some(1_700_000_008_000),
+            } if message == "429 Too Many Requests"
+                && action.reason == "free_tier_limit"
+                && action.link.as_deref() == Some("https://opencode.ai/go")
         ));
     }
 

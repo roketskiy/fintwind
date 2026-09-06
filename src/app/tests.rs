@@ -1949,3 +1949,84 @@ fn tab_cycle_walks_favorites_then_dynamic_provider_rail() {
     );
     assert_eq!(next_picker_highlight(Some(2), tabs.len(), "down"), Some(0));
 }
+
+#[test]
+fn working_phase_labels_retry_backoff_with_clamped_detail_and_countdown() {
+    use super::ProviderPhase;
+    use super::transcript_view::{WorkingPhase, working_phase};
+    use crate::model::ProviderRetryAction;
+
+    let action = ProviderRetryAction {
+        reason: "free_tier_limit".into(),
+        provider: "zen".into(),
+        title: "Free limit reached".into(),
+        message: "Subscribe to OpenCode Go".into(),
+        label: "subscribe".into(),
+        link: Some("https://opencode.ai/go".into()),
+    };
+    let phase = ProviderPhase::Retrying {
+        attempt: 2,
+        message: "429 Too Many Requests".into(),
+        action: Some(action),
+        next_at_ms: Some(1_700_000_008_000),
+    };
+    let Some(WorkingPhase::Retrying {
+        text,
+        action_label,
+        action_link,
+    }) = working_phase(Some(&phase), 0, 1_700_000_000_000)
+    else {
+        panic!("a retry report must label the row");
+    };
+    assert!(text.contains("Retry 2 · 429 Too Many Requests"), "{text}");
+    assert!(text.contains("next in 8s"), "{text}");
+    assert_eq!(action_label.as_deref(), Some("subscribe"));
+    assert_eq!(action_link.as_deref(), Some("https://opencode.ai/go"));
+}
+
+#[test]
+fn working_phase_clamps_long_retry_reasons_and_fills_blank_ones() {
+    use super::ProviderPhase;
+    use super::transcript_view::{WorkingPhase, compact_provider_retry_message, working_phase};
+
+    let long = format!("{} tail", "x".repeat(80));
+    let clipped = compact_provider_retry_message(&long);
+    assert!(clipped.chars().count() <= 65);
+    assert!(clipped.ends_with('…'));
+    assert_eq!(
+        compact_provider_retry_message("first line\nsecond line"),
+        "first line"
+    );
+
+    let phase = ProviderPhase::Retrying {
+        attempt: 1,
+        message: "   ".into(),
+        action: None,
+        next_at_ms: None,
+    };
+    let Some(WorkingPhase::Retrying { text, .. }) = working_phase(Some(&phase), 0, 0) else {
+        panic!("a retry report must label the row");
+    };
+    assert!(text.contains("provider error"), "{text}");
+}
+
+#[test]
+fn working_phase_labels_responding_and_only_long_silence() {
+    use super::ProviderPhase;
+    use super::transcript_view::{PROVIDER_QUIET_RESPONSE_SECS, WorkingPhase, working_phase};
+    use crate::model::unix_time;
+
+    let responding = ProviderPhase::Responding { since: 1_000 };
+    let Some(WorkingPhase::Responding { elapsed_secs }) =
+        working_phase(Some(&responding), 0, 0)
+    else {
+        panic!("a busy report must label the row");
+    };
+    assert_eq!(elapsed_secs, unix_time() - 1_000);
+
+    assert!(working_phase(None, PROVIDER_QUIET_RESPONSE_SECS - 1, 0).is_none());
+    assert!(matches!(
+        working_phase(None, PROVIDER_QUIET_RESPONSE_SECS, 0),
+        Some(WorkingPhase::Awaiting { .. })
+    ));
+}

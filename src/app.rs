@@ -36,9 +36,9 @@ use crate::model::{
     BackgroundWorkTranscript, BackgroundWorkTranscriptEvent, Checkpoint, CheckpointStatus,
     CompactionState, CompactionStatus, ContextUsage, DriverEvent, FavoriteModel, InteractionMode,
     Message, MessageAttachment, MessageRole, OPENCODE_PROVIDER, PendingPermission, Project,
-    ProviderModel, ProviderProbe, ProviderResumeCursor, QueuedMessage, ReasoningBlock, RuntimeMode,
-    SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus, UserInputAnswer,
-    UserInputQuestion, compact_path, unix_time, unix_time_millis,
+    ProviderModel, ProviderProbe, ProviderResumeCursor, ProviderRetryAction, QueuedMessage,
+    ReasoningBlock, RuntimeMode, SessionStatus, SessionWorkspace, TranscriptBlock, TurnStatus,
+    UserInputAnswer, UserInputQuestion, compact_path, unix_time, unix_time_millis,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -170,6 +170,24 @@ enum StreamPhase {
     Text,
     Reasoning,
     Activity,
+}
+
+/// The provider runtime's own account of a running turn's quiet stretches
+/// (opencode2 `session.status`). Deltas and tool activity speak for
+/// themselves; this phase labels the waits where neither exists — a model
+/// call in flight, or a retry backoff after a failure — so the working row
+/// never reads as a frozen app. Cleared by any visible output.
+#[derive(Clone, Debug, PartialEq)]
+enum ProviderPhase {
+    /// `session.status busy`: a model call is in flight.
+    Responding { since: u64 },
+    /// `session.status retry`: the call failed; the runtime backs off.
+    Retrying {
+        attempt: u32,
+        message: String,
+        action: Option<ProviderRetryAction>,
+        next_at_ms: Option<u64>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -823,6 +841,9 @@ struct SessionRuntime {
     pending_steers: VecDeque<ComposerSubmission>,
     stream_phase: Option<StreamPhase>,
     stream_remeasure_pending: bool,
+    /// The provider's busy/retry report for the live turn, if any. Runtime
+    /// presentation state: it never persists and always dies with the turn.
+    provider_phase: Option<ProviderPhase>,
     pending_permission: Option<PendingPermission>,
     pending_user_input: Option<PendingUserInput>,
     pending_computer_approval: Option<PendingComputerApproval>,

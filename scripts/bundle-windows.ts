@@ -35,13 +35,23 @@ interface CargoMetadata {
 function findInnoSetupCompiler(): string {
   const onPath = Bun.which("ISCC.exe") ?? Bun.which("iscc");
   if (onPath) return onPath;
-  for (const base of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) {
-    if (!base) continue;
-    const candidate = join(base, "Inno Setup 6", "ISCC.exe");
-    if (existsSync(candidate)) return candidate;
+  // Inno Setup 7 kept the "Inno Setup <major>" directory name but moved to
+  // Program Files, while winget/choco and per-user installs can land in any
+  // of the bases below — so try the known names, newest first.
+  const bases = [
+    process.env.ProgramFiles,
+    process.env["ProgramFiles(x86)"],
+    process.env.LocalAppData && join(process.env.LocalAppData, "Programs"),
+  ];
+  for (const directory of ["Inno Setup 7", "Inno Setup 6"]) {
+    for (const base of bases) {
+      if (!base) continue;
+      const candidate = join(base, directory, "ISCC.exe");
+      if (existsSync(candidate)) return candidate;
+    }
   }
   throw new Error(
-    "ISCC.exe was not found. Install Inno Setup 6 (choco install innosetup).",
+    "ISCC.exe was not found. Install Inno Setup 7 (winget install JRSoftware.InnoSetup).",
   );
 }
 

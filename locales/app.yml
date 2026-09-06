@@ -1952,6 +1952,16 @@ transcript.you_stopped_after:
   en: You stopped after %{duration}
 transcript.working_for:
   en: Working for %{duration}
+transcript.provider_responding:
+  en: Responding · %{duration}
+transcript.awaiting_response:
+  en: Awaiting response · %{duration}
+transcript.provider_retry:
+  en: Retry %{attempt} · %{message}
+transcript.provider_retry_eta:
+  en: next in %{duration}
+transcript.provider_retry_unknown:
+  en: provider error
 transcript.thinking:
   en: Thinking
 transcript.thought_for:

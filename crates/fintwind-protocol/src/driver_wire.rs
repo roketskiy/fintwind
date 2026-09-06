@@ -5,7 +5,9 @@ use serde_json::{Value, json};
 
 use crate::WireDriverEvent;
 use crate::computer_use::{ComputerTarget, ComputerUsePhase, ComputerUseState};
-use crate::model::{ActivityKind, DriverEvent, PermissionOption, UserInputQuestion};
+use crate::model::{
+    ActivityKind, DriverEvent, PermissionOption, ProviderRetryAction, UserInputQuestion,
+};
 
 pub fn decode_enum<T: DeserializeOwned>(value: &str) -> anyhow::Result<T> {
     serde_json::from_value(Value::String(value.to_owned()))
@@ -113,6 +115,21 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::CompactionUpdated(state) => {
             ("compactionUpdated", serde_json::to_value(state)?)
         }
+        DriverEvent::ProviderBusy => ("providerBusy", Value::Null),
+        DriverEvent::ProviderRetry {
+            attempt,
+            message,
+            action,
+            next_at_ms,
+        } => (
+            "providerRetry",
+            json!({
+                "attempt": attempt,
+                "message": message,
+                "action": action,
+                "nextAtMs": next_at_ms,
+            }),
+        ),
         DriverEvent::TurnFinished { success, summary } => (
             "turnFinished",
             json!({ "success": success, "summary": summary }),
@@ -201,6 +218,16 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "compactionUpdated" => {
             DriverEvent::CompactionUpdated(serde_json::from_value(payload)?)
         }
+        "providerBusy" => DriverEvent::ProviderBusy,
+        "providerRetry" => {
+            let retry: ProviderRetryWire = serde_json::from_value(payload)?;
+            DriverEvent::ProviderRetry {
+                attempt: retry.attempt,
+                message: retry.message,
+                action: retry.action,
+                next_at_ms: retry.next_at_ms,
+            }
+        }
         "turnFinished" => {
             let finished: TurnFinishedWire = serde_json::from_value(payload)?;
             DriverEvent::TurnFinished {
@@ -279,6 +306,15 @@ struct TurnFinishedWire {
     summary: Option<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderRetryWire {
+    attempt: u32,
+    message: String,
+    action: Option<ProviderRetryAction>,
+    next_at_ms: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -316,6 +352,42 @@ mod tests {
         assert_eq!(request_id, "request-1");
         assert_eq!(questions[0].id, "deployment");
         assert_eq!(questions[0].options[0].label, "Preview");
+    }
+
+    #[test]
+    fn provider_status_signals_round_trip_through_the_daemon_wire() {
+        let wire = event_to_wire(DriverEvent::ProviderBusy).unwrap();
+        assert_eq!(wire.kind, "providerBusy");
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::ProviderBusy
+        ));
+
+        let expected_action = ProviderRetryAction {
+            reason: "free_tier_limit".into(),
+            provider: "zen".into(),
+            title: "Free limit reached".into(),
+            message: "Subscribe to OpenCode Go".into(),
+            label: "subscribe".into(),
+            link: Some("https://opencode.ai/go".into()),
+        };
+        let retry = DriverEvent::ProviderRetry {
+            attempt: 3,
+            message: "429 Too Many Requests".into(),
+            action: Some(expected_action.clone()),
+            next_at_ms: Some(1_700_000_008_000),
+        };
+        let wire = event_to_wire(retry).unwrap();
+        assert_eq!(wire.kind, "providerRetry");
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::ProviderRetry {
+                attempt: 3,
+                ref message,
+                action: Some(ref round_action),
+                next_at_ms: Some(1_700_000_008_000),
+            } if message == "429 Too Many Requests" && *round_action == expected_action
+        ));
     }
 
     #[test]

@@ -1374,11 +1374,11 @@ pub struct Fintwind {
     /// Generation token for the debounced native-session reconcile.
     native_reconcile_generation: u64,
     /// Server transcript version (local fetch timestamp) already applied to
-    /// each imported session, so re-opening a session does not refetch
-    /// unless the server moved.
-    imported_transcript_fetched: HashMap<Uuid, u64>,
-    /// Imported transcript fetches in flight, keyed by session id.
-    imported_transcript_fetches: HashSet<Uuid>,
+    /// each session that tracks a native one — imported or created here — so
+    /// re-opening a session does not refetch unless the server moved.
+    native_transcript_fetched: HashMap<Uuid, u64>,
+    /// Native transcript fetches in flight, keyed by session id.
+    native_transcript_fetches: HashSet<Uuid>,
     /// Last reconcile/fetch failure, shown next to the sidebar. `None` means
     /// the last attempt succeeded (or none ran yet).
     native_reconcile_error: Option<String>,
@@ -3039,8 +3039,8 @@ impl Fintwind {
                 provider_connectivity: HashMap::new(),
                 model_latency: HashMap::new(),
                 native_reconcile_generation: 0,
-                imported_transcript_fetched: HashMap::new(),
-                imported_transcript_fetches: HashSet::new(),
+                native_transcript_fetched: HashMap::new(),
+                native_transcript_fetches: HashSet::new(),
                 native_reconcile_error: None,
                 providers_form_format: Default::default(),
                 providers_form_models: Vec::new(),

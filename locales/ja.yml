@@ -710,6 +710,7 @@ session.compaction_requested: 圧縮を要求しました。プロバイダー�
 session.compaction_completed: コンテキストを圧縮しました
 session.compaction_failed: コンテキストの圧縮に失敗しました
 session.compaction_unavailable: 実行中のプロバイダーがないため、このセッションを圧縮できません
+transcript.compaction: 圧縮
 session.agent_ran_out_of_context: このターンでエージェントのコンテキストが不足しました
 session.agent_declined_turn: エージェントはこのターンを辞退しました
 session.agent_stopped_reason: "エージェントが停止しました：%{reason}"

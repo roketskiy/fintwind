@@ -1205,6 +1205,7 @@ impl StateStore {
         session.service_tier = stored.service_tier;
         session.context_window = stored.context_window;
         session.context_usage = stored.context_usage;
+        session.compaction = stored.compaction;
         session.runtime_event_cursor = stored.runtime_event_cursor;
 
         let mut statement = connection

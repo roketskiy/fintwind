@@ -550,12 +550,11 @@ pub struct AgentTurn {
 }
 
 /// How full the provider's context window is, from the latest main-thread
-/// model call. `tokens` is prompt + cache + output of that call; `window` is
-/// the model's context size, which the provider only reports once a turn
-/// settles — `None` means "not known yet", and the meter degrades to a bare
-/// token count. The optional tail carries the session's cumulative token
-/// throughput and the latest call's cache split; each stays `None` until the
-/// provider first reports it.
+/// model call. `tokens` is that call's occupancy (prompt + cache + output);
+/// `window` is the model's context size — `None` means "not known yet", and
+/// the meter degrades to a bare token count. The optional tail carries the
+/// session's cumulative token throughput and cache split; each stays `None`
+/// until the provider first reports it.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
 pub struct ContextUsage {
     pub tokens: u64,
@@ -563,16 +562,17 @@ pub struct ContextUsage {
     pub window: Option<u64>,
     /// Every step's prompt + output summed across the session — the tokens
     /// the provider actually processed. Absolute, accumulated by the driver;
-    /// a driver restart re-seeds it from the newest stored messages, so it is
-    /// a floor, never an over-count.
+    /// a driver restart re-seeds it from stored session totals when present,
+    /// otherwise from the newest stored messages, so it is a floor, never an
+    /// over-count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
-    /// Cached prompt tokens of the latest call; the numerator of the cache
-    /// hit rate.
+    /// Cached prompt tokens summed across every call in the session; the
+    /// numerator of the cache hit rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_read: Option<u64>,
-    /// The latest call's full prompt — cache read, cache write, and uncached
-    /// input together; the denominator of the cache hit rate.
+    /// Full prompt tokens summed across every call — cache read, cache write,
+    /// and uncached input together; the denominator of the cache hit rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u64>,
 }
@@ -611,6 +611,10 @@ pub struct CompactionState {
     /// [`CompactionStatus::Cancelled`] instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The compacted summary the provider stored. Present on a completed
+    /// attempt so the transcript can show the same document the TUI does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
 }
 
 /// Last daemon event incorporated into a session's persisted projection.
@@ -1257,6 +1261,9 @@ pub enum MessageRole {
     User,
     Assistant,
     System,
+    /// Provider-side context compaction. Renders as a transcript divider with
+    /// the stored summary, matching OpenCode's TUI Compaction section.
+    Compaction,
 }
 
 /// A file represented by a composer chip and retained with the sent message.

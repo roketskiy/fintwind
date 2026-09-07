@@ -753,6 +753,34 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                     ctx,
                 )),
         ),
+        MessageRole::Compaction => {
+            let body = render_markdown_message_body(&content, markdown, theme, ctx);
+            div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(10.0))
+                .py(px(8.0))
+                .child(
+                    div()
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .child(div().flex_1().h(px(1.0)).bg(theme.border))
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(px(11.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text_tertiary)
+                                .child(tr!("transcript.compaction")),
+                        )
+                        .child(div().flex_1().h(px(1.0)).bg(theme.border)),
+                )
+                .child(body)
+        }
     };
 
     let selection = ctx.selection().clone();

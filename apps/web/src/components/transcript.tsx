@@ -1073,6 +1073,18 @@ function MessageRow({
       </div>
     )
   }
+  if (message.role === 'compaction') {
+    return (
+      <article className="min-w-0 space-y-2.5 py-2">
+        <div className="flex items-center gap-2.5">
+          <div className="h-px min-w-0 flex-1 bg-border" />
+          <div className="shrink-0 text-[11px] font-medium text-[var(--text-tertiary)]">{t('transcript.compaction')}</div>
+          <div className="h-px min-w-0 flex-1 bg-border" />
+        </div>
+        <Markdown text={visible} />
+      </article>
+    )
+  }
   return (
     <MessageContextMenu content={copyContent} forkAction={forkAction} t={t}>
       <article className="group/message min-w-0 py-1">

@@ -198,6 +198,33 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
         let created_at = ms_to_seconds(row.get("time").and_then(|time| time.get("created")))
             .unwrap_or_default();
         match row.get("type").and_then(Value::as_str) {
+            Some("compaction") => {
+                // opencode2 stores a completed compaction as its own message
+                // type with a top-level `summary` (and sometimes text parts).
+                // The TUI renders it as a Compaction divider; skipping the
+                // type dropped every summary from imported transcripts.
+                let mut text = row
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                if text.trim().is_empty() {
+                    text = parts_text(row.get("content"));
+                }
+                if text.trim().is_empty() {
+                    continue;
+                }
+                transcript.messages.push(Message {
+                    id: uuid::Uuid::new_v4(),
+                    turn_id: None,
+                    role: MessageRole::Compaction,
+                    content: text,
+                    display_content: None,
+                    attachments: Vec::new(),
+                    created_at,
+                    streaming: false,
+                });
+            }
             Some("user") => {
                 // Verified against 0.0.0-beta-18743: a user row carries its
                 // prompt as a top-level `text` string and has no `content`
@@ -576,5 +603,38 @@ mod tests {
         assert!(transcript.messages.is_empty());
         assert!(transcript.blocks.is_empty());
         assert!(transcript.turns.is_empty());
+    }
+
+    #[test]
+    fn compaction_rows_become_transcript_dividers() {
+        let rows = vec![
+            json!({
+                "id": "msg_1", "type": "user",
+                "time": {"created": 1_000_u64},
+                "text": "先设计"
+            }),
+            json!({
+                "id": "msg_2", "type": "assistant",
+                "time": {"created": 2_000_u64, "completed": 3_000_u64},
+                "content": [{"type": "text", "text": "好。"}]
+            }),
+            json!({
+                "id": "msg_3", "type": "compaction",
+                "time": {"created": 4_000_u64},
+                "status": "completed",
+                "summary": "## Objective\n- Compacted."
+            }),
+            json!({
+                "id": "msg_4", "type": "user",
+                "time": {"created": 5_000_u64},
+                "text": "继续"
+            }),
+        ];
+        let transcript = translate_rows(&rows);
+        assert_eq!(transcript.messages.len(), 4);
+        assert_eq!(transcript.messages[2].role, MessageRole::Compaction);
+        assert_eq!(transcript.messages[2].content, "## Objective\n- Compacted.");
+        assert_eq!(transcript.messages[2].turn_id, None);
+        assert_eq!(transcript.turns.len(), 2);
     }
 }

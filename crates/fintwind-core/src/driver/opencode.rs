@@ -218,10 +218,21 @@ impl OpenCodeDriver {
 
         let usage_metadata = Arc::new(OpenCodeUsageMetadata::default());
         let previous_usage_path = format!(
-            "/api/session/{}/message?limit=20",
+            "/api/session/{}/message?limit=200",
             encode_path_segment(&session_id)
         );
         let previous_usage = server.request("GET", &previous_usage_path, None).ok();
+        let previous_session = server
+            .request(
+                "GET",
+                &format!("/api/session/{}", encode_path_segment(&session_id)),
+                None,
+            )
+            .ok();
+        let previous_session_info = previous_session
+            .as_ref()
+            .and_then(|value| value.get("data"))
+            .or(previous_session.as_ref());
         let previous_info = previous_usage
             .as_ref()
             .and_then(|messages| latest_opencode_usage_message(messages).cloned());
@@ -233,30 +244,36 @@ impl OpenCodeDriver {
             *usage_metadata.last_model.lock() = Some(model.clone());
         }
         // A fresh driver republishes the newest stored step so the meter and
-        // the new totals row are populated before the first live step lands.
-        // The seed only ever adds to the accumulator; live steps then grow
-        // it from there.
-        if let Some((seeded_total, newest)) = previous_usage.as_ref().and_then(|messages| {
-            let seeds = opencode_usage_seeds(messages);
-            (seeds.0.is_some() || seeds.1.is_some()).then_some(seeds)
-        }) {
-            if let Some(total) = seeded_total {
-                *usage_metadata.session_total.lock() = total;
-            }
-            if let Some(usage) = newest {
-                let _ = events.send(DriverEvent::UsageUpdated {
-                    context_tokens: Some(usage.context),
-                    context_window: None,
-                    session_total: Some(*usage_metadata.session_total.lock()),
-                    cache_read: (usage.prompt > 0).then_some(usage.cache_read),
-                    prompt_tokens: (usage.prompt > 0).then_some(usage.prompt),
-                });
-            }
+        // the totals row are populated before the first live step lands.
+        // Session-row totals, when present, are the TUI's own source of the
+        // cumulative numbers; the message tail is only a floor.
+        let seeds = previous_usage
+            .as_ref()
+            .map(|messages| opencode_usage_seeds(messages, previous_session_info))
+            .unwrap_or_else(|| opencode_usage_seeds(&Value::Null, previous_session_info));
+        if seeds.total > 0 {
+            *usage_metadata.session_total.lock() = seeds.total;
+        }
+        if seeds.prompt > 0 {
+            *usage_metadata.session_cache_read.lock() = seeds.cache_read;
+            *usage_metadata.session_prompt.lock() = seeds.prompt;
+        }
+        if seeds.newest.is_some() || seeds.total > 0 || seeds.prompt > 0 {
+            let (cache_read, prompt_tokens) = usage_metadata.session_cache();
+            let _ = events.send(DriverEvent::UsageUpdated {
+                context_tokens: seeds.newest.map(|usage| usage.context),
+                context_window: None,
+                session_total: (seeds.total > 0).then_some(seeds.total),
+                cache_read,
+                prompt_tokens,
+            });
         }
         // A compaction is durable and can outlive this driver: republish the
         // newest native compaction record so a restarted session still shows
-        // the last attempt's outcome. One that was still running re-announces
-        // itself through `session.compaction.delta` even without `started`.
+        // the last attempt's outcome — including the stored summary the TUI
+        // renders as a Compaction section. One that was still running
+        // re-announces itself through `session.compaction.delta` even without
+        // `started`.
         if let Some(state) = previous_usage
             .as_ref()
             .and_then(|messages| latest_opencode_compaction(messages))
@@ -308,13 +325,15 @@ impl OpenCodeDriver {
                 let windows = opencode_model_context_windows(&response);
                 *background_usage_metadata.model_context_windows.lock() = windows;
                 let window = background_usage_metadata.current_context_window();
-                if let Some(window) = window {
+                let (cache_read, prompt_tokens) = background_usage_metadata.session_cache();
+                let total = *background_usage_metadata.session_total.lock();
+                if window.is_some() || total > 0 || prompt_tokens.is_some() {
                     let _ = metadata_events.send(DriverEvent::UsageUpdated {
                         context_tokens: None,
-                        context_window: Some(window),
-                        session_total: None,
-                        cache_read: None,
-                        prompt_tokens: None,
+                        context_window: window,
+                        session_total: (total > 0).then_some(total),
+                        cache_read,
+                        prompt_tokens,
                     });
                 }
             })?;
@@ -655,6 +674,7 @@ impl OpenCodeDriver {
                                             reason: Some("manual".into()),
                                             model: None,
                                             error: Some(error.to_string()),
+                                            summary: None,
                                         },
                                     ));
                                 }
@@ -1189,10 +1209,20 @@ struct OpenCodeUsageMetadata {
     model_context_windows: Mutex<HashMap<String, u64>>,
     last_model: Mutex<Option<String>>,
     /// Cumulative tokens the provider has processed for this session —
-    /// every settled step's prompt + output, seeded from the newest stored
-    /// messages at attach. Absolute values flow outward, so consumers never
+    /// every settled step's prompt + output, seeded from the stored session
+    /// totals when present. Absolute values flow outward, so consumers never
     /// re-sum and replays cannot double-count.
     session_total: Mutex<u64>,
+    /// Cached prompt tokens summed across every settled step.
+    session_cache_read: Mutex<u64>,
+    /// Full prompt tokens (cache + uncached input) summed across every
+    /// settled step — the denominator of the session cache hit rate.
+    session_prompt: Mutex<u64>,
+    /// Whether `session.usage.updated` has delivered the session's own
+    /// cumulative token row. Those values are authoritative — the row already
+    /// includes every settled step — so settled steps then stop adding their
+    /// own split on top.
+    authoritative_totals: Mutex<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -1270,7 +1300,17 @@ fn opencode_wildcard_matches(input: &str, pattern: &str) -> bool {
 impl OpenCodeUsageMetadata {
     fn current_context_window(&self) -> Option<u64> {
         let model = self.last_model.lock().clone()?;
-        self.model_context_windows.lock().get(&model).copied()
+        let windows = self.model_context_windows.lock();
+        opencode_lookup_context_window(&windows, &model)
+    }
+
+    fn session_cache(&self) -> (Option<u64>, Option<u64>) {
+        let prompt = *self.session_prompt.lock();
+        let cache = *self.session_cache_read.lock();
+        (
+            (prompt > 0).then_some(cache),
+            (prompt > 0).then_some(prompt),
+        )
     }
 }
 
@@ -1286,34 +1326,66 @@ fn opencode_model_context_windows(response: &Value) -> HashMap<String, u64> {
             let window = model
                 .pointer("/limit/context")
                 .and_then(Value::as_u64)
+                .or_else(|| model.pointer("/limit/input").and_then(Value::as_u64))
+                .or_else(|| model.get("contextWindow").and_then(Value::as_u64))
                 .filter(|window| *window > 0)?;
             Some((format!("{provider}/{id}"), window))
         })
         .collect()
 }
 
-/// The context size carried by a `session.usage.updated` payload. Unlike the
-/// message shape above, this is the raw provider usage: AI SDK v6 normalizes
-/// every provider's `inputTokens` to include cached tokens, and `outputTokens`
-/// to include reasoning, so the cache and reasoning fields are subsets of
-/// `input`/`output` rather than additions. Summing all five — as if normalized
-/// — double-counts the cache and reads roughly twice the real context on a
-/// cache-heavy turn. `total`, when present, already equals `input + output`.
-fn opencode_session_usage_tokens(payload: &Value) -> Option<u64> {
-    let tokens = payload.get("tokens")?;
-    if let Some(total) = tokens
-        .get("total")
-        .and_then(Value::as_u64)
-        .filter(|total| *total > 0)
-    {
-        return Some(total);
+/// Match a live `provider/id` key against the catalog, including the
+/// case-insensitive and id-only fallbacks a custom provider's catalog
+/// often needs — OpenCode's `/api/model` keys are not always identical
+/// to the session's `providerID/id` casing.
+fn opencode_lookup_context_window(windows: &HashMap<String, u64>, model: &str) -> Option<u64> {
+    if let Some(window) = windows.get(model).copied() {
+        return Some(window);
     }
-    let total = [tokens.get("input"), tokens.get("output")]
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_u64)
-        .fold(0_u64, u64::saturating_add);
-    (total > 0).then_some(total)
+    let needle = model.to_ascii_lowercase();
+    if let Some(window) = windows.iter().find_map(|(key, window)| {
+        (key.eq_ignore_ascii_case(model) || key.to_ascii_lowercase() == needle).then_some(*window)
+    }) {
+        return Some(window);
+    }
+    let id = model.rsplit_once('/').map(|(_, id)| id).unwrap_or(model);
+    windows.iter().find_map(|(key, window)| {
+        let catalog_id = key.rsplit_once('/').map(|(_, id)| id).unwrap_or(key);
+        catalog_id.eq_ignore_ascii_case(id).then_some(*window)
+    })
+}
+
+/// The session-level token row carried by `session.usage.updated` — the same
+/// shape the session record stores. `input` is the cache-excluded sum across
+/// every settled call, so the object is throughput, not context: read as
+/// occupancy it reported the whole session's processed input (545.7k on a
+/// session whose live context was 147.3k, and 712.4k on the next turn).
+struct SessionUsageRow {
+    total: u64,
+    cache_read: u64,
+    prompt: u64,
+}
+
+fn opencode_session_row_usage(payload: &Value) -> Option<SessionUsageRow> {
+    let tokens = payload.get("tokens")?;
+    let input = tokens.get("input").and_then(Value::as_u64)?;
+    let output = tokens.get("output").and_then(Value::as_u64).unwrap_or(0);
+    let reasoning = tokens.get("reasoning").and_then(Value::as_u64).unwrap_or(0);
+    let cache_read = tokens
+        .pointer("/cache/read")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let cache_write = tokens
+        .pointer("/cache/write")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let prompt = input.saturating_add(cache_read).saturating_add(cache_write);
+    let total = prompt.saturating_add(output).saturating_add(reasoning);
+    (total > 0).then_some(SessionUsageRow {
+        total,
+        cache_read,
+        prompt,
+    })
 }
 
 /// One model call's usage in a single semantics: `prompt` is the full prompt
@@ -1357,49 +1429,78 @@ fn opencode_normalized_usage(message: &Value) -> Option<UsageBreakdown> {
     })
 }
 
-/// The raw usage shape carried by `session.usage.updated`, where `input`
-/// already includes the cached tokens.
-fn opencode_raw_usage(payload: &Value) -> Option<UsageBreakdown> {
-    let tokens = payload.get("tokens")?;
-    let input = tokens.get("input").and_then(Value::as_u64)?;
-    let output = tokens.get("output").and_then(Value::as_u64).unwrap_or(0);
-    let cache_read = tokens
-        .pointer("/cache/read")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let context = tokens
-        .get("total")
-        .and_then(Value::as_u64)
-        .filter(|total| *total > 0)
-        .unwrap_or_else(|| input.saturating_add(output));
-    (context > 0).then_some(UsageBreakdown {
-        context,
-        prompt: input,
-        cache_read,
-    })
+/// Session-wide usage seed: occupancy of the newest call, plus the
+/// session's cumulative totals. Prefers the session row's stored totals
+/// (the TUI's own source) when present; otherwise sums the fetched
+/// assistant-message tail as a floor, never an over-count.
+struct UsageSeed {
+    newest: Option<UsageBreakdown>,
+    total: u64,
+    cache_read: u64,
+    prompt: u64,
 }
 
-/// The cumulative seed and newest call's split carried by the stored
-/// assistant messages of a session (newest first). Only the fetched tail is
-/// summed: a driver restart on a long session yields a floor for the true
-/// total, never an over-count.
-fn opencode_usage_seeds(messages: &Value) -> (Option<u64>, Option<UsageBreakdown>) {
-    let Some(data) = messages.pointer("/data").and_then(Value::as_array) else {
-        return (None, None);
+fn opencode_session_row_totals(session: &Value) -> Option<(u64, u64, u64)> {
+    let tokens = session.get("tokens");
+    let input = tokens
+        .and_then(|tokens| tokens.get("input"))
+        .and_then(Value::as_u64)
+        .or_else(|| session.get("tokens_input").and_then(Value::as_u64))
+        .unwrap_or(0);
+    let output = tokens
+        .and_then(|tokens| tokens.get("output"))
+        .and_then(Value::as_u64)
+        .or_else(|| session.get("tokens_output").and_then(Value::as_u64))
+        .unwrap_or(0);
+    let reasoning = tokens
+        .and_then(|tokens| tokens.get("reasoning"))
+        .and_then(Value::as_u64)
+        .or_else(|| session.get("tokens_reasoning").and_then(Value::as_u64))
+        .unwrap_or(0);
+    let cache_read = tokens
+        .and_then(|tokens| tokens.pointer("/cache/read"))
+        .and_then(Value::as_u64)
+        .or_else(|| session.get("tokens_cache_read").and_then(Value::as_u64))
+        .unwrap_or(0);
+    let cache_write = tokens
+        .and_then(|tokens| tokens.pointer("/cache/write"))
+        .and_then(Value::as_u64)
+        .or_else(|| session.get("tokens_cache_write").and_then(Value::as_u64))
+        .unwrap_or(0);
+    let prompt = input.saturating_add(cache_read).saturating_add(cache_write);
+    let total = prompt.saturating_add(output).saturating_add(reasoning);
+    (total > 0 || prompt > 0).then_some((total, cache_read, prompt))
+}
+
+fn opencode_usage_seeds(messages: &Value, session: Option<&Value>) -> UsageSeed {
+    let mut seed = UsageSeed {
+        newest: None,
+        total: 0,
+        cache_read: 0,
+        prompt: 0,
     };
-    let mut total = 0_u64;
-    let mut newest = None;
-    for message in data {
-        if message.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
+    if let Some(data) = messages.pointer("/data").and_then(Value::as_array) {
+        for message in data {
+            if message.get("type").and_then(Value::as_str) != Some("assistant") {
+                continue;
+            }
+            let Some(usage) = opencode_normalized_usage(message) else {
+                continue;
+            };
+            seed.total = seed.total.saturating_add(usage.context);
+            seed.cache_read = seed.cache_read.saturating_add(usage.cache_read);
+            seed.prompt = seed.prompt.saturating_add(usage.prompt);
+            seed.newest.get_or_insert(usage);
         }
-        let Some(usage) = opencode_normalized_usage(message) else {
-            continue;
-        };
-        total = total.saturating_add(usage.context);
-        newest.get_or_insert(usage);
     }
-    ((total > 0).then_some(total), newest)
+    if let Some((total, cache_read, prompt)) =
+        session.and_then(opencode_session_row_totals)
+    {
+        seed.total = total;
+        seed.cache_read = cache_read;
+        seed.prompt = prompt;
+    }
+    seed
 }
 
 /// The model key (`provider/id`) of an opencode2 assistant message or
@@ -1428,6 +1529,45 @@ fn opencode_compaction_model(payload: &Value) -> Option<String> {
 /// state. The endpoint answers newest-first, so the first compaction entry
 /// is the latest attempt; records whose status is unknown are skipped
 /// rather than guessed at.
+fn opencode_compaction_summary(payload: &Value) -> Option<String> {
+    payload
+        .get("summary")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            let parts = payload.get("content").and_then(Value::as_array)?;
+            let text = parts
+                .iter()
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            let trimmed = text.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_owned())
+        })
+}
+
+fn fetch_latest_opencode_compaction(port: u16, session_id: &str) -> Option<CompactionState> {
+    if port == 0 || session_id.is_empty() {
+        return None;
+    }
+    let path = format!(
+        "/api/session/{}/message?limit=20",
+        encode_path_segment(session_id)
+    );
+    let messages = crate::opencode_session::request_json_on_port(
+        port,
+        "GET",
+        &path,
+        None,
+        Duration::from_secs(10),
+    )
+    .ok()?;
+    latest_opencode_compaction(&messages)
+}
+
 fn latest_opencode_compaction(messages: &Value) -> Option<CompactionState> {
     let data = messages.pointer("/data").and_then(Value::as_array)?;
     let record = data
@@ -1455,6 +1595,7 @@ fn latest_opencode_compaction(messages: &Value) -> Option<CompactionState> {
                     .or_else(|| error.as_str())
             })
             .map(str::to_owned),
+        summary: opencode_compaction_summary(record),
     })
 }
 
@@ -1889,50 +2030,72 @@ fn handle_event(
             }
         }
         "session.usage.updated" => {
-            // The payload carries raw provider usage (its `input` already
-            // includes cached tokens) but no model; the window comes from the
-            // model announced by `session.step.started`. The cumulative total
-            // only rides along — growth happens on `session.step.ended`.
-            let (context_tokens, context_window, breakdown) = {
-                let metadata = &state.usage_metadata;
-                let tokens = opencode_session_usage_tokens(payload);
-                let window = metadata.current_context_window();
-                (tokens, window, opencode_raw_usage(payload))
+            // opencode2 publishes the session's cumulative token row here —
+            // the same object the session record stores, `input` being the
+            // cache-excluded sum across every settled call. Read as the
+            // in-flight context it reported 545.7k against a 147.3k live
+            // context (and 712.4k on the next turn), so occupancy never
+            // comes from this event: it belongs to settled steps below.
+            // The row is authoritative for the totals, so settled steps
+            // stop adding their own split once it has landed.
+            let Some(row) = opencode_session_row_usage(payload) else {
+                return;
             };
-            if context_tokens.is_some() || context_window.is_some() {
-                let (cache_read, prompt_tokens) = breakdown
-                    .filter(|usage| usage.prompt > 0)
-                    .map(|usage| (Some(usage.cache_read), Some(usage.prompt)))
-                    .unwrap_or((None, None));
-                // A zero total means nothing settled yet — stay silent so
-                // the panel can tell "not known" from "nothing used".
-                let total = *state.usage_metadata.session_total.lock();
-                let _ = events.send(DriverEvent::UsageUpdated {
-                    context_tokens,
-                    context_window,
-                    session_total: (total > 0).then_some(total),
-                    cache_read,
-                    prompt_tokens,
-                });
+            {
+                let mut total = state.usage_metadata.session_total.lock();
+                *total = row.total;
             }
+            {
+                let mut cache = state.usage_metadata.session_cache_read.lock();
+                *cache = row.cache_read;
+            }
+            {
+                let mut prompt = state.usage_metadata.session_prompt.lock();
+                *prompt = row.prompt;
+            }
+            *state.usage_metadata.authoritative_totals.lock() = true;
+            let window = state.usage_metadata.current_context_window();
+            let (cache_read, prompt_tokens) = state.usage_metadata.session_cache();
+            let _ = events.send(DriverEvent::UsageUpdated {
+                context_tokens: None,
+                context_window: window,
+                session_total: (row.total > 0).then_some(row.total),
+                cache_read,
+                prompt_tokens,
+            });
         }
         "session.step.ended" => {
-            // One settled model call: its tokens land here exactly once per
-            // step, so this — not the possibly-repeated usage event — is
-            // where the session's cumulative throughput grows.
+            // One settled model call: occupancy is this step's context. The
+            // session totals grow here too — unless `session.usage.updated`
+            // has already delivered the authoritative cumulative row, which
+            // includes this very step.
             if let Some(usage) = opencode_normalized_usage(payload) {
                 let window = state.usage_metadata.current_context_window();
-                let total = {
+                let authoritative = *state.usage_metadata.authoritative_totals.lock();
+                let total = if authoritative {
+                    *state.usage_metadata.session_total.lock()
+                } else {
                     let mut total = state.usage_metadata.session_total.lock();
                     *total = total.saturating_add(usage.context);
                     *total
                 };
+                if !authoritative && usage.prompt > 0 {
+                    {
+                        let mut cache = state.usage_metadata.session_cache_read.lock();
+                        *cache = cache.saturating_add(usage.cache_read);
+                    }
+                    {
+                        let mut prompt = state.usage_metadata.session_prompt.lock();
+                        *prompt = prompt.saturating_add(usage.prompt);
+                    }
+                }
+                let (cache_read, prompt_tokens) = state.usage_metadata.session_cache();
                 let _ = events.send(DriverEvent::UsageUpdated {
                     context_tokens: Some(usage.context),
                     context_window: window,
-                    session_total: Some(total),
-                    cache_read: (usage.prompt > 0).then_some(usage.cache_read),
-                    prompt_tokens: (usage.prompt > 0).then_some(usage.prompt),
+                    session_total: (total > 0).then_some(total),
+                    cache_read,
+                    prompt_tokens,
                 });
             }
         }
@@ -1949,6 +2112,7 @@ fn handle_event(
                     .map(str::to_owned),
                 model: None,
                 error: None,
+                summary: None,
             }));
         }
         "session.compaction.delta" => {
@@ -1964,19 +2128,29 @@ fn handle_event(
                     reason: None,
                     model: None,
                     error: None,
+                    summary: None,
                 }));
             }
         }
         "session.compaction.ended" => {
             state.compaction_live = false;
+            // The ended event often carries only status/model. The stored
+            // summary lives on the compaction message, which is what the TUI
+            // renders as the Compaction section — fetch it so the transcript
+            // can show the same document immediately.
+            let stored = fetch_latest_opencode_compaction(port, session_id);
             let _ = events.send(DriverEvent::CompactionUpdated(CompactionState {
                 status: CompactionStatus::Completed,
                 reason: payload
                     .get("reason")
                     .and_then(Value::as_str)
-                    .map(str::to_owned),
-                model: opencode_compaction_model(payload),
+                    .map(str::to_owned)
+                    .or_else(|| stored.as_ref().and_then(|state| state.reason.clone())),
+                model: opencode_compaction_model(payload)
+                    .or_else(|| stored.as_ref().and_then(|state| state.model.clone())),
                 error: None,
+                summary: opencode_compaction_summary(payload)
+                    .or_else(|| stored.and_then(|state| state.summary)),
             }));
         }
         "session.compaction.failed" => {
@@ -1997,6 +2171,7 @@ fn handle_event(
                         .map(str::to_owned),
                     model: None,
                     error: None,
+                    summary: None,
                 }));
             } else {
                 let _ = events.send(DriverEvent::CompactionUpdated(CompactionState {
@@ -2014,6 +2189,7 @@ fn handle_event(
                                 .or_else(|| error.as_str())
                         })
                         .map(str::to_owned),
+                    summary: None,
                 }));
             }
         }
@@ -3779,8 +3955,10 @@ mod tests {
         assert!(matches!(
             &seen[5],
             DriverEvent::UsageUpdated {
-                context_tokens: Some(2),
+                // The cumulative session row — totals only, never occupancy.
+                context_tokens: None,
                 context_window: None,
+                session_total: Some(2),
                 ..
             }
         ));
@@ -3912,8 +4090,8 @@ mod tests {
             .lock()
             .insert("glmcoding/glm-5.3-flash".into(), 200_000);
 
-        // The step announces the model; the usage event then carries the raw
-        // provider usage, whose `input` already includes the cached tokens.
+        // The step announces the model. The usage event then carries the
+        // session's cumulative row — totals only, never occupancy.
         handle_event(
             &json!({
                 "type": "session.step.started",
@@ -3957,11 +4135,45 @@ mod tests {
         assert!(matches!(
             event_rx.try_recv().unwrap(),
             DriverEvent::UsageUpdated {
+                context_tokens: None,
+                context_window: Some(200_000),
+                session_total: Some(15_201),
+                cache_read: Some(1_792),
+                prompt_tokens: Some(15_191)
+            }
+        ));
+
+        // The settled step is what reports occupancy — and the authoritative
+        // row keeps the totals from growing a second time.
+        handle_event(
+            &json!({
+                "type": "session.step.ended",
+                "data": {
+                    "sessionID": "ses_1",
+                    "tokens": {
+                        "input": 11_607,
+                        "output": 10,
+                        "reasoning": 0,
+                        "cache": {"read": 1_792, "write": 0}
+                    }
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::UsageUpdated {
                 context_tokens: Some(13_409),
                 context_window: Some(200_000),
-                session_total: None,
+                session_total: Some(15_201),
                 cache_read: Some(1_792),
-                prompt_tokens: Some(13_399)
+                prompt_tokens: Some(15_191)
             }
         ));
         assert!(event_rx.try_recv().is_err());
@@ -3999,21 +4211,37 @@ mod tests {
 
         let mut total = 0;
         let mut contexts = Vec::new();
+        let mut caches = Vec::new();
+        let mut prompts = Vec::new();
         while let Ok(DriverEvent::UsageUpdated {
             context_tokens,
             session_total: Some(session_total),
+            cache_read,
+            prompt_tokens,
             ..
         }) = event_rx.try_recv()
         {
             total = session_total;
             contexts.push(context_tokens);
+            caches.push(cache_read);
+            prompts.push(prompt_tokens);
         }
         assert_eq!(
             contexts,
             vec![Some(13_409), Some(14_015)],
-            "each step should publish its own context"
+            "each step should publish its own occupancy"
         );
         assert_eq!(total, 13_409 + 14_015, "steps should sum exactly once");
+        assert_eq!(
+            caches,
+            vec![Some(1_792), Some(3_584)],
+            "cache hits accumulate across every call"
+        );
+        assert_eq!(
+            prompts,
+            vec![Some(13_399), Some(27_389)],
+            "prompt tokens accumulate across every call"
+        );
     }
 
     #[test]
@@ -4048,7 +4276,8 @@ mod tests {
                 "data": {
                     "sessionID": "ses_1",
                     "reason": "manual",
-                    "model": {"id": "glm-5.3-flash", "providerID": "glmcoding"}
+                    "model": {"id": "glm-5.3-flash", "providerID": "glmcoding"},
+                    "summary": "## Objective\n- Compacted."
                 }
             }),
             &events,
@@ -4064,8 +4293,9 @@ mod tests {
             DriverEvent::CompactionUpdated(CompactionState {
                 status: CompactionStatus::Completed,
                 model: Some(model),
+                summary: Some(summary),
                 ..
-            }) if model == "glmcoding/glm-5.3-flash"
+            }) if model == "glmcoding/glm-5.3-flash" && summary == "## Objective\n- Compacted."
         ));
         assert!(event_rx.try_recv().is_err());
     }
@@ -4187,12 +4417,28 @@ mod tests {
                 {"id": "msg_2", "type": "compaction", "status": "failed",
                  "error": {"message": "provider 500"}},
                 {"id": "msg_1", "type": "compaction", "status": "completed",
-                 "model": "glmcoding/glm-5.3-flash"}
+                 "model": "glmcoding/glm-5.3-flash",
+                 "summary": "## Objective\n- Compacted."}
             ]
         });
         let seeded = latest_opencode_compaction(&messages).unwrap();
         assert_eq!(seeded.status, CompactionStatus::Failed);
         assert_eq!(seeded.error.as_deref(), Some("provider 500"));
+        assert_eq!(seeded.summary, None);
+
+        let completed = json!({
+            "data": [
+                {"id": "msg_1", "type": "compaction", "status": "completed",
+                 "summary": "## Objective\n- Compacted."}
+            ]
+        });
+        assert_eq!(
+            latest_opencode_compaction(&completed)
+                .unwrap()
+                .summary
+                .as_deref(),
+            Some("## Objective\n- Compacted.")
+        );
 
         // Conversations without a compaction seed nothing, and unknown
         // statuses are skipped rather than guessed at.
@@ -4211,34 +4457,35 @@ mod tests {
     }
 
     #[test]
-    fn session_usage_events_do_not_double_count_the_cache() {
-        // Shape captured live from opencode2: the same turn whose assistant
-        // message reported `{input: 205, cache.read: 8_704, output: 3}` — a
-        // ~8.9k context — published this raw usage payload. Summing all five
-        // fields reads 19_339, about twice the real context; the raw shape
-        // totals `input + output` because its cache entry is already inside
-        // `input`.
+    fn session_usage_row_is_cumulative_throughput_not_context() {
+        // Live evidence: the session whose meter read 545.7k against a
+        // 147.3k context carried exactly this row on `session.usage.updated`
+        // — 525_421 + 20_321 = 545_742. `input` is the cache-excluded sum
+        // across every settled call, so the object is the session record's
+        // throughput, never the in-flight context.
         let payload = json!({
             "sessionID": "ses_1",
-            "cost": 0.002_190_308,
+            "cost": 3.9,
             "tokens": {
-                "input": 9_598,
-                "output": 37,
-                "reasoning": 0,
-                "cache": {"read": 8_704, "write": 0}
+                "input": 525_421,
+                "output": 20_321,
+                "reasoning": 82_280,
+                "cache": {"read": 10_741_120, "write": 0}
             }
         });
-        assert_eq!(opencode_session_usage_tokens(&payload), Some(9_635));
+        let row = opencode_session_row_usage(&payload).unwrap();
+        assert_eq!(row.prompt, 525_421 + 10_741_120);
+        assert_eq!(row.total, 525_421 + 10_741_120 + 20_321 + 82_280);
+        assert_eq!(row.cache_read, 10_741_120);
 
-        // A `total`, when the provider reports one, is the context outright.
-        let payload = json!({"tokens": {
-            "total": 500,
-            "input": 9_598,
-            "output": 37,
-            "reasoning": 0,
-            "cache": {"read": 8_704, "write": 0}
-        }});
-        assert_eq!(opencode_session_usage_tokens(&payload), Some(500));
+        // An all-zero row (fresh session) carries nothing.
+        assert!(
+            opencode_session_row_usage(&json!({"tokens": {
+                "input": 0, "output": 0, "reasoning": 0,
+                "cache": {"read": 0, "write": 0}
+            }}))
+            .is_none()
+        );
     }
 
     #[test]
@@ -4269,20 +4516,6 @@ mod tests {
     }
 
     #[test]
-    fn raw_usage_reads_the_cache_inside_the_input() {
-        let payload = json!({"tokens": {
-            "input": 9_598,
-            "output": 37,
-            "reasoning": 0,
-            "cache": {"read": 8_704, "write": 0}
-        }});
-        let usage = opencode_raw_usage(&payload).unwrap();
-        assert_eq!(usage.context, 9_635);
-        assert_eq!(usage.prompt, 9_598);
-        assert_eq!(usage.cache_read, 8_704);
-    }
-
-    #[test]
     fn usage_seeds_sum_the_stored_tail_and_take_the_newest_call() {
         // Newest first, exactly as the messages endpoint returns them.
         let messages = json!({
@@ -4298,11 +4531,62 @@ mod tests {
                 }}
             ]
         });
-        let (total, newest) = opencode_usage_seeds(&messages);
-        assert_eq!(total, Some(78_921 + 15));
-        let newest = newest.expect("newest assistant usage");
+        let seed = opencode_usage_seeds(&messages, None);
+        assert_eq!(seed.total, 78_921 + 15);
+        assert_eq!(seed.cache_read, 78_592);
+        assert_eq!(seed.prompt, 78_838 + 10);
+        let newest = seed.newest.expect("newest assistant usage");
         assert_eq!(newest.context, 78_921);
         assert_eq!(newest.prompt, 78_838);
+
+        // The session row's stored totals win over a truncated message tail.
+        let session = json!({"tokens": {
+            "input": 525_421, "output": 20_321, "reasoning": 82_280,
+            "cache": {"read": 10_741_120, "write": 0}
+        }});
+        let seed = opencode_usage_seeds(&messages, Some(&session));
+        assert_eq!(seed.total, 525_421 + 10_741_120 + 20_321 + 82_280);
+        assert_eq!(seed.cache_read, 10_741_120);
+        assert_eq!(seed.prompt, 525_421 + 10_741_120);
+        assert_eq!(seed.newest.unwrap().context, 78_921);
+
+        // The session list/detail row stores the same totals as flattened
+        // `tokens_*` columns rather than a nested `tokens` object.
+        let session = json!({
+            "tokens_input": 525_421,
+            "tokens_output": 20_321,
+            "tokens_reasoning": 82_280,
+            "tokens_cache_read": 10_741_120,
+            "tokens_cache_write": 0
+        });
+        let seed = opencode_usage_seeds(&Value::Null, Some(&session));
+        assert_eq!(seed.total, 525_421 + 10_741_120 + 20_321 + 82_280);
+        assert_eq!(seed.cache_read, 10_741_120);
+        assert_eq!(seed.prompt, 525_421 + 10_741_120);
+        assert!(seed.newest.is_none());
+    }
+
+    #[test]
+    fn context_window_lookup_falls_back_across_casing_and_id() {
+        let windows = opencode_model_context_windows(&json!({
+            "data": [{
+                "providerID": "rightcode",
+                "id": "grok-4.6",
+                "limit": {"context": 500_000}
+            }]
+        }));
+        assert_eq!(
+            opencode_lookup_context_window(&windows, "rightcode/grok-4.6"),
+            Some(500_000)
+        );
+        assert_eq!(
+            opencode_lookup_context_window(&windows, "RightCode/Grok-4.6"),
+            Some(500_000)
+        );
+        assert_eq!(
+            opencode_lookup_context_window(&windows, "other/grok-4.6"),
+            Some(500_000)
+        );
     }
 
     #[test]
@@ -4344,8 +4628,7 @@ mod tests {
         assert_eq!(
             opencode_message_model_key(latest)
                 .as_ref()
-                .and_then(|model| windows.get(model))
-                .copied(),
+                .and_then(|model| opencode_lookup_context_window(&windows, model)),
             Some(1_000_000)
         );
     }

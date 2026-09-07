@@ -176,7 +176,7 @@ fn palette_content_match_text(
 ) -> StyledText {
     let (source_label, source_color) = match matched.source {
         MessageRole::User => (tr!("command_palette.you"), theme.gauge),
-        MessageRole::Assistant | MessageRole::System => {
+        MessageRole::Assistant | MessageRole::System | MessageRole::Compaction => {
             (tr!("command_palette.agent"), theme.success)
         }
     };

@@ -8,7 +8,7 @@
 use gpui::{PathBuilder, WeakEntity, relative};
 
 use super::*;
-use crate::usage::{PlanUsage, format_tokens, reset_label};
+use crate::usage::{PlanUsage, cache_hit_percent, format_percent, format_tokens, reset_label};
 
 const USAGE_METER_MENU_ID: &str = "usage-meter";
 
@@ -214,7 +214,7 @@ impl Fintwind {
             (Some(error), _) => SharedString::from(tr!("usage.refresh_failed", error = error)),
             (None, Some(percent)) => SharedString::from(tr!(
                 "usage.context_used",
-                percent = format!("{percent:.0}"),
+                percent = format!("{percent:.1}"),
                 shortcut = crate::platform::primary_shortcut("⌘U", "Ctrl+U")
             )),
             (None, None) => SharedString::from(tr!(
@@ -376,9 +376,10 @@ fn usage_panel(
     let percent = context_percent(usage);
     let value = match (usage.window, percent) {
         (Some(window), Some(percent)) => format!(
-            "{} / {} ({percent:.0}%)",
+            "{} / {} ({})",
             format_tokens(usage.tokens),
-            format_tokens(window)
+            format_tokens(window),
+            format_percent(percent)
         ),
         // The transport reports occupancy but not the window size.
         _ => format_tokens(usage.tokens),
@@ -512,13 +513,11 @@ fn usage_panel(
 /// is omitted entirely.
 fn usage_totals_row(theme: &Theme, usage: ContextUsage) -> Option<Div> {
     let total = usage.total_tokens.map(format_tokens);
-    let hit = match (usage.cache_read, usage.prompt_tokens) {
-        (Some(read), Some(prompt)) if prompt > 0 => Some(format!(
-            "{:.0}%",
-            read.min(prompt) as f64 * 100.0 / prompt as f64
-        )),
-        _ => None,
-    };
+    let hit = cache_hit_percent(
+        usage.cache_read.unwrap_or(0),
+        usage.prompt_tokens.unwrap_or(0),
+    )
+    .map(format_percent);
     if total.is_none() && hit.is_none() {
         return None;
     }

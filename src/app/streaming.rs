@@ -539,8 +539,17 @@ impl Fintwind {
                     .find(|session| session.id == session_id)
                     .and_then(|session| session.compaction.as_ref().map(|c| c.status));
                 if let Some(session) = self.state.session_mut(session_id) {
-                    if session.compaction.as_ref() != Some(&state) {
+                    let changed = session.compaction.as_ref() != Some(&state);
+                    if changed {
                         session.compaction = Some(state.clone());
+                    }
+                    if state.status == CompactionStatus::Completed {
+                        let before = session.messages.len();
+                        upsert_compaction_transcript(session, &state);
+                        if changed || session.messages.len() != before {
+                            self.state.mark_session_dirty(session_id);
+                        }
+                    } else if changed {
                         self.state.mark_session_dirty(session_id);
                     }
                 }
@@ -956,5 +965,28 @@ pub(super) fn append_text_delta_to_session(
         message.streaming = true;
         session.messages.push(message);
     }
+    session.updated_at = unix_time();
+}
+
+/// Insert the provider's compacted summary into the transcript once, matching
+/// the TUI's Compaction divider. Re-delivery and attach-time seeding reuse the
+/// same snapshot, so an identical body is a no-op.
+pub(super) fn upsert_compaction_transcript(session: &mut AgentSession, state: &CompactionState) {
+    let Some(summary) = state
+        .summary
+        .as_deref()
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+    else {
+        return;
+    };
+    if session.messages.iter().any(|message| {
+        message.role == MessageRole::Compaction && message.content.trim() == summary
+    }) {
+        return;
+    }
+    // A compaction is a conversation-level divider, not part of the live
+    // turn: attaching it would fold the summary behind "Worked for N".
+    session.messages.push(Message::new(MessageRole::Compaction, summary));
     session.updated_at = unix_time();
 }

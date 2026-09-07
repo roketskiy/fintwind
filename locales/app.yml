@@ -1340,6 +1340,8 @@ session.compaction_failed:
   en: Context compaction failed
 session.compaction_unavailable:
   en: No live provider to compact this session
+transcript.compaction:
+  en: Compaction
 session.agent_ran_out_of_context:
   en: The agent ran out of context for this turn
 session.agent_declined_turn:

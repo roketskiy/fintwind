@@ -1702,6 +1702,7 @@ mod tests {
             reason: Some("manual".into()),
             model: None,
             error: Some("provider rejected the summary".into()),
+            summary: None,
         };
         let wire = event_to_wire(DriverEvent::CompactionUpdated(state.clone())).unwrap();
         assert_eq!(wire.kind, "compactionUpdated");

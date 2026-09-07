@@ -20,4 +20,9 @@ model?: string | null,
  * Failure detail. A user-initiated abort is reported as
  * [`CompactionStatus::Cancelled`] instead.
  */
-error?: string | null, };
+error?: string | null,
+/**
+ * The compacted summary the provider stored. Present on a completed
+ * attempt so the transcript can show the same document the TUI does.
+ */
+summary?: string | null, };

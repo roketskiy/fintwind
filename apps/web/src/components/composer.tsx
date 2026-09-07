@@ -1749,6 +1749,9 @@ function UsageMeter({
   const contextPercent = context?.window
     ? context.tokens * 100 / context.window
     : null
+  const cacheHit = context?.cache_read != null && context.prompt_tokens
+    ? Math.min(context.cache_read, context.prompt_tokens) * 100 / context.prompt_tokens
+    : null
   const supportsPlanUsage = PLAN_USAGE_PROVIDERS.includes(session.provider)
   const plan = useQuery({
     queryKey: daemonKeys.planUsage(config?.address ?? 'disconnected', session.provider),
@@ -1768,7 +1771,7 @@ function UsageMeter({
     ? t('usage.refresh_failed', { error })
     : contextPercent == null
       ? t('usage.shortcut', { shortcut: usageShortcut })
-      : t('usage.context_used', { percent: contextPercent.toFixed(0), shortcut: usageShortcut })
+      : t('usage.context_used', { percent: contextPercent.toFixed(1), shortcut: usageShortcut })
 
   return (
     <Popover.Root modal={false} open={open} onOpenChange={setOpen}>
@@ -1801,9 +1804,18 @@ function UsageMeter({
               label={t('usage.context_window')}
               percent={contextPercent ?? 0}
               value={context?.window && contextPercent != null
-                ? `${formatTokens(context.tokens)} / ${formatTokens(context.window)} (${contextPercent.toFixed(0)}%)`
+                ? `${formatTokens(context.tokens)} / ${formatTokens(context.window)} (${contextPercent.toFixed(1)}%)`
                 : formatTokens(context?.tokens ?? 0)}
             />
+            {(context?.total_tokens != null || cacheHit != null) && (
+              <div className="flex items-center gap-2 text-[11px]">
+                <span className="text-[var(--text-tertiary)]">{t('usage.total_tokens')}</span>
+                <span className="text-[var(--text-secondary)]">{context?.total_tokens != null ? formatTokens(context.total_tokens) : '—'}</span>
+                <span className="min-w-0 flex-1" />
+                <span className="text-[var(--text-tertiary)]">{t('usage.cache_hit_rate')}</span>
+                <span className="text-[var(--text-secondary)]">{cacheHit != null ? `${cacheHit.toFixed(1)}%` : '—'}</span>
+              </div>
+            )}
             {(plan.data || plan.isFetching || error) && <div className="h-px bg-border" />}
             {plan.data && <PlanUsageLanes locale={locale} plan={plan.data} provider={session.provider} t={t} />}
             {plan.isFetching && supportsPlanUsage && <UsageSkeleton t={t} />}

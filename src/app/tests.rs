@@ -9,6 +9,7 @@ use super::{
     NAVIGATION_RAIL_TICK_HEIGHT, NAVIGATION_RAIL_TURN_HEIGHT, PendingUserInput, SessionNavigation,
     StreamDeltaKind, TranscriptRowKind::*, active_navigation_turn_index,
     append_text_delta_to_session, assistant_response_footer, assistant_response_footer_index,
+    upsert_compaction_transcript,
     assistant_response_footer_time, changed_files_inline_message_index, compact_driver_error,
     complete_latest_reasoning_activity, disclosure_leading_space, fenced_code,
     fitted_file_tree_width, fitted_panel_widths, folded_transcript_row_kinds,
@@ -25,8 +26,9 @@ use super::{
 use crate::git_branch::BranchEntry;
 use crate::model::{
     ActivityItem, ActivityKind, AgentSession, Checkpoint, CheckpointFile, CheckpointStatus,
-    DriverEvent, Message, MessageRole, ReasoningBlock, RuntimeEventCursor, SessionStatus,
-    TranscriptBlock, TurnStatus, UserInputOption, UserInputQuestion,
+    CompactionState, CompactionStatus, DriverEvent, Message, MessageRole, ReasoningBlock,
+    RuntimeEventCursor, SessionStatus, TranscriptBlock, TurnStatus, UserInputOption,
+    UserInputQuestion,
 };
 
 #[test]
@@ -1534,6 +1536,35 @@ fn unkeyed_assistant_message_keeps_a_standalone_footer() {
         Some("Standalone response.")
     );
     assert_eq!(assistant_response_footer_time(&session, 0), Some(300));
+}
+
+#[test]
+fn completed_compaction_inserts_a_transcript_divider_once() {
+    let mut session = AgentSession::new(Uuid::new_v4());
+    session.begin_turn("Build it");
+    session.push_message(MessageRole::Assistant, "Working.");
+    let state = CompactionState {
+        status: CompactionStatus::Completed,
+        reason: Some("manual".into()),
+        model: Some("rightcode/grok-4.6".into()),
+        error: None,
+        summary: Some("## Objective\n- Compacted.".into()),
+    };
+    upsert_compaction_transcript(&mut session, &state);
+    upsert_compaction_transcript(&mut session, &state);
+
+    assert_eq!(
+        session
+            .messages
+            .iter()
+            .filter(|message| message.role == MessageRole::Compaction)
+            .count(),
+        1
+    );
+    let divider = session.messages.last().unwrap();
+    assert_eq!(divider.role, MessageRole::Compaction);
+    assert_eq!(divider.content, "## Objective\n- Compacted.");
+    assert_eq!(divider.turn_id, None);
 }
 
 #[test]

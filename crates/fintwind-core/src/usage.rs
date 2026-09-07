@@ -11,7 +11,9 @@ use serde_json::Value;
 
 const OPENCODE_GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 
-pub use fintwind_protocol::usage::{PlanUsage, PlanWindow, format_tokens, reset_label};
+pub use fintwind_protocol::usage::{
+    PlanUsage, PlanWindow, cache_hit_percent, format_percent, format_tokens, reset_label,
+};
 
 /// Fetch OpenCode Go's rolling, weekly, and monthly subscription limits.
 /// `None` means OpenCode has no Go credential, which is normal for people

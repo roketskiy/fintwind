@@ -398,24 +398,28 @@ mod tests {
                 reason: Some("manual".into()),
                 model: None,
                 error: None,
+                summary: None,
             },
             CompactionState {
                 status: CompactionStatus::Completed,
                 reason: Some("auto".into()),
                 model: Some("anthropic/claude-sonnet-4".into()),
                 error: None,
+                summary: Some("## Objective\n- Compacted.".into()),
             },
             CompactionState {
                 status: CompactionStatus::Failed,
                 reason: None,
                 model: None,
                 error: Some("provider rejected the summary call".into()),
+                summary: None,
             },
             CompactionState {
                 status: CompactionStatus::Cancelled,
                 reason: Some("manual".into()),
                 model: None,
                 error: None,
+                summary: None,
             },
         ];
         for state in snapshots {

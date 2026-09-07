@@ -1274,12 +1274,15 @@ impl Fintwind {
                     // Parse only visible rows rather than doing work for every
                     // driver delta or every off-screen prompt.
                     let mut markdown = self.message_markdown.borrow_mut();
-                    let view = matches!(message.role, MessageRole::User | MessageRole::Assistant)
-                        .then(|| {
-                            let view = markdown.entry(message.id).or_default();
-                            view.set_text(message.visible_content(), message.streaming);
-                            &*view
-                        });
+                    let view = matches!(
+                        message.role,
+                        MessageRole::User | MessageRole::Assistant | MessageRole::Compaction
+                    )
+                    .then(|| {
+                        let view = markdown.entry(message.id).or_default();
+                        view.set_text(message.visible_content(), message.streaming);
+                        &*view
+                    });
                     let rendered = render_message(
                         MessageRender {
                             theme: &theme,

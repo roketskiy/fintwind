@@ -4,8 +4,9 @@
 //! this app all write into the same server. A background reconcile lists the
 //! current workspace's native sessions, imports the ones the app has never
 //! seen, refreshes titles and timestamps of the ones it has, and drops local
-//! entries the server no longer holds. When an imported session is opened,
-//! its server-side transcript is fetched and translated into the ordinary
+//! entries the server no longer holds. When a session that tracks a native
+//! one is opened — imported, or created here and continued elsewhere — its
+//! server-side transcript is fetched and translated into the ordinary
 //! message/block model, so it renders exactly like a session created here.
 //!
 //! Reconcile runs at startup, when the window regains focus (the classic
@@ -175,6 +176,29 @@ fn has_starting_session(sessions: &[AgentSession]) -> bool {
     sessions
         .iter()
         .any(|session| session.status == SessionStatus::Connecting)
+}
+
+/// Should this session's transcript be pulled from the OpenCode server?
+///
+/// Every session that tracks a native one qualifies — imported sessions on
+/// first open, and app-created ones whenever the server's copy moved past
+/// what they hold: the TUI and the CLI write into the same store while this
+/// app is closed or focused elsewhere. A session this app is streaming does
+/// not — its transcript is being produced here, and a server pull would
+/// clobber live turn state.
+fn native_transcript_refresh_due(
+    session: &AgentSession,
+    runtime_attached: bool,
+    fetched_at: u64,
+) -> bool {
+    if session.native_session_id.is_none() {
+        return false;
+    }
+    if session.status.is_busy() || runtime_attached {
+        return false;
+    }
+    let has_content = session.detail_loaded && !session.messages.is_empty();
+    !(has_content && fetched_at >= session.last_reply_at.unwrap_or(0))
 }
 
 impl Fintwind {
@@ -357,6 +381,18 @@ impl Fintwind {
             self.save();
             cx.notify();
         }
+
+        // A roster is the app's one reliable signal that the server moved —
+        // the "I just used the TUI" moment. If that merge invalidated the
+        // selected session's synced transcript, pull it now instead of
+        // waiting for a re-activation. Sessions this run has driven keep
+        // their runtime attached and are skipped: their transcript echoes
+        // this app's own turns, and their next activation refreshes.
+        if let Some(selected) = self.state.selected_session
+            && !self.runtimes.contains_key(&selected)
+        {
+            self.ensure_native_transcript(selected, cx);
+        }
     }
 
     /// Point an untracked local row at its native session so later rosters
@@ -432,7 +468,7 @@ impl Fintwind {
             session.updated_at = new_updated;
         }
         if old_last_reply.unwrap_or(0) < summary.updated_at {
-            self.imported_transcript_fetched.remove(&session_id);
+            self.native_transcript_fetched.remove(&session_id);
         }
         true
     }
@@ -446,39 +482,36 @@ impl Fintwind {
             .sessions
             .retain(|session| session.id != session_id);
         self.remove_right_panel_session_state(session_id);
-        self.imported_transcript_fetched.remove(&session_id);
+        self.native_transcript_fetched.remove(&session_id);
         self.state.selected_session = self
             .state
             .selected_session
             .filter(|selected| *selected != session_id);
     }
 
-    /// Make sure an imported session shows its server-side transcript.
-    /// Called when a session is activated (after local hydration).
-    pub(super) fn ensure_imported_transcript(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+    /// Make sure a session that tracks a native OpenCode session shows the
+    /// server's transcript. Called when a session is activated (after local
+    /// hydration) and after a roster merge that may have observed the server
+    /// moving underneath.
+    ///
+    /// App-created sessions need this as much as imported ones: the TUI and
+    /// the CLI write into the same server store, so a conversation continued
+    /// elsewhere must refresh exactly like one imported from there.
+    pub(super) fn ensure_native_transcript(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
         let Some((native_session_id, binary, directory)) = self
             .state
             .sessions
             .iter()
-            .find(|s| s.id == session_id)
+            .find(|session| session.id == session_id)
             .and_then(|session| {
-                if !session.imported {
-                    return None;
-                }
-                // Busy or attached sessions stream through the runtime;
-                // replacing their transcript from the server would clobber
-                // live state.
-                if session.status.is_busy() || self.runtimes.contains_key(&session_id) {
-                    return None;
-                }
-                // Already fetched for this version of the server transcript?
-                let fetched_at = self
-                    .imported_transcript_fetched
-                    .get(&session_id)
-                    .copied()
-                    .unwrap_or(0);
-                let has_content = session.detail_loaded && !session.messages.is_empty();
-                if has_content && fetched_at >= session.last_reply_at.unwrap_or(0) {
+                if !native_transcript_refresh_due(
+                    session,
+                    self.runtimes.contains_key(&session_id),
+                    self.native_transcript_fetched
+                        .get(&session_id)
+                        .copied()
+                        .unwrap_or(0),
+                ) {
                     return None;
                 }
                 Some((
@@ -490,7 +523,7 @@ impl Fintwind {
         else {
             return;
         };
-        if !self.imported_transcript_fetches.insert(session_id) {
+        if !self.native_transcript_fetches.insert(session_id) {
             return;
         }
         let daemon = self.daemon.clone();
@@ -503,23 +536,47 @@ impl Fintwind {
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                this.imported_transcript_fetches.remove(&session_id);
+                this.native_transcript_fetches.remove(&session_id);
                 match fetched {
                     Ok(transcript) => {
-                        if let Some(session) = this.state.session_mut(session_id) {
+                        // The fetch raced the session coming back to life: a
+                        // turn may have started between dispatch and apply,
+                        // and replacing the transcript then would clobber
+                        // live streaming state. Leave the synced marker
+                        // unset so the next activation retries.
+                        let live = this
+                            .state
+                            .sessions
+                            .iter()
+                            .find(|session| session.id == session_id)
+                            .is_some_and(|session| session.status.is_busy())
+                            || this.runtimes.contains_key(&session_id)
+                            || this.submission_preparations.contains(&session_id);
+                        if !live
+                            && let Some(session) = this.state.session_mut(session_id)
+                        {
                             session.messages = transcript.messages;
                             session.transcript_blocks = transcript.blocks;
                             session.turns = transcript.turns;
                             session.detail_loaded = true;
-                            this.imported_transcript_fetched
-                                .insert(session_id, unix_time());
+                            // Not the wall clock: at least the server stamp
+                            // the pull reflects, so a server clock ahead of
+                            // this machine's cannot pin every future check
+                            // into refetching.
+                            this.native_transcript_fetched.insert(
+                                session_id,
+                                unix_time().max(session.last_reply_at.unwrap_or(0)),
+                            );
                             this.state.mark_session_dirty(session_id);
+                            // The pulled blocks may carry plan activities the
+                            // replaced state never saw.
+                            this.rebuild_todo_summary(session_id);
+                            if this.state.selected_session == Some(session_id) {
+                                this.reset_visible_state();
+                                this.reset_transcript_rows(this.transcript_row_count());
+                            }
+                            this.save();
                         }
-                        if this.state.selected_session == Some(session_id) {
-                            this.reset_visible_state();
-                            this.reset_transcript_rows(this.transcript_row_count());
-                        }
-                        this.save();
                         cx.notify();
                     }
                     Err(error) => {
@@ -746,5 +803,43 @@ mod tests {
         session.status = SessionStatus::Connecting;
         assert!(has_starting_session(std::slice::from_ref(&session)));
         assert!(!has_starting_session(&[]));
+    }
+
+    /// The reported shape: a session created here, continued in the TUI
+    /// while the app was closed. The row is not `imported`, but it tracks a
+    /// native session whose transcript moved past the local copy, so it must
+    /// refresh exactly like an imported one.
+    #[test]
+    fn an_app_created_session_tracking_a_native_one_refreshes_too() {
+        let mut session = started_session(Uuid::new_v4(), "GPU 探讨", 1_000);
+        session.native_session_id = Some("ses_1".to_owned());
+        session.detail_loaded = true;
+        session.push_message(MessageRole::User, "本地已有的最后一条");
+
+        // Never synced this run, or the server moved past the synced stamp.
+        assert!(native_transcript_refresh_due(&session, false, 0));
+        assert!(native_transcript_refresh_due(&session, false, 999));
+        // Already synced through this version of the server transcript.
+        assert!(!native_transcript_refresh_due(&session, false, 2_000));
+        // A live runtime owns the transcript; a server pull would clobber it.
+        assert!(!native_transcript_refresh_due(&session, true, 0));
+        // A busy session streams through its runtime too.
+        session.status = SessionStatus::Working;
+        assert!(!native_transcript_refresh_due(&session, false, 0));
+    }
+
+    #[test]
+    fn a_local_only_session_never_refreshes() {
+        let mut session = started_session(Uuid::new_v4(), "本地会话", 1_000);
+        session.detail_loaded = true;
+        session.push_message(MessageRole::User, "你好");
+        assert!(!native_transcript_refresh_due(&session, false, 0));
+    }
+
+    #[test]
+    fn an_imported_skeleton_still_refreshes_on_first_open() {
+        let session = imported_session(Uuid::new_v4(), "ses_1", "问候交流", 1_000);
+        assert!(native_transcript_refresh_due(&session, false, 0));
+        assert!(!native_transcript_refresh_due(&session, true, 0));
     }
 }

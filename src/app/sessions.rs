@@ -200,9 +200,10 @@ impl Fintwind {
             // retain the clean snapshot captured before its agent made edits.
             self.refresh_selected_branch_snapshot(cx);
         }
-        // An imported session opened for the first time pulls its transcript
-        // from the OpenCode server.
-        self.ensure_imported_transcript(session_id, cx);
+        // A session tracking a native OpenCode one — imported, or created
+        // here and continued in the TUI or CLI — pulls the server's
+        // transcript whenever the local copy may be behind it.
+        self.ensure_native_transcript(session_id, cx);
         self.refresh_composer_sources(cx);
         self.reset_transcript_rows(self.transcript_row_count());
         self.save();

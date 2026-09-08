@@ -262,6 +262,8 @@ providers.ttft_error_auth: "API Keyを拒否されました（HTTP %{status}）"
 providers.ttft_error_model: モデルが見つかりません（HTTP 404）
 providers.ttft_error_no_stream: エンドポイントはストリーミングトークンを返しませんでした
 providers.ttft_error_timeout: "%{seconds}秒以内に最初のトークンが届きませんでした"
+providers.input_modalities_label: 入力モダリティ
+providers.input_modalities_hint: 空欄なら models.dev に従います
 providers.modality_tooltip: "入力モダリティ：%{modalities}"
 modality.text: テキスト
 modality.image: 画像

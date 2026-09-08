@@ -13,7 +13,7 @@ use fintwind_client::custom_providers::{
     self, ApiListError, CustomProvider, CustomProviderModel, FirstTokenError,
 };
 
-use super::providers_page::{outline_button, small_pill};
+use super::providers_page::{ProviderFormModelDraft, outline_button, small_pill};
 
 use super::*;
 
@@ -331,15 +331,16 @@ impl Fintwind {
     /// collection the submit uses.
     fn form_draft_models(&self, cx: &App) -> Vec<CustomProviderModel> {
         let mut models = Vec::new();
-        for (id, context) in &self.providers_form_models {
-            let id = id.read(cx).content().trim().to_owned();
+        for draft in &self.providers_form_models {
+            let id = draft.id.read(cx).content().trim().to_owned();
             if id.is_empty() {
                 continue;
             }
-            let context = context.read(cx).content();
+            let context = draft.context.read(cx).content();
             models.push(CustomProviderModel {
                 id,
                 context_window: custom_providers::parse_context_window(context),
+                input_modalities: draft.input_modalities.clone(),
                 ..Default::default()
             });
         }
@@ -472,7 +473,16 @@ impl Fintwind {
                 let text = custom_providers::format_context_window(tokens);
                 context.update(cx, |input, cx| input.set_content(text, cx));
             }
-            self.providers_form_models.push((id, context));
+            // Only what the draft itself recorded: the catalog's modalities
+            // stay a display fallback and must not freeze into the config on
+            // a fetch-plus-submit the user never toggled.
+            let input_modalities = model.input_modalities.clone();
+            self.providers_form_models
+                .push(ProviderFormModelDraft {
+                    id,
+                    context,
+                    input_modalities,
+                });
         }
         cx.notify();
     }

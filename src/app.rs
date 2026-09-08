@@ -1344,6 +1344,10 @@ pub struct Fintwind {
     providers_delete_arming: Option<String>,
     /// The inline model editor over the selected provider's model list.
     providers_model_editor: Option<providers_page::ProvidersModelEditor>,
+    /// The inline model editor's input-modality selection, seeded when the
+    /// editor opens and written to the model on confirm. Empty records none,
+    /// leaving the row's badge to the models.dev table.
+    providers_model_editor_modalities: Vec<String>,
     /// Generation token for the debounced commit of keystroke-level field
     /// edits; a newer edit supersedes the pending one.
     providers_commit_generation: u64,
@@ -1384,8 +1388,9 @@ pub struct Fintwind {
     native_reconcile_error: Option<String>,
     /// The API format picked in the add-provider form.
     providers_form_format: fintwind_client::custom_providers::ProviderApiFormat,
-    /// Model draft rows of the add-provider form: id + context window.
-    providers_form_models: Vec<(Entity<ComposerInput>, Entity<ComposerInput>)>,
+    /// Model draft rows of the add-provider form: id and context-window
+    /// fields plus the input modalities picked for each.
+    providers_form_models: Vec<providers_page::ProviderFormModelDraft>,
     /// Model metadata the add form's fields cannot hold — the names and
     /// output limits a fetch's merge filled in — keyed by model id, so a
     /// submitted draft keeps what the fetch learned.
@@ -3030,6 +3035,7 @@ impl Fintwind {
                 providers_api_key_revealed: false,
                 providers_delete_arming: None,
                 providers_model_editor: None,
+                providers_model_editor_modalities: Vec::new(),
                 providers_commit_generation: 0,
                 providers_store: Vec::new(),
                 providers_load_generation: 0,

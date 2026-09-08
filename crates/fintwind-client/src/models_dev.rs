@@ -213,6 +213,9 @@ pub fn merge_api_models(
             name: basics.name.or_else(|| api_model.name.clone()),
             context_window: api_model.context_window.or(basics.context_window),
             output_limit: api_model.output_limit.or(basics.output_limit),
+            // The catalog's modalities stay a display fallback; a fetched
+            // model records none of its own until the user says so.
+            input_modalities: Vec::new(),
         });
         outcome.added += 1;
     }

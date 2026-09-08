@@ -125,6 +125,17 @@ fn provider_from_config(key: &str, entry: &Value, disabled: &HashSet<String>) ->
                     // `CustomProviderModel::display_name`'s one decision.
                     name: spec.get("name").and_then(Value::as_str).map(str::to_owned),
                     output_limit: spec.pointer("/limit/output").and_then(Value::as_u64),
+                    input_modalities: spec
+                        .pointer("/modalities/input")
+                        .and_then(Value::as_array)
+                        .map(|modalities| {
+                            modalities
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 })
                 .collect()
         })
@@ -324,6 +335,42 @@ fn provider_entry(provider: &CustomProvider) -> Value {
                     }
                 }
             }
+        }
+        // `modalities.input` carries the recorded input modalities. An unset
+        // list drops just that key, leaving any other `modalities` keys
+        // (`output`, or anything a newer schema adds) exactly as recorded.
+        if model.input_modalities.is_empty() {
+            let mut modalities = spec.get("modalities").and_then(Value::as_object).cloned();
+            if let Some(modalities) = modalities.as_mut() {
+                modalities.remove("input");
+            }
+            match modalities {
+                Some(modalities) if modalities.is_empty() => {
+                    spec.remove("modalities");
+                }
+                Some(modalities) => {
+                    spec.insert("modalities".into(), Value::Object(modalities));
+                }
+                None => {}
+            }
+        } else {
+            let mut modalities = spec
+                .get("modalities")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            modalities.insert(
+                "input".into(),
+                Value::Array(
+                    model
+                        .input_modalities
+                        .iter()
+                        .cloned()
+                        .map(Value::String)
+                        .collect(),
+                ),
+            );
+            spec.insert("modalities".into(), Value::Object(modalities));
         }
         // The pre-OpenCode-config mirror wrote `contextWindow`; superseded
         // by `limit.context` and never read back once `limit` exists.
@@ -892,6 +939,89 @@ mod tests {
         save_providers_at(&path, &providers).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["provider"]["openrouter"]["npm"], "@ai-sdk/anthropic");
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn input_modalities_round_trip_and_leave_other_modality_keys_alone() {
+        let directory =
+            std::env::temp_dir().join(format!("fintwind-oc-cfg-modalities-{}", std::process::id()));
+        let document = serde_json::json!({
+            "provider": {
+                "relay": {
+                    "options": {"baseURL": "https://relay.example.com/v1"},
+                    "models": {
+                        "vision-model": {
+                            "name": "Vision Model",
+                            "cost": {"input": 0.5, "output": 1.0},
+                            "modalities": {
+                                "input": ["text", "image"],
+                                "output": ["text"],
+                                "custom": {"future": true}
+                            }
+                        },
+                        "plain-model": {"name": "Plain Model"}
+                    }
+                }
+            }
+        });
+        let path = write_fixture(&directory, &document);
+        let mut providers = load_providers_at(&path).unwrap();
+
+        // The recorded list loads as recorded.
+        let relay = providers.iter_mut().find(|p| p.slug == "relay").unwrap();
+        let vision = relay.model("vision-model").unwrap();
+        assert_eq!(vision.input_modalities, vec!["text", "image"]);
+        assert!(relay.model("plain-model").unwrap().input_modalities.is_empty());
+
+        // A fresh selection replaces `input` and leaves `output` in place.
+        let relay = providers.iter_mut().find(|p| p.slug == "relay").unwrap();
+        let vision = relay
+            .models
+            .iter_mut()
+            .find(|model| model.id == "vision-model")
+            .unwrap();
+        vision.input_modalities = vec!["text".into(), "pdf".into()];
+        let plain = relay
+            .models
+            .iter_mut()
+            .find(|model| model.id == "plain-model")
+            .unwrap();
+        plain.input_modalities = vec!["text".into()];
+        save_providers_at(&path, &providers).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let models = &saved["provider"]["relay"]["models"];
+        assert_eq!(
+            models["vision-model"]["modalities"],
+            serde_json::json!({"input": ["text", "pdf"], "output": ["text"], "custom": {"future": true}})
+        );
+        // Unknown model-spec keys ride along through a modalities edit.
+        assert_eq!(
+            models["vision-model"]["cost"],
+            serde_json::json!({"input": 0.5, "output": 1.0})
+        );
+        assert_eq!(
+            models["plain-model"]["modalities"],
+            serde_json::json!({"input": ["text"]})
+        );
+
+        // Clearing the selection drops `input` alone; the emptied object the
+        // removal would leave behind is dropped too, and the `modalities`
+        // object's unknown siblings survive both edits.
+        let mut providers = load_providers_at(&path).unwrap();
+        let relay = providers.iter_mut().find(|p| p.slug == "relay").unwrap();
+        for model in &mut relay.models {
+            model.input_modalities.clear();
+        }
+        save_providers_at(&path, &providers).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let models = &saved["provider"]["relay"]["models"];
+        assert_eq!(
+            models["vision-model"]["modalities"],
+            serde_json::json!({"output": ["text"], "custom": {"future": true}})
+        );
+        assert!(models["plain-model"].get("modalities").is_none());
 
         let _ = std::fs::remove_dir_all(directory);
     }

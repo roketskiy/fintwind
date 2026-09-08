@@ -61,6 +61,16 @@ pub(super) enum ProvidersModelEditor {
     Edit(usize),
 }
 
+/// One model draft row of the add-provider form: the id and context-window
+/// fields plus the input modalities picked for the model. A draft exists
+/// before its model does, so the selection lives here rather than on a
+/// [`CustomProviderModel`].
+pub(super) struct ProviderFormModelDraft {
+    pub(super) id: Entity<ComposerInput>,
+    pub(super) context: Entity<ComposerInput>,
+    pub(super) input_modalities: Vec<String>,
+}
+
 pub(super) fn api_format_label(format: ProviderApiFormat) -> String {
     match format {
         ProviderApiFormat::OpenAi => tr!("providers.api_format_openai"),
@@ -96,6 +106,7 @@ impl Fintwind {
         self.providers_api_key_revealed = false;
         self.providers_delete_arming = None;
         self.providers_model_editor = None;
+        self.providers_model_editor_modalities.clear();
         self.load_provider_fields(&id, cx);
         self.providers_detail_scroll
             .set_offset(gpui::Point::default());
@@ -136,6 +147,7 @@ impl Fintwind {
         self.providers_api_key_revealed = false;
         self.providers_delete_arming = None;
         self.providers_model_editor = None;
+        self.providers_model_editor_modalities.clear();
         self.providers_form_models.clear();
         if let Some(id) = self.providers_selected.clone() {
             self.load_provider_fields(&id, cx);
@@ -182,6 +194,7 @@ impl Fintwind {
                             this.providers_adding = false;
                             this.providers_renaming = false;
                             this.providers_model_editor = None;
+                            this.providers_model_editor_modalities.clear();
                             this.providers_delete_arming = None;
                         } else if page_reload && let Some(id) = this.providers_selected.clone() {
                             this.load_provider_fields(&id, cx);
@@ -278,6 +291,7 @@ impl Fintwind {
         self.providers_renaming = false;
         self.providers_delete_arming = None;
         self.providers_model_editor = None;
+        self.providers_model_editor_modalities.clear();
         self.providers_api_key_revealed = false;
         self.providers_form_format = ProviderApiFormat::default();
         self.providers_form_models.clear();
@@ -315,12 +329,12 @@ impl Fintwind {
             .trim()
             .to_owned();
         let mut models = Vec::new();
-        for (id, context) in &self.providers_form_models {
-            let id = id.read(cx).content().trim().to_owned();
+        for draft in &self.providers_form_models {
+            let id = draft.id.read(cx).content().trim().to_owned();
             if id.is_empty() {
                 continue;
             }
-            let context = context.read(cx).content();
+            let context = draft.context.read(cx).content();
             // A fetch's merge knows more about this id than the fields can
             // hold — its display name and output limit ride along.
             let known = self.providers_form_model_catalog.get(&id);
@@ -329,6 +343,7 @@ impl Fintwind {
                 context_window: custom_providers::parse_context_window(&context),
                 name: known.and_then(|model| model.name.clone()),
                 output_limit: known.and_then(|model| model.output_limit),
+                input_modalities: draft.input_modalities.clone(),
             });
         }
 
@@ -460,7 +475,7 @@ impl Fintwind {
     }
 
     fn begin_model_editor(&mut self, editor: ProvidersModelEditor, cx: &mut Context<Self>) {
-        let (id, context) = match (&editor, self.selected_custom_provider()) {
+        let (id, context, modalities) = match (&editor, self.selected_custom_provider()) {
             (ProvidersModelEditor::Edit(index), Some(provider)) => {
                 let Some(model) = provider.models.get(*index) else {
                     return;
@@ -471,11 +486,13 @@ impl Fintwind {
                         .context_window
                         .map(|window| custom_providers::format_context_window(window))
                         .unwrap_or_default(),
+                    self.effective_input_modalities(model),
                 )
             }
-            _ => (String::new(), String::new()),
+            _ => (String::new(), String::new(), Vec::new()),
         };
         self.providers_model_editor = Some(editor);
+        self.providers_model_editor_modalities = modalities;
         self.provider_model_id_input
             .update(cx, |input, cx| input.set_content(id, cx));
         self.provider_model_context_input
@@ -483,8 +500,22 @@ impl Fintwind {
         cx.notify();
     }
 
+    /// The input modalities a model row shows: the recorded list when there is
+    /// one, otherwise the metadata table's answer for the id. The editor seeds
+    /// its picker from this, so it opens showing what the row currently says.
+    fn effective_input_modalities(&self, model: &CustomProviderModel) -> Vec<String> {
+        if !model.input_modalities.is_empty() {
+            return model.input_modalities.clone();
+        }
+        self.models_dev_table
+            .as_deref()
+            .map(|table| table.resolve_input_modalities(&model.id))
+            .unwrap_or_default()
+    }
+
     fn cancel_model_editor(&mut self, cx: &mut Context<Self>) {
         self.providers_model_editor = None;
+        self.providers_model_editor_modalities.clear();
         cx.notify();
     }
 
@@ -530,6 +561,7 @@ impl Fintwind {
         let mut model = CustomProviderModel {
             id: model_id.clone(),
             context_window,
+            input_modalities: self.providers_model_editor_modalities.clone(),
             ..Default::default()
         };
         if let Some(provider) = self
@@ -541,9 +573,9 @@ impl Fintwind {
                 ProvidersModelEditor::Add => provider.models.push(model),
                 ProvidersModelEditor::Edit(index) => {
                     if let Some(slot) = provider.models.get_mut(index) {
-                        // The editor only owns the id and the context window;
-                        // catalog-filled basics ride along unless the id now
-                        // names a different model.
+                        // The editor only owns the id, the context window, and
+                        // the modalities; catalog-filled basics ride along
+                        // unless the id now names a different model.
                         if slot.id == model_id {
                             model.name = slot.name.take();
                             model.output_limit = slot.output_limit;
@@ -554,10 +586,12 @@ impl Fintwind {
             }
         }
         self.providers_model_editor = None;
+        self.providers_model_editor_modalities.clear();
         self.commit_custom_providers(cx);
     }
 
     fn delete_model(&mut self, id: String, index: usize, cx: &mut Context<Self>) {
+        let mut removed = false;
         if let Some(provider) = self
             .providers_store
             .iter_mut()
@@ -573,13 +607,20 @@ impl Fintwind {
                     return;
                 }
                 provider.models.remove(index);
+                removed = true;
             }
         }
-        if matches!(
-            self.providers_model_editor,
-            Some(ProvidersModelEditor::Edit(edited)) if edited == index
-        ) {
-            self.providers_model_editor = None;
+        match self.providers_model_editor {
+            Some(ProvidersModelEditor::Edit(edited)) if edited == index => {
+                self.providers_model_editor = None;
+                self.providers_model_editor_modalities.clear();
+            }
+            // The editor points at a slot in a shrinking list: follow the
+            // model it opened on rather than whatever shifts into the index.
+            Some(ProvidersModelEditor::Edit(edited)) if removed && edited > index => {
+                self.providers_model_editor = Some(ProvidersModelEditor::Edit(edited - 1));
+            }
+            _ => {}
         }
         self.commit_custom_providers(cx);
     }
@@ -595,7 +636,11 @@ impl Fintwind {
                 .search_field()
                 .placeholder(tr!("providers.context_window_placeholder"))
         });
-        self.providers_form_models.push((id, context));
+        self.providers_form_models.push(ProviderFormModelDraft {
+            id,
+            context,
+            input_modalities: Vec::new(),
+        });
         cx.notify();
     }
 
@@ -995,6 +1040,7 @@ impl Fintwind {
                 let modality_pill = self.model_modality_pill(
                     theme,
                     bare_id,
+                    &[],
                     SharedString::from(format!("builtin-modality-{index}")),
                 );
                 model_rows = model_rows.child(
@@ -1502,8 +1548,12 @@ impl Fintwind {
             // A models.dev-filled name reads as the model's title; the raw id
             // stays beside it in mono. Without a name the id is the title.
             let named = model.display_name();
-            let modality_pill =
-                self.model_modality_pill(theme, &model.id, SharedString::from(format!("modality-{index}")));
+            let modality_pill = self.model_modality_pill(
+                theme,
+                &model.id,
+                &model.input_modalities,
+                SharedString::from(format!("modality-{index}")),
+            );
             let latency_cluster = self.render_model_latency_cluster(
                 &provider.id,
                 &model.id,
@@ -1631,8 +1681,8 @@ impl Fintwind {
             .into_any_element()
     }
 
-    /// The inline model editor: id + context window, confirmed with the
-    /// check button or Enter in either field.
+    /// The inline model editor: id, context window, and input modalities,
+    /// confirmed with the check button or Enter in either field.
     fn render_model_editor_row(
         &self,
         theme: &Theme,
@@ -1655,93 +1705,177 @@ impl Fintwind {
         let valid = !model_id.is_empty()
             && (context_text.is_empty()
                 || custom_providers::parse_context_window(&context_text).is_some());
+        let toggle = |this: &mut Self, modality: &str, cx: &mut Context<Self>| {
+            toggle_modality(&mut this.providers_model_editor_modalities, modality);
+            cx.notify();
+        };
 
         div()
             .px(px(10.0))
             .py(px(8.0))
             .bg(theme.inset)
             .flex()
-            .items_center()
+            .flex_col()
             .gap(px(8.0))
             .when(separator, |element| {
                 element.border_t_1().border_color(theme.border)
             })
             .child(
-                TextField::new(
-                    "provider-model-id-field",
-                    self.provider_model_id_input.clone(),
-                )
-                .flex_1()
-                .min_w_0(),
-            )
-            .child(
-                TextField::new(
-                    "provider-model-context-field",
-                    self.provider_model_context_input.clone(),
-                )
-                .w(px(120.0)),
-            )
-            .child(
                 div()
-                    .id("confirm-provider-model")
-                    .tab_index(0)
-                    .focus_visible(|style| style.border_color(accent))
-                    .h(px(30.0))
-                    .px(px(10.0))
-                    .rounded(px(7.0))
                     .flex()
                     .items_center()
-                    .gap(px(6.0))
-                    .cursor_default()
-                    .text_size(px(12.0))
-                    .when(valid, |element| {
-                        element
-                            .bg(accent)
-                            .text_color(on_providers_accent(theme))
-                            .hover(|element| element.bg(accent.opacity(0.85)))
-                            .active(|element| element.bg(accent.opacity(0.72)))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.confirm_model_editor(cx);
-                            }))
-                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                                if !event.keystroke.modifiers.modified()
-                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                {
-                                    this.confirm_model_editor(cx);
-                                    cx.stop_propagation();
-                                }
-                            }))
-                    })
-                    .when(!valid, |element| {
-                        element
-                            .border_1()
-                            .border_color(theme.border_strong)
-                            .text_color(theme.text_ghost)
-                    })
-                    .child(icon(
-                        "icons/check.svg",
-                        12.5,
-                        if valid {
-                            on_providers_accent(theme)
-                        } else {
-                            theme.text_ghost
-                        },
-                    ))
-                    .child(tr!("providers.save")),
+                    .gap(px(8.0))
+                    .child(
+                        TextField::new(
+                            "provider-model-id-field",
+                            self.provider_model_id_input.clone(),
+                        )
+                        .flex_1()
+                        .min_w_0(),
+                    )
+                    .child(
+                        TextField::new(
+                            "provider-model-context-field",
+                            self.provider_model_context_input.clone(),
+                        )
+                        .w(px(120.0)),
+                    )
+                    .child(
+                        div()
+                            .id("confirm-provider-model")
+                            .tab_index(0)
+                            .focus_visible(|style| style.border_color(accent))
+                            .h(px(30.0))
+                            .px(px(10.0))
+                            .rounded(px(7.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .cursor_default()
+                            .text_size(px(12.0))
+                            .when(valid, |element| {
+                                element
+                                    .bg(accent)
+                                    .text_color(on_providers_accent(theme))
+                                    .hover(|element| element.bg(accent.opacity(0.85)))
+                                    .active(|element| element.bg(accent.opacity(0.72)))
+                                    .on_click(cx.listener(|this, _, _, cx| {
+                                        this.confirm_model_editor(cx);
+                                    }))
+                                    .on_key_down(cx.listener(
+                                        |this, event: &KeyDownEvent, _, cx| {
+                                            if !event.keystroke.modifiers.modified()
+                                                && matches!(
+                                                    event.keystroke.key.as_str(),
+                                                    "enter" | "space"
+                                                )
+                                            {
+                                                this.confirm_model_editor(cx);
+                                                cx.stop_propagation();
+                                            }
+                                        },
+                                    ))
+                            })
+                            .when(!valid, |element| {
+                                element
+                                    .border_1()
+                                    .border_color(theme.border_strong)
+                                    .text_color(theme.text_ghost)
+                            })
+                            .child(icon(
+                                "icons/check.svg",
+                                12.5,
+                                if valid {
+                                    on_providers_accent(theme)
+                                } else {
+                                    theme.text_ghost
+                                },
+                            ))
+                            .child(tr!("providers.save")),
+                    )
+                    .child(
+                        small_action_button(
+                            "cancel-provider-model",
+                            "icons/x.svg",
+                            tr!("common.cancel"),
+                            theme.text_secondary,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.cancel_model_editor(cx);
+                        })),
+                    ),
             )
-            .child(
-                small_action_button(
-                    "cancel-provider-model",
-                    "icons/x.svg",
-                    tr!("common.cancel"),
-                    theme.text_secondary,
-                    theme,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.cancel_model_editor(cx);
-                })),
-            )
+            .child(self.render_modality_row(
+                theme,
+                cx,
+                "model-editor",
+                &self.providers_model_editor_modalities,
+                true,
+                toggle,
+            ))
             .into_any_element()
+    }
+
+    /// The input-modality picker of a model editor: one toggle chip per
+    /// modality, plus a hint that an empty selection defers to models.dev.
+    /// The caller supplies `toggle`, so the editor and each add-form draft
+    /// share the same control; `hint` is off on repeated draft rows, where
+    /// the same sentence would read as noise.
+    fn render_modality_row(
+        &self,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+        id_prefix: &str,
+        selected: &[String],
+        hint: bool,
+        toggle: impl Fn(&mut Self, &str, &mut Context<Self>) + Copy + 'static,
+    ) -> Div {
+        let accent = providers_accent(theme);
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .flex_none()
+                    .pr(px(2.0))
+                    .text_size(px(10.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_tertiary)
+                    .child(tr!("providers.input_modalities_label")),
+            );
+        for modality in custom_providers::INPUT_MODALITIES {
+            let active = selected.iter().any(|entry| entry == modality);
+            row = row.child(
+                modality_chip(
+                    SharedString::from(format!("{id_prefix}-{modality}")),
+                    theme,
+                    accent,
+                    modality,
+                    active,
+                )
+                .on_click(cx.listener(move |this, _, _, cx| toggle(this, modality, cx)))
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                    if !event.keystroke.modifiers.modified()
+                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    {
+                        toggle(this, modality, cx);
+                        cx.stop_propagation();
+                    }
+                })),
+            );
+        }
+        if hint {
+            row = row.child(
+                div()
+                    .ml(px(2.0))
+                    .text_size(px(10.0))
+                    .text_color(theme.text_ghost)
+                    .child(tr!("providers.input_modalities_hint")),
+            );
+        }
+        row
     }
 
     // ── Add-provider form ──────────────────────────────────────────────────
@@ -1758,59 +1892,79 @@ impl Fintwind {
         let mut model_count = 0usize;
         let mut drafts = div().flex().flex_col();
         let draft_count = self.providers_form_models.len();
-        for (index, (id, context)) in self.providers_form_models.iter().enumerate() {
-            if !id.read(cx).content().trim().is_empty() {
+        for (index, draft) in self.providers_form_models.iter().enumerate() {
+            if !draft.id.read(cx).content().trim().is_empty() {
                 model_count += 1;
             }
-            let context_entity = context.clone();
+            let context_entity = draft.context.clone();
+            let toggle = move |this: &mut Self, modality: &str, cx: &mut Context<Self>| {
+                if let Some(draft) = this.providers_form_models.get_mut(index) {
+                    toggle_modality(&mut draft.input_modalities, modality);
+                }
+                cx.notify();
+            };
             drafts = drafts.child(
                 div()
                     .py(px(8.0))
                     .pr(px(2.0))
                     .flex()
-                    .items_center()
-                    .gap(px(8.0))
+                    .flex_col()
+                    .gap(px(6.0))
                     .when(index > 0, |element| {
                         element.border_t_1().border_color(theme.border)
                     })
                     .child(
-                        TextField::new(
-                            SharedString::from(format!("form-model-id-{index}")),
-                            id.clone(),
-                        )
-                        .flex_1()
-                        .min_w_0(),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                TextField::new(
+                                    SharedString::from(format!("form-model-id-{index}")),
+                                    draft.id.clone(),
+                                )
+                                .flex_1()
+                                .min_w_0(),
+                            )
+                            .child(
+                                TextField::new(
+                                    SharedString::from(format!("form-model-context-{index}")),
+                                    draft.context.clone(),
+                                )
+                                .w(px(120.0)),
+                            )
+                            .child(
+                                icon_button(
+                                    SharedString::from(format!("remove-form-model-{index}")),
+                                    "icons/trash.svg",
+                                    *theme,
+                                )
+                                .tooltip(Tooltip::text(tr!("providers.delete_model")))
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        if let Some(index) = this
+                                            .providers_form_models
+                                            .iter()
+                                            .position(|draft| draft.context == context_entity)
+                                        {
+                                            this.providers_form_models.remove(index);
+                                            // A dropped draft's field may hold focus; let
+                                            // it go instead of parking it nowhere.
+                                            window.blur();
+                                            cx.notify();
+                                        }
+                                    },
+                                )),
+                            ),
                     )
-                    .child(
-                        TextField::new(
-                            SharedString::from(format!("form-model-context-{index}")),
-                            context.clone(),
-                        )
-                        .w(px(120.0)),
-                    )
-                    .child(
-                        icon_button(
-                            SharedString::from(format!("remove-form-model-{index}")),
-                            "icons/trash.svg",
-                            *theme,
-                        )
-                        .tooltip(Tooltip::text(tr!("providers.delete_model")))
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                if let Some(index) = this
-                                    .providers_form_models
-                                    .iter()
-                                    .position(|(_, candidate)| candidate == &context_entity)
-                                {
-                                    this.providers_form_models.remove(index);
-                                    // A dropped draft's field may hold focus; let
-                                    // it go instead of parking it nowhere.
-                                    window.blur();
-                                    cx.notify();
-                                }
-                            },
-                        )),
-                    ),
+                    .child(self.render_modality_row(
+                        theme,
+                        cx,
+                        &format!("form-model-{index}"),
+                        &draft.input_modalities,
+                        index == 0,
+                        toggle,
+                    )),
             );
         }
         let models_empty = draft_count == 0;
@@ -2158,21 +2312,83 @@ fn modality_labels(modalities: &[String]) -> String {
         .join(", ")
 }
 
+/// Flip one modality in a selection, keeping the canonical order the config
+/// schema documents so saved lists do not shuffle between edits.
+fn toggle_modality(selected: &mut Vec<String>, modality: &str) {
+    if let Some(index) = selected.iter().position(|entry| entry == modality) {
+        selected.remove(index);
+        return;
+    }
+    selected.push(modality.to_owned());
+    selected.sort_by_key(|entry| {
+        custom_providers::INPUT_MODALITIES
+            .iter()
+            .position(|candidate| candidate == entry)
+            .unwrap_or(usize::MAX)
+    });
+}
+
+/// One toggle chip in a modality picker: the modality's stroke icon and word,
+/// accent-filled while selected. The caller attaches the toggle handlers, so
+/// the same chip serves the model editor and the add form's drafts.
+fn modality_chip(
+    id: impl Into<ElementId>,
+    theme: &Theme,
+    accent: Hsla,
+    modality: &str,
+    selected: bool,
+) -> Stateful<Div> {
+    let color = if selected { accent } else { theme.text_secondary };
+    div()
+        .id(id)
+        .tab_index(0)
+        .focus_visible(|style| style.border_color(accent))
+        .h(px(26.0))
+        .px(px(8.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(if selected {
+            accent.opacity(0.55)
+        } else {
+            theme.border_strong
+        })
+        .when(selected, |element| element.bg(accent.opacity(0.14)))
+        .when(!selected, |element| {
+            element
+                .hover(|element| element.bg(theme.overlay))
+                .active(|element| element.bg(theme.overlay_strong))
+        })
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(5.0))
+        .cursor_default()
+        .text_size(px(11.0))
+        .text_color(color)
+        .children(modality_icon_path(modality).map(|path| icon(path, 11.0, color)))
+        .child(SharedString::from(modality_label(modality)))
+}
+
 impl Fintwind {
     /// The modality badge for one model id: a quiet pill holding one small
     /// stroke icon per input modality the model accepts, with the spelled-out
-    /// modalities in its tooltip. `None` when the metadata table holds
-    /// nothing for the id — the badge waits for a table rather than guessing.
+    /// modalities in its tooltip. `recorded` is the user's own list, which
+    /// wins when present; without one the metadata table answers, and `None`
+    /// means the badge waits for a table rather than guessing.
     pub(super) fn model_modality_pill(
         &self,
         theme: &Theme,
         model_id: &str,
+        recorded: &[String],
         id: impl Into<ElementId>,
     ) -> Option<AnyElement> {
-        let input = self
-            .models_dev_table
-            .as_deref()?
-            .resolve_input_modalities(model_id);
+        let input = if recorded.is_empty() {
+            self.models_dev_table
+                .as_deref()?
+                .resolve_input_modalities(model_id)
+        } else {
+            recorded.to_vec()
+        };
         if input.is_empty() {
             return None;
         }

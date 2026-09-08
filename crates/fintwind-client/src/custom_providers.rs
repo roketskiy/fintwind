@@ -43,6 +43,10 @@ impl ProviderApiFormat {
     }
 }
 
+/// The input modalities OpenCode's model schema accepts, in the order the
+/// Providers page offers them.
+pub const INPUT_MODALITIES: [&str; 5] = ["text", "image", "audio", "video", "pdf"];
+
 /// One model of a [`CustomProvider`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -57,6 +61,10 @@ pub struct CustomProviderModel {
     /// Output limit in tokens, typically filled from the models.dev catalog.
     /// Stored on the model as `limit.output` when the entry has none.
     pub output_limit: Option<u64>,
+    /// Input modalities the user recorded, e.g. `["text", "image"]`. Stored on
+    /// the model as `modalities.input`; empty means unset, and the UI badge
+    /// falls back to the models.dev catalog.
+    pub input_modalities: Vec<String>,
 }
 
 impl Default for CustomProviderModel {
@@ -66,6 +74,7 @@ impl Default for CustomProviderModel {
             context_window: None,
             name: None,
             output_limit: None,
+            input_modalities: Vec::new(),
         }
     }
 }

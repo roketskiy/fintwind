@@ -502,6 +502,10 @@ providers.ttft_error_no_stream:
   en: the endpoint returned no streamed tokens
 providers.ttft_error_timeout:
   en: "no first token within %{seconds} s"
+providers.input_modalities_label:
+  en: Input modalities
+providers.input_modalities_hint:
+  en: Empty follows models.dev
 providers.modality_tooltip:
   en: "Input modalities: %{modalities}"
 modality.text:

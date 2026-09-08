@@ -254,6 +254,8 @@ providers.ttft_error_auth: "API Key 被拒绝（HTTP %{status}）"
 providers.ttft_error_model: 未找到该模型（HTTP 404）
 providers.ttft_error_no_stream: 端点未返回流式内容
 providers.ttft_error_timeout: "%{seconds} 秒内未收到首字"
+providers.input_modalities_label: 输入模态
+providers.input_modalities_hint: 留空则跟随 models.dev
 providers.modality_tooltip: "输入模态：%{modalities}"
 modality.text: 文本
 modality.image: 图像

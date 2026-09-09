@@ -13,9 +13,11 @@
 //! - `GET /api/session/{id}/message` → `{data: [message…], cursor}` newest
 //!   first, each message flat. Assistant rows inline their parts under
 //!   `content` (`{type: "reasoning"|"tool"|"text"…}`) — the SDK 1.4.6
-//!   `{info, parts}` envelope does not match this beta. User rows carry the
-//!   prompt as a top-level `text` string with attached files in a `files`
-//!   array and no `content` at all.
+//!   `{info, parts}` envelope does not match this beta. Tool parts carry the
+//!   tool name as `name` (legacy: `tool`) and keep the result text in
+//!   `state.content`, with no `state.title`. User rows carry the prompt as a
+//!   top-level `text` string with attached files in a `files` array and no
+//!   `content` at all.
 
 use std::time::Duration;
 
@@ -398,11 +400,17 @@ fn tool_item(part: &Value) -> ActivityItem {
     // The tool state carries what the live events deliver, so the same
     // normalization applies: kind from the tool name, display target and
     // output prepared once here instead of per frame.
+    //
+    // opencode2 persists `name`/`id` on the part and keeps the result text in
+    // `state.content` with no `state.title`; the legacy shape used
+    // `tool`/`callID` with `state.output` and a server-authored title.
+    // Accept both so a restored transcript keeps the identity a live stream
+    // gave the same tool call.
     let state = part.get("state").unwrap_or(part);
     let name = part
-        .get("tool")
+        .get("name")
+        .or_else(|| part.get("tool"))
         .and_then(Value::as_str)
-        .or_else(|| part.get("callID").and_then(Value::as_str))
         .unwrap_or("tool");
     let kind = crate::model::ActivityKind::from_tool_name(name);
     let title = state
@@ -410,7 +418,7 @@ fn tool_item(part: &Value) -> ActivityItem {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| tr!("activity.tool"));
+        .unwrap_or_else(|| name.to_owned());
     let failed = state.get("status").and_then(Value::as_str) == Some("error");
     let output: Option<Value> = state
         .get("output")
@@ -421,6 +429,12 @@ fn tool_item(part: &Value) -> ActivityItem {
                 .then(|| state.get("error").cloned())
                 .flatten()
                 .filter(|error| !error.is_null())
+        })
+        .or_else(|| {
+            state
+                .get("content")
+                .filter(|content| !content.is_null())
+                .cloned()
         });
     super::activity::tool_activity(
         None,
@@ -585,6 +599,43 @@ mod tests {
         let item = tool_item(&failed);
         assert!(item.failed);
         assert!(item.complete);
+    }
+
+    #[test]
+    fn opencode2_tool_parts_keep_their_identity() {
+        // Stored shape of the current beta (`session_message` rows): the name
+        // lives on the part, the result text rides `state.content`, and no
+        // `state.title` exists. Before this was handled, every restored tool
+        // row degraded to the generic "工具" label with no target or output.
+        let part = json!({
+            "type": "tool", "id": "call_01", "name": "read", "executed": true,
+            "state": {
+                "status": "completed",
+                "input": {"path": "src/workspace.rs", "limit": 200},
+                "content": [{"type": "text", "text": "Read src/workspace.rs"}],
+                "metadata": {"truncated": false}
+            },
+            "time": {"created": 1_788_962_111_526_u64, "completed": 1_788_962_111_943_u64}
+        });
+        let item = tool_item(&part);
+        assert_eq!(item.kind, crate::model::ActivityKind::FileRead);
+        assert_eq!(item.display_target.as_deref(), Some("src/workspace.rs"));
+        assert_eq!(item.output.as_deref(), Some("Read src/workspace.rs"));
+        assert!(!item.failed);
+
+        let patch = json!({
+            "type": "tool", "id": "call_02", "name": "patch",
+            "state": {
+                "status": "error",
+                "input": {"patchText": "*** Begin Patch\n*** Update File: a.rs\n@@\n-x\n+y\n*** End Patch"},
+                "error": {"message": "patch did not apply"}
+            }
+        });
+        let item = tool_item(&patch);
+        assert_eq!(item.kind, crate::model::ActivityKind::FileChange);
+        assert!(item.failed);
+        assert!(!item.file_changes.is_empty());
+        assert!(item.output.as_deref().is_some_and(|output| output.contains("patch did not apply")));
     }
 
     #[test]

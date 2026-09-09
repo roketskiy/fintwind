@@ -657,16 +657,7 @@ impl Fintwind {
                 "icons/server.svg",
                 "settings preferences daemon server remote web network origin token port",
             ),
-            (
-                SettingsPage::ComputerUse,
-                "settings.computer_use",
-                "icons/cursor-spark.svg",
-                "settings preferences computer use accessibility screen recording",
-            ),
         ] {
-            if !page.is_visible_in_navigation() {
-                continue;
-            }
             commands.push(CommandPaletteItem::command(
                 PaletteSection::Settings,
                 crate::i18n::translate(label_key),
@@ -1269,7 +1260,7 @@ mod tests {
     #[test]
     fn fuzzy_search_matches_command_words_and_initials() {
         assert!(score("open proj", "Open project folder repository").is_some());
-        assert!(score("cmptr use", "Computer Use settings accessibility").is_some());
+        assert!(score("mcp srv", "MCP Servers tools stdio http").is_some());
         assert!(score("totally absent", "Open project folder repository").is_none());
     }
 

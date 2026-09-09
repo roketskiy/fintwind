@@ -74,7 +74,7 @@ older `~/.fintwind/<date>/<slug>` layout on first load.
 
 Configuration ownership is separate too: the Release desktop writes
 `~/.fintwind/app.json`, while Debug stays isolated at `temp/app.json`. Daemon
-provider and Computer Use settings live in `~/.fintwind/settings.json`. The
+provider settings live in `~/.fintwind/settings.json`. The
 desktop's Settings → Daemon page can explicitly
 expose the child daemon on a fixed port, configure exact browser origins, and
 copy its stable authentication token. It remains loopback-only by default.
@@ -102,9 +102,9 @@ bun install
 bun run dev
 ```
 
-The embedded browser and experimental computer-use integration currently
-remain macOS-only. Agent sessions, projects, transcripts, skills, usage,
-diffs, file editing, and the terminal run natively on Linux and Windows.
+On Windows the right-panel browser runs on WebView2. Agent sessions, projects,
+transcripts, skills, usage, diffs, file editing, and the terminal also run
+natively.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and checks.
 Release maintainers should also read [RELEASING.md](RELEASING.md).

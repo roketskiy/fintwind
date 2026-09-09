@@ -35,13 +35,13 @@ Inputs ([src/driver/mod.rs:67](../src/driver/mod.rs#L79)):
 pub struct DriverStartOptions {
     binary, cwd, mode, interaction_mode,
     model, reasoning_effort, service_tier,
-    computer_use_enabled, provider_cursor,
+    provider_cursor,
 }
 ```
 
 Outputs ([src/model.rs:973](../src/model.rs#L973)): `Connected`,
 `AvailableCommands`, `TurnStarted`, `TextDelta`, `ReasoningDelta`, `Activity`,
-`RichActivity`, `Permission`, `ComputerUseUpdated`, `SteerAccepted`,
+`RichActivity`, `Permission`, `SteerAccepted`,
 `SteerRejected`, `TurnFinished`, `Error`, `ProcessExited`.
 
 A transport that can inject a user message into the *running* turn advertises
@@ -78,9 +78,9 @@ A runtime — and with it that session's provider process — is dropped when:
 | Nobody has touched the session for 30 minutes | `reap_idle_sessions`, [src/app/runtime.rs](../src/app/runtime.rs) |
 | Fintwind quits | `cx.quit()` |
 
-Stop drops the runtime for Codex, whose app-server owns the Computer Use process
-tree, and for Amp, which offers no interrupt on its stream — for both, stopping
-means ending the process, and the next prompt resumes the native thread
+Stop drops the runtime for Codex and for Amp, which offers no interrupt on its
+stream — for both, stopping means ending the process, and the next prompt
+resumes the native thread
 (`thread/resume`, `threads continue`). Every other provider has a protocol
 interrupt and keeps its runtime (`retain_runtime_after_cancel`).
 
@@ -156,7 +156,6 @@ OpenCode server itself, whose driver kills it explicitly on drop.
 | Interactive approvals | yes | no | yes | no | yes | yes | yes |
 | Mid-turn steering | yes | yes | yes | yes | yes | yes | yes |
 | Model discovery | yes | yes | no (fixed) | no (modes) | yes | yes | yes |
-| Computer Use | yes | yes | no | no | no | yes | yes |
 | Restricted to Build + Full access | no | yes | no | yes | no | no | no |
 
 Every provider now holds a session across turns. That was not true when this
@@ -170,8 +169,7 @@ turned out to already serve a session protocol; nobody had looked.
 ## Codex CLI
 
 **Launch** — `codex app-server --stdio`
-([src/driver/codex.rs:164](../src/driver/codex.rs#L164)), plus `-c` config
-overrides when Computer Use is on.
+([src/driver/codex.rs:164](../src/driver/codex.rs#L164)).
 
 **Protocol** — newline-delimited JSON-RPC over stdio, genuinely bidirectional:
 Codex can send Fintwind requests (approvals) and Fintwind answers them by id. Three
@@ -188,9 +186,7 @@ its stdin, never by a signal. See
 
 1. `initialize` (id `0`) with `clientInfo` and `capabilities.experimentalApi`.
 2. `initialized`.
-3. `skills/extraRoots/set` when Computer Use is on, so Fintwind's bundled skill is
-   discovered like Codex's own skills rather than injected as instructions.
-4. `thread/start` or `thread/resume` (id `1`) with `cwd`, `approvalPolicy`,
+3. `thread/start` or `thread/resume` (id `1`) with `cwd`, `approvalPolicy`,
    `sandbox`, `approvalsReviewer`, and optional `model` / `serviceTier`.
 
 The reply to id `1` carries `result.thread.id` (→ `Connected` with a
@@ -240,11 +236,6 @@ unknown markers are dropped. Private control markers never reach the transcript
 
 **Models** — a throwaway app-server, `model/list` paged via `nextCursor`, up to
 32 pages ([src/model_catalog.rs:367](../src/model_catalog.rs#L367)).
-
-**Computer Use** — `-c mcp_servers.fintwind_js_repl.command=…` registers Fintwind's
-QuickJS MCP server, with several `-c` flags disabling Codex's own external
-computer-use plugin/MCP/skill so only Fintwind's `js` / `js_reset` surface is
-visible.
 
 ---
 
@@ -304,9 +295,6 @@ runtime is dropped, because the RPC process may still be sitting on the fork
 register model providers. Ids are `provider/model` slugs and are validated as
 such before launch; per-model `thinkingLevelMap` becomes the reasoning-effort
 options.
-
-**Computer Use** — `--extension <fintwind pi extension>` and `--skill <SKILL.md>`,
-with the REPL and helper paths passed through the environment.
 
 ---
 
@@ -498,10 +486,6 @@ through its resident server, avoiding a second OpenCode process contending for
 the same local resources; a cold task may use a short-lived server
 ([src/opencode_session.rs](../src/opencode_session.rs)).
 
-**Computer Use** — `OPENCODE_CONFIG_CONTENT` and the helper paths are handed to
-the resident server through its environment, exactly as the one-shot invocation
-received them.
-
 ---
 
 ## Agent Client Protocol
@@ -597,9 +581,6 @@ agents; T3 Code runs the same last-prompt-settles bookkeeping for both.
 **Rewind and branch** — unchanged and still out of band: Grok forks through its
 own ACP server plus on-disk truncation ([src/grok_session.rs](../src/grok_session.rs)),
 Cursor re-seeds a fresh session ([src/cursor_session.rs](../src/cursor_session.rs)).
-
-**Computer Use** — Grok's isolated `GROK_HOME` and `--rules` setup is transport
-independent, so the ACP session reuses the same builder the headless driver used.
 
 **What moving to ACP gained.** Grok's Supervised mode no longer means "deny"
 (`--permission-mode dontAsk` existed because the one-shot stream had no response

@@ -42,7 +42,7 @@ async function build(target: BuildTarget): Promise<boolean> {
   }
   const result = isMacOS
     ? await $`${join(root, "scripts/bundle.sh")} debug`.nothrow()
-    : await $`cargo build --package fintwind --bin fintwind --bin fintwind_js_repl`.nothrow();
+    : await $`cargo build --package fintwind --bin fintwind`.nothrow();
   if (result.exitCode !== 0) {
     console.error("[fintwind-dev] Build failed; keeping the current app open.");
     return false;

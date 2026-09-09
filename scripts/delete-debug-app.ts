@@ -22,7 +22,7 @@ function addCandidate(path: string): void {
 }
 
 function isDebugDiagnostic(name: string): boolean {
-  return /^fintwind Debug(?: Computer Use)?[-_.]/.test(name);
+  return /^fintwind Debug[-_.]/.test(name);
 }
 
 async function addMatchingChildren(
@@ -64,7 +64,6 @@ async function existingTargets(): Promise<Target[]> {
 
 // Checkout-local state and build artifacts. Keep the release cache intact.
 addCandidate(join(projectRoot, "temp"));
-addCandidate(join(projectRoot, ".fintwind-cache", "computer-use", "debug"));
 addCandidate(join(projectRoot, "target", "debug", "fintwind Debug.app"));
 addCandidate(join(projectRoot, "target", "debug", "Fintwind Debug.app"));
 
@@ -85,15 +84,6 @@ addCandidate("/Applications/Fintwind Debug.app");
 
 // Debug-only app data retains the original directory name for compatibility.
 addCandidate(join(library, "Application Support", "Fintwind Debug"));
-addCandidate(
-  join(
-    library,
-    "Application Support",
-    "Fintwind",
-    "Computer Use",
-    "fintwind Debug Computer Use.app",
-  ),
-);
 addCandidate(join(library, "Caches", "Fintwind Debug"));
 addCandidate(join(library, "Logs", "Fintwind Debug"));
 
@@ -152,9 +142,7 @@ for (const target of targets) {
 
 const runningProcesses = [
   "fintwind Debug",
-  "fintwind Debug Computer Use",
   "Fintwind Debug",
-  "Fintwind Debug Computer Use",
 ].filter(
   (name) =>
     Bun.spawnSync(["/usr/bin/pgrep", "-x", name], {

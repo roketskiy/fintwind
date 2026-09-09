@@ -42,7 +42,7 @@ use crate::model::{
 };
 use crate::opencode_pool::PooledServer;
 use crate::opencode_session::{
-    OpenCodeServer, basic_authorization, encode_path_segment, fork_session_removing_turns_on_server,
+    basic_authorization, encode_path_segment, fork_session_removing_turns_on_server,
 };
 
 /// How often the permission poll scans the server's pending requests. The
@@ -114,7 +114,6 @@ pub struct OpenCodeDriver {
     interaction_mode: InteractionMode,
     model: Option<String>,
     reasoning_effort: Option<String>,
-    computer_use: Option<super::support::HeadlessComputerUseRuntime>,
 }
 
 impl OpenCodeDriver {
@@ -129,7 +128,6 @@ impl OpenCodeDriver {
             service_tier: _,
             context_window: _,
             agent_preset: _,
-            computer_use_enabled,
             provider_cursor,
         } = options;
         let resume_session_id = match provider_cursor {
@@ -139,25 +137,9 @@ impl OpenCodeDriver {
             None => None,
         };
 
-        let computer_use = computer_use_enabled
-            .then(|| super::support::HeadlessComputerUseRuntime::start(events.clone()))
-            .transpose()?;
-        // The one-shot path handed Computer Use to OpenCode through the
-        // environment; the resident server takes it exactly the same way.
-        let environment = computer_use
-            .as_ref()
-            .map(|runtime| super::support::opencode_computer_use_environment(&runtime.config))
-            .unwrap_or_default();
-        // Computer Use bakes per-session configuration into the server's
-        // environment, so it keeps a dedicated server. Every other session
-        // shares the workspace's one resident server — OpenCode hosts many
-        // sessions per process, and a second `opencode serve` in the same
-        // workspace contends with the live one.
-        let server = if computer_use.is_some() {
-            PooledServer::dedicated(OpenCodeServer::start_with_env(&binary, &cwd, &environment)?)
-        } else {
-            crate::opencode_pool::acquire(&binary, &cwd)?
-        };
+        // OpenCode hosts many sessions per process, and a second
+        // `opencode serve` in the same workspace contends with the live one.
+        let server = crate::opencode_pool::acquire(&binary, &cwd)?;
 
         // Reuse the native session when resuming so the conversation, and the
         // cursor already persisted for it, stay the same.
@@ -787,7 +769,6 @@ impl OpenCodeDriver {
             mode,
             interaction_mode,
             model,
-            computer_use,
             reasoning_effort,
         })
     }
@@ -962,12 +943,6 @@ impl DriverControl for OpenCodeDriver {
         let _ = self.commands.send(CommandMessage::Cancel);
     }
 
-    fn cancel_computer_use(&self) {
-        if let Some(computer_use) = self.computer_use.as_ref() {
-            computer_use.stop();
-        }
-    }
-
     fn respond(&self, request_id: String, option_id: String) {
         for (request_id, option_id) in
             permission_responses(&self.permissions, &request_id, &option_id)
@@ -1013,7 +988,6 @@ impl DriverControl for OpenCodeDriver {
 
 impl Drop for OpenCodeDriver {
     fn drop(&mut self) {
-        self.cancel_computer_use();
         self.event_stream.cancel();
         // The worker owns the other server lease. Release the UI-owned lease
         // first, then wake the worker so any final terminate/wait happens there.
@@ -3604,7 +3578,7 @@ mod tests {
                 service_tier: None,
                 context_window: None,
                 agent_preset: None,
-                computer_use_enabled: false,
+
                 provider_cursor: None,
             },
             events,
@@ -3692,7 +3666,7 @@ mod tests {
                 service_tier: None,
                 context_window: None,
                 agent_preset: None,
-                computer_use_enabled: false,
+
                 provider_cursor: None,
             },
             events,
@@ -3766,7 +3740,7 @@ mod tests {
                 service_tier: None,
                 context_window: None,
                 agent_preset: None,
-                computer_use_enabled: false,
+
                 provider_cursor: None,
             },
             events,
@@ -3852,7 +3826,7 @@ mod tests {
                 service_tier: None,
                 context_window: None,
                 agent_preset: None,
-                computer_use_enabled: false,
+
                 provider_cursor: None,
             },
             events,
@@ -3988,7 +3962,7 @@ mod tests {
                 service_tier: None,
                 context_window: None,
                 agent_preset: None,
-                computer_use_enabled: false,
+
                 provider_cursor: None,
             },
             events,

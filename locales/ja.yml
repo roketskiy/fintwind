@@ -62,7 +62,6 @@ settings.appearance: 外観
 settings.providers: プロバイダー
 settings.usage: 使用状況
 settings.daemon: デーモン
-settings.computer_use: コンピュータ操作
 settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン
 settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語
 settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
@@ -70,7 +69,6 @@ settings.skills: スキル
 settings.skills_keywords: スキル ライブラリ エージェント 無効 有効 削除 claude codex cursor opencode pi amp 共有
 settings.usage_keywords: 使用状況 トークン コスト 支出 キャッシュ 日別 グラフ モデル 内訳 履歴 claude codex
 settings.daemon_keywords: デーモン サーバー リモート ウェブ ネットワーク 公開 オリジン トークン ポート websocket
-settings.computer_use_keywords: コンピュータ 操作 画面収録 アクセシビリティ アプリ 制御 codex
 settings.back: 戻る
 settings.search: 設定を検索
 settings.mcp_servers: MCPサーバー
@@ -315,21 +313,6 @@ mcp.hint_invalid_url: URLは http:// または https:// で始まる必要があ
 mcp.sync_failed: "OpenCodeのMCP設定を更新できませんでした:%{error}"
 mcp.managed_note: このリストはOpenCode自身の設定ファイル(opencode.json)のmcpセクションです。CLIとTUIも同じサーバーを使い、OpenCodeはファイルをホットリロードします。timeout、cwd、oauth などの追加フィールドはそのまま保持されます。
 
-computer_use.allow_apps: fintwind にアプリの操作を許可
-computer_use.availability: コンピュータ操作は Codex、OpenCode、Grok、Pi で利用できます
-computer_use.macos_access: macOS のアクセス権
-computer_use.helper_access: fintwind の分離された操作ヘルパー %{helper} にアクセスを許可してください
-computer_use.screen_recording: 画面収録
-computer_use.screen_recording_description: 許可されたアプリのウインドウのみを取り込みます
-computer_use.accessibility: アクセシビリティ
-computer_use.accessibility_description: 承認後にポインタとキーボードのイベントを送信します
-computer_use.always_allowed_apps: 常に許可するアプリ
-computer_use.always_allowed_apps_description: fintwind はこれらの許可をアプリの Bundle ID と署名チームに紐付けます
-computer_use.no_always_allowed_apps: 常に許可されているアプリはありません。タスクごとの許可はメモリにのみ保持されます
-computer_use.access_granted: アクセス許可済み
-computer_use.grant_access: アクセスを許可
-computer_use.permission_check_failed: コンピュータ操作の権限を確認できませんでした
-
 common.settings: 設定
 common.copy: コピー
 common.remove: 削除
@@ -532,19 +515,6 @@ agent_preset.creator_description: カスタムエージェントプリセット�
 agent_preset.custom: カスタム
 agent_preset.no_description: 説明はありません。
 agent_preset.minimal_no_plan: ミニマルモードにはプラン機能がありません
-
-computer_use.allow_for_task: このタスクで許可
-computer_use.always_allow_app: このアプリを常に許可
-computer_use.allow_control: fintwind に「%{app}」の操作を許可しますか？
-computer_use.screenshot_shared: このウインドウのスクリーンショットが、使用中の Codex モデルと共有されます
-computer_use.sensitive_action: この操作ではテキストの入力やキー操作が行われる可能性があります
-computer_use.bundle_id: "Bundle ID：%{id}"
-computer_use.no_bundle_id: このアプリには Bundle ID がないため、常に許可することはできません
-computer_use.stopped: 停止しました
-computer_use.controlling: 操作中
-computer_use.captured: キャプチャ済み
-computer_use.take_control: 操作を引き継ぐ
-computer_use.preparing_preview: プレビューを準備中…
 
 common.deny: 拒否
 
@@ -783,7 +753,6 @@ errors.read_provider_event_stream: "%{provider} のイベントストリーム�
 errors.answer_provider_permission: "%{provider} の権限リクエストに回答できませんでした：%{error}"
 errors.answer_provider_question: "%{provider} の質問に回答できませんでした：%{error}"
 errors.initialize_codex_app_server: Codex app-server を初期化できませんでした
-errors.register_computer_use_skill: fintwind のコンピュータ操作スキルを Codex に登録できませんでした
 errors.codex_thread_open_incomplete: Codex はスレッドを開く処理を完了しませんでした
 errors.provider_receive_prompt: "%{provider} はプロンプトを受信できませんでした"
 errors.provider_start_turn: "%{provider} はターンを開始できませんでした"

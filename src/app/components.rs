@@ -1528,7 +1528,7 @@ mod message_time_tests {
             true,
         )
         .with_arguments(Some("{\n  \"actions\": []\n}".into()))
-        .with_output(Some("Computer Use helper closed its session".into()))
+        .with_output(Some("tool closed its session".into()))
         .with_failed(true);
 
         assert_eq!(
@@ -1540,19 +1540,19 @@ mod message_time_tests {
                 },
                 ActivityDisclosureSection {
                     kind: ActivityDisclosureSectionKind::Output,
-                    content: "Computer Use helper closed its session".into(),
+                    content: "tool closed its session".into(),
                 },
             ]
         );
         assert_eq!(
             activity_disclosure_text(&activity).as_deref(),
             Some(
-                "Arguments\n{\n  \"actions\": []\n}\n\nOutput\nComputer Use helper closed its session"
+                "Arguments\n{\n  \"actions\": []\n}\n\nOutput\ntool closed its session"
             )
         );
         assert_eq!(
             activity_preview(&activity),
-            "Computer Use helper closed its session"
+            "tool closed its session"
         );
 
         let image_only = ActivityItem::new(

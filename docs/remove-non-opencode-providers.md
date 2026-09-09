@@ -119,7 +119,7 @@ Fintwind 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CL
 7. `src/git_commit.rs`：commit 消息生成只留 OpenCode 分支；`AgentInvocation` 调用点删除 provider 传参。
 8. `src/usage.rs`：删 `fetch_claude_plan_usage`、`fetch_codex_plan_usage`、Grok fetch（若有）；只留 `fetch_opencode_go_plan_usage` 及其辅助。
 9. `src/model_catalog.rs`：删其他 provider 的模型发现（throwaway 进程探测、ACP handshake 目录等），只留 OpenCode 的。
-10. `src/daemon.rs`、`src/server.rs`、`src/persistence.rs`、`src/workspace.rs`、`src/projectless.rs`、`src/computer_use.rs`（若含 provider 分支）、`src/checkpoint.rs`：清理 provider 参数与分支；`provider_probe`、`fetch_plan_usage` 处理器不再按 provider 分发。
+10. `src/daemon.rs`、`src/server.rs`、`src/persistence.rs`、`src/workspace.rs`、`src/projectless.rs`、`src/checkpoint.rs`：清理 provider 参数与分支；`provider_probe`、`fetch_plan_usage` 处理器不再按 provider 分发。
 11. `src/settings.rs`：`DaemonSettings` 读写适配新结构；旧设置文件中的 `disabled_providers`/`provider_binary_overrides` 在读取时忽略（serde 默认丢未知字段，确认无 `deny_unknown_fields`）。
 12. `crates/fintwind-client/src/persistence.rs`、`crates/fintwind-client/src/composer_complete.rs`：同步清理。
 13. 核心层测试：`server.rs`、`settings.rs`、`git_commit.rs`、`composer_complete.rs`、`skills.rs`、`usage.rs` 等测试的 fixture 全部改为 OpenCode 路径；删除针对已删驱动的测试（codex/claude/pi/amp/acp/deepseek 的单元与 `#[ignore]` 集成测试）。
@@ -152,7 +152,7 @@ Fintwind 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CL
 
 1. 删除 `assets/icons/provider-{amp,claude,cursor,deepseek,grok,openai,pi}.svg`，保留 `provider-opencode.svg`。
 2. `locales/app.yml`、`ja.yml`、`zh-CN.yml`：删除 `providers.*`、`settings.providers*`、`usage_error.*`（claude/codex 相关）、`usage.*` 历史页相关键；保留 OpenCode 相关；核对 `mode.*`（访问模式文案仍通用）。
-3. `docs/providers.md`：重写为单 provider 文档（OpenCode serve 传输、approval、steer、fork、model discovery、computer use）。
+3. `docs/providers.md`：重写为单 provider 文档（OpenCode serve 传输、approval、steer、fork、model discovery）。
 4. `AGENTS.md`、`README.md`、`CHANGELOG.md`、`website/`：更新产品描述（"supports OpenCode"）。
 5. `db/schema.ts`：`sessions.provider` 列**保留**（text，旧数据继续存在）；`bun run db:generate` 确认无新迁移产生。
 6. `.github/workflows`、`scripts/`：检查是否有 provider 相关的 CI/打包引用。
@@ -186,8 +186,7 @@ Fintwind 目前集成了 8 个 coding-agent CLI：**Amp、Claude Code、Codex CL
 2. **测试面大**：`src/app/tests.rs`、`server.rs` 等大量测试以 `ProviderKind::Codex` 为默认 fixture，删除类型后编译错误会集中爆发；建议在阶段 0 就批量替换为无参构造，而不是等编译器逐个报错。
 3. **Web 端生成代码**：`generated/*.ts` 由 ts-rs 生成，必须与 Rust 端同步重新生成，否则 TS 编译失败；CI 中若有生成校验需保持一致。
 4. **usage 页面删除影响面**：`usage_page.rs` 入口在 sidebar/composer 多处；删除时同步清理路由、locale 键、`daemon-api.ts` 中的 `LoadUsageHistory`/`UsageHistory` 消息与 `fintwind-client` 类型。
-5. **`computer_use`**：目前 Codex/Pi/OpenCode/Grok 各自实现；只保留 OpenCode 的 `OPENCODE_CONFIG_CONTENT` 路径，确认 `computer_use.rs` 与 `src/computer_use.rs` 无其他 provider 残留。
-6. **`agent_preset`**：目前仅 DeepSeek Harness 使用；删除 DeepSeek 后可评估是否移除该字段（保留亦可，OpenCode 无需）。
+5. **`agent_preset`**：目前仅 DeepSeek Harness 使用；删除 DeepSeek 后可评估是否移除该字段（保留亦可，OpenCode 无需）。 Computer Use 已从产品中移除，不再作为 provider 残留项。
 7. **icon 引用**：`ui/mod.rs` 与 web `fintwind-icon.tsx` 引用图标路径，删除 svg 前先清引用，避免 asset 加载报错。
 
 ## 7. 验收标准

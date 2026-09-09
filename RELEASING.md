@@ -122,8 +122,8 @@ Cloudflare, `no_check_bucket = true`) is shared with kero and needs no change.
    ```
 
 The script checks R2 up front (bucket reachable, version not already
-published), builds and signs the app via `scripts/bundle.sh release`, verifies
-the bundled JS REPL and computer-use helper, builds the styled DMG, notarizes
+published), builds and signs the app via `scripts/bundle.sh release`, builds
+the styled DMG, notarizes
 and staples DMG + app, zips the app for Sparkle, pulls the recent archives
 from R2 so `generate_appcast` can build binary deltas, attaches the changelog
 section as release notes, regenerates the signed `appcast.xml`, and uploads

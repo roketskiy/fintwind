@@ -22,7 +22,6 @@ pub mod blob_store;
 pub mod checkpoint;
 pub mod command_env;
 pub mod composer_complete;
-pub mod computer_use;
 pub mod daemon;
 pub mod driver;
 pub mod git_branch;
@@ -43,14 +42,13 @@ pub mod usage;
 pub mod workspace;
 pub mod worktree;
 
-mod fs_ext;
 mod protocol;
 mod server;
 
 pub use protocol::{
     APP_EXECUTABLE_ENV, ClientMessage, Command, DAEMON_ADDRESS_ENV, DAEMON_TOKEN_ENV, DaemonReady,
     PROTOCOL_VERSION, ReplayCursor, Request, ResponseOutcome, ResponsePayload, RpcError,
-    SequencedEvent, ServerMessage, WireComputerToolRequest, WireDriverEvent,
+    SequencedEvent, ServerMessage, WireDriverEvent,
     WireDriverStartOptions, WireSessionOptions,
 };
 pub use server::{Backend, EventSink, ServerOptions, serve};

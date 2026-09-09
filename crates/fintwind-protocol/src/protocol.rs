@@ -6,7 +6,6 @@ use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::attachments::{AttachmentUpload, StoredAttachment};
-use crate::computer_use::ComputerPermissions;
 use crate::model::{AgentSession, Project, ProviderProbe, UserInputAnswer};
 use crate::persistence::{ComposerDraftChange, ComposerDrafts, SessionMessageMatch};
 use crate::provider_session::{
@@ -17,7 +16,7 @@ use crate::skills::SkillsCatalog;
 use crate::usage::PlanUsage;
 use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const MAX_WIRE_MESSAGE_BYTES: usize = 48 * 1024 * 1024;
 pub const DAEMON_TOKEN_ENV: &str = "FINTWIND_DAEMON_TOKEN";
 pub const DAEMON_ADDRESS_ENV: &str = "FINTWIND_DAEMON_ADDRESS";
@@ -95,7 +94,6 @@ pub enum Command {
     /// and the provider coalesces repeated requests while one is pending.
     CompactSession,
     Cancel,
-    CancelComputerUse,
     RefreshBackgroundWork,
     StopBackgroundWork {
         key: Value,
@@ -108,13 +106,6 @@ pub enum Command {
     RespondUserInput {
         request_id: String,
         answers: Vec<UserInputAnswer>,
-    },
-    RunComputerTool {
-        request: WireComputerToolRequest,
-    },
-    RejectComputerTool {
-        request: WireComputerToolRequest,
-        reason: String,
     },
     ApplyOptions {
         options: WireSessionOptions,
@@ -137,9 +128,6 @@ pub enum Command {
     FetchPlanUsage {
         binary_override: Option<String>,
         cli_version: Option<String>,
-    },
-    ProbeComputerPermissions {
-        prompt: bool,
     },
     LoadSkills {
         projects: Vec<(String, PathBuf)>,
@@ -281,7 +269,6 @@ pub struct WireDriverStartOptions {
     pub service_tier: Option<String>,
     pub context_window: Option<String>,
     pub agent_preset: Option<String>,
-    pub computer_use_enabled: bool,
     pub provider_cursor: Option<Value>,
 }
 
@@ -294,14 +281,6 @@ pub struct WireSessionOptions {
     pub reasoning_effort: Option<String>,
     pub service_tier: Option<String>,
     pub context_window: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct WireComputerToolRequest {
-    pub call_id: String,
-    pub tool: String,
-    pub arguments: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
@@ -402,9 +381,6 @@ pub enum ResponsePayload {
     },
     PlanUsage {
         usage: Option<PlanUsage>,
-    },
-    ComputerPermissions {
-        permissions: ComputerPermissions,
     },
     SkillsCatalog {
         catalog: SkillsCatalog,
@@ -532,7 +508,7 @@ mod tests {
 
         assert_eq!(json["type"], "forkSessionFromResponse");
         assert_eq!(json["turnCount"], 7);
-        assert_eq!(PROTOCOL_VERSION, 4);
+        assert_eq!(PROTOCOL_VERSION, 5);
     }
 
     #[test]
@@ -541,7 +517,7 @@ mod tests {
 
         assert_eq!(json["type"], "rewindSessionToMessage");
         assert_eq!(json["turnCount"], 4);
-        assert_eq!(PROTOCOL_VERSION, 4);
+        assert_eq!(PROTOCOL_VERSION, 5);
     }
 
     #[test]

@@ -753,7 +753,6 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
             {
               type: 'start',
               options: {
-                provider: session.provider,
                 binary: startup!.probe.path!,
                 cwd: sessionCwd(session, project),
                 mode: session.runtime_mode,
@@ -763,7 +762,6 @@ export function RuntimeProvider({ children }: { children: ReactNode }) {
                 serviceTier: session.service_tier ?? null,
                 contextWindow: session.context_window ?? null,
                 agentPreset: session.agent_preset ?? null,
-                computerUseEnabled: false,
                 providerCursor: session.provider_cursor as never,
               },
             },

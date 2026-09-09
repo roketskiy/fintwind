@@ -200,37 +200,6 @@ pub fn show_task_notification(tag: &str, title: &str, body: &str, cx: &gpui::App
     });
 }
 
-#[cfg(target_os = "macos")]
-pub fn load_app_icon_for_bundle_id(bundle_id: &str) -> Option<std::sync::Arc<gpui::Image>> {
-    use objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep, NSWorkspace};
-    use objc2_foundation::{NSDictionary, NSSize, NSString};
-
-    let bundle_id = NSString::from_str(bundle_id);
-    let workspace = NSWorkspace::sharedWorkspace();
-    let application_url = workspace.URLForApplicationWithBundleIdentifier(&bundle_id)?;
-    let application_path = application_url.path()?;
-    let image = workspace.iconForFile(&application_path);
-    image.setSize(NSSize::new(32.0, 32.0));
-    let tiff_data = image.TIFFRepresentation()?;
-    let bitmap_rep = NSBitmapImageRep::imageRepWithData(&tiff_data)?;
-    let properties = NSDictionary::new();
-    let png_data = unsafe {
-        bitmap_rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &properties)
-    }?;
-    let bytes = unsafe { png_data.as_bytes_unchecked() };
-    (!bytes.is_empty()).then(|| {
-        std::sync::Arc::new(gpui::Image::from_bytes(
-            gpui::ImageFormat::Png,
-            bytes.to_vec(),
-        ))
-    })
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn load_app_icon_for_bundle_id(_: &str) -> Option<std::sync::Arc<gpui::Image>> {
-    None
-}
-
 /// Select `path` in the platform file manager. GPUI dispatches Linux portal
 /// and subprocess work away from the UI thread.
 pub fn reveal_in_file_manager(path: &std::path::Path, cx: &gpui::App) {
@@ -396,8 +365,17 @@ pub fn configure_sidebar_material(window: &Window, dark: bool) {
             return;
         }
 
-        let channel = if dark { 0x18 } else { 0xF3 } as f64 / 255.0;
-        let tint = NSColor::colorWithSRGBRed_green_blue_alpha(channel, channel, channel, 0.92);
+        let tint = if dark {
+            let channel = 0x18 as f64 / 255.0;
+            NSColor::colorWithSRGBRed_green_blue_alpha(channel, channel, channel, 0.92)
+        } else {
+            NSColor::colorWithSRGBRed_green_blue_alpha(
+                0xEC as f64 / 255.0,
+                0xE8 as f64 / 255.0,
+                0xE1 as f64 / 255.0,
+                0.92,
+            )
+        };
 
         SIDEBAR_TINT_VIEW.with_borrow_mut(|slot| {
             let needs_new_view = slot.as_ref().is_none_or(|tint_view| {

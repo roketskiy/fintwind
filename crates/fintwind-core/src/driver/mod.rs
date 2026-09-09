@@ -1,7 +1,6 @@
 //! Local provider runtime owned by `fintwind-daemon`.
 
 mod activity;
-mod computer_use;
 pub(crate) mod native;
 mod opencode;
 mod support;
@@ -11,7 +10,6 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, SendError, Sender, unbounded};
 
-use crate::computer_use::ComputerToolRequest;
 use crate::model::{
     BackgroundWorkKey, DriverEvent, InteractionMode, ProviderResumeCursor, RuntimeMode,
     UserInputAnswer,
@@ -97,10 +95,6 @@ impl DriverHandle {
         self.inner.cancel();
     }
 
-    pub fn cancel_computer_use(&self) {
-        self.inner.cancel_computer_use();
-    }
-
     pub fn refresh_background_work(&self) {
         self.inner.refresh_background_work();
     }
@@ -115,14 +109,6 @@ impl DriverHandle {
 
     pub fn respond_user_input(&self, request_id: String, answers: Vec<UserInputAnswer>) {
         self.inner.respond_user_input(request_id, answers);
-    }
-
-    pub fn run_computer_tool(&self, request: ComputerToolRequest) {
-        self.inner.run_computer_tool(request);
-    }
-
-    pub fn reject_computer_tool(&self, request: ComputerToolRequest, reason: String) {
-        self.inner.reject_computer_tool(request, reason);
     }
 
     pub fn apply_options(&self, options: SessionOptions) -> bool {
@@ -153,13 +139,10 @@ pub trait DriverControl: Send + Sync {
     /// through `DriverEvent::CompactionUpdated`.
     fn compact(&self) {}
     fn cancel(&self);
-    fn cancel_computer_use(&self) {}
     fn refresh_background_work(&self) {}
     fn stop_background_work(&self, _key: BackgroundWorkKey, _control_id: String) {}
     fn respond(&self, request_id: String, option_id: String);
     fn respond_user_input(&self, _request_id: String, _answers: Vec<UserInputAnswer>) {}
-    fn run_computer_tool(&self, _request: ComputerToolRequest) {}
-    fn reject_computer_tool(&self, _request: ComputerToolRequest, _reason: String) {}
     /// Applies changed turn options to the live session, returning whether the
     /// transport could do it without being restarted. A `false` answer is the
     /// driver asking to be torn down and recreated with the new options.
@@ -182,7 +165,6 @@ pub struct DriverStartOptions {
     pub service_tier: Option<String>,
     pub context_window: Option<String>,
     pub agent_preset: Option<String>,
-    pub computer_use_enabled: bool,
     pub provider_cursor: Option<ProviderResumeCursor>,
 }
 

@@ -33,7 +33,7 @@ pub(crate) struct PooledServer {
 
 struct PoolInner {
     server: OpenCodeServer,
-    /// Dedicated Computer Use servers do not participate in a workspace slot.
+    /// Dedicated servers do not participate in a workspace slot.
     slot: Option<Weak<PoolSlot>>,
 }
 
@@ -72,9 +72,8 @@ impl Deref for PooledServer {
 }
 
 impl PooledServer {
-    /// Wraps a server a session started for itself. Computer Use bakes
-    /// per-session configuration into the server environment, so those
-    /// sessions cannot share a workspace server and keep this path.
+    /// Wraps a server a session started for itself, outside the workspace pool.
+    #[cfg(test)]
     pub(crate) fn dedicated(server: OpenCodeServer) -> Self {
         Self {
             inner: Arc::new(PoolInner { server, slot: None }),

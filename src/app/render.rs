@@ -259,7 +259,6 @@ impl Render for Fintwind {
         let theme = Theme::current(cx);
         let empty = should_render_empty_state(self.selected_session());
         let permission = self.render_permission(cx);
-        let computer_use = self.render_computer_use_overlay(cx);
         let command_palette = self.render_command_palette(window, cx);
         let commit_dialog = self.render_commit_dialog(cx);
         let toast = self.render_active_toast(cx);
@@ -351,7 +350,6 @@ impl Render for Fintwind {
                         element.child(self.render_task_capsule(cx))
                     })
                     .children(toast)
-                    .children(computer_use)
                     .when(self.sidebar_visible, |element| {
                         element.child(self.render_panel_resize_handle(
                             "sidebar-resize-handle",

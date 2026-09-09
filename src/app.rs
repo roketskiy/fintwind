@@ -22,10 +22,6 @@ use uuid::Uuid;
 use crate::app::background_work::TodoSummary;
 use crate::checkpoint;
 use crate::composer_complete::{FileEntry, SlashCommand};
-use crate::computer_use::{
-    ComputerPermissions, ComputerTarget, ComputerUsePhase, ComputerUseState,
-    PendingComputerApproval,
-};
 use crate::driver::{self, DriverHandle, DriverStartOptions, SessionOptions};
 use crate::git_branch::BranchSnapshot;
 use crate::input::{ComposerAttachmentPaste, ComposerEvent, ComposerInput};
@@ -222,17 +218,7 @@ enum SettingsPage {
     Skills,
     McpServers,
     Daemon,
-    ComputerUse,
     Appearance,
-}
-
-impl SettingsPage {
-    /// Computer Use is still experimental, so only development builds expose
-    /// its navigation entry points. Keeping this decision on the page itself
-    /// makes the Settings sidebar and command palette use the same gate.
-    fn is_visible_in_navigation(self) -> bool {
-        self != Self::ComputerUse || cfg!(all(debug_assertions, target_os = "macos"))
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -846,10 +832,6 @@ struct SessionRuntime {
     provider_phase: Option<ProviderPhase>,
     pending_permission: Option<PendingPermission>,
     pending_user_input: Option<PendingUserInput>,
-    pending_computer_approval: Option<PendingComputerApproval>,
-    /// Back-to-front stack of window previews captured during the active turn.
-    computer_use_previews: Vec<ComputerUsePreview>,
-    computer_session_grants: HashSet<String>,
     last_driver_error: Option<String>,
     /// When this session last sent or received anything, for idle reaping.
     last_active_at: Instant,
@@ -906,13 +888,6 @@ impl PendingUserInput {
             })
             .collect()
     }
-}
-
-struct ComputerUsePreview {
-    target: Option<ComputerTarget>,
-    phase: ComputerUsePhase,
-    visible: bool,
-    screenshot: Option<Arc<gpui::Image>>,
 }
 
 #[derive(Debug, Default)]
@@ -1078,10 +1053,6 @@ pub struct Fintwind {
     provider_detection_remaining: usize,
     /// When provider detection last completed, for the page's "Checked" label.
     provider_detection_checked_at: Option<Instant>,
-    computer_permissions: ComputerPermissions,
-    computer_permission_tx: Sender<Result<ComputerPermissions, String>>,
-    computer_permission_events: Receiver<Result<ComputerPermissions, String>>,
-    computer_permission_request_pending: bool,
     /// Account rate-limit meters, fetched off-thread (OpenCode Go over HTTPS)
     /// and refreshed live by OpenCode's own stream. Frames read only this
     /// snapshot.
@@ -1101,8 +1072,6 @@ pub struct Fintwind {
     plan_usage_checked_at: HashMap<String, Instant>,
     /// Turns that settled since the last fetch, so the meters have moved.
     plan_usage_stale: HashSet<String>,
-    computer_use_app_icons: RefCell<HashMap<String, Option<std::sync::Arc<gpui::Image>>>>,
-    computer_use_app_icon_loads: RefCell<HashSet<String>>,
     model_picker_tab: ModelPickerTab,
     /// Keyboard cursor over the model picker's filtered rows. `None` means the
     /// keyboard has not moved yet, so `enter` takes the first row.
@@ -2257,35 +2226,9 @@ impl Fintwind {
         let (provider_probe_tx, provider_probe_events) = unbounded();
         let (provider_version_tx, provider_version_events) = unbounded();
         let (provider_detection_tx, provider_detection_events) = unbounded();
-        let (computer_permission_tx, computer_permission_events) = unbounded();
         let (plan_usage_tx, plan_usage_events) = unbounded();
         let (event_wake_tx, event_wake_events) = smol::channel::bounded(1);
         let (task_state_sync_tx, task_state_sync_events) = unbounded();
-        #[cfg(target_os = "macos")]
-        {
-            let computer_permission_tx = computer_permission_tx.clone();
-            let event_wake = event_wake_tx.clone();
-            let daemon = daemon.client();
-            std::thread::Builder::new()
-                .name("fintwind-computer-permission-probe".into())
-                .spawn(move || {
-                    let result = match daemon.request(
-                        Uuid::nil(),
-                        Uuid::nil(),
-                        fintwind_client::Command::ProbeComputerPermissions { prompt: false },
-                    ) {
-                        Ok(fintwind_client::ResponsePayload::ComputerPermissions { permissions }) => {
-                            Ok(permissions)
-                        }
-                        Ok(_) => Err("the daemon returned an invalid permission response".into()),
-                        Err(error) => Err(error.to_string()),
-                    };
-                    if computer_permission_tx.send(result).is_ok() {
-                        signal_event_pump(&event_wake);
-                    }
-                })
-                .ok();
-        }
         let model_picker_tab = ModelPickerTab::Provider("OpenCode".into());
         let mut session_navigation = SessionNavigation::default();
         if let Some(session_id) = state.selected_session.filter(|session_id| {
@@ -2401,9 +2344,6 @@ impl Fintwind {
                     // app had focus — a checkout in a terminal, an edit in an
                     // editor. Coming back is the moment to re-check.
                     this.invalidate_workspace_queries(cx);
-                    if this.settings_page == Some(SettingsPage::ComputerUse) {
-                        this.request_computer_permissions(false, cx);
-                    }
                     // Skill files are routinely edited in another app; coming
                     // back to the window is the moment to re-read them.
                     if this.settings_page == Some(SettingsPage::Skills) {
@@ -2896,10 +2836,6 @@ impl Fintwind {
                 provider_detection_events,
                 provider_detection_remaining: 0,
                 provider_detection_checked_at: None,
-                computer_permissions: ComputerPermissions::default(),
-                computer_permission_tx,
-                computer_permission_events,
-                computer_permission_request_pending: false,
                 plan_usage: HashMap::new(),
                 plan_usage_error: HashMap::new(),
                 plan_usage_tx,
@@ -2908,8 +2844,6 @@ impl Fintwind {
                 plan_usage_unconfigured: HashSet::new(),
                 plan_usage_checked_at: HashMap::new(),
                 plan_usage_stale: HashSet::new(),
-                computer_use_app_icons: RefCell::new(HashMap::new()),
-                computer_use_app_icon_loads: RefCell::new(HashSet::new()),
                 model_picker_tab,
                 model_picker_highlight: None,
                 model_picker_scroll: ScrollHandle::new(),

@@ -2,7 +2,6 @@
 
 use std::sync::Arc;
 
-use crate::computer_use::ComputerToolRequest;
 use crate::model::{
     BackgroundWorkKey, DriverEvent, ProviderResumeCursor, RuntimeEventCursor,
 };
@@ -30,7 +29,6 @@ pub(crate) fn start_remote(
             service_tier: options.service_tier,
             context_window: options.context_window,
             agent_preset: options.agent_preset,
-            computer_use_enabled: options.computer_use_enabled,
             provider_cursor: options
                 .provider_cursor
                 .map(serde_json::to_value)
@@ -170,10 +168,6 @@ impl DriverControl for RemoteDriverControl {
         self.notify(fintwind_client::Command::Cancel);
     }
 
-    fn cancel_computer_use(&self) {
-        self.notify(fintwind_client::Command::CancelComputerUse);
-    }
-
     fn refresh_background_work(&self) {
         self.notify(fintwind_client::Command::RefreshBackgroundWork);
     }
@@ -204,27 +198,6 @@ impl DriverControl for RemoteDriverControl {
         self.notify(fintwind_client::Command::RespondUserInput {
             request_id,
             answers,
-        });
-    }
-
-    fn run_computer_tool(&self, request: ComputerToolRequest) {
-        self.notify(fintwind_client::Command::RunComputerTool {
-            request: fintwind_client::WireComputerToolRequest {
-                call_id: request.call_id,
-                tool: request.tool,
-                arguments: request.arguments,
-            },
-        });
-    }
-
-    fn reject_computer_tool(&self, request: ComputerToolRequest, reason: String) {
-        self.notify(fintwind_client::Command::RejectComputerTool {
-            request: fintwind_client::WireComputerToolRequest {
-                call_id: request.call_id,
-                tool: request.tool,
-                arguments: request.arguments,
-            },
-            reason,
         });
     }
 

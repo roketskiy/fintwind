@@ -16,7 +16,6 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::attachments::AttachmentStore;
-use crate::computer_use::{ComputerTarget, ComputerUsePhase, ComputerUseState};
 use crate::driver::{self, DriverHandle, DriverStartOptions, SessionOptions};
 use crate::model::{
     ActivityKind, AgentSession, Checkpoint, CheckpointStatus, DriverEvent, PermissionOption,
@@ -222,11 +221,6 @@ impl Backend for FintwindBackend {
             } => {
                 let usage = crate::usage::fetch_opencode_go_plan_usage()?;
                 Ok(ResponsePayload::PlanUsage { usage })
-            }
-            Command::ProbeComputerPermissions { prompt } => {
-                Ok(ResponsePayload::ComputerPermissions {
-                    permissions: crate::computer_use::probe_permissions(prompt)?,
-                })
             }
             Command::LoadSkills { projects } => {
                 let locations = crate::skills::skill_locations(&projects);
@@ -565,7 +559,6 @@ impl Backend for FintwindBackend {
                     service_tier: options.service_tier,
                     context_window: options.context_window,
                     agent_preset: options.agent_preset,
-                    computer_use_enabled: options.computer_use_enabled,
                     provider_cursor: options
                         .provider_cursor
                         .map(serde_json::from_value)
@@ -1126,7 +1119,6 @@ fn handle_driver_command(
         Command::Steer { prompt } => driver.steer(prompt),
         Command::CompactSession => driver.compact(),
         Command::Cancel => driver.cancel(),
-        Command::CancelComputerUse => driver.cancel_computer_use(),
         Command::RefreshBackgroundWork => driver.refresh_background_work(),
         Command::StopBackgroundWork { key, control_id } => {
             driver.stop_background_work(
@@ -1142,23 +1134,6 @@ fn handle_driver_command(
             request_id,
             answers,
         } => driver.respond_user_input(request_id, answers),
-        Command::RunComputerTool { request } => {
-            driver.run_computer_tool(crate::computer_use::ComputerToolRequest {
-                call_id: request.call_id,
-                tool: request.tool,
-                arguments: request.arguments,
-            });
-        }
-        Command::RejectComputerTool { request, reason } => {
-            driver.reject_computer_tool(
-                crate::computer_use::ComputerToolRequest {
-                    call_id: request.call_id,
-                    tool: request.tool,
-                    arguments: request.arguments,
-                },
-                reason,
-            );
-        }
         Command::ApplyOptions { options } => {
             return Ok(ResponsePayload::OptionsApplied {
                 applied: driver.apply_options(SessionOptions {
@@ -1188,7 +1163,6 @@ fn handle_driver_command(
         | Command::UpdateSettings { .. }
         | Command::ProbeProvider { .. }
         | Command::FetchPlanUsage { .. }
-        | Command::ProbeComputerPermissions { .. }
         | Command::LoadSkills { .. }
         | Command::SetSkillsEnabled { .. }
         | Command::TrashSkills { .. }
@@ -1305,15 +1279,6 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
                 "questions": questions,
             }),
         ),
-        DriverEvent::ComputerUseUpdated(state) => (
-            "computerUseUpdated",
-            serde_json::to_value(ComputerUseWire {
-                target: state.target,
-                phase: state.phase,
-                visible: state.visible,
-                image_url: state.image_url,
-            })?,
-        ),
         DriverEvent::SteerAccepted { message } => ("steerAccepted", json!({ "message": message })),
         DriverEvent::SteerRejected { message, reason } => (
             "steerRejected",
@@ -1405,15 +1370,6 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
                 questions: request.questions,
             }
         }
-        "computerUseUpdated" => {
-            let state: ComputerUseWire = serde_json::from_value(payload)?;
-            DriverEvent::ComputerUseUpdated(ComputerUseState {
-                target: state.target,
-                phase: state.phase,
-                visible: state.visible,
-                image_url: state.image_url,
-            })
-        }
         "steerAccepted" => {
             let steer: AcceptedSteerWire = serde_json::from_value(payload)?;
             DriverEvent::SteerAccepted {
@@ -1488,15 +1444,6 @@ struct PermissionWire {
 struct UserInputWire {
     request_id: String,
     questions: Vec<crate::model::UserInputQuestion>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ComputerUseWire {
-    target: Option<ComputerTarget>,
-    phase: ComputerUsePhase,
-    visible: bool,
-    image_url: Option<String>,
 }
 
 #[derive(Deserialize)]

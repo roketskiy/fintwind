@@ -1,10 +1,10 @@
 //! Daemon-owned content-addressed storage for binary task payloads.
 //!
 //! Screenshots arrive from providers as `data:` URLs. Keeping them inline in
-//! the transcript is what made the old single-file state unusable: one
-//! computer-use session reached 8 MB, base64 inflates the payload by a third,
-//! and every render decoded the string again. Blobs live in files instead, and
-//! the transcript keeps only a `fintwind-blob:` reference.
+//! the transcript is what made the old single-file state unusable: a long
+//! session could reach several megabytes, base64 inflates the payload by a
+//! third, and every render decoded the string again. Blobs live in files
+//! instead, and the transcript keeps only a `fintwind-blob:` reference.
 
 use std::fs;
 use std::io;

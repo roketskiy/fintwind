@@ -16,9 +16,7 @@ import { extractReleaseNotes } from "./changelog";
 
 const appName = "fintwind";
 const executableName = "fintwind";
-const jsReplExecutableName = "fintwind_js_repl";
 const daemonExecutableName = "fintwind-daemon";
-const computerUseHelperName = "fintwind Computer Use";
 const packageName = "fintwind";
 const defaultNotaryProfile = "NOTARY";
 const projectRoot = resolve(import.meta.dir, "..");
@@ -46,8 +44,7 @@ Options:
                                 default derives a monotonic number from the
                                 Cargo version)
   --volume-name <name>          Mounted DMG name (default: fintwind)
-  --skip-build                  Reuse target/release/fintwind, fintwind_js_repl, and
-                                fintwind-daemon
+  --skip-build                  Reuse target/release/fintwind and fintwind-daemon
   --skip-notarize               Unnotarized signed DMG (implies --local)
   --adhoc                       Ad-hoc sign, no notarization (implies --local)
   --help                        Show this help
@@ -270,105 +267,19 @@ const releaseDirectory = resolve(
   "release",
 );
 const releaseExecutable = join(releaseDirectory, "fintwind");
-const releaseJsReplExecutable = join(
-  releaseDirectory,
-  jsReplExecutableName,
-);
 const releaseDaemonExecutable = join(releaseDirectory, daemonExecutableName);
 const appBundle = join(releaseDirectory, `${appName}.app`);
 const contentsDirectory = join(appBundle, "Contents");
-const bundledJsReplExecutable = join(
-  contentsDirectory,
-  "Resources",
-  jsReplExecutableName,
-);
 const bundledDaemonExecutable = join(
   contentsDirectory,
   "MacOS",
   daemonExecutableName,
-);
-const bundledComputerUseSkill = join(
-  contentsDirectory,
-  "Resources",
-  "skills",
-  "fintwind-computer-use",
-  "SKILL.md",
-);
-const bundledPiComputerUseExtension = join(
-  contentsDirectory,
-  "Resources",
-  "computer-use",
-  "pi-extension.ts",
-);
-const bundledComputerUseHelper = join(
-  contentsDirectory,
-  "Helpers",
-  `${computerUseHelperName}.app`,
 );
 const bundledSparkleFramework = join(
   contentsDirectory,
   "Frameworks",
   "Sparkle.framework",
 );
-
-async function verifyJavaScriptRepl(executable: string): Promise<void> {
-  const child = Bun.spawn([executable], {
-    stdin: "pipe",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const requests = [
-    {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: {
-        protocolVersion: "2025-06-18",
-        capabilities: {},
-        clientInfo: { name: "fintwind-release", version: "1" },
-      },
-    },
-    { jsonrpc: "2.0", id: 2, method: "tools/list", params: {} },
-    {
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: {
-        name: "js",
-        arguments: { code: "nodeRepl.write(typeof sky);" },
-      },
-    },
-  ];
-  child.stdin.write(
-    `${requests.map((request) => JSON.stringify(request)).join("\n")}\n`,
-  );
-  child.stdin.end();
-  const stdout = await new Response(child.stdout).text();
-  const stderr = await new Response(child.stderr).text();
-  const exitCode = await child.exited;
-  if (exitCode !== 0) {
-    throw new Error(
-      `Bundled JavaScript REPL exited with ${exitCode}: ${stderr.trim()}`,
-    );
-  }
-  const responses = stdout
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => JSON.parse(line));
-  const tools = responses
-    .find((response) => response.id === 2)
-    ?.result?.tools?.map((tool: { name?: string }) => tool.name);
-  if (JSON.stringify(tools) !== JSON.stringify(["js", "js_reset"])) {
-    throw new Error(
-      `Bundled JavaScript REPL exposed unexpected tools: ${stdout}`,
-    );
-  }
-  const lazySky = responses.find((response) => response.id === 3)
-    ?.result?.content?.[0]?.text;
-  if (lazySky !== "undefined") {
-    throw new Error(`Bundled JavaScript REPL initialized sky eagerly: ${stdout}`);
-  }
-}
 
 if (extname(outputPath).toLowerCase() !== ".dmg") {
   throw new Error(`Output path must end in .dmg: ${outputPath}`);
@@ -392,7 +303,6 @@ try {
   if (values["skip-build"]) {
     for (const executable of [
       releaseExecutable,
-      releaseJsReplExecutable,
       releaseDaemonExecutable,
     ]) {
       try {
@@ -415,10 +325,6 @@ try {
   for (const artifact of [
     join(contentsDirectory, "MacOS", executableName),
     bundledDaemonExecutable,
-    bundledJsReplExecutable,
-    bundledComputerUseSkill,
-    bundledPiComputerUseExtension,
-    bundledComputerUseHelper,
     join(bundledSparkleFramework, "Sparkle"),
   ]) {
     await access(artifact);
@@ -427,10 +333,7 @@ try {
   await $`plutil -replace CFBundleVersion -string ${buildNumber} ${join(contentsDirectory, "Info.plist")}`;
   await $`xattr -cr ${appBundle}`;
 
-  await $`codesign --verify --strict --verbose=2 ${bundledJsReplExecutable}`;
   await $`codesign --verify --strict --verbose=2 ${bundledDaemonExecutable}`;
-  await $`codesign --verify --deep --strict --verbose=2 ${bundledComputerUseHelper}`;
-  await verifyJavaScriptRepl(bundledJsReplExecutable);
   logStep(
     adhoc
       ? "Ad-hoc signing the final app bundle"
@@ -474,20 +377,10 @@ try {
   mountedDmg = true;
   const mountedApp = join(mountDirectory, `${appName}.app`);
   const mountedContents = join(mountedApp, "Contents");
-  const mountedJsRepl = join(
-    mountedContents,
-    "Resources",
-    jsReplExecutableName,
-  );
   const mountedDaemon = join(
     mountedContents,
     "MacOS",
     daemonExecutableName,
-  );
-  const mountedComputerUseHelper = join(
-    mountedContents,
-    "Helpers",
-    `${computerUseHelperName}.app`,
   );
   const mountedSparkleFramework = join(
     mountedContents,
@@ -497,21 +390,6 @@ try {
   for (const artifact of [
     join(mountedContents, "MacOS", executableName),
     mountedDaemon,
-    mountedJsRepl,
-    join(
-      mountedContents,
-      "Resources",
-      "skills",
-      "fintwind-computer-use",
-      "SKILL.md",
-    ),
-    join(
-      mountedContents,
-      "Resources",
-      "computer-use",
-      "pi-extension.ts",
-    ),
-    mountedComputerUseHelper,
     join(mountedSparkleFramework, "Sparkle"),
   ]) {
     await access(artifact);
@@ -525,12 +403,9 @@ try {
       `DMG Applications link points to "${applicationsTarget}", expected "/Applications".`,
     );
   }
-  await $`codesign --verify --strict --verbose=2 ${mountedJsRepl}`;
   await $`codesign --verify --strict --verbose=2 ${mountedDaemon}`;
-  await $`codesign --verify --deep --strict --verbose=2 ${mountedComputerUseHelper}`;
   await $`codesign --verify --strict --verbose=2 ${mountedSparkleFramework}`;
   await $`codesign --verify --deep --strict --verbose=2 ${mountedApp}`;
-  await verifyJavaScriptRepl(mountedJsRepl);
   await $`diskutil eject ${mountDirectory}`;
   mountedDmg = false;
 

@@ -40,16 +40,12 @@ case "$profile" in
   debug)
     app_name="Fintwind Debug"
     display_name="fintwind Debug"
-    helper_name="Fintwind Debug Computer Use"
-    helper_display_name="fintwind Debug Computer Use"
     bundle_identifier="sh.fintwind.dev"
     icon_file="AppIconDev.icns"
     ;;
   release)
     app_name="fintwind"
     display_name="fintwind"
-    helper_name="fintwind Computer Use"
-    helper_display_name="fintwind Computer Use"
     bundle_identifier="sh.fintwind"
     icon_file="AppIcon.icns"
     ;;
@@ -65,71 +61,15 @@ fi
 debug_adhoc_requirement="=designated => identifier \"$bundle_identifier\""
 if [ "${FINTWIND_SKIP_CARGO_BUILD:-0}" != "1" ]; then
   if [ "$profile" = "release" ]; then
-    cargo build --release --package fintwind --bin fintwind --bin fintwind_js_repl --package fintwind-daemon --bin fintwind-daemon
+    cargo build --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon
   else
-    cargo build --package fintwind --bin fintwind --bin fintwind_js_repl
+    cargo build --package fintwind --bin fintwind
   fi
 fi
 
 bundle="$cargo_target_dir/$profile/$app_name.app"
 contents="$bundle/Contents"
-helper_bundle="$contents/Helpers/$helper_name.app"
-repl_executable="$contents/Resources/fintwind_js_repl"
 daemon_executable="$contents/MacOS/fintwind-daemon"
-swift_module_cache="$cargo_target_dir/$profile/swift-module-cache"
-helper_source="resources/computer-use/FintwindComputerUse.swift"
-menu_bar_cursor_resource="resources/computer-use/menubar-cursor.png"
-overlay_cursor_resource="resources/computer-use/overlay-cursor.svg"
-helper_fingerprint="$({
-  shasum -a 256 \
-    "$helper_source" \
-    resources/computer-use/Info.plist \
-    "$menu_bar_cursor_resource" \
-    "$overlay_cursor_resource"
-  printf '%s\n' "standalone-service-v2" "$helper_name" "$helper_display_name" "$bundle_identifier.computer-use" "$codesign_identity" "$(uname -m)-apple-macos13.0"
-  xcrun swiftc -version
-} | shasum -a 256 | awk '{ print $1 }')"
-helper_cache_root=".fintwind-cache/computer-use/$profile"
-helper_cache_entry="$helper_cache_root/$helper_fingerprint"
-cached_helper_bundle="$helper_cache_entry/$helper_name.app"
-
-# Keep compiled helpers outside target so `cargo clean` does not force an
-# unnecessary Swift rebuild. The fingerprint includes the signing identity so
-# switching certificates can never reuse a helper signed as different code.
-# The cached app is copied into fintwind's standard Helpers directory as the
-# canonical packaged service. fintwind refreshes a stable standalone runtime copy
-# from it so Screen Recording is attributed to the helper rather than fintwind.
-
-if [ ! -d "$cached_helper_bundle" ]; then
-  helper_cache_staging="$helper_cache_root/.staging-$helper_fingerprint-$$"
-  rm -rf "$helper_cache_staging"
-  cached_helper_staging="$helper_cache_staging/$helper_name.app"
-  cached_helper_contents="$cached_helper_staging/Contents"
-  mkdir -p "$cached_helper_contents/MacOS" "$cached_helper_contents/Resources" "$swift_module_cache"
-  cp resources/computer-use/Info.plist "$cached_helper_contents/Info.plist"
-  cp "$menu_bar_cursor_resource" "$overlay_cursor_resource" "$cached_helper_contents/Resources/"
-  printf '%s\n' "$helper_fingerprint" > "$cached_helper_contents/Resources/.fintwind-helper-fingerprint"
-  plutil -replace CFBundleDisplayName -string "$helper_display_name" "$cached_helper_contents/Info.plist"
-  plutil -replace CFBundleExecutable -string "$helper_name" "$cached_helper_contents/Info.plist"
-  plutil -replace CFBundleIdentifier -string "$bundle_identifier.computer-use" "$cached_helper_contents/Info.plist"
-  plutil -replace CFBundleName -string "$helper_display_name" "$cached_helper_contents/Info.plist"
-  xcrun swiftc \
-    -O \
-    -parse-as-library \
-    -module-cache-path "$swift_module_cache" \
-    -target "$(uname -m)-apple-macos13.0" \
-    "$helper_source" \
-    -o "$cached_helper_contents/MacOS/$helper_name"
-  if [ "$codesign_identity" = "-" ]; then
-    codesign --force --sign - "$cached_helper_staging"
-  elif [ "$profile" = "release" ]; then
-    codesign --force --options runtime --timestamp --sign "$codesign_identity" "$cached_helper_staging"
-  else
-    codesign --force --options runtime --sign "$codesign_identity" "$cached_helper_staging"
-  fi
-  mkdir -p "$helper_cache_root"
-  mv "$helper_cache_staging" "$helper_cache_entry"
-fi
 
 # Sparkle powers in-app updates. The framework is embedded in the bundle and
 # the same distribution's bin/ tools (generate_appcast, sign_update) sign
@@ -155,18 +95,14 @@ if [ ! -d "$sparkle_framework_source" ]; then
 fi
 
 rm -rf "$bundle"
-mkdir -p "$contents/MacOS" "$contents/Resources/computer-use" "$contents/Resources/skills/fintwind-computer-use" "$contents/Helpers"
+mkdir -p "$contents/MacOS" "$contents/Resources"
 cp "$cargo_target_dir/$profile/fintwind" "$contents/MacOS/$app_name"
-cp "$cargo_target_dir/$profile/fintwind_js_repl" "$repl_executable"
-chmod 755 "$repl_executable"
 if [ "$profile" = "release" ]; then
   cp "$cargo_target_dir/$profile/fintwind-daemon" "$daemon_executable"
   chmod 755 "$daemon_executable"
 fi
 cp resources/Info.plist "$contents/Info.plist"
 cp "resources/$icon_file" "$contents/Resources/AppIcon.icns"
-cp resources/computer-use/pi-extension.ts "$contents/Resources/computer-use/pi-extension.ts"
-cp resources/computer-use/SKILL.md "$contents/Resources/skills/fintwind-computer-use/SKILL.md"
 frameworks_directory="$contents/Frameworks"
 sparkle_framework="$frameworks_directory/Sparkle.framework"
 mkdir -p "$frameworks_directory"
@@ -182,7 +118,6 @@ plutil -replace CFBundleDisplayName -string "$display_name" "$contents/Info.plis
 plutil -replace CFBundleExecutable -string "$app_name" "$contents/Info.plist"
 plutil -replace CFBundleIdentifier -string "$bundle_identifier" "$contents/Info.plist"
 plutil -replace CFBundleName -string "$display_name" "$contents/Info.plist"
-cp -R "$cached_helper_bundle" "$helper_bundle"
 # Finder info and resource forks on copied resources make codesign reject the
 # bundle as "detritus"; strip extended attributes before signing.
 xattr -cr "$bundle"
@@ -193,7 +128,6 @@ if [ "$codesign_identity" = "-" ]; then
   codesign --force --sign - "$sparkle_framework/Versions/B/Autoupdate"
   codesign --force --sign - "$sparkle_framework/Versions/B/Updater.app"
   codesign --force --sign - "$sparkle_framework"
-  codesign --force --identifier "$bundle_identifier.js-repl" --sign - "$repl_executable"
   if [ "$profile" = "release" ]; then
     codesign --force --identifier "$bundle_identifier.daemon" --sign - "$daemon_executable"
   fi
@@ -211,18 +145,15 @@ elif [ "$profile" = "release" ]; then
   codesign --force --options runtime --timestamp --sign "$codesign_identity" "$sparkle_framework/Versions/B/Autoupdate"
   codesign --force --options runtime --timestamp --sign "$codesign_identity" "$sparkle_framework/Versions/B/Updater.app"
   codesign --force --options runtime --timestamp --sign "$codesign_identity" "$sparkle_framework"
-  codesign --force --options runtime --timestamp --identifier "$bundle_identifier.js-repl" --sign "$codesign_identity" "$repl_executable"
   codesign --force --options runtime --timestamp --identifier "$bundle_identifier.daemon" --sign "$codesign_identity" "$daemon_executable"
   codesign --force --options runtime --timestamp --sign "$codesign_identity" "$bundle"
 else
   codesign --force --options runtime --sign "$codesign_identity" "$sparkle_framework/Versions/B/Autoupdate"
   codesign --force --options runtime --sign "$codesign_identity" "$sparkle_framework/Versions/B/Updater.app"
   codesign --force --options runtime --sign "$codesign_identity" "$sparkle_framework"
-  codesign --force --options runtime --identifier "$bundle_identifier.js-repl" --sign "$codesign_identity" "$repl_executable"
   codesign --force --options runtime --sign "$codesign_identity" "$bundle"
 fi
 if [ "$profile" = "release" ]; then
-  codesign --verify --strict --verbose=2 "$repl_executable"
   codesign --verify --strict --verbose=2 "$daemon_executable"
   codesign --verify --deep --strict --verbose=2 "$bundle"
 fi

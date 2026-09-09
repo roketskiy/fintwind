@@ -406,11 +406,6 @@ impl Fintwind {
                     }
                 }
             }
-            DriverEvent::ComputerUseUpdated(state) => {
-                if self.accepts_turn_output(session_id) {
-                    Self::upsert_computer_use_preview(runtime, state);
-                }
-            }
             DriverEvent::SteerAccepted { message } => {
                 let submission = runtime
                     .pending_steers
@@ -662,15 +657,12 @@ impl Fintwind {
                 );
                 runtime.pending_permission = None;
                 runtime.pending_user_input = None;
-                runtime.pending_computer_approval = None;
-                runtime.driver.cancel_computer_use();
                 // The agent may have edited files or switched branches, so the
                 // cached view of the workspace is no longer trustworthy. This
                 // handler has no `Context`, so the drain loop acts on the flag.
                 if self.state.selected_session == Some(session_id) {
                     self.workspace_queries_stale = true;
                 }
-                runtime.computer_use_previews.clear();
                 runtime.driver.refresh_background_work();
                 self.capture_latest_turn_checkpoint_for(session_id);
                 if allow_queue_drain && success {
@@ -731,9 +723,6 @@ impl Fintwind {
                 runtime.provider_phase = None;
                 runtime.pending_permission = None;
                 runtime.pending_user_input = None;
-                runtime.pending_computer_approval = None;
-                runtime.driver.cancel_computer_use();
-                runtime.computer_use_previews.clear();
                 let needs_fallback = !self.turn_has_assistant_message(session_id);
                 let failure_message = runtime
                     .last_driver_error
@@ -771,35 +760,6 @@ impl Fintwind {
             }
         }
         true
-    }
-
-    fn upsert_computer_use_preview(runtime: &mut SessionRuntime, state: ComputerUseState) {
-        if !state.visible {
-            return;
-        }
-        let Some(window_id) = state.target.as_ref().map(|target| target.window_id) else {
-            return;
-        };
-        let mut preview = ComputerUsePreview {
-            target: state.target,
-            phase: state.phase,
-            visible: state.visible,
-            screenshot: state.image_url.as_deref().and_then(|image_url| {
-                crate::computer_use::decode_preview_image_url(image_url).ok()
-            }),
-        };
-        if let Some(index) = runtime.computer_use_previews.iter().position(|preview| {
-            preview
-                .target
-                .as_ref()
-                .is_some_and(|target| target.window_id == window_id)
-        }) {
-            let previous = runtime.computer_use_previews.remove(index);
-            if preview.screenshot.is_none() {
-                preview.screenshot = previous.screenshot;
-            }
-        }
-        runtime.computer_use_previews.push(preview);
     }
 }
 

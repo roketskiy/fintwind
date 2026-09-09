@@ -677,13 +677,10 @@ fn command_targets_runtime(command: &Command) -> bool {
             | Command::Prompt { .. }
             | Command::Steer { .. }
             | Command::Cancel
-            | Command::CancelComputerUse
             | Command::RefreshBackgroundWork
             | Command::StopBackgroundWork { .. }
             | Command::Respond { .. }
             | Command::RespondUserInput { .. }
-            | Command::RunComputerTool { .. }
-            | Command::RejectComputerTool { .. }
             | Command::ApplyOptions { .. }
             | Command::Rollback { .. }
             | Command::Fork { .. }
@@ -1295,7 +1292,6 @@ mod tests {
                         service_tier: None,
                         context_window: None,
                         agent_preset: None,
-                        computer_use_enabled: false,
                         provider_cursor: None,
                     },
                 },
@@ -1361,7 +1357,6 @@ mod tests {
                         service_tier: None,
                         context_window: None,
                         agent_preset: None,
-                        computer_use_enabled: false,
                         provider_cursor: None,
                     },
                 },
@@ -1886,7 +1881,6 @@ mod tests {
             service_tier: None,
             context_window: None,
             agent_preset: None,
-            computer_use_enabled: false,
             provider_cursor: None,
         }
     }

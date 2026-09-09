@@ -116,7 +116,6 @@ Differences worth knowing:
 
 ## What is not available yet
 
-- **Computer use.** The runtime and its UI stay disabled off macOS.
 - **Terminals over the daemon's browser client.** The desktop terminal works;
   a remote browser client connected to a Windows daemon cannot open one.
 

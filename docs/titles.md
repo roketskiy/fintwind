@@ -186,8 +186,7 @@ Grok writes `<grok_home>/sessions/*/<session_id>/summary.json` with a
 `generated_title` field ([grok_session.rs:22](../crates/fintwind-core/src/grok_session.rs#L22)).
 Polled at `0, 250ms, 750ms, 1.5s, 3s, 5s, 7.5s, 10s`, armed at turn end from
 either the xAI `_x.ai/session/prompt_complete` notification or the ACP prompt
-result. `grok_home` follows `$GROK_HOME`, or the isolated home the Computer Use
-runtime supplies.
+result. `grok_home` follows `$GROK_HOME`.
 
 ### OpenCode, Pi, DeepSeek
 

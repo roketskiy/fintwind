@@ -136,15 +136,15 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             is_dark: false,
-            canvas: rgb(0xF6F5F6).into(),
+            canvas: rgb(0xF7F5F0).into(),
             sidebar: if cfg!(target_os = "macos") {
                 transparent_black()
             } else {
-                rgb(0xF3F3F3).into()
+                rgb(0xECE8E1).into()
             },
-            sidebar_drag_background: rgb(0xF3F3F3).into(),
+            sidebar_drag_background: rgb(0xECE8E1).into(),
             sidebar_item_background: hsla(0.0, 0.0, 0.078, 0.06),
-            surface: rgb(0xF6F5F6).into(),
+            surface: rgb(0xF7F5F0).into(),
             raised: rgb(0xECECEC).into(),
             composer: rgb(0xFFFFFF).into(),
             inset: rgb(0xE6E6E6).into(),

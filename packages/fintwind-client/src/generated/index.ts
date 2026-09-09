@@ -33,8 +33,6 @@ export type { ComposerDraftAttachment } from "./ComposerDraftAttachment";
 export type { ComposerDraftChange } from "./ComposerDraftChange";
 export type { ComposerDraftTarget } from "./ComposerDraftTarget";
 export type { ComposerDrafts } from "./ComposerDrafts";
-export type { ComputerAppGrant } from "./ComputerAppGrant";
-export type { ComputerPermissions } from "./ComputerPermissions";
 export type { ContextUsage } from "./ContextUsage";
 export type { CreatedWorktree } from "./CreatedWorktree";
 export type { DaemonReady } from "./DaemonReady";
@@ -84,7 +82,6 @@ export type { StoredTranscriptBlockContent } from "./StoredTranscriptBlockConten
 export type { TranscriptBlock } from "./TranscriptBlock";
 export type { TurnStatus } from "./TurnStatus";
 export type { UserInputAnswer } from "./UserInputAnswer";
-export type { WireComputerToolRequest } from "./WireComputerToolRequest";
 export type { WireDriverEvent } from "./WireDriverEvent";
 export type { WireDriverStartOptions } from "./WireDriverStartOptions";
 export type { WireSessionOptions } from "./WireSessionOptions";

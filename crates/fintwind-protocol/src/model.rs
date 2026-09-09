@@ -1512,7 +1512,6 @@ pub enum DriverEvent {
         request_id: String,
         questions: Vec<UserInputQuestion>,
     },
-    ComputerUseUpdated(crate::computer_use::ComputerUseState),
     /// The provider accepted a steering message into the running turn.
     SteerAccepted {
         message: String,

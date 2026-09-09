@@ -76,19 +76,19 @@ mod tests {
         );
         assert_eq!(
             input_title(Some(&serde_json::json!({
-                "tool_name": "fintwind_js_repl__js",
-                "arguments": {"code": "1", "title": "Inspect wrapped app"}
+                "tool_name": "read",
+                "arguments": {"path": "src/main.rs", "title": "Inspect wrapped app"}
             })))
             .as_deref(),
             Some("Inspect wrapped app")
         );
         assert_eq!(
             input_title(Some(&serde_json::json!({
-                "tool_name": "fintwind_js_repl__js",
-                "tool_input": {"code": "1", "title": "Verify Grok bridge"}
+                "tool_name": "read",
+                "tool_input": {"path": "src/main.rs", "title": "Verify nested title"}
             })))
             .as_deref(),
-            Some("Verify Grok bridge")
+            Some("Verify nested title")
         );
     }
 }

@@ -15,7 +15,6 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{Command, DaemonExposureSettings, DaemonSettings, DaemonSupervisor, ResponsePayload};
-use fintwind_protocol::computer_use::ComputerAppGrant;
 use fintwind_protocol::i18n::AppLanguage;
 use fintwind_protocol::identity::DATA_DIRECTORY_NAME;
 use fintwind_protocol::model::{AgentSession, FavoriteModel, Project, OPENCODE_PROVIDER};
@@ -38,10 +37,6 @@ fn default_sidebar_visibility() -> bool {
 }
 
 fn default_right_panel_visibility() -> bool {
-    false
-}
-
-fn default_computer_use_enabled() -> bool {
     false
 }
 
@@ -303,10 +298,6 @@ pub struct PersistedState {
     pub right_panel_width: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_state: Option<PersistedWindowState>,
-    #[serde(default = "default_computer_use_enabled")]
-    pub computer_use_enabled: bool,
-    #[serde(default)]
-    pub computer_use_allowed_apps: Vec<ComputerAppGrant>,
     #[serde(skip)]
     daemon_settings_extra: BTreeMap<String, serde_json::Value>,
     #[serde(skip)]
@@ -353,8 +344,6 @@ impl PersistedState {
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
             right_panel_width: DEFAULT_RIGHT_PANEL_WIDTH,
             window_state: None,
-            computer_use_enabled: false,
-            computer_use_allowed_apps: Vec::new(),
             daemon_settings_extra: BTreeMap::new(),
             dirty_sessions: HashSet::new(),
         }
@@ -436,15 +425,11 @@ impl PersistedState {
 
     pub fn daemon_settings(&self) -> DaemonSettings {
         DaemonSettings {
-            computer_use_enabled: self.computer_use_enabled,
-            computer_use_allowed_apps: self.computer_use_allowed_apps.clone(),
             extra: self.daemon_settings_extra.clone(),
         }
     }
 
     pub fn apply_daemon_settings(&mut self, settings: DaemonSettings) {
-        self.computer_use_enabled = settings.computer_use_enabled;
-        self.computer_use_allowed_apps = settings.computer_use_allowed_apps;
         self.daemon_settings_extra = settings.extra;
     }
 
@@ -556,7 +541,6 @@ impl PersistedState {
             }
         }
         self.version = STATE_VERSION;
-        normalize_computer_app_grants(&mut self.computer_use_allowed_apps);
         self.backfill_remembered_selection();
     }
 
@@ -1148,13 +1132,6 @@ pub fn read_remote_reference(
         return None;
     };
     Some(bytes)
-}
-
-fn normalize_computer_app_grants(grants: &mut Vec<ComputerAppGrant>) {
-    let mut seen_bundle_ids = HashSet::new();
-    grants.retain(|grant| {
-        !grant.bundle_id.trim().is_empty() && seen_bundle_ids.insert(grant.bundle_id.clone())
-    });
 }
 
 fn to_io_error(error: impl std::fmt::Display) -> io::Error {

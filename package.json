@@ -3,7 +3,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun ./scripts/dev.ts",
-    "release": "bun ./scripts/release.ts",
+    "bundle": "bun ./scripts/bundle-windows.ts",
     "protocol:generate": "cargo run -p fintwind-protocol --bin export_types",
     "protocol:check": "cargo run -p fintwind-protocol --bin export_types -- --check",
     "db:generate": "drizzle-kit generate",

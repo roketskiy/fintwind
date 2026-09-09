@@ -215,11 +215,11 @@ impl Fintwind {
             (None, Some(percent)) => SharedString::from(tr!(
                 "usage.context_used",
                 percent = format!("{percent:.1}"),
-                shortcut = crate::platform::primary_shortcut("⌘U", "Ctrl+U")
+                shortcut = "Ctrl+U"
             )),
             (None, None) => SharedString::from(tr!(
                 "usage.shortcut",
-                shortcut = crate::platform::primary_shortcut("⌘U", "Ctrl+U")
+                shortcut = "Ctrl+U"
             )),
         };
 

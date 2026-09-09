@@ -120,10 +120,6 @@ fn unix_terminal_shell_candidates(
             .filter(|shell| !shell.is_empty())
             .map(PathBuf::from),
     );
-    #[cfg(target_os = "macos")]
-    candidates.push(PathBuf::from("/bin/zsh"));
-    #[cfg(target_os = "linux")]
-    candidates.extend([PathBuf::from("/bin/bash"), PathBuf::from("/bin/sh")]);
     candidates
 }
 

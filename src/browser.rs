@@ -1,8 +1,7 @@
-//! Native browser surface for the right panel: a WKWebView on macOS, a
-//! composition-hosted WebView2 on Windows.
+//! Native browser surface for the right panel: a composition-hosted WebView2.
 //!
-//! Both are real native content the GPUI renderer does not own, so three
-//! invariants keep them honest:
+//! The page is real native content the GPUI renderer does not own, so three
+//! invariants keep it honest:
 //!
 //! - Geometry: the surface's content area syncs the native frame from element
 //!   layout every frame, deduplicated so an unchanged frame costs nothing.
@@ -16,9 +15,7 @@
 //!   records intent and schedules the entity update on the foreground
 //!   executor.
 //!
-//! The two platforms differ in how much of the window they take over. AppKit
-//! puts the WKWebView in the view hierarchy and routes input to it; Windows
-//! renders WebView2 into one of GPUI's own composition visuals and receives
+//! WebView2 renders into one of GPUI's own composition visuals and receives
 //! nothing, so this module forwards mouse input, cursor and focus by hand.
 //! [`host`] carries the detail.
 //!
@@ -30,7 +27,6 @@ use gpui::{
     App, Context, Div, Entity, FocusHandle, Focusable, HitboxBehavior, IntoElement, ObjectFit,
     Render, SharedString, Stateful, Subscription, Window, canvas, div, img, prelude::*, px,
 };
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use gpui::{AsyncApp, ForegroundExecutor, WeakEntity};
 
 use crate::input::{ComposerEvent, ComposerInput};
@@ -44,11 +40,6 @@ use crate::{
 };
 
 const TOOLBAR_HEIGHT: f32 = 42.0;
-/// Mirror Safari's UA so sites serve the webview their real desktop build.
-#[cfg(target_os = "macos")]
-const USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
-     AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15";
-
 /// What the address input resolves to when the user submits it.
 #[derive(Debug, PartialEq, Eq)]
 enum AddressTarget {
@@ -137,218 +128,6 @@ fn is_secure_url(url: &str) -> bool {
 /// including `http://` — stays visible because it is information.
 fn display_url(url: &str) -> &str {
     url.strip_prefix("https://").unwrap_or(url)
-}
-
-#[cfg(target_os = "macos")]
-mod host {
-    use std::cell::Cell;
-    use std::ffi::c_void;
-    use std::ptr::null_mut;
-
-    use gpui::{Bounds, Pixels};
-    use objc2::rc::Retained;
-    use objc2::runtime::AnyObject;
-    use objc2::{AllocAnyThread, DefinedClass, define_class, msg_send};
-    use objc2_app_kit::{NSApplication, NSEventType, NSView, NSWindow};
-    use objc2_foundation::{
-        MainThreadMarker, NSDictionary, NSKeyValueChangeKey, NSKeyValueObservingOptions,
-        NSObjectNSKeyValueObserverRegistration, NSObjectProtocol, NSProcessInfo, NSString,
-        ns_string,
-    };
-    use objc2_web_kit::WKWebView;
-    use wry::WebViewExtMacOS;
-    use wry::dpi::{LogicalPosition, LogicalSize};
-
-    /// Whether AppKit is currently dispatching (or just dispatched) a mouse
-    /// press — the discriminator between a user's click handing the page the
-    /// keyboard and a page script pulling it over on its own: a click-driven
-    /// responder change happens inside that click's dispatch, so the current
-    /// event is a fresh press; a script's `focus()` fires from a WebKit
-    /// callout with only a stale event behind it.
-    fn recent_user_gesture() -> bool {
-        let Some(mtm) = MainThreadMarker::new() else {
-            return false;
-        };
-        let Some(event) = NSApplication::sharedApplication(mtm).currentEvent() else {
-            return false;
-        };
-        let pressed = matches!(
-            event.r#type(),
-            NSEventType::LeftMouseDown
-                | NSEventType::LeftMouseUp
-                | NSEventType::RightMouseDown
-                | NSEventType::OtherMouseDown
-        );
-        pressed && NSProcessInfo::processInfo().systemUptime() - event.timestamp() < 0.5
-    }
-
-    pub(super) struct ResponderObserverIvars {
-        window: Retained<NSWindow>,
-        handler: Box<dyn Fn(bool)>,
-    }
-
-    define_class!(
-        #[unsafe(super(objc2::runtime::NSObject))]
-        #[ivars = ResponderObserverIvars]
-        pub(super) struct ResponderObserver;
-
-        /// NSKeyValueObserving: the window's `firstResponder` is documented
-        /// KVO-compliant, and observing it is the only push signal for native
-        /// focus moves — the webview taking or losing the keyboard produces
-        /// no GPUI event at all.
-        impl ResponderObserver {
-            #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
-            fn observe_value_for_key_path(
-                &self,
-                key_path: Option<&NSString>,
-                _of_object: Option<&AnyObject>,
-                _change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
-                _context: *mut c_void,
-            ) {
-                if key_path.is_some_and(|path| path.isEqualToString(ns_string!("firstResponder"))) {
-                    (self.ivars().handler)(recent_user_gesture());
-                }
-            }
-        }
-
-        unsafe impl NSObjectProtocol for ResponderObserver {}
-    );
-
-    impl ResponderObserver {
-        fn new(window: Retained<NSWindow>, handler: Box<dyn Fn(bool)>) -> Retained<Self> {
-            let observer = Self::alloc().set_ivars(ResponderObserverIvars { window, handler });
-            let observer: Retained<Self> = unsafe { msg_send![super(observer), init] };
-            unsafe {
-                observer
-                    .ivars()
-                    .window
-                    .addObserver_forKeyPath_options_context(
-                        &observer,
-                        ns_string!("firstResponder"),
-                        NSKeyValueObservingOptions::New,
-                        null_mut(),
-                    );
-            }
-            observer
-        }
-    }
-
-    impl Drop for ResponderObserver {
-        fn drop(&mut self) {
-            unsafe {
-                self.ivars()
-                    .window
-                    .removeObserver_forKeyPath(self, ns_string!("firstResponder"));
-            }
-        }
-    }
-
-    /// The wry webview plus deduplication state, so per-frame syncs only call
-    /// into AppKit when geometry or visibility actually changed.
-    pub(super) struct WebviewHost {
-        pub webview: wry::WebView,
-        wk: Retained<WKWebView>,
-        last_bounds: Cell<Option<(i32, i32, i32, i32)>>,
-        visible: Cell<bool>,
-        /// Watches the window's first responder; dropped (and unregistered)
-        /// with the host.
-        _responder_observer: Option<Retained<ResponderObserver>>,
-    }
-
-    impl WebviewHost {
-        pub fn new(webview: wry::WebView, on_responder_change: Box<dyn Fn(bool)>) -> Self {
-            let wk: Retained<WKWebView> = Retained::into_super(webview.webview());
-            lower_below_scene_overlay(&wk);
-            let responder_observer = wk
-                .window()
-                .map(|window| ResponderObserver::new(window, on_responder_change));
-            Self {
-                webview,
-                wk,
-                last_bounds: Cell::new(None),
-                visible: Cell::new(false),
-                _responder_observer: responder_observer,
-            }
-        }
-
-        pub fn wk(&self) -> &WKWebView {
-            &self.wk
-        }
-
-        pub fn ns_view(&self) -> &NSView {
-            &self.wk
-        }
-
-        /// GPUI window coordinates are top-left-origin logical points, which is
-        /// exactly wry's child-bounds convention. Wry quantizes the native
-        /// frame to whole points, and panel drags produce fractional layouts —
-        /// left un-rounded, the frame can land a point off and expose a sliver
-        /// of background along an edge. Round each edge (not origin + size) so
-        /// every side stays within half a point of the layout rect, and
-        /// deduplicate on the rounded rect so per-frame syncs are free.
-        /// AppKit lays the view out in the same logical points GPUI uses, so
-        /// the scale factor is only of interest to the Windows host.
-        pub fn sync_bounds(&self, bounds: Bounds<Pixels>, _scale: f32) {
-            let left = f32::from(bounds.origin.x).round() as i32;
-            let top = f32::from(bounds.origin.y).round() as i32;
-            let right = f32::from(bounds.origin.x + bounds.size.width).round() as i32;
-            let bottom = f32::from(bounds.origin.y + bounds.size.height).round() as i32;
-            if self.last_bounds.get() == Some((left, top, right, bottom)) {
-                return;
-            }
-            self.last_bounds.set(Some((left, top, right, bottom)));
-            let _ = self.webview.set_bounds(wry::Rect {
-                position: LogicalPosition::new(f64::from(left), f64::from(top)).into(),
-                size: LogicalSize::new(f64::from(right - left), f64::from(bottom - top)).into(),
-            });
-        }
-
-        pub fn set_visible(&self, visible: bool) {
-            if self.visible.get() == visible {
-                return;
-            }
-            self.visible.set(visible);
-            let _ = self.webview.set_visible(visible);
-        }
-
-        /// Whether the native first responder is the webview (or one of its
-        /// internal views) — i.e. plain keystrokes currently go to the page,
-        /// not to GPUI.
-        pub fn native_focus_within(&self) -> bool {
-            let view = self.ns_view();
-            let Some(window) = view.window() else {
-                return false;
-            };
-            window.firstResponder().is_some_and(|responder| {
-                responder
-                    .downcast_ref::<NSView>()
-                    .is_some_and(|responder| responder.isDescendantOf(view))
-            })
-        }
-    }
-
-    /// GPUI's scene-overlay view — the transparent plane its menus and
-    /// tooltips composite on — is added to the window before this webview
-    /// existed, and AppKit stacks later siblings on top. Left alone, a fresh
-    /// webview would cover the overlay and every menu with it; re-anchor the
-    /// webview just beneath the overlay plane.
-    fn lower_below_scene_overlay(view: &NSView) {
-        use objc2_app_kit::NSWindowOrderingMode;
-
-        let Some(superview) = (unsafe { view.superview() }) else {
-            return;
-        };
-        for sibling in superview.subviews().iter() {
-            if sibling.class().name() == c"GPUIOverlayView" {
-                superview.addSubview_positioned_relativeTo(
-                    view,
-                    NSWindowOrderingMode::Below,
-                    Some(&sibling),
-                );
-                return;
-            }
-        }
-    }
 }
 
 #[cfg(target_os = "windows")]
@@ -538,9 +317,7 @@ mod host {
         unsafe { SetFocus(parent as SysHwnd) };
     }
 
-    /// The `ICoreWebView2` behind the surface, exposing the same handful of
-    /// operations the macOS host does so the shared call sites in
-    /// [`super::BrowserView`] stay platform-free.
+    /// The `ICoreWebView2` behind the surface.
     pub(super) struct Webview(ICoreWebView2);
 
     impl Webview {
@@ -1106,38 +883,18 @@ fn window_hwnd(window: &Window) -> isize {
     }
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-mod host {
-    use gpui::{Bounds, Pixels};
-
-    /// Linux has no embedding path: wry's WebKitGTK backend accepts an Xlib
-    /// parent only and needs a GTK main loop, and GPUI's Linux backend is
-    /// neither GTK nor guaranteed to be X11.
-    pub(super) struct WebviewHost;
-
-    impl WebviewHost {
-        pub fn sync_bounds(&self, _bounds: Bounds<Pixels>, _scale: f32) {}
-        pub fn set_visible(&self, _visible: bool) {}
-        pub fn native_focus_within(&self) -> bool {
-            false
-        }
-    }
-}
-
 use host::WebviewHost;
 
 /// Schedules entity updates from webview delegate callbacks. The callbacks run
 /// on the main thread but can fire while GPUI holds the app borrow, so the
 /// update always takes the next executor turn instead of re-entering.
 #[derive(Clone)]
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 struct Deferred {
     executor: ForegroundExecutor,
     cx: AsyncApp,
     view: WeakEntity<BrowserView>,
 }
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 impl Deferred {
     fn update(&self, f: impl FnOnce(&mut BrowserView, &mut Context<BrowserView>) + 'static) {
         let mut cx = self.cx.clone();
@@ -1309,121 +1066,6 @@ impl BrowserView {
             .map(|url| display_url(url).to_owned())
     }
 
-    #[cfg(target_os = "macos")]
-    fn build_webview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        use wry::dpi::{LogicalPosition, LogicalSize};
-
-        let deferred = Deferred {
-            executor: cx.foreground_executor().clone(),
-            cx: cx.to_async(),
-            view: cx.entity().downgrade(),
-        };
-
-        let on_page_load = deferred.clone();
-        let on_title = deferred.clone();
-        let on_new_window = deferred.clone();
-
-        // The responder observer's decision needs the window (GPUI focus
-        // moves), which `Deferred` cannot reach; go through the window handle.
-        let on_responder_change: Box<dyn Fn(bool)> = {
-            let executor = cx.foreground_executor().clone();
-            let async_cx = cx.to_async();
-            let view = cx.entity().downgrade();
-            let window_handle = window.window_handle();
-            Box::new(move |user_gesture| {
-                let mut cx = async_cx.clone();
-                let view = view.clone();
-                executor
-                    .spawn(async move {
-                        let _ = window_handle.update(&mut cx, |_, window, cx| {
-                            let _ = view.update(cx, |this, cx| {
-                                this.native_responder_changed(user_gesture, window, cx);
-                            });
-                        });
-                    })
-                    .detach();
-            })
-        };
-
-        let built = wry::WebViewBuilder::new()
-            .with_bounds(wry::Rect {
-                position: LogicalPosition::new(0.0, 0.0).into(),
-                size: LogicalSize::new(0.0, 0.0).into(),
-            })
-            .with_visible(false)
-            .with_focused(false)
-            .with_accept_first_mouse(true)
-            .with_devtools(true)
-            .with_user_agent(USER_AGENT)
-            .with_navigation_handler(|_| true)
-            .with_on_page_load_handler(move |event, url| {
-                let event = match event {
-                    wry::PageLoadEvent::Started => PageLoad::Started,
-                    wry::PageLoadEvent::Finished => PageLoad::Finished,
-                };
-                on_page_load.update(move |this, cx| this.page_load_changed(event, url, cx));
-            })
-            .with_document_title_changed_handler(move |title| {
-                on_title.update(move |this, cx| this.title_changed(title, cx));
-            })
-            .with_new_window_req_handler(move |url, _features| {
-                // One surface, one page: pop-ups and `target="_blank"` links
-                // navigate in place instead of spawning windows.
-                on_new_window.update(move |this, cx| this.navigate_to_url(url, cx));
-                wry::NewWindowResponse::Deny
-            })
-            .with_download_started_handler(|url, destination| {
-                let Some(target) = download_destination(&url, destination.clone()) else {
-                    return false;
-                };
-                *destination = target;
-                true
-            })
-            .with_download_completed_handler(|_url, path, success| {
-                if success && let Some(path) = path {
-                    reveal_in_finder(&path);
-                }
-            })
-            .build_as_child(window);
-
-        match built {
-            Ok(webview) => {
-                self.host = Some(Rc::new(WebviewHost::new(webview, on_responder_change)))
-            }
-            Err(error) => self.host_error = Some(error.to_string()),
-        }
-    }
-
-    /// The native first responder moved (KVO on the window): resolve the two
-    /// focus systems immediately instead of waiting for a render. While the
-    /// address bar is being typed into, a script-initiated grab (a page
-    /// autofocusing its own input) loses the keyboard right back; a grab
-    /// carried by a user click means the user entered the page, so GPUI
-    /// focus follows onto this surface and the address bar drops its caret.
-    #[cfg(target_os = "macos")]
-    fn native_responder_changed(
-        &mut self,
-        user_gesture: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let natively_focused = self
-            .host
-            .as_ref()
-            .is_some_and(|host| host.native_focus_within());
-        if natively_focused {
-            let address_focused = self.address.read(cx).focus().is_focused(window);
-            if address_focused && !user_gesture {
-                self.reclaim_native_keyboard(cx);
-            } else {
-                window.focus(&self.focus_handle, cx);
-            }
-        }
-        self.was_natively_focused = natively_focused;
-        self.last_window_focus = window.focused(cx);
-        cx.notify();
-    }
-
     /// WebView2 rendered into GPUI's composition tree.
     ///
     /// Nothing exists synchronously here: `create` returns before the
@@ -1521,12 +1163,6 @@ impl BrowserView {
         cx.notify();
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    fn build_webview(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.host_error = Some(tr!("browser.unavailable_on_platform"));
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn page_load_changed(&mut self, event: PageLoad, url: String, cx: &mut Context<Self>) {
         match event {
             PageLoad::Started => {
@@ -1547,7 +1183,6 @@ impl BrowserView {
         cx.notify();
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn title_changed(&mut self, title: String, cx: &mut Context<Self>) {
         let title = (!title.trim().is_empty()).then_some(title);
         if self.page_title != title {
@@ -1556,7 +1191,6 @@ impl BrowserView {
         }
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn refresh_navigation_state(&mut self) {
         if let Some(host) = &self.host {
             self.can_go_back = host.webview.can_go_back().unwrap_or(false);
@@ -1593,13 +1227,9 @@ impl BrowserView {
         self.navigate_to_url(url, cx);
     }
 
-    #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub fn navigate_to_url(&mut self, url: String, cx: &mut Context<Self>) {
         let Some(host) = &self.host else {
-            #[cfg(target_os = "windows")]
-            {
-                self.pending_url = Some(url);
-            }
+            self.pending_url = Some(url);
             return;
         };
         if host.webview.load_url(&url).is_err() {
@@ -1614,21 +1244,10 @@ impl BrowserView {
         cx.notify();
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    pub fn navigate_to_url(&mut self, _url: String, _cx: &mut Context<Self>) {}
-
     /// Hand the keyboard to the page. `makeFirstResponder` runs responder
     /// callbacks synchronously and this is reached from inside an entity
     /// update, so the native call takes the next executor turn.
     fn focus_page(&mut self, _cx: &mut Context<Self>) {
-        #[cfg(target_os = "macos")]
-        if let Some(host) = self.host.clone() {
-            _cx.foreground_executor()
-                .spawn(async move {
-                    let _ = host.webview.focus();
-                })
-                .detach();
-        }
         // `MoveFocus` is the only way in: a visual-hosted page has no window
         // of ours for a click to land on, so focus is always explicit.
         #[cfg(target_os = "windows")]
@@ -1671,7 +1290,7 @@ impl BrowserView {
 
     /// Per-frame push from the app: whether this surface is the visible right
     /// panel tab, and whether a GPUI overlay is open above it. Deduplicated
-    /// down to real AppKit calls by the host.
+    /// down to real host calls.
     pub fn sync_native_state(
         &mut self,
         surface_visible: bool,
@@ -1708,53 +1327,15 @@ impl BrowserView {
         // a blank page area beats a menu nobody can see.
         let covered_by_snapshot = occluded && !self.snapshot_pending;
         let show = surface_visible && has_page && !covered_by_snapshot;
-        // AppKit leaves a hidden view as first responder, so a page focused at
-        // the moment its tab is switched away would keep eating the keyboard.
+        // A hidden visual-hosted page can keep keyboard focus, so a page
+        // focused at the moment its tab is switched away would keep eating
+        // the keyboard.
         if !show && host.native_focus_within() {
             self.reclaim_native_keyboard(cx);
         }
         host.set_visible(show);
     }
 
-    #[cfg(target_os = "macos")]
-    fn request_snapshot(&mut self, cx: &mut Context<Self>) {
-        use objc2_app_kit::NSImage;
-        use objc2_foundation::NSError;
-
-        let Some(host) = &self.host else {
-            return;
-        };
-        self.snapshot_pending = true;
-        let epoch = self.snapshot_epoch;
-        let deferred = Deferred {
-            executor: cx.foreground_executor().clone(),
-            cx: cx.to_async(),
-            view: cx.entity().downgrade(),
-        };
-        let completion = block2::RcBlock::new(move |image: *mut NSImage, _: *mut NSError| {
-            // Main thread, inside a WebKit completion: one raw-pixel copy —
-            // never an image encode, which costs tens of milliseconds and
-            // whose decode would push the first paint frames out.
-            let render_image = unsafe { image.as_ref() }.and_then(snapshot_render_image);
-            deferred.update(move |this, cx| {
-                if this.snapshot_epoch == epoch {
-                    this.snapshot_pending = false;
-                    if this.occluded {
-                        this.snapshot = render_image;
-                    }
-                    // Always redraw: the next frame's sync is what actually
-                    // hides the live view now that the capture settled.
-                    cx.notify();
-                }
-            });
-        });
-        unsafe {
-            host.wk()
-                .takeSnapshotWithConfiguration_completionHandler(None, &completion)
-        };
-    }
-
-    #[cfg(not(target_os = "macos"))]
     fn request_snapshot(&mut self, _cx: &mut Context<Self>) {}
 
     /// Keep GPUI focus and the native first responder coherent. They are
@@ -1800,34 +1381,20 @@ impl BrowserView {
     /// Return the native first responder to GPUI's view — deferred, since
     /// `makeFirstResponder` runs responder callbacks that may re-enter GPUI.
     fn reclaim_native_keyboard(&mut self, _cx: &mut Context<Self>) {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(host) = self.host.clone() {
             _cx.foreground_executor()
                 .spawn(async move {
-                    #[cfg(target_os = "macos")]
-                    let _ = host.webview.focus_parent();
-                    #[cfg(target_os = "windows")]
                     host.focus_parent();
                 })
                 .detach();
         }
     }
 
-    #[cfg(target_os = "macos")]
-    fn estimated_progress(&self) -> f64 {
-        self.host
-            .as_ref()
-            .map(|host| unsafe { host.wk().estimatedProgress() })
-            .unwrap_or(0.0)
-    }
-
-    #[cfg(not(target_os = "macos"))]
     fn estimated_progress(&self) -> f64 {
         0.0
     }
 
     fn go_back(&mut self, _cx: &mut Context<Self>) {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(host) = &self.host {
             let _ = host.webview.go_back();
             self.refresh_navigation_state();
@@ -1836,7 +1403,6 @@ impl BrowserView {
     }
 
     fn go_forward(&mut self, _cx: &mut Context<Self>) {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(host) = &self.host {
             let _ = host.webview.go_forward();
             self.refresh_navigation_state();
@@ -1845,7 +1411,6 @@ impl BrowserView {
     }
 
     fn reload(&mut self, _cx: &mut Context<Self>) {
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if let Some(host) = &self.host
             && self.navigation_requested
         {
@@ -1856,16 +1421,6 @@ impl BrowserView {
     }
 
     fn hard_reload(&mut self, _cx: &mut Context<Self>) {
-        #[cfg(target_os = "macos")]
-        if let Some(host) = &self.host
-            && self.navigation_requested
-        {
-            unsafe { host.wk().reloadFromOrigin() };
-            self.loading = true;
-            _cx.notify();
-        }
-        // WebView2 exposes no cache-bypassing reload; the scripted form is the
-        // closest equivalent the page itself can perform.
         #[cfg(target_os = "windows")]
         if let Some(host) = &self.host
             && self.navigation_requested
@@ -1877,13 +1432,6 @@ impl BrowserView {
     }
 
     fn stop_loading(&mut self, _cx: &mut Context<Self>) {
-        #[cfg(target_os = "macos")]
-        if let Some(host) = &self.host {
-            unsafe { host.wk().stopLoading() };
-            self.loading = false;
-            self.refresh_navigation_state();
-            _cx.notify();
-        }
         #[cfg(target_os = "windows")]
         if let Some(host) = &self.host {
             let _ = host.webview.stop();
@@ -1894,17 +1442,6 @@ impl BrowserView {
     }
 
     fn toggle_devtools(&mut self) {
-        #[cfg(target_os = "macos")]
-        if let Some(host) = &self.host {
-            if host.webview.is_devtools_open() {
-                host.webview.close_devtools();
-            } else {
-                host.webview.open_devtools();
-            }
-        }
-        // WebView2's devtools are a separate top-level window that the user
-        // closes; there is no API to ask whether it is open, let alone shut
-        // it, so this opens and re-focuses instead of toggling.
         #[cfg(target_os = "windows")]
         if let Some(host) = &self.host {
             let _ = host.webview.open_devtools();
@@ -1920,21 +1457,6 @@ impl BrowserView {
     /// Forward a standard editing selector to the webview. GPUI's window view
     /// claims key equivalents before AppKit's responder chain reaches the
     /// webview, so Browser-scoped bindings route the classics back natively.
-    #[cfg(target_os = "macos")]
-    fn perform_editing_selector(&self, selector: objc2::runtime::Sel) {
-        use objc2::runtime::{AnyObject, NSObjectProtocol};
-
-        if let Some(host) = &self.host {
-            let view = host.ns_view();
-            if !view.respondsToSelector(selector) {
-                return;
-            }
-            let nil: *mut AnyObject = std::ptr::null_mut();
-            let _: *mut AnyObject =
-                unsafe { objc2::msg_send![view, performSelector: selector, withObject: nil] };
-        }
-    }
-
     /// Run a document editing command in the page.
     ///
     /// WebView2 handles the standard chords itself when the page holds the
@@ -1950,29 +1472,21 @@ impl BrowserView {
     }
 
     fn webview_copy(&self) {
-        #[cfg(target_os = "macos")]
-        self.perform_editing_selector(objc2::sel!(copy:));
         #[cfg(target_os = "windows")]
         self.perform_editing_command("copy");
     }
 
     fn webview_cut(&self) {
-        #[cfg(target_os = "macos")]
-        self.perform_editing_selector(objc2::sel!(cut:));
         #[cfg(target_os = "windows")]
         self.perform_editing_command("cut");
     }
 
     fn webview_paste(&self) {
-        #[cfg(target_os = "macos")]
-        self.perform_editing_selector(objc2::sel!(paste:));
         #[cfg(target_os = "windows")]
         self.perform_editing_command("paste");
     }
 
     fn webview_select_all(&self) {
-        #[cfg(target_os = "macos")]
-        self.perform_editing_selector(objc2::sel!(selectAll:));
         #[cfg(target_os = "windows")]
         self.perform_editing_command("selectAll");
     }
@@ -2029,10 +1543,7 @@ impl BrowserView {
                 "browser-back",
                 "icons/arrow-left.svg",
                 self.can_go_back,
-                tr!(
-                    "browser.back",
-                    shortcut = crate::platform::primary_shortcut("⌘[", "Ctrl+[")
-                ),
+                tr!("browser.back", shortcut = "Ctrl+["),
                 theme,
                 |this, _, cx| this.go_back(cx),
                 cx,
@@ -2041,10 +1552,7 @@ impl BrowserView {
                 "browser-forward",
                 "icons/arrow-right.svg",
                 self.can_go_forward,
-                tr!(
-                    "browser.forward",
-                    shortcut = crate::platform::primary_shortcut("⌘]", "Ctrl+]")
-                ),
+                tr!("browser.forward", shortcut = "Ctrl+]"),
                 theme,
                 |this, _, cx| this.go_forward(cx),
                 cx,
@@ -2064,10 +1572,7 @@ impl BrowserView {
                     "browser-reload",
                     "icons/rotate-cw.svg",
                     has_page,
-                    tr!(
-                        "browser.reload",
-                        shortcut = crate::platform::primary_shortcut("⌘R", "Ctrl+R")
-                    ),
+                    tr!("browser.reload", shortcut = "Ctrl+R"),
                     theme,
                     |this, _, cx| this.reload(cx),
                     cx,
@@ -2143,10 +1648,7 @@ impl BrowserView {
                     .line_height(px(17.0))
                     .text_color(theme.text_tertiary)
                     .whitespace_normal()
-                    .child(tr!(
-                        "browser.start_hint",
-                        shortcut = crate::platform::primary_shortcut("⌘L", "Ctrl+L")
-                    )),
+                    .child(tr!("browser.start_hint", shortcut = "Ctrl+L")),
             )
     }
 
@@ -2322,156 +1824,12 @@ impl BrowserView {
     }
 }
 
-/// Distilled page-load event, so handler closures stay free of wry types.
+/// Distilled page-load event, so handler closures stay free of WebView2 types.
 #[derive(Clone, Copy)]
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 enum PageLoad {
     Started,
     Finished,
 }
-
-/// Convert a WebKit snapshot into pixels GPUI paints synchronously.
-///
-/// The rep wraps the snapshot's `CGImage` without re-encoding; the only cost
-/// is one pass over the pixel buffer into the tightly packed BGRA order
-/// [`gpui::RenderImage`] uploads as-is.
-#[cfg(target_os = "macos")]
-fn snapshot_render_image(
-    image: &objc2_app_kit::NSImage,
-) -> Option<std::sync::Arc<gpui::RenderImage>> {
-    use objc2::AnyThread;
-    use objc2_app_kit::{NSBitmapFormat, NSBitmapImageRep};
-
-    let cg_image =
-        unsafe { image.CGImageForProposedRect_context_hints(std::ptr::null_mut(), None, None) }?;
-    let rep = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &cg_image);
-    if rep.isPlanar() || rep.bitsPerSample() != 8 {
-        return None;
-    }
-    let width = usize::try_from(rep.pixelsWide()).ok()?;
-    let height = usize::try_from(rep.pixelsHigh()).ok()?;
-    let bytes_per_row = usize::try_from(rep.bytesPerRow()).ok()?;
-    let samples = usize::try_from(rep.samplesPerPixel()).ok()?;
-    let format = rep.bitmapFormat();
-    let data = rep.bitmapData();
-    if data.is_null() {
-        return None;
-    }
-    let bytes = unsafe { std::slice::from_raw_parts(data, bytes_per_row.checked_mul(height)?) };
-    let bgra = bgra_from_bitmap(
-        bytes,
-        width,
-        height,
-        bytes_per_row,
-        samples,
-        format.contains(NSBitmapFormat::AlphaFirst),
-        format.contains(NSBitmapFormat::ThirtyTwoBitLittleEndian),
-    )?;
-    let buffer = image::RgbaImage::from_raw(width as u32, height as u32, bgra)?;
-    Some(std::sync::Arc::new(gpui::RenderImage::new(vec![
-        image::Frame::new(buffer),
-    ])))
-}
-
-/// Repack an `NSBitmapImageRep` pixel buffer as tight BGRA rows.
-///
-/// The rep's channel order follows two format flags: `alpha_first` gives the
-/// declared sample order, and 32-bit little-endian packing stores that order
-/// reversed in memory. Snapshots are opaque, so premultiplication needs no
-/// undoing. Returns `None` for layouts snapshots never use (fewer than three
-/// samples, undersized buffers) — the caller falls back to no snapshot.
-#[cfg(any(target_os = "macos", test))]
-fn bgra_from_bitmap(
-    bytes: &[u8],
-    width: usize,
-    height: usize,
-    bytes_per_row: usize,
-    samples: usize,
-    alpha_first: bool,
-    little_endian_words: bool,
-) -> Option<Vec<u8>> {
-    if width == 0 || height == 0 || !(3..=4).contains(&samples) {
-        return None;
-    }
-    let row_bytes = width.checked_mul(samples)?;
-    if bytes_per_row < row_bytes || bytes.len() < bytes_per_row.checked_mul(height)? {
-        return None;
-    }
-
-    // Where each output channel (B, G, R) lives within one pixel's bytes.
-    let [b, g, r] = match (samples, alpha_first, little_endian_words) {
-        (4, true, true) => [0, 1, 2], // memory B,G,R,A — the CGImage native case
-        (4, false, false) => [2, 1, 0], // memory R,G,B,A
-        (4, true, false) => [3, 2, 1], // memory A,R,G,B
-        (4, false, true) => [1, 2, 3], // memory A,B,G,R
-        _ => [2, 1, 0],               // 3-sample R,G,B
-    };
-    let alpha = match (samples, alpha_first, little_endian_words) {
-        (4, true, true) => Some(3),
-        (4, false, false) => Some(3),
-        (4, true, false) => Some(0),
-        (4, false, true) => Some(0),
-        _ => None,
-    };
-
-    if (b, g, r, alpha) == (0, 1, 2, Some(3)) && bytes_per_row == row_bytes {
-        return Some(bytes[..row_bytes * height].to_vec());
-    }
-
-    let mut out = Vec::with_capacity(width * height * 4);
-    for row in bytes.chunks_exact(bytes_per_row).take(height) {
-        for pixel in row[..row_bytes].chunks_exact(samples) {
-            out.extend_from_slice(&[
-                pixel[b],
-                pixel[g],
-                pixel[r],
-                alpha.map_or(u8::MAX, |a| pixel[a]),
-            ]);
-        }
-    }
-    Some(out)
-}
-
-#[cfg(target_os = "macos")]
-fn download_destination(url: &str, suggested: std::path::PathBuf) -> Option<std::path::PathBuf> {
-    let downloads = dirs::download_dir()?;
-    let name = suggested
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| !name.is_empty())
-        .or_else(|| {
-            url.split(['?', '#'])
-                .next()?
-                .rsplit('/')
-                .next()
-                .map(str::to_owned)
-                .filter(|name| !name.is_empty())
-        })
-        .unwrap_or_else(|| "download".to_owned());
-
-    let path = downloads.join(&name);
-    if !path.exists() {
-        return Some(path);
-    }
-    let (stem, extension) = match name.rsplit_once('.') {
-        Some((stem, extension)) if !stem.is_empty() => (stem.to_owned(), format!(".{extension}")),
-        _ => (name, String::new()),
-    };
-    (2..1000)
-        .map(|counter| downloads.join(format!("{stem} ({counter}){extension}")))
-        .find(|candidate| !candidate.exists())
-}
-
-#[cfg(target_os = "macos")]
-fn reveal_in_finder(path: &std::path::Path) {
-    use objc2_app_kit::NSWorkspace;
-    use objc2_foundation::{NSArray, NSString, NSURL};
-
-    let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
-    let urls = NSArray::from_retained_slice(&[url]);
-    NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&urls);
-}
-
 impl Focusable for BrowserView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -2596,59 +1954,11 @@ mod tests {
     }
 
     #[test]
-    fn bitmap_repacking_reaches_bgra_from_every_snapshot_layout() {
-        // One red pixel then one green pixel, expressed in each channel
-        // layout `NSBitmapImageRep` can hand back for an 8-bit snapshot.
-        let bgra = [0u8, 0, 255, 255, 0, 255, 0, 255];
-        let rgba = [255u8, 0, 0, 255, 0, 255, 0, 255];
-        let argb = [255u8, 255, 0, 0, 255, 0, 255, 0];
-        let abgr = [255u8, 0, 0, 255, 255, 0, 255, 0];
-        let rgb = [255u8, 0, 0, 0, 255, 0];
-        let expected = vec![0u8, 0, 255, 255, 0, 255, 0, 255];
-
-        assert_eq!(
-            bgra_from_bitmap(&bgra, 2, 1, 8, 4, true, true),
-            Some(expected.clone())
-        );
-        assert_eq!(
-            bgra_from_bitmap(&rgba, 2, 1, 8, 4, false, false),
-            Some(expected.clone())
-        );
-        assert_eq!(
-            bgra_from_bitmap(&argb, 2, 1, 8, 4, true, false),
-            Some(expected.clone())
-        );
-        assert_eq!(
-            bgra_from_bitmap(&abgr, 2, 1, 8, 4, false, true),
-            Some(expected.clone())
-        );
-        assert_eq!(
-            bgra_from_bitmap(&rgb, 2, 1, 6, 3, false, false),
-            Some(expected)
-        );
-    }
-
-    #[test]
-    fn bitmap_repacking_honors_row_padding_and_rejects_bad_layouts() {
-        // Two rows of one RGBA pixel with 4 bytes of row padding.
-        let padded = [
-            255u8, 0, 0, 255, 9, 9, 9, 9, //
-            0, 255, 0, 255, 9, 9, 9, 9,
-        ];
-        assert_eq!(
-            bgra_from_bitmap(&padded, 1, 2, 8, 4, false, false),
-            Some(vec![0, 0, 255, 255, 0, 255, 0, 255])
-        );
-        assert_eq!(bgra_from_bitmap(&[0; 8], 2, 1, 8, 2, false, false), None);
-        assert_eq!(bgra_from_bitmap(&[0; 7], 2, 1, 8, 4, false, false), None);
-        assert_eq!(bgra_from_bitmap(&[], 0, 0, 0, 4, false, false), None);
-    }
-
-    #[test]
     fn download_names_do_not_overwrite() {
         // Pure-logic check of the uniquing shape; the filesystem probe path is
         // exercised by using a directory that cannot collide.
-        let unique = std::env::temp_dir().join(format!("fintwind-download-{}", uuid::Uuid::new_v4()));
+        let unique =
+            std::env::temp_dir().join(format!("fintwind-download-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&unique).unwrap();
         std::fs::write(unique.join("file.txt"), "x").unwrap();
         let (stem, extension) = match "file.txt".rsplit_once('.') {

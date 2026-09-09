@@ -10,10 +10,10 @@
 // to say which binary an item is for. Existing feeds in the directory are
 // merged, so older releases keep their entries.
 //
-// macOS signs through Sparkle's `sign_update`; there is no such tool here, so
-// the same EdDSA key is used through Node's Ed25519 primitives. The derived
-// public key is checked against the app's SUPublicEDKey first — an unsigned
-// or wrongly-signed feed is a dead update path, and it must fail loudly.
+// There is no Sparkle `sign_update` here, so the same EdDSA key is used
+// through Node's Ed25519 primitives. The derived public key is checked
+// against the app's published key first — an unsigned or wrongly-signed feed
+// is a dead update path, and it must fail loudly.
 //
 // Env:
 //   SPARKLE_PRIVATE_KEY        EdDSA private key, base64 (required)
@@ -22,7 +22,7 @@ import { createPrivateKey, sign } from "node:crypto";
 import { readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { defaultDownloadUrlPrefix } from "./appcast.ts";
+export const defaultDownloadUrlPrefix = "https://releases.fintwind.sh/";
 
 const projectRoot = resolve(import.meta.dir, "..");
 
@@ -59,15 +59,12 @@ export function publicKeyBase64(privateKey: ReturnType<typeof createPrivateKey>)
   return Buffer.from(jwk.x, "base64url").toString("base64");
 }
 
-/** SUPublicEDKey, the one value both platforms have to agree on. */
+/** The EdDSA public key the app compiles in and the feed must match. */
 export async function appPublicKey(): Promise<string> {
-  const plist = await Bun.file(join(projectRoot, "resources/Info.plist")).text();
-  const key = plist
-    .split("<key>SUPublicEDKey</key>")[1]
-    ?.split("<string>")[1]
-    ?.split("</string>")[0]
-    ?.trim();
-  if (!key) throw new Error("resources/Info.plist has no SUPublicEDKey");
+  const key = (
+    await Bun.file(join(projectRoot, "resources/sparkle-public-ed-key.txt")).text()
+  ).trim();
+  if (!key) throw new Error("resources/sparkle-public-ed-key.txt is empty");
   return key;
 }
 
@@ -180,7 +177,7 @@ export async function generateWindowsAppcasts(
   const expected = await appPublicKey();
   if (derived !== expected) {
     throw new Error(
-      `SPARKLE_PRIVATE_KEY does not match SUPublicEDKey (${expected}); ` +
+      `SPARKLE_PRIVATE_KEY does not match the app public key (${expected}); ` +
         `it derives ${derived}. Signing with it would ship a feed the app rejects.`,
     );
   }

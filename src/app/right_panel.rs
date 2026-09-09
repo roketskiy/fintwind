@@ -2409,7 +2409,7 @@ impl Fintwind {
                                     Tooltip::new(tr!(
                                         "files.unsaved_changes",
                                         shortcut =
-                                            crate::platform::primary_shortcut("⌘S", "Ctrl+S")
+                                            "Ctrl+S"
                                     ))
                                     .build(window, cx)
                                 }),

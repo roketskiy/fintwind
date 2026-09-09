@@ -34,13 +34,11 @@ crossbeam-channel = "0.5"
 dirs = "6.0"
 # The egoist/zed fork is upstream main plus PR #61945 (layered scene
 # rendering), which lets GPUI composite menus and tooltips above native child
-# views — the browser surface's WKWebView. Drop back to upstream once the PR
+# views — the browser surface's WebView2. Drop back to upstream once the PR
 # merges.
 gpui = { git = "https://github.com/egoist/zed", branch = "waku-webview" }
 gpui_platform = { git = "https://github.com/egoist/zed", branch = "waku-webview", features = [
     "font-kit",
-    "wayland",
-    "x11",
 ] }
 parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
@@ -78,81 +76,6 @@ gpui = { git = "https://github.com/egoist/zed", branch = "waku-webview", feature
     "test-support",
 ] }
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-wry = { version = "0.56", features = ["devtools"] }
-block2 = "0.6"
-# Matches the version GPUI itself renders with, so RenderImage frames are the
-# same `image` types.
-image = "0.25"
-objc2-core-graphics = { version = "0.3", default-features = false, features = [
-    "std",
-    "CGImage",
-] }
-objc2-web-kit = { version = "0.3.2", default-features = false, features = [
-    "std",
-    "block2",
-    "objc2-app-kit",
-    "WKWebView",
-    "WKSnapshotConfiguration",
-] }
-objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = [
-    "std",
-    "NSAccessibility",
-    "NSAppearance",
-    "NSApplication",
-    "NSBitmapImageRep",
-    "NSCell",
-    "NSColor",
-    "NSEvent",
-    "NSGraphics",
-    "NSGraphicsContext",
-    "NSImage",
-    "NSImageRep",
-    "NSMenu",
-    "NSMenuItem",
-    "NSResponder",
-    "NSView",
-    "NSVisualEffectView",
-    "NSWindow",
-    "NSWorkspace",
-    "objc2-core-graphics",
-    "objc2-quartz-core",
-] }
-objc2-foundation = { version = "0.3", default-features = false, features = [
-    "std",
-    "NSArray",
-    "NSBundle",
-    "NSData",
-    "NSDictionary",
-    "NSError",
-    "NSFileManager",
-    "NSGeometry",
-    "NSKeyValueObserving",
-    "NSLocale",
-    "NSProcessInfo",
-    "NSString",
-    "NSURL",
-] }
-objc2-user-notifications = { version = "0.3", default-features = false, features = [
-    "std",
-    "block2",
-    "UNNotificationContent",
-    "UNNotificationRequest",
-    "UNNotificationSound",
-    "UNNotificationTrigger",
-    "UNUserNotificationCenter",
-] }
-objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "objc2-core-graphics"] }
-raw-window-handle = "0.6"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-# Matches the version GPUI exposes through `WindowOptions::icon`.
-image = { version = "0.25", default-features = false, features = ["png"] }
-
 [target.'cfg(target_os = "windows")'.build-dependencies]
 embed-resource = "3.0"
 
@@ -183,8 +106,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
-# Verifies the EdDSA signatures `generate_appcast` writes, so the Windows
-# updater trusts the same key Sparkle does on macOS.
+# Verifies the EdDSA signatures `scripts/appcast-windows.ts` writes.
 ed25519-dalek = "2"
 
 [profile.release]

@@ -639,7 +639,7 @@ impl Fintwind {
             },
             can_commit,
             commit_active,
-            Some(crate::platform::primary_shortcut("⌘↩", "Ctrl+Enter")),
+            Some("Ctrl+Enter"),
             CommitAction::Commit,
             weak.clone(),
             &theme,

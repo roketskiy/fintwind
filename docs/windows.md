@@ -48,8 +48,7 @@ its signature, and runs it. fintwind closes, is replaced in place, and reopens.
 Turn the check off in **Settings → General → Automatic updates** — **Check for
 Updates…** in the app menu still works either way.
 
-Updates are the same signed feed macOS uses, with one appcast per
-architecture:
+Updates use one signed appcast per architecture:
 
 - `https://releases.fintwind.sh/appcast-windows-x86_64.xml`
 - `https://releases.fintwind.sh/appcast-windows-aarch64.xml`
@@ -93,7 +92,7 @@ Ctrl+Shift+V copy and paste so Ctrl+C stays available to the shell.
 
 The right panel's Browser tab runs on WebView2, which is in-box on Windows 11
 and evergreen-installed on Windows 10. Navigation, devtools, downloads, and
-pop-up handling behave as they do on macOS.
+pop-up handling are native WebView2.
 
 fintwind hosts it in *visual* mode rather than as a child window: the page renders
 into a DirectComposition visual that GPUI hands out between its own content

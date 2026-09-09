@@ -2,7 +2,7 @@
 //!
 //! Explorer, the taskbar, and the Programs list all read the icon and version
 //! block out of the PE image itself — there is no bundle or desktop entry to
-//! carry them. Every other platform builds without a script.
+//! carry them.
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
@@ -17,26 +17,21 @@ fn main() {
     }
 }
 
-/// Republish `SUPublicEDKey` from the macOS Info.plist as a compile-time
-/// constant.
+/// Publish the EdDSA public key as a compile-time constant.
 ///
-/// The Windows updater verifies the same EdDSA signatures `generate_appcast`
-/// writes, against the same key. Reading the plist here rather than repeating
-/// the key in Rust means the two cannot drift into a feed the app rejects.
+/// The Windows updater verifies the signatures `scripts/appcast-windows.ts`
+/// writes against this key. Reading it from a file rather than repeating it
+/// in Rust means the feed and the app cannot drift.
 fn export_sparkle_public_key() {
-    const PLIST: &str = "resources/Info.plist";
-    const KEY: &str = "<key>SUPublicEDKey</key>";
+    const KEY_FILE: &str = "resources/sparkle-public-ed-key.txt";
 
-    println!("cargo:rerun-if-changed={PLIST}");
+    println!("cargo:rerun-if-changed={KEY_FILE}");
 
-    let plist = std::fs::read_to_string(PLIST).expect("read the app Info.plist");
-    let value = plist
-        .split_once(KEY)
-        .and_then(|(_, rest)| rest.split_once("<string>"))
-        .and_then(|(_, rest)| rest.split_once("</string>"))
-        .map(|(value, _)| value.trim())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| panic!("{PLIST} has no SUPublicEDKey"));
+    let value = std::fs::read_to_string(KEY_FILE).expect("read the Sparkle public key");
+    let value = value.trim();
+    if value.is_empty() {
+        panic!("{KEY_FILE} is empty");
+    }
 
     println!("cargo:rustc-env=FINTWIND_SPARKLE_PUBLIC_ED_KEY={value}");
 }

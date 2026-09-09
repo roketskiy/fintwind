@@ -92,32 +92,6 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("secondary-enter", SubmitSteer, Some("ComposerInput")),
     ]);
 
-    #[cfg(target_os = "macos")]
-    cx.bind_keys([
-        KeyBinding::new("cmd-backspace", DeleteToStart, Some("ComposerInput")),
-        KeyBinding::new("cmd-delete", DeleteToEnd, Some("ComposerInput")),
-        KeyBinding::new("ctrl-h", Backspace, Some("ComposerInput")),
-        KeyBinding::new("ctrl-d", Delete, Some("ComposerInput")),
-        KeyBinding::new("ctrl-u", DeleteToStart, Some("ComposerInput")),
-        KeyBinding::new("ctrl-k", DeleteToEnd, Some("ComposerInput")),
-        KeyBinding::new("ctrl-b", Left, Some("ComposerInput")),
-        KeyBinding::new("ctrl-f", Right, Some("ComposerInput")),
-        KeyBinding::new("cmd-left", Home, Some("ComposerInput")),
-        KeyBinding::new("cmd-right", End, Some("ComposerInput")),
-        KeyBinding::new("cmd-up", Home, Some("ComposerInput")),
-        KeyBinding::new("cmd-down", End, Some("ComposerInput")),
-        KeyBinding::new("ctrl-a", Home, Some("ComposerInput")),
-        KeyBinding::new("ctrl-e", End, Some("ComposerInput")),
-        KeyBinding::new("shift-cmd-left", SelectToStart, Some("ComposerInput")),
-        KeyBinding::new("shift-cmd-right", SelectToEnd, Some("ComposerInput")),
-        KeyBinding::new("cmd-shift-up", SelectToStart, Some("ComposerInput")),
-        KeyBinding::new("cmd-shift-down", SelectToEnd, Some("ComposerInput")),
-        KeyBinding::new("ctrl-shift-a", SelectToStart, Some("ComposerInput")),
-        KeyBinding::new("ctrl-shift-e", SelectToEnd, Some("ComposerInput")),
-    ]);
-
-    // The word-motion chords Windows and the Linux desktops share.
-    #[cfg(not(target_os = "macos"))]
     cx.bind_keys([
         KeyBinding::new(
             "ctrl-backspace",

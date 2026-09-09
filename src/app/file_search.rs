@@ -814,10 +814,7 @@ impl Fintwind {
                 .child(find_toggle(
                     "find-toggle-case",
                     "icons/case-sensitive.svg",
-                    tr!(
-                        "find.match_case",
-                        shortcut = crate::platform::primary_shortcut("⌥⌘C", "Ctrl+Alt+C")
-                    ),
+                    tr!("find.match_case", shortcut = "Ctrl+Alt+C"),
                     search.case_sensitive,
                     theme,
                     cx.listener(|this, _, _, cx| {
@@ -827,10 +824,7 @@ impl Fintwind {
                 .child(find_toggle(
                     "find-toggle-word",
                     "icons/whole-word.svg",
-                    tr!(
-                        "find.match_whole_word",
-                        shortcut = crate::platform::primary_shortcut("⌥⌘W", "Ctrl+Alt+W")
-                    ),
+                    tr!("find.match_whole_word", shortcut = "Ctrl+Alt+W"),
                     search.whole_word,
                     theme,
                     cx.listener(|this, _, _, cx| {
@@ -840,10 +834,7 @@ impl Fintwind {
                 .child(find_toggle(
                     "find-toggle-regex",
                     "icons/regex.svg",
-                    tr!(
-                        "find.use_regex",
-                        shortcut = crate::platform::primary_shortcut("⌥⌘R", "Ctrl+Alt+R")
-                    ),
+                    tr!("find.use_regex", shortcut = "Ctrl+Alt+R"),
                     search.use_regex,
                     theme,
                     cx.listener(|this, _, _, cx| {
@@ -921,10 +912,7 @@ impl Fintwind {
                 .child(find_bar_button(
                     "replace-all",
                     "icons/replace-all.svg",
-                    tr!(
-                        "find.replace_all",
-                        shortcut = crate::platform::primary_shortcut("⌥⌘Enter", "Ctrl+Alt+Enter")
-                    ),
+                    tr!("find.replace_all", shortcut = "Ctrl+Alt+Enter"),
                     has_matches,
                     theme,
                     cx.listener(|this, _, _, cx| this.file_search_replace_all(cx)),

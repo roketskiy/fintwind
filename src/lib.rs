@@ -190,9 +190,6 @@ pub fn run() {
         .with_assets(crate::assets::Assets)
         .with_main_window_reopen()
         .run(move |cx: &mut App| {
-            // Linux uses this for Wayland app_id/X11 WM_CLASS and notification
-            // attribution. Other platforms also benefit from one stable
-            // process identity.
             cx.set_app_identity(APP_ID, APP_NAME);
             crate::assets::register_fonts(cx).expect("failed to register bundled fonts");
             crate::input::init(cx);
@@ -207,8 +204,8 @@ pub fn run() {
             crate::theme::init(cx);
             crate::platform::init_reduce_motion(cx);
 
-            // Sparkle only runs from a bundled release build (or when forced
-            // via FINTWIND_FORCE_UPDATER=1); everywhere else the menu item is
+            // The updater only runs from a release build (or when forced via
+            // FINTWIND_FORCE_UPDATER=1); everywhere else the menu item is
             // omitted along with the updater itself.
             let updater = crate::updater::Updater::init();
             let updater_available = updater.is_some();
@@ -221,7 +218,7 @@ pub fn run() {
             cx.on_action(|_: &About, _| crate::platform::show_about_panel());
 
             cx.bind_keys([
-                // `secondary` is Command on macOS and Control elsewhere.
+                // `secondary` is Control on Windows.
                 KeyBinding::new("secondary-q", Quit, None),
                 KeyBinding::new("secondary-w", CloseWindow, None),
                 KeyBinding::new("secondary-n", NewSession, None),
@@ -284,10 +281,9 @@ pub fn run() {
 
             cx.on_action(|_: &Quit, cx| cx.quit());
 
-            // Unlike AppKit, Linux has no Dock activation path that can
-            // restore a hidden last window. Follow Zed's GPUI precedent and
-            // terminate when the final window closes.
-            #[cfg(not(target_os = "macos"))]
+            // Follow Zed's GPUI precedent and terminate when the final window
+            // closes — Windows has no Dock activation path that can restore a
+            // hidden last window.
             cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
@@ -306,29 +302,13 @@ pub fn run() {
                             // is what extends the client area over the frame
                             // so Fintwind's own header can host the caption
                             // buttons and drag region.
-                            appears_transparent: cfg!(any(
-                                target_os = "macos",
-                                target_os = "windows"
-                            )),
-                            traffic_light_position: cfg!(target_os = "macos")
-                                .then(|| point(px(16.0), px(17.0))),
+                            appears_transparent: true,
+                            traffic_light_position: None,
                         }),
-                        // Fintwind moves its custom macOS titlebar explicitly. Keep
-                        // the NSWindow movable so native controls and Window-menu
-                        // tiling remain enabled.
                         is_movable: true,
-                        app_owns_titlebar_drag: cfg!(target_os = "macos"),
-                        window_background: if cfg!(target_os = "macos") {
-                            WindowBackgroundAppearance::Blurred
-                        } else {
-                            WindowBackgroundAppearance::Opaque
-                        },
+                        app_owns_titlebar_drag: false,
+                        window_background: WindowBackgroundAppearance::Opaque,
                         app_id: Some(APP_ID.to_owned()),
-                        // GPUI defaults to compositor/server decorations. If a
-                        // Wayland compositor declines them, it reports the
-                        // client fallback and Fintwind renders that frame itself.
-                        #[cfg(target_os = "linux")]
-                        icon: crate::platform::linux_app_icon(),
                         window_bounds: Some(window_bounds),
                         display_id,
                         window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),

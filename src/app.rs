@@ -71,9 +71,6 @@ use crate::{
     ToggleUsagePanel,
 };
 
-#[cfg(target_os = "macos")]
-const TRAFFIC_LIGHT_CLEARANCE: f32 = 86.0;
-#[cfg(not(target_os = "macos"))]
 const TRAFFIC_LIGHT_CLEARANCE: f32 = 8.0;
 const CONTENT_MAX_WIDTH: f32 = 720.0;
 /// Menu-registry id of the composer's model picker, shared by its render site
@@ -1608,8 +1605,8 @@ pub use commit_dialog::init as init_commit_dialog_keys;
 use components::*;
 pub use image_preview::init as init_image_preview_keys;
 pub use settings::init as init_settings_keys;
-pub use sidebar::init as init_sidebar_keys;
 use sidebar::SidebarRow;
+pub use sidebar::init as init_sidebar_keys;
 pub use skills_page::init as init_skills_keys;
 use streaming::*;
 use transcript::*;

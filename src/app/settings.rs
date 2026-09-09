@@ -285,13 +285,10 @@ impl Fintwind {
             window,
             cx,
         );
-        // Only as tall as whatever actually sits in it: macOS's native
-        // traffic lights, or the client-side buttons a Linux desktop puts on
-        // this side. Windows keeps all three on the far side, and a desktop
-        // like GNOME keeps none here, so there is nothing to clear and the
+        // Windows keeps all three caption buttons on the far side, so this
         // strip is only somewhere to drag the window by — the content
         // column's own titlebar carries the rest of that job.
-        let height = if cfg!(target_os = "macos") || left_window_controls.is_some() {
+        let height = if left_window_controls.is_some() {
             48.0
         } else {
             12.0
@@ -1501,4 +1498,3 @@ impl Fintwind {
         cx.notify();
     }
 }
-

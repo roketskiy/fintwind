@@ -7,22 +7,13 @@ well-scoped features are welcome.
 
 The debug app requires:
 
-- macOS, Linux (Wayland or X11), or Windows 10 1809 and newer
+- Windows 10 1809 and newer
 - Rust 1.96 or newer
 - Bun
 - A supported agent CLI when testing a provider integration
-
-On Ubuntu and Debian, install the Linux compiler and GPUI runtime
-prerequisites with:
-
-```sh
-sudo apt install build-essential clang cmake pkg-config libfontconfig-dev \
-  libwayland-dev libx11-xcb-dev libxkbcommon-x11-dev libvulkan1 \
-  xdg-desktop-portal
-```
-
-Equivalent packages are available on Fedora, Arch, and other desktop Linux
-distributions. A working Vulkan driver is required at runtime.
+- The MSVC toolchain (Visual Studio Build Tools with the C++ workload and the
+  Windows SDK) so Cargo can link and so the resource compiler is available for
+  the executable's icon and version block
 
 Install dependencies and start the development watcher from the repository
 root:
@@ -32,49 +23,18 @@ bun install
 bun run dev
 ```
 
-On macOS the watcher builds and signs `target/debug/Fintwind Debug.app`; on Linux
-and Windows it builds `target/debug/fintwind`. In both cases the provider daemon remains an
-external `target/debug/fintwind-debug-daemon`: provider-only edits rebuild and
+The watcher builds `target/debug/fintwind.exe`. The provider daemon remains an
+external `target/debug/fintwind-debug-daemon.exe`: provider-only edits rebuild and
 hot-swap that process without relaunching the app, while desktop edits rebuild
 and relaunch the app normally. Keep that watcher running while you work. Do
 not start a second watcher or manually relaunch the debug app. Press `Ctrl-C`,
 or quit the app, to stop it.
 
-On Windows the right-panel browser runs on WebView2. On Linux it reports that
-it is unavailable.
-
-Windows needs the MSVC toolchain (Visual Studio Build Tools with the C++
-workload and the Windows SDK) so Cargo can link and so the resource compiler
-is available for the executable's icon and version block.
-
-## Linux bundle
-
-To produce a distro-compatible release archive with the desktop and daemon
-binaries, desktop entry, icon, and license:
-
-```sh
-./scripts/bundle-linux.sh
-```
-
-The archive is written under `target/release` with an install-prefix layout
-(`bin/` and `share/`) beneath one versioned directory. It intentionally does
-not bundle system graphics libraries; distribution packages should declare
-those runtime dependencies normally.
-
-`scripts/install.sh` (served at `https://fintwind.sh/install.sh`) is what
-users run to install that archive. Point it at a local build to exercise it
-without publishing:
-
-```sh
-FINTWIND_BUNDLE_PATH=target/release/fintwind-<version>-<target>.tar.gz \
-  sh scripts/install.sh
-```
-
-[docs/linux.md](docs/linux.md) documents both paths for users.
+The right-panel browser runs on WebView2.
 
 ## Windows bundle
 
-To produce the portable archive and the installer, on Windows:
+To produce the portable archive and the installer:
 
 ```sh
 bun scripts/bundle-windows.ts

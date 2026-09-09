@@ -5,14 +5,9 @@ import { watch, type FSWatcher } from "node:fs";
 import { join, resolve } from "node:path";
 
 const root = resolve(import.meta.dir, "..");
-const isMacOS = process.platform === "darwin";
-const appName = "Fintwind Debug";
 const targetDir = resolve(root, process.env.CARGO_TARGET_DIR || "target");
-const executableSuffix = process.platform === "win32" ? ".exe" : "";
-const appPath = isMacOS
-  ? join(targetDir, "debug/Fintwind Debug.app")
-  : join(targetDir, `debug/fintwind${executableSuffix}`);
-const daemonPath = join(targetDir, `debug/fintwind-debug-daemon${executableSuffix}`);
+const appPath = join(targetDir, "debug/fintwind.exe");
+const daemonPath = join(targetDir, "debug/fintwind-debug-daemon.exe");
 const watchedDirectories = ["src", "crates", "assets", "resources", "locales"];
 const watchedFiles = ["Cargo.toml", "Cargo.lock", "build.rs"];
 const rebuildDebounceMs = 1_000;
@@ -35,14 +30,12 @@ async function build(target: BuildTarget): Promise<boolean> {
     return buildDaemon();
   }
 
-  console.log(`[fintwind-dev] Building ${isMacOS ? "app bundle" : "app"}...`);
+  console.log("[fintwind-dev] Building app...");
   if (!(await buildDaemon())) {
     console.error("[fintwind-dev] Daemon build failed; keeping the current app open.");
     return false;
   }
-  const result = isMacOS
-    ? await $`${join(root, "scripts/bundle.sh")} debug`.nothrow()
-    : await $`cargo build --package fintwind --bin fintwind`.nothrow();
+  const result = await $`cargo build --package fintwind --bin fintwind`.nothrow();
   if (result.exitCode !== 0) {
     console.error("[fintwind-dev] Build failed; keeping the current app open.");
     return false;
@@ -64,10 +57,8 @@ async function buildDaemon(): Promise<boolean> {
 async function stopApp(): Promise<void> {
   const waiter = app;
   app = undefined;
-  if (isMacOS) {
-    await $`pkill -TERM -x ${appName}`.quiet().nothrow();
-  } else if (waiter?.exitCode === null) {
-    waiter.kill("SIGTERM");
+  if (waiter?.exitCode === null) {
+    waiter.kill();
   }
   if (waiter?.exitCode === null) {
     await waiter.exited;
@@ -76,7 +67,7 @@ async function stopApp(): Promise<void> {
 
 function launchApp(): ReturnType<typeof Bun.spawn> {
   console.log(`[fintwind-dev] Launching ${appPath}`);
-  const command = isMacOS ? ["open", "-n", "-W", appPath] : [appPath];
+  const command = [appPath];
   const launchedApp = Bun.spawn(command, {
     cwd: root,
     env: { ...process.env, FINTWIND_DAEMON_PATH: daemonPath },

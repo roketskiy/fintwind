@@ -6,19 +6,7 @@ and keeps projects, sessions, transcripts on your machine.
 
 ## Install
 
-On macOS, [download the signed `.dmg`](https://fintwind.sh). It updates itself.
-
-On Linux:
-
-```sh
-curl -fsSL https://fintwind.sh/install.sh | sh
-```
-
-The script installs into `~/.local` without root. See
-[docs/linux.md](docs/linux.md) for requirements, manual installation, and
-uninstalling.
-
-On Windows, run `fintwind-<version>-<arch>-Setup.exe` from the
+Run `fintwind-<version>-<arch>-Setup.exe` from the
 [latest release](https://github.com/egoist/fintwind/releases/latest). It installs
 per-user and updates itself. A portable `.zip` is published alongside it. See
 [docs/windows.md](docs/windows.md) for requirements and what is not available
@@ -91,10 +79,9 @@ replace the daemon without relaunching fintwind Debug.
 
 ## Development
 
-Development is supported on macOS, Linux, and Windows and requires
-[Rust 1.96 or newer](https://www.rust-lang.org/tools/install) and
-[Bun](https://bun.sh/). Linux supports both Wayland and X11, and Windows needs
-the MSVC toolchain; install the native build prerequisites listed in
+Development requires Windows 10 1809 or newer, the MSVC toolchain,
+[Rust 1.96 or newer](https://www.rust-lang.org/tools/install), and
+[Bun](https://bun.sh/). Install the native build prerequisites listed in
 [CONTRIBUTING.md](CONTRIBUTING.md) first.
 
 ```sh
@@ -102,7 +89,7 @@ bun install
 bun run dev
 ```
 
-On Windows the right-panel browser runs on WebView2. Agent sessions, projects,
+The right-panel browser runs on WebView2. Agent sessions, projects,
 transcripts, skills, usage, diffs, file editing, and the terminal also run
 natively.
 

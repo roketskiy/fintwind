@@ -46,12 +46,8 @@ fn primary_modifier_pressed(modifiers: &Modifiers) -> bool {
 
 #[inline]
 fn terminal_clipboard_modifier_pressed(modifiers: &Modifiers) -> bool {
-    if cfg!(target_os = "macos") {
-        modifiers.secondary() && !modifiers.control && !modifiers.alt
-    } else {
-        // Preserve Ctrl+C for SIGINT and follow Linux terminal convention.
-        modifiers.control && modifiers.shift && !modifiers.alt && !modifiers.platform
-    }
+    // Preserve Ctrl+C for SIGINT; copy/paste is Ctrl+Shift+C/V.
+    modifiers.control && modifiers.shift && !modifiers.alt && !modifiers.platform
 }
 const TERMINAL_PADDING_X: f32 = 10.0;
 const TERMINAL_PADDING_Y: f32 = 8.0;
@@ -1560,15 +1556,6 @@ fn terminal_key_bytes(keystroke: &Keystroke, mode: TermMode) -> Option<Vec<u8>> 
     let key = keystroke.key.as_str();
 
     if modifiers.platform {
-        #[cfg(target_os = "macos")]
-        return match key {
-            "left" => Some(vec![0x01]),
-            "right" => Some(vec![0x05]),
-            "backspace" => Some(vec![0x15]),
-            _ => None,
-        };
-
-        #[cfg(not(target_os = "macos"))]
         return None;
     }
 
@@ -1892,9 +1879,8 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn linux_terminal_clipboard_shortcuts_preserve_ctrl_c_for_sigint() {
+    fn terminal_clipboard_shortcuts_preserve_ctrl_c_for_sigint() {
         let control = Modifiers {
             control: true,
             ..Default::default()

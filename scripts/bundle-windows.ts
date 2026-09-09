@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 //
 // Build and package the Windows release: a portable zip and the Inno Setup
-// installer the in-app updater re-runs silently. Mirrors bundle-linux.sh for
-// the archive half and resources/windows/fintwind.iss for the installer half.
+// installer the in-app updater re-runs silently. The zip is a portable
+// layout; resources/windows/fintwind.iss builds the installer half.
 //
 // Usage:
 //   bun scripts/bundle-windows.ts
@@ -180,8 +180,7 @@ try {
   await mkdir(releaseDirectory, { recursive: true });
   await rm(archive, { force: true });
   // Windows 10 1803 and later ship bsdtar, which writes a zip when the output
-  // name says so — no PowerShell, and the same one-versioned-directory layout
-  // the Linux tarball uses.
+  // name says so — no PowerShell, and a one-versioned-directory layout.
   await $`${findTar()} -a -c -f ${archive} -C ${staging} ${packageDirectoryName}`;
   console.log(`Created ${archive}`);
 

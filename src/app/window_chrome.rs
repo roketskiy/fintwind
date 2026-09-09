@@ -1,17 +1,11 @@
-#[cfg(target_os = "linux")]
-use gpui::WindowButtonLayout;
-#[cfg(target_os = "windows")]
-use gpui::WindowControlArea;
 use gpui::{
-    AnyElement, BoxShadow, Context, Decorations, Div, Hsla, IntoElement, MouseButton, ResizeEdge,
-    Tiling, Window, div, prelude::*, px, transparent_black,
+    AnyElement, BoxShadow, Context, Decorations, Div, Hsla, IntoElement, KeyDownEvent, MouseButton,
+    ResizeEdge, Tiling, Window, WindowButton, WindowControlArea, div, prelude::*, px,
+    transparent_black,
 };
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-use gpui::{KeyDownEvent, WindowButton};
 
 use super::Fintwind;
 use crate::theme::Theme;
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 use crate::ui::{icon, tooltip::Tooltip};
 
 const CLIENT_FRAME_INSET: f32 = 10.0;
@@ -24,9 +18,8 @@ pub(super) enum WindowControlSide {
 }
 
 impl Fintwind {
-    /// Draw the frame a Wayland compositor delegates back to the client.
-    /// Server-decorated windows pass through untouched, so X11 and Wayland
-    /// compositors that provide native chrome keep doing so.
+    /// Draw the frame when GPUI falls back to client-side decorations.
+    /// Server-decorated windows pass through untouched.
     pub(super) fn render_window_frame(
         &self,
         content: AnyElement,
@@ -102,101 +95,50 @@ impl Fintwind {
             .into_any_element()
     }
 
-    /// Render the window controls Fintwind owns: the desktop's configured button
-    /// order when GPUI had to fall back from server-side to client-side
-    /// decorations, and the platform order on Windows.
+    /// Render the window controls Fintwind owns. Windows keeps all three on the
+    /// right, in this order, and has no per-user layout preference to read.
     pub(super) fn render_client_window_controls(
         &self,
         side: WindowControlSide,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        #[cfg(target_os = "windows")]
-        let buttons = {
-            // Windows keeps all three on the right, in this order, and has no
-            // per-user layout preference to read.
-            if !matches!(side, WindowControlSide::Right) {
-                return None;
-            }
-            [
-                Some(WindowButton::Minimize),
-                Some(WindowButton::Maximize),
-                Some(WindowButton::Close),
-            ]
-        };
+        if !matches!(side, WindowControlSide::Right) {
+            return None;
+        }
+        let buttons = [
+            WindowButton::Minimize,
+            WindowButton::Maximize,
+            WindowButton::Close,
+        ];
 
-        #[cfg(target_os = "linux")]
-        let buttons = {
-            if !matches!(window.window_decorations(), Decorations::Client { .. }) {
-                return None;
-            }
-            let layout = cx
-                .button_layout()
-                .unwrap_or_else(WindowButtonLayout::linux_default);
-            match side {
-                WindowControlSide::Left => layout.left,
-                WindowControlSide::Right => layout.right,
-            }
-        };
-
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
-        {
-            if buttons.iter().all(Option::is_none) {
-                return None;
-            }
-
-            let theme = Theme::current(cx);
-            let is_maximized = window.is_maximized();
-            let supported = window.window_controls();
-            let side_id = match side {
-                WindowControlSide::Left => "client-window-controls-left",
-                WindowControlSide::Right => "client-window-controls-right",
+        let theme = Theme::current(cx);
+        let is_maximized = window.is_maximized();
+        let supported = window.window_controls();
+        let controls = buttons.into_iter().map(|button| {
+            let enabled = match button {
+                WindowButton::Minimize => supported.minimize && window.is_minimizable(),
+                WindowButton::Maximize => supported.maximize && window.is_resizable(),
+                WindowButton::Close => true,
             };
-            let controls = buttons.into_iter().flatten().map(|button| {
-                let enabled = match button {
-                    WindowButton::Minimize => supported.minimize && window.is_minimizable(),
-                    WindowButton::Maximize => supported.maximize && window.is_resizable(),
-                    WindowButton::Close => true,
-                };
-                client_window_button(button, enabled, is_maximized, theme, cx)
-            });
+            client_window_button(button, enabled, is_maximized, theme, cx)
+        });
 
-            #[cfg(target_os = "windows")]
-            let controls = div()
-                .id(side_id)
+        Some(
+            div()
+                .id("client-window-controls-right")
                 .tab_group()
                 .tab_stop(false)
                 .h_full()
                 .flex_none()
                 .flex()
                 .items_center()
-                .children(controls);
-
-            #[cfg(target_os = "linux")]
-            let controls = div()
-                .id(side_id)
-                .tab_group()
-                .tab_stop(false)
-                .h_full()
-                .flex_none()
-                .px(px(10.0))
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .children(controls);
-
-            Some(controls.into_any_element())
-        }
-
-        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-        {
-            let _ = (side, window, cx);
-            None
-        }
+                .children(controls)
+                .into_any_element(),
+        )
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn client_window_button(
     button: WindowButton,
     enabled: bool,
@@ -233,39 +175,23 @@ fn client_window_button(
         theme.text_ghost
     };
 
-    let control = div().id(id);
     // Windows hit-tests the caption before it dispatches a mouse event.
     // Claiming the button's area here is also what lets the maximize control
     // show Windows 11's snap layouts on hover.
-    #[cfg(target_os = "windows")]
-    let control = control.window_control_area(match button {
-        WindowButton::Minimize => WindowControlArea::Min,
-        WindowButton::Maximize => WindowControlArea::Max,
-        WindowButton::Close => WindowControlArea::Close,
-    });
-
-    #[cfg(target_os = "windows")]
-    let control = control
+    let control = div()
+        .id(id)
+        .window_control_area(match button {
+            WindowButton::Minimize => WindowControlArea::Min,
+            WindowButton::Maximize => WindowControlArea::Max,
+            WindowButton::Close => WindowControlArea::Close,
+        })
         .w(px(46.0))
         .h(px(32.0))
         .flex_none()
         .flex()
         .items_center()
         .justify_center();
-
-    #[cfg(target_os = "linux")]
-    let control = control
-        .size(px(26.0))
-        .flex_none()
-        .rounded_full()
-        .flex()
-        .items_center()
-        .justify_center();
-
-    #[cfg(target_os = "windows")]
     let icon_size = 12.0;
-    #[cfg(target_os = "linux")]
-    let icon_size = 14.0;
 
     control
         .track_focus(&focus)
@@ -306,7 +232,6 @@ fn client_window_button(
         .into_any_element()
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn activate_window_button(button: WindowButton, window: &mut Window) {
     match button {
         WindowButton::Minimize => window.minimize_window(),

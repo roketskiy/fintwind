@@ -1,4 +1,4 @@
-use gpui::{App, Global, Hsla, Window, WindowAppearance, hsla, rgb, transparent_black};
+use gpui::{App, Global, Hsla, Window, WindowAppearance, hsla, rgb};
 
 pub use fintwind_client::theme::ThemePreference;
 
@@ -90,11 +90,7 @@ impl Theme {
         Self {
             is_dark: true,
             canvas: rgb(0x1A1A1A).into(),
-            sidebar: if cfg!(target_os = "macos") {
-                transparent_black()
-            } else {
-                rgb(0x181818).into()
-            },
+            sidebar: rgb(0x181818).into(),
             sidebar_drag_background: rgb(0x181818).into(),
             sidebar_item_background: hsla(0.0, 0.0, 0.941, 0.06),
             surface: rgb(0x1A1A1A).into(),
@@ -137,11 +133,7 @@ impl Theme {
         Self {
             is_dark: false,
             canvas: rgb(0xF7F5F0).into(),
-            sidebar: if cfg!(target_os = "macos") {
-                transparent_black()
-            } else {
-                rgb(0xECE8E1).into()
-            },
+            sidebar: rgb(0xECE8E1).into(),
             sidebar_drag_background: rgb(0xECE8E1).into(),
             sidebar_item_background: hsla(0.0, 0.0, 0.078, 0.06),
             surface: rgb(0xF7F5F0).into(),

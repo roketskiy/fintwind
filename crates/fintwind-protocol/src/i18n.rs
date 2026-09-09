@@ -86,17 +86,6 @@ fn locale_uses_east_asian_date_format(locale: &str) -> bool {
     matches!(locale, "zh-CN" | "ja")
 }
 
-#[cfg(target_os = "macos")]
-fn system_locale() -> String {
-    use objc2_foundation::NSLocale;
-
-    NSLocale::preferredLanguages()
-        .firstObject()
-        .map(|locale| locale.to_string())
-        .unwrap_or_else(|| "en".to_owned())
-}
-
-#[cfg(not(target_os = "macos"))]
 fn system_locale() -> String {
     std::env::var("LC_ALL")
         .or_else(|_| std::env::var("LC_MESSAGES"))

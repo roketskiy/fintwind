@@ -693,6 +693,10 @@ impl Fintwind {
                 self.state.selected_project = Some(project_id);
                 self.create_session_for(project_id, cx);
             }
+        } else if let Some(selected) = self.state.selected_session {
+            // The merge may have relocated the selected session to another
+            // project; keep its group unfolded so the active row stays visible.
+            self.reveal_sidebar_session_project(selected, cx);
         }
     }
 

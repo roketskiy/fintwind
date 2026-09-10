@@ -779,7 +779,7 @@ impl Fintwind {
     /// once per stream commit. The fingerprint is an allocation-free scan of
     /// exactly what [`Self::sidebar_rows`] reads: started sessions with their
     /// recency timestamps and project, the projects that seed sessionless
-    /// groups with their `created_at` recency, the collapsed-project set, and
+    /// groups with their `created_at` recency, the expanded-project set, and
     /// the language the headers are localized in.
     fn sidebar_rows_cached(&self) -> Rc<Vec<SidebarRow>> {
         let mut fingerprint = mix(0x51de_ba5e_5eed_c0de, self.state.language as u64);
@@ -796,15 +796,15 @@ impl Fintwind {
             fingerprint = mix(fingerprint, project.created_at);
         }
         // A set has no stable iteration order; combine order-independently.
-        let collapsed = self
-            .sidebar_collapsed_groups
+        let expanded = self
+            .sidebar_expanded_groups
             .iter()
             .fold(0u64, |combined, project| {
                 combined.wrapping_add(mix_uuid(0, *project))
             });
         fingerprint = mix(
-            mix(fingerprint, self.sidebar_collapsed_groups.len() as u64),
-            collapsed,
+            mix(fingerprint, self.sidebar_expanded_groups.len() as u64),
+            expanded,
         );
         if self.sidebar_rows_fingerprint.get() != Some(fingerprint) {
             *self.sidebar_rows_snapshot.borrow_mut() = Rc::new(self.sidebar_rows());
@@ -826,7 +826,7 @@ impl Fintwind {
                 &mut rows,
                 project_id,
                 &sessions,
-                self.sidebar_collapsed_groups.contains(&project_id),
+                !self.sidebar_expanded_groups.contains(&project_id),
             );
         }
         if rows.len() == 1 {
@@ -891,7 +891,7 @@ impl Fintwind {
         let theme = Theme::current(cx);
         let header = match project_id {
             Some(project_id) => {
-                let collapsed = self.sidebar_collapsed_groups.contains(&project_id);
+                let collapsed = !self.sidebar_expanded_groups.contains(&project_id);
                 let project_name = self
                     .state
                     .projects
@@ -975,7 +975,7 @@ impl Fintwind {
     }
 
     fn toggle_sidebar_group(&mut self, project_id: Uuid, cx: &mut Context<Self>) {
-        let collapsed = !self.sidebar_collapsed_groups.contains(&project_id);
+        let collapsed = self.sidebar_expanded_groups.contains(&project_id);
         self.set_sidebar_group_collapsed(project_id, collapsed, cx);
     }
 
@@ -986,11 +986,32 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         let changed = if collapsed {
-            self.sidebar_collapsed_groups.insert(project_id)
+            self.sidebar_expanded_groups.remove(&project_id)
         } else {
-            self.sidebar_collapsed_groups.remove(&project_id)
+            self.sidebar_expanded_groups.insert(project_id)
         };
         if changed {
+            cx.notify();
+        }
+    }
+
+    /// Reveals the group that owns `session_id` so a task the user just
+    /// switched to (or created) is visible even though groups start folded.
+    pub(super) fn reveal_sidebar_session_project(
+        &mut self,
+        session_id: Uuid,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(project_id) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| session.project_id)
+        else {
+            return;
+        };
+        if self.sidebar_expanded_groups.insert(project_id) {
             cx.notify();
         }
     }

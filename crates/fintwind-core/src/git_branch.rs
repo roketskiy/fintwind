@@ -116,6 +116,29 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
     }))
 }
 
+/// The workspace's checked-out branch, or `None` when `cwd` is not inside a
+/// Git repository. A detached HEAD reports its short commit instead.
+///
+/// This is deliberately much cheaper than [`inspect`]: it never enumerates
+/// refs or measures pending changes, so list surfaces can afford to ask once
+/// per project rather than only for the selected workspace.
+pub fn current(cwd: &Path) -> anyhow::Result<Option<String>> {
+    let repository = crate::command_env::plain_command("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .output()
+        .context("failed to execute git")?;
+    if !repository.status.success() {
+        return Ok(None);
+    }
+    if let Some(branch) =
+        optional_stdout(cwd, &["branch", "--show-current"])?.filter(|branch| !branch.is_empty())
+    {
+        return Ok(Some(branch));
+    }
+    Ok(optional_stdout(cwd, &["rev-parse", "--short", "HEAD"])?.filter(|head| !head.is_empty()))
+}
+
 fn worktree_line_counts(cwd: &Path) -> (u64, u64) {
     let tracked = crate::command_env::plain_command("git")
         .args(["diff", "--numstat", "HEAD", "--"])
@@ -376,6 +399,16 @@ mod tests {
                 .unwrap()
                 .checked_out_elsewhere
         );
+    }
+
+    #[test]
+    fn reports_the_current_branch_without_inspecting_the_tree() {
+        let repository = repository();
+        assert_eq!(current(&repository).unwrap().as_deref(), Some("main"));
+
+        let outside = repository.with_extension("not-a-repository");
+        fs::create_dir_all(&outside).unwrap();
+        assert_eq!(current(&outside).unwrap(), None);
     }
 
     #[test]

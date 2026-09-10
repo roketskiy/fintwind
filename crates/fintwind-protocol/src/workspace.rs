@@ -90,6 +90,13 @@ pub enum WorkspaceOperation {
         #[ts(type = "string")]
         cwd: PathBuf,
     },
+    /// The currently checked-out branch of a workspace. Far cheaper than
+    /// [`Self::InspectBranches`], which enumerates refs and measures the
+    /// working tree; list surfaces that only draw the branch name ask for this.
+    CurrentBranch {
+        #[ts(type = "string")]
+        cwd: PathBuf,
+    },
     CheckoutBranch {
         #[ts(type = "string")]
         cwd: PathBuf,
@@ -221,6 +228,9 @@ pub enum WorkspaceResult {
     },
     Branches {
         snapshot: Option<BranchSnapshot>,
+    },
+    CurrentBranch {
+        branch: Option<String>,
     },
     BranchChanged {
         snapshot: BranchSnapshot,

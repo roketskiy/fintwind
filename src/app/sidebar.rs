@@ -77,8 +77,8 @@ fn updater_button_available_content(
 /// Height of a session card plus the separation reserved beneath it in the
 /// virtualized sidebar list. Keep the gap inside the list row so measured and
 /// estimated heights stay identical for off-screen sessions.
-const SIDEBAR_SESSION_CARD_HEIGHT: f32 = 36.0;
-const SIDEBAR_SESSION_ROW_GAP: f32 = 1.0;
+const SIDEBAR_SESSION_CARD_HEIGHT: f32 = 64.0;
+const SIDEBAR_SESSION_ROW_GAP: f32 = 2.0;
 const SIDEBAR_SESSION_ROW_HEIGHT: f32 = SIDEBAR_SESSION_CARD_HEIGHT + SIDEBAR_SESSION_ROW_GAP;
 const SIDEBAR_ACTION_ROW_HEIGHT: f32 = 32.0;
 const SIDEBAR_SEARCH_BOTTOM_GAP: f32 = 10.0;
@@ -866,7 +866,12 @@ impl Fintwind {
         }
     }
 
-    fn sidebar_row(&self, index: usize, rows: &[SidebarRow], cx: &mut Context<Self>) -> AnyElement {
+    fn sidebar_row(
+        &mut self,
+        index: usize,
+        rows: &[SidebarRow],
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let Some(row) = rows.get(index) else {
             return div().into_any_element();
         };
@@ -1082,25 +1087,76 @@ impl Fintwind {
         cx.notify();
     }
 
-    fn render_sidebar_session_item(&self, session_id: Uuid, cx: &mut Context<Self>) -> AnyElement {
+    fn render_sidebar_session_item(
+        &mut self,
+        session_id: Uuid,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Theme::current(cx);
-        let Some(session) = self
-            .state
-            .sessions
-            .iter()
-            .find(|session| session.id == session_id)
-        else {
-            return div().into_any_element();
+        // Everything the card draws is read off the session before the branch
+        // cache is consulted, because its read needs `&mut self`.
+        let (status, working, time_label, project_name, title_text, stored_branch, workspace_path) = {
+            let Some(session) = self
+                .state
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+            else {
+                return div().into_any_element();
+            };
+            let project_name = self
+                .state
+                .projects
+                .iter()
+                .find(|project| project.id == session.project_id)
+                .map(Project::display_name)
+                .unwrap_or_else(|| tr!("sidebar.unknown_project"));
+            // A materialized worktree already stores its branch. A local
+            // checkout reads the lightweight per-workspace branch cache, which
+            // answers from memory and only schedules background work on a miss.
+            let (stored_branch, workspace_path) = match &session.workspace {
+                SessionWorkspace::Worktree { branch, .. } => (Some(branch.clone()), None),
+                SessionWorkspace::Local | SessionWorkspace::NewWorktree { .. } => (
+                    None,
+                    self.workspace_path_for_session(session)
+                        .map(std::path::Path::to_path_buf),
+                ),
+            };
+            (
+                session.status,
+                matches!(
+                    session.status,
+                    SessionStatus::Connecting | SessionStatus::Working
+                ),
+                session_time_label(session, unix_time()),
+                project_name,
+                localized_session_title(session),
+                stored_branch,
+                workspace_path,
+            )
+        };
+        let branch = if let Some(branch) = stored_branch {
+            Some(branch)
+        } else if let Some(path) = workspace_path.as_deref() {
+            let cached = self.sidebar_branch_for_workspace(path, cx);
+            cached.or_else(|| {
+                // Stale-while-revalidate: invalidation (a command finishing,
+                // switching sessions, app reactivation) drops the cached name,
+                // so keep drawing the selected workspace's last known branch
+                // until the fresh one lands instead of flickering the row.
+                self.visible_branch_snapshot
+                    .as_ref()
+                    .filter(|(cached, _)| cached == path)
+                    .and_then(|(_, snapshot)| snapshot.display_branch().map(str::to_owned))
+            })
+        } else {
+            None
         };
         let selected = sidebar_session_selected(
             self.state.selected_session,
             self.pending_session_activation
                 .map(|pending| pending.session_id),
             session_id,
-        );
-        let working = matches!(
-            session.status,
-            SessionStatus::Connecting | SessionStatus::Working
         );
         let rename_input =
             (self.session_rename == Some(session_id)).then(|| self.session_rename_input.clone());
@@ -1135,68 +1191,102 @@ impl Fintwind {
                 .truncate()
                 .text_size(px(13.5))
                 .text_color(theme.text)
-                .child(SharedString::from(localized_session_title(session)))
+                .child(SharedString::from(title_text))
                 .into_any_element()
         };
+        let metadata_time = time_label.map(|label| {
+            div()
+                .flex_none()
+                .text_size(px(11.0))
+                .text_color(if status.is_busy() {
+                    theme.text_tertiary
+                } else {
+                    theme.text_ghost
+                })
+                .child(SharedString::from(label))
+        });
+        let project_row = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(11.0))
+                    .text_color(theme.text_tertiary)
+                    .child(SharedString::from(project_name)),
+            )
+            .when_some(metadata_time, |element, time| element.child(time));
+        let title_row = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(title)
+            .when(working, |element| {
+                element.child(motion::spin_slow(icon(
+                    "icons/loader-circle.svg",
+                    12.0,
+                    status_color(&theme, status),
+                )))
+            })
+            .when(status == SessionStatus::Waiting, |element| {
+                element.child(icon("icons/alert.svg", 12.0, status_color(&theme, status)))
+            })
+            .when(status == SessionStatus::Failed, |element| {
+                element.child(icon("icons/x.svg", 12.0, status_color(&theme, status)))
+            });
+        let has_branch = branch.is_some();
+        let branch_row = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .items_center()
+            .gap(px(5.0))
+            .when_some(branch, |element, branch| {
+                element
+                    .child(icon("icons/git-branch.svg", 11.0, theme.text_ghost))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(px(11.0))
+                            .text_color(theme.text_ghost)
+                            .child(SharedString::from(branch)),
+                    )
+            });
+
         let fintwind = cx.entity().downgrade();
         let menu = self.menu_handle(format!("session-{session_id}"), cx);
         let row_focus = menu.trigger_focus_handle().clone();
         let keyboard_menu = menu.clone();
         let row = div()
-            .id(SharedString::from(format!("session-{}", session.id)))
+            .id(SharedString::from(format!("session-{session_id}")))
             .w_full()
             .min_w_0()
             .h(px(SIDEBAR_SESSION_CARD_HEIGHT))
             .flex_none()
             .flex()
-            .items_center()
-            .gap(px(6.0))
+            .flex_col()
+            .justify_center()
+            .gap(px(2.0))
             .px(px(8.0))
-            .rounded(px(7.0))
+            .py(px(6.0))
+            .rounded(px(8.0))
             .cursor_default()
             .when(selected, |element| {
                 element.bg(theme.sidebar_item_background)
             })
             .hover(|element| element.bg(theme.sidebar_item_background))
             .active(|element| element.bg(theme.overlay_strong))
-            .child(title)
-            .when(working, |element| {
-                element.child(motion::spin_slow(icon(
-                    "icons/loader-circle.svg",
-                    12.0,
-                    status_color(&theme, session.status),
-                )))
-            })
-            .when(session.status == SessionStatus::Waiting, |element| {
-                element.child(icon(
-                    "icons/alert.svg",
-                    12.0,
-                    status_color(&theme, session.status),
-                ))
-            })
-            .when(session.status == SessionStatus::Failed, |element| {
-                element.child(icon(
-                    "icons/x.svg",
-                    12.0,
-                    status_color(&theme, session.status),
-                ))
-            })
-            .when_some(
-                session_time_label(session, unix_time()),
-                |element, label| {
-                    element.child(
-                        div()
-                            .flex_none()
-                            .text_size(px(11.5))
-                            .text_color(if session.is_busy() {
-                                theme.text_tertiary
-                            } else {
-                                theme.text_ghost
-                            })
-                            .child(SharedString::from(label)),
-                    )
-                },
-            )
+            .child(project_row)
+            .child(title_row)
+            .when(has_branch, |element| element.child(branch_row))
             .when(!renaming, |element| {
                 element
                     .track_focus(&row_focus)

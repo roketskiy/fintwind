@@ -332,7 +332,11 @@ impl BackgroundWorkRegistry {
             merge_option(&mut current.duration_ms, incoming.duration_ms);
             merge_option(&mut current.exit_code, incoming.exit_code);
             merge_option(&mut current.control_id, incoming.control_id);
-            merge_option(&mut current.origin_activity_id, incoming.origin_activity_id);
+            for origin in incoming.origin_activity_ids {
+                if !current.origin_activity_ids.contains(&origin) {
+                    current.origin_activity_ids.push(origin);
+                }
+            }
             merge_option(&mut current.role, incoming.role);
             merge_option(&mut current.model, incoming.model);
             merge_option(&mut current.parent_id, incoming.parent_id);
@@ -376,14 +380,21 @@ impl BackgroundWorkRegistry {
             BackgroundWorkTranscriptEvent::Started { key, prompt } => {
                 let transcript = self.transcripts.entry(key).or_default();
                 // Deltas can legitimately arrive before Started (the child
-                // existed before the driver attached). One turn per
-                // transcript, and the prompt message only when it would
-                // still come first.
-                if transcript.turns.is_empty() {
+                // existed before the driver attached), and Started also
+                // arrives again when the parent resumes a settled child. Open
+                // a turn whenever the newest one is no longer running; the
+                // prompt message only when it would still come first, so a
+                // resume neither reopens the old turn nor repeats the prompt.
+                let needs_turn = transcript
+                    .turns
+                    .last()
+                    .is_none_or(|turn| turn.status != TurnStatus::Running);
+                if needs_turn {
                     let turn_id = uuid::Uuid::new_v4();
+                    let turn_count = transcript.turns.len() + 1;
                     transcript.turns.push(AgentTurn {
                         id: turn_id,
-                        turn_count: 1,
+                        turn_count,
                         status: TurnStatus::Running,
                         provider_turn_started: true,
                         provider_resume_at: None,
@@ -391,14 +402,23 @@ impl BackgroundWorkRegistry {
                         completed_at: None,
                         checkpoint: None,
                     });
-                    if let Some(prompt) = prompt.filter(|prompt| !prompt.trim().is_empty()) {
-                        if transcript.messages.is_empty() {
-                            transcript.messages.push(Message::new_for_turn(
-                                MessageRole::User,
-                                prompt,
-                                turn_id,
-                            ));
-                        }
+                    // The prompt opens the new turn unless content already
+                    // arrived before Started — a restored child whose deltas
+                    // raced the announce — where inserting it would reorder
+                    // the tail. A message with no turn id is exactly that
+                    // pre-turn content.
+                    let tail_is_prior_turn = transcript
+                        .messages
+                        .last()
+                        .is_none_or(|message| message.turn_id.is_some());
+                    if tail_is_prior_turn
+                        && let Some(prompt) = prompt.filter(|prompt| !prompt.trim().is_empty())
+                    {
+                        transcript.messages.push(Message::new_for_turn(
+                            MessageRole::User,
+                            prompt,
+                            turn_id,
+                        ));
                     }
                 }
             }
@@ -784,21 +804,44 @@ fn status_progress(status: BackgroundWorkStatus) -> u8 {
 }
 
 fn recover_subagent_origin(session: &AgentSession, item: &mut BackgroundWorkItem) {
-    if item.key.kind != BackgroundWorkKind::Subagent || item.origin_activity_id.is_some() {
+    if item.key.kind != BackgroundWorkKind::Subagent {
         return;
     }
     let marker = format!("sessionID=\"{}\"", item.key.provider_id);
-    item.origin_activity_id = session
+    // Every task call that names this child is an entry point: the one that
+    // spawned it and the ones that resumed it. The provider stamps each with
+    // the same `sessionID` marker, so a scan of the transcript recovers all of
+    // them — including a resume the driver linked live but a reloaded snapshot
+    // only recorded the first half of.
+    for activity in session
         .transcript_blocks
         .iter()
         .flat_map(|block| &block.activities)
-        .find(|activity| {
-            activity
-                .output
-                .as_deref()
-                .is_some_and(|output| output.contains(&marker))
+        .filter(|activity| {
+            is_subagent_activity(activity)
+                && activity
+                    .output
+                    .as_deref()
+                    .is_some_and(|output| output.contains(&marker))
         })
-        .and_then(|activity| activity.source_id.clone());
+    {
+        if let Some(source) = activity.source_id.clone()
+            && !item.origin_activity_ids.contains(&source)
+        {
+            item.origin_activity_ids.push(source);
+        }
+    }
+}
+
+/// Whether a transcript activity is a subagent tool call. Recovery matches the
+/// child's `sessionID` marker only on these, so an unrelated tool whose output
+/// happens to quote the marker cannot claim the link.
+fn is_subagent_activity(activity: &ActivityItem) -> bool {
+    activity.kind == crate::model::ActivityKind::Tool
+        && matches!(
+            activity.title.trim().to_ascii_lowercase().as_str(),
+            "task" | "subagent"
+        )
 }
 
 fn bound_output(item: &mut BackgroundWorkItem) {
@@ -972,7 +1015,7 @@ impl Fintwind {
         item.command = activity.display_target.clone();
         item.detail = activity.detail.clone();
         item.output = activity.output.clone();
-        item.origin_activity_id = Some(provider_id);
+        item.origin_activity_ids = vec![provider_id];
         self.handle_background_work_event(session_id, BackgroundWorkEvent::Upsert(item));
     }
 
@@ -983,7 +1026,16 @@ impl Fintwind {
     ) {
         if let Some(session) = self.state.sessions.iter().find(|session| session.id == session_id) {
             match &mut event {
-                BackgroundWorkEvent::Upsert(item) => recover_subagent_origin(session, item),
+                // A live upsert from the driver already names every call that
+                // bound the child, so only a card that arrived with no origin
+                // at all needs the transcript scan. Reconciled items are rebuilt
+                // fresh and empty, so they always scan; a settled snapshot is
+                // repaired once by `restore_background_work`.
+                BackgroundWorkEvent::Upsert(item) => {
+                    if item.origin_activity_ids.is_empty() {
+                        recover_subagent_origin(session, item);
+                    }
+                }
                 BackgroundWorkEvent::ReconcileLive { items } => {
                     for item in items {
                         recover_subagent_origin(session, item);
@@ -1021,20 +1073,24 @@ impl Fintwind {
         if self.background_work.contains_key(&session_id) {
             return;
         }
-        let Some(snapshots) = self
+        let Some(session) = self
             .state
             .sessions
             .iter()
             .find(|session| session.id == session_id)
-            .map(|session| session.background_work.as_slice())
-            .filter(|snapshots| !snapshots.is_empty())
+            .filter(|session| !session.background_work.is_empty())
         else {
             return;
         };
-        self.background_work.insert(
-            session_id,
-            BackgroundWorkRegistry::from_snapshots(snapshots),
-        );
+        let mut registry = BackgroundWorkRegistry::from_snapshots(&session.background_work);
+        // A snapshot written before the multi-call origin field, or against a
+        // transcript that had dropped call ids, carries no way back to its
+        // card. The stored transcript still names the child, so re-derive the
+        // links now rather than leaving a settled subagent unopenable.
+        for item in registry.items.values_mut() {
+            recover_subagent_origin(session, item);
+        }
+        self.background_work.insert(session_id, registry);
     }
 
     pub(super) fn mark_background_work_lost(&mut self, session_id: Uuid) {
@@ -1075,7 +1131,7 @@ impl Fintwind {
             .get(&session_id)?
             .items
             .values()
-            .find(|item| item.origin_activity_id.as_deref() == Some(activity_id))
+            .find(|item| item.origin_activity_ids.iter().any(|id| id == activity_id))
     }
 
     pub(super) fn maybe_refresh_background_work(&mut self, cx: &mut Context<Self>) {
@@ -2654,6 +2710,48 @@ mod tests {
     }
 
     #[test]
+    fn a_resumed_child_opens_a_new_turn_with_its_own_prompt() {
+        let mut registry = BackgroundWorkRegistry::default();
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        let started = |prompt: &str| {
+            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Started {
+                key: key.clone(),
+                prompt: Some(prompt.to_owned()),
+            })
+        };
+        registry.apply(started("Inspect the repository"));
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::TextDelta {
+                key: key.clone(),
+                delta: "first answer".into(),
+            },
+        ));
+        registry.apply(BackgroundWorkEvent::Transcript(
+            BackgroundWorkTranscriptEvent::Finished {
+                key: key.clone(),
+                success: true,
+            },
+        ));
+        let first_turn = registry.transcripts[&key].turns[0].id;
+
+        registry.apply(started("Re-review the diff"));
+        let transcript = &registry.transcripts[&key];
+        assert_eq!(transcript.turns.len(), 2, "the resume opens a new turn");
+        assert_eq!(transcript.turns[1].status, TurnStatus::Running);
+        assert_ne!(transcript.turns[1].id, first_turn);
+        assert_eq!(
+            transcript
+                .messages
+                .iter()
+                .filter(|message| message.role == MessageRole::User)
+                .map(|message| message.content.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Inspect the repository", "Re-review the diff"],
+            "the resume records its own prompt exactly once"
+        );
+    }
+
+    #[test]
     fn activity_updates_match_source_ids_and_keep_the_original_entry() {
         let mut registry = BackgroundWorkRegistry::default();
         let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
@@ -2767,10 +2865,45 @@ mod tests {
         });
 
         assert_eq!(
-            restored.items[&key].origin_activity_id.as_deref(),
-            Some("call_parent")
+            restored.items[&key].origin_activity_ids,
+            vec!["call_parent".to_owned()]
         );
         assert_eq!(restored.transcripts[&key].messages[0].content, "child answer");
+    }
+
+    #[test]
+    fn recovering_a_resumed_child_links_every_naming_call() {
+        let mut parent = AgentSession::new(uuid::Uuid::new_v4());
+        let mut spawn = ActivityItem::new(
+            Some("call_spawn".into()),
+            ActivityKind::Tool,
+            "Task",
+            None,
+            true,
+        );
+        spawn.output =
+            Some("<subagent sessionID=\"ses_child\" state=\"completed\">one</subagent>".into());
+        let mut resume = ActivityItem::new(
+            Some("call_resume".into()),
+            ActivityKind::Tool,
+            "Task",
+            None,
+            true,
+        );
+        resume.output =
+            Some("<subagent sessionID=\"ses_child\" state=\"completed\">two</subagent>".into());
+        parent.transcript_blocks.push(TranscriptBlock {
+            after_message: 0,
+            turn_id: None,
+            activities: vec![spawn, resume],
+        });
+
+        let mut item = subagent_item("ses_child", BackgroundWorkStatus::Completed);
+        recover_subagent_origin(&parent, &mut item);
+        assert_eq!(
+            item.origin_activity_ids,
+            vec!["call_spawn".to_owned(), "call_resume".to_owned()]
+        );
     }
 
     #[test]

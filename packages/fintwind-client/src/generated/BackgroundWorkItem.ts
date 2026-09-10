@@ -12,6 +12,8 @@ background: boolean, canStop: boolean,
  */
 controlId: string | null,
 /**
- * Transcript activity that created this work, when the provider exposes it.
+ * Transcript activities that opened this work, when the provider exposes
+ * them. A subagent session can be resumed by several tool calls, so one
+ * child maps to every call that spawned or continued it.
  */
-originActivityId: string | null, role: string | null, model: string | null, parentId: string | null, status: BackgroundWorkStatus, };
+originActivityIds: Array<string>, role: string | null, model: string | null, parentId: string | null, status: BackgroundWorkStatus, };

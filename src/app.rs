@@ -1015,6 +1015,7 @@ pub struct Fintwind {
     settings_focus: FocusHandle,
     onboarding_add_project_focus: FocusHandle,
     onboarding_projectless_focus: FocusHandle,
+    sidebar_add_project_focus: FocusHandle,
     /// Mirror of Sparkle's persisted automatic-check setting. Refreshed when
     /// settings opens and on toggle, so frames never read user defaults —
     /// that lookup can reach cfprefsd.
@@ -2303,6 +2304,7 @@ impl Fintwind {
             let settings_focus = cx.focus_handle();
             let onboarding_add_project_focus = cx.focus_handle();
             let onboarding_projectless_focus = cx.focus_handle();
+            let sidebar_add_project_focus = cx.focus_handle();
             let updater_button_focus = cx.focus_handle();
 
             cx.on_focus(&updater_button_focus, window, |this: &mut Self, _, cx| {
@@ -2830,6 +2832,7 @@ impl Fintwind {
                 settings_focus,
                 onboarding_add_project_focus,
                 onboarding_projectless_focus,
+                sidebar_add_project_focus,
                 automatic_updates_enabled: cx
                     .try_global::<crate::updater::UpdaterState>()
                     .and_then(|updater| updater.0.as_ref())

@@ -1,5 +1,8 @@
 # Fintwind 开发指南
 
+## 语言
+- 使用中文交流
+
 ## 开发运行时
 
 - 假定 `bun ./scripts/dev.ts` 已经在运行,并且持有当前的 `fintwind.exe`

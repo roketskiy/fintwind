@@ -446,29 +446,39 @@ impl Render for ReasoningView {
             .overflow_hidden()
             .focus_visible(|style| style.border_1().border_color(theme.accent))
             .child(
-                list(self.list.clone(), move |index, _, cx| {
-                    view.update(cx, |this, _| {
-                        let ctx = render::Ctx::new(
-                            this.row_id.clone(),
-                            &palette,
-                            Metrics::COMPACT,
-                            this.selection.clone(),
-                        )
-                        .with_link_handler(this.link_handler.clone())
-                        .with_streaming_animation(false);
-                        render::virtual_row(
-                            &this.rows[index],
-                            index,
-                            &this.codes,
-                            &this.cache,
-                            &ctx,
-                        )
-                    })
-                    .unwrap_or_else(|_| div().into_any_element())
-                })
-                .size_full()
-                .px(px(12.0))
-                .py(px(8.0)),
+                // `List` ignores horizontal padding: it positions items at the
+                // element's left edge and measures them against the full border
+                // box, so `.px()` on the list itself has no effect. The page
+                // margin has to come from a wrapping element instead.
+                div()
+                    .w_full()
+                    .h_full()
+                    .min_w_0()
+                    .px(px(12.0))
+                    .child(
+                        list(self.list.clone(), move |index, _, cx| {
+                            view.update(cx, |this, _| {
+                                let ctx = render::Ctx::new(
+                                    this.row_id.clone(),
+                                    &palette,
+                                    Metrics::COMPACT,
+                                    this.selection.clone(),
+                                )
+                                .with_link_handler(this.link_handler.clone())
+                                .with_streaming_animation(false);
+                                render::virtual_row(
+                                    &this.rows[index],
+                                    index,
+                                    &this.codes,
+                                    &this.cache,
+                                    &ctx,
+                                )
+                            })
+                            .unwrap_or_else(|_| div().into_any_element())
+                        })
+                        .size_full()
+                        .py(px(8.0)),
+                    ),
             )
             .child(scrollbar::vertical(&self.list, &self.scrollbar))
             .on_scroll_wheel(move |_, _, cx| {

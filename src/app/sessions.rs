@@ -162,6 +162,11 @@ impl Fintwind {
             self.store_selected_right_panel_state();
         }
         self.state.selected_session = Some(session_id);
+        if session_changed {
+            // Folded groups hide the task the user just opened; reveal its
+            // project so the selection stays visible in the sidebar.
+            self.reveal_sidebar_session_project(session_id, cx);
+        }
         self.restore_background_work(session_id);
         if let Some((project_id, model, reasoning_effort, service_tier, context_window)) =
             self.selected_session().map(|session| {

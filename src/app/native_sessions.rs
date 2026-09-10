@@ -334,6 +334,7 @@ impl Fintwind {
                     // conversation open on the surviving row.
                     if self.state.selected_session == Some(remove) {
                         self.state.selected_session = Some(claim);
+                        self.reveal_sidebar_session_project(claim, cx);
                     }
                     self.drop_roster_row(remove);
                     self.claim_native_session(claim, summary);

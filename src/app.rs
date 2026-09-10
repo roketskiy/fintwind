@@ -1183,9 +1183,12 @@ pub struct Fintwind {
     /// One stable field reused across sidebar rows so virtualization never
     /// replaces the focused editor while a rename is in progress.
     session_rename_input: Entity<ComposerInput>,
-    /// Projects the user has folded in the sidebar, by project id. This is
-    /// intentionally runtime-only, like transcript disclosure state.
-    sidebar_collapsed_groups: HashSet<Uuid>,
+    /// Sidebar projects the user has unfolded, by project id. Inverted from a
+    /// collapsed set so the default — an empty set — folds every project at
+    /// launch; the selection's own project is revealed when the app opens and
+    /// whenever the selected task changes. Intentionally runtime-only, like
+    /// transcript disclosure state.
+    sidebar_expanded_groups: HashSet<Uuid>,
     sidebar_visible: bool,
     sidebar_width: f32,
     right_panel_visible: bool,
@@ -2782,6 +2785,20 @@ impl Fintwind {
                 })
             };
 
+            // Groups start folded; only the restored selection's project is
+            // revealed so the user can see where they left off.
+            let sidebar_expanded_groups = state
+                .selected_session
+                .and_then(|session_id| {
+                    state
+                        .sessions
+                        .iter()
+                        .find(|session| session.id == session_id)
+                        .map(|session| session.project_id)
+                })
+                .into_iter()
+                .collect::<HashSet<Uuid>>();
+
             Self {
                 daemon,
                 daemon_hostname,
@@ -2891,7 +2908,7 @@ impl Fintwind {
                 session_navigation,
                 session_rename: None,
                 session_rename_input,
-                sidebar_collapsed_groups: HashSet::new(),
+                sidebar_expanded_groups,
                 sidebar_visible,
                 sidebar_width,
                 right_panel_visible,

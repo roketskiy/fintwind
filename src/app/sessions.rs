@@ -235,6 +235,7 @@ impl Fintwind {
             return;
         };
         self.branch_snapshots.invalidate(&workspace_path);
+        self.sidebar_branches.invalidate(&workspace_path);
         self.refresh_workspace_surfaces(cx);
         self.invalidate_composer_sources(cx);
     }

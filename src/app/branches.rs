@@ -115,6 +115,52 @@ impl Fintwind {
         }
     }
 
+    /// The branch name drawn on a session card. Reads the lightweight
+    /// per-workspace branch cache, scheduling one background `CurrentBranch`
+    /// on a miss. Unlike [`Self::branch_snapshot_for_workspace`] this neither
+    /// touches the selected-workspace slot nor fetches commit counts, so the
+    /// sidebar can ask for every visible project.
+    pub(super) fn sidebar_branch_for_workspace(
+        &mut self,
+        workspace_path: &std::path::Path,
+        cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let workspace_path = workspace_path.to_path_buf();
+        match self.sidebar_branches.read(&workspace_path) {
+            Query::Ready(result) => result.as_ref().clone().ok().flatten(),
+            Query::Pending => None,
+            Query::Missing(token) => {
+                let fetch_path = workspace_path.clone();
+                let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
+                cx.spawn(async move |fintwind, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            match workspace.request(
+                                fintwind_client::WorkspaceOperation::CurrentBranch { cwd: fetch_path },
+                            ) {
+                                Ok(fintwind_client::WorkspaceResult::CurrentBranch { branch }) => {
+                                    Ok(branch)
+                                }
+                                Ok(_) => Err(()),
+                                Err(_) => Err(()),
+                            }
+                        })
+                        .await;
+                    let _ = fintwind.update(cx, |fintwind, cx| {
+                        // A failure is stored too, so a broken or non-Git path
+                        // is not asked for again on every rebuild.
+                        if fintwind.sidebar_branches.fulfill(token, result) {
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                None
+            }
+        }
+    }
+
     pub(super) fn refresh_selected_branch_snapshot(&mut self, cx: &mut Context<Self>) {
         let Some(path) = self
             .selected_workspace_path()
@@ -124,6 +170,9 @@ impl Fintwind {
             return;
         };
         self.branch_snapshots.invalidate(&path);
+        // The card's lighter branch cache would otherwise keep showing the
+        // old name after an external checkout.
+        self.sidebar_branches.invalidate(&path);
         cx.notify();
     }
 
@@ -326,6 +375,7 @@ impl Fintwind {
                         let current = snapshot.current.clone();
                         fintwind.visible_branch_snapshot = Some((path.clone(), snapshot));
                         fintwind.branch_snapshots.invalidate(&path);
+                        fintwind.sidebar_branches.invalidate(&path);
                         let selected_path = fintwind
                             .selected_workspace_path()
                             .map(std::path::Path::to_path_buf);

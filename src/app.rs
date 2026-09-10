@@ -1086,6 +1086,12 @@ pub struct Fintwind {
     /// Git subprocess results per concrete workspace path. Render only reads
     /// this in-memory cache; misses are fulfilled on the background executor.
     branch_snapshots: QueryCache<PathBuf, Result<Option<BranchSnapshot>, String>>,
+    /// The branch name drawn on each sidebar session card, per concrete
+    /// workspace path. This is the lightweight branch query rather than the
+    /// full [`Self::branch_snapshots`], and its capacity is larger because the
+    /// sidebar asks for every visible project, not just the selected one.
+    /// Failures are cached too, so a broken path is not retried every frame.
+    sidebar_branches: QueryCache<PathBuf, Result<Option<String>, ()>>,
     /// Stale-while-revalidate value for the selected path, avoiding label
     /// flicker when app activation invalidates the query.
     visible_branch_snapshot: Option<(PathBuf, BranchSnapshot)>,
@@ -2867,6 +2873,7 @@ impl Fintwind {
                 branch_picker_list_state,
                 branch_picker_row_cache: RefCell::new(Vec::new()),
                 branch_snapshots: QueryCache::new(MAX_CACHED_WORKSPACES),
+                sidebar_branches: QueryCache::new(4 * MAX_CACHED_WORKSPACES),
                 visible_branch_snapshot: None,
                 branch_operation_pending: false,
                 commit_dialog: None,

@@ -1698,8 +1698,11 @@ pub struct BackgroundWorkItem {
     pub can_stop: bool,
     /// Provider-native identifier used for an authoritative stop request.
     pub control_id: Option<String>,
-    /// Transcript activity that created this work, when the provider exposes it.
-    pub origin_activity_id: Option<String>,
+    /// Transcript activities that opened this work, when the provider exposes
+    /// them. A subagent session can be resumed by several tool calls, so one
+    /// child maps to every call that spawned or continued it.
+    #[serde(default)]
+    pub origin_activity_ids: Vec<String>,
     pub role: Option<String>,
     pub model: Option<String>,
     pub parent_id: Option<String>,
@@ -1729,7 +1732,7 @@ impl BackgroundWorkItem {
             background: false,
             can_stop: false,
             control_id: None,
-            origin_activity_id: None,
+            origin_activity_ids: Vec::new(),
             role: None,
             model: None,
             parent_id: None,

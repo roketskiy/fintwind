@@ -1459,7 +1459,7 @@ function ActivityGroup({
             <ActivityRow
               activity={activity}
               backgroundWork={backgroundWork.find((item) => (
-                item.originActivityId === activity.source_id
+                activity.source_id != null && (item.originActivityIds ?? []).includes(activity.source_id)
               ))}
               key={activity.id}
               t={t}

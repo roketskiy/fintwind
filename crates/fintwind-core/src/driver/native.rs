@@ -407,6 +407,14 @@ fn tool_item(part: &Value) -> ActivityItem {
     // Accept both so a restored transcript keeps the identity a live stream
     // gave the same tool call.
     let state = part.get("state").unwrap_or(part);
+    // The provider-call id is what links a restored activity back to live
+    // background work (a subagent's card to its child session). opencode2
+    // keeps it on the part's `id`; the legacy shape used `callID`.
+    let source_id = part
+        .get("id")
+        .or_else(|| part.get("callID"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let name = part
         .get("name")
         .or_else(|| part.get("tool"))
@@ -437,7 +445,7 @@ fn tool_item(part: &Value) -> ActivityItem {
                 .cloned()
         });
     super::activity::tool_activity(
-        None,
+        source_id,
         kind,
         title,
         state.get("input"),
@@ -588,6 +596,7 @@ mod tests {
         let item = tool_item(&part);
         assert_eq!(item.kind, crate::model::ActivityKind::Command);
         assert_eq!(item.title, "Run the tests");
+        assert_eq!(item.source_id.as_deref(), Some("call_1"));
         assert_eq!(item.output.as_deref(), Some("test result: ok"));
         assert!(!item.failed);
         assert!(item.complete);
@@ -620,6 +629,9 @@ mod tests {
         let item = tool_item(&part);
         assert_eq!(item.kind, crate::model::ActivityKind::FileRead);
         assert_eq!(item.display_target.as_deref(), Some("src/workspace.rs"));
+        // The restored activity keeps the provider call id, which is what
+        // re-links it to a live background item (e.g. a subagent's card).
+        assert_eq!(item.source_id.as_deref(), Some("call_01"));
         assert_eq!(item.output.as_deref(), Some("Read src/workspace.rs"));
         assert!(!item.failed);
 
@@ -633,6 +645,7 @@ mod tests {
         });
         let item = tool_item(&patch);
         assert_eq!(item.kind, crate::model::ActivityKind::FileChange);
+        assert_eq!(item.source_id.as_deref(), Some("call_02"));
         assert!(item.failed);
         assert!(!item.file_changes.is_empty());
         assert!(item.output.as_deref().is_some_and(|output| output.contains("patch did not apply")));

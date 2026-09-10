@@ -1092,10 +1092,18 @@ fn open_event_stream(
     Ok(Some(stream))
 }
 
+/// A subagent tool call whose child session is not known yet. `target` names
+/// the child a resume continues; `None` means the call spawns a new child.
+struct PendingSubagent {
+    activity_id: String,
+    prompt: Option<String>,
+    target: Option<String>,
+}
+
 #[derive(Default)]
 struct OpenCodeStreamState {
     tools: HashMap<String, (ActivityKind, String)>,
-    pending_subagents: VecDeque<(String, Option<String>)>,
+    pending_subagents: VecDeque<PendingSubagent>,
     reasoning_parts: HashSet<String>,
     children: HashMap<String, OpenCodeChildSession>,
     usage_metadata: Arc<OpenCodeUsageMetadata>,
@@ -1109,6 +1117,13 @@ struct OpenCodeStreamState {
     compaction_live: bool,
 }
 
+/// One resume call the parent bound to a child, awaiting the child's own
+/// `session.execution.started`. The prompt it carries opens that turn.
+struct PendingRevive {
+    activity_id: String,
+    prompt: Option<String>,
+}
+
 struct OpenCodeChildSession {
     item: BackgroundWorkItem,
     prompt: Option<String>,
@@ -1116,6 +1131,13 @@ struct OpenCodeChildSession {
     /// When the child's own execution began; the session row can exist
     /// (and be listed) noticeably earlier.
     execution_started_at_ms: Option<u64>,
+    /// Resume calls the parent bound but whose `session.execution.started` has
+    /// not arrived yet. Each is a legitimate reopen of a settled child rather
+    /// than a redelivered straggler. A child can be resumed several times in
+    /// one parent step (parallel `task` calls), so the binds queue instead of
+    /// overwriting one another; each start consumes one, and its prompt opens
+    /// that turn rather than echoing the child's original spawn prompt.
+    pending_revives: VecDeque<PendingRevive>,
 }
 
 impl OpenCodeChildSession {
@@ -1142,8 +1164,24 @@ impl OpenCodeChildSession {
             prompt,
             tools: HashMap::new(),
             execution_started_at_ms: None,
+            pending_revives: VecDeque::new(),
         }
     }
+}
+
+/// Take the pending call that belongs to `child_id`: an exact resume first,
+/// then the oldest spawn (whose child id was unknown until now). Same-named
+/// resumes that outlive their child stay queued instead of being consumed by
+/// an unrelated `session.created`.
+fn take_pending_subagent(
+    pending: &mut VecDeque<PendingSubagent>,
+    child_id: &str,
+) -> Option<PendingSubagent> {
+    let index = pending
+        .iter()
+        .position(|pending| pending.target.as_deref() == Some(child_id))
+        .or_else(|| pending.iter().position(|pending| pending.target.is_none()))?;
+    pending.remove(index)
 }
 
 fn is_subagent_tool(name: &str) -> bool {
@@ -1161,6 +1199,31 @@ fn subagent_prompt(input: Option<&Value>) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(str::to_owned)
+}
+
+/// The child session a subagent tool call resumes, when it names one. A task
+/// that carries `sessionID` continues an existing child instead of creating a
+/// new one, so the call is bound to that child directly rather than queued for
+/// the next `session.created`.
+fn subagent_session_id(input: Option<&Value>) -> Option<String> {
+    let input = input?;
+    ["sessionID", "sessionId", "session_id"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(str::to_owned)
+}
+
+/// Record one more transcript call as an entry point into a background item,
+/// keeping the first occurrence's order and dropping duplicates. Returns
+/// whether the call was new.
+fn push_origin_activity(origins: &mut Vec<String>, activity_id: String) -> bool {
+    if origins.iter().any(|existing| existing == &activity_id) {
+        return false;
+    }
+    origins.push(activity_id);
+    true
 }
 
 /// Pending question forms and whether they were already announced.
@@ -1758,9 +1821,11 @@ fn handle_child_event(
             .children
             .entry(session_id.clone())
             .or_insert_with(|| OpenCodeChildSession::new(&session_id, parent_id, payload));
-        if is_new && let Some((activity_id, prompt)) = state.pending_subagents.pop_front() {
-            child.item.origin_activity_id = Some(activity_id);
-            child.prompt = child.prompt.clone().or(prompt);
+        if is_new
+            && let Some(pending) = take_pending_subagent(&mut state.pending_subagents, &session_id)
+        {
+            push_origin_activity(&mut child.item.origin_activity_ids, pending.activity_id);
+            child.prompt = child.prompt.clone().or(pending.prompt);
         }
         child.prompt = child.prompt.clone().or_else(|| child_prompt(payload));
         if let Some(title) = child_title(payload) {
@@ -1771,10 +1836,19 @@ fn handle_child_event(
         child.item.command = child.item.command.clone().or_else(|| child.prompt.clone());
         let key = child.item.key.clone();
         let prompt = child.prompt.clone();
+        // Only a genuinely new (or still-live) child opens a transcript turn
+        // here. A duplicate `session.created` for a settled child must stay
+        // quiet: its resume turn belongs to the later `execution.started`.
+        let starts_turn = is_new || child.item.status.is_live();
         child_update(child, events, None, None);
-        let _ = events.send(DriverEvent::BackgroundWork(
-            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Started { key, prompt }),
-        ));
+        if starts_turn {
+            let _ = events.send(DriverEvent::BackgroundWork(
+                BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Started {
+                    key,
+                    prompt,
+                }),
+            ));
+        }
         return;
     }
 
@@ -1782,8 +1856,13 @@ fn handle_child_event(
         return;
     };
     // A settled child's stragglers on the event stream must not reopen its
-    // transcript; only metadata updates still apply.
-    if !child.item.status.is_live() && kind != "session.updated" {
+    // transcript; only metadata updates still apply. A `session.execution.
+    // started` reopens it only when the parent just bound a new tool call to
+    // this child — a redelivered start with no such binding is a straggler.
+    if !child.item.status.is_live()
+        && kind != "session.updated"
+        && !(kind == "session.execution.started" && !child.pending_revives.is_empty())
+    {
         return;
     }
     let key = child.item.key.clone();
@@ -1797,12 +1876,28 @@ fn handle_child_event(
             child_update(child, events, None, None);
         }
         "session.execution.started" => {
+            // A child that is already live can only be looking at a redelivered
+            // start — executions do not overlap — so it must not consume a
+            // resume that is still waiting for its own turn. Only a settled
+            // child's start is the bound resume reopening it.
+            let was_live = child.item.status.is_live();
             child.execution_started_at_ms = Some(unix_time_millis());
+            // The resume has been consumed; a later redelivered start must not
+            // reopen the child after it settles again.
+            let prompt = if was_live {
+                child.prompt.clone()
+            } else {
+                child
+                    .pending_revives
+                    .pop_front()
+                    .and_then(|revive| revive.prompt)
+                    .or_else(|| child.prompt.clone())
+            };
             child_update(child, events, Some(BackgroundWorkStatus::Running), None);
             let _ = events.send(DriverEvent::BackgroundWork(
                 BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Started {
                     key,
-                    prompt: child.prompt.clone(),
+                    prompt,
                 }),
             ));
         }
@@ -2200,18 +2295,17 @@ fn handle_event(
                 // The runner's idle report may precede the execution event or
                 // replace it entirely; either way a turn the app still holds
                 // open must be settled (see `settle_on_idle_report`).
-                Some("idle") => settle_on_idle_report(port, session_id, turn_active, events),
+                Some("idle") => {
+                    settle_on_idle_report(port, session_id, turn_active, state, events)
+                }
                 _ => {}
             }
         }
         // Deprecated companion of `session.status idle` (both publish on the
         // same transition); the second settlement attempt is a no-op.
-        "session.idle" => settle_on_idle_report(port, session_id, turn_active, events),
+        "session.idle" => settle_on_idle_report(port, session_id, turn_active, state, events),
         "session.execution.succeeded" => {
-            state.reasoning_parts.clear();
-            state.permissions.lock().pending.clear();
-            state.tools.clear();
-            state.pending_subagents.clear();
+            clear_foreground_turn_state(state);
             if std::mem::take(&mut *turn_active.lock()) {
                 let _ = events.send(DriverEvent::TurnFinished {
                     success: true,
@@ -2220,10 +2314,7 @@ fn handle_event(
             }
         }
         "session.execution.failed" => {
-            state.reasoning_parts.clear();
-            state.permissions.lock().pending.clear();
-            state.tools.clear();
-            state.pending_subagents.clear();
+            clear_foreground_turn_state(state);
             // The failure payload carries the provider error; surface it so
             // the transcript explains why the turn settled unsuccessfully.
             let message = payload
@@ -2330,6 +2421,7 @@ fn settle_on_idle_report(
     port: u16,
     session_id: &str,
     turn_active: &Mutex<bool>,
+    state: &mut OpenCodeStreamState,
     events: &impl DriverEventSink,
 ) {
     if !*turn_active.lock() {
@@ -2351,6 +2443,10 @@ fn settle_on_idle_report(
     };
     let failure = newest_assistant_error(&messages);
     if std::mem::take(&mut *turn_active.lock()) {
+        // The idle backstop replaces a lost execution event, so it must drop
+        // the same per-turn bookkeeping: otherwise a stale pending spawn or
+        // tool name leaks into the next turn and mis-binds a new child.
+        clear_foreground_turn_state(state);
         let _ = events.send(DriverEvent::TurnFinished {
             success: failure.is_none(),
             summary: failure,
@@ -2407,9 +2503,18 @@ fn tool_called(payload: &Value, events: &impl DriverEventSink, state: &mut OpenC
         .as_ref()
         .is_some_and(|(_, name)| is_subagent_tool(name))
     {
-        state
-            .pending_subagents
-            .push_back((id.to_owned(), subagent_prompt(arguments)));
+        let prompt = subagent_prompt(arguments);
+        let target = subagent_session_id(arguments);
+        let resumed = target.as_deref().is_some_and(|child_id| {
+            bind_subagent_resume(state, child_id, id, prompt.clone(), events)
+        });
+        if !resumed {
+            state.pending_subagents.push_back(PendingSubagent {
+                activity_id: id.to_owned(),
+                prompt,
+                target,
+            });
+        }
     }
     let display = activity::input_title(arguments);
     let item = activity::tool_activity(
@@ -2423,6 +2528,55 @@ fn tool_called(payload: &Value, events: &impl DriverEventSink, state: &mut OpenC
         false,
     );
     let _ = events.send(DriverEvent::RichActivity(item));
+}
+
+/// Bind a subagent tool call that names a child session to that child. Returns
+/// false when the child is not known yet, leaving the caller to queue the call
+/// for the next `session.created`.
+fn bind_subagent_resume(
+    state: &mut OpenCodeStreamState,
+    child_id: &str,
+    activity_id: &str,
+    prompt: Option<String>,
+    events: &impl DriverEventSink,
+) -> bool {
+    let Some(child) = state.children.get_mut(child_id) else {
+        return false;
+    };
+    // Only a call the child has not already recorded is a new binding. A
+    // replayed `tool.called`/`input.started` pair rewrites nothing and must not
+    // re-arm a resume whose execution start was already consumed.
+    if push_origin_activity(&mut child.item.origin_activity_ids, activity_id.to_owned()) {
+        // The next execution start is an intentional resume and may reopen a
+        // settled child, and its turn carries this prompt.
+        child.pending_revives.push_back(PendingRevive {
+            activity_id: activity_id.to_owned(),
+            prompt,
+        });
+        child_update(child, events, None, None);
+    }
+    true
+}
+
+/// Clear every child's pending resumes. Called when the foreground turn
+/// settles: a resume that never produced its own execution start (the tool
+/// failed, or the turn was interrupted) must not stay armed.
+fn disarm_child_resumes(state: &mut OpenCodeStreamState) {
+    for child in state.children.values_mut() {
+        child.pending_revives.clear();
+    }
+}
+
+/// Drop the per-turn bookkeeping the foreground stream accumulated. Every path
+/// that ends a foreground turn shares this — including the idle backstop, which
+/// stands in when the execution event is lost — so a stale pending spawn or
+/// tool name can never leak into the next turn and mis-bind a new child.
+fn clear_foreground_turn_state(state: &mut OpenCodeStreamState) {
+    state.reasoning_parts.clear();
+    state.permissions.lock().pending.clear();
+    state.tools.clear();
+    state.pending_subagents.clear();
+    disarm_child_resumes(state);
 }
 
 /// `session.tool.success`/`session.tool.error` close a tool activity with its
@@ -2444,7 +2598,15 @@ fn tool_finished(
     {
         state
             .pending_subagents
-            .retain(|(activity_id, _)| activity_id != id);
+            .retain(|pending| pending.activity_id != id);
+        // A resume that failed will never emit its own execution start, so it
+        // must not stay armed against a later replay. Drop only this call's
+        // bind so a parallel resume in the same turn stays queued.
+        for child in state.children.values_mut() {
+            child
+                .pending_revives
+                .retain(|revive| revive.activity_id != id);
+        }
     }
     let kind = stored
         .as_ref()
@@ -3140,7 +3302,7 @@ mod tests {
         assert!(emitted.iter().any(|event| matches!(
             event,
             DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
-                if item.origin_activity_id.as_deref() == Some("call_task")
+                if item.origin_activity_ids.iter().any(|id| id == "call_task")
         )));
         assert!(emitted.iter().any(|event| matches!(
             event,
@@ -3148,6 +3310,413 @@ mod tests {
                 BackgroundWorkTranscriptEvent::Started { prompt, .. }
             )) if prompt.as_deref() == Some("Inspect the repository")
         )));
+    }
+
+    #[test]
+    fn resuming_a_settled_child_binds_the_new_call_and_revives_it() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        let parent = "ses_parent";
+        handle_child_event(
+            &json!({"type": "session.created", "data": {"session": {"id": "ses_child", "parentID": parent}}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        while event_rx.try_recv().is_ok() {}
+
+        // A task that names the child continues it: the new call is bound
+        // directly, with no `session.created` to pop and no stale queue entry.
+        handle_event(
+            &json!({"type": "session.tool.input.started", "data": {"id": "call_resume", "name": "task"}}),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        handle_event(
+            &json!({"type": "session.tool.called", "data": {"id": "call_resume", "input": {"prompt": "again", "sessionID": "ses_child"}}}),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        assert!(state.pending_subagents.is_empty());
+        let bound = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(bound.iter().any(|event| matches!(
+            event,
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
+                if item.origin_activity_ids.iter().any(|id| id == "call_resume")
+        )));
+
+        // The resumed execution reopens the settled child instead of being
+        // discarded as a straggler.
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        let revived = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(revived.iter().any(|event| matches!(
+            event,
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
+                if item.status == BackgroundWorkStatus::Running
+        )));
+        assert!(revived.iter().any(|event| matches!(
+            event,
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(
+                BackgroundWorkTranscriptEvent::Started { prompt, .. }
+            )) if prompt.as_deref() == Some("again")
+        )));
+    }
+
+    #[test]
+    fn parallel_resumes_in_one_step_each_carry_their_own_prompt() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        let parent = "ses_parent";
+        handle_child_event(
+            &json!({"type": "session.created", "data": {"session": {"id": "ses_child", "parentID": parent}}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        while event_rx.try_recv().is_ok() {}
+
+        // Two `task` calls name the same child before either execution starts.
+        // The binds queue instead of overwriting one another.
+        for (id, prompt) in [("call_r1", "first resume"), ("call_r2", "second resume")] {
+            handle_event(
+                &json!({"type": "session.tool.input.started", "data": {"id": id, "name": "task"}}),
+                &events,
+                &commands,
+                &turn,
+                0,
+                "ses_1",
+                false,
+                &mut state,
+            );
+            handle_event(
+                &json!({"type": "session.tool.called", "data": {"id": id, "input": {"prompt": prompt, "sessionID": "ses_child"}}}),
+                &events,
+                &commands,
+                &turn,
+                0,
+                "ses_1",
+                false,
+                &mut state,
+            );
+        }
+
+        // Each resume runs to completion before the next begins, so the child
+        // settles in between.
+        let mut prompts = Vec::new();
+        for _ in 0..2 {
+            handle_child_event(
+                &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+                parent,
+                &events,
+                &commands,
+                false,
+                &mut state,
+            );
+            prompts.extend(event_rx.try_iter().filter_map(|event| match event {
+                DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(
+                    BackgroundWorkTranscriptEvent::Started { prompt, .. },
+                )) => prompt,
+                _ => None,
+            }));
+            handle_child_event(
+                &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_child"}}),
+                parent,
+                &events,
+                &commands,
+                false,
+                &mut state,
+            );
+        }
+        assert_eq!(
+            prompts,
+            vec!["first resume".to_owned(), "second resume".to_owned()],
+            "each resume start carries its own prompt, in bind order"
+        );
+    }
+
+    #[test]
+    fn a_replayed_resume_call_does_not_rearm_the_child() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        let parent = "ses_parent";
+        handle_child_event(
+            &json!({"type": "session.created", "data": {"session": {"id": "ses_child", "parentID": parent}}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        while event_rx.try_recv().is_ok() {}
+
+        let bind = |state: &mut OpenCodeStreamState| {
+            handle_event(
+                &json!({"type": "session.tool.input.started", "data": {"id": "call_resume", "name": "task"}}),
+                &events,
+                &commands,
+                &turn,
+                0,
+                "ses_1",
+                false,
+                state,
+            );
+            handle_event(
+                &json!({"type": "session.tool.called", "data": {"id": "call_resume", "input": {"prompt": "again", "sessionID": "ses_child"}}}),
+                &events,
+                &commands,
+                &turn,
+                0,
+                "ses_1",
+                false,
+                state,
+            );
+        };
+        bind(&mut state);
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        while event_rx.try_recv().is_ok() {}
+
+        // The same call id redelivered must not re-arm the resume, so a
+        // straggler execution start stays ignored.
+        bind(&mut state);
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        let seen = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(
+            !seen.iter().any(|event| matches!(
+                event,
+                DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
+                    if item.status == BackgroundWorkStatus::Running
+            )),
+            "a replayed resume call must not revive a settled child"
+        );
+    }
+
+    #[test]
+    fn a_failed_resume_does_not_leave_the_child_armed() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        let parent = "ses_parent";
+        handle_child_event(
+            &json!({"type": "session.created", "data": {"session": {"id": "ses_child", "parentID": parent}}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        while event_rx.try_recv().is_ok() {}
+
+        handle_event(
+            &json!({"type": "session.tool.input.started", "data": {"id": "call_resume", "name": "task"}}),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        handle_event(
+            &json!({"type": "session.tool.called", "data": {"id": "call_resume", "input": {"prompt": "again", "sessionID": "ses_child"}}}),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        // The resume tool itself fails; its execution never starts.
+        handle_event(
+            &json!({"type": "session.tool.error", "data": {"id": "call_resume", "error": {"message": "could not resume"}}}),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        while event_rx.try_recv().is_ok() {}
+
+        // A redelivered start must not reopen the child.
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        let seen = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(
+            !seen.iter().any(|event| matches!(
+                event,
+                DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
+                    if item.status == BackgroundWorkStatus::Running
+            )),
+            "a failed resume must not leave the child armed"
+        );
+    }
+
+    #[test]
+    fn settled_children_stay_quiet_until_a_new_call_binds_them() {
+        let (events, event_rx, commands, _command_rx, _turn, mut state) = harness();
+        let parent = "ses_parent";
+        let created = json!({
+            "type": "session.created",
+            "data": {"session": {"id": "ses_child", "parentID": parent, "title": "Research"}}
+        });
+        handle_child_event(&created, parent, &events, &commands, false, &mut state);
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        while event_rx.try_recv().is_ok() {}
+
+        // A redelivered start with no bound call, and a duplicate created, must
+        // both leave the settled child alone.
+        handle_child_event(
+            &json!({"type": "session.execution.started", "data": {"sessionID": "ses_child"}}),
+            parent,
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        handle_child_event(&created, parent, &events, &commands, false, &mut state);
+        let seen = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(
+            !seen.iter().any(|event| matches!(
+                event,
+                DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
+                    if item.status == BackgroundWorkStatus::Running
+            )),
+            "an unbidden start must not revive a settled child"
+        );
+        assert!(
+            !seen.iter().any(|event| matches!(
+                event,
+                DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(
+                    BackgroundWorkTranscriptEvent::Started { .. }
+                ))
+            )),
+            "a duplicate created must not open a transcript turn"
+        );
     }
 
     #[test]

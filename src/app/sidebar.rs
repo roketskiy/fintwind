@@ -36,7 +36,7 @@ fn append_project_group_rows(
 ) {
     // A project with no started sessions keeps its header so every added
     // project stays visible; it just lists nothing beneath it.
-    rows.push(SidebarRow::Header(Some(project_id)));
+    rows.push(SidebarRow::Header(project_id));
     if !collapsed {
         rows.extend(sessions.iter().copied().map(SidebarRow::Session));
     }
@@ -176,10 +176,8 @@ fn sidebar_project_groups(
 pub(super) enum SidebarRow {
     /// Opens the window-wide command palette and scrolls with history.
     Search,
-    /// Project group header carrying the project's id. `None` is the
-    /// placeholder shown while no project has history, which still hosts the
-    /// project action.
-    Header(Option<Uuid>),
+    /// Project group header carrying the project's id.
+    Header(Uuid),
     /// A started session.
     Session(Uuid),
     /// Spacing between project groups.
@@ -423,24 +421,44 @@ impl Fintwind {
                 div().id("sidebar-titlebar-drag-region").h_full().flex_1(),
                 cx,
             ))
+            .child(self.render_sidebar_project_action(cx))
     }
 
+    /// The sidebar titlebar's "add project" button. It sits at the trailing
+    /// edge of the top row so opening a project stays reachable whether or not
+    /// any history exists.
     fn render_sidebar_project_action(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
-        div().flex().items_center().child(
+        div().mr(px(10.0)).flex().items_center().child(
             div()
                 .id("add-project")
-                .w(px(24.0))
-                .h(px(24.0))
-                .rounded(px(6.0))
+                .track_focus(&self.sidebar_add_project_focus)
+                .tab_index(0)
+                .w(px(28.0))
+                .h(px(28.0))
+                .flex_none()
+                .rounded(px(7.0))
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_default()
+                .tooltip(Tooltip::text(tr_cow!("project.add_project")))
+                .focus_visible(|style| style.border_1().border_color(theme.accent))
                 .hover(|element| element.bg(theme.overlay))
                 .active(|element| element.bg(theme.overlay_strong))
-                .child(icon("icons/folder-new.svg", 16.0, theme.text_ghost))
-                .on_click(cx.listener(|this, _, _, cx| this.add_project(cx))),
+                .child(icon("icons/folder-new.svg", 15.0, theme.text_tertiary))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                    cx.stop_propagation();
+                })
+                .on_click(cx.listener(|this, _, _, cx| this.add_project(cx)))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if !event.keystroke.modifiers.modified()
+                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    {
+                        this.add_project(cx);
+                        cx.stop_propagation();
+                    }
+                })),
         )
     }
 
@@ -829,10 +847,6 @@ impl Fintwind {
                 !self.sidebar_expanded_groups.contains(&project_id),
             );
         }
-        if rows.len() == 1 {
-            // Keep the project action visible while there is no history.
-            rows.push(SidebarRow::Header(None));
-        }
         rows
     }
 
@@ -878,7 +892,7 @@ impl Fintwind {
         match *row {
             SidebarRow::Search => self.render_sidebar_search(cx).into_any_element(),
             SidebarRow::Header(project_id) => self
-                .render_sidebar_group_header(project_id, index == 1, cx)
+                .render_sidebar_group_header(project_id, cx)
                 .into_any_element(),
             SidebarRow::Session(session_id) => self
                 .render_sidebar_session_item(session_id, cx)
@@ -887,31 +901,28 @@ impl Fintwind {
         }
     }
 
-    fn render_sidebar_group_header(
-        &self,
-        project_id: Option<Uuid>,
-        first: bool,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn render_sidebar_group_header(&self, project_id: Uuid, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
-        let header = match project_id {
-            Some(project_id) => {
-                let collapsed = !self.sidebar_expanded_groups.contains(&project_id);
-                let project_name = self
-                    .state
-                    .projects
-                    .iter()
-                    .find(|project| project.id == project_id)
-                    .map(Project::display_name)
-                    .unwrap_or_else(|| tr!("sidebar.unknown_project"));
-                let chevron = icon("icons/chevron-down.svg", 11.0, theme.text_ghost).when(
-                    collapsed,
-                    |icon| {
-                        icon.with_transformation(gpui::Transformation::rotate(gpui::percentage(
-                            0.75,
-                        )))
-                    },
-                );
+        let collapsed = !self.sidebar_expanded_groups.contains(&project_id);
+        let project_name = self
+            .state
+            .projects
+            .iter()
+            .find(|project| project.id == project_id)
+            .map(Project::display_name)
+            .unwrap_or_else(|| tr!("sidebar.unknown_project"));
+        let chevron = icon("icons/chevron-down.svg", 11.0, theme.text_ghost).when(
+            collapsed,
+            |icon| {
+                icon.with_transformation(gpui::Transformation::rotate(gpui::percentage(
+                    0.75,
+                )))
+            },
+        );
+        session_group_header(&theme)
+            .w_full()
+            .min_w_0()
+            .child(
                 div()
                     .id(SharedString::from(format!(
                         "sidebar-group-toggle-{project_id}"
@@ -955,28 +966,8 @@ impl Fintwind {
                             }
                             _ => {}
                         }
-                    }))
-                    .into_any_element()
-            }
-            // The empty-history placeholder: no group to fold, it only hosts
-            // the project action while onboarding.
-            None => div()
-                .h(px(22.0))
-                .flex()
-                .items_center()
-                .child(tr_cow!("sidebar.tasks"))
-                .into_any_element(),
-        };
-
-        session_group_header(&theme)
-            .w_full()
-            .min_w_0()
-            .child(header)
-            .when(first, |element| {
-                element
-                    .justify_between()
-                    .child(self.render_sidebar_project_action(cx))
-            })
+                    })),
+            )
     }
 
     fn toggle_sidebar_group(&mut self, project_id: Uuid, cx: &mut Context<Self>) {
@@ -1778,7 +1769,7 @@ mod tests {
         assert_eq!(
             expanded,
             vec![
-                SidebarRow::Header(Some(project)),
+                SidebarRow::Header(project),
                 SidebarRow::Session(sessions[0]),
                 SidebarRow::Session(sessions[1]),
                 SidebarRow::GroupSpacer,
@@ -1789,7 +1780,7 @@ mod tests {
         append_project_group_rows(&mut collapsed, project, &sessions, true);
         assert_eq!(
             collapsed,
-            vec![SidebarRow::Header(Some(project)), SidebarRow::GroupSpacer]
+            vec![SidebarRow::Header(project), SidebarRow::GroupSpacer]
         );
     }
 

@@ -93,7 +93,7 @@ export interface BackgroundWorkItem {
   background: boolean
   canStop: boolean
   controlId: string | null
-  originActivityId: string | null
+  originActivityIds: string[]
   role: string | null
   model: string | null
   parentId: string | null
@@ -1559,7 +1559,10 @@ function upsertBackgroundItem(
           ? existing.canStop || incoming.canStop
           : false,
         controlId: incoming.controlId ?? existing.controlId,
-        originActivityId: incoming.originActivityId ?? existing.originActivityId,
+        originActivityIds: Array.from(new Set([
+          ...(existing.originActivityIds ?? []),
+          ...(incoming.originActivityIds ?? []),
+        ])),
         role: incoming.role ?? existing.role,
         model: incoming.model ?? existing.model,
         parentId: incoming.parentId ?? existing.parentId,

@@ -17,17 +17,6 @@ pub fn init(cx: &mut App) {
     )]);
 }
 
-fn session_group_header(theme: &Theme) -> Div {
-    div()
-        .h(px(28.0))
-        .px(px(8.0))
-        .flex()
-        .items_center()
-        .text_size(px(12.5))
-        .font_weight(FontWeight::MEDIUM)
-        .text_color(theme.text_tertiary)
-}
-
 fn append_project_group_rows(
     rows: &mut Vec<SidebarRow>,
     project_id: Uuid,
@@ -82,6 +71,10 @@ const SIDEBAR_SESSION_ROW_GAP: f32 = 2.0;
 const SIDEBAR_SESSION_ROW_HEIGHT: f32 = SIDEBAR_SESSION_CARD_HEIGHT + SIDEBAR_SESSION_ROW_GAP;
 const SIDEBAR_ACTION_ROW_HEIGHT: f32 = 32.0;
 const SIDEBAR_SEARCH_BOTTOM_GAP: f32 = 10.0;
+/// Project group header: a bordered card that is slightly taller than the
+/// old text-only row so the trailing new-session control has a usable hit area.
+const SIDEBAR_PROJECT_CARD_HEIGHT: f32 = 34.0;
+const SIDEBAR_PROJECT_CARD_BOTTOM_GAP: f32 = 6.0;
 
 /// The session row's trailing time: how long the live turn has been working,
 /// or how long ago the agent last replied. A session that has never replied
@@ -919,55 +912,119 @@ impl Fintwind {
                 )))
             },
         );
-        session_group_header(&theme)
-            .w_full()
+        let toggle = div()
+            .id(SharedString::from(format!(
+                "sidebar-group-toggle-{project_id}"
+            )))
+            .tab_index(0)
+            .h_full()
+            .flex_1()
             .min_w_0()
+            .px(px(4.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(5.0))
+            .cursor_default()
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .hover(|element| element.bg(theme.overlay))
+            .active(|element| element.bg(theme.overlay_strong))
+            .child(icon("icons/folder.svg", 12.0, theme.text_ghost))
             .child(
                 div()
-                    .id(SharedString::from(format!(
-                        "sidebar-group-toggle-{project_id}"
-                    )))
-                    .tab_index(0)
-                    .h(px(22.0))
+                    .flex_1()
                     .min_w_0()
-                    .rounded(px(4.0))
+                    .truncate()
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(project_name)),
+            )
+            .child(chevron)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.toggle_sidebar_group(project_id, cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                match event.keystroke.key.as_str() {
+                    "enter" | "space" => {
+                        this.toggle_sidebar_group(project_id, cx);
+                        cx.stop_propagation();
+                    }
+                    "left" if !collapsed => {
+                        this.set_sidebar_group_collapsed(project_id, true, cx);
+                        cx.stop_propagation();
+                    }
+                    "right" if collapsed => {
+                        this.set_sidebar_group_collapsed(project_id, false, cx);
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }));
+        let new_session = div()
+            .id(SharedString::from(format!(
+                "sidebar-group-new-session-{project_id}"
+            )))
+            .tab_index(0)
+            .size(px(28.0))
+            .flex_none()
+            .rounded(px(7.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_default()
+            .tooltip(Tooltip::text(tr_cow!("menu.new_task")))
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .hover(|element| element.bg(theme.overlay))
+            .active(|element| element.bg(theme.overlay_strong))
+            .child(icon("icons/compose.svg", 14.0, theme.text_tertiary))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.start_session_for_project(project_id, window, cx);
+                cx.stop_propagation();
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                if !event.keystroke.modifiers.modified()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    this.start_session_for_project(project_id, window, cx);
+                    cx.stop_propagation();
+                }
+            }));
+        div()
+            .w_full()
+            .min_w_0()
+            .pb(px(SIDEBAR_PROJECT_CARD_BOTTOM_GAP))
+            .child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .h(px(SIDEBAR_PROJECT_CARD_HEIGHT))
+                    .px(px(4.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(theme.border_strong)
                     .flex()
                     .items_center()
-                    .gap(px(5.0))
-                    .cursor_default()
-                    .focus_visible(|style| style.border_1().border_color(theme.accent))
-                    .hover(|element| element.bg(theme.overlay))
-                    .active(|element| element.bg(theme.overlay_strong))
-                    .child(icon("icons/folder.svg", 12.0, theme.text_ghost))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_color(theme.text_secondary)
-                            .child(SharedString::from(project_name)),
-                    )
-                    .child(chevron)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.toggle_sidebar_group(project_id, cx);
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                        match event.keystroke.key.as_str() {
-                            "enter" | "space" => {
-                                this.toggle_sidebar_group(project_id, cx);
-                                cx.stop_propagation();
-                            }
-                            "left" if !collapsed => {
-                                this.set_sidebar_group_collapsed(project_id, true, cx);
-                                cx.stop_propagation();
-                            }
-                            "right" if collapsed => {
-                                this.set_sidebar_group_collapsed(project_id, false, cx);
-                                cx.stop_propagation();
-                            }
-                            _ => {}
-                        }
-                    })),
+                    .gap(px(2.0))
+                    .text_size(px(12.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_tertiary)
+                    .child(toggle)
+                    .child(new_session),
             )
+    }
+
+    fn start_session_for_project(
+        &mut self,
+        project_id: Uuid,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.settings_page = None;
+        self.select_project(project_id, cx);
+        let focus = self.composer_focus(cx);
+        window.focus(&focus, cx);
     }
 
     fn toggle_sidebar_group(&mut self, project_id: Uuid, cx: &mut Context<Self>) {

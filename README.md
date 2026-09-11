@@ -4,10 +4,12 @@ fintwind is a native Windows desktop app for [OpenCode 2](https://opencode.ai). 
 built in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)
 and keeps projects, sessions, transcripts on your machine.
 
-> This project is based on [waku](https://github.com/egoist/waku) by
-> [EGOIST](https://github.com/egoist), licensed under
-> [GPL-3.0](LICENSE). This fork diverges as an independently developed native
-> Windows desktop client for coding agents, and remains GPL-3.0.
+> fintwind is a fork of [waku](https://github.com/egoist/waku) by
+> [EGOIST](https://github.com/egoist), and stays under [GPL-3.0](LICENSE) like
+> upstream. Unlike waku, this fork converges on a single OpenCode 2 backend:
+> all other agent providers and the macOS/Linux builds were removed in favor of
+> Windows-first development. The upstream project remains the place for the
+> multi-provider, cross-platform app.
 
 ## Install
 
@@ -17,21 +19,12 @@ per-user and updates itself. A portable `.zip` is published alongside it. See
 [docs/windows.md](docs/windows.md) for requirements and what is not available
 there yet.
 
-## Supported agents
+## Requirements
 
-fintwind works with:
-
-- [Amp](https://ampcode.com/)
-- Claude Code
-- Codex CLI
-- Cursor CLI
-- Grok Build
-- OpenCode
-- Pi
-
-Install and authenticate at least one supported agent CLI before starting fintwind.
-fintwind detects available CLIs automatically and uses each provider's native
-structured protocol and session continuity.
+fintwind drives one agent backend: a local
+[OpenCode 2](https://opencode.ai) server. Install and authenticate the
+`opencode2` CLI first; fintwind starts it automatically, and sessions, models,
+providers, and MCP servers all come from that single backend.
 
 ## Highlights
 
@@ -103,7 +96,8 @@ Release maintainers should also read [RELEASING.md](RELEASING.md).
 
 ## Sponsorship
 
-You can support the project development via [GitHub Sponsors](https://github.com/sponsors/egoist).
+The original waku project is developed by [EGOIST](https://github.com/egoist);
+you can support that work via [GitHub Sponsors](https://github.com/sponsors/egoist).
 
 ## License
 

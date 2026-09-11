@@ -30,11 +30,26 @@ providers, and MCP servers all come from that single backend.
 
 ## Highlights
 
-- Keep projects and independent agent sessions in one native app.
-- Switch models, reasoning effort, and access modes from a shared interface.
-- Queue or steer follow-up messages while an agent is working.
-- Rewind Git-backed tasks with conversation-aware checkpoints.
-- Store app state locally, with no fintwind account or remote service required.
+- **Truly native, not Electron**: the UI is rendered directly on the GPU by
+  Rust + GPUI; only the optional right-panel browser uses the built-in
+  system WebView2.
+- **Smooth with long conversations**: transcripts and reasoning are rendered
+  with virtualized lists that build only what is visible each frame, keeping
+  streaming output fluid even on high-refresh-rate displays.
+- **Respects your system**: dark/light theme follows the OS appearance,
+  animations honor the system reduce-motion setting, and key interactions
+  are fully keyboard-operable.
+- **Windows-native integration**: system tray, native menus, a built-in
+  terminal, per-user install, and signed automatic updates behave the way
+  Windows users expect.
+- **Local-first**: projects, sessions, transcripts, and attachments all stay
+  on your machine (SQLite + local files), with the daemon running locally.
+  No account, no cloud dependency.
+- **Zero telemetry by default**: telemetry is off by default; configuration
+  is just local JSON files you can back up and migrate freely.
+- **Session control**: switch models, reasoning effort, and access modes
+  from one interface; queue or steer follow-up messages while an agent
+  works; rewind Git-backed tasks with conversation-aware checkpoints.
 
 ## Architecture
 

@@ -4,10 +4,15 @@ fintwind is a native Windows desktop app for [OpenCode 2](https://opencode.ai). 
 built in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)
 and keeps projects, sessions, transcripts on your machine.
 
+> This project is based on [waku](https://github.com/egoist/waku) by
+> [EGOIST](https://github.com/egoist), licensed under
+> [GPL-3.0](LICENSE). This fork diverges as an independently developed native
+> Windows desktop client for coding agents, and remains GPL-3.0.
+
 ## Install
 
 Run `fintwind-<version>-<arch>-Setup.exe` from the
-[latest release](https://github.com/egoist/fintwind/releases/latest). It installs
+[latest release](https://github.com/roketskiy/fintwind/releases/latest). It installs
 per-user and updates itself. A portable `.zip` is published alongside it. See
 [docs/windows.md](docs/windows.md) for requirements and what is not available
 there yet.

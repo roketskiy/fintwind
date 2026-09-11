@@ -8,7 +8,7 @@ through the in-app updater and https://fintwind.sh.
 ## Reporting a Vulnerability
 
 Please use GitHub private vulnerability reporting:
-https://github.com/egoist/fintwind/security/advisories/new
+https://github.com/roketskiy/fintwind/security/advisories/new
 
 If that doesn't work for you, email hi@egoist.dev.
 

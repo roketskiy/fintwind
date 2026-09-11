@@ -1,104 +1,93 @@
 # fintwind
 
-fintwind is a native Windows desktop app for [OpenCode 2](https://opencode.ai). It is
-built in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)
-and keeps projects, sessions, transcripts on your machine.
+简体中文 | [English](README.en.md)
 
-> fintwind is a fork of [waku](https://github.com/egoist/waku) by
-> [EGOIST](https://github.com/egoist), and stays under [GPL-3.0](LICENSE) like
-> upstream. Unlike waku, this fork converges on a single OpenCode 2 backend:
-> all other agent providers and the macOS/Linux builds were removed in favor of
-> Windows-first development. The upstream project remains the place for the
-> multi-provider, cross-platform app.
+fintwind 是 [OpenCode 2](https://opencode.ai) 的原生 Windows 桌面应用，使用 Rust 和
+[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 构建，
+项目、会话与对话记录全部保存在你自己的机器上。
 
-## Install
+> fintwind 是 [EGOIST](https://github.com/egoist) 的
+> [waku](https://github.com/egoist/waku) 的 fork，同样采用
+> [GPL-3.0](LICENSE) 授权。与 waku 不同，本 fork 收敛为单一 OpenCode 2 后端：
+> 移除了其余所有 agent provider 和 macOS/Linux 构建，专注 Windows 优先开发。
+> 多 provider、跨平台的需求请前往上游项目。
 
-Run `fintwind-<version>-<arch>-Setup.exe` from the
-[latest release](https://github.com/roketskiy/fintwind/releases/latest). It installs
-per-user and updates itself. A portable `.zip` is published alongside it. See
-[docs/windows.md](docs/windows.md) for requirements and what is not available
-there yet.
+## 安装
 
-## Requirements
+从[最新 release](https://github.com/roketskiy/fintwind/releases/latest) 下载
+`fintwind-<version>-<arch>-Setup.exe` 运行即可。它按用户安装、自动更新，
+同时提供便携版 `.zip`。系统要求与尚未支持的功能见
+[docs/windows.md](docs/windows.md)。
 
-fintwind drives one agent backend: a local
-[OpenCode 2](https://opencode.ai) server. Install and authenticate the
-`opencode2` CLI first; fintwind starts it automatically, and sessions, models,
-providers, and MCP servers all come from that single backend.
+## 环境要求
 
-## Highlights
+fintwind 只驱动一个 agent 后端：本地 [OpenCode 2](https://opencode.ai) 服务。
+请先安装并登录 `opencode2` CLI；fintwind 会自动拉起它，
+会话、模型、provider 与 MCP 服务器全部来自这一个后端。
 
-- Keep projects and independent agent sessions in one native app.
-- Switch models, reasoning effort, and access modes from a shared interface.
-- Queue or steer follow-up messages while an agent is working.
-- Rewind Git-backed tasks with conversation-aware checkpoints.
-- Store app state locally, with no fintwind account or remote service required.
+## 功能亮点
 
-## Architecture
+- 在一个原生应用中管理项目与相互独立的 agent 会话。
+- 用统一界面切换模型、思考程度与访问模式。
+- agent 工作时可以排队或中途插话（steer）后续消息。
+- 基于 Git 的任务可回退，带对话感知的检查点。
+- 应用状态全部本地存储，无需 fintwind 账号，也不依赖任何远程服务。
 
-The native desktop is an RPC client of the standalone `fintwind-daemon` process.
-Provider sessions run in [`fintwind-core`](crates/fintwind-core), behind the
-authenticated, versioned WebSocket contract in
-[`fintwind-protocol`](crates/fintwind-protocol). fintwind Desktop depends on
-[`fintwind-client`](crates/fintwind-client), not on the daemon implementation. The
-daemon owns task SQLite data, uploaded attachments, provider-native session
-forks, and all workspace filesystem and Git operations; paths returned by it
-always refer to the daemon host. The desktop retains only presentation state
-and a disposable preview cache.
+## 架构
 
-The browser client lives at [`apps/web`](apps/web) and uses the generated
-browser transport in [`packages/fintwind-client`](packages/fintwind-client). Its
-checked-in types are generated directly from the Rust protocol, while its
-WebSocket client implements the same handshake, request IDs, subscriptions,
-sequence deduplication, and replay cursors as the Rust client. Run
-`bun run protocol:generate` after changing a wire type and
-`bun run protocol:check` to verify that generated files are current.
+原生桌面端是独立 `fintwind-daemon` 进程的 RPC 客户端。Provider 会话运行在
+[`fintwind-core`](crates/fintwind-core) 中，隐藏在
+[`fintwind-protocol`](crates/fintwind-protocol) 的带鉴权、带版本化的
+WebSocket 契约之后。桌面端只依赖
+[`fintwind-client`](crates/fintwind-client)，不依赖 daemon 的具体实现。
+daemon 拥有任务 SQLite 数据、上传的附件、provider 原生的会话分叉，以及全部
+工作区文件系统与 Git 操作；它返回的路径一律指 daemon 所在主机。
+桌面端只保留展示状态和可丢弃的预览缓存。
 
-Projectless task workspaces live on the daemon host under
-`~/.fintwind/projects/<date>/<slug>`. The daemon moves workspaces created by the
-older `~/.fintwind/<date>/<slug>` layout on first load.
+浏览器客户端位于 [`apps/web`](apps/web)，使用
+[`packages/fintwind-client`](packages/fintwind-client) 中生成的浏览器传输层。
+其签入的类型直接由 Rust 协议生成，WebSocket 客户端实现了与 Rust 客户端相同的
+握手、请求 ID、订阅、序列去重和重放游标。改动线上类型后运行
+`bun run protocol:generate` 重新生成，并用 `bun run protocol:check` 验证
+生成文件是最新的。
 
-Configuration ownership is separate too: the Release desktop writes
-`~/.fintwind/app.json`, while Debug stays isolated at `temp/app.json`. Daemon
-provider settings live in `~/.fintwind/settings.json`. The
-desktop's Settings → Daemon page can explicitly
-expose the child daemon on a fixed port, configure exact browser origins, and
-copy its stable authentication token. It remains loopback-only by default.
+无项目的任务工作区位于 daemon 主机的 `~/.fintwind/projects/<日期>/<slug>`
+下。daemon 首次加载时会把旧版 `~/.fintwind/<日期>/<slug>` 布局创建的
+工作区迁移过去。
 
-When connected to a daemon managed outside the desktop process, fintwind never
-interprets daemon paths on the client machine. The local folder picker and PTY
-are therefore unavailable until the protocol gains daemon-host picker and
-terminal-stream endpoints; files, diffs, Git, skills, usage, task state, and
-attachments already use daemon RPC.
+配置归属同样分离：Release 桌面端写 `~/.fintwind/app.json`，Debug 则隔离在
+`temp/app.json`。daemon 的 provider 设置保存在
+`~/.fintwind/settings.json`。桌面端"设置 → Daemon"页可以把子 daemon
+显式暴露在固定端口上、配置精确的浏览器来源，并复制其稳定的鉴权令牌；
+默认始终只监听回环地址。
 
-Release apps bundle and sign `fintwind-daemon`. Development keeps the daemon at
-`target/debug/fintwind-debug-daemon`, allowing provider-only edits to rebuild and
-replace the daemon without relaunching fintwind Debug.
+连接到桌面进程之外托管的 daemon 时，fintwind 绝不在客户机上解释 daemon
+的路径。因此在协议增加 daemon 主机侧的目录选择器与终端流端点之前，
+本地目录选择器和 PTY 不可用；文件、diff、Git、skills、用量、任务状态与
+附件则已经走 daemon RPC。
 
-## Development
+Release 应用捆绑并签名 `fintwind-daemon`。开发时 daemon 位于
+`target/debug/fintwind-debug-daemon`，这样只改 provider 相关代码时可以
+单独重编译并替换 daemon，不必重启 fintwind Debug。
 
-Development requires Windows 10 1809 or newer, the MSVC toolchain,
-[Rust 1.96 or newer](https://www.rust-lang.org/tools/install), and
-[Bun](https://bun.sh/). Install the native build prerequisites listed in
-[CONTRIBUTING.md](CONTRIBUTING.md) first.
+## 开发
+
+开发环境要求 Windows 10 1809 或更新、MSVC 工具链、
+[Rust 1.96 或更新](https://www.rust-lang.org/tools/install) 以及
+[Bun](https://bun.sh/)。请先按
+[CONTRIBUTING.md](CONTRIBUTING.md) 安装原生构建依赖。
 
 ```sh
 bun install
 bun run dev
 ```
 
-The right-panel browser runs on WebView2. Agent sessions, projects,
-transcripts, skills, usage, diffs, file editing, and the terminal also run
-natively.
+右侧浏览器面板运行在 WebView2 上；agent 会话、项目、对话记录、skills、
+用量、diff、文件编辑和终端均为原生实现。
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow and checks.
-Release maintainers should also read [RELEASING.md](RELEASING.md).
+开发流程与检查项见 [CONTRIBUTING.md](CONTRIBUTING.md)；
+发布维护者还应阅读 [RELEASING.md](RELEASING.md)。
 
-## Sponsorship
+## 许可证
 
-The original waku project is developed by [EGOIST](https://github.com/egoist);
-you can support that work via [GitHub Sponsors](https://github.com/sponsors/egoist).
-
-## License
-
-fintwind is licensed under the [GNU General Public License v3.0 only](LICENSE).
+fintwind 基于 [GNU General Public License v3.0 only](LICENSE) 授权。

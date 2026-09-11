@@ -174,6 +174,76 @@ pub fn provider_icon(provider: &str) -> &'static str {
     provider_letter_icon(provider)
 }
 
+/// Icon for a model: its company's brand mark when the model is recognizable,
+/// otherwise the serving provider's icon. A provider often resells another
+/// company's models — a router serving Grok is still Grok — so the mark shown
+/// beside a model name is matched from the model's catalog id and display
+/// name rather than taken from the provider.
+pub fn model_icon(model_id: &str, model_name: &str, provider: &str) -> &'static str {
+    model_company_icon(model_id, model_name).unwrap_or_else(|| provider_icon(provider))
+}
+
+/// Brand mark per model company, matched on distinctive model-id and display
+/// name tokens. Checked top to bottom; list the more specific family first
+/// when companies share a token. Companies without an embedded mark (Cohere,
+/// 01.AI, StepFun, …) are absent on purpose and fall through to the provider
+/// letter glyph.
+const MODEL_COMPANY_MARKS: &[(&[&str], &str)] = &[
+    (&["grok"], "icons/companies/xai.svg"),
+    (&["claude"], "icons/companies/anthropic.svg"),
+    (
+        &["gpt", "o1", "o3", "o4", "codex", "davinci", "chatgpt", "openai"],
+        "icons/companies/openai.svg",
+    ),
+    (&["gemini", "gemma", "google"], "icons/companies/google.svg"),
+    (&["deepseek"], "icons/companies/deepseek.svg"),
+    (&["qwen", "tongyi", "qwq", "qvq"], "icons/companies/qwen.svg"),
+    (&["kimi", "moonshot"], "icons/companies/moonshot.svg"),
+    (&["glm", "chatglm", "zhipu", "zai"], "icons/companies/zai.svg"),
+    (&["llama", "meta"], "icons/companies/meta.svg"),
+    (
+        &[
+            "mistral", "mixtral", "codestral", "pixtral", "magistral", "ministral", "devstral",
+            "voxtral",
+        ],
+        "icons/companies/mistral.svg",
+    ),
+    (&["minimax", "hailuo", "abab"], "icons/companies/minimax.svg"),
+    (&["doubao", "bytedance", "ui-tars"], "icons/companies/bytedance.svg"),
+    (&["phi", "microsoft", "mai"], "icons/companies/microsoft.svg"),
+    (&["nova", "amazon"], "icons/companies/amazon.svg"),
+    (&["sonar", "perplexity", "r1-1776"], "icons/companies/perplexity.svg"),
+];
+
+/// The company mark for a model, or `None` when no company matches and the
+/// caller should fall back to [`provider_icon`].
+fn model_company_icon(model_id: &str, model_name: &str) -> Option<&'static str> {
+    let haystack = format!("{} {}", model_id.trim(), model_name.trim()).to_ascii_lowercase();
+    MODEL_COMPANY_MARKS
+        .iter()
+        .find(|(tokens, _)| tokens.iter().any(|token| contains_token(&haystack, token)))
+        .map(|(_, icon)| *icon)
+}
+
+/// Substring match on token boundaries, so short marks like `o3` or `phi`
+/// cannot match inside an unrelated identifier ("qwen3-o" or "domain" stay
+/// unmatched while "o3-mini" and "phi-4" land).
+fn contains_token(haystack: &str, token: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let mut from = 0;
+    while let Some(offset) = haystack[from..].find(token) {
+        let start = from + offset;
+        let end = start + token.len();
+        let open = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let close = end == bytes.len() || !bytes[end].is_ascii_alphanumeric();
+        if open && close {
+            return true;
+        }
+        from = start + 1;
+    }
+    false
+}
+
 /// Letter glyph for a provider name, drawn from its first ASCII letter so
 /// digits, punctuation, and non-Latin prefixes still land on the letter that
 /// leads the readable part of the name. Names without any ASCII letter fall
@@ -563,6 +633,12 @@ mod tests {
         for letter in 'A'..='Z' {
             paths.push(provider_letter_icon(&letter.to_string()));
         }
+        // Same for every company mark in `MODEL_COMPANY_MARKS`: one probe per
+        // entry, so a renamed SVG fails here instead of vanishing from the
+        // model chip at runtime.
+        for (tokens, _) in MODEL_COMPANY_MARKS {
+            paths.push(model_icon(tokens[0], tokens[0], "opencode"));
+        }
         for kind in [
             ActivityKind::Reasoning,
             ActivityKind::Command,
@@ -622,6 +698,47 @@ mod tests {
         // No ASCII letter anywhere: generic mark.
         assert_eq!(provider_icon("  "), "icons/hexagon.svg");
         assert_eq!(provider_icon("云雾"), "icons/hexagon.svg");
+    }
+
+    #[test]
+    fn model_icons_follow_the_company_behind_the_model() {
+        // A router's slug never leaks into the mark: the company is matched
+        // from the model id and display name, however the provider is named.
+        assert_eq!(
+            model_icon("some-router/grok-4.6", "Grok 4.6", "Some Router"),
+            "icons/companies/xai.svg"
+        );
+        assert_eq!(
+            model_icon("openrouter/claude-opus-4", "Claude Opus 4", "OpenRouter"),
+            "icons/companies/anthropic.svg"
+        );
+        assert_eq!(
+            model_icon("zhipuai/glm-4.6", "GLM 4.6", "Zhipu"),
+            "icons/companies/zai.svg"
+        );
+        assert_eq!(
+            model_icon("moonshotai/kimi-k2", "Kimi K2", "Moonshot"),
+            "icons/companies/moonshot.svg"
+        );
+        // The match runs on either the id, the display name, or both.
+        assert_eq!(
+            model_company_icon("", "GPT-5").unwrap(),
+            "icons/companies/openai.svg"
+        );
+        assert_eq!(
+            model_company_icon("google/gemini-2.5-pro", "").unwrap(),
+            "icons/companies/google.svg"
+        );
+        // Short tokens land on real models but not inside other words.
+        assert_eq!(model_company_icon("openai/o3-mini", "").unwrap(), "icons/companies/openai.svg");
+        assert_eq!(model_company_icon("microsoft/phi-4", ""), Some("icons/companies/microsoft.svg"));
+        assert_eq!(model_company_icon("qwen/qwen3-o", ""), Some("icons/companies/qwen.svg"));
+        assert_eq!(model_company_icon("test/domain-x", ""), None);
+        // No match: the provider's icon carries on.
+        assert_eq!(
+            model_icon("yi/yi-lightning", "Yi Lightning", "01.AI"),
+            "icons/letters/a.svg"
+        );
     }
 
     #[test]

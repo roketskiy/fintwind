@@ -21,11 +21,11 @@ fn native_override(preference: ThemePreference) -> Option<bool> {
     }
 }
 
-/// Fintwind's visual language, take two: neutral graphite surfaces in the spirit
-/// of Cursor — color is reserved for meaning. On macOS the sidebar's semantic
-/// tint is installed as a native layer above Sidebar vibrancy; keeping this
-/// GPUI surface clear avoids incorrectly accumulating the alpha of nested Metal
-/// backgrounds. Selected, hovered, and pressed rows remain a 6% neutral layer.
+/// Fintwind's visual language: graphite in dark, cool paper-white in light —
+/// color is reserved for meaning. On macOS the sidebar's semantic tint is
+/// installed as a native layer above Sidebar vibrancy; keeping this GPUI
+/// surface clear avoids incorrectly accumulating the alpha of nested Metal
+/// backgrounds. Selected, hovered, and pressed rows remain a thin neutral layer.
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub is_dark: bool,
@@ -132,26 +132,26 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             is_dark: false,
-            canvas: rgb(0xF7F5F0).into(),
-            sidebar: rgb(0xECE8E1).into(),
-            sidebar_drag_background: rgb(0xECE8E1).into(),
-            sidebar_item_background: hsla(0.0, 0.0, 0.078, 0.06),
-            surface: rgb(0xF7F5F0).into(),
-            raised: rgb(0xECECEC).into(),
+            canvas: rgb(0xFFFFFF).into(),
+            sidebar: rgb(0xF9F9F9).into(),
+            sidebar_drag_background: rgb(0xF9F9F9).into(),
+            sidebar_item_background: hsla(0.0, 0.0, 0.078, 0.10),
+            surface: rgb(0xFFFFFF).into(),
+            raised: rgb(0xF4F4F4).into(),
             composer: rgb(0xFFFFFF).into(),
-            inset: rgb(0xE6E6E6).into(),
+            inset: rgb(0xEFEFEF).into(),
             terminal: rgb(0xFFFFFF).into(),
-            overlay: hsla(220.0 / 360.0, 0.10, 0.12, 0.05),
-            overlay_strong: hsla(220.0 / 360.0, 0.10, 0.12, 0.09),
+            overlay: hsla(0.0, 0.0, 0.12, 0.05),
+            overlay_strong: hsla(0.0, 0.0, 0.12, 0.09),
 
-            border: hsla(220.0 / 360.0, 0.10, 0.12, 0.08),
-            border_strong: hsla(220.0 / 360.0, 0.10, 0.12, 0.15),
-            sidebar_border: hsla(0.0, 0.0, 0.078, 0.12),
+            border: hsla(0.0, 0.0, 0.12, 0.12),
+            border_strong: hsla(0.0, 0.0, 0.12, 0.18),
+            sidebar_border: hsla(0.0, 0.0, 0.078, 0.10),
 
-            text: rgb(0x242424).into(),
-            text_secondary: rgb(0x666666).into(),
-            text_tertiary: rgb(0x858585).into(),
-            text_ghost: rgb(0xA4A4A4).into(),
+            text: rgb(0x141414).into(),
+            text_secondary: rgb(0x5C5C5C).into(),
+            text_tertiary: rgb(0x8A8A8A).into(),
+            text_ghost: rgb(0xA3A3A3).into(),
 
             accent: rgb(0xD97757).into(),
             resize_handle: rgb(0x2563EB).into(),
@@ -159,7 +159,7 @@ impl Theme {
 
             selection: hsla(211.0 / 360.0, 1.0, 0.50, 0.35),
             code_text: rgb(0x9A5528).into(),
-            code_wash: hsla(220.0 / 360.0, 0.10, 0.12, 0.07),
+            code_wash: hsla(0.0, 0.0, 0.12, 0.07),
 
             inverse: rgb(0x202227).into(),
             on_inverse: rgb(0xF8F8F9).into(),

@@ -6,7 +6,6 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    export_sparkle_public_key();
 
     #[cfg(target_os = "windows")]
     {
@@ -15,25 +14,6 @@ fn main() {
         println!("cargo:rustc-link-arg-bins=/stack:{}", 8 * 1024 * 1024);
         embed_windows_resources();
     }
-}
-
-/// Publish the EdDSA public key as a compile-time constant.
-///
-/// The Windows updater verifies the signatures `scripts/appcast-windows.ts`
-/// writes against this key. Reading it from a file rather than repeating it
-/// in Rust means the feed and the app cannot drift.
-fn export_sparkle_public_key() {
-    const KEY_FILE: &str = "resources/sparkle-public-ed-key.txt";
-
-    println!("cargo:rerun-if-changed={KEY_FILE}");
-
-    let value = std::fs::read_to_string(KEY_FILE).expect("read the Sparkle public key");
-    let value = value.trim();
-    if value.is_empty() {
-        panic!("{KEY_FILE} is empty");
-    }
-
-    println!("cargo:rustc-env=FINTWIND_SPARKLE_PUBLIC_ED_KEY={value}");
 }
 
 #[cfg(target_os = "windows")]

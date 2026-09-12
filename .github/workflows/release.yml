@@ -174,22 +174,6 @@ jobs:
         run: |
           echo "$VERSION" > artifacts/latest-windows.txt
 
-      # Signed here rather than on the Windows runners: this is the only job
-      # that holds both installers, and the signing key stays in one place.
-      - name: Sign the Windows update feeds
-        env:
-          VERSION: ${{ needs.version.outputs.version }}
-          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
-        run: |
-          # Merge into the live feeds so previously published releases keep
-          # their entries; a first run simply starts from nothing.
-          for arch in x86_64 aarch64; do
-            curl -fsSL --max-time 30 \
-              "https://releases.fintwind.sh/appcast-windows-$arch.xml" \
-              -o "artifacts/appcast-windows-$arch.xml" || true
-          done
-          bun scripts/appcast-windows.ts artifacts "$VERSION"
-
       - name: Write release notes
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -220,5 +204,4 @@ jobs:
           files: |
             artifacts/*.zip
             artifacts/*.exe
-            artifacts/appcast-windows-*.xml
             artifacts/latest-windows.txt

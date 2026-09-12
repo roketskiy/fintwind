@@ -1,7 +1,7 @@
 ; fintwind's Windows installer.
 ;
-; Per-user by design: %LOCALAPPDATA%\Programs needs no elevation, which is
-; what lets the in-app updater re-run this silently without a UAC prompt.
+; Per-user by design: %LOCALAPPDATA%\Programs needs no elevation, so a silent
+; install or reinstall never triggers a UAC prompt.
 ; See RELEASING.md and docs/windows.md.
 ;
 ; Built by scripts/bundle-windows.ts, which supplies:
@@ -32,7 +32,7 @@
 
 [Setup]
 ; Never change AppId: it is how Windows and every later installer recognize
-; an existing install, and how the updater replaces rather than duplicates it.
+; an existing install, so a reinstall replaces rather than duplicates it.
 AppId={{8B6C6E4A-3E0F-4F0B-9C5F-2E0E9C4B7A11}
 AppName=fintwind
 AppVersion={#AppVersion}
@@ -57,18 +57,18 @@ ArchitecturesInstallIn64BitMode={#Architectures}
 ; What docs/windows.md promises. Enforcing it here beats installing onto a
 ; system that cannot run the result.
 MinVersion=10.0.17763
-; Two installers must not race — the updater can be triggered again while an
-; update is already applying.
+; Two installers must not race — a second launch can start while one is
+; already applying.
 SetupMutex=fintwindSetup
-; No elevation, so an update never has to ask for it either.
+; No elevation, so a silent install never has to ask for it either.
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
 DisableReadyPage=yes
-; The updater passes /DIR, and a manual reinstall should land where the
-; previous one did rather than asking again.
+; A manual reinstall lands where the previous install did rather than
+; asking again.
 UsePreviousAppDir=yes
 ; fintwind persists continuously to SQLite, so closing it is safe; a silent
-; update cannot stop to ask, and a locked fintwind.exe would fail the install.
+; install cannot stop to ask, and a locked fintwind.exe would fail it.
 CloseApplications=force
 RestartApplications=no
 
@@ -88,5 +88,4 @@ Name: "{userdesktop}\fintwind"; Filename: "{app}\fintwind.exe"; Tasks: desktopic
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; Flags: unchecked
 
 [Run]
-; No skipifsilent: this is also how the updater's silent run brings fintwind back.
 Filename: "{app}\fintwind.exe"; Description: "{cm:LaunchProgram,fintwind}"; Flags: nowait postinstall

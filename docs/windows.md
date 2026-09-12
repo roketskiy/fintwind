@@ -6,8 +6,7 @@ Download `fintwind-<version>-x86_64-Setup.exe` (or the `aarch64` installer on an
 Arm device) from [releases.fintwind.sh](https://releases.fintwind.sh) or the
 [GitHub release](https://github.com/roketskiy/fintwind/releases) and run it. It
 installs per-user into `%LOCALAPPDATA%\Programs\fintwind`, so it never asks for
-administrator rights — which is also what lets fintwind update itself later
-without a UAC prompt.
+administrator rights.
 
 `https://releases.fintwind.sh/latest-windows.txt` names the current version if you
 want to script the download.
@@ -20,10 +19,6 @@ anywhere and run `fintwind.exe`.
 **Keep the two executables together.** fintwind launches `fintwind-daemon.exe` from its
 own directory, so moving `fintwind.exe` out on its own leaves it unable to start
 the daemon. A shortcut is fine.
-
-A portable copy still updates itself: the updater passes the running
-directory to the installer, so it replaces that copy in place rather than
-creating a second install.
 
 fintwind expects:
 
@@ -42,21 +37,11 @@ release was not code-signed. Choose **More info → Run anyway**.
 
 ## Updating
 
-fintwind updates itself. It checks once per launch, and an available update
-appears in the sidebar footer; clicking it downloads the installer, verifies
-its signature, and runs it. fintwind closes, is replaced in place, and reopens.
-Turn the check off in **Settings → General → Automatic updates** — **Check for
-Updates…** in the app menu still works either way.
-
-Updates use one signed appcast per architecture:
-
-- `https://releases.fintwind.sh/appcast-windows-x86_64.xml`
-- `https://releases.fintwind.sh/appcast-windows-aarch64.xml`
-
-Every installer carries an EdDSA signature, and fintwind refuses one that does not
-verify against the public key built into it — so a compromised mirror or a
-tampered download cannot install anything. The preference itself lives in
-`%LOCALAPPDATA%\Fintwind\updater.json`.
+fintwind does not update itself. When a new release ships, download its
+installer (or zip) from [releases.fintwind.sh](https://releases.fintwind.sh) or
+the [GitHub release](https://github.com/roketskiy/fintwind/releases) and run it.
+Installing over the existing copy replaces it in place and keeps all of your
+data — see the next section.
 
 ## Where fintwind keeps its data
 
@@ -130,9 +115,3 @@ shim on `PATH`. If the shell finds it but fintwind does not, set the binary path
 
 **Git-backed features do nothing.** fintwind shells out to `git`. Install Git for
 Windows and make sure `git --version` works in a new terminal.
-
-**The update never arrives.** fintwind reaches the feed with the `curl.exe` in
-System32; a proxy or filter that blocks `releases.fintwind.sh` blocks updates too.
-**Check for Updates…** reports the reason, where the once-per-launch check
-stays quiet. Downloading the installer by hand and running it is always
-equivalent.

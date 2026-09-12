@@ -7,8 +7,39 @@
 
 - 假定 `bun ./scripts/dev.ts` 已经在运行,并且持有当前的 `fintwind.exe`
   进程。源码变更会被自动重新编译并重启。只有在它尚未启动时才需要你自己运行。
-- 每次修改之后完成后，调用一个子代理审查代码，并修复功能性bug和重大漏洞,然后提问用户是否以及如何编译release。
 - 除非被要求,否则不做视觉测试。
+
+## 代码审查
+- 单论超过三十行的代码修改时，check完成后调用调用一个子代理审查代码，并修复功能性bug和重大漏洞,然后提问用户是否编译release，以及如何编译release。
+
+## Windows release 构建
+
+dev watcher 占用的是 `target/debug/fintwind.exe`，release 写到 `target/release`，两者不冲突，不必停 watcher。两个可执行文件必须放在同一目录：应用从自身旁边启动 `fintwind-daemon.exe`。
+
+### 不带安装包
+
+只产出两个 release 可执行文件，不打包、不调用 Inno Setup：
+
+```sh
+cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon
+```
+
+产物：`target/release/fintwind.exe`、`target/release/fintwind-daemon.exe`。
+
+### 带安装包
+
+编译 release，再打便携 zip 和 per-user 安装程序（需本机已装 Inno Setup 6.3+，`ISCC.exe`）：
+
+```sh
+bun scripts/bundle-windows.ts
+```
+
+等价于 `bun run bundle`。产物都在 `target/release`：
+
+- `fintwind-<version>-<target-triple>.zip`（目录内两个 exe 并排）
+- `fintwind-<version>-<arch>-Setup.exe`
+
+未设置 `WINDOWS_CERTIFICATE`（base64 `.pfx`）和 `WINDOWS_CERTIFICATE_PASSWORD` 时打出的是未签名包，脚本会打印说明。细节见 [CONTRIBUTING.md](CONTRIBUTING.md) 的 Windows bundle 与 [RELEASING.md](RELEASING.md)。
 
 ## 性能
 

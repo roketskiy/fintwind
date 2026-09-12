@@ -140,6 +140,9 @@ pub struct Palette {
     pub code_wash: Hsla,
     pub selection: Hsla,
     pub accent: Hsla,
+    /// Link text (and its underline). A single fixed blue on both themes —
+    /// the user-specified #8ACFF8 — so a URL reads as a URL at a glance.
+    pub link: Hsla,
     pub added: Hsla,
     pub removed: Hsla,
     is_dark: bool,
@@ -159,6 +162,7 @@ impl Palette {
             code_wash: theme.code_wash,
             selection: theme.selection,
             accent: theme.accent,
+            link: gpui::rgb(0x8ACFF8).into(),
             added: theme.success,
             removed: theme.danger,
             is_dark: theme.is_dark,
@@ -260,6 +264,8 @@ pub fn flatten(
             font: run_font,
             color: if run.style.code {
                 palette.code_text
+            } else if run.style.link.is_some() {
+                palette.link
             } else {
                 base_color
             },
@@ -267,7 +273,7 @@ pub fn flatten(
             // underlay; a run background could only ever be a square box.
             background_color: None,
             underline: run.style.link.is_some().then_some(UnderlineStyle {
-                color: Some(palette.tertiary),
+                color: Some(palette.link),
                 thickness: px(1.0),
                 wavy: false,
             }),

@@ -40,10 +40,6 @@ fn default_right_panel_visibility() -> bool {
     false
 }
 
-fn default_analytics_enabled() -> bool {
-    true
-}
-
 fn default_provider() -> String {
     OPENCODE_PROVIDER.to_owned()
 }
@@ -206,7 +202,6 @@ pub struct PersistedWindowState {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppSettings {
-    pub analytics_enabled: bool,
     pub favorite_models: Vec<FavoriteModel>,
     pub theme: ThemePreference,
     pub language: AppLanguage,
@@ -216,7 +211,6 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
-            analytics_enabled: default_analytics_enabled(),
             favorite_models: Vec::new(),
             theme: ThemePreference::System,
             language: AppLanguage::default(),
@@ -228,8 +222,6 @@ impl Default for AppSettings {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct AppState {
     app_state_version: u32,
-    #[serde(default = "Uuid::new_v4")]
-    analytics_id: Uuid,
     #[serde(default)]
     selected_project: Option<Uuid>,
     #[serde(default)]
@@ -261,10 +253,6 @@ struct AppState {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PersistedState {
     pub version: u32,
-    #[serde(default = "Uuid::new_v4")]
-    pub analytics_id: Uuid,
-    #[serde(default = "default_analytics_enabled")]
-    pub analytics_enabled: bool,
     pub projects: Vec<Project>,
     pub sessions: Vec<AgentSession>,
     pub selected_project: Option<Uuid>,
@@ -323,8 +311,6 @@ impl PersistedState {
     pub fn empty() -> Self {
         Self {
             version: STATE_VERSION,
-            analytics_id: Uuid::new_v4(),
-            analytics_enabled: true,
             projects: Vec::new(),
             sessions: Vec::new(),
             selected_project: None,
@@ -435,7 +421,6 @@ impl PersistedState {
 
     fn app_settings(&self) -> AppSettings {
         AppSettings {
-            analytics_enabled: self.analytics_enabled,
             favorite_models: self.favorite_models.clone(),
             theme: self.theme,
             language: self.language,
@@ -446,7 +431,6 @@ impl PersistedState {
     fn app_state(&self) -> AppState {
         AppState {
             app_state_version: APP_STATE_VERSION,
-            analytics_id: self.analytics_id,
             selected_project: self.selected_project,
             selected_session: self.persistable_selected_session(),
             last_provider: self.last_provider.clone(),
@@ -464,7 +448,6 @@ impl PersistedState {
     }
 
     fn apply_app_settings(&mut self, settings: AppSettings) {
-        self.analytics_enabled = settings.analytics_enabled;
         self.favorite_models = settings.favorite_models;
         self.theme = settings.theme;
         self.language = settings.language;
@@ -472,7 +455,6 @@ impl PersistedState {
     }
 
     fn apply_app_state(&mut self, app_state: AppState) {
-        self.analytics_id = app_state.analytics_id;
         self.selected_project = app_state.selected_project;
         self.selected_session = app_state.selected_session;
         self.last_provider = app_state.last_provider;

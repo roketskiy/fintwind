@@ -1,9 +1,9 @@
 # Changelog
 
-All notable changes to Fintwind. This file is the **source of truth for the release
-notes shown in the in-app updater**: the Release workflow extracts the section
-whose heading matches the version being released and publishes it next to the
-update.
+All notable changes to Fintwind. This file is the **source of truth for the
+release notes published with each GitHub release**: the Release workflow
+extracts the section whose heading matches the version being released and
+publishes it as the release body.
 
 Format follows [Keep a Changelog](https://keepachangelog.com). Add a new
 `## [<version>]` section at the top for each release, matching the version in

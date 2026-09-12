@@ -32,37 +32,6 @@ fn append_project_group_rows(
     rows.push(SidebarRow::GroupSpacer);
 }
 
-fn updater_button_available_content(
-    foreground: Hsla,
-    label: SharedString,
-    label_reveal: f32,
-) -> Div {
-    div()
-        .relative()
-        .size_full()
-        .child(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .opacity(1.0 - label_reveal)
-                .child(icon("icons/download.svg", 12.0, foreground)),
-        )
-        .child(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .whitespace_nowrap()
-                .opacity(label_reveal)
-                .child(label),
-        )
-}
-
 /// Height of a session card plus the separation reserved beneath it in the
 /// virtualized sidebar list. Keep the gap inside the list row so measured and
 /// estimated heights stay identical for off-screen sessions.
@@ -539,133 +508,6 @@ impl Fintwind {
             .child(search)
     }
 
-    fn start_available_update(&mut self, cx: &mut Context<Self>) {
-        if self.updater_status != crate::updater::UpdateStatus::Available {
-            return;
-        }
-        let started = cx
-            .try_global::<crate::updater::UpdaterState>()
-            .and_then(|state| state.0.as_ref())
-            .is_some_and(|updater| updater.install_available_update());
-        if started {
-            self.updater_status = crate::updater::UpdateStatus::Updating;
-            self.reset_updater_button_animation();
-            cx.notify();
-        }
-    }
-
-    fn render_updater_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let status = self.updater_status;
-        if status == crate::updater::UpdateStatus::Idle {
-            return None;
-        }
-
-        let theme = Theme::current(cx);
-        let foreground = rgb(0xFFFFFF).into();
-        let available = status == crate::updater::UpdateStatus::Available;
-        let button = div()
-            .id("sidebar-update")
-            .track_focus(&self.updater_button_focus)
-            .when(available, |button| button.tab_index(0))
-            .w(px(UPDATER_BUTTON_COLLAPSED_WIDTH))
-            .h(px(24.0))
-            .flex_none()
-            .overflow_hidden()
-            .rounded_full()
-            .relative()
-            .cursor_default()
-            .bg(theme.gauge)
-            .text_color(foreground)
-            .text_size(px(11.0))
-            .font_weight(FontWeight::MEDIUM)
-            .when(available, |button| {
-                button
-                    .hover(|style| style.opacity(0.92))
-                    .focus_visible(|style| style.border_1().border_color(rgb(0xFFFFFF)))
-                    .active(|style| style.opacity(0.8))
-                    .on_hover(cx.listener(|this, hovering: &bool, _, cx| {
-                        this.set_updater_button_hovered(*hovering, cx);
-                    }))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.start_available_update(cx);
-                    }))
-                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.start_available_update(cx);
-                            cx.stop_propagation();
-                        }
-                    }))
-            });
-
-        if !available {
-            let indicator = motion::spin_slow(icon("icons/loader-circle.svg", 14.0, foreground));
-            return Some(
-                button
-                    .tooltip(Tooltip::text(
-                        if status == crate::updater::UpdateStatus::Checking {
-                            tr!("updater.checking")
-                        } else {
-                            tr!("updater.updating")
-                        },
-                    ))
-                    .child(
-                        div()
-                            .size_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(indicator),
-                    )
-                    .into_any_element(),
-            );
-        }
-
-        let label: SharedString = tr_cow!("updater.update").into();
-        let animation_generation = self.updater_button_animation_generation;
-        if animation_generation == 0 {
-            return Some(
-                button
-                    .child(updater_button_available_content(foreground, label, 0.0))
-                    .into_any_element(),
-            );
-        }
-
-        let from_width = self.updater_button_animation_from_width;
-        let from_reveal = self.updater_button_animation_from_reveal;
-        let target_width = if self.updater_button_expanded() {
-            UPDATER_BUTTON_EXPANDED_WIDTH
-        } else {
-            UPDATER_BUTTON_COLLAPSED_WIDTH
-        };
-        let target_reveal = if self.updater_button_expanded() {
-            1.0
-        } else {
-            0.0
-        };
-        let current_width = self.updater_button_width.clone();
-        let current_reveal = self.updater_button_label_reveal.clone();
-
-        Some(
-            button
-                .with_animation(
-                    SharedString::from(format!("sidebar-updater-expand-{animation_generation}")),
-                    Animation::new(Duration::from_millis(150)).with_easing(ease_out_quint()),
-                    move |button, delta| {
-                        let width = from_width + (target_width - from_width) * delta;
-                        let reveal = from_reveal + (target_reveal - from_reveal) * delta;
-                        current_width.set(width);
-                        current_reveal.set(reveal);
-                        button.w(px(width)).child(updater_button_available_content(
-                            foreground,
-                            label.clone(),
-                            reveal,
-                        ))
-                    },
-                )
-                .into_any_element(),
-        )
-    }
-
     fn render_sidebar_footer(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         div()
@@ -699,9 +541,6 @@ impl Fintwind {
                     })),
             )
             .child(div().flex_1())
-            .when_some(self.render_updater_button(cx), |footer, button| {
-                footer.child(button)
-            })
     }
 
     pub(super) fn render_sidebar(
@@ -927,7 +766,6 @@ impl Fintwind {
             .gap(px(5.0))
             .cursor_default()
             .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .hover(|element| element.bg(theme.overlay))
             .active(|element| element.bg(theme.overlay_strong))
             .child(icon("icons/folder.svg", 12.0, theme.text_ghost))
             .child(
@@ -997,6 +835,17 @@ impl Fintwind {
             .pb(px(SIDEBAR_PROJECT_CARD_BOTTOM_GAP))
             .child(
                 div()
+                    // The card carries the unified hover highlight so the
+                    // whole header lights up as one surface, the way the
+                    // session cards do — a hover on the inner toggle would
+                    // otherwise paint a detached blob that stops short of the
+                    // new-session control. Press feedback stays on the
+                    // controls themselves: the toggle is focusable and the
+                    // button stops mousedown propagation, so a card-level
+                    // active state would never trigger for them.
+                    .id(SharedString::from(format!(
+                        "sidebar-project-card-{project_id}"
+                    )))
                     .w_full()
                     .min_w_0()
                     .h(px(SIDEBAR_PROJECT_CARD_HEIGHT))
@@ -1004,6 +853,8 @@ impl Fintwind {
                     .rounded(px(8.0))
                     .border_1()
                     .border_color(theme.border_strong)
+                    .cursor_default()
+                    .hover(|element| element.bg(theme.sidebar_item_background))
                     .flex()
                     .items_center()
                     .gap(px(2.0))

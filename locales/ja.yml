@@ -1,7 +1,6 @@
 _version: 1
 
 menu.about: "%{app} について"
-menu.check_for_updates: アップデートを確認…
 menu.settings: 設定…
 menu.quit: "%{app} を終了"
 menu.file: ファイル
@@ -28,11 +27,6 @@ window.minimize: 最小化
 window.maximize: 最大化
 window.restore: 元に戻す
 
-updater.update: アップデート
-updater.checking: アップデートを確認中…
-updater.updating: アップデート中…
-updater.up_to_date: fintwind は最新です
-updater.failed: "アップデートに失敗しました：%{error}"
 
 command_palette.placeholder: タスクを検索、またはコマンドを実行…
 command_palette.suggested: おすすめ
@@ -165,10 +159,6 @@ common.creating: 作成中…
 settings.local_by_default: デフォルトでローカルに保存
 settings.local_by_default_description: プロジェクト、会話、設定はこの Mac に保存されます
 settings.local_by_default_web_description: プロジェクト、会話、添付ファイルは接続先デーモンのホストに保存されます。fintwind Web の設定はこのブラウザに保存されます。
-settings.automatic_updates: 自動アップデート
-settings.automatic_updates_description: バックグラウンドで新しいバージョンを確認し、インストールを案内します
-settings.share_anonymous_usage_data: 匿名の使用状況データを共有
-settings.share_anonymous_usage_data_description: 機能の利用状況と信頼性に関するデータを共有して、fintwind の改善にご協力ください。プロンプト、回答、プロジェクト名、ファイルパスなどの個人データは一切含まれません
 
 providers.coding_agents: コーディングエージェント
 providers.description: fintwind はこのコンピューターにインストールされたエージェントの CLI を使用します。各エージェントの CLI をインストールするかログインしてから、更新してください

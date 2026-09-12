@@ -28,7 +28,6 @@ macro_rules! tr_cow {
     };
 }
 
-mod analytics;
 mod app;
 mod assets;
 mod browser;
@@ -42,7 +41,6 @@ mod review_diff;
 mod terminal;
 mod theme;
 mod ui;
-mod updater;
 
 pub use fintwind_client::{
     checkpoint, command_env, composer_complete, git_branch, git_commit, i18n, identity, model,
@@ -65,7 +63,6 @@ actions!(
         NewSession,
         NewProject,
         OpenSettings,
-        CheckForUpdates,
         ToggleSidebar,
         ToggleRightPanel,
         ToggleCommandPalette,
@@ -204,17 +201,6 @@ pub fn run() {
             crate::theme::init(cx);
             crate::platform::init_reduce_motion(cx);
 
-            // The updater only runs from a release build (or when forced via
-            // FINTWIND_FORCE_UPDATER=1); everywhere else the menu item is
-            // omitted along with the updater itself.
-            let updater = crate::updater::Updater::init();
-            let updater_available = updater.is_some();
-            cx.set_global(crate::updater::UpdaterState(updater));
-            cx.on_action(|_: &CheckForUpdates, cx| {
-                if let Some(updater) = &cx.global::<crate::updater::UpdaterState>().0 {
-                    updater.check_for_updates();
-                }
-            });
             cx.on_action(|_: &About, _| crate::platform::show_about_panel());
 
             cx.bind_keys([
@@ -352,33 +338,26 @@ pub fn run() {
                 })
                 .ok();
 
-            set_app_menus(cx, updater_available);
+            set_app_menus(cx);
         });
 }
 
 /// Rebuild the native menu bar in the active locale. GPUI menus own their
 /// labels, so changing language must replace the model as well as redraw the
 /// window.
-pub(crate) fn set_app_menus(cx: &mut App, updater_available: bool) {
+pub(crate) fn set_app_menus(cx: &mut App) {
     cx.set_menus(vec![
         Menu {
             name: APP_NAME.into(),
             disabled: false,
             items: {
-                let mut items = vec![MenuItem::action(tr!("menu.about", app = APP_NAME), About)];
-                if updater_available {
-                    items.push(MenuItem::action(
-                        tr!("menu.check_for_updates"),
-                        CheckForUpdates,
-                    ));
-                }
-                items.push(MenuItem::separator());
-                items.extend([
+                vec![
+                    MenuItem::action(tr!("menu.about", app = APP_NAME), About),
+                    MenuItem::separator(),
                     MenuItem::action(tr!("menu.settings"), OpenSettings),
                     MenuItem::separator(),
                     MenuItem::action(tr!("menu.quit", app = APP_NAME), Quit),
-                ]);
-                items
+                ]
             },
         },
         Menu {

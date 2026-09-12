@@ -2,8 +2,8 @@
 
 ## Supported Versions
 
-Only the latest release of Fintwind receives security fixes. Updates ship
-through the in-app updater and https://fintwind.sh.
+Only the latest release of Fintwind receives security fixes. Download the
+newest release from https://fintwind.sh or the GitHub releases page.
 
 ## Reporting a Vulnerability
 

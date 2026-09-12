@@ -1817,7 +1817,7 @@ fn settings_search_filters_pages_for_arrow_cycling() {
 
     // An empty query keeps every page in sidebar order, so the arrows cycle
     // the full navigation even before anything is typed.
-    let mut all_pages = vec![
+    let all_pages = vec![
         SettingsPage::General,
         SettingsPage::Appearance,
         SettingsPage::Providers,

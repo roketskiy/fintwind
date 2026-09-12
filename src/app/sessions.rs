@@ -419,12 +419,6 @@ impl Fintwind {
     ) {
         self.settings_page = Some(SettingsPage::General);
         self.settings_scroll.set_offset(gpui::Point::default());
-        // Sparkle owns this value and its consent prompt can flip it outside
-        // the settings UI, so re-mirror it each time settings opens.
-        self.automatic_updates_enabled = cx
-            .try_global::<crate::updater::UpdaterState>()
-            .and_then(|updater| updater.0.as_ref())
-            .is_some_and(|updater| updater.automatically_checks_for_updates());
         window.focus(&self.settings_focus, cx);
         cx.notify();
     }
@@ -486,10 +480,6 @@ impl Fintwind {
         }
         self.right_panel_visible = visible;
         self.right_panel_slide = self.begin_panel_slide(self.right_panel_rendered_width, cx);
-        if visible {
-            self.analytics
-                .track(crate::analytics::Event::RightPanelOpened);
-        }
         self.persist_panel_layout();
         cx.notify();
     }
@@ -1107,11 +1097,7 @@ impl Fintwind {
                     session.push_message(MessageRole::Assistant, tr!("session.stopped"));
                 }
             }
-            self.finish_active_turn_with_analytics(
-                session_id,
-                TurnStatus::Interrupted,
-                crate::analytics::TurnOutcome::Cancelled,
-            );
+            self.finish_active_turn(session_id, TurnStatus::Interrupted);
         }
         if has_active_turn {
             self.capture_latest_turn_checkpoint_for(session_id);
@@ -1145,33 +1131,9 @@ impl Fintwind {
         let Some(session_id) = self.state.selected_session else {
             return;
         };
-        let decision = if let Some(runtime) = self.runtimes.get_mut(&session_id) {
-            let decision = runtime
-                .pending_permission
-                .as_ref()
-                .and_then(|permission| {
-                    permission
-                        .options
-                        .iter()
-                        .find(|option| option.id == option_id)
-                })
-                .map_or(
-                    "other",
-                    |option| if option.allow { "allow" } else { "deny" },
-                );
+        if let Some(runtime) = self.runtimes.get_mut(&session_id) {
             runtime.driver.respond(request_id, option_id);
             runtime.pending_permission = None;
-            Some(decision)
-        } else {
-            None
-        };
-        if let Some(decision) = decision {
-            self.analytics
-                .track(crate::analytics::Event::PermissionResponded {
-                    provider: "opencode",
-                    kind: "provider",
-                    decision,
-                });
         }
         if let Some(session) = self.selected_session_mut() {
             session.status = SessionStatus::Working;
@@ -1374,7 +1336,6 @@ impl Fintwind {
                     let project = Project::from_path(path);
                     let project_id = project.id;
                     this.state.projects.push(project);
-                    this.analytics.track(crate::analytics::Event::ProjectAdded);
                     this.create_session_for(project_id, cx);
                 });
             }

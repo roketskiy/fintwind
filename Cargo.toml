@@ -58,13 +58,11 @@ ratex-types = "0.1"
 ratex-render = { version = "0.1", features = ["embed-fonts"] }
 regex = "1"
 rust-i18n = "4"
-rust-umami = "0.1.1"
 smol = "2"
 ropey = "=2.0.0-beta.1"
 futures-lite = "2"
 futures = "0.3"
 nucleo-matcher = "0.3.1"
-tokio = { version = "1", features = ["rt"] }
 
 # `test-support` has to stay test-only. It compiles a loop into gpui's
 # `flush_effects` that draws every dirty window right there, so with the
@@ -106,8 +104,6 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }
-# Verifies the EdDSA signatures `scripts/appcast-windows.ts` writes.
-ed25519-dalek = "2"
 
 [profile.release]
 lto = "thin"

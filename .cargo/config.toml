@@ -1,0 +1,23 @@
+[env]
+# Xcode ships the Metal compiler as an optional toolchain. GPUI's build script
+# invokes `xcrun metal`, so select that toolchain for precompiled shaders.
+TOOLCHAINS = "Metal"
+# JSON has no bigint literal, so generated browser bindings model the wire's
+# integer fields as JavaScript numbers.
+TS_RS_LARGE_INT = "number"
+
+# Link the C runtime statically on Windows, as Zed does for GPUI. The
+# alternative is shipping (or installing) the Visual C++ redistributable, and
+# neither works here: Fintwind installs per-user with no elevation precisely so it
+# can update itself silently, and the portable zip has to run from wherever it
+# is unpacked. Windows on Arm makes the failure routine rather than rare — an
+# arm64 machine almost never has the arm64 redistributable already, so a
+# dynamically linked build dies at startup on `VCRUNTIME140.dll`.
+#
+# Link with the toolchain-bundled rust-lld instead of MSVC link.exe: faster
+# final links on incremental rebuilds, and no external LLVM install needed.
+[target.'cfg(target_os = "windows")']
+rustflags = ["-C", "target-feature=+crt-static", "-C", "linker=rust-lld"]
+
+[build]
+jobs = 4

@@ -1,0 +1,23 @@
+target
+.fintwind-cache
+.DS_Store
+*.log
+.env
+
+/dist
+node_modules
+temp/
+
+# Local resources, not part of the source tree
+.agents/
+gpui-component-main/
+
+# Agent skill packs (UI skills), local only
+.claude/skills/
+.zcode/skills/
+skills-lock.json
+
+.DS_Store
+
+# Local search index data
+.zvec-grep/

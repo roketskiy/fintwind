@@ -1,0 +1,100 @@
+# Contributing to Fintwind
+
+Thanks for helping improve Fintwind. Bug reports, focused fixes, tests, and
+well-scoped features are welcome.
+
+## Development setup
+
+The debug app requires:
+
+- Windows 10 1809 and newer
+- Rust 1.96 or newer
+- Bun
+- A supported agent CLI when testing a provider integration
+- The MSVC toolchain (Visual Studio Build Tools with the C++ workload and the
+  Windows SDK) so Cargo can link and so the resource compiler is available for
+  the executable's icon and version block
+
+Install dependencies and start the development watcher from the repository
+root:
+
+```sh
+bun install
+bun run dev
+```
+
+The watcher builds `target/debug/fintwind.exe`. The provider daemon remains an
+external `target/debug/fintwind-debug-daemon.exe`: provider-only edits rebuild and
+hot-swap that process without relaunching the app, while desktop edits rebuild
+and relaunch the app normally. Keep that watcher running while you work. Do
+not start a second watcher or manually relaunch the debug app. Press `Ctrl-C`,
+or quit the app, to stop it.
+
+The right-panel browser runs on WebView2.
+
+## Windows bundle
+
+To produce the portable archive and the installer:
+
+```sh
+bun scripts/bundle-windows.ts
+```
+
+Both land under `target/release`. The zip holds the two executables side by
+side beneath one versioned directory — the layout Fintwind needs to find its
+daemon — and the installer is built from
+[`resources/windows/fintwind.iss`](resources/windows/fintwind.iss), so Inno Setup 6.3
+or newer must be installed (`choco install innosetup`) — the architecture
+gate uses identifiers added in 6.3. Set `WINDOWS_CERTIFICATE`
+(base64 `.pfx`) and `WINDOWS_CERTIFICATE_PASSWORD` to Authenticode-sign them;
+without those the script packages unsigned binaries and says so.
+[docs/windows.md](docs/windows.md) documents installing for users, and
+[RELEASING.md](RELEASING.md) the signed update feed.
+
+## Making changes
+
+- Before starting work on anything larger than a bug fix, open an issue and
+  discuss the proposal first.
+- Keep changes focused and follow the existing Rust and GPUI conventions.
+- Keep filesystem, process, network, and other blocking work off the UI thread.
+  Rendering and row-building paths must read data already held in memory.
+- Keep long collections virtualized and per-frame work proportional to visible
+  content.
+- Make every mouse control keyboard-operable, preserve visible focus, honor
+  reduce-motion settings, and do not communicate state with color alone.
+- Prefer provider-neutral behavior when a change applies to every agent, while
+  preserving provider-native event order and session semantics.
+- Add or update tests for behavior that can be verified without the UI.
+
+## Checks
+
+Run the focused checks relevant to your change, then run the full baseline
+before opening a pull request:
+
+```sh
+cargo fmt --package fintwind --package fintwind-protocol --package fintwind-client --package fintwind-core --package fintwind-daemon -- --check
+cargo check
+cargo test
+bun run protocol:check
+bun run --filter @fintwind/client check
+bun run --filter @fintwind/client test
+```
+
+When a Rust wire type changes, run `bun run protocol:generate` and commit the
+updated files under `packages/fintwind-client/src/generated`.
+
+For user-visible changes, wait for the watcher to report a successful rebuild
+and validate the freshly relaunched app. Include screenshots or a short
+recording in the pull request when they make the result easier to review.
+
+## Pull requests
+
+In the pull request description:
+
+- Explain the problem and the chosen solution.
+- List the checks you ran.
+- Call out known limitations or follow-up work.
+- Link the related issue, if one exists.
+
+By contributing, you agree that your contribution will be licensed under the
+[GNU General Public License v3.0 only](LICENSE).

@@ -3,13 +3,10 @@
 ## Install
 
 Download `fintwind-<version>-x86_64-Setup.exe` (or the `aarch64` installer on an
-Arm device) from [releases.fintwind.sh](https://releases.fintwind.sh) or the
+Arm device) from the
 [GitHub release](https://github.com/roketskiy/fintwind/releases) and run it. It
 installs per-user into `%LOCALAPPDATA%\Programs\fintwind`, so it never asks for
 administrator rights.
-
-`https://releases.fintwind.sh/latest-windows.txt` names the current version if you
-want to script the download.
 
 ### Portable
 
@@ -38,8 +35,8 @@ release was not code-signed. Choose **More info → Run anyway**.
 ## Updating
 
 fintwind does not update itself. When a new release ships, download its
-installer (or zip) from [releases.fintwind.sh](https://releases.fintwind.sh) or
-the [GitHub release](https://github.com/roketskiy/fintwind/releases) and run it.
+installer (or zip) from the
+[GitHub release](https://github.com/roketskiy/fintwind/releases) and run it.
 Installing over the existing copy replaces it in place and keeps all of your
 data — see the next section.
 

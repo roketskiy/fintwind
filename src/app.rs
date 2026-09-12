@@ -165,7 +165,7 @@ enum StreamPhase {
 }
 
 /// The provider runtime's own account of a running turn's quiet stretches
-/// (opencode2 `session.status`). Deltas and tool activity speak for
+/// (opencode `session.status`). Deltas and tool activity speak for
 /// themselves; this phase labels the waits where neither exists — a model
 /// call in flight, or a retry backoff after a failure — so the working row
 /// never reads as a frozen app. Cleared by any visible output.

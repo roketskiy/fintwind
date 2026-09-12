@@ -41,7 +41,7 @@ fn server_passwords() -> &'static Mutex<HashMap<u16, String>> {
 }
 
 /// The `Authorization: Basic ...` header for the server on `port`, if a
-/// password was registered for it. opencode2 serves Basic-auth every request
+/// password was registered for it. opencode serves Basic-auth every request
 /// and generate their own random password when none is injected, so Fintwind
 /// supplies one and must present it on every connection, including the SSE
 /// stream.
@@ -97,7 +97,7 @@ fn retained_turn_count(total_turns: usize, turns_to_remove: usize) -> anyhow::Re
     })
 }
 
-/// The native transcript as opencode2 stores it: separated user turns and the
+/// The native transcript as opencode stores it: separated user turns and the
 /// id of the newest message of any kind (used to fork "keep everything").
 struct NativeMessages {
     user_ids: Vec<String>,
@@ -169,7 +169,7 @@ fn fork_session_with_message_ids(
 ) -> anyhow::Result<ProviderResumeCursor> {
     let fork_at = fork_message_id(&native.user_ids, retained_turns)?;
     let body = match fork_at {
-        // opencode2 forks at an explicit boundary instead of v1's bare
+        // opencode forks at an explicit boundary instead of v1's bare
         // message id: `before` keeps everything up to (not including) the
         // message, which matches the v1 "keep the retained prefix" semantics.
         Some(message_id) => json!({"boundary": {"type": "before", "messageID": message_id}}),
@@ -235,7 +235,7 @@ impl OpenCodeServer {
         for (name, value) in environment {
             command.env(name, value);
         }
-        // opencode2 serves enforce Basic auth and generate their own random
+        // opencode serves enforce Basic auth and generate their own random
         // password when none is provided (an empty value behaves the same as
         // unset), so Fintwind injects its own random password and authenticates
         // every request against the exact credentials it started.
@@ -312,7 +312,7 @@ impl OpenCodeServer {
 }
 
 fn is_native_user_turn(message: &Value) -> bool {
-    // opencode2 stores the transcript as flat messages: user turns carry
+    // opencode stores the transcript as flat messages: user turns carry
     // their text directly and system turns have their own types
     // (`synthetic`, `agent-switched`, `model-switched`, ...). The current
     // beta keeps the text in `content` parts; older builds used a flat
@@ -732,10 +732,10 @@ mod tests {
     /// the caller so this never creates provider traffic; it only forks the
     /// already-completed native transcript and removes the test fork again.
     #[test]
-    #[ignore = "requires an installed opencode2 and FINTWIND_OPENCODE_TEST_SESSION_ID"]
+    #[ignore = "requires an installed opencode and FINTWIND_OPENCODE_TEST_SESSION_ID"]
     fn forks_away_a_real_single_turn_session() {
         let binary =
-            crate::command_env::find_executable("opencode2").expect("opencode2 is not installed");
+            crate::command_env::find_executable("opencode").expect("opencode is not installed");
         let session_id = std::env::var("FINTWIND_OPENCODE_TEST_SESSION_ID")
             .expect("set FINTWIND_OPENCODE_TEST_SESSION_ID to a completed one-turn session");
         let cwd = std::env::current_dir().expect("the test working directory should exist");

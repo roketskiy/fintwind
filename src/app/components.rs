@@ -1675,7 +1675,7 @@ mod message_time_tests {
 
     #[test]
     fn opencode_question_tool_gets_the_ask_questions_label() {
-        // opencode2 names its question tool `question`; the raw JSON
+        // opencode names its question tool `question`; the raw JSON
         // arguments are a prompt for the user, not transcript detail.
         let activity = ActivityItem::new(
             Some("tool-1".into()),

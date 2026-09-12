@@ -2,13 +2,13 @@
 
 简体中文 | [English](README.en.md)
 
-fintwind 是 [OpenCode 2](https://opencode.ai) 的原生 Windows 桌面应用，使用 Rust 和
+fintwind 是 [OpenCode](https://opencode.ai) 的原生 Windows 桌面应用，使用 Rust 和
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 构建，
 项目、会话与对话记录全部保存在你自己的机器上。
 
 > fintwind 是 [EGOIST](https://github.com/egoist) 的
 > [waku](https://github.com/egoist/waku) 的 fork，同样采用
-> [GPL-3.0](LICENSE) 授权。与 waku 不同，本 fork 收敛为单一 OpenCode 2 后端：
+> [GPL-3.0](LICENSE) 授权。与 waku 不同，本 fork 收敛为单一 OpenCode 后端：
 > 移除了其余所有 agent provider 和 macOS/Linux 构建，专注 Windows 优先开发。
 > 多 provider、跨平台的需求请前往上游项目。
 
@@ -21,8 +21,8 @@ fintwind 是 [OpenCode 2](https://opencode.ai) 的原生 Windows 桌面应用，
 
 ## 环境要求
 
-fintwind 只驱动一个 agent 后端：本地 [OpenCode 2](https://opencode.ai) 服务。
-请先安装并登录 `opencode2` CLI；fintwind 会自动拉起它，
+fintwind 只驱动一个 agent 后端：本地 [OpenCode](https://opencode.ai) 服务。
+请先安装并登录 `opencode` CLI；fintwind 会自动拉起它，
 会话、模型、provider 与 MCP 服务器全部来自这一个后端。
 
 ## 功能亮点

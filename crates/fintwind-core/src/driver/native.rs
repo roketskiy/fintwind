@@ -7,7 +7,7 @@
 //! renders through the ordinary transcript pipeline), and applies title and
 //! deletion edits back to the server.
 //!
-//! Wire shapes verified against `opencode2` 0.0.0-beta-18743:
+//! Wire shapes verified against `opencode` 0.0.0-beta-18743:
 //! - `GET /api/session?directory=…` → `{data: [session…], cursor}` newest
 //!   first, `time.created/updated` in milliseconds;
 //! - `GET /api/session/{id}/message` → `{data: [message…], cursor}` newest
@@ -201,7 +201,7 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
             .unwrap_or_default();
         match row.get("type").and_then(Value::as_str) {
             Some("compaction") => {
-                // opencode2 stores a completed compaction as its own message
+                // opencode stores a completed compaction as its own message
                 // type with a top-level `summary` (and sometimes text parts).
                 // The TUI renders it as a Compaction divider; skipping the
                 // type dropped every summary from imported transcripts.
@@ -401,14 +401,14 @@ fn tool_item(part: &Value) -> ActivityItem {
     // normalization applies: kind from the tool name, display target and
     // output prepared once here instead of per frame.
     //
-    // opencode2 persists `name`/`id` on the part and keeps the result text in
+    // opencode persists `name`/`id` on the part and keeps the result text in
     // `state.content` with no `state.title`; the legacy shape used
     // `tool`/`callID` with `state.output` and a server-authored title.
     // Accept both so a restored transcript keeps the identity a live stream
     // gave the same tool call.
     let state = part.get("state").unwrap_or(part);
     // The provider-call id is what links a restored activity back to live
-    // background work (a subagent's card to its child session). opencode2
+    // background work (a subagent's card to its child session). opencode
     // keeps it on the part's `id`; the legacy shape used `callID`.
     let source_id = part
         .get("id")
@@ -611,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn opencode2_tool_parts_keep_their_identity() {
+    fn opencode_tool_parts_keep_their_identity() {
         // Stored shape of the current beta (`session_message` rows): the name
         // lives on the part, the result text rides `state.content`, and no
         // `state.title` exists. Before this was handled, every restored tool

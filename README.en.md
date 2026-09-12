@@ -2,13 +2,13 @@
 
 > 🇨🇳 [中文文档](README.md) | English
 
-fintwind is a native Windows desktop app for [OpenCode 2](https://opencode.ai). It is
+fintwind is a native Windows desktop app for [OpenCode](https://opencode.ai). It is
 built in Rust with [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui)
 and keeps projects, sessions, transcripts on your machine.
 
 > fintwind is a fork of [waku](https://github.com/egoist/waku) by
 > [EGOIST](https://github.com/egoist), and stays under [GPL-3.0](LICENSE) like
-> upstream. Unlike waku, this fork converges on a single OpenCode 2 backend:
+> upstream. Unlike waku, this fork converges on a single OpenCode backend:
 > all other agent providers and the macOS/Linux builds were removed in favor of
 > Windows-first development. The upstream project remains the place for the
 > multi-provider, cross-platform app.
@@ -24,8 +24,8 @@ there yet.
 ## Requirements
 
 fintwind drives one agent backend: a local
-[OpenCode 2](https://opencode.ai) server. Install and authenticate the
-`opencode2` CLI first; fintwind starts it automatically, and sessions, models,
+[OpenCode](https://opencode.ai) server. Install and authenticate the
+`opencode` CLI first; fintwind starts it automatically, and sessions, models,
 providers, and MCP servers all come from that single backend.
 
 ## Highlights

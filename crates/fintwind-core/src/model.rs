@@ -7,7 +7,7 @@ pub use fintwind_protocol::model::*;
 pub fn provider_probe(binary_override: Option<&str>) -> ProviderProbe {
     let path = match binary_override {
         Some(binary) => crate::command_env::resolve_binary_override(binary),
-        None => crate::command_env::find_executable("opencode2"),
+        None => crate::command_env::find_executable("opencode"),
     };
     ProviderProbe {
         installed: path.is_some(),

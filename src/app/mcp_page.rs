@@ -8,7 +8,7 @@
 //! committed straight back on every mutation — the same single-source-of-
 //! truth contract as the Providers page, so entries added with the CLI, the
 //! TUI, or an editor are the same data. OpenCode watches the file and
-//! hot-reloads, so a commit reaches running `opencode2 serve` processes
+//! hot-reloads, so a commit reaches running `opencode serve` processes
 //! without a restart.
 //!
 //! Field edits debounce their commit; discrete actions (add, delete, toggle,

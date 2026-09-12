@@ -49,7 +49,7 @@ gate uses identifiers added in 6.3. Set `WINDOWS_CERTIFICATE`
 (base64 `.pfx`) and `WINDOWS_CERTIFICATE_PASSWORD` to Authenticode-sign them;
 without those the script packages unsigned binaries and says so.
 [docs/windows.md](docs/windows.md) documents installing for users, and
-[RELEASING.md](RELEASING.md) the signed update feed.
+[RELEASING.md](RELEASING.md) the GitHub release process.
 
 ## Making changes
 

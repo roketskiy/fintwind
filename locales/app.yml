@@ -424,7 +424,7 @@ providers.duplicate_model:
 providers.sync_failed:
   en: "Could not update OpenCode's provider configuration: %{error}"
 providers.builtin_managed:
-  en: The endpoint and API key are managed by the opencode2 CLI (opencode2 auth login); this roster is OpenCode's own configuration file.
+  en: The endpoint and API key are managed by the opencode CLI (opencode auth login); this roster is OpenCode's own configuration file.
 providers.default_model_badge:
   en: Default
 providers.fetch_models:

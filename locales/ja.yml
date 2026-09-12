@@ -222,7 +222,7 @@ providers.added_toast: "プロバイダー「%{name}」を追加しました"
 providers.deleted_toast: "プロバイダー「%{name}」を削除しました"
 providers.duplicate_model: このモデル ID は既に存在します
 providers.sync_failed: "OpenCode のプロバイダー設定を更新できませんでした：%{error}"
-providers.builtin_managed: エンドポイントと API キーは opencode2 CLI が管理します（opencode2 auth login）。この一覧は OpenCode 自身の設定ファイルです。
+providers.builtin_managed: エンドポイントと API キーは opencode CLI が管理します（opencode auth login）。この一覧は OpenCode 自身の設定ファイルです。
 providers.default_model_badge: デフォルト
 providers.fetch_models: モデルを取得
 providers.fetching_models: 取得中…

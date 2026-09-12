@@ -4,10 +4,10 @@
 //! The Providers settings page loads its working roster from, and commits
 //! edits straight back to, OpenCode's global configuration —
 //! `~/.config/opencode/opencode.json` (the same file the CLI and TUI read).
-//! The app keeps no parallel store, so a provider added with `opencode2
+//! The app keeps no parallel store, so a provider added with `opencode
 //! auth`-managed credentials or by hand in an editor shows up here and vice
 //! versa. OpenCode watches the file and hot-reloads, so a commit reaches
-//! running `opencode2 serve` processes without a restart.
+//! running `opencode serve` processes without a restart.
 //!
 //! Saves are deliberately conservative: the document is read fresh, only the
 //! `provider` map is regenerated from the working roster, the top-level
@@ -26,7 +26,7 @@
 //! lists (providers, models, servers) keep the map's order, and no test
 //! asserts it.
 //!
-//! Verified against `opencode2` 0.0.0-beta-18743:
+//! Verified against `opencode` 0.0.0-beta-18743:
 //! - a model `limit` without `output` fails validation and silently drops
 //!   the WHOLE provider from the catalog, so a fresh `limit` is always
 //!   written with both keys (output defaults to OpenCode's own 32 000);

@@ -1,8 +1,8 @@
 [package]
 name = "fintwind"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
-description = "A native Windows desktop app for OpenCode 2"
+description = "A native Windows desktop app for OpenCode"
 license = "GPL-3.0-only"
 
 [[bin]]

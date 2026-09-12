@@ -1028,7 +1028,7 @@ impl Fintwind {
                             .text_size(px(10.5))
                             .line_height(px(15.0))
                             .text_color(theme.text_tertiary)
-                            .child(tr!("providers.not_detected_as", command = "opencode2")),
+                            .child(tr!("providers.not_detected_as", command = "opencode")),
                     ),
             );
         }
@@ -1112,7 +1112,7 @@ impl Fintwind {
                                     } else {
                                         SharedString::from(tr!(
                                             "providers.not_detected_as",
-                                            command = "opencode2"
+                                            command = "opencode"
                                         ))
                                     }),
                             ),

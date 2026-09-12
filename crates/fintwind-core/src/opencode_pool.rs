@@ -232,10 +232,10 @@ mod tests {
     /// a fresh one. Ignored by default: needs the CLI installed. Run with
     /// `cargo test --bin fintwind opencode_pool -- --ignored`.
     #[test]
-    #[ignore = "requires an installed opencode2"]
+    #[ignore = "requires an installed opencode"]
     fn workspace_sessions_share_one_server_until_the_last_drops() {
         let binary =
-            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode").expect("opencode is not installed");
         let cwd = TestWorkspace::new();
 
         let first =
@@ -276,10 +276,10 @@ mod tests {
     /// Two sessions starting together must share the same in-flight startup
     /// instead of briefly launching competing workspace servers.
     #[test]
-    #[ignore = "requires an installed opencode2"]
+    #[ignore = "requires an installed opencode"]
     fn concurrent_acquires_start_one_server() {
         let binary =
-            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode").expect("opencode is not installed");
         let workspace = TestWorkspace::new();
         let cwd = workspace.path().to_path_buf();
         let barrier = Arc::new(Barrier::new(3));
@@ -311,10 +311,10 @@ mod tests {
     /// A dedicated server — Computer Use bakes per-session configuration into
     /// the environment — dies with its handle just like a pooled one.
     #[test]
-    #[ignore = "requires an installed opencode2"]
+    #[ignore = "requires an installed opencode"]
     fn dedicated_server_dies_with_its_last_handle() {
         let binary =
-            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode").expect("opencode is not installed");
         let cwd = TestWorkspace::new();
 
         let server = OpenCodeServer::start(&binary, cwd.path()).expect("the server should start");
@@ -343,10 +343,10 @@ mod tests {
     /// handle still references it, and that stale handle must not kill the
     /// replacement when it eventually drops.
     #[test]
-    #[ignore = "requires an installed opencode2"]
+    #[ignore = "requires an installed opencode"]
     fn dead_server_recovers_without_cross_generation_teardown() {
         let binary =
-            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode").expect("opencode is not installed");
         let cwd = TestWorkspace::new();
 
         let stale = acquire(&binary, cwd.path()).expect("the first server should start");

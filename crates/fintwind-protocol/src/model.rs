@@ -1449,7 +1449,7 @@ impl ActivityKind {
     }
 }
 
-/// Structured action some provider retries carry. opencode2 attaches a
+/// Structured action some provider retries carry. opencode attaches a
 /// free-tier or account-limit notice to the retry status when the backoff is
 /// caused by a usage limit, including where the account can be upgraded.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1543,13 +1543,13 @@ pub enum DriverEvent {
     /// not turn output: it can start, settle, or fail while no turn is live,
     /// and it arrives for the provider's own automatic compaction too.
     CompactionUpdated(CompactionState),
-    /// The provider runtime announced a model call in flight (opencode2
+    /// The provider runtime announced a model call in flight (opencode
     /// `session.status busy`): at the turn's start and again at every step
     /// start. This is the transcript's signal to label the wait before the
     /// first delta of a step lands.
     ProviderBusy,
     /// The provider call failed and the runtime is retrying with backoff
-    /// (opencode2 `session.status retry`). The transcript stays silent for
+    /// (opencode `session.status retry`). The transcript stays silent for
     /// the whole window, so this is the only honest progress signal it gets.
     /// `next_at_ms` is the sender's absolute epoch time for the next attempt;
     /// a skewed clock merely skews the countdown.

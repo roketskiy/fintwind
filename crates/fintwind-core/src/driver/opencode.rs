@@ -1,14 +1,14 @@
-//! `opencode2 serve` is OpenCode's real API: one resident process serves
+//! `opencode serve` is OpenCode's real API: one resident process serves
 //! every session in a workspace, streams server-sent events, and answers
 //! permission requests the user can actually be asked. Fintwind already started
 //! this server for a side-quest — forking a session — while running
-//! conversations through one-shot `opencode2 run` invocations; this drives
+//! conversations through one-shot `opencode run` invocations; this drives
 //! everything through it, pooled per workspace via `opencode_pool` so
 //! sessions share the process instead of starting one each. A prompt posted
 //! into a busy session is folded into the running turn rather than queued
 //! behind it, which is what makes steering a plain post.
 //!
-//! Routes and payload shapes here were read off a live `opencode2` server's
+//! Routes and payload shapes here were read off a live `opencode` server's
 //! `/api` protocol and event stream, not guessed. The v1 compatibility
 //! surface (`/session/...`, `/event` with `properties`) is gone from current
 //! releases — `POST /session` answers 405 — so everything below speaks the
@@ -46,7 +46,7 @@ use crate::opencode_session::{
 };
 
 /// How often the permission poll scans the server's pending requests. The
-/// endpoint answers instantly when nothing is pending and opencode2 does not
+/// endpoint answers instantly when nothing is pending and opencode does not
 /// stream permission events, so this cadence bounds how long an approval
 /// waits to reach the UI while costing next to nothing when idle.
 const PERMISSION_POLL_INTERVAL: Duration = Duration::from_millis(400);
@@ -67,7 +67,7 @@ enum CommandMessage {
     Shutdown,
 }
 
-/// The prompt body both turn starts and steers post; opencode2 keeps the
+/// The prompt body both turn starts and steers post; opencode keeps the
 /// model on the session (set through `/api/session/{id}/model`), so prompts
 /// carry only their text. The wire's default delivery (`steer`) folds a
 /// prompt posted into a busy session into the running turn, matching v1.
@@ -182,7 +182,7 @@ impl OpenCodeDriver {
             Some(&json!({"agent": agent})),
         );
 
-        // opencode2 keeps the model on the session instead of on every
+        // opencode keeps the model on the session instead of on every
         // prompt. A startup model override switches it once; later switches
         // would ride the same endpoint. The model reference on this wire is
         // `{id, providerID}`, unlike v1's `{providerID, modelID}`.
@@ -327,7 +327,7 @@ impl OpenCodeDriver {
         let forms = Arc::new(Mutex::new(OpenCodeFormState::default()));
         let event_stream = Arc::new(OpenCodeEventStreamControl::default());
 
-        // opencode2 answers permission requests through a polling endpoint
+        // opencode answers permission requests through a polling endpoint
         // (`GET /api/permission/request`) instead of the event stream v1
         // used, so a dedicated thread scans it and routes requests through
         // the same approval path the event handler used. The request shape
@@ -701,7 +701,7 @@ impl OpenCodeDriver {
                             request_id,
                             answers,
                         } => {
-                            // Current opencode2 routes the question tool's
+                            // Current opencode routes the question tool's
                             // answers through the form that carried the
                             // prompt; the dedicated question route stays for
                             // releases that still publish `question.asked`.
@@ -1228,7 +1228,7 @@ fn push_origin_activity(origins: &mut Vec<String>, activity_id: String) -> bool 
 
 /// Pending question forms and whether they were already announced.
 ///
-/// opencode2 delivers the `question` tool's prompt as a *form*: a
+/// opencode delivers the `question` tool's prompt as a *form*: a
 /// `form.created` event whose `metadata.kind` is `"question"` and whose
 /// fields carry the questions (`title` = header, `description` = question
 /// text, `type` `"multiselect"` for multi-select). The field shapes are kept
@@ -1540,7 +1540,7 @@ fn opencode_usage_seeds(messages: &Value, session: Option<&Value>) -> UsageSeed 
     seed
 }
 
-/// The model key (`provider/id`) of an opencode2 assistant message or
+/// The model key (`provider/id`) of an opencode assistant message or
 /// `session.step.started` payload, where `model` is an object.
 fn opencode_message_model_key(message: &Value) -> Option<String> {
     let model = message.get("model")?;
@@ -2064,7 +2064,7 @@ fn handle_event(
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    // opencode2's `/api/event` payloads carry their fields under `data`; the
+    // opencode's `/api/event` payloads carry their fields under `data`; the
     // old v1 compatibility stream (still advertised by some forks) used
     // `properties`, tolerated here at no cost.
     let payload = value
@@ -2099,7 +2099,7 @@ fn handle_event(
             }
         }
         "session.usage.updated" => {
-            // opencode2 publishes the session's cumulative token row here —
+            // opencode publishes the session's cumulative token row here —
             // the same object the session record stores, `input` being the
             // cache-excluded sum across every settled call. Read as the
             // in-flight context it reported 545.7k against a 147.3k live
@@ -2713,7 +2713,7 @@ fn request_user_input(properties: &Value, events: &impl DriverEventSink) {
     }
 }
 
-/// The `question` tool on current opencode2 publishes its prompt as a form
+/// The `question` tool on current opencode publishes its prompt as a form
 /// (`form.created` with `metadata.kind == "question"`), not as the question
 /// events the dedicated route still documents. A field maps back to a
 /// question: `title` is the header, `description` the question text, each
@@ -2982,7 +2982,7 @@ mod tests {
 
     /// One-shot loopback server answering a single GET with a canned JSON
     /// body, so the idle settlement's message fetch runs without an installed
-    /// opencode2.
+    /// opencode.
     fn serve_one_message_response(body: String) -> u16 {
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -4127,14 +4127,14 @@ mod tests {
         );
     }
 
-    /// Drives a real `opencode2 serve` through the actual driver. Ignored by
+    /// Drives a real `opencode serve` through the actual driver. Ignored by
     /// default: needs the CLI installed, credentials, and the network. Run with
     /// `cargo test --bin fintwind opencode_session_against_a_real_server -- --ignored`.
     #[test]
-    #[ignore = "requires an installed, authenticated opencode2"]
+    #[ignore = "requires an installed, authenticated opencode"]
     fn opencode_session_against_a_real_server() {
         let binary =
-            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode").expect("opencode is not installed");
         let (events, event_rx) = crate::driver::test_event_channel();
         let driver = OpenCodeDriver::start(
             DriverStartOptions {
@@ -4213,16 +4213,16 @@ mod tests {
         assert_ne!(fork_session_id, source_session_id);
     }
 
-    /// The provider status pipeline against a real `opencode2`: a plain turn
+    /// The provider status pipeline against a real `opencode`: a plain turn
     /// over `deepseek/deepseek-v4-flash` must surface the runner's
     /// `session.status busy` as `ProviderBusy` before the first delta and
     /// still settle through the execution event. Run with
     /// `cargo test -p fintwind-core provider_status_signals -- --ignored`.
     #[test]
-    #[ignore = "requires an installed, authenticated opencode2"]
+    #[ignore = "requires an installed, authenticated opencode"]
     fn provider_status_signals_flow_against_a_real_server() {
         let binary =
-            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode").expect("opencode is not installed");
         let (events, event_rx) = crate::driver::test_event_channel();
         let driver = OpenCodeDriver::start(
             DriverStartOptions {
@@ -4286,17 +4286,17 @@ mod tests {
         );
     }
 
-    /// Drives the `question` tool against a real `opencode2`: the prompt
+    /// Drives the `question` tool against a real `opencode`: the prompt
     /// must arrive as a form (`form.created`, not the question events older
     /// docs describe), surface as a structured question request, and the
     /// reply must settle the form and the turn. Ignored by default: needs
     /// the CLI installed with working provider credentials. Run with
     /// `cargo test --bin fintwind question_form_against_a_real_server -- --ignored`.
     #[test]
-    #[ignore = "requires an installed, authenticated opencode2"]
+    #[ignore = "requires an installed, authenticated opencode"]
     fn question_form_against_a_real_server() {
         let binary =
-            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode").expect("opencode is not installed");
         let (events, event_rx) = crate::driver::test_event_channel();
         let driver = OpenCodeDriver::start(
             DriverStartOptions {
@@ -4379,10 +4379,10 @@ mod tests {
     /// one TurnFinished, and a reply that honors both instructions. Ignored by
     /// default: needs the CLI installed, credentials, and the network.
     #[test]
-    #[ignore = "requires an installed, authenticated opencode2"]
+    #[ignore = "requires an installed, authenticated opencode"]
     fn opencode_steering_folds_a_mid_turn_message_into_the_running_turn() {
         let binary =
-            crate::command_env::find_executable("opencode2").expect("opencode is not installed");
+            crate::command_env::find_executable("opencode").expect("opencode is not installed");
         let (events, event_rx) = crate::driver::test_event_channel();
         let driver = OpenCodeDriver::start(
             DriverStartOptions {
@@ -4463,7 +4463,7 @@ mod tests {
     #[test]
     fn streams_text_and_correlated_tools_and_settles_on_execution() {
         let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
-        // Payloads copied from a live `opencode2 serve` event stream.
+        // Payloads copied from a live `opencode serve` event stream.
         let wire = [
             json!({"type":"session.text.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"OK"}}),
             json!({"type":"session.reasoning.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"thinking"}}),
@@ -4514,7 +4514,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires opencode2, credentials and FINTWIND_TEST_MODEL"]
+    #[ignore = "requires opencode, credentials and FINTWIND_TEST_MODEL"]
     fn tool_input_is_visible_before_execution_against_a_real_server() {
         let cwd =
             std::env::temp_dir().join(format!("fintwind-tool-stream-{}", uuid::Uuid::new_v4()));
@@ -4522,7 +4522,7 @@ mod tests {
         let (events, event_rx) = crate::driver::test_event_channel();
         let driver = OpenCodeDriver::start(
             DriverStartOptions {
-                binary: crate::command_env::find_executable("opencode2").unwrap(),
+                binary: crate::command_env::find_executable("opencode").unwrap(),
                 cwd: cwd.clone(),
                 mode: RuntimeMode::FullAccess,
                 interaction_mode: InteractionMode::Build,
@@ -4601,7 +4601,7 @@ mod tests {
     #[test]
     fn v2_reasoning_and_text_flows_classify_by_their_own_events() {
         let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
-        // opencode2 separates the thought and answer streams into their own
+        // opencode separates the thought and answer streams into their own
         // events, so no part classification is needed.
         let wire = [
             json!({"type":"session.reasoning.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"thinking"}}),
@@ -5180,7 +5180,7 @@ mod tests {
     fn generated_session_titles_replace_the_local_fallback() {
         let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
 
-        // opencode2 emits the final generated title once through `session.renamed`.
+        // opencode emits the final generated title once through `session.renamed`.
         handle_event(
             &json!({
                 "type": "session.renamed",

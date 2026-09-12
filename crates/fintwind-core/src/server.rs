@@ -1872,7 +1872,7 @@ mod tests {
 
     fn test_start_options() -> WireDriverStartOptions {
         WireDriverStartOptions {
-            binary: PathBuf::from("opencode2"),
+            binary: PathBuf::from("opencode"),
             cwd: PathBuf::from("."),
             mode: "fullAccess".into(),
             interaction_mode: "build".into(),

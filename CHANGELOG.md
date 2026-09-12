@@ -15,6 +15,9 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.1]
+
+- Drive the `opencode` CLI instead of `opencode2` after the upstream merge
 - Drop macOS and Linux distribution; Fintwind is Windows-only
 
 ## [0.1.4]

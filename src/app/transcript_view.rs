@@ -1202,7 +1202,8 @@ impl Fintwind {
             TranscriptRowKind::TurnBlock(_)
             | TranscriptRowKind::TurnFold(_)
             | TranscriptRowKind::ChangedFiles(_)
-            | TranscriptRowKind::WorkingIndicator => false,
+            | TranscriptRowKind::WorkingIndicator
+            | TranscriptRowKind::Compacting => false,
         };
         let inner = match kind {
             TranscriptRowKind::Message(message_index) => self
@@ -1283,6 +1284,12 @@ impl Fintwind {
                         view.set_text(message.visible_content(), message.streaming);
                         &*view
                     });
+                    let is_compaction = message.role == MessageRole::Compaction;
+                    let compaction_expanded =
+                        is_compaction && self.expanded_compactions.contains(&message.id);
+                    let compaction_focus = is_compaction.then(|| {
+                        self.transcript_control_focus(format!("compaction-{}", message.id), cx)
+                    });
                     let rendered = render_message(
                         MessageRender {
                             theme: &theme,
@@ -1300,6 +1307,8 @@ impl Fintwind {
                             attachments_can_reveal,
                             markdown: view,
                             ctx: &ctx,
+                            compaction_expanded,
+                            compaction_focus,
                             menu,
                             fintwind,
                             composer,
@@ -1335,6 +1344,7 @@ impl Fintwind {
                 .render_changed_files_row(turn_id, &theme, cx)
                 .unwrap_or_else(|| div().into_any_element()),
             TranscriptRowKind::WorkingIndicator => self.render_working_indicator_row(&theme, cx),
+            TranscriptRowKind::Compacting => self.render_compacting_indicator_row(&theme),
         };
         div()
             .w_full()
@@ -1370,6 +1380,36 @@ impl Fintwind {
             self.expanded_changed_files.insert(turn_id);
         }
         self.remeasure_changed_files(turn_id);
+        cx.notify();
+    }
+
+    /// Expand or collapse a settled compaction card. Like the other
+    /// disclosure toggles, the caller passes the row's *current* state and
+    /// this inverts it; the height change must preserve the reader's
+    /// position instead of letting the list's tail pin shift it.
+    pub(super) fn toggle_compaction_message(
+        &mut self,
+        message_id: Uuid,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.pin_transcript_for_disclosure();
+        if expanded {
+            self.expanded_compactions.remove(&message_id);
+        } else {
+            self.expanded_compactions.insert(message_id);
+        }
+        if let Some(message_index) = self
+            .selected_session()
+            .and_then(|session| {
+                session
+                    .messages
+                    .iter()
+                    .position(|message| message.id == message_id)
+            })
+        {
+            self.remeasure_transcript_message(message_index);
+        }
         cx.notify();
     }
 
@@ -1731,6 +1771,28 @@ impl Fintwind {
                     ))),
             )
             .children(phase.map(|phase| self.render_working_phase(phase, theme, cx)))
+            .into_any_element()
+    }
+
+    /// The compaction's tail row: pulsing dots plus "Compacting context…",
+    /// styled after the working indicator. A compaction never opens a turn,
+    /// so without this the transcript gives no sign of life between the
+    /// `/compact` request and the settled summary card.
+    fn render_compacting_indicator_row(&self, theme: &Theme) -> AnyElement {
+        div()
+            .h(px(22.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .child(working_wave_dots(theme.text_tertiary))
+            .child(
+                div()
+                    .text_size(px(11.5))
+                    .line_height(px(16.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_tertiary)
+                    .child(SharedString::from(tr!("transcript.compacting"))),
+            )
             .into_any_element()
     }
 

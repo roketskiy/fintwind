@@ -363,6 +363,11 @@ pub(super) struct MessageRender<'a> {
     /// The parsed human or assistant body. System messages remain verbatim.
     pub(super) markdown: Option<&'a MarkdownView>,
     pub(super) ctx: &'a MarkdownCtx<'a>,
+    /// Whether the settled compaction card discloses its summary. Only
+    /// compaction rows read this; the subagent surfaces pass `false`.
+    pub(super) compaction_expanded: bool,
+    /// Stable focus identity for the compaction card's disclosure header.
+    pub(super) compaction_focus: Option<FocusHandle>,
     pub(super) menu: ContextMenuHandle,
     pub(super) fintwind: gpui::WeakEntity<Fintwind>,
     pub(super) composer: Entity<ComposerInput>,
@@ -555,6 +560,8 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         attachments_can_reveal,
         markdown,
         ctx,
+        compaction_expanded,
+        compaction_focus,
         menu,
         fintwind,
         composer,
@@ -759,32 +766,132 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                 )),
         ),
         MessageRole::Compaction => {
-            let body = render_markdown_message_body(&content, markdown, theme, ctx);
-            div()
-                .w_full()
-                .min_w_0()
+            // The settled summary is provider bookkeeping, not conversation:
+            // it presents as one collapsed card styled after the tool
+            // activity rows, and the full document discloses in place.
+            let expanded = compaction_expanded;
+            let surface = theme.surface.blend(theme.overlay.opacity(0.7));
+            // The collapsed header previews the summary's first heading or
+            // line — enough to tell which compaction this is without
+            // unfurling a long document.
+            let preview = content
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(|line| {
+                    line.trim_start_matches(['#', '*'])
+                        .trim()
+                        .trim_end_matches('*')
+                        .trim()
+                })
+                .unwrap_or_default()
+                .to_owned();
+            let shows_preview = !expanded && !preview.is_empty();
+            let header = div()
                 .flex()
-                .flex_col()
-                .gap(px(10.0))
-                .py(px(8.0))
+                .items_center()
+                .gap(px(6.0))
+                .min_w_0()
+                .w_full()
                 .child(
                     div()
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.0))
-                        .child(div().flex_1().h(px(1.0)).bg(theme.border))
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_size(px(11.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text_tertiary)
-                                .child(tr!("transcript.compaction")),
-                        )
-                        .child(div().flex_1().h(px(1.0)).bg(theme.border)),
+                        .flex_none()
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text_secondary)
+                        .child(tr!("transcript.compaction")),
                 )
-                .child(body)
+                .when(shows_preview, |header| {
+                    header.child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .truncate()
+                            .text_color(theme.text_tertiary)
+                            .child(SharedString::from(preview.clone())),
+                    )
+                })
+                .when(!shows_preview, |header| {
+                    header.child(div().flex_1().min_w(px(0.0)))
+                })
+                .child(icon(
+                    if expanded {
+                        "icons/chevron-down.svg"
+                    } else {
+                        "icons/chevron-right.svg"
+                    },
+                    11.0,
+                    theme.text_tertiary,
+                ));
+            let mut card = div()
+                .w_full()
+                .min_w_0()
+                .rounded(px(9.0))
+                .border_1()
+                .border_color(theme.border_strong)
+                .bg(surface)
+                .flex()
+                .flex_col();
+            let click_fintwind = fintwind.clone();
+            let key_fintwind = fintwind.clone();
+            match compaction_focus {
+                Some(focus) => {
+                    card = card.child(
+                        div()
+                            .id(SharedString::from(format!("compaction-{message_id}")))
+                            .track_focus(&focus)
+                            .tab_index(0)
+                            .px(px(10.0))
+                            .h(px(30.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .cursor_default()
+                            .text_size(px(12.5))
+                            .line_height(px(17.0))
+                            .focus_visible(|style| style.text_color(theme.text))
+                            .hover(|style| style.text_color(theme.text))
+                            .active(|style| style.text_color(theme.text_ghost))
+                            .child(header)
+                            .on_click(move |_, _, cx| {
+                                let _ = click_fintwind.update(cx, |this, cx| {
+                                    this.toggle_compaction_message(message_id, expanded, cx)
+                                });
+                            })
+                            .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    let _ = key_fintwind.update(cx, |this, cx| {
+                                        this.toggle_compaction_message(message_id, expanded, cx)
+                                    });
+                                    cx.stop_propagation();
+                                }
+                            }),
+                    );
+                }
+                // Compaction rows only render in the main transcript, which
+                // always supplies a focus handle; this keeps a static header
+                // if a surface without one ever shows the role.
+                None => {
+                    card = card.child(
+                        div()
+                            .px(px(10.0))
+                            .h(px(30.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .child(header),
+                    );
+                }
+            }
+            if expanded {
+                card = card.child(
+                    div()
+                        .px(px(10.0))
+                        .pb(px(8.0))
+                        .min_w_0()
+                        .child(render_markdown_message_body(&content, markdown, theme, ctx)),
+                );
+            }
+            card
         }
     };
 

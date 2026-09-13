@@ -1268,6 +1268,8 @@ session.compaction_unavailable:
   en: No live provider to compact this session
 transcript.compaction:
   en: Compaction
+transcript.compacting:
+  en: Compacting context…
 session.agent_ran_out_of_context:
   en: The agent ran out of context for this turn
 session.agent_declined_turn:

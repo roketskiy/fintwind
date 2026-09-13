@@ -1,7 +1,7 @@
 use gpui::{
     AnyElement, BoxShadow, Context, Decorations, Div, Hsla, IntoElement, KeyDownEvent, MouseButton,
-    ResizeEdge, Tiling, Window, WindowButton, WindowControlArea, div, prelude::*, px,
-    transparent_black,
+    ResizeEdge, Tiling, Window, WindowButton, WindowControlArea, div, hsla, prelude::*, px, rgb,
+    transparent_black, white,
 };
 
 use super::Fintwind;
@@ -10,6 +10,16 @@ use crate::ui::{icon, tooltip::Tooltip};
 
 const CLIENT_FRAME_INSET: f32 = 10.0;
 const CLIENT_FRAME_ROUNDING: f32 = 10.0;
+
+/// Windows 11 caption-button metrics. These are OS chrome, not app theme.
+/// Height matches the 48px titlebars that host these controls — `h_full()`
+/// collapses to zero in those `items_center` rows.
+const CAPTION_BUTTON_WIDTH: f32 = 46.0;
+const CAPTION_BUTTON_HEIGHT: f32 = 48.0;
+const CAPTION_ICON_SIZE: f32 = 10.0;
+const CLOSE_HOVER_BG: u32 = 0xC4_2B_1C;
+const CLOSE_PRESSED_BG: u32 = 0xB1_1A_10;
+const CLOSE_GROUP: &str = "client-window-close";
 
 #[derive(Clone, Copy)]
 pub(super) enum WindowControlSide {
@@ -114,6 +124,7 @@ impl Fintwind {
 
         let theme = Theme::current(cx);
         let is_maximized = window.is_maximized();
+        let is_active = window.is_window_active();
         let supported = window.window_controls();
         let controls = buttons.into_iter().map(|button| {
             let enabled = match button {
@@ -121,7 +132,7 @@ impl Fintwind {
                 WindowButton::Maximize => supported.maximize && window.is_resizable(),
                 WindowButton::Close => true,
             };
-            client_window_button(button, enabled, is_maximized, theme, cx)
+            client_window_button(button, enabled, is_maximized, is_active, theme, cx)
         });
 
         Some(
@@ -129,10 +140,9 @@ impl Fintwind {
                 .id("client-window-controls-right")
                 .tab_group()
                 .tab_stop(false)
-                .h_full()
+                .h(px(CAPTION_BUTTON_HEIGHT))
                 .flex_none()
                 .flex()
-                .items_center()
                 .children(controls)
                 .into_any_element(),
         )
@@ -143,6 +153,7 @@ fn client_window_button(
     button: WindowButton,
     enabled: bool,
     is_maximized: bool,
+    is_active: bool,
     theme: Theme,
     cx: &mut Context<Fintwind>,
 ) -> AnyElement {
@@ -164,20 +175,39 @@ fn client_window_button(
         ),
         WindowButton::Close => (
             "client-window-close",
-            "icons/x.svg",
+            "icons/window-close.svg",
             tr!("menu.close_window"),
         ),
     };
     let focus = cx.focus_handle();
-    let icon_color = if enabled {
-        theme.text_secondary
-    } else {
+    let icon_color = if !enabled {
         theme.text_ghost
+    } else if is_active {
+        theme.text
+    } else {
+        theme.text_tertiary
+    };
+    let hover_fill = if theme.is_dark {
+        hsla(0.0, 0.0, 1.0, 0.06)
+    } else {
+        hsla(0.0, 0.0, 0.0, 0.0578)
+    };
+    let pressed_fill = if theme.is_dark {
+        hsla(0.0, 0.0, 1.0, 0.04)
+    } else {
+        hsla(0.0, 0.0, 0.0, 0.0373)
     };
 
     // Windows hit-tests the caption before it dispatches a mouse event.
     // Claiming the button's area here is also what lets the maximize control
     // show Windows 11's snap layouts on hover.
+    let glyph = icon(icon_path, CAPTION_ICON_SIZE, icon_color);
+    let glyph = if button == WindowButton::Close {
+        glyph.group_hover(CLOSE_GROUP, |style| style.text_color(white()))
+    } else {
+        glyph
+    };
+
     let control = div()
         .id(id)
         .window_control_area(match button {
@@ -185,13 +215,16 @@ fn client_window_button(
             WindowButton::Maximize => WindowControlArea::Max,
             WindowButton::Close => WindowControlArea::Close,
         })
-        .w(px(46.0))
-        .h(px(32.0))
+        .w(px(CAPTION_BUTTON_WIDTH))
+        .h(px(CAPTION_BUTTON_HEIGHT))
         .flex_none()
         .flex()
         .items_center()
-        .justify_center();
-    let icon_size = 12.0;
+        .justify_center()
+        .rounded(px(0.0))
+        .when(button == WindowButton::Close, |control| {
+            control.group(CLOSE_GROUP)
+        });
 
     control
         .track_focus(&focus)
@@ -201,18 +234,18 @@ fn client_window_button(
         .opacity(if enabled { 1.0 } else { 0.45 })
         .focus_visible(|style| style.border_1().border_color(theme.accent))
         .when(enabled, |control| {
-            control
-                .hover(move |style| {
-                    if button == WindowButton::Close {
-                        style.bg(theme.danger_soft)
-                    } else {
-                        style.bg(theme.overlay)
-                    }
-                })
-                .active(|style| style.bg(theme.overlay_strong))
+            if button == WindowButton::Close {
+                control
+                    .hover(|style| style.bg(Hsla::from(rgb(CLOSE_HOVER_BG))))
+                    .active(|style| style.bg(Hsla::from(rgb(CLOSE_PRESSED_BG))))
+            } else {
+                control
+                    .hover(move |style| style.bg(hover_fill))
+                    .active(move |style| style.bg(pressed_fill))
+            }
         })
         .tooltip(Tooltip::text(label))
-        .child(icon(icon_path, icon_size, icon_color))
+        .child(glyph)
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .on_click(move |_, window, cx| {
             cx.stop_propagation();

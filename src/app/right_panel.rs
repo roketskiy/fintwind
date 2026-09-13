@@ -2456,7 +2456,8 @@ impl Fintwind {
             .items_center()
             .gap(px(6.0))
             .pl(px(10.0))
-            .pr(px(14.0))
+            // Caption buttons sit on the window edge; Win11 chrome has no inset.
+            .pr(px(0.0))
             .child(
                 div()
                     .relative()

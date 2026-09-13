@@ -1817,6 +1817,8 @@ impl Fintwind {
                     attachments_can_reveal: false,
                     markdown: Some(view),
                     ctx: &ctx,
+                    compaction_expanded: false,
+                    compaction_focus: None,
                     menu,
                     fintwind: cx.entity().downgrade(),
                     composer: self.composer.clone(),

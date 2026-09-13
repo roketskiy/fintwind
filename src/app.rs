@@ -1165,6 +1165,10 @@ pub struct Fintwind {
     /// Per-response file cards the user expanded beyond their three-file
     /// preview. Runtime-only, like the other transcript disclosures.
     expanded_changed_files: HashSet<Uuid>,
+    /// Settled compaction cards the user expanded; collapsed is the default,
+    /// the summary belongs to the provider's bookkeeping more than to the
+    /// reader. Runtime-only, like the other transcript disclosures.
+    expanded_compactions: HashSet<Uuid>,
     /// Stable focus identities for controls inside virtualized transcript and
     /// diff rows. Recreating a handle on every row build would drop keyboard
     /// focus whenever GPUI re-renders the list.
@@ -2766,6 +2770,7 @@ impl Fintwind {
                 expanded_activity_items: HashMap::new(),
                 expanded_turns: HashSet::new(),
                 expanded_changed_files: HashSet::new(),
+                expanded_compactions: HashSet::new(),
                 transcript_control_focuses: RefCell::new(HashMap::new()),
                 session_navigation,
                 session_rename: None,

@@ -527,6 +527,11 @@ impl Fintwind {
                 // start, settle, or fail while no turn is live — the
                 // provider's own automatic overflow compaction emits the same
                 // events — so like usage it bypasses `accepts_turn_output`.
+                // The row set moves here — the compacting row appears, and a
+                // failure or withdrawal removes it — so the transition is
+                // spliced against this snapshot rather than left to the
+                // generic sync, whose shrink path resets the whole list.
+                let previous_kinds = self.snapshot_selected_transcript_rows(session_id);
                 let previous = self
                     .state
                     .sessions
@@ -547,6 +552,9 @@ impl Fintwind {
                     } else if changed {
                         self.state.mark_session_dirty(session_id);
                     }
+                }
+                if let Some(previous_kinds) = previous_kinds.as_deref() {
+                    self.splice_active_transcript_rows_after_visibility_change(previous_kinds);
                 }
                 // Only transitions surface. Re-delivery and attach-time
                 // seeding replay the stored state and must not re-toast an

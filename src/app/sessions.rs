@@ -767,6 +767,7 @@ impl Fintwind {
         self.expanded_activity_items.clear();
         self.expanded_turns.clear();
         self.expanded_changed_files.clear();
+        self.expanded_compactions.clear();
         self.transcript_control_focuses.borrow_mut().clear();
         // Selection belongs to the session being left.
         self.transcript_selection.selection.borrow_mut().clear();

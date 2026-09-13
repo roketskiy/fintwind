@@ -423,6 +423,12 @@ pub(super) enum TranscriptRowKind {
     /// that has not produced a chunk yet still shows visible progress, and a
     /// streaming one shows it below whatever content has arrived.
     WorkingIndicator,
+    /// The tail row while a context compaction runs: pulsing dots plus
+    /// "Compacting context…". A compaction lives outside any turn, so the
+    /// working indicator above cannot cover it — without this row the
+    /// transcript sits silent from `/compact` until the summary lands, which
+    /// reads as stuck.
+    Compacting,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -629,7 +635,8 @@ pub(super) fn assistant_response_footer(
                 TranscriptRowKind::TurnBlock(_)
                 | TranscriptRowKind::TurnFold(_)
                 | TranscriptRowKind::ChangedFiles(_)
-                | TranscriptRowKind::WorkingIndicator => None,
+                | TranscriptRowKind::WorkingIndicator
+                | TranscriptRowKind::Compacting => None,
             })
             .filter(|part| !part.content.trim().is_empty())
             .map(|part| part.content.as_str())
@@ -844,6 +851,16 @@ pub(super) fn transcript_rows_fingerprint(
     // turn statuses below would hold still while the rows moved.
     hash = mix(hash, session.status.is_busy() as u64);
 
+    // The compacting row exists only while a compaction runs, and no turn
+    // status changes when it settles — this flip must move the rows too.
+    hash = mix(
+        hash,
+        session
+            .compaction
+            .as_ref()
+            .is_some_and(|state| state.status == CompactionStatus::Running) as u64,
+    );
+
     hash = mix(hash, session.messages.len() as u64);
     for message in &session.messages {
         hash = mix(hash, message.role as u64);
@@ -959,6 +976,17 @@ pub(super) fn folded_transcript_row_kinds(
     if session.status.is_busy() && session.active_turn_id().is_some() {
         rows.push(TranscriptRowKind::WorkingIndicator);
     }
+    // A compaction in flight closes the transcript the same way — it runs
+    // outside any turn, so the indicator above cannot cover it, and the
+    // provider's own automatic compaction can start one with no user prompt
+    // in sight at all.
+    if session
+        .compaction
+        .as_ref()
+        .is_some_and(|state| state.status == CompactionStatus::Running)
+    {
+        rows.push(TranscriptRowKind::Compacting);
+    }
 
     // A normal response renders its file summary inside the terminal answer,
     // immediately before that message's footer actions. Only turns without a
@@ -1055,7 +1083,8 @@ fn turn_answer_start(session: &AgentSession, turn_rows: &[TranscriptRowKind]) ->
         TranscriptRowKind::TurnBlock(_)
         | TranscriptRowKind::TurnFold(_)
         | TranscriptRowKind::ChangedFiles(_)
-        | TranscriptRowKind::WorkingIndicator => false,
+        | TranscriptRowKind::WorkingIndicator
+        | TranscriptRowKind::Compacting => false,
     };
     let Some(last_text) = turn_rows.iter().rposition(is_answer_text) else {
         return turn_rows.len();
@@ -1072,7 +1101,7 @@ fn row_turn_id(session: &AgentSession, row: TranscriptRowKind) -> Option<Uuid> {
         TranscriptRowKind::TurnBlock(index) => session.transcript_blocks.get(index)?.turn_id,
         TranscriptRowKind::TurnFold(turn_id) => Some(turn_id),
         TranscriptRowKind::ChangedFiles(turn_id) => Some(turn_id),
-        TranscriptRowKind::WorkingIndicator => None,
+        TranscriptRowKind::WorkingIndicator | TranscriptRowKind::Compacting => None,
     }
 }
 

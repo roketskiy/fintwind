@@ -1294,7 +1294,12 @@ impl Fintwind {
             } else {
                 px(0.0)
             })
-            .pr(px(14.0))
+            // Caption buttons sit on the window edge; Win11 chrome has no inset.
+            .pr(if right_window_controls.is_some() {
+                px(0.0)
+            } else {
+                px(14.0)
+            })
             .when(!self.sidebar_visible, |element| {
                 element
                     .child(

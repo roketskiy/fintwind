@@ -149,6 +149,13 @@ pub enum Command {
     /// merge-only so a stale client snapshot cannot delete tasks another
     /// client just created.
     RemoveSession,
+    /// Remove a project from the app catalog. Ordinary state saves are
+    /// merge-only, so a stale client snapshot cannot restore a project
+    /// another client just hid. This does not delete the project folder or
+    /// OpenCode's own sessions.
+    RemoveProject {
+        project_id: Uuid,
+    },
     /// List the OpenCode server's sessions for a workspace directory, so the
     /// client can reconcile its sidebar with sessions created outside the app
     /// (CLI, TUI, another client).
@@ -509,6 +516,15 @@ mod tests {
         assert_eq!(json["type"], "forkSessionFromResponse");
         assert_eq!(json["turnCount"], 7);
         assert_eq!(PROTOCOL_VERSION, 5);
+    }
+
+    #[test]
+    fn remove_project_command_uses_stable_camel_case_fields() {
+        let project_id = Uuid::from_u128(9);
+        let json = serde_json::to_value(Command::RemoveProject { project_id }).unwrap();
+
+        assert_eq!(json["type"], "removeProject");
+        assert_eq!(json["projectId"], project_id.to_string());
     }
 
     #[test]

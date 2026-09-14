@@ -753,6 +753,9 @@ impl Fintwind {
                 )))
             },
         );
+        let fintwind = cx.entity().downgrade();
+        let menu = self.menu_handle(format!("project-{project_id}"), cx);
+        let keyboard_menu = menu.clone();
         let toggle = div()
             .id(SharedString::from(format!(
                 "sidebar-group-toggle-{project_id}"
@@ -782,7 +785,7 @@ impl Fintwind {
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.toggle_sidebar_group(project_id, cx);
             }))
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
                 match event.keystroke.key.as_str() {
                     "enter" | "space" => {
                         this.toggle_sidebar_group(project_id, cx);
@@ -794,6 +797,10 @@ impl Fintwind {
                     }
                     "right" if collapsed => {
                         this.set_sidebar_group_collapsed(project_id, false, cx);
+                        cx.stop_propagation();
+                    }
+                    "f10" if event.keystroke.modifiers.shift => {
+                        keyboard_menu.open_context_menu(window, cx);
                         cx.stop_propagation();
                     }
                     _ => {}
@@ -835,7 +842,7 @@ impl Fintwind {
             .w_full()
             .min_w_0()
             .pb(px(SIDEBAR_PROJECT_CARD_BOTTOM_GAP))
-            .child(
+            .child(context_menu(
                 div()
                     // The card carries the unified hover highlight so the
                     // whole header lights up as one surface, the way the
@@ -865,7 +872,17 @@ impl Fintwind {
                     .text_color(theme.text_tertiary)
                     .child(toggle)
                     .child(new_session),
-            )
+                SharedString::from(format!("project-menu-{project_id}")),
+                &menu,
+                move |_| {
+                    let remove_fintwind = fintwind.clone();
+                    vec![MenuItem::new(tr!("project.remove"), move |_, cx| {
+                        let _ = remove_fintwind.update(cx, |fintwind, cx| {
+                            fintwind.remove_project(project_id, cx);
+                        });
+                    })]
+                },
+            ))
     }
 
     fn start_session_for_project(

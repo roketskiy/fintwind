@@ -332,6 +332,7 @@ project.default_folder: 默认文件夹
 project.project_lower: 项目
 project.without_a_project: 不使用项目
 project.your_project: 你的项目
+project.remove: 从应用中移除
 onboarding.open_project_to_begin: 打开一个项目即可开始
 onboarding.description: fintwind 会在你选择的文件夹中运行编程智能体。代码、任务和历史记录都保留在这台 Mac 上
 onboarding.web_description: 请选择守护进程主机上的路径，或在不使用项目的情况下开始。

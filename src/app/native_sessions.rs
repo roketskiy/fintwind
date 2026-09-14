@@ -316,6 +316,14 @@ impl Fintwind {
         summaries: Vec<fintwind_client::provider_session::NativeSessionSummary>,
         cx: &mut Context<Self>,
     ) {
+        if !self
+            .state
+            .projects
+            .iter()
+            .any(|project| project.id == project_id)
+        {
+            return;
+        }
         self.native_reconcile_error = None;
         let mut changed = false;
 

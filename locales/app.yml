@@ -662,6 +662,8 @@ project.without_a_project:
   en: without a project
 project.your_project:
   en: your project
+project.remove:
+  en: Remove from app
 
 onboarding.open_project_to_begin:
   en: Open a project to begin

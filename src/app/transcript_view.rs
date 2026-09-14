@@ -1203,7 +1203,8 @@ impl Fintwind {
             | TranscriptRowKind::TurnFold(_)
             | TranscriptRowKind::ChangedFiles(_)
             | TranscriptRowKind::WorkingIndicator
-            | TranscriptRowKind::Compacting => false,
+            | TranscriptRowKind::Compacting
+            | TranscriptRowKind::ProviderRetry => false,
         };
         let inner = match kind {
             TranscriptRowKind::Message(message_index) => self
@@ -1214,6 +1215,7 @@ impl Fintwind {
                     let copied = self.copied_message_feedback.contains_key(&message.id);
                     let (assistant_footer_copy_content, assistant_footer_time) =
                         self.assistant_response_footer_cached(message_index);
+                    let assistant_turn_stats = self.assistant_turn_stats_cached(message_index);
                     let assistant_before_footer = assistant_footer_copy_content
                         .as_ref()
                         .and(message.turn_id)
@@ -1297,6 +1299,7 @@ impl Fintwind {
                             assistant_footer_copy_content,
                             assistant_footer_time,
                             assistant_before_footer,
+                            assistant_turn_stats,
                             copied,
                             assistant_message_action,
                             user_message_action,
@@ -1345,6 +1348,13 @@ impl Fintwind {
                 .unwrap_or_else(|| div().into_any_element()),
             TranscriptRowKind::WorkingIndicator => self.render_working_indicator_row(&theme, cx),
             TranscriptRowKind::Compacting => self.render_compacting_indicator_row(&theme),
+            TranscriptRowKind::ProviderRetry => {
+                let retry = self.selected_provider_retry().cloned();
+                match retry {
+                    Some(retry) => self.render_provider_retry_row(&retry, &theme, cx),
+                    None => div().into_any_element(),
+                }
+            }
         };
         div()
             .w_full()
@@ -1410,6 +1420,26 @@ impl Fintwind {
         {
             self.remeasure_transcript_message(message_index);
         }
+        cx.notify();
+    }
+
+    /// Expand or collapse the live provider-retry card. Same disclosure
+    /// contract as the compaction card: the caller passes the row's current
+    /// state, this inverts it, and the height change must not shift the
+    /// reader's position.
+    pub(super) fn toggle_provider_retry(
+        &mut self,
+        session_id: Uuid,
+        expanded: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.pin_transcript_for_disclosure();
+        if expanded {
+            self.expanded_provider_retries.remove(&session_id);
+        } else {
+            self.expanded_provider_retries.insert(session_id);
+        }
+        self.remeasure_transcript_tail();
         cx.notify();
     }
 
@@ -1738,7 +1768,7 @@ impl Fintwind {
     /// on screen from the moment the prompt lands — before the provider has
     /// produced a single chunk — and stays below whatever streams in until
     /// the turn settles into its "Worked for N" fold. Quiet stretches carry
-    /// the provider's own busy/retry label, or the bare silence counter.
+    /// the provider's own busy label, or the bare silence counter.
     fn render_working_indicator_row(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let elapsed = self
             .selected_session()
@@ -1746,13 +1776,19 @@ impl Fintwind {
             .filter(|turn| turn.status == TurnStatus::Running)
             .map(|turn| unix_time().saturating_sub(turn.started_at))
             .unwrap_or(0);
-        let phase = self.selected_runtime().and_then(|runtime| {
-            working_phase(
-                runtime.provider_phase.as_ref(),
-                runtime.last_active_at.elapsed().as_secs(),
-                unix_time_millis(),
-            )
-        });
+        // A backoff is silence with an explanation. The retry card already
+        // gives it, so the silence counter would only say the same thing twice
+        // — and more vaguely — right above it.
+        let retrying = self.selected_provider_retry().is_some();
+        let phase = self
+            .selected_runtime()
+            .and_then(|runtime| {
+                working_phase(
+                    runtime.provider_phase.as_ref(),
+                    runtime.last_active_at.elapsed().as_secs(),
+                )
+            })
+            .filter(|phase| !(retrying && matches!(phase, WorkingPhase::Awaiting { .. })));
         div()
             .h(px(22.0))
             .flex()
@@ -1800,7 +1836,7 @@ impl Fintwind {
         &self,
         phase: WorkingPhase,
         theme: &Theme,
-        cx: &mut Context<Self>,
+        _cx: &mut Context<Self>,
     ) -> AnyElement {
         let (text, color) = match &phase {
             WorkingPhase::Responding { elapsed_secs } => (
@@ -1817,9 +1853,8 @@ impl Fintwind {
                 ),
                 theme.text_tertiary,
             ),
-            WorkingPhase::Retrying { text, .. } => (text.clone(), theme.warning),
         };
-        let mut row = div()
+        div()
             .flex()
             .items_center()
             .gap(px(6.0))
@@ -1831,53 +1866,214 @@ impl Fintwind {
                     .text_color(color)
                     .child(SharedString::from(format!("· {text}"))),
             )
-            .into_any_element();
-        if let WorkingPhase::Retrying {
-            action_label,
-            action_link: Some(link),
-            ..
-        } = phase
-        {
-            let action_label = action_label.unwrap_or_else(|| link.clone());
-            let focus = self.transcript_control_focus("working-phase-link", cx);
-            row = div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .child(row)
-                .child(
+            .into_any_element()
+    }
+
+    /// The provider's retry backoff as a compact card, styled after the settled
+    /// compaction card: the header carries the state — a pulsing warning dot,
+    /// "Retrying", the attempt, the reason preview, and the countdown — and the
+    /// full error plus the provider's own upsell action sit behind the
+    /// disclosure.
+    ///
+    /// This replaces the old suffix on the working indicator row. That suffix
+    /// only rendered while the session was busy and its turn still running —
+    /// exactly the window a backoff tends to outlive — so the state the reader
+    /// needed to see was the state that hid it.
+    fn render_provider_retry_row(
+        &self,
+        retry: &ProviderRetry,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(session_id) = self.state.selected_session else {
+            return div().into_any_element();
+        };
+        let expanded = self.expanded_provider_retries.contains(&session_id);
+        let reason = if retry.message.trim().is_empty() {
+            tr!("transcript.provider_retry_unknown")
+        } else {
+            retry.message.trim().to_owned()
+        };
+        let preview = compact_provider_retry_message(&reason);
+        let countdown = retry.next_at_ms.map(|next_at_ms| {
+            let wait = next_at_ms.saturating_sub(unix_time_millis()) / 1000;
+            tr!(
+                "transcript.provider_retry_eta",
+                duration = format_working_elapsed(wait)
+            )
+        });
+        // The collapsed header previews the reason; expanded, the body below
+        // shows it in full, so repeating it in the header would only crowd the
+        // countdown.
+        let shows_preview = !expanded && !preview.is_empty() && preview != reason;
+
+        let header = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .min_w_0()
+            .w_full()
+            .child(pulse_dot(5.0, theme.warning))
+            .child(
+                div()
+                    .flex_none()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_secondary)
+                    .child(tr!("transcript.retrying")),
+            )
+            .child(div().flex_none().text_color(theme.text_tertiary).child(tr!(
+                "transcript.provider_retry_attempt",
+                attempt = retry.attempt
+            )))
+            .when(shows_preview, |header| {
+                header.child(
                     div()
-                        .id("working-phase-link")
-                        .track_focus(&focus)
-                        .tab_index(0)
-                        .px(px(2.0))
-                        .text_size(px(11.5))
-                        .line_height(px(16.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(color)
-                        .underline()
-                        .cursor_pointer()
-                        .focus_visible(|style| style.text_color(theme.text))
-                        .hover(|style| style.text_color(theme.text))
-                        .active(|style| style.text_color(theme.text_ghost))
-                        .child(SharedString::from(action_label))
-                        .on_click({
-                            let link = link.clone();
-                            cx.listener(move |_, _, _, cx| cx.open_url(link.as_str()))
-                        })
-                        .on_key_down({
-                            let link = link.clone();
-                            cx.listener(move |_, event: &KeyDownEvent, _, cx| {
-                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                    cx.open_url(link.as_str());
-                                    cx.stop_propagation();
-                                }
-                            })
-                        }),
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .truncate()
+                        .text_color(theme.text_tertiary)
+                        .child(SharedString::from(preview.clone())),
                 )
-                .into_any_element();
+            })
+            .when(!shows_preview, |header| {
+                header.child(div().flex_1().min_w(px(0.0)))
+            })
+            .children(countdown.map(|countdown| {
+                div()
+                    .flex_none()
+                    .text_color(theme.warning)
+                    .child(SharedString::from(countdown))
+            }))
+            .child(icon(
+                if expanded {
+                    "icons/chevron-down.svg"
+                } else {
+                    "icons/chevron-right.svg"
+                },
+                11.0,
+                theme.text_tertiary,
+            ));
+
+        let surface = theme.surface.blend(theme.overlay.opacity(0.7));
+        let focus = self.transcript_control_focus(format!("provider-retry-{session_id}"), cx);
+        let mut card = div()
+            .w_full()
+            .min_w_0()
+            .rounded(px(9.0))
+            .border_1()
+            .border_color(theme.border_strong)
+            .bg(surface)
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id(SharedString::from(format!("provider-retry-{session_id}")))
+                    .track_focus(&focus)
+                    .tab_index(0)
+                    .px(px(10.0))
+                    .h(px(30.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .cursor_default()
+                    .text_size(px(12.5))
+                    .line_height(px(17.0))
+                    .focus_visible(|style| style.text_color(theme.text))
+                    .hover(|style| style.text_color(theme.text))
+                    .active(|style| style.text_color(theme.text_ghost))
+                    .child(header)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.toggle_provider_retry(session_id, expanded, cx);
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.toggle_provider_retry(session_id, expanded, cx);
+                            cx.stop_propagation();
+                        }
+                    })),
+            );
+        if expanded {
+            let mut body = div()
+                .px(px(10.0))
+                .pb(px(8.0))
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(6.0));
+            for line in reason.lines().filter(|line| !line.trim().is_empty()) {
+                body = body.child(
+                    div()
+                        .w_full()
+                        .min_w(px(0.0))
+                        .text_size(px(12.0))
+                        .line_height(px(17.0))
+                        .text_color(theme.text_secondary)
+                        .child(SharedString::from(line.trim().to_owned())),
+                );
+            }
+            if let Some(action) = retry.action.as_ref() {
+                let mut notice = div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
+                    .text_size(px(12.0))
+                    .line_height(px(17.0));
+                if !action.title.trim().is_empty() {
+                    notice = notice.child(
+                        div()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_secondary)
+                            .child(SharedString::from(action.title.clone())),
+                    );
+                }
+                if !action.message.trim().is_empty() {
+                    notice = notice.child(
+                        div()
+                            .text_color(theme.text_tertiary)
+                            .child(SharedString::from(action.message.clone())),
+                    );
+                }
+                if let Some(link) = action.link.clone() {
+                    let label = if action.label.trim().is_empty() {
+                        link.clone()
+                    } else {
+                        action.label.clone()
+                    };
+                    let link_focus = self
+                        .transcript_control_focus(format!("provider-retry-link-{session_id}"), cx);
+                    notice = notice.child(
+                        div()
+                            .id("provider-retry-link")
+                            .track_focus(&link_focus)
+                            .tab_index(0)
+                            .flex_none()
+                            .text_color(theme.warning)
+                            .underline()
+                            .cursor_pointer()
+                            .focus_visible(|style| style.text_color(theme.text))
+                            .hover(|style| style.text_color(theme.text))
+                            .active(|style| style.text_color(theme.text_ghost))
+                            .child(SharedString::from(label))
+                            .on_click({
+                                let link = link.clone();
+                                cx.listener(move |_, _, _, cx| cx.open_url(link.as_str()))
+                            })
+                            .on_key_down({
+                                let link = link.clone();
+                                cx.listener(move |_, event: &KeyDownEvent, _, cx| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        cx.open_url(link.as_str());
+                                        cx.stop_propagation();
+                                    }
+                                })
+                            }),
+                    );
+                }
+                body = body.child(notice);
+            }
+            card = card.child(body);
         }
-        row
+        card.into_any_element()
     }
 
     /// The turn's tool activity as a disclosure: the summary line toggles the
@@ -2756,61 +2952,28 @@ pub(super) const PROVIDER_QUIET_RESPONSE_SECS: u64 = 30;
 
 /// The working row's quiet-stretch label, resolved from the runtime's
 /// provider phase. `quiet_secs` is how long the session has heard nothing at
-/// all; `now_ms` prices the retry countdown against the server's next-attempt
-/// stamp. Pure so the fallbacks stay testable.
+/// all. Pure so the fallbacks stay testable. Retry backoff is deliberately not
+/// part of this: it renders as its own card so it survives the turn ending.
 pub(super) fn working_phase(
     phase: Option<&ProviderPhase>,
     quiet_secs: u64,
-    now_ms: u64,
 ) -> Option<WorkingPhase> {
     match phase {
         Some(ProviderPhase::Responding { since }) => Some(WorkingPhase::Responding {
             elapsed_secs: unix_time().saturating_sub(*since),
         }),
-        Some(ProviderPhase::Retrying {
-            attempt,
-            message,
-            action,
-            next_at_ms,
-        }) => {
-            let detail = match compact_provider_retry_message(message) {
-                detail if !detail.is_empty() => detail,
-                _ => tr!("transcript.provider_retry_unknown"),
-            };
-            let mut text = tr!("transcript.provider_retry", attempt = attempt, message = detail);
-            if let Some(next_at_ms) = next_at_ms {
-                let wait = next_at_ms.saturating_sub(now_ms) / 1000;
-                text.push_str(" · ");
-                text.push_str(&tr!(
-                    "transcript.provider_retry_eta",
-                    duration = format_working_elapsed(wait)
-                ));
-            }
-            Some(WorkingPhase::Retrying {
-                text,
-                action_label: action.as_ref().map(|action| action.label.clone()),
-                action_link: action.as_ref().and_then(|action| action.link.clone()),
-            })
+        None if quiet_secs >= PROVIDER_QUIET_RESPONSE_SECS => {
+            Some(WorkingPhase::Awaiting { quiet_secs })
         }
-        None if quiet_secs >= PROVIDER_QUIET_RESPONSE_SECS => Some(WorkingPhase::Awaiting {
-            quiet_secs,
-        }),
         None => None,
     }
 }
 
 /// The quiet-stretch states the working row can label, beyond its elapsed
-/// ticker. `Retrying` carries its ready-made sentence (attempt, reason, and
-/// countdown already localized together) plus the provider's optional
-/// upsell action, kept separate because the link is interactive.
+/// ticker.
 #[derive(Clone, Debug)]
 pub(super) enum WorkingPhase {
     Responding { elapsed_secs: u64 },
-    Retrying {
-        text: String,
-        action_label: Option<String>,
-        action_link: Option<String>,
-    },
     Awaiting { quiet_secs: u64 },
 }
 

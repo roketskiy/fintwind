@@ -167,19 +167,55 @@ enum StreamPhase {
 /// The provider runtime's own account of a running turn's quiet stretches
 /// (opencode `session.status`). Deltas and tool activity speak for
 /// themselves; this phase labels the waits where neither exists — a model
-/// call in flight, or a retry backoff after a failure — so the working row
-/// never reads as a frozen app. Cleared by any visible output.
+/// call in flight — so the working row never reads as a frozen app. Cleared
+/// by any visible output.
 #[derive(Clone, Debug, PartialEq)]
 enum ProviderPhase {
     /// `session.status busy`: a model call is in flight.
     Responding { since: u64 },
-    /// `session.status retry`: the call failed; the runtime backs off.
-    Retrying {
-        attempt: u32,
-        message: String,
-        action: Option<ProviderRetryAction>,
-        next_at_ms: Option<u64>,
-    },
+}
+
+/// The provider's retry backoff (`session.status retry`). Held by the app —
+/// not by the session runtime, which `drain_driver_events` briefly takes out of
+/// its map, and not by the turn, which the backoff routinely outlives.
+///
+/// A retry outlives the turn that started it: the provider keeps backing off
+/// after Fintwind has already settled — or failed — that turn, and while the
+/// session is in that state the app used to accept no provider output at all
+/// and silently drop every retry report. App scope is what lets the retry card
+/// stay on screen exactly when the reader most needs it, without the fold ever
+/// asking a runtime that is not currently installed.
+#[derive(Clone, Debug, PartialEq)]
+struct ProviderRetry {
+    attempt: u32,
+    message: String,
+    action: Option<ProviderRetryAction>,
+    next_at_ms: Option<u64>,
+    /// When the app recorded this report. Prices the card's own expiry when
+    /// the provider stamped no next attempt, so an unretracted report cannot
+    /// pin the card — and the pulse lease behind it — on screen forever.
+    received_at_ms: u64,
+}
+
+impl ProviderRetry {
+    /// The moment this report stops describing a backoff in progress.
+    ///
+    /// opencode stamps the next attempt; a report whose stamp is long past was
+    /// superseded — by a successful attempt, or by an event stream that died
+    /// with the report unretracted. Without a stamp there is nothing to price
+    /// the wait, so the report's own age stands in.
+    fn stale_at_ms(&self) -> u64 {
+        const STALE_AFTER_MS: u64 = 60_000;
+        match self.next_at_ms {
+            Some(next_at_ms) => next_at_ms.saturating_add(STALE_AFTER_MS),
+            None => self.received_at_ms.saturating_add(STALE_AFTER_MS),
+        }
+    }
+
+    /// Whether this report still describes a backoff in progress.
+    fn is_live(&self, now_ms: u64) -> bool {
+        now_ms < self.stale_at_ms()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -836,7 +872,7 @@ struct SessionRuntime {
     /// dropped instead of opening a stray fragment. A fresh `started` reopens
     /// the key. Cleared with `open_reasoning`.
     settled_reasoning: HashSet<String>,
-    /// The provider's busy/retry report for the live turn, if any. Runtime
+    /// The provider's busy report for the live turn, if any. Runtime
     /// presentation state: it never persists and always dies with the turn.
     provider_phase: Option<ProviderPhase>,
     pending_permission: Option<PendingPermission>,
@@ -1182,6 +1218,18 @@ pub struct Fintwind {
     /// the summary belongs to the provider's bookkeeping more than to the
     /// reader. Runtime-only, like the other transcript disclosures.
     expanded_compactions: HashSet<Uuid>,
+    /// Sessions whose provider-retry card the user expanded to read the full
+    /// error. Collapsed is the default: the header already carries the attempt
+    /// and countdown. Runtime-only.
+    expanded_provider_retries: HashSet<Uuid>,
+    /// The provider's live retry backoff per session, if any. App-level rather
+    /// than runtime-level: `drain_driver_events` removes a runtime from map
+    /// while it handles that session's events, and a fold read through the
+    /// absent runtime would rebuild the rows without the retry card. Keyed by
+    /// session so a backoff in a background task is remembered when the reader
+    /// switches to it. Runtime-only, and pruned on expiry, submission, stop,
+    /// and session removal.
+    provider_retries: HashMap<Uuid, ProviderRetry>,
     /// Stable focus identities for controls inside virtualized transcript and
     /// diff rows. Recreating a handle on every row build would drop keyboard
     /// focus whenever GPUI re-renders the list.
@@ -1489,6 +1537,13 @@ pub struct Fintwind {
     assistant_footer_cache: RefCell<HashMap<usize, (Option<SharedString>, Option<u64>)>>,
     /// The row-kinds fingerprint `assistant_footer_cache` was built under.
     assistant_footer_fingerprint: Cell<Option<u64>>,
+    /// Settled-turn stats line per message index, rebuilt when the row-kinds
+    /// fingerprint — mixed with the provider catalog's size, because the
+    /// model segment resolves its display name through it — moves. See
+    /// `assistant_turn_stats_cached`.
+    assistant_turn_stats_cache: RefCell<HashMap<usize, Option<SharedString>>>,
+    /// The fingerprint `assistant_turn_stats_cache` was built under.
+    assistant_turn_stats_fingerprint: Cell<Option<u64>>,
     /// Checkpoint-ref existence per (session, retained turn count), filled by
     /// `prefetch_checkpoint_refs` on the background executor. Rows read only
     /// this cache: resolving a ref forks a `git` subprocess, which must stay
@@ -2784,6 +2839,8 @@ impl Fintwind {
                 expanded_turns: HashSet::new(),
                 expanded_changed_files: HashSet::new(),
                 expanded_compactions: HashSet::new(),
+                expanded_provider_retries: HashSet::new(),
+                provider_retries: HashMap::new(),
                 transcript_control_focuses: RefCell::new(HashMap::new()),
                 session_navigation,
                 session_rename: None,
@@ -2950,6 +3007,8 @@ impl Fintwind {
                 transcript_navigation_turns_fingerprint: Cell::new(None),
                 assistant_footer_cache: RefCell::new(HashMap::new()),
                 assistant_footer_fingerprint: Cell::new(None),
+                assistant_turn_stats_cache: RefCell::new(HashMap::new()),
+                assistant_turn_stats_fingerprint: Cell::new(None),
                 checkpoint_ref_cache: RefCell::new(HashMap::new()),
                 checkpoint_ref_generation: Cell::new(0),
                 checkpoint_ref_prefetch: Cell::new(None),

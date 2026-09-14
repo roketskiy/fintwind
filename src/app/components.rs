@@ -348,6 +348,10 @@ pub(super) struct MessageRender<'a> {
     pub(super) assistant_footer_copy_content: Option<SharedString>,
     pub(super) assistant_footer_time: Option<u64>,
     pub(super) assistant_before_footer: Option<AnyElement>,
+    /// The settled turn's always-visible stats line — "Build · Model · 25.9s
+    /// · 64.5 tok/s" — shown under the body (and the changed-files card)
+    /// of the message that owns the response footer.
+    pub(super) assistant_turn_stats: Option<SharedString>,
     pub(super) copied: bool,
     pub(super) assistant_message_action: Option<AssistantMessageAction>,
     pub(super) user_message_action: Option<UserMessageAction>,
@@ -550,6 +554,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         assistant_footer_copy_content,
         assistant_footer_time,
         assistant_before_footer,
+        assistant_turn_stats,
         copied,
         assistant_message_action,
         user_message_action,
@@ -732,6 +737,18 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                 .child(body);
             if let Some(before_footer) = assistant_before_footer {
                 column = column.child(div().w_full().mt(px(12.0)).mb(px(3.0)).child(before_footer));
+            }
+            // Always visible — unlike the hover footer below — and only on
+            // the turn's terminal message, which the cached line already
+            // resolved; streaming turns and interim parts pass `None`.
+            if let Some(stats) = assistant_turn_stats {
+                column = column.child(
+                    div()
+                        .text_size(px(11.5))
+                        .line_height(px(16.0))
+                        .text_color(theme.text_tertiary)
+                        .child(stats),
+                );
             }
             if let Some(copy_content) = assistant_footer_copy_content {
                 column = column.child(render_message_footer(

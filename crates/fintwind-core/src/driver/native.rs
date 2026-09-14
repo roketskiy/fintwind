@@ -25,7 +25,9 @@ use serde_json::Value;
 
 use fintwind_protocol::provider_session::{NativeSessionSummary, NativeTranscript};
 
-use crate::model::{ActivityItem, AgentTurn, Message, MessageRole, ReasoningBlock, TurnStatus};
+use crate::model::{
+    ActivityItem, AgentTurn, Message, MessageRole, ReasoningBlock, TurnStats, TurnStatus,
+};
 use crate::opencode_session::{OpenCodeServer, encode_path_segment};
 
 /// Page size for paged lists; matches the live transcript reader.
@@ -255,6 +257,7 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                     started_at: created_at,
                     completed_at: Some(created_at),
                     checkpoint: None,
+                    stats: None,
                 };
                 transcript.messages.push(Message {
                     id: uuid::Uuid::new_v4(),
@@ -287,6 +290,23 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                     }
                 }
                 let text = parts_text(row.get("content"));
+                // Every assistant row is one model step of the turn above it,
+                // and the fold happens before the content gate: a row with no
+                // visible text still ran a model step whose tokens and
+                // streaming time belong to the turn's footer statistics.
+                if let Some(step) = turn_stats_step(row)
+                    && let Some(turn) = transcript.turns.last_mut()
+                {
+                    let stats = turn.stats.get_or_insert_with(TurnStats::default);
+                    if step.model.is_some() {
+                        stats.model = step.model;
+                    }
+                    if step.agent.is_some() {
+                        stats.agent = step.agent;
+                    }
+                    stats.output_tokens = stats.output_tokens.saturating_add(step.output_tokens);
+                    stats.stream_ms = stats.stream_ms.saturating_add(step.stream_ms);
+                }
                 if activities.is_empty() && text.trim().is_empty() {
                     continue;
                 }
@@ -314,6 +334,7 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                             started_at: created_at,
                             completed_at: Some(completed_at),
                             checkpoint: None,
+                            stats: None,
                         };
                         let id = turn.id;
                         transcript.turns.push(turn);
@@ -357,6 +378,43 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
     }
 
     transcript
+}
+
+/// One assistant row's contribution to its turn's footer statistics. The
+/// stored rows — unlike the live step events, which carry no times — keep the
+/// `time.streamed`/`time.created` pair the TUI's own footer divides by, so
+/// the import path can reproduce the exact numbers a live turn accumulates.
+/// A row that reports nothing measurable folds in as `None`.
+fn turn_stats_step(row: &Value) -> Option<TurnStats> {
+    let model = row.get("model").and_then(|model| {
+        let provider = model.get("providerID").and_then(Value::as_str)?;
+        let id = model.get("id").and_then(Value::as_str)?;
+        Some(format!("{provider}/{id}"))
+    });
+    // A blank agent id is a degraded row, not a name to titlecase: normalizing
+    // it away keeps the footer from rendering an empty segment.
+    let agent = row
+        .get("agent")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|agent| !agent.trim().is_empty());
+    let output = row
+        .pointer("/tokens/output")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let stream_ms = match (
+        row.pointer("/time/streamed").and_then(Value::as_u64),
+        row.pointer("/time/created").and_then(Value::as_u64),
+    ) {
+        (Some(streamed), Some(created)) => streamed.saturating_sub(created),
+        _ => 0,
+    };
+    (model.is_some() || agent.is_some() || output > 0 || stream_ms > 0).then_some(TurnStats {
+        model,
+        agent,
+        output_tokens: output,
+        stream_ms,
+    })
 }
 
 /// Concatenated text of a message's text parts.
@@ -549,6 +607,81 @@ mod tests {
         for message in &transcript.messages {
             assert!(transcript.turns.iter().any(|turn| Some(turn.id) == message.turn_id));
         }
+    }
+
+    /// Assistant rows keep the tokens, model, and streaming time the live
+    /// step events lack, so the import path can fold them into the same
+    /// footer statistics a live turn accumulates — summed across a turn's
+    /// steps, with the final step's model and agent winning.
+    #[test]
+    fn transcript_translation_folds_turn_statistics() {
+        let rows = vec![
+            json!({
+                "id": "msg_1", "type": "user",
+                "time": {"created": 1_000_u64},
+                "text": "跑一下测试", "agents": [], "files": []
+            }),
+            // Tool step of the same turn with no visible content at all: it
+            // is dropped from the transcript but its output tokens and
+            // payload-sourced streaming duration still fold into the turn's
+            // statistics. Its model/agent lead until the final step
+            // overwrites them.
+            json!({
+                "id": "msg_2", "type": "assistant",
+                "time": {"created": 2_000_u64, "streamed": 4_600_u64, "completed": 5_000_u64},
+                "agent": "build",
+                "model": {"id": "glm-5.3-flash", "providerID": "glmcoding"},
+                "tokens": {"input": 100, "output": 12, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                "content": []
+            }),
+            json!({
+                "id": "msg_3", "type": "assistant",
+                "time": {"created": 6_000_u64, "completed": 9_000_u64},
+                "agent": "explore",
+                "model": {"id": "glm-5.3", "providerID": "glmcoding"},
+                "tokens": {"input": 130, "output": 90, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                "content": [{"type": "text", "text": "全部通过。"}]
+            }),
+            // A second turn whose only step lacks `time.streamed`: its
+            // duration stays out of the denominator, tokens still count, and
+            // its blank agent is normalized away rather than folded in.
+            json!({
+                "id": "msg_4", "type": "user",
+                "time": {"created": 20_000_u64},
+                "text": "再来一次", "agents": [], "files": []
+            }),
+            json!({
+                "id": "msg_5", "type": "assistant",
+                "time": {"created": 21_000_u64, "completed": 22_000_u64},
+                "agent": "",
+                "model": {"id": "glm-5.3", "providerID": "glmcoding"},
+                "tokens": {"input": 50, "output": 3, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                "content": [{"type": "text", "text": "完成。"}]
+            }),
+        ];
+
+        let transcript = translate_rows(&rows);
+        assert_eq!(transcript.turns.len(), 2);
+        assert_eq!(
+            transcript.turns[0].stats,
+            Some(TurnStats {
+                model: Some("glmcoding/glm-5.3".into()),
+                agent: Some("explore".into()),
+                output_tokens: 102,
+                stream_ms: 2_600,
+            })
+        );
+        // The second turn's step streamed no measurable time, so its stats
+        // carry the tokens and model but no duration to divide by.
+        assert_eq!(
+            transcript.turns[1].stats,
+            Some(TurnStats {
+                model: Some("glmcoding/glm-5.3".into()),
+                agent: None,
+                output_tokens: 3,
+                stream_ms: 0,
+            })
+        );
     }
 
     /// The exact row shape `0.0.0-beta-18743` serves for user turns: the

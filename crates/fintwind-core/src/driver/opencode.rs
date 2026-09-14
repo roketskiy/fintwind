@@ -38,7 +38,7 @@ use crate::model::{
     ActivityItem, ActivityKind, BackgroundWorkEvent, BackgroundWorkItem, BackgroundWorkKey,
     BackgroundWorkKind, BackgroundWorkStatus, BackgroundWorkTranscriptEvent, CompactionState,
     CompactionStatus, DriverEvent, InteractionMode, PermissionOption, ProviderResumeCursor,
-    RuntimeMode, UserInputAnswer, UserInputOption, UserInputQuestion, unix_time_millis,
+    RuntimeMode, TurnStats, UserInputAnswer, UserInputOption, UserInputQuestion, unix_time_millis,
 };
 use crate::opencode_pool::PooledServer;
 use crate::opencode_session::{
@@ -1114,6 +1114,24 @@ struct OpenCodeStreamState {
     /// the durable `started`, and the first delta promotes the session
     /// instead of leaving it silent.
     compaction_live: bool,
+    /// Footer statistics for the foreground turn in flight. Steps accumulate
+    /// here until the turn settles, then leave as one `TurnStatsUpdated`;
+    /// `None` between turns and until the first `session.step.started`.
+    turn_stats: Option<OpenCodeTurnStats>,
+}
+
+/// The live accumulator behind [`TurnStats`]. The step events carry no
+/// provider-side streaming time (verified against the v2 event schema: only
+/// a publication `timestamp`), so each step's duration falls back to the
+/// driver's own wall clock between `session.step.started` and the step's
+/// settlement event — the same wall the app's own turn timing reads, so the
+/// two stay comparable.
+#[derive(Default)]
+struct OpenCodeTurnStats {
+    stats: TurnStats,
+    /// Wall-clock (ms) of the in-flight step's `session.step.started`, or
+    /// `None` when the step began before this driver attached.
+    step_started_at: Option<u64>,
 }
 
 /// One resume call the parent bound to a child, awaiting the child's own
@@ -2132,10 +2150,37 @@ fn handle_event(
         }
         "session.step.started" => {
             // The step announces the model that will run it; later usage
-            // events carry tokens but no model.
-            if let Some(model) = opencode_message_model_key(payload) {
+            // events carry tokens but no model. The same announcement feeds
+            // the footer statistics: the footer reads the final step's
+            // values, so each step overwrites the model/agent pair it
+            // actually carries — an announcement missing either (a degraded
+            // stream) keeps the earlier step's value instead of blanking it —
+            // and arms the wall clock the step's duration falls back to.
+            let model = opencode_message_model_key(payload);
+            if let Some(model) = model.clone() {
                 *state.usage_metadata.last_model.lock() = Some(model);
             }
+            let agent = payload
+                .get("agent")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .filter(|agent| !agent.trim().is_empty());
+            // An accumulator left over from a turn this driver never saw
+            // settle would bleed its tokens into the next turn, so a step
+            // starting while no turn is active starts from zero.
+            let stale = state.turn_stats.is_some() && !*turn_active.lock();
+            let mut stats = match (state.turn_stats.take(), stale) {
+                (Some(existing), false) => existing,
+                _ => OpenCodeTurnStats::default(),
+            };
+            if model.is_some() {
+                stats.stats.model = model;
+            }
+            if agent.is_some() {
+                stats.stats.agent = agent;
+            }
+            stats.step_started_at = Some(unix_time_millis());
+            state.turn_stats = Some(stats);
         }
         "session.usage.updated" => {
             // opencode publishes the session's cumulative token row here —
@@ -2206,6 +2251,7 @@ fn handle_event(
                     prompt_tokens,
                 });
             }
+            step_ended_turn_stats(payload, state);
         }
         "session.compaction.started" => {
             // Durable admission: the provider will summarize at its next
@@ -2301,6 +2347,39 @@ fn handle_event(
                 }));
             }
         }
+        // The channel opencode actually publishes provider backoff on. Verified
+        // against a real 2.0.3 server (a deliberately broken OpenAI-compatible
+        // stream): the runner emits `session.step.failed` and this event for
+        // every attempt, and emits **no** `session.status` at all over a whole
+        // turn — including the retries. A driver that only understood
+        // `session.status` therefore never saw a single retry.
+        //
+        // Payload: `{sessionID, assistantMessageID, attempt, at, error:{type,
+        // message, status}}`, where `at` is the wall clock of the next attempt.
+        // There is no upsell `action` on this path; `session.status`'s retry
+        // variant carries one but is legacy.
+        "session.retry.scheduled" => {
+            let error = payload.get("error");
+            let message = error
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .or_else(|| payload.get("message").and_then(Value::as_str))
+                .unwrap_or_default()
+                .to_owned();
+            let _ = events.send(DriverEvent::ProviderRetry {
+                attempt: payload
+                    .get("attempt")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    .min(u32::MAX as u64) as u32,
+                message,
+                action: None,
+                next_at_ms: payload.get("at").and_then(Value::as_u64),
+            });
+        }
+        // Legacy spelling of the same state, still emitted by older builds.
+        // `status.retry` also carries the provider's optional upsell `action`,
+        // which the modern event has no equivalent for, so both paths stay.
         "session.status" => {
             let status = payload.get("status");
             match status
@@ -2344,7 +2423,7 @@ fn handle_event(
         // same transition); the second settlement attempt is a no-op.
         "session.idle" => settle_on_idle_report(port, session_id, turn_active, state, events),
         "session.execution.succeeded" => {
-            clear_foreground_turn_state(state);
+            clear_foreground_turn_state(state, events);
             if std::mem::take(&mut *turn_active.lock()) {
                 let _ = events.send(DriverEvent::TurnFinished {
                     success: true,
@@ -2353,7 +2432,7 @@ fn handle_event(
             }
         }
         "session.execution.failed" => {
-            clear_foreground_turn_state(state);
+            clear_foreground_turn_state(state, events);
             // The failure payload carries the provider error; surface it so
             // the transcript explains why the turn settled unsuccessfully.
             let message = payload
@@ -2486,7 +2565,7 @@ fn settle_on_idle_report(
         // The idle backstop replaces a lost execution event, so it must drop
         // the same per-turn bookkeeping: otherwise a stale pending spawn or
         // tool name leaks into the next turn and mis-binds a new child.
-        clear_foreground_turn_state(state);
+        clear_foreground_turn_state(state, events);
         let _ = events.send(DriverEvent::TurnFinished {
             success: failure.is_none(),
             summary: failure,
@@ -2610,12 +2689,57 @@ fn disarm_child_resumes(state: &mut OpenCodeStreamState) {
 /// Drop the per-turn bookkeeping the foreground stream accumulated. Every path
 /// that ends a foreground turn shares this — including the idle backstop, which
 /// stands in when the execution event is lost — so a stale pending spawn or
-/// tool name can never leak into the next turn and mis-bind a new child.
-fn clear_foreground_turn_state(state: &mut OpenCodeStreamState) {
+/// tool name can never leak into the next turn and mis-bind a new child. The
+/// statistics accumulated for the turn leave as one event on the same paths.
+fn clear_foreground_turn_state(state: &mut OpenCodeStreamState, events: &impl DriverEventSink) {
+    flush_turn_stats(state, events);
     state.permissions.lock().pending.clear();
     state.tools.clear();
     state.pending_subagents.clear();
     disarm_child_resumes(state);
+}
+
+/// Fold one settled step into the turn's footer statistics. The step events
+/// carry no `time` object — the stored message rows have one, but they are
+/// only visible on the message endpoint — so the step's streaming duration
+/// prefers a payload that does grow `time.streamed`/`time.created` (a newer
+/// server or a fork) and otherwise falls back to the wall clock its
+/// `session.step.started` armed; a step whose start was never seen
+/// contributes tokens but no time.
+///
+/// This only accumulates, never flushes: a turn can carry several terminal
+/// `finish` values (a steer or provider retry reopens the model loop, and
+/// `length` continues past it), so an early flush would deliver a segment's
+/// totals and lose whatever the earlier segments had already collected.
+/// The flush happens exactly once, on the turn's terminal paths through
+/// [`clear_foreground_turn_state`].
+fn step_ended_turn_stats(payload: &Value, state: &mut OpenCodeStreamState) {
+    let Some(accum) = state.turn_stats.as_mut() else {
+        return;
+    };
+    let output = payload
+        .pointer("/tokens/output")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    accum.stats.output_tokens = accum.stats.output_tokens.saturating_add(output);
+    let duration = match (
+        payload.pointer("/time/streamed").and_then(Value::as_u64),
+        payload.pointer("/time/created").and_then(Value::as_u64),
+    ) {
+        (Some(streamed), Some(created)) => streamed.saturating_sub(created),
+        _ => accum
+            .step_started_at
+            .map_or(0, |started| unix_time_millis().saturating_sub(started)),
+    };
+    accum.stats.stream_ms = accum.stats.stream_ms.saturating_add(duration);
+    accum.step_started_at = None;
+}
+
+/// Send the accumulated turn statistics, if any, and retire the accumulator.
+fn flush_turn_stats(state: &mut OpenCodeStreamState, events: &impl DriverEventSink) {
+    if let Some(accum) = state.turn_stats.take() {
+        let _ = events.send(DriverEvent::TurnStatsUpdated(accum.stats));
+    }
 }
 
 /// `session.tool.success`/`session.tool.error` close a tool activity with its
@@ -3097,6 +3221,54 @@ mod tests {
                 let action = action.expect("the upsell action rides the retry");
                 assert_eq!(action.reason, "free_tier_limit");
                 assert_eq!(action.link.as_deref(), Some("https://opencode.ai/go"));
+                assert_eq!(next_at_ms, Some(1_700_000_008_000));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    /// The modern retry event. `session.status` is never emitted by current
+    /// builds — a whole turn, retries included, surfaced zero of them against a
+    /// real 2.0.3 server — so this is the one that has to reach the app. Its
+    /// field names differ from the legacy variant: the reason rides under
+    /// `error.message` and the countdown under `at`.
+    #[test]
+    fn scheduled_retry_surfaces_as_a_provider_retry_with_its_own_field_names() {
+        let (events, event_rx, _commands, _command_rx, turn, mut state) = harness();
+        handle_event(
+            &json!({
+                "type": "session.retry.scheduled",
+                "data": {
+                    "sessionID": "ses_1",
+                    "assistantMessageID": "msg_1",
+                    "attempt": 4,
+                    "at": 1_700_000_008_000_u64,
+                    "error": {
+                        "type": "provider.transport",
+                        "message": "ECONNRESET: The socket connection was closed unexpectedly.",
+                        "status": 200
+                    }
+                }
+            }),
+            &events,
+            &_commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        match event_rx.recv() {
+            Ok(DriverEvent::ProviderRetry {
+                attempt,
+                message,
+                action,
+                next_at_ms,
+            }) => {
+                assert_eq!(attempt, 4);
+                assert!(message.contains("ECONNRESET"), "{message}");
+                // This path carries no upsell action; the legacy one did.
+                assert_eq!(action, None);
                 assert_eq!(next_at_ms, Some(1_700_000_008_000));
             }
             other => panic!("unexpected event: {other:?}"),
@@ -4858,6 +5030,309 @@ mod tests {
             vec![Some(13_399), Some(27_389)],
             "prompt tokens accumulate across every call"
         );
+    }
+
+    #[test]
+    fn step_events_accumulate_turn_statistics_and_flush_at_the_terminal_event() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+
+        // The first step is a tool step: its tokens and streaming time fold
+        // into the accumulator, which stays open regardless of `finish`.
+        handle_event(
+            &json!({
+                "type": "session.step.started",
+                "data": {
+                    "sessionID": "ses_1",
+                    "assistantMessageID": "msg_1",
+                    "agent": "build",
+                    "model": {"id": "glm-5.3-flash", "providerID": "glmcoding"}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.step.ended",
+                "data": {
+                    "sessionID": "ses_1",
+                    "assistantMessageID": "msg_1",
+                    "finish": "tool-calls",
+                    "tokens": {"input": 100, "output": 12, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                    "time": {"created": 1_000_u64, "streamed": 3_500_u64}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+
+        // The final step names the agent and model the footer shows; it
+        // carries no `time`, so its duration falls back to the wall clock
+        // its `step.started` armed. Two milliseconds of separation keeps that
+        // fallback measurably positive without making the test slow.
+        std::thread::sleep(Duration::from_millis(2));
+        handle_event(
+            &json!({
+                "type": "session.step.started",
+                "data": {
+                    "sessionID": "ses_1",
+                    "assistantMessageID": "msg_2",
+                    "agent": "explore",
+                    "model": {"id": "glm-5.3", "providerID": "glmcoding"}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.step.ended",
+                "data": {
+                    "sessionID": "ses_1",
+                    "assistantMessageID": "msg_2",
+                    "finish": "stop",
+                    "tokens": {"input": 130, "output": 90, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        // A terminal `finish` does not flush: the turn's terminal event owns
+        // the single delivery, so nothing has left the accumulator yet.
+        assert!(
+            !event_rx
+                .try_iter()
+                .any(|event| matches!(event, DriverEvent::TurnStatsUpdated(_))),
+            "statistics must not flush before the turn's terminal event"
+        );
+
+        handle_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_1"}}),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+
+        let mut stats = Vec::new();
+        let mut finished = false;
+        for event in event_rx.try_iter() {
+            match event {
+                DriverEvent::TurnStatsUpdated(payload) => stats.push(payload),
+                DriverEvent::TurnFinished { .. } => finished = true,
+                _ => {}
+            }
+        }
+        assert_eq!(stats.len(), 1, "the flush happens once, at the terminal event");
+        assert_eq!(stats[0].output_tokens, 102);
+        // 2_500 from the tool step's payload time, plus a wall-clock
+        // fallback that only has to be non-negative on the final step.
+        assert!(stats[0].stream_ms >= 2_500);
+        assert_eq!(stats[0].model.as_deref(), Some("glmcoding/glm-5.3"));
+        assert_eq!(stats[0].agent.as_deref(), Some("explore"));
+        assert!(finished, "the turn still settles normally");
+    }
+
+    /// A steer, provider retry, or `length` continuation reopens the model
+    /// loop after a terminal `finish`, so the second terminal finish must add
+    /// to — not replace — what the first segment collected. A degraded
+    /// reopen that announces neither model nor agent (a blank agent is not a
+    /// name) keeps the earlier step's values instead of blanking them.
+    #[test]
+    fn a_second_terminal_finish_in_one_turn_keeps_accumulating() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+
+        handle_event(
+            &json!({
+                "type": "session.step.started",
+                "data": {
+                    "sessionID": "ses_1",
+                    "assistantMessageID": "msg_1",
+                    "agent": "plan",
+                    "model": {"id": "glm-5.3", "providerID": "glmcoding"}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.step.ended",
+                "data": {
+                    "sessionID": "ses_1",
+                    "assistantMessageID": "msg_1",
+                    "finish": "stop",
+                    "tokens": {"input": 100, "output": 50, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                    "time": {"created": 1_000_u64, "streamed": 3_000_u64}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        // The reopened segment announces a blank agent and no model at all.
+        handle_event(
+            &json!({
+                "type": "session.step.started",
+                "data": {
+                    "sessionID": "ses_1",
+                    "assistantMessageID": "msg_2",
+                    "agent": ""
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.step.ended",
+                "data": {
+                    "sessionID": "ses_1",
+                    "assistantMessageID": "msg_2",
+                    "finish": "length",
+                    "tokens": {"input": 130, "output": 30, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                    "time": {"created": 5_000_u64, "streamed": 6_500_u64}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        handle_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_1"}}),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+
+        let stats = event_rx
+            .try_iter()
+            .filter_map(|event| match event {
+                DriverEvent::TurnStatsUpdated(payload) => Some(payload),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stats.len(), 1, "both terminal finishes leave as one event");
+        assert_eq!(stats[0].output_tokens, 80, "the segments sum, not replace");
+        assert_eq!(stats[0].stream_ms, 3_500);
+        assert_eq!(
+            stats[0].model.as_deref(),
+            Some("glmcoding/glm-5.3"),
+            "a step without a model keeps the earlier step's"
+        );
+        assert_eq!(
+            stats[0].agent.as_deref(),
+            Some("plan"),
+            "a blank agent is not a name and does not blank the captured one"
+        );
+    }
+
+    #[test]
+    fn turn_stats_flush_falls_back_to_the_terminal_execution_event() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+
+        // A step that ends without a recognized finish — a degraded or
+        // replayed stream — leaves the accumulator armed; the turn's
+        // terminal event must still deliver what was collected.
+        handle_event(
+            &json!({
+                "type": "session.step.started",
+                "data": {
+                    "sessionID": "ses_1",
+                    "agent": "plan",
+                    "model": {"id": "glm-5.3", "providerID": "glmcoding"}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.step.ended",
+                "data": {
+                    "sessionID": "ses_1",
+                    "tokens": {"input": 100, "output": 7, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+        handle_event(
+            &json!({"type": "session.execution.succeeded", "data": {"sessionID": "ses_1"}}),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            true,
+            &mut state,
+        );
+
+        let stats = event_rx
+            .try_iter()
+            .filter_map(|event| match event {
+                DriverEvent::TurnStatsUpdated(stats) => Some(stats),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(stats.len(), 1);
+        assert_eq!(stats[0].output_tokens, 7);
+        assert_eq!(stats[0].agent.as_deref(), Some("plan"));
     }
 
     #[test]

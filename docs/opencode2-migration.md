@@ -176,6 +176,14 @@
    - 标题：`session.renamed`（`data.title`）
    - 其余：`session.inbox.enqueued/delivered`、`session.instructions.updated`、
      `server.connected`、`plugin.added` 等，均非转录内容
+   - **重试（2026-09-14，2.0.3 实测补充）**：重试走 **`session.retry.scheduled`**，
+     payload `{sessionID, assistantMessageID, attempt, at, error:{type,message,status}}`，
+     其中 `at` 是**下一次尝试**的时间戳（ms）。`session.status` 在 2.0.3 上
+     **整个回合一条都不发**（含全部重试）；schema 里它的 retry 变体仍在（带
+     `action` upsell），属旧版本残留，驱动需同时兼容两条路径。每次尝试另发
+     `session.step.failed`（同形 error），重试期间还会插入 `session.synthetic`
+     （"The previous response was interrupted…"）并各自留下一个带
+     `content:[{type:"text"}]` 的 assistant 消息。
 5. **权限（推翻 §4 事件名映射）**：权限请求**不进 SSE**，通过
    `GET /api/permission/request` 轮询获得（响应 `{data:[{id: per_..., sessionID,
    action, resources, save, source}]}`）；回复 `POST /api/session/{id}/permission/

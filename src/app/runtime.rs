@@ -1921,6 +1921,7 @@ impl Fintwind {
             self.expanded_turns.clear();
             self.expanded_changed_files.clear();
             self.expanded_compactions.clear();
+            self.expanded_provider_retries.clear();
             self.transcript_control_focuses.borrow_mut().clear();
             self.splice_transcript_rows_after_visibility_change(&previous_kinds);
             self.show_toast(match cleanup_error {
@@ -2465,6 +2466,7 @@ impl Fintwind {
             self.expanded_turns.clear();
             self.expanded_changed_files.clear();
             self.expanded_compactions.clear();
+            self.expanded_provider_retries.clear();
             self.transcript_control_focuses.borrow_mut().clear();
             self.message_edit = None;
             self.hide_toast();
@@ -2616,6 +2618,8 @@ impl Fintwind {
             runtime.open_reasoning.clear();
             runtime.settled_reasoning.clear();
             runtime.provider_phase = None;
+            // The new submission supersedes any backoff from the previous turn.
+            self.provider_retries.remove(&session_id);
             runtime.pending_permission = None;
             runtime.pending_user_input = None;
             runtime.last_active_at = Instant::now();

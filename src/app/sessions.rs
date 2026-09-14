@@ -381,6 +381,132 @@ impl Fintwind {
             .detach();
     }
 
+    /// Hide a project from the app catalog. The folder on disk and any
+    /// OpenCode-native sessions stay put; the project and its local session
+    /// rows simply stop appearing until the folder is added again.
+    pub(super) fn remove_project(&mut self, project_id: Uuid, cx: &mut Context<Self>) {
+        if !self
+            .state
+            .projects
+            .iter()
+            .any(|project| project.id == project_id)
+        {
+            return;
+        }
+        if let Err(error) = self.store.remove_project(project_id) {
+            self.show_toast(tr!("errors.save_local_state", error = error));
+            cx.notify();
+            return;
+        }
+        self.native_reconcile_generation += 1;
+
+        let session_ids = self
+            .state
+            .sessions
+            .iter()
+            .filter(|session| session.project_id == project_id)
+            .map(|session| session.id)
+            .collect::<Vec<_>>();
+        let was_selected_project = self.state.selected_project == Some(project_id);
+        let selected_session_hidden = self
+            .state
+            .selected_session
+            .is_some_and(|session_id| session_ids.contains(&session_id));
+
+        for session_id in session_ids {
+            self.forget_session_from_app(session_id, cx);
+        }
+
+        self.remove_composer_draft(
+            crate::persistence::ComposerDraftKey::NewSession(project_id),
+            cx,
+        );
+        self.sidebar_expanded_groups.remove(&project_id);
+        self.state
+            .projects
+            .retain(|project| project.id != project_id);
+        if was_selected_project {
+            self.state.selected_project = None;
+        }
+
+        self.invalidate_checkpoint_refs();
+
+        if was_selected_project || selected_session_hidden {
+            self.state.selected_session = None;
+            let next_session = self
+                .state
+                .sessions
+                .iter()
+                .filter(|session| session.has_started())
+                .max_by_key(|session| session.updated_at)
+                .map(|session| session.id)
+                .or_else(|| {
+                    self.state
+                        .sessions
+                        .iter()
+                        .max_by_key(|session| session.updated_at)
+                        .map(|session| session.id)
+                });
+            if let Some(session_id) = next_session {
+                self.select_session(session_id, cx);
+            } else if let Some(next_project) = self
+                .state
+                .projects
+                .iter()
+                .filter(|project| !project.is_projectless())
+                .map(|project| project.id)
+                .next()
+                .or_else(|| self.state.projects.first().map(|project| project.id))
+            {
+                self.select_project(next_project, cx);
+            } else {
+                self.save();
+                cx.notify();
+            }
+        } else {
+            self.save();
+            cx.notify();
+        }
+
+        let sweep = self.store.blob_sweep();
+        cx.background_executor()
+            .spawn(async move { sweep() })
+            .detach();
+    }
+
+    /// Drop one session from the in-memory catalog without deleting OpenCode's
+    /// copy or git checkpoint refs.
+    fn forget_session_from_app(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        let Some(index) = self
+            .state
+            .sessions
+            .iter()
+            .position(|session| session.id == session_id)
+        else {
+            return;
+        };
+        let composer_draft_key =
+            crate::persistence::ComposerDraftKey::for_session(&self.state.sessions[index]);
+        self.response_fork_preparations.remove(&session_id);
+        self.submission_preparations.remove(&session_id);
+        self.reset_session_runtime(session_id);
+        self.runtime_attach_pending.remove(&session_id);
+        self.runtime_attach_misses.remove(&session_id);
+        self.background_work.remove(&session_id);
+        self.provider_retries.remove(&session_id);
+        self.expanded_provider_retries.remove(&session_id);
+        self.remove_right_panel_session_state(session_id);
+        self.remove_composer_draft(composer_draft_key, cx);
+        self.state.sessions.remove(index);
+        if self
+            .pending_session_activation
+            .is_some_and(|pending| pending.session_id == session_id)
+        {
+            self.pending_session_activation = None;
+        }
+        self.session_navigation.remove(session_id);
+    }
+
     pub(super) fn new_session_action(
         &mut self,
         _: &NewSession,

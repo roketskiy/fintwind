@@ -974,6 +974,17 @@ impl StateStore {
             .map_err(to_io_error)
     }
 
+    pub fn remove_project(&self, project_id: Uuid) -> io::Result<()> {
+        self.daemon
+            .client()
+            .notify(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::RemoveProject { project_id },
+            )
+            .map_err(to_io_error)
+    }
+
     pub fn blob_sweep(&self) -> impl FnOnce() + Send + 'static {
         let daemon = self.daemon.clone();
         move || {

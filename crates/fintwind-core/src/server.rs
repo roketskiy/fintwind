@@ -64,6 +64,15 @@ pub struct EventSink {
 }
 
 impl EventSink {
+    #[cfg(test)]
+    pub fn discarded() -> Self {
+        Self {
+            session_id: Uuid::nil(),
+            runtime_id: Uuid::nil(),
+            hub: Arc::new(Hub::default()),
+        }
+    }
+
     pub fn send(&self, event: WireDriverEvent) -> anyhow::Result<()> {
         self.hub.emit(self.session_id, self.runtime_id, event, true);
         Ok(())
@@ -894,6 +903,7 @@ fn task_catalog_action(command: &Command) -> TaskCatalogAction {
             projects: projects.clone(),
         },
         Command::RemoveSession
+        | Command::RemoveProject { .. }
         | Command::ForkSessionFromResponse { .. }
         | Command::RewindSessionToMessage { .. } => TaskCatalogAction::Changed,
         _ => TaskCatalogAction::None,

@@ -32,6 +32,7 @@ pub struct FintwindBackend {
     task_store: StateStore,
     task_state: Mutex<PersistedState>,
     removed_session_ids: Mutex<HashSet<Uuid>>,
+    removed_project_ids: Mutex<HashSet<Uuid>>,
     composer_drafts: ComposerDraftStore,
     attachments: AttachmentStore,
     checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
@@ -59,6 +60,7 @@ impl FintwindBackend {
             task_store,
             task_state: Mutex::new(task_state),
             removed_session_ids: Mutex::new(HashSet::new()),
+            removed_project_ids: Mutex::new(HashSet::new()),
             composer_drafts,
             attachments,
             checkpoint_capture_locks: Mutex::new(HashMap::new()),
@@ -129,6 +131,39 @@ impl FintwindBackend {
             }
         }
         Ok(checkpoint)
+    }
+
+    /// Drop a project and its local session rows from the daemon catalog.
+    /// The project folder and OpenCode-native sessions are left untouched.
+    fn remove_project_from_catalog(&self, project_id: Uuid) -> anyhow::Result<()> {
+        let session_ids = {
+            let mut state = self.task_state.lock();
+            let mut removed_session_ids = self.removed_session_ids.lock();
+            let mut removed_project_ids = self.removed_project_ids.lock();
+            removed_project_ids.insert(project_id);
+            let session_ids = state
+                .sessions
+                .iter()
+                .filter(|session| session.project_id == project_id)
+                .map(|session| session.id)
+                .collect::<Vec<_>>();
+            for session_id in &session_ids {
+                removed_session_ids.insert(*session_id);
+            }
+            drop(removed_session_ids);
+            drop(removed_project_ids);
+            state
+                .sessions
+                .retain(|session| session.project_id != project_id);
+            state.projects.retain(|project| project.id != project_id);
+            self.task_store.save(&mut state)?;
+            session_ids
+        };
+        let mut sessions = self.sessions.lock();
+        for session_id in session_ids {
+            drop(sessions.remove(&session_id));
+        }
+        Ok(())
     }
 }
 
@@ -265,7 +300,11 @@ impl Backend for FintwindBackend {
                     .collect::<HashMap<_, _>>();
                 let mut state = self.task_state.lock();
                 let removed_session_ids = self.removed_session_ids.lock();
+                let removed_project_ids = self.removed_project_ids.lock();
                 for project in projects {
+                    if removed_project_ids.contains(&project.id) {
+                        continue;
+                    }
                     if let Some(existing) = state
                         .projects
                         .iter_mut()
@@ -278,9 +317,13 @@ impl Backend for FintwindBackend {
                 }
                 let sessions = sessions
                     .into_iter()
-                    .filter(|session| !removed_session_ids.contains(&session.id))
+                    .filter(|session| {
+                        !removed_session_ids.contains(&session.id)
+                            && !removed_project_ids.contains(&session.project_id)
+                    })
                     .collect::<Vec<_>>();
                 drop(removed_session_ids);
+                drop(removed_project_ids);
                 let saved_ids = sessions
                     .iter()
                     .map(|session| session.id)
@@ -328,6 +371,10 @@ impl Backend for FintwindBackend {
                     })
                     .collect();
                 Ok(ResponsePayload::TaskStateSaved { sessions })
+            }
+            Command::RemoveProject { project_id } => {
+                self.remove_project_from_catalog(project_id)?;
+                Ok(ResponsePayload::Ack)
             }
             Command::RemoveSession => {
                 {
@@ -1169,6 +1216,7 @@ fn handle_driver_command(
         | Command::LoadTaskState
         | Command::SaveTaskState { .. }
         | Command::RemoveSession
+        | Command::RemoveProject { .. }
         | Command::HydrateSession { .. }
         | Command::SearchSessionMessages { .. }
         | Command::LoadComposerDrafts
@@ -1758,5 +1806,97 @@ mod tests {
             event_from_wire(wire).unwrap(),
             DriverEvent::CompactionUpdated(round) if round == state
         ));
+    }
+
+    fn catalog_backend() -> (FintwindBackend, PathBuf) {
+        let root = std::env::temp_dir().join(format!("fintwind-remove-project-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let backend = FintwindBackend::new(
+            crate::settings::DaemonSettingsStore::open(root.join("settings.json")).unwrap(),
+            StateStore::daemon(root.join("app.db")),
+        )
+        .unwrap();
+        (backend, root)
+    }
+
+    fn catalog_request(command: Command) -> Request {
+        Request {
+            request_id: Uuid::nil(),
+            session_id: Uuid::nil(),
+            runtime_id: Uuid::nil(),
+            command,
+        }
+    }
+
+    #[test]
+    fn removing_a_project_hides_it_from_the_catalog_without_resurrecting_on_save() {
+        let (backend, root) = catalog_backend();
+        let project = Project::from_path(root.join("repo"));
+        let mut session = AgentSession::new(project.id);
+        session.begin_turn("keep the files");
+        backend
+            .handle(
+                catalog_request(Command::SaveTaskState {
+                    projects: vec![project.clone()],
+                    live_session_ids: vec![session.id],
+                    sessions: vec![session.clone()],
+                }),
+                EventSink::discarded(),
+            )
+            .unwrap();
+
+        backend
+            .handle(
+                catalog_request(Command::RemoveProject {
+                    project_id: project.id,
+                }),
+                EventSink::discarded(),
+            )
+            .unwrap();
+
+        let ResponsePayload::TaskState {
+            projects, sessions, ..
+        } = backend
+            .handle(
+                catalog_request(Command::LoadTaskState),
+                EventSink::discarded(),
+            )
+            .unwrap()
+        else {
+            panic!("expected task state");
+        };
+        assert!(projects.is_empty(), "the project leaves the app catalog");
+        assert!(sessions.is_empty(), "its local session rows leave with it");
+
+        backend
+            .handle(
+                catalog_request(Command::SaveTaskState {
+                    projects: vec![project],
+                    live_session_ids: vec![session.id],
+                    sessions: vec![session],
+                }),
+                EventSink::discarded(),
+            )
+            .unwrap();
+        let ResponsePayload::TaskState {
+            projects, sessions, ..
+        } = backend
+            .handle(
+                catalog_request(Command::LoadTaskState),
+                EventSink::discarded(),
+            )
+            .unwrap()
+        else {
+            panic!("expected task state");
+        };
+        assert!(
+            projects.is_empty(),
+            "a stale save cannot restore the project"
+        );
+        assert!(
+            sessions.is_empty(),
+            "a stale save cannot restore its sessions"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

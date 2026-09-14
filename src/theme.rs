@@ -1,6 +1,105 @@
-use gpui::{App, Global, Hsla, Window, WindowAppearance, hsla, rgb};
+use std::sync::atomic::{AtomicU32, Ordering};
 
+use gpui::{App, Global, Hsla, Pixels, Window, WindowAppearance, hsla, px, rgb};
+
+pub use fintwind_client::persistence::{DEFAULT_CODE_TEXT_SCALE, DEFAULT_UI_TEXT_SCALE};
 pub use fintwind_client::theme::ThemePreference;
+
+/// The user's UI text scale, stored as raw f32 bits. Atomics rather than a
+/// GPUI global because line builders deep inside element trees read these on
+/// every frame and threading a context into every closure that sizes text is
+/// not worth it; relaxed ordering is enough for a presentation-only value.
+static UI_TEXT_SCALE: AtomicU32 = AtomicU32::new(0);
+/// The user's code text scale, stored as raw f32 bits.
+static CODE_TEXT_SCALE: AtomicU32 = AtomicU32::new(0);
+
+/// Publish the text-size preferences so every later frame renders with them.
+/// Call again after the user changes the setting; the next paint reflows.
+pub fn set_ui_text_scale(scale: f32) {
+    UI_TEXT_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+}
+
+pub fn ui_text_scale() -> f32 {
+    let bits = UI_TEXT_SCALE.load(Ordering::Relaxed);
+    if bits == 0 {
+        DEFAULT_UI_TEXT_SCALE
+    } else {
+        f32::from_bits(bits)
+    }
+}
+
+pub fn set_code_text_scale(scale: f32) {
+    CODE_TEXT_SCALE.store(scale.to_bits(), Ordering::Relaxed);
+}
+
+pub fn code_text_scale() -> f32 {
+    let bits = CODE_TEXT_SCALE.load(Ordering::Relaxed);
+    if bits == 0 {
+        DEFAULT_CODE_TEXT_SCALE
+    } else {
+        f32::from_bits(bits)
+    }
+}
+
+/// A UI-chrome text measurement that respects the user's text scale. Snap to
+/// a quarter pixel so scaled text neither blurs nor makes layout jitter.
+pub fn ui_px(size: f32) -> Pixels {
+    px((size * ui_text_scale() * 4.0).round() / 4.0)
+}
+
+/// A code text measurement that respects the user's code text scale — code
+/// blocks, editor panes, and the gutters that must line up with them.
+pub fn code_px(size: f32) -> Pixels {
+    px((size * code_text_scale() * 4.0).round() / 4.0)
+}
+
+/// The text-size presets the appearance page offers, shared by the UI and
+/// code settings. Multiplicative so every surface keeps its designed
+/// proportions at any size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TextSizePreset {
+    Small,
+    Default,
+    Large,
+    ExtraLarge,
+}
+
+impl TextSizePreset {
+    pub const ALL: [Self; 4] = [Self::Small, Self::Default, Self::Large, Self::ExtraLarge];
+
+    pub fn scale(self) -> f32 {
+        match self {
+            Self::Small => 0.9,
+            Self::Default => 1.0,
+            Self::Large => 1.1,
+            Self::ExtraLarge => 1.25,
+        }
+    }
+
+    pub fn label(self) -> String {
+        let key = match self {
+            Self::Small => "settings.text_size_small",
+            Self::Default => "settings.text_size_default",
+            Self::Large => "settings.text_size_large",
+            Self::ExtraLarge => "settings.text_size_extra_large",
+        };
+        crate::i18n::translate(key)
+    }
+
+    /// The preset a stored scale was picked from, so the chip can label a
+    /// hand-edited setting with the closest option instead of an odd number.
+    pub fn for_scale(scale: f32) -> Self {
+        Self::ALL
+            .into_iter()
+            .min_by(|a, b| {
+                (a.scale() - scale)
+                    .abs()
+                    .partial_cmp(&(b.scale() - scale).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(Self::Default)
+    }
+}
 
 fn resolves_to_dark(preference: ThemePreference, system_appearance: WindowAppearance) -> bool {
     match preference {

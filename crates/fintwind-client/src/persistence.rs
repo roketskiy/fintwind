@@ -31,6 +31,12 @@ const APP_STATE_VERSION: u32 = 1;
 
 pub const DEFAULT_SIDEBAR_WIDTH: f32 = 252.0;
 pub const DEFAULT_RIGHT_PANEL_WIDTH: f32 = 460.0;
+/// UI text scale at which every chrome text measurement renders at its
+/// designed size. Serde default for the persisted setting.
+pub const DEFAULT_UI_TEXT_SCALE: f32 = 1.0;
+/// Code text scale at which every code measurement renders at its designed
+/// size. Serde default for the persisted setting.
+pub const DEFAULT_CODE_TEXT_SCALE: f32 = 1.0;
 
 fn default_sidebar_visibility() -> bool {
     true
@@ -46,6 +52,14 @@ fn default_provider() -> String {
 
 fn default_sidebar_width() -> f32 {
     DEFAULT_SIDEBAR_WIDTH
+}
+
+fn default_ui_text_scale() -> f32 {
+    DEFAULT_UI_TEXT_SCALE
+}
+
+fn default_code_text_scale() -> f32 {
+    DEFAULT_CODE_TEXT_SCALE
 }
 
 fn default_right_panel_width() -> f32 {
@@ -205,6 +219,8 @@ pub struct AppSettings {
     pub favorite_models: Vec<FavoriteModel>,
     pub theme: ThemePreference,
     pub language: AppLanguage,
+    pub ui_text_scale: f32,
+    pub code_text_scale: f32,
     pub daemon_exposure: DaemonExposureSettings,
 }
 
@@ -214,6 +230,8 @@ impl Default for AppSettings {
             favorite_models: Vec::new(),
             theme: ThemePreference::System,
             language: AppLanguage::default(),
+            ui_text_scale: DEFAULT_UI_TEXT_SCALE,
+            code_text_scale: DEFAULT_CODE_TEXT_SCALE,
             daemon_exposure: DaemonExposureSettings::default(),
         }
     }
@@ -274,6 +292,10 @@ pub struct PersistedState {
     pub theme: ThemePreference,
     #[serde(default)]
     pub language: AppLanguage,
+    #[serde(default = "default_ui_text_scale")]
+    pub ui_text_scale: f32,
+    #[serde(default = "default_code_text_scale")]
+    pub code_text_scale: f32,
     #[serde(default)]
     pub daemon_exposure: DaemonExposureSettings,
     #[serde(default = "default_sidebar_visibility")]
@@ -324,6 +346,8 @@ impl PersistedState {
             favorite_models: Vec::new(),
             theme: ThemePreference::System,
             language: AppLanguage::default(),
+            ui_text_scale: DEFAULT_UI_TEXT_SCALE,
+            code_text_scale: DEFAULT_CODE_TEXT_SCALE,
             daemon_exposure: DaemonExposureSettings::default(),
             sidebar_visible: true,
             right_panel_visible: false,
@@ -424,6 +448,8 @@ impl PersistedState {
             favorite_models: self.favorite_models.clone(),
             theme: self.theme,
             language: self.language,
+            ui_text_scale: self.ui_text_scale,
+            code_text_scale: self.code_text_scale,
             daemon_exposure: self.daemon_exposure.clone(),
         }
     }
@@ -451,6 +477,8 @@ impl PersistedState {
         self.favorite_models = settings.favorite_models;
         self.theme = settings.theme;
         self.language = settings.language;
+        self.ui_text_scale = settings.ui_text_scale;
+        self.code_text_scale = settings.code_text_scale;
         self.daemon_exposure = settings.daemon_exposure;
     }
 

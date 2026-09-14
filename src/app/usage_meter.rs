@@ -5,6 +5,8 @@
 //! OpenCode transport; plan lanes come from OpenCode Go's usage endpoint.
 //! Frames read only snapshots stored on the entity.
 
+use crate::theme::ui_px;
+
 use gpui::{PathBuilder, WeakEntity, relative};
 
 use super::*;
@@ -366,7 +368,7 @@ fn usage_panel(
         .flex()
         .flex_col()
         .gap(px(12.0))
-        .text_size(px(12.0));
+        .text_size(ui_px(12.0));
 
     // The context row always renders; a session with nothing measured yet
     // reads "0" over an empty track, exactly like the CLI's own panel. The
@@ -401,7 +403,7 @@ fn usage_panel(
                 .child(div().flex_1())
                 .child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(ui_px(11.0))
                         .text_color(theme.text_tertiary)
                         .child(SharedString::from(value)),
                 ),
@@ -435,7 +437,7 @@ fn usage_panel(
                 .flex_1()
                 .min_w(px(0.0))
                 .truncate()
-                .text_size(px(11.0))
+                .text_size(ui_px(11.0))
                 .text_color(theme.text_tertiary)
                 .child(SharedString::from(header)),
         );
@@ -465,14 +467,14 @@ fn usage_panel(
                             .children(window.resets_at.map(|resets_at| {
                                 div()
                                     .flex_none()
-                                    .text_size(px(11.0))
+                                    .text_size(ui_px(11.0))
                                     .text_color(theme.text_tertiary)
                                     .child(SharedString::from(reset_label(resets_at, now)))
                             }))
                             .child(
                                 div()
                                     .flex_none()
-                                    .text_size(px(11.5))
+                                    .text_size(ui_px(11.5))
                                     .text_color(theme.text_secondary)
                                     .child(SharedString::from(format!("{:.0}%", window.percent))),
                             ),
@@ -490,13 +492,13 @@ fn usage_panel(
                 .gap(px(4.0))
                 .child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(ui_px(11.0))
                         .text_color(theme.text_tertiary)
                         .child(tr!("usage.plan_limits")),
                 )
                 .child(
                     div()
-                        .text_size(px(11.0))
+                        .text_size(ui_px(11.0))
                         .text_color(theme.text_secondary)
                         .child(SharedString::from(tr!("usage.unavailable", error = error))),
                 ),
@@ -530,13 +532,13 @@ fn usage_totals_row(theme: &Theme, usage: ContextUsage) -> Option<Div> {
             .gap(px(5.0))
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(ui_px(11.0))
                     .text_color(theme.text_tertiary)
                     .child(label),
             )
             .child(
                 div()
-                    .text_size(px(11.0))
+                    .text_size(ui_px(11.0))
                     .text_color(theme.text_secondary)
                     .child(SharedString::from(value.unwrap_or_else(|| "—".into()))),
             )
@@ -575,7 +577,7 @@ fn compaction_row(
                 .child(
                     motion::pulse(Duration::from_millis(1400), move |phase| {
                         div()
-                            .text_size(px(11.0))
+                            .text_size(ui_px(11.0))
                             .text_color(theme.text_tertiary)
                             .child(SharedString::from(label.clone()))
                             .opacity(pulsating_between(0.5, 1.0)(phase))
@@ -598,7 +600,7 @@ fn compaction_row(
                         .flex_1()
                         .min_w(px(0.0))
                         .truncate()
-                        .text_size(px(11.0))
+                        .text_size(ui_px(11.0))
                         .text_color(theme.warning)
                         .when(!detail.is_empty(), |element| {
                             element.tooltip(Tooltip::text(detail.to_owned()))
@@ -614,7 +616,7 @@ fn compaction_row(
                         .rounded(px(5.0))
                         .flex()
                         .items_center()
-                        .text_size(px(11.0))
+                        .text_size(ui_px(11.0))
                         .text_color(theme.text)
                         .cursor_default()
                         .hover(|element| element.bg(theme.overlay))

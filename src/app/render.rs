@@ -1,3 +1,5 @@
+use crate::theme::ui_px;
+
 use super::*;
 
 fn should_render_empty_state(session: Option<&AgentSession>) -> bool {
@@ -441,7 +443,7 @@ impl Fintwind {
         let text_ctx = MarkdownCtx::new(
             format!("toast-{generation}"),
             &palette,
-            MarkdownMetrics::COMPACT,
+            MarkdownMetrics::compact(),
             self.toast_selection.clone(),
         );
         let message = md::render::plain_text(
@@ -504,8 +506,8 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .gap(px(8.0))
-                    .text_size(px(11.5))
-                    .line_height(px(16.0))
+                    .text_size(ui_px(11.5))
+                    .line_height(ui_px(16.0))
                     .text_color(theme.text)
                     .on_hover(cx.listener(|this, hovering: &bool, _, cx| {
                         this.set_toast_hovered(*hovering, cx);

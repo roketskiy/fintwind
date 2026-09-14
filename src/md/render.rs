@@ -97,6 +97,39 @@ impl Metrics {
         code_line_height: 16.0,
         block_gap: 6.0,
     };
+
+    /// The assistant-response scale adjusted for the user's text-size
+    /// preferences. Every consumer must go through these constructors rather
+    /// than naming the consts, so measurement and paint agree and the style
+    /// caches (keyed by value) invalidate when a setting changes.
+    pub fn body() -> Self {
+        Self::BODY.adjusted()
+    }
+
+    /// [`Self::USER_MESSAGE`] adjusted for the user's text-size preferences.
+    pub fn user_message() -> Self {
+        Self::USER_MESSAGE.adjusted()
+    }
+
+    /// [`Self::COMPACT`] adjusted for the user's text-size preferences.
+    pub fn compact() -> Self {
+        Self::COMPACT.adjusted()
+    }
+
+    /// Body text follows the UI text scale, code follows the code text scale;
+    /// both multiplicative so each preset keeps its designed proportions and
+    /// the default settings reproduce these consts exactly.
+    fn adjusted(self) -> Self {
+        let ui_scale = crate::theme::ui_text_scale();
+        let code_scale = crate::theme::code_text_scale();
+        Self {
+            text_size: self.text_size * ui_scale,
+            line_height: self.line_height * ui_scale,
+            code_text_size: self.code_text_size * code_scale,
+            code_line_height: self.code_line_height * code_scale,
+            block_gap: self.block_gap * ui_scale,
+        }
+    }
 }
 
 pub const SANS_FAMILY: &str = ".SystemUIFont";
@@ -1548,8 +1581,8 @@ fn render_code_fragment(
                             .min_w_0()
                             .flex_1()
                             .truncate()
-                            .text_size(px(10.0))
-                            .line_height(px(14.0))
+                            .text_size(crate::theme::code_px(10.0))
+                            .line_height(crate::theme::code_px(14.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(ctx.palette.ghost)
                             .when_some(label, |element, label| {

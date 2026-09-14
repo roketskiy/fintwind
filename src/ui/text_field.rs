@@ -1,3 +1,5 @@
+use crate::theme::ui_px;
+
 use gpui::{
     AnyElement, App, Div, ElementId, InteractiveElement, Interactivity, ParentElement, RenderOnce,
     Stateful, StyleRefinement, Styled, Window, div, prelude::*, px,
@@ -76,8 +78,8 @@ impl RenderOnce for TextField {
             .flex()
             .items_center()
             .gap(px(7.0))
-            .text_size(px(12.5))
-            .line_height(px(17.0))
+            .text_size(ui_px(12.5))
+            .line_height(ui_px(17.0))
             .when_some(self.icon, |element, (path, size)| {
                 element.child(icon(path, size, theme.text_tertiary))
             })

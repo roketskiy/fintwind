@@ -3,6 +3,8 @@
 //! Git inspection, mutation, and one-shot agent CLI generation all run on the
 //! background executor. UI surfaces only paint the cached state below.
 
+use crate::theme::ui_px;
+
 use gpui::{KeyBinding, actions};
 
 use super::*;
@@ -578,7 +580,7 @@ impl Fintwind {
                     div()
                         .min_w_0()
                         .flex_1()
-                        .text_size(px(14.0))
+                        .text_size(ui_px(14.0))
                         .text_color(if include_enabled {
                             theme.text
                         } else {
@@ -592,7 +594,7 @@ impl Fintwind {
                         .flex()
                         .items_center()
                         .gap(px(6.0))
-                        .text_size(px(13.5))
+                        .text_size(ui_px(13.5))
                         .font_weight(FontWeight::MEDIUM)
                         .child(
                             div()
@@ -713,7 +715,7 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .gap(px(9.0))
-                    .text_size(px(14.0))
+                    .text_size(ui_px(14.0))
                     .text_color(theme.text)
                     .child(icon("icons/git-branch.svg", 15.0, theme.text))
                     .child(div().min_w_0().truncate().child(branch)),
@@ -723,8 +725,8 @@ impl Fintwind {
                     .h(px(112.0))
                     .px(px(16.0))
                     .py(px(10.0))
-                    .text_size(px(14.0))
-                    .line_height(px(21.0))
+                    .text_size(ui_px(14.0))
+                    .line_height(ui_px(21.0))
                     .text_color(theme.text)
                     .child(message),
             )
@@ -734,8 +736,8 @@ impl Fintwind {
                     div()
                         .px(px(20.0))
                         .pb(px(10.0))
-                        .text_size(px(11.5))
-                        .line_height(px(16.0))
+                        .text_size(ui_px(11.5))
+                        .line_height(ui_px(16.0))
                         .text_color(theme.danger)
                         .child(error),
                 )
@@ -817,7 +819,7 @@ fn render_commit_action_row(
         .items_center()
         .gap(px(10.0))
         .cursor_default()
-        .text_size(px(14.0))
+        .text_size(ui_px(14.0))
         .text_color(foreground)
         .focus_visible(|style| style.border_1().border_color(theme.accent))
         .when(enabled, |row| {
@@ -838,7 +840,7 @@ fn render_commit_action_row(
                     .items_center()
                     .justify_center()
                     .bg(theme.overlay_strong)
-                    .text_size(px(11.5))
+                    .text_size(ui_px(11.5))
                     .text_color(if enabled {
                         theme.text_secondary
                     } else {

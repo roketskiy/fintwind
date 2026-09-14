@@ -6,6 +6,8 @@
 //! typing in the find input, editing the file, switching files — never per
 //! frame.
 
+use crate::theme::ui_px;
+
 use regex::Regex;
 
 use super::*;
@@ -846,7 +848,7 @@ impl Fintwind {
                 div()
                     .min_w(px(56.0))
                     .flex_none()
-                    .text_size(px(10.5))
+                    .text_size(ui_px(10.5))
                     .whitespace_nowrap()
                     .text_color(if count_is_bad {
                         theme.danger
@@ -1024,8 +1026,8 @@ impl Fintwind {
             .flex()
             .items_center()
             .gap(px(2.0))
-            .text_size(px(11.5))
-            .line_height(px(16.0))
+            .text_size(ui_px(11.5))
+            .line_height(ui_px(16.0))
             .child(div().min_w_0().flex_1().child(input.clone()))
     }
 }

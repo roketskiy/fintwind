@@ -23,6 +23,8 @@
 //!   focusing any earlier silently does nothing — and then no key reaches the
 //!   menu at all.
 
+use crate::theme::ui_px;
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -951,8 +953,8 @@ impl RenderOnce for MenuCard {
                     .px(px(10.0))
                     .pt(px(6.0))
                     .pb(px(2.0))
-                    .text_size(px(10.5))
-                    .line_height(px(15.0))
+                    .text_size(ui_px(10.5))
+                    .line_height(ui_px(15.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_tertiary)
                     .child(label)
@@ -1031,8 +1033,8 @@ fn row(
         .flex()
         .items_center()
         .gap(px(8.0))
-        .text_size(px(12.5))
-        .line_height(px(16.0))
+        .text_size(ui_px(12.5))
+        .line_height(ui_px(16.0))
         .when(highlighted, |element| element.bg(highlight))
         .when_some(on_click, |element, on_click| {
             element

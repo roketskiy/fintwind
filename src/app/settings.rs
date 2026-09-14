@@ -1,3 +1,5 @@
+use crate::theme::ui_px;
+
 use gpui::actions;
 
 use super::composer::next_picker_highlight;
@@ -162,7 +164,7 @@ impl Fintwind {
                     .items_center()
                     .gap(px(10.0))
                     .cursor_default()
-                    .text_size(px(13.5))
+                    .text_size(ui_px(13.5))
                     .text_color(if selected {
                         theme.text
                     } else {
@@ -224,7 +226,7 @@ impl Fintwind {
                         .items_center()
                         .gap(px(9.0))
                         .cursor_default()
-                        .text_size(px(13.5))
+                        .text_size(ui_px(13.5))
                         .text_color(theme.text_secondary)
                         .hover(|element| element.bg(theme.overlay))
                         .active(|element| element.bg(theme.overlay_strong))
@@ -369,7 +371,7 @@ impl Fintwind {
                 div()
                     .pt(px(2.0))
                     .flex_none()
-                    .text_size(px(18.0))
+                    .text_size(ui_px(18.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(match page {
@@ -444,7 +446,7 @@ impl Fintwind {
                     .bg(theme.raised)
                     .child(
                         div()
-                            .text_size(px(13.5))
+                            .text_size(ui_px(13.5))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text)
                             .child(tr!("settings.local_by_default")),
@@ -452,8 +454,8 @@ impl Fintwind {
                     .child(
                         div()
                             .mt(px(5.0))
-                            .text_size(px(12.5))
-                            .line_height(px(18.0))
+                            .text_size(ui_px(12.5))
+                            .line_height(ui_px(18.0))
                             .text_color(theme.text_secondary)
                             .child(tr!("settings.local_by_default_description")),
                     ),
@@ -473,7 +475,7 @@ impl Fintwind {
                 .bg(theme.raised)
                 .child(
                     div()
-                        .text_size(px(13.5))
+                        .text_size(ui_px(13.5))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .child(tr!("daemon.external_title")),
@@ -481,8 +483,8 @@ impl Fintwind {
                 .child(
                     div()
                         .mt(px(5.0))
-                        .text_size(px(12.5))
-                        .line_height(px(18.0))
+                        .text_size(ui_px(12.5))
+                        .line_height(ui_px(18.0))
                         .text_color(theme.text_secondary)
                         .child(tr!("daemon.external_description")),
                 )
@@ -518,7 +520,7 @@ impl Fintwind {
             .items_center()
             .justify_center()
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .text_color(theme.text_secondary)
             .opacity(if apply_disabled { 0.55 } else { 1.0 })
             .focus_visible(|style| style.border_color(theme.accent))
@@ -559,7 +561,7 @@ impl Fintwind {
             .items_center()
             .gap(px(6.0))
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .text_color(theme.text_secondary)
             .focus_visible(|style| style.border_color(theme.accent))
             .hover(|element| element.bg(theme.overlay))
@@ -651,7 +653,7 @@ impl Fintwind {
             .items_center()
             .gap(px(6.0))
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .text_color(theme.text_secondary)
             .focus_visible(|style| style.border_color(theme.accent))
             .hover(|element| element.bg(theme.overlay))
@@ -695,7 +697,7 @@ impl Fintwind {
             .flex()
             .items_center()
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .text_color(theme.text_secondary)
             .opacity(if pending { 0.55 } else { 1.0 })
             .focus_visible(|style| style.border_color(theme.accent))
@@ -744,7 +746,7 @@ impl Fintwind {
                                     .gap(px(7.0))
                                     .child(
                                         div()
-                                            .text_size(px(13.5))
+                                            .text_size(ui_px(13.5))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(theme.text)
                                             .child(tr!("daemon.expose_title")),
@@ -754,7 +756,7 @@ impl Fintwind {
                                             .px(px(6.0))
                                             .py(px(2.0))
                                             .rounded_full()
-                                            .text_size(px(9.5))
+                                            .text_size(ui_px(9.5))
                                             .text_color(if enabled {
                                                 theme.success
                                             } else {
@@ -775,8 +777,8 @@ impl Fintwind {
                                     .mt(px(5.0))
                                     .min_w_0()
                                     .whitespace_normal()
-                                    .text_size(px(12.0))
-                                    .line_height(px(18.0))
+                                    .text_size(ui_px(12.0))
+                                    .line_height(ui_px(18.0))
                                     .text_color(theme.text_secondary)
                                     .child(tr!("daemon.expose_description")),
                             ),
@@ -792,7 +794,7 @@ impl Fintwind {
                         .bg(theme.raised)
                         .child(
                             div()
-                                .text_size(px(13.5))
+                                .text_size(ui_px(13.5))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text)
                                 .child(tr!("daemon.connection_title")),
@@ -802,8 +804,8 @@ impl Fintwind {
                                 .mt(px(4.0))
                                 .min_w_0()
                                 .whitespace_normal()
-                                .text_size(px(11.5))
-                                .line_height(px(16.0))
+                                .text_size(ui_px(11.5))
+                                .line_height(ui_px(16.0))
                                 .text_color(theme.text_secondary)
                                 .child(tr!("daemon.connection_description")),
                         )
@@ -819,7 +821,7 @@ impl Fintwind {
                                         .min_w_0()
                                         .child(
                                             div()
-                                                .text_size(px(11.0))
+                                                .text_size(ui_px(11.0))
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .text_color(theme.text)
                                                 .child(tr!("daemon.port")),
@@ -828,8 +830,8 @@ impl Fintwind {
                                             div()
                                                 .mt(px(3.0))
                                                 .whitespace_normal()
-                                                .text_size(px(10.0))
-                                                .line_height(px(14.0))
+                                                .text_size(ui_px(10.0))
+                                                .line_height(ui_px(14.0))
                                                 .text_color(theme.text_tertiary)
                                                 .child(tr!("daemon.port_description")),
                                         ),
@@ -856,7 +858,7 @@ impl Fintwind {
                                         .min_w_0()
                                         .child(
                                             div()
-                                                .text_size(px(11.0))
+                                                .text_size(ui_px(11.0))
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .text_color(theme.text)
                                                 .child(tr!("daemon.allowed_origins")),
@@ -865,8 +867,8 @@ impl Fintwind {
                                             div()
                                                 .mt(px(3.0))
                                                 .whitespace_normal()
-                                                .text_size(px(10.0))
-                                                .line_height(px(14.0))
+                                                .text_size(ui_px(10.0))
+                                                .line_height(ui_px(14.0))
                                                 .text_color(theme.text_tertiary)
                                                 .child(tr!("daemon.allowed_origins_description")),
                                         ),
@@ -894,7 +896,7 @@ impl Fintwind {
                         .bg(theme.raised)
                         .child(
                             div()
-                                .text_size(px(13.5))
+                                .text_size(ui_px(13.5))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text)
                                 .child(tr!("daemon.credentials_title")),
@@ -904,8 +906,8 @@ impl Fintwind {
                                 .mt(px(4.0))
                                 .min_w_0()
                                 .whitespace_normal()
-                                .text_size(px(11.5))
-                                .line_height(px(16.0))
+                                .text_size(ui_px(11.5))
+                                .line_height(ui_px(16.0))
                                 .text_color(theme.text_secondary)
                                 .child(tr!("daemon.credentials_description")),
                         )
@@ -920,7 +922,7 @@ impl Fintwind {
                                     div()
                                         .w(px(80.0))
                                         .flex_none()
-                                        .text_size(px(10.5))
+                                        .text_size(ui_px(10.5))
                                         .text_color(theme.text_tertiary)
                                         .child(tr!("daemon.websocket_url")),
                                 )
@@ -930,7 +932,7 @@ impl Fintwind {
                                         .min_w_0()
                                         .truncate()
                                         .font_family(".SystemUIFontMonospaced")
-                                        .text_size(px(11.0))
+                                        .text_size(ui_px(11.0))
                                         .text_color(theme.text)
                                         .child(SharedString::from(format!(
                                             "ws://{}:{port}",
@@ -951,7 +953,7 @@ impl Fintwind {
                                     div()
                                         .w(px(80.0))
                                         .flex_none()
-                                        .text_size(px(10.5))
+                                        .text_size(ui_px(10.5))
                                         .text_color(theme.text_tertiary)
                                         .child(tr!("daemon.token")),
                                 )
@@ -961,7 +963,7 @@ impl Fintwind {
                                         .min_w_0()
                                         .truncate()
                                         .font_family(".SystemUIFontMonospaced")
-                                        .text_size(px(11.0))
+                                        .text_size(ui_px(11.0))
                                         .text_color(theme.text)
                                         .child(SharedString::from(if token_revealed {
                                             token.clone()
@@ -990,8 +992,8 @@ impl Fintwind {
                                         .flex_1()
                                         .min_w_0()
                                         .whitespace_normal()
-                                        .text_size(px(10.5))
-                                        .line_height(px(15.0))
+                                        .text_size(ui_px(10.5))
+                                        .line_height(ui_px(15.0))
                                         .text_color(theme.text_secondary)
                                         .child(tr!("daemon.security_warning")),
                                 ),
@@ -1204,6 +1206,64 @@ impl Fintwind {
             },
         );
 
+        let selected_ui_text_scale = self.state.ui_text_scale;
+        let weak = cx.entity().downgrade();
+        let ui_text_size_handle = self.menu_handle("ui-text-size-selector", cx);
+        let ui_text_size_selector = dropdown_menu(
+            MenuChip::new("ui-text-size-selector")
+                .label(TextSizePreset::for_scale(selected_ui_text_scale).label())
+                .outlined()
+                .selected(ui_text_size_handle.is_open())
+                .w(px(116.0))
+                .justify_between(),
+            "ui-text-size-selector-menu",
+            &ui_text_size_handle,
+            MenuAlign::BelowRight,
+            move |_| {
+                TextSizePreset::ALL
+                    .into_iter()
+                    .map(|preset| {
+                        let weak = weak.clone();
+                        MenuItem::new(preset.label(), move |window, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.set_ui_text_scale(preset.scale(), window, cx);
+                            });
+                        })
+                        .selected(preset.scale() == selected_ui_text_scale)
+                    })
+                    .collect()
+            },
+        );
+
+        let selected_code_text_scale = self.state.code_text_scale;
+        let weak = cx.entity().downgrade();
+        let code_text_size_handle = self.menu_handle("code-text-size-selector", cx);
+        let code_text_size_selector = dropdown_menu(
+            MenuChip::new("code-text-size-selector")
+                .label(TextSizePreset::for_scale(selected_code_text_scale).label())
+                .outlined()
+                .selected(code_text_size_handle.is_open())
+                .w(px(116.0))
+                .justify_between(),
+            "code-text-size-selector-menu",
+            &code_text_size_handle,
+            MenuAlign::BelowRight,
+            move |_| {
+                TextSizePreset::ALL
+                    .into_iter()
+                    .map(|preset| {
+                        let weak = weak.clone();
+                        MenuItem::new(preset.label(), move |window, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.set_code_text_scale(preset.scale(), window, cx);
+                            });
+                        })
+                        .selected(preset.scale() == selected_code_text_scale)
+                    })
+                    .collect()
+            },
+        );
+
         div()
             .mt(px(15.0))
             .w_full()
@@ -1227,7 +1287,7 @@ impl Fintwind {
                             .min_w_0()
                             .child(
                                 div()
-                                    .text_size(px(13.5))
+                                    .text_size(ui_px(13.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
                                     .child(tr!("settings.theme")),
@@ -1235,8 +1295,8 @@ impl Fintwind {
                             .child(
                                 div()
                                     .mt(px(5.0))
-                                    .text_size(px(12.5))
-                                    .line_height(px(18.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
                                     .text_color(theme.text_secondary)
                                     .child(tr!("settings.theme_description")),
                             ),
@@ -1259,7 +1319,7 @@ impl Fintwind {
                             .min_w_0()
                             .child(
                                 div()
-                                    .text_size(px(13.5))
+                                    .text_size(ui_px(13.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
                                     .child(tr!("language.title")),
@@ -1267,15 +1327,105 @@ impl Fintwind {
                             .child(
                                 div()
                                     .mt(px(5.0))
-                                    .text_size(px(12.5))
-                                    .line_height(px(18.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
                                     .text_color(theme.text_secondary)
                                     .child(tr!("language.description")),
                             ),
                     )
                     .child(language_selector),
             )
+            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(
+                div()
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.ui_text_size")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.ui_text_size_description")),
+                            ),
+                    )
+                    .child(ui_text_size_selector),
+            )
+            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(
+                div()
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.code_text_size")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.code_text_size_description")),
+                            ),
+                    )
+                    .child(code_text_size_selector),
+            )
             .into_any_element()
+    }
+
+    /// Switch the whole chrome to `scale`. A window refresh re-renders every
+    /// view — including child entities a plain notify would leave with their
+    /// cached elements — so no surface keeps a stale text size.
+    fn set_ui_text_scale(&mut self, scale: f32, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.ui_text_scale == scale {
+            return;
+        }
+        self.state.ui_text_scale = scale;
+        crate::theme::set_ui_text_scale(scale);
+        self.save();
+        window.refresh();
+        cx.notify();
+    }
+
+    /// Switch every code surface to `scale`. See [`Self::set_ui_text_scale`].
+    fn set_code_text_scale(&mut self, scale: f32, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.code_text_scale == scale {
+            return;
+        }
+        self.state.code_text_scale = scale;
+        crate::theme::set_code_text_scale(scale);
+        self.save();
+        window.refresh();
+        cx.notify();
     }
 
     fn render_settings_drag_region(

@@ -9,89 +9,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com). Add a new
 `## [<version>]` section at the top for each release, matching the version in
 `Cargo.toml`.
 
+Fintwind versions are independent of [waku](https://github.com/egoist/waku).
+Do not copy upstream version numbers into this file.
+
 Write release notes for the final product users receive, not the development
 history. When a feature is still unreleased, fold its fixes and refinements into
 the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
-## [0.1.1]
-
-- Drive the `opencode` CLI instead of `opencode2` after the upstream merge
-- Drop macOS and Linux distribution; Fintwind is Windows-only
-
-## [0.1.4]
-
-- Fix text selection in diff view
-
-## [0.1.3]
-
-- Pin Codex and Claude commit message generation to cheap models: gpt-5.6-luna and claude-4.5-haiku
-- Animate sidebars
-- Render provider file edits as inline diffs in the transcript
-- Fix claude task title generation
-
-## [0.1.2]
-
-- Fix regression: user bubble should fit its content width
+- Show turn-footer token stats and provider retry cards
+- Reconnect the daemon in place after a disconnect instead of failing permanently
+- Keep late-arriving reasoning from splitting into an orphan thinking block
+- Improve compaction UX and window chrome
 
 ## [0.1.1]
 
-- Give nested Markdown the full message width
-- Cap composer height and scroll overflow with an overlay scrollbar
-- Keep drag-selecting text past the input bounds
-- Fix char boundary panic when sliding the live reasoning window
+- Drive the `opencode` CLI instead of `opencode2` after OpenCode merged the two
 
 ## [0.1.0]
 
-- Add standalone Fintwind daemon and browser client
-- Add Linux support (X11 and Wayland, you need to build from source for now)
-- Answer agent questions directly in the composer
-- Redesign queued follow-ups as composer cards with per-message steering
-- Add DeepSeek agent preset selection (Standard, Code, Minimal, and Creator)
-- Add Claude context window and ultracode effort options
-- Add /fast command to toggle fast mode for Codex
-- Show the latest activity in live transcript headers
-- Add soft wrapping and keyboard copy feedback
-- Add terminal overlay scrollbar and measure cell width from the font
-- Restore window position, size, and display across launches
-- Contain wheel scrolling in activity and command output viewports
-- Smooth streaming markdown and reduce CPU usage while streaming
+First Fintwind release, forked from [waku](https://github.com/egoist/waku) 0.1.7.
+Versions from this point are Fintwind's own; they are not waku releases.
 
-## [0.0.13]
-
-- Add DeepSeek Harness provider
-- Render user message as Markdown and linkify bare URLs
-- Share one resident OpenCode serve per workspace across sessions
-
-## [0.0.12]
-
-- Inherit the login-shell environment for provider commands
-- Fix model traits across provider switches
-- Keep branch change counts current and include untracked files
-- Normalize SIGCHLD for provider children
-- Fix Grok model discovery
-
-## [0.0.11]
-
-- Fix provider detection for CLIs installed through shell PATH managers such as
-  nvm and fnm
-- Show models registered by Pi extensions
-- Fix the model picker closing when entering a space in search
-- Fix duplicate transcript history and lost interaction mode when resuming ACP
-  sessions
-
-## [0.0.10]
-
-- Fix crash in due to IME composition
-- Fix typo
-
-## [0.0.9]
-
-- Add OpenCode Go support in usage popover
-- Fix app icon
-- Fix Cursor model detection
-
-## [0.0.8]
-
-- Initial release
+- Windows-only native desktop for OpenCode (Rust + GPUI)
+- Drive a single OpenCode backend; remove other agent providers
+- Group sessions by project with a card-style sidebar and per-group new session
+- Model picker with provider filter, company brand icons, input modality, and
+  thinking-effort variants
+- Virtualize reasoning, show tool calls step by step, and render LaTeX in the
+  transcript
+- MCP management UI
+- Close the window to quit and stop the OpenCode backend on exit
+- Title-bar action to open the project in File Explorer

@@ -5,6 +5,11 @@ portable zip) from the
 [GitHub Releases](https://github.com/roketskiy/fintwind/releases) page. The app
 does not update itself.
 
+Fintwind versions live in the root `Cargo.toml` and are **independent of
+waku**. Development happens on `main`. Never reuse a published `v*` tag, and
+do not bump `Cargo.toml` until you are cutting the release — unreleased work
+stays under `## [unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
+
 Cutting a release is: push a `v*` tag (or run the **Release** workflow). CI
 builds both Windows architectures and opens a draft GitHub release. Review the
 draft, then publish it.
@@ -31,10 +36,15 @@ packages unsigned binaries and SmartScreen will warn.
 
 ## Cutting a release
 
-1. Bump `version` in `Cargo.toml` and add a `## [<version>]` section to
-   [`CHANGELOG.md`](CHANGELOG.md).
-2. Push a `v<version>` tag, or run **Release** from Actions.
-3. Review the draft GitHub release, then publish it.
+1. On `main`, bump `version` in the root `Cargo.toml` (next unused Fintwind
+   number — currently the line is `0.1.x`).
+2. Rename `## [unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) to
+   `## [<version>]` and add a fresh empty `## [unreleased]` above it.
+3. Commit, for example `chore: release <version>`.
+4. Tag that commit `v<version>` (`git tag v<version>`) and push the branch
+   plus the tag (`git push origin main --tags`), or run **Release** from
+   Actions without a tag (it reads `Cargo.toml`).
+5. Review the draft GitHub release, then publish it.
 
 ### What CI produces
 

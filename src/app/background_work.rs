@@ -401,6 +401,7 @@ impl BackgroundWorkRegistry {
                         started_at: unix_time(),
                         completed_at: None,
                         checkpoint: None,
+                        stats: None,
                     });
                     // The prompt opens the new turn unless content already
                     // arrived before Started — a restored child whose deltas
@@ -1807,6 +1808,7 @@ impl Fintwind {
                     assistant_footer_copy_content: None,
                     assistant_footer_time: None,
                     assistant_before_footer: None,
+                    assistant_turn_stats: None,
                     copied: false,
                     assistant_message_action: None,
                     user_message_action: None,

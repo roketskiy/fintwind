@@ -358,6 +358,9 @@ impl Fintwind {
             DriverEvent::Connected { provider_cursor } => {
                 runtime.last_driver_error = None;
                 runtime.last_background_refresh_at = Instant::now();
+                // A fresh attach knows nothing about a backoff that predated it;
+                // the next status report, if any, says whether one is running.
+                self.provider_retries.remove(&session_id);
                 runtime.driver.refresh_background_work();
                 if let Some(session) = self.state.session_mut(session_id) {
                     session.provider_cursor = provider_cursor;
@@ -402,6 +405,7 @@ impl Fintwind {
             DriverEvent::TurnStarted => {
                 runtime.last_driver_error = None;
                 runtime.provider_phase = None;
+                self.provider_retries.remove(&session_id);
                 if let Some(session) = self.state.session_mut(session_id)
                     && session.active_turn_id().is_some()
                 {
@@ -410,6 +414,9 @@ impl Fintwind {
                 }
             }
             DriverEvent::ProviderBusy => {
+                // A call is in flight again, so the backoff it replaced is over
+                // whether or not the provider retracted it.
+                self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = Some(ProviderPhase::Responding {
                         since: unix_time(),
@@ -422,34 +429,49 @@ impl Fintwind {
                 action,
                 next_at_ms,
             } => {
-                if self.accepts_turn_output(session_id) {
-                    runtime.provider_phase = Some(ProviderPhase::Retrying {
-                        attempt,
-                        message,
-                        action,
-                        next_at_ms,
-                    });
+                // Deliberately not gated on `accepts_turn_output`: a retry is
+                // provider state, not turn output. It keeps arriving after the
+                // turn settled or failed, and dropping those reports is what
+                // left the reader watching a frozen transcript while the
+                // provider was visibly retrying.
+                runtime.provider_phase = None;
+                let retry = ProviderRetry {
+                    attempt,
+                    message,
+                    action,
+                    next_at_ms,
+                    received_at_ms: unix_time_millis(),
+                };
+                // One expiry sleeper per backoff episode: repeated attempt
+                // reports for the same episode reuse the first one.
+                let new_episode = self.provider_retries.insert(session_id, retry).is_none();
+                if new_episode {
+                    self.schedule_provider_retry_expiry(session_id, cx);
                 }
             }
             DriverEvent::TextDelta(delta) => {
+                self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
                     self.append_text_delta(session_id, runtime, delta);
                 }
             }
             DriverEvent::ReasoningStarted { part } => {
+                self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
                     self.open_reasoning_fragment(session_id, runtime, part);
                 }
             }
             DriverEvent::ReasoningDelta { part, delta } => {
+                self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
                     self.append_reasoning_delta(session_id, runtime, part, delta);
                 }
             }
             DriverEvent::ReasoningEnded { part, text } => {
+                self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
                     self.complete_reasoning_fragment(session_id, runtime, part, text);
@@ -462,6 +484,7 @@ impl Fintwind {
                 detail,
                 complete,
             } => {
+                self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     let refresh_branch = should_refresh_branch_after_activity(kind, complete)
                         && self.state.selected_session == Some(session_id);
@@ -478,6 +501,7 @@ impl Fintwind {
                 }
             }
             DriverEvent::RichActivity(item) => {
+                self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     let refresh_branch =
                         should_refresh_branch_after_activity(item.kind, item.complete)
@@ -608,6 +632,24 @@ impl Fintwind {
                     // the steer landed. Keep the message visible and
                     // user-controlled instead of auto-running it.
                     self.enqueue_follow_up_submission(session_id, submission, cx);
+                }
+            }
+            DriverEvent::TurnStatsUpdated(stats) => {
+                // Turn meta, not turn output: it must survive the drain of a
+                // turn that is settling, so it bypasses `accepts_turn_output`
+                // the way usage does. It lands only while the turn is still
+                // the active one — the driver emits it before the turn's
+                // terminal event, and a turn that already settled keeps the
+                // stats stored with it, so re-delivery changes nothing.
+                if let Some(session) = self.state.session_mut(session_id)
+                    && let Some(turn) = session
+                        .turns
+                        .last_mut()
+                        .filter(|turn| turn.status == TurnStatus::Running)
+                    && turn.stats.as_ref() != Some(&stats)
+                {
+                    turn.stats = Some(stats);
+                    self.state.mark_session_dirty(session_id);
                 }
             }
             DriverEvent::PlanUsageUpdated(usage) => {
@@ -759,7 +801,7 @@ impl Fintwind {
                 self.complete_turn_blocks(session_id);
                 runtime.stream_phase = None;
                 runtime.open_reasoning.clear();
-            runtime.settled_reasoning.clear();
+                runtime.settled_reasoning.clear();
                 runtime.provider_phase = None;
                 let needs_fallback = !self.turn_has_assistant_message(session_id);
                 if let Some(session) = self.state.session_mut(session_id) {
@@ -817,6 +859,11 @@ impl Fintwind {
                 }
             }
             DriverEvent::Error(error) => {
+                // A fatal provider error retires the backoff: showing "Retrying"
+                // beside the error that ended the attempt would contradict it.
+                // A genuinely continuing backoff re-announces itself.
+                let previous_kinds = self.snapshot_selected_transcript_rows(session_id);
+                self.provider_retries.remove(&session_id);
                 let error = compact_driver_error(&error);
                 runtime.last_driver_error = Some(error.clone());
                 if self.state.selected_session == Some(session_id) {
@@ -847,6 +894,9 @@ impl Fintwind {
                         session.push_message(MessageRole::Assistant, error);
                     }
                 }
+                if let Some(previous_kinds) = previous_kinds.as_deref() {
+                    self.splice_active_transcript_rows_after_visibility_change(previous_kinds);
+                }
             }
             DriverEvent::ProcessExited => {
                 self.mark_background_work_lost(session_id);
@@ -855,8 +905,10 @@ impl Fintwind {
                 self.complete_turn_blocks(session_id);
                 runtime.stream_phase = None;
                 runtime.open_reasoning.clear();
-            runtime.settled_reasoning.clear();
+                runtime.settled_reasoning.clear();
                 runtime.provider_phase = None;
+                // A dead provider process is not retrying.
+                self.provider_retries.remove(&session_id);
                 runtime.pending_permission = None;
                 runtime.pending_user_input = None;
                 let needs_fallback = !self.turn_has_assistant_message(session_id);
@@ -892,6 +944,58 @@ impl Fintwind {
             }
         }
         true
+    }
+
+    /// Wake the app when a provider backoff's grace period runs out, so the
+    /// card retires even if nothing else repaints.
+    ///
+    /// The card's only motion is a pulse dot, and `motion::pulse` schedules no
+    /// frame at all under reduce-motion — exactly the still, already-settled
+    /// transcript a retry tends to happen in. Without this sleeper the
+    /// countdown and the expiry check would both depend on unrelated redraws
+    /// that may never come.
+    ///
+    /// One sleeper per backoff episode, so an hours-long backoff still wakes
+    /// only a handful of times.
+    pub(super) fn schedule_provider_retry_expiry(&self, session_id: Uuid, cx: &mut Context<Self>) {
+        // Cap each sleep so a bogus far-future stamp cannot park one sleeper
+        // for years; a still-live report simply pays another tick.
+        const MAX_SLEEP: Duration = Duration::from_secs(30);
+        cx.spawn(async move |this, cx| {
+            loop {
+                let live = this
+                    .update(cx, |this, _| {
+                        this.provider_retries
+                            .get(&session_id)
+                            .is_some_and(|retry| retry.is_live(unix_time_millis()))
+                    })
+                    .unwrap_or(false);
+                if !live {
+                    break;
+                }
+                cx.background_executor().timer(MAX_SLEEP).await;
+            }
+            let _ = this.update(cx, |this, cx| {
+                // A fresh report may have replaced the one this sleeper
+                // watched; it carries its own sleeper, so leave it alone.
+                let retire = this
+                    .provider_retries
+                    .get(&session_id)
+                    .is_some_and(|retry| !retry.is_live(unix_time_millis()));
+                if !retire {
+                    return;
+                }
+                // Removing the tail row shrinks the list; splice it so the
+                // reader's place survives instead of a full reset.
+                let previous_kinds = this.snapshot_selected_transcript_rows(session_id);
+                this.provider_retries.remove(&session_id);
+                if let Some(previous_kinds) = previous_kinds.as_deref() {
+                    this.splice_active_transcript_rows_after_visibility_change(previous_kinds);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 }
 

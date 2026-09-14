@@ -306,6 +306,8 @@ impl Fintwind {
         self.submission_preparations.remove(&session_id);
         self.reset_session_runtime(session_id);
         self.background_work.remove(&session_id);
+        self.provider_retries.remove(&session_id);
+        self.expanded_provider_retries.remove(&session_id);
         self.remove_right_panel_session_state(session_id);
         self.remove_composer_draft(composer_draft_key, cx);
         self.state.sessions.remove(index);
@@ -768,6 +770,7 @@ impl Fintwind {
         self.expanded_turns.clear();
         self.expanded_changed_files.clear();
         self.expanded_compactions.clear();
+        self.expanded_provider_retries.clear();
         self.transcript_control_focuses.borrow_mut().clear();
         // Selection belongs to the session being left.
         self.transcript_selection.selection.borrow_mut().clear();
@@ -1084,6 +1087,8 @@ impl Fintwind {
         self.finish_streaming_assistant(session_id);
         self.complete_turn_blocks(session_id);
         self.settle_foreground_work(session_id, BackgroundWorkStatus::Stopped);
+        // A user stop withdraws the backoff with the turn it belonged to.
+        self.provider_retries.remove(&session_id);
         if let Some(runtime) = runtime.as_mut() {
             runtime.stream_phase = None;
             runtime.open_reasoning.clear();

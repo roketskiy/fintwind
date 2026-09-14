@@ -1884,8 +1884,10 @@ transcript.provider_responding:
   en: Responding · %{duration}
 transcript.awaiting_response:
   en: Awaiting response · %{duration}
-transcript.provider_retry:
-  en: Retry %{attempt} · %{message}
+transcript.retrying:
+  en: Retrying
+transcript.provider_retry_attempt:
+  en: attempt %{attempt}
 transcript.provider_retry_eta:
   en: next in %{duration}
 transcript.provider_retry_unknown:

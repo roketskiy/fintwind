@@ -10,18 +10,19 @@ use super::{
     StreamDeltaKind, TranscriptRowKind::*, active_navigation_turn_index,
     append_text_delta_to_session, assistant_response_footer, assistant_response_footer_index,
     upsert_compaction_transcript,
-    assistant_response_footer_time, changed_files_inline_message_index, compact_driver_error,
-    complete_latest_reasoning_activity, disclosure_leading_space, fenced_code,
+    assistant_response_footer_time, bind_keyed_reasoning_delta,
+    changed_files_inline_message_index, compact_driver_error,
+    complete_reasoning_activity_bound, disclosure_leading_space, fenced_code,
     fitted_file_tree_width, fitted_panel_widths, folded_transcript_row_kinds,
     format_worked_duration, format_working_elapsed, maintain_transcript_anchor, message_opens_turn,
     message_starts_followup_turn, navigation_preview_snippet, navigation_rail_fade_visibility,
     navigation_rail_height, navigation_rail_scale, paused_toast_duration, pop_stream_batch,
-    push_transcript_activity, session_is_reapable, should_refresh_branch_after_activity,
-    should_show_navigation_rail, should_show_scroll_to_bottom, task_id_from_notification_tag,
-    task_notification_tag, transcript_anchor_end_space, transcript_navigation_turns,
-    transcript_rests_at_tail, transcript_row_kinds, transcript_row_splice,
-    transcript_rows_fingerprint, widened_panel_width_for_file_editor,
-    widened_panel_width_for_review,
+    push_transcript_activity, session_is_reapable, settle_keyed_reasoning_fragment,
+    should_refresh_branch_after_activity, should_show_navigation_rail,
+    should_show_scroll_to_bottom, task_id_from_notification_tag, task_notification_tag,
+    transcript_anchor_end_space, transcript_navigation_turns, transcript_rests_at_tail,
+    transcript_row_kinds, transcript_row_splice, transcript_rows_fingerprint,
+    widened_panel_width_for_file_editor, widened_panel_width_for_review,
 };
 use crate::git_branch::BranchEntry;
 use crate::model::{
@@ -71,7 +72,7 @@ fn structured_user_input_preserves_question_order_and_custom_answer_precedence()
 }
 use gpui::{ListAlignment, ListState, Pixels, px};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     time::{Duration, Instant},
 };
 use uuid::Uuid;
@@ -874,9 +875,220 @@ fn completing_reasoning_identifies_the_row_that_must_be_remeasured() {
         });
     }
 
-    assert_eq!(complete_latest_reasoning_activity(&mut session), Some(1));
+    assert_eq!(complete_reasoning_activity_bound(&mut session, &[]), Some(1));
     assert!(!session.transcript_blocks[0].activities[0].complete);
     assert!(session.transcript_blocks[1].activities[0].complete);
+}
+
+#[test]
+fn a_reasoning_tail_delta_after_tool_events_returns_to_its_own_thought() {
+    // Live opencode streams flush a thought's ~100ms-batched tail after the
+    // next tool's events have already landed. Position alone would open a
+    // stray one-character thought (the "!" bug); the fragment key routes the
+    // tail back inside the thought it belongs to.
+    let mut session = AgentSession::new(Uuid::new_v4());
+    session.begin_turn("Find the web code");
+    let mut open_reasoning = HashMap::new();
+    let settled_reasoning = HashSet::new();
+    let part = "reasoning:msg_1:0";
+
+    bind_keyed_reasoning_delta(
+        &mut session,
+        &mut open_reasoning,
+        &settled_reasoning,
+        part,
+        "**Searching** Let me look",
+        true,
+    );
+    push_transcript_activity(
+        &mut session,
+        ActivityItem::new(Some("call_1".into()), ActivityKind::Search, "web", None, false),
+        true,
+    );
+    let opened = bind_keyed_reasoning_delta(
+        &mut session,
+        &mut open_reasoning,
+        &settled_reasoning,
+        part,
+        "!",
+        true,
+    );
+
+    assert!(!opened, "a late tail delta must rejoin its fragment's activity");
+    assert_eq!(session.transcript_blocks.len(), 1, "no stray thought block");
+    let activities = &session.transcript_blocks[0].activities;
+    assert_eq!(activities.len(), 2);
+    assert_eq!(
+        activities[0].reasoning.as_ref().unwrap().content,
+        "**Searching** Let me look!"
+    );
+    assert_eq!(activities[0].source_id.as_deref(), Some(part));
+
+    // A different fragment key opens its own activity, still inside the same
+    // continuing block — matching the stored part order a restart renders.
+    let opened = bind_keyed_reasoning_delta(
+        &mut session,
+        &mut open_reasoning,
+        &settled_reasoning,
+        "reasoning:msg_2:0",
+        "**Next**",
+        true,
+    );
+    assert!(opened);
+    assert_eq!(session.transcript_blocks.len(), 1);
+    assert_eq!(session.transcript_blocks[0].activities.len(), 3);
+}
+
+#[test]
+fn a_reasoning_fragment_settles_to_the_stored_transcript_shape() {
+    let mut session = AgentSession::new(Uuid::new_v4());
+    session.begin_turn("Find the web code");
+    let mut open_reasoning = HashMap::new();
+    let settled_reasoning = HashSet::new();
+    let part = "reasoning:msg_1:0";
+
+    bind_keyed_reasoning_delta(
+        &mut session,
+        &mut open_reasoning,
+        &settled_reasoning,
+        part,
+        "partial",
+        true,
+    );
+    // The durable end carries the authoritative full text, healing whatever
+    // the delta stream lost or reordered.
+    let settled = settle_keyed_reasoning_fragment(
+        &mut session,
+        &mut open_reasoning,
+        part,
+        Some("**Thought** full text!"),
+        true,
+    );
+    assert_eq!(settled, Some(0));
+    let activities = &session.transcript_blocks[0].activities;
+    assert!(activities[0].complete);
+    assert_eq!(
+        activities[0].reasoning.as_ref().unwrap().content,
+        "**Thought** full text!"
+    );
+    assert!(open_reasoning.is_empty(), "the fragment unbinds once settled");
+
+    // A fragment whose deltas never landed materializes from its end text.
+    let settled = settle_keyed_reasoning_fragment(
+        &mut session,
+        &mut open_reasoning,
+        "reasoning:msg_1:1",
+        Some("late thought"),
+        true,
+    );
+    assert_eq!(settled, None);
+    let activities = &session.transcript_blocks[0].activities;
+    assert_eq!(activities.len(), 2);
+    assert!(activities[1].complete);
+    assert_eq!(activities[1].reasoning.as_ref().unwrap().content, "late thought");
+
+    // A fragment that settles empty leaves nothing behind, like the replay
+    // path's filter over stored parts.
+    bind_keyed_reasoning_delta(
+        &mut session,
+        &mut open_reasoning,
+        &settled_reasoning,
+        "reasoning:msg_1:2",
+        " ",
+        true,
+    );
+    let settled = settle_keyed_reasoning_fragment(
+        &mut session,
+        &mut open_reasoning,
+        "reasoning:msg_1:2",
+        Some("  "),
+        true,
+    );
+    // No block survives to remeasure — the empty activity (and its block,
+    // had it emptied) is gone.
+    assert_eq!(settled, None);
+    assert_eq!(session.transcript_blocks[0].activities.len(), 2);
+    assert!(open_reasoning.is_empty());
+}
+
+#[test]
+fn a_tail_delta_after_its_fragment_settled_opens_nothing() {
+    // The provider can flush a buffered tail after the fragment's own
+    // authoritative end event. The settled key drops it: the end event already
+    // wrote the full text, and the stored transcript holds no extra part.
+    let mut session = AgentSession::new(Uuid::new_v4());
+    session.begin_turn("Find the web code");
+    let mut open_reasoning = HashMap::new();
+    let mut settled_reasoning = HashSet::new();
+    let part = "reasoning:msg_1:0";
+
+    bind_keyed_reasoning_delta(
+        &mut session,
+        &mut open_reasoning,
+        &settled_reasoning,
+        part,
+        "thought",
+        true,
+    );
+    settle_keyed_reasoning_fragment(
+        &mut session,
+        &mut open_reasoning,
+        part,
+        Some("thought!"),
+        true,
+    );
+    settled_reasoning.insert(part.to_owned());
+
+    let opened = bind_keyed_reasoning_delta(
+        &mut session,
+        &mut open_reasoning,
+        &settled_reasoning,
+        part,
+        "!",
+        true,
+    );
+    assert!(!opened, "a settled fragment must not reopen for a stray tail");
+    assert_eq!(session.transcript_blocks.len(), 1);
+    assert_eq!(session.transcript_blocks[0].activities.len(), 1);
+    assert_eq!(
+        session.transcript_blocks[0].activities[0]
+            .reasoning
+            .as_ref()
+            .unwrap()
+            .content,
+        "thought!",
+        "the authoritative end text is untouched"
+    );
+}
+
+#[test]
+fn stream_batches_keep_adjacent_reasoning_fragments_separate() {
+    let mut events = VecDeque::from([
+        DriverEvent::ReasoningDelta {
+            part: "reasoning:msg_1:0".into(),
+            delta: "a".into(),
+        },
+        DriverEvent::ReasoningDelta {
+            part: "reasoning:msg_1:0".into(),
+            delta: "b".into(),
+        },
+        DriverEvent::ReasoningDelta {
+            part: "reasoning:msg_1:1".into(),
+            delta: "c".into(),
+        },
+    ]);
+
+    assert!(matches!(
+        pop_stream_batch(&mut events, StreamDeltaKind::Reasoning),
+        Some(DriverEvent::ReasoningDelta { part, delta })
+            if part == "reasoning:msg_1:0" && delta == "ab"
+    ));
+    assert!(matches!(
+        pop_stream_batch(&mut events, StreamDeltaKind::Reasoning),
+        Some(DriverEvent::ReasoningDelta { part, delta })
+            if part == "reasoning:msg_1:1" && delta == "c"
+    ));
+    assert!(events.is_empty());
 }
 
 #[test]

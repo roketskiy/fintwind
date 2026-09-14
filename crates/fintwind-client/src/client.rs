@@ -221,6 +221,13 @@ impl DaemonClient {
             .collect()
     }
 
+    /// Whether the background socket thread has exited. The flag is terminal:
+    /// a disconnected client never recovers on its own, so callers must
+    /// obtain a replacement from the daemon supervisor.
+    pub fn is_disconnected(&self) -> bool {
+        self.inner.disconnected.load(Ordering::Acquire)
+    }
+
     pub fn shutdown(&self) {
         let _ = self.inner.outgoing.send(Outgoing::Shutdown);
     }
@@ -244,17 +251,24 @@ fn run_client(
     outgoing: Receiver<Outgoing>,
     inner: Arc<ClientInner>,
 ) {
+    // The loop exits through several branches and the reason is easy to lose
+    // on the way (release builds have no stderr at all otherwise), so every
+    // break records what happened before the flag goes terminal.
+    let mut graceful = false;
+    let mut reason = "the daemon closed the connection".to_owned();
     'connection: loop {
         while let Ok(message) = outgoing.try_recv() {
             match message {
                 Outgoing::Message(message) => {
-                    if write_json(&mut socket, &message).is_err() {
+                    if let Err(error) = write_json(&mut socket, &message) {
+                        reason = format!("a request could not be sent: {error:#}");
                         break 'connection;
                     }
                 }
                 Outgoing::Shutdown => {
                     let _ = write_json(&mut socket, &ClientMessage::Shutdown);
                     let _ = socket.flush();
+                    graceful = true;
                     break 'connection;
                 }
             }
@@ -317,7 +331,10 @@ fn run_client(
                             .lock()
                             .retain(|subscriber| subscriber.send(revision).is_ok());
                     }
-                    ServerMessage::ShuttingDown => break,
+                    ServerMessage::ShuttingDown => {
+                        graceful = true;
+                        break;
+                    }
                     ServerMessage::Hello { .. } | ServerMessage::Rejected { .. } => {}
                 }
             }
@@ -328,11 +345,16 @@ fn run_client(
             Ok(_) => {}
             Err(tungstenite::Error::Io(error)) if retryable_io(&error) => {}
             Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => break,
-            Err(_) => break,
+            Err(error) => {
+                reason = format!("the connection failed: {error}");
+                break;
+            }
         }
     }
 
-    inner.disconnected.store(true, Ordering::Release);
+    if !graceful {
+        eprintln!("fintwind daemon connection lost: {reason}");
+    }
     let pending = std::mem::take(&mut *inner.pending.lock());
     for (_, response) in pending {
         let _ = response.send(Err(RpcError {
@@ -358,6 +380,11 @@ fn run_client(
             event: WireDriverEvent::new("processExited", serde_json::Value::Null),
         });
     }
+    // Only now, with the synthetic session exits handed to their subscribers,
+    // does the supervisor-visible flag go up: otherwise a supervisor poll
+    // could replace this client while `is_disconnected()` still races the
+    // delivery of those exits.
+    inner.disconnected.store(true, Ordering::Release);
     inner.task_state_subscribers.lock().clear();
 }
 

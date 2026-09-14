@@ -6,6 +6,17 @@ impl Fintwind {
         self.refresh_transcript_row_kinds()
     }
 
+    /// Whether the selected session's provider is currently backing off. Read
+    /// from the app's own table, not the runtime: a retry is presentation-only
+    /// provider state that outlives the turn, and `drain_driver_events` takes
+    /// the runtime out of its map while it handles that session's events.
+    pub(super) fn selected_provider_retry(&self) -> Option<&ProviderRetry> {
+        let session_id = self.state.selected_session?;
+        self.provider_retries
+            .get(&session_id)
+            .filter(|retry| retry.is_live(unix_time_millis()))
+    }
+
     /// Refold the cached row kinds, but only when the transcript they were
     /// folded from actually changed. Returns the row count.
     ///
@@ -15,10 +26,15 @@ impl Fintwind {
     /// already cached. The fingerprint is one allocation-free linear pass, so a
     /// settled transcript now costs a scan instead of a fold.
     pub(super) fn refresh_transcript_row_kinds(&self) -> usize {
+        let provider_retry = self.selected_provider_retry().is_some();
         let fingerprint = self
             .selected_session()
             .map_or(EMPTY_TRANSCRIPT_FINGERPRINT, |session| {
-                transcript_rows_fingerprint(session, &self.expanded_turns)
+                transcript_rows_fingerprint_with_retry(
+                    session,
+                    &self.expanded_turns,
+                    provider_retry,
+                )
             });
         if self.transcript_row_kinds_fingerprint.get() != Some(fingerprint) {
             let next_kinds = self.selected_transcript_row_kinds();
@@ -30,7 +46,11 @@ impl Fintwind {
 
     pub(super) fn selected_transcript_row_kinds(&self) -> Vec<TranscriptRowKind> {
         self.selected_session().map_or_else(Vec::new, |session| {
-            folded_transcript_row_kinds(session, &self.expanded_turns)
+            folded_transcript_row_kinds_with_retry(
+                session,
+                &self.expanded_turns,
+                self.selected_provider_retry().is_some(),
+            )
         })
     }
 
@@ -64,6 +84,46 @@ impl Fintwind {
             )
         });
         self.assistant_footer_cache
+            .borrow_mut()
+            .insert(message_index, value.clone());
+        value
+    }
+
+    /// The settled turn's stats line for `message_index`, cached under the
+    /// row-kinds fingerprint mixed with the model catalog's size.
+    ///
+    /// Same contract as [`Self::assistant_response_footer_cached`]: the row
+    /// builder asks every frame, the underlying turn walk is O(session), and
+    /// the line exists only for settled turns whose parts are immutable —
+    /// settling flips a turn status the fingerprint hashes, and the stats'
+    /// own arrival is hashed in beside it. The catalog size rides along
+    /// because the model segment resolves its display name through the
+    /// provider probe, which can land after the turn did; without it a late
+    /// catalog would leave the cached line on the raw `provider/id` key.
+    pub(super) fn assistant_turn_stats_cached(
+        &self,
+        message_index: usize,
+    ) -> Option<SharedString> {
+        self.refresh_transcript_row_kinds();
+        let fingerprint = self.transcript_row_kinds_fingerprint.get().map(|rows| {
+            mix(
+                rows,
+                self.provider_probe()
+                    .map_or(0, |probe| probe.models.len() as u64),
+            )
+        });
+        if self.assistant_turn_stats_fingerprint.get() != fingerprint {
+            self.assistant_turn_stats_cache.borrow_mut().clear();
+            self.assistant_turn_stats_fingerprint.set(fingerprint);
+        }
+        if let Some(cached) = self.assistant_turn_stats_cache.borrow().get(&message_index) {
+            return cached.clone();
+        }
+        let value = self
+            .selected_session()
+            .and_then(|session| assistant_turn_stats(self, session, message_index))
+            .map(SharedString::from);
+        self.assistant_turn_stats_cache
             .borrow_mut()
             .insert(message_index, value.clone());
         value
@@ -429,6 +489,11 @@ pub(super) enum TranscriptRowKind {
     /// transcript sits silent from `/compact` until the summary lands, which
     /// reads as stuck.
     Compacting,
+    /// The provider is backing off between attempts. Like [`Self::Compacting`]
+    /// this lives outside the turn's lifecycle: a retry keeps arriving after
+    /// the turn settled or failed, and it presents as its own compact card
+    /// rather than a working-row suffix so it stays visible either way.
+    ProviderRetry,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -636,7 +701,8 @@ pub(super) fn assistant_response_footer(
                 | TranscriptRowKind::TurnFold(_)
                 | TranscriptRowKind::ChangedFiles(_)
                 | TranscriptRowKind::WorkingIndicator
-                | TranscriptRowKind::Compacting => None,
+                | TranscriptRowKind::Compacting
+                | TranscriptRowKind::ProviderRetry => None,
             })
             .filter(|part| !part.content.trim().is_empty())
             .map(|part| part.content.as_str())
@@ -661,6 +727,127 @@ pub(super) fn assistant_response_footer_time(
             .and_then(|turn| turn.completed_at)
     });
     Some(completed_at.unwrap_or(message.created_at))
+}
+
+/// Extract the turn's stats line inputs from the session and assemble the
+/// line. The duration comes from the turn's own timestamps — seconds, the
+/// only resolution the app records — widened to the milliseconds the TUI's
+/// formatting ladder expects. Without captured statistics the model and
+/// throughput segments drop out entirely: the session's *current* model is a
+/// fallback the footer must not show, because a historical turn usually ran
+/// something else. The agent falls back to the session's interaction mode
+/// when the turn never captured one. A message with no turn context, or a
+/// turn with neither statistics nor a completion time, has nothing to say.
+fn assistant_turn_stats(
+    app: &Fintwind,
+    session: &AgentSession,
+    message_index: usize,
+) -> Option<String> {
+    if assistant_response_footer_index(session, message_index) != Some(message_index) {
+        return None;
+    }
+    let message = &session.messages[message_index];
+    let turn = message
+        .turn_id
+        .and_then(|turn_id| session.turns.iter().find(|turn| turn.id == turn_id));
+    let stats = turn.and_then(|turn| turn.stats.as_ref());
+    if turn.is_none()
+        || (stats.is_none() && turn.is_some_and(|turn| turn.completed_at.is_none()))
+    {
+        return None;
+    }
+    let agent = stats
+        .and_then(|stats| stats.agent.clone())
+        .unwrap_or_else(|| session.interaction_mode.label());
+    let model_display = stats
+        .and_then(|stats| stats.model.as_deref())
+        .map(|key| app.model_display_name(Some(key)));
+    let duration_ms = turn.and_then(|turn| {
+        turn.completed_at
+            .map(|completed| completed.saturating_sub(turn.started_at).saturating_mul(1_000))
+    });
+    let (output_tokens, stream_ms) = stats
+        .map_or((0, 0), |stats| (stats.output_tokens, stats.stream_ms));
+    turn_stats_line(
+        Some(agent.as_str()),
+        model_display.as_deref(),
+        duration_ms,
+        output_tokens,
+        stream_ms,
+    )
+}
+
+/// Assemble the footer's stats line from already-resolved segments:
+/// `Build · MiMo V2.5 Free · 25.9s · 64.5 tok/s`. Every segment drops out
+/// when its input is missing, and a line with nothing to say is `None`.
+pub(super) fn turn_stats_line(
+    agent: Option<&str>,
+    model: Option<&str>,
+    duration_ms: Option<u64>,
+    output_tokens: u64,
+    stream_ms: u64,
+) -> Option<String> {
+    let mut segments: Vec<String> = Vec::with_capacity(4);
+    if let Some(agent) = agent {
+        segments.push(titlecase_agent(agent));
+    }
+    if let Some(model) = model {
+        segments.push(model.to_owned());
+    }
+    if let Some(duration) = duration_ms {
+        segments.push(format_turn_stats_duration(duration));
+    }
+    if let Some(speed) = turn_tokens_per_second(output_tokens, stream_ms) {
+        segments.push(format!("{speed:.1} tok/s"));
+    }
+    (!segments.is_empty()).then(|| segments.join(" · "))
+}
+
+/// The TUI's duration ladder (`Locale.duration`): raw milliseconds under a
+/// second, tenths of a second under a minute, then coarser units as the
+/// turn outgrows each band.
+pub(super) fn format_turn_stats_duration(ms: u64) -> String {
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1_000.0)
+    } else if ms < 3_600_000 {
+        format!("{}m {}s", ms / 60_000, (ms % 60_000) / 1_000)
+    } else if ms < 86_400_000 {
+        format!("{}h {}m", ms / 3_600_000, (ms % 3_600_000) / 60_000)
+    } else {
+        format!("{}d {}h", ms / 86_400_000, (ms % 86_400_000) / 3_600_000)
+    }
+}
+
+/// Output tokens per streaming second. `None` when either side is
+/// unmeasurable drops the segment rather than showing a meaningless
+/// "0.0 tok/s".
+pub(super) fn turn_tokens_per_second(output_tokens: u64, stream_ms: u64) -> Option<f64> {
+    (output_tokens > 0 && stream_ms > 0)
+        .then(|| output_tokens as f64 / (stream_ms as f64 / 1_000.0))
+}
+
+/// The TUI's `Locale.titlecase`: uppercase the first character of every
+/// word ("build" → "Build"), words being runs of ASCII word characters —
+/// the `\b\w` regex the original applies.
+fn titlecase_agent(agent: &str) -> String {
+    let mut result = String::with_capacity(agent.len());
+    let mut at_word_start = true;
+    for character in agent.chars() {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            if at_word_start {
+                result.extend(character.to_uppercase());
+            } else {
+                result.push(character);
+            }
+            at_word_start = false;
+        } else {
+            result.push(character);
+            at_word_start = true;
+        }
+    }
+    result
 }
 
 /// The visible terminal answer row that owns both the changed-files card and
@@ -840,11 +1027,28 @@ pub(super) fn transcript_row_kinds(
 /// fall back to `Message(n)` — silently dropping every reasoning block and tool
 /// activity from the transcript. Cheap mixing, not a real hash: this runs on
 /// the frame path, and the values it folds in are already well distributed.
+/// Test-only shorthand: the fingerprint of a session whose provider is not
+/// retrying. Production always knows the retry state, so only the tests below,
+/// which rarely care about it, get this default.
+#[cfg(test)]
 pub(super) fn transcript_rows_fingerprint(
     session: &AgentSession,
     expanded_turns: &HashSet<Uuid>,
 ) -> u64 {
+    transcript_rows_fingerprint_with_retry(session, expanded_turns, false)
+}
+
+pub(super) fn transcript_rows_fingerprint_with_retry(
+    session: &AgentSession,
+    expanded_turns: &HashSet<Uuid>,
+    provider_retry: bool,
+) -> u64 {
     let mut hash = mix_uuid(EMPTY_TRANSCRIPT_FINGERPRINT, session.id);
+
+    // The retry card is runtime state, not session state, so its presence has
+    // to be handed in; otherwise a backoff starting or clearing would leave the
+    // cached rows describing the other state.
+    hash = mix(hash, provider_retry as u64);
 
     // The working indicator row exists only while the session is busy, and a
     // driver error can drop the busy status without touching any turn — the
@@ -883,6 +1087,12 @@ pub(super) fn transcript_rows_fingerprint(
     for turn in &session.turns {
         hash = mix_uuid(hash, turn.id);
         hash = mix(hash, turn.status as u64);
+        // The stats line reads turn.stats, so its appearance has to move the
+        // fingerprint too — a hydration or replay that changes nothing else
+        // would leave the cached line stale otherwise. Content only changes
+        // while the turn runs (which flips the status above), so presence is
+        // the whole story.
+        hash = mix(hash, turn.stats.is_some() as u64);
         hash = mix(
             hash,
             turn.checkpoint.as_ref().is_some_and(|checkpoint| {
@@ -933,9 +1143,19 @@ fn mix_turn_id(hash: u64, turn_id: Option<Uuid>) -> u64 {
 ///
 /// Every field this reads is fingerprinted by [`transcript_rows_fingerprint`]
 /// so frames can skip the fold; consult a new one and that must learn it too.
+/// Test-only shorthand; see [`transcript_rows_fingerprint`].
+#[cfg(test)]
 pub(super) fn folded_transcript_row_kinds(
     session: &AgentSession,
     expanded_turns: &HashSet<Uuid>,
+) -> Vec<TranscriptRowKind> {
+    folded_transcript_row_kinds_with_retry(session, expanded_turns, false)
+}
+
+pub(super) fn folded_transcript_row_kinds_with_retry(
+    session: &AgentSession,
+    expanded_turns: &HashSet<Uuid>,
+    provider_retry: bool,
 ) -> Vec<TranscriptRowKind> {
     let anchors = session
         .transcript_blocks
@@ -986,6 +1206,12 @@ pub(super) fn folded_transcript_row_kinds(
         .is_some_and(|state| state.status == CompactionStatus::Running)
     {
         rows.push(TranscriptRowKind::Compacting);
+    }
+    // The retry card closes the transcript for the same reason the compaction
+    // row does, only more so: it is the one signal that the provider is still
+    // working after the turn it belongs to has already settled.
+    if provider_retry {
+        rows.push(TranscriptRowKind::ProviderRetry);
     }
 
     // A normal response renders its file summary inside the terminal answer,
@@ -1084,7 +1310,8 @@ fn turn_answer_start(session: &AgentSession, turn_rows: &[TranscriptRowKind]) ->
         | TranscriptRowKind::TurnFold(_)
         | TranscriptRowKind::ChangedFiles(_)
         | TranscriptRowKind::WorkingIndicator
-        | TranscriptRowKind::Compacting => false,
+        | TranscriptRowKind::Compacting
+        | TranscriptRowKind::ProviderRetry => false,
     };
     let Some(last_text) = turn_rows.iter().rposition(is_answer_text) else {
         return turn_rows.len();
@@ -1101,7 +1328,9 @@ fn row_turn_id(session: &AgentSession, row: TranscriptRowKind) -> Option<Uuid> {
         TranscriptRowKind::TurnBlock(index) => session.transcript_blocks.get(index)?.turn_id,
         TranscriptRowKind::TurnFold(turn_id) => Some(turn_id),
         TranscriptRowKind::ChangedFiles(turn_id) => Some(turn_id),
-        TranscriptRowKind::WorkingIndicator | TranscriptRowKind::Compacting => None,
+        TranscriptRowKind::WorkingIndicator
+        | TranscriptRowKind::Compacting
+        | TranscriptRowKind::ProviderRetry => None,
     }
 }
 

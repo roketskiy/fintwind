@@ -534,6 +534,30 @@ impl Checkpoint {
     }
 }
 
+/// Throughput statistics one settled turn reports for the assistant footer —
+/// the TUI's `Build · MiMo V2.5 Free · 25.9s · 64.5 tok/s` line. Accumulated
+/// by the driver across the turn's model steps and delivered once the turn
+/// settles; recomputed from stored message rows on the import path. Every
+/// field is a floor: absent data leaves the corresponding footer segment out
+/// rather than inventing a value.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+pub struct TurnStats {
+    /// The model key (`provider/id`) the turn's final step announced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The agent id the turn's final step announced, as the provider spells
+    /// it (titlecasing is presentation, done at render time).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Output tokens summed across the turn's steps.
+    #[serde(default)]
+    pub output_tokens: u64,
+    /// Streaming milliseconds summed across the turn's steps — the
+    /// denominator of the tokens-per-second segment.
+    #[serde(default)]
+    pub stream_ms: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 pub struct AgentTurn {
     pub id: Uuid,
@@ -547,6 +571,11 @@ pub struct AgentTurn {
     pub completed_at: Option<u64>,
     #[serde(default)]
     pub checkpoint: Option<Checkpoint>,
+    /// Footer statistics for this turn, once the driver (or the import
+    /// hydration) has reported them. Absent on turns persisted before the
+    /// field existed and on turns that produced no measurable steps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<TurnStats>,
 }
 
 /// How full the provider's context window is, from the latest main-thread
@@ -1020,6 +1049,7 @@ impl AgentSession {
                 started_at,
                 completed_at: Some(completed_at),
                 checkpoint: None,
+                stats: None,
             });
         }
     }
@@ -1046,6 +1076,7 @@ impl AgentSession {
             started_at: now,
             completed_at: None,
             checkpoint: None,
+            stats: None,
         });
         self.messages.push(
             Message::new_for_turn(MessageRole::User, prompt, id)
@@ -1555,6 +1586,11 @@ pub enum DriverEvent {
     /// (Codex's `account/rateLimits/updated`). Same shape the OAuth fetcher
     /// produces for Claude, so the panel renders both identically.
     PlanUsageUpdated(crate::usage::PlanUsage),
+    /// Throughput statistics for the foreground turn, delivered when it
+    /// settles (its final step ended, or the turn's terminal event arrived).
+    /// The app routes it to the session's active turn; one that has already
+    /// settled keeps its stored stats, so late re-delivery changes nothing.
+    TurnStatsUpdated(TurnStats),
     /// Provider-side context compaction progressed. Conversation plumbing,
     /// not turn output: it can start, settle, or fail while no turn is live,
     /// and it arrives for the provider's own automatic compaction too.
@@ -3201,6 +3237,44 @@ pub fn compact_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Turn statistics arrived after turns were already being persisted, so
+    /// the field must stay optional on the wire and in the session store:
+    /// rows written by older builds load without it, and turns without
+    /// measurable statistics serialize to exactly the shape those builds
+    /// wrote — no field, no spurious re-persist.
+    #[test]
+    fn agent_turns_survive_without_and_with_statistics() {
+        let legacy = serde_json::json!({
+            "id": "0b7c26b1-2f1e-4a5a-9d4f-58e6f5a7b8c9",
+            "turn_count": 1,
+            "status": "completed",
+            "started_at": 1_788_253_280_u64,
+            "completed_at": 1_788_253_290_u64
+        });
+        let turn: AgentTurn = serde_json::from_value(legacy).unwrap();
+        assert_eq!(turn.stats, None);
+        assert!(
+            !serde_json::to_value(&turn)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .contains_key("stats")
+        );
+
+        let measured = AgentTurn {
+            stats: Some(TurnStats {
+                model: Some("glmcoding/glm-5.3".to_owned()),
+                agent: Some("build".to_owned()),
+                output_tokens: 645,
+                stream_ms: 10_000,
+            }),
+            ..turn.clone()
+        };
+        let round_tripped: AgentTurn =
+            serde_json::from_value(serde_json::to_value(&measured).unwrap()).unwrap();
+        assert_eq!(round_tripped.stats, measured.stats);
+    }
 
     #[test]
     fn background_work_snapshots_have_serializable_named_items() {

@@ -14,7 +14,9 @@ use super::{
     changed_files_inline_message_index, compact_driver_error,
     complete_reasoning_activity_bound, disclosure_leading_space, fenced_code,
     fitted_file_tree_width, fitted_panel_widths, folded_transcript_row_kinds,
-    format_worked_duration, format_working_elapsed, maintain_transcript_anchor, message_opens_turn,
+    folded_transcript_row_kinds_with_retry,
+    format_worked_duration, format_working_elapsed, format_turn_stats_duration,
+    maintain_transcript_anchor, message_opens_turn,
     message_starts_followup_turn, navigation_preview_snippet, navigation_rail_fade_visibility,
     navigation_rail_height, navigation_rail_scale, paused_toast_duration, pop_stream_batch,
     push_transcript_activity, session_is_reapable, settle_keyed_reasoning_fragment,
@@ -22,13 +24,15 @@ use super::{
     should_show_scroll_to_bottom, task_id_from_notification_tag, task_notification_tag,
     transcript_anchor_end_space, transcript_navigation_turns, transcript_rests_at_tail,
     transcript_row_kinds, transcript_row_splice, transcript_rows_fingerprint,
+    transcript_rows_fingerprint_with_retry,
+    turn_stats_line, turn_tokens_per_second,
     widened_panel_width_for_file_editor, widened_panel_width_for_review,
 };
 use crate::git_branch::BranchEntry;
 use crate::model::{
     ActivityItem, ActivityKind, AgentSession, Checkpoint, CheckpointFile, CheckpointStatus,
     CompactionState, CompactionStatus, DriverEvent, Message, MessageRole, ReasoningBlock,
-    RuntimeEventCursor, SessionStatus, TranscriptBlock, TurnStatus, UserInputOption,
+    RuntimeEventCursor, SessionStatus, TranscriptBlock, TurnStats, TurnStatus, UserInputOption,
     UserInputQuestion,
 };
 
@@ -1750,6 +1754,92 @@ fn unkeyed_assistant_message_keeps_a_standalone_footer() {
     assert_eq!(assistant_response_footer_time(&session, 0), Some(300));
 }
 
+/// The TUI's `Locale.duration` ladder, reproduced band for band so a
+/// Fintwind footer reads exactly like the TUI's for the same turn.
+#[test]
+fn turn_stats_duration_follows_the_tui_ladder() {
+    assert_eq!(format_turn_stats_duration(0), "0ms");
+    assert_eq!(format_turn_stats_duration(999), "999ms");
+    assert_eq!(format_turn_stats_duration(1_000), "1.0s");
+    assert_eq!(format_turn_stats_duration(25_940), "25.9s");
+    // 59.999s rounds up inside its own band, matching toFixed(1).
+    assert_eq!(format_turn_stats_duration(59_999), "60.0s");
+    assert_eq!(format_turn_stats_duration(60_000), "1m 0s");
+    assert_eq!(format_turn_stats_duration(3_599_999), "59m 59s");
+    assert_eq!(format_turn_stats_duration(3_600_000), "1h 0m");
+    assert_eq!(format_turn_stats_duration(86_399_999), "23h 59m");
+    assert_eq!(format_turn_stats_duration(86_400_000), "1d 0h");
+    assert_eq!(format_turn_stats_duration(180_000_000), "2d 2h");
+}
+
+/// Every segment of the stats line drops out when its input is missing, and
+/// a line with nothing measurable to say does not render at all.
+#[test]
+fn turn_stats_line_assembles_segments_and_titlecases_the_agent() {
+    // The TUI's own example line, rebuilt end to end.
+    assert_eq!(
+        turn_stats_line(Some("build"), Some("MiMo V2.5 Free"), Some(25_900), 645, 10_000),
+        Some("Build · MiMo V2.5 Free · 25.9s · 64.5 tok/s".to_owned())
+    );
+    // Titlecase capitalizes the head of every word, like the TUI's regex.
+    assert_eq!(
+        turn_stats_line(Some("code-review"), None, None, 0, 0),
+        Some("Code-Review".to_owned())
+    );
+    // Unmeasurable throughput (no output, or no streaming time) drops the
+    // segment rather than showing "0.0 tok/s".
+    assert_eq!(
+        turn_stats_line(Some("plan"), None, None, 0, 10_000).as_deref(),
+        Some("Plan")
+    );
+    assert_eq!(
+        turn_stats_line(None, None, Some(90_000), 10, 0).as_deref(),
+        Some("1m 30s")
+    );
+    // No completion time drops only the duration segment. The model and
+    // throughput segments can only come from captured turn statistics, so
+    // this combination means a turn that reported tokens without a model.
+    assert_eq!(
+        turn_stats_line(None, Some("glmcoding/glm-5.3"), None, 645, 10_000).as_deref(),
+        Some("glmcoding/glm-5.3 · 64.5 tok/s")
+    );
+    // A turn without statistics shows neither model nor throughput — the
+    // session's current model is not what a historical turn ran — leaving at
+    // most the agent and the duration (both assembled by the caller).
+    assert_eq!(
+        turn_stats_line(Some("plan"), None, Some(90_000), 0, 0).as_deref(),
+        Some("Plan · 1m 30s")
+    );
+    assert_eq!(turn_stats_line(None, None, None, 0, 0), None);
+}
+
+#[test]
+fn turn_tokens_per_second_requires_both_sides() {
+    assert_eq!(turn_tokens_per_second(0, 5_000), None);
+    assert_eq!(turn_tokens_per_second(645, 0), None);
+    assert_eq!(turn_tokens_per_second(645, 10_000), Some(64.5));
+}
+
+/// The stats line is cached under the row-kinds fingerprint, so the stats'
+/// own arrival has to move that fingerprint — a hydration or replay that
+/// changes nothing else would leave the cached line missing otherwise.
+#[test]
+fn transcript_fingerprint_covers_turn_stats_appearance() {
+    let mut session = AgentSession::new(Uuid::new_v4());
+    session.begin_turn("Build it");
+    session.push_message(MessageRole::Assistant, "Done.");
+    session.finish_active_turn(TurnStatus::Completed);
+    let without = transcript_rows_fingerprint(&session, &HashSet::new());
+    session.turns.last_mut().unwrap().stats = Some(TurnStats {
+        model: Some("glmcoding/glm-5.3".into()),
+        agent: Some("build".into()),
+        output_tokens: 645,
+        stream_ms: 10_000,
+    });
+    let with = transcript_rows_fingerprint(&session, &HashSet::new());
+    assert_ne!(without, with);
+}
+
 #[test]
 fn completed_compaction_inserts_a_transcript_divider_once() {
     let mut session = AgentSession::new(Uuid::new_v4());
@@ -2179,9 +2269,8 @@ fn tab_cycle_walks_favorites_then_dynamic_provider_rail() {
 }
 
 #[test]
-fn working_phase_labels_retry_backoff_with_clamped_detail_and_countdown() {
-    use super::ProviderPhase;
-    use super::transcript_view::{WorkingPhase, working_phase};
+fn provider_retry_card_previews_the_reason_and_clamps_it() {
+    use super::transcript_view::compact_provider_retry_message;
     use crate::model::ProviderRetryAction;
 
     let action = ProviderRetryAction {
@@ -2192,30 +2281,18 @@ fn working_phase_labels_retry_backoff_with_clamped_detail_and_countdown() {
         label: "subscribe".into(),
         link: Some("https://opencode.ai/go".into()),
     };
-    let phase = ProviderPhase::Retrying {
+    let retry = super::ProviderRetry {
         attempt: 2,
         message: "429 Too Many Requests".into(),
         action: Some(action),
         next_at_ms: Some(1_700_000_008_000),
+        received_at_ms: 1_700_000_000_000,
     };
-    let Some(WorkingPhase::Retrying {
-        text,
-        action_label,
-        action_link,
-    }) = working_phase(Some(&phase), 0, 1_700_000_000_000)
-    else {
-        panic!("a retry report must label the row");
-    };
-    assert!(text.contains("Retry 2 · 429 Too Many Requests"), "{text}");
-    assert!(text.contains("next in 8s"), "{text}");
-    assert_eq!(action_label.as_deref(), Some("subscribe"));
-    assert_eq!(action_link.as_deref(), Some("https://opencode.ai/go"));
-}
-
-#[test]
-fn working_phase_clamps_long_retry_reasons_and_fills_blank_ones() {
-    use super::ProviderPhase;
-    use super::transcript_view::{WorkingPhase, compact_provider_retry_message, working_phase};
+    // The header preview and the expanded body share this one-line clamp.
+    assert_eq!(
+        compact_provider_retry_message(&retry.message),
+        "429 Too Many Requests"
+    );
 
     let long = format!("{} tail", "x".repeat(80));
     let clipped = compact_provider_retry_message(&long);
@@ -2225,17 +2302,62 @@ fn working_phase_clamps_long_retry_reasons_and_fills_blank_ones() {
         compact_provider_retry_message("first line\nsecond line"),
         "first line"
     );
+}
 
-    let phase = ProviderPhase::Retrying {
-        attempt: 1,
-        message: "   ".into(),
+#[test]
+fn provider_retry_stays_live_through_its_backoff_and_expires_after() {
+    let received_at_ms = 1_700_000_000_000;
+    let retry = super::ProviderRetry {
+        attempt: 5,
+        message: "Endpoint is unavailable.".into(),
         action: None,
+        next_at_ms: Some(1_700_000_008_000),
+        received_at_ms,
+    };
+    assert!(retry.is_live(1_700_000_000_000));
+    assert!(retry.is_live(1_700_000_008_000));
+    // The stamp prices the next attempt, not the report's expiry: an old
+    // report may still describe a running backoff.
+    assert!(retry.is_live(1_700_000_030_000));
+    // Past the grace period nothing retracts the card but nothing renews it
+    // either, so it stops claiming a retry.
+    assert!(!retry.is_live(1_700_000_200_000));
+
+    // opencode does not always stamp the next attempt. The report's own age
+    // has to price the wait then — an unstamped report that never expires
+    // would pin a card, and the pulse lease behind it, on screen forever.
+    let unstamped = super::ProviderRetry {
         next_at_ms: None,
+        ..retry
     };
-    let Some(WorkingPhase::Retrying { text, .. }) = working_phase(Some(&phase), 0, 0) else {
-        panic!("a retry report must label the row");
-    };
-    assert!(text.contains("provider error"), "{text}");
+    assert!(unstamped.is_live(received_at_ms));
+    assert!(unstamped.is_live(received_at_ms + 59_000));
+    assert!(!unstamped.is_live(received_at_ms + 61_000));
+}
+
+/// The retry card is app-level provider state, not turn output: it has to stay
+/// on screen after the turn it belongs to has settled — precisely the window in
+/// which the old working-row suffix disappeared and the reader saw nothing.
+#[test]
+fn provider_retry_card_outlives_the_turn_that_started_it() {
+    let mut session = AgentSession::new(Uuid::new_v4());
+    session.begin_turn("Build it");
+    session.push_message(MessageRole::Assistant, "Starting on it.");
+    session.finish_active_turn(TurnStatus::Completed);
+    session.status = SessionStatus::Idle;
+    let expanded = HashSet::new();
+
+    let settled = folded_transcript_row_kinds(&session, &expanded);
+    assert!(!settled.contains(&WorkingIndicator));
+    assert!(!settled.contains(&ProviderRetry));
+
+    let retrying = folded_transcript_row_kinds_with_retry(&session, &expanded, true);
+    assert_eq!(retrying.last(), Some(&ProviderRetry));
+    assert_ne!(
+        transcript_rows_fingerprint_with_retry(&session, &expanded, true),
+        transcript_rows_fingerprint(&session, &expanded),
+        "the retry card changed the rows but not the fingerprint"
+    );
 }
 
 #[test]
@@ -2245,16 +2367,15 @@ fn working_phase_labels_responding_and_only_long_silence() {
     use crate::model::unix_time;
 
     let responding = ProviderPhase::Responding { since: 1_000 };
-    let Some(WorkingPhase::Responding { elapsed_secs }) =
-        working_phase(Some(&responding), 0, 0)
+    let Some(WorkingPhase::Responding { elapsed_secs }) = working_phase(Some(&responding), 0)
     else {
         panic!("a busy report must label the row");
     };
     assert_eq!(elapsed_secs, unix_time() - 1_000);
 
-    assert!(working_phase(None, PROVIDER_QUIET_RESPONSE_SECS - 1, 0).is_none());
+    assert!(working_phase(None, PROVIDER_QUIET_RESPONSE_SECS - 1).is_none());
     assert!(matches!(
-        working_phase(None, PROVIDER_QUIET_RESPONSE_SECS, 0),
+        working_phase(None, PROVIDER_QUIET_RESPONSE_SECS),
         Some(WorkingPhase::Awaiting { .. })
     ));
 }

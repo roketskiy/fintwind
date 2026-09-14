@@ -80,6 +80,7 @@ export type { SlashCommand } from "./SlashCommand";
 export type { StoredAttachment } from "./StoredAttachment";
 export type { StoredTranscriptBlockContent } from "./StoredTranscriptBlockContent";
 export type { TranscriptBlock } from "./TranscriptBlock";
+export type { TurnStats } from "./TurnStats";
 export type { TurnStatus } from "./TurnStatus";
 export type { UserInputAnswer } from "./UserInputAnswer";
 export type { WireDriverEvent } from "./WireDriverEvent";

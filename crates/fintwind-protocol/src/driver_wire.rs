@@ -119,6 +119,9 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             }),
         ),
         DriverEvent::PlanUsageUpdated(usage) => ("planUsageUpdated", serde_json::to_value(usage)?),
+        DriverEvent::TurnStatsUpdated(stats) => {
+            ("turnStatsUpdated", serde_json::to_value(stats)?)
+        }
         DriverEvent::CompactionUpdated(state) => {
             ("compactionUpdated", serde_json::to_value(state)?)
         }
@@ -238,6 +241,9 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
             }
         }
         "planUsageUpdated" => DriverEvent::PlanUsageUpdated(serde_json::from_value(payload)?),
+        "turnStatsUpdated" => {
+            DriverEvent::TurnStatsUpdated(serde_json::from_value(payload)?)
+        }
         "compactionUpdated" => {
             DriverEvent::CompactionUpdated(serde_json::from_value(payload)?)
         }

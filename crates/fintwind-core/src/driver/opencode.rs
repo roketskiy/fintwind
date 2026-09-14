@@ -1104,7 +1104,6 @@ struct PendingSubagent {
 struct OpenCodeStreamState {
     tools: HashMap<String, (ActivityKind, String)>,
     pending_subagents: VecDeque<PendingSubagent>,
-    reasoning_parts: HashSet<String>,
     children: HashMap<String, OpenCodeChildSession>,
     usage_metadata: Arc<OpenCodeUsageMetadata>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
@@ -1547,6 +1546,21 @@ fn opencode_message_model_key(message: &Value) -> Option<String> {
     let provider = model.get("providerID").and_then(Value::as_str)?;
     let id = model.get("id").and_then(Value::as_str)?;
     Some(format!("{provider}/{id}"))
+}
+
+/// The reasoning fragment identity shared by `session.reasoning.started`,
+/// `-delta`, and `-ended`: the (assistant message, ordinal) pair the stored
+/// reasoning part is keyed by. The `reasoning:` prefix keeps the key out of
+/// the tool call-id namespace that activity matching also uses. Fields that
+/// a degraded stream omits fall back to stable defaults, so all three events
+/// of one fragment still derive the same key.
+fn reasoning_part_key(payload: &Value) -> String {
+    let message = payload
+        .get("assistantMessageID")
+        .and_then(Value::as_str)
+        .unwrap_or("msg");
+    let ordinal = payload.get("ordinal").and_then(Value::as_u64).unwrap_or(0);
+    format!("reasoning:{message}:{ordinal}")
 }
 
 /// The compaction summary's model, reported by `session.compaction.ended`.
@@ -2082,6 +2096,15 @@ fn handle_event(
             }
             let _ = events.send(DriverEvent::TextDelta(delta.to_owned()));
         }
+        "session.reasoning.started" => {
+            // Durable boundary of one persisted reasoning part. Forwarded so
+            // the app keys its live block the way the stored part is keyed;
+            // deltas may trail tool events, so position alone cannot group
+            // them.
+            let _ = events.send(DriverEvent::ReasoningStarted {
+                part: reasoning_part_key(payload),
+            });
+        }
         "session.reasoning.delta" => {
             let Some(delta) = payload.get("delta").and_then(Value::as_str) else {
                 return;
@@ -2089,7 +2112,23 @@ fn handle_event(
             if delta.is_empty() {
                 return;
             }
-            let _ = events.send(DriverEvent::ReasoningDelta(delta.to_owned()));
+            let _ = events.send(DriverEvent::ReasoningDelta {
+                part: reasoning_part_key(payload),
+                delta: delta.to_owned(),
+            });
+        }
+        "session.reasoning.ended" => {
+            // Durable and authoritative: `text` is the fragment's full value —
+            // the exact text the stored reasoning part keeps. Rewriting the
+            // live block from it heals deltas lost to reordering or a
+            // redelivered stream.
+            let _ = events.send(DriverEvent::ReasoningEnded {
+                part: reasoning_part_key(payload),
+                text: payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            });
         }
         "session.step.started" => {
             // The step announces the model that will run it; later usage
@@ -2399,10 +2438,11 @@ fn handle_event(
                 forms.announced.remove(id);
             }
         }
-        // `session.text.started`/`ended`, `session.reasoning.started`/`ended`,
-        // `session.step.streamed`, `session.inbox.*`, `session.execution.started`,
+        // `session.text.started`/`ended`, `session.step.streamed`,
+        // `session.inbox.*`, `session.execution.started`,
         // `session.instructions.updated`, `server.connected`, and the
-        // heartbeat comment lines are not transcript content.
+        // heartbeat comment lines are not transcript content. The reasoning
+        // started/ended/delta trio is handled above.
         _ => {}
     }
 }
@@ -2572,7 +2612,6 @@ fn disarm_child_resumes(state: &mut OpenCodeStreamState) {
 /// stands in when the execution event is lost — so a stale pending spawn or
 /// tool name can never leak into the next turn and mis-bind a new child.
 fn clear_foreground_turn_state(state: &mut OpenCodeStreamState) {
-    state.reasoning_parts.clear();
     state.permissions.lock().pending.clear();
     state.tools.clear();
     state.pending_subagents.clear();
@@ -4484,7 +4523,7 @@ mod tests {
             seen.push(event);
         }
         assert!(matches!(&seen[0], DriverEvent::TextDelta(text) if text == "OK"));
-        assert!(matches!(&seen[1], DriverEvent::ReasoningDelta(text) if text == "thinking"));
+        assert!(matches!(&seen[1], DriverEvent::ReasoningDelta { delta: text, .. } if text == "thinking"));
         assert!(matches!(&seen[2], DriverEvent::RichActivity(item)
                 if item.source_id.as_deref() == Some("call_1")
                     && item.kind == ActivityKind::FileRead && !item.complete
@@ -4511,6 +4550,40 @@ mod tests {
         ));
         assert_eq!(seen.len(), 7, "non-transcript events leaked");
         assert!(!*turn.lock(), "the turn should be settled exactly once");
+    }
+
+    #[test]
+    fn reasoning_fragments_key_their_deltas_and_settle_from_the_durable_end() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        // A thought's buffered tail can flush after the next tool's events
+        // have already landed; started/ended carry the (message, ordinal)
+        // identity the stored reasoning part keeps, and ended carries the
+        // authoritative full text.
+        let wire = [
+            json!({"type":"session.reasoning.started","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0}}),
+            json!({"type":"session.reasoning.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"let me look"}}),
+            json!({"type":"session.tool.input.started","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"call_1","name":"grep"}}),
+            json!({"type":"session.reasoning.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"!"}}),
+            json!({"type":"session.reasoning.ended","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"text":"let me look!"}}),
+        ];
+        for event in wire {
+            handle_event(&event, &events, &commands, &turn, 0, "ses_1", true, &mut state);
+        }
+
+        let mut seen = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            seen.push(event);
+        }
+        assert!(matches!(&seen[0], DriverEvent::ReasoningStarted { part } if part == "reasoning:msg_1:0"));
+        assert!(matches!(&seen[1], DriverEvent::ReasoningDelta { part, delta }
+                if part == "reasoning:msg_1:0" && delta == "let me look"));
+        assert!(matches!(&seen[2], DriverEvent::RichActivity(_)));
+        // The late tail keeps its fragment key even though a tool preceded it.
+        assert!(matches!(&seen[3], DriverEvent::ReasoningDelta { part, delta }
+                if part == "reasoning:msg_1:0" && delta == "!"));
+        assert!(matches!(&seen[4], DriverEvent::ReasoningEnded { part, text }
+                if part == "reasoning:msg_1:0" && text.as_deref() == Some("let me look!")));
+        assert_eq!(seen.len(), 5, "non-transcript events leaked");
     }
 
     #[test]
@@ -4614,7 +4687,7 @@ mod tests {
         }
 
         let seen = event_rx.try_iter().collect::<Vec<_>>();
-        assert!(matches!(&seen[0], DriverEvent::ReasoningDelta(text) if text == "thinking"));
+        assert!(matches!(&seen[0], DriverEvent::ReasoningDelta { delta: text, .. } if text == "thinking"));
         assert!(matches!(&seen[1], DriverEvent::TextDelta(text) if text == "answer"));
         assert!(matches!(&seen[2], DriverEvent::TextDelta(text) if text == " tail"));
         assert!(matches!(

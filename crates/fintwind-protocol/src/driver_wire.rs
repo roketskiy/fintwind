@@ -20,6 +20,17 @@ pub fn encode_enum<T: Serialize>(value: T) -> anyhow::Result<String> {
         .ok_or_else(|| anyhow!("protocol enum did not serialize as a string"))
 }
 
+/// The reasoning fragment identity a wire payload carries, if any. An absent
+/// key (a pre-keying peer) decodes to an empty string, which the app maps to
+/// its phase-based fallback instead of part-bound reasoning.
+fn reasoning_part_from_wire(payload: &Value) -> String {
+    payload
+        .get("part")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
 pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
     let (kind, payload) = match event {
         DriverEvent::RuntimeEventCursorAdvanced(_) => {
@@ -37,7 +48,13 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         }
         DriverEvent::TurnStarted => ("turnStarted", Value::Null),
         DriverEvent::TextDelta(text) => ("textDelta", Value::String(text)),
-        DriverEvent::ReasoningDelta(text) => ("reasoningDelta", Value::String(text)),
+        DriverEvent::ReasoningStarted { part } => ("reasoningStarted", json!({ "part": part })),
+        DriverEvent::ReasoningDelta { part, delta } => {
+            ("reasoningDelta", json!({ "part": part, "delta": delta }))
+        }
+        DriverEvent::ReasoningEnded { part, text } => {
+            ("reasoningEnded", json!({ "part": part, "text": text }))
+        }
         DriverEvent::Activity {
             id,
             kind,
@@ -143,7 +160,32 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "turnStarted" => DriverEvent::TurnStarted,
         "nativeSessionsChanged" => DriverEvent::NativeSessionsChanged,
         "textDelta" => DriverEvent::TextDelta(serde_json::from_value(payload)?),
-        "reasoningDelta" => DriverEvent::ReasoningDelta(serde_json::from_value(payload)?),
+        // A bare string payload is a pre-keying daemon: the delta keeps the
+        // phase-based fallback path on an empty part key.
+        "reasoningStarted" => DriverEvent::ReasoningStarted {
+            part: reasoning_part_from_wire(&payload),
+        },
+        "reasoningDelta" => {
+            let (part, delta) = match payload {
+                Value::String(delta) => (String::new(), delta),
+                payload => (
+                    reasoning_part_from_wire(&payload),
+                    payload
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                ),
+            };
+            DriverEvent::ReasoningDelta { part, delta }
+        }
+        "reasoningEnded" => DriverEvent::ReasoningEnded {
+            part: reasoning_part_from_wire(&payload),
+            text: payload
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        },
         "activity" => {
             let activity: ActivityWire = serde_json::from_value(payload)?;
             DriverEvent::Activity {

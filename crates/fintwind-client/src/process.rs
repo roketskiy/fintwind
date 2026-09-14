@@ -128,6 +128,7 @@ pub fn parse_allowed_origins(text: &str) -> anyhow::Result<Vec<String>> {
 
 pub struct DaemonProcess {
     client: DaemonClient,
+    client_address: String,
     child: Child,
     #[cfg(windows)]
     _job: windows_job::JobObject,
@@ -249,6 +250,7 @@ impl DaemonProcess {
         };
         Ok(Self {
             client,
+            client_address,
             child,
             #[cfg(windows)]
             _job: job,
@@ -402,6 +404,9 @@ struct SupervisorInner {
     settings_updates: Sender<DaemonSettings>,
     client_updates: Mutex<Vec<Sender<DaemonClient>>>,
     running: AtomicBool,
+    /// Address and bearer token of a daemon this desktop does not own, kept
+    /// so a dropped connection can be re-established with replay.
+    remote_endpoint: Mutex<Option<(String, String)>>,
 }
 
 enum DaemonTarget {
@@ -445,26 +450,31 @@ impl DaemonSupervisor {
         let process = DaemonProcess::spawn_configured(executable, exposure.clone())?;
         let settings = read_settings(&process.client())?;
         let initial_stamp = ExecutableStamp::read(executable)?;
-        let supervisor = Self::from_target(
+        Self::from_target(
             DaemonTarget::Local(process),
             Some(executable.to_owned()),
             Some(exposure),
             settings,
-        )?;
-        let weak_inner = Arc::downgrade(&supervisor.inner);
-        std::thread::Builder::new()
-            .name("fintwind-daemon-supervisor".into())
-            .spawn(move || monitor_daemon(weak_inner, initial_stamp, watch_for_rebuilds))
-            .context("could not start fintwind daemon supervisor")?;
-        Ok(supervisor)
+            Some(initial_stamp),
+            watch_for_rebuilds,
+        )
     }
 
     /// Connect to a daemon managed on another host (or by an external local
     /// service manager). Dropping the desktop never shuts this daemon down.
     pub fn connect(address: &str, token: String) -> anyhow::Result<Self> {
-        let client = DaemonClient::connect(address, token)?;
+        let client = DaemonClient::connect(address, token.clone())?;
         let settings = read_settings(&client)?;
-        Self::from_target(DaemonTarget::Remote(client), None, None, settings)
+        let supervisor = Self::from_target(
+            DaemonTarget::Remote(client),
+            None,
+            None,
+            settings,
+            None,
+            false,
+        )?;
+        *supervisor.inner.remote_endpoint.lock() = Some((address.to_owned(), token));
+        Ok(supervisor)
     }
 
     fn from_target(
@@ -472,6 +482,8 @@ impl DaemonSupervisor {
         executable: Option<PathBuf>,
         exposure: Option<DaemonExposureSettings>,
         settings: DaemonSettings,
+        initial_stamp: Option<ExecutableStamp>,
+        watch_for_rebuilds: bool,
     ) -> anyhow::Result<Self> {
         let (settings_updates, settings_update_rx) = unbounded();
         let inner = Arc::new(SupervisorInner {
@@ -486,7 +498,13 @@ impl DaemonSupervisor {
             settings_updates,
             client_updates: Mutex::new(Vec::new()),
             running: AtomicBool::new(true),
+            remote_endpoint: Mutex::new(None),
         });
+        let weak_inner = Arc::downgrade(&inner);
+        std::thread::Builder::new()
+            .name("fintwind-daemon-supervisor".into())
+            .spawn(move || monitor_daemon(weak_inner, initial_stamp, watch_for_rebuilds))
+            .context("could not start fintwind daemon supervisor")?;
         let weak_inner = Arc::downgrade(&inner);
         std::thread::Builder::new()
             .name("fintwind-daemon-settings".into())
@@ -609,7 +627,7 @@ impl Drop for DaemonSupervisor {
 
 fn monitor_daemon(
     weak_inner: std::sync::Weak<SupervisorInner>,
-    mut active_stamp: ExecutableStamp,
+    mut active_stamp: Option<ExecutableStamp>,
     watch_for_rebuilds: bool,
 ) {
     loop {
@@ -620,24 +638,93 @@ fn monitor_daemon(
         if !inner.running.load(Ordering::Acquire) {
             return;
         }
-        let process_exited = match &mut *inner.target.lock() {
-            DaemonTarget::Local(process) => process.has_exited(),
-            DaemonTarget::Restarting(_) => true,
-            DaemonTarget::Remote(_) => return,
+        // A remote daemon is owned elsewhere: its process is not ours to
+        // restart, but a dropped connection is still recoverable in place.
+        // The verdict must be taken before acting: the lock guard of an
+        // `if let` scrutinee lives through the success block, and
+        // `reconnect_remote` takes this same non-reentrant lock.
+        let remote_lost = match &*inner.target.lock() {
+            DaemonTarget::Remote(client) => client.is_disconnected(),
+            _ => false,
+        };
+        if remote_lost {
+            reconnect_remote(&inner);
+            continue;
+        }
+        let (process_exited, connection_lost) = match &mut *inner.target.lock() {
+            DaemonTarget::Local(process) => {
+                let process_exited = process.has_exited();
+                let connection_lost = !process_exited && process.client.is_disconnected();
+                (process_exited, connection_lost)
+            }
+            // A failed replacement leaves the stale client in place; treating
+            // it as exited keeps the restart attempts going.
+            DaemonTarget::Restarting(_) => (true, false),
+            DaemonTarget::Remote(_) => {
+                // Re-checked and handled above; the target cannot turn remote
+                // while this thread watches a local daemon.
+                continue;
+            }
         };
         let Some(executable) = inner.executable.as_ref() else {
             return;
         };
         let observed_stamp = ExecutableStamp::read(executable).ok();
-        let executable_changed =
-            watch_for_rebuilds && observed_stamp.is_some_and(|observed| observed != active_stamp);
-        if !process_exited && !executable_changed {
+        let executable_changed = watch_for_rebuilds
+            && observed_stamp.is_some_and(|observed| {
+                active_stamp.is_none_or(|active| observed != active)
+            });
+        if !process_exited && !connection_lost && !executable_changed {
             continue;
         }
         let _restart = inner.restart.lock();
         let Some(exposure) = inner.exposure.lock().clone() else {
             return;
         };
+        // shutdown()/reconfigure() may have replaced the target while this
+        // thread waited for the restart lock; re-read it before acting. A
+        // target that no longer wants this round of recovery (or no longer
+        // needs it) must not fall through to a process restart.
+        if !process_exited && !executable_changed {
+            let reconnect = match &mut *inner.target.lock() {
+                DaemonTarget::Local(process) if process.client.is_disconnected() => Some((
+                    process.client_address.clone(),
+                    process.client.last_sequences(),
+                )),
+                _ => None,
+            };
+            let Some((address, cursors)) = reconnect else {
+                continue;
+            };
+            match DaemonClient::connect_with_resume(&address, exposure.token.clone(), cursors) {
+                Ok(client) => {
+                    let replaced = match &mut *inner.target.lock() {
+                        DaemonTarget::Local(process) if process.client.is_disconnected() => {
+                            process.client = client.clone();
+                            true
+                        }
+                        _ => false,
+                    };
+                    if replaced {
+                        inner
+                            .client_updates
+                            .lock()
+                            .retain(|subscriber| subscriber.send(client.clone()).is_ok());
+                        eprintln!("fintwind daemon connection restored");
+                    }
+                    continue;
+                }
+                Err(error) => {
+                    // The daemon's listener refuses the reconnect even
+                    // though the process still runs — a wedged daemon.
+                    // The process restart below is the heavier hammer
+                    // that recovers it.
+                    eprintln!(
+                        "could not reconnect to the fintwind daemon in place ({error:#}); restarting it instead"
+                    );
+                }
+            }
+        }
         match replace_local_daemon(&inner, executable, &exposure) {
             Ok(()) => {}
             Err(error) => {
@@ -647,10 +734,42 @@ fn monitor_daemon(
         }
         queue_settings_refresh(&inner);
         if let Some(observed_stamp) = observed_stamp {
-            active_stamp = observed_stamp;
+            active_stamp = Some(observed_stamp);
         }
         drop(_restart);
         drop(inner);
+    }
+}
+
+/// Re-establish a dropped connection to a daemon this desktop does not own.
+/// The daemon keeps its sessions and replay journal, so reconnecting with
+/// the cursors of the last seen events resumes every stream without loss.
+fn reconnect_remote(inner: &SupervisorInner) {
+    let Some((address, token)) = inner.remote_endpoint.lock().clone() else {
+        return;
+    };
+    let cursors = match &*inner.target.lock() {
+        DaemonTarget::Remote(client) if client.is_disconnected() => client.last_sequences(),
+        _ => return,
+    };
+    match DaemonClient::connect_with_resume(&address, token, cursors) {
+        Ok(client) => {
+            let replaced = match &mut *inner.target.lock() {
+                DaemonTarget::Remote(dead) if dead.is_disconnected() => {
+                    *dead = client.clone();
+                    true
+                }
+                _ => false,
+            };
+            if replaced {
+                inner
+                    .client_updates
+                    .lock()
+                    .retain(|subscriber| subscriber.send(client.clone()).is_ok());
+                eprintln!("fintwind daemon connection restored");
+            }
+        }
+        Err(error) => eprintln!("could not reconnect to the remote fintwind daemon: {error:#}"),
     }
 }
 

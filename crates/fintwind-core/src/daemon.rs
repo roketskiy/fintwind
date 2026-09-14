@@ -1236,7 +1236,13 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::TurnStarted => ("turnStarted", Value::Null),
         DriverEvent::NativeSessionsChanged => ("nativeSessionsChanged", Value::Null),
         DriverEvent::TextDelta(text) => ("textDelta", Value::String(text)),
-        DriverEvent::ReasoningDelta(text) => ("reasoningDelta", Value::String(text)),
+        DriverEvent::ReasoningStarted { part } => ("reasoningStarted", json!({ "part": part })),
+        DriverEvent::ReasoningDelta { part, delta } => {
+            ("reasoningDelta", json!({ "part": part, "delta": delta }))
+        }
+        DriverEvent::ReasoningEnded { part, text } => {
+            ("reasoningEnded", json!({ "part": part, "text": text }))
+        }
         DriverEvent::Activity {
             id,
             kind,
@@ -1329,6 +1335,17 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
     Ok(WireDriverEvent::new(kind, payload))
 }
 
+/// The reasoning fragment identity a wire payload carries, if any. An absent
+/// key (a pre-keying peer) decodes to an empty string, which the app maps to
+/// its phase-based fallback instead of part-bound reasoning.
+fn reasoning_part_from_wire(payload: &Value) -> String {
+    payload
+        .get("part")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
 pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
     let payload = event.payload;
     Ok(match event.kind.as_str() {
@@ -1341,7 +1358,32 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "turnStarted" => DriverEvent::TurnStarted,
         "nativeSessionsChanged" => DriverEvent::NativeSessionsChanged,
         "textDelta" => DriverEvent::TextDelta(serde_json::from_value(payload)?),
-        "reasoningDelta" => DriverEvent::ReasoningDelta(serde_json::from_value(payload)?),
+        // A bare string payload is a pre-keying peer: the delta keeps the
+        // phase-based fallback path on an empty part key.
+        "reasoningStarted" => DriverEvent::ReasoningStarted {
+            part: reasoning_part_from_wire(&payload),
+        },
+        "reasoningDelta" => {
+            let (part, delta) = match payload {
+                Value::String(delta) => (String::new(), delta),
+                payload => (
+                    reasoning_part_from_wire(&payload),
+                    payload
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                ),
+            };
+            DriverEvent::ReasoningDelta { part, delta }
+        }
+        "reasoningEnded" => DriverEvent::ReasoningEnded {
+            part: reasoning_part_from_wire(&payload),
+            text: payload
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        },
         "activity" => {
             let activity: ActivityWire = serde_json::from_value(payload)?;
             DriverEvent::Activity {
@@ -1599,6 +1641,59 @@ mod tests {
         assert!(matches!(
             event_from_wire(wire).unwrap(),
             DriverEvent::TextDelta(text) if text == "hello"
+        ));
+    }
+
+    #[test]
+    fn wire_event_round_trip_preserves_keyed_reasoning_fragments() {
+        let wire = event_to_wire(DriverEvent::ReasoningStarted {
+            part: "reasoning:msg_1:0".into(),
+        })
+        .unwrap();
+        assert_eq!(wire.kind, "reasoningStarted");
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::ReasoningStarted { part } if part == "reasoning:msg_1:0"
+        ));
+
+        let wire = event_to_wire(DriverEvent::ReasoningDelta {
+            part: "reasoning:msg_1:0".into(),
+            delta: "thinking".into(),
+        })
+        .unwrap();
+        assert_eq!(wire.kind, "reasoningDelta");
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::ReasoningDelta { part, delta }
+                if part == "reasoning:msg_1:0" && delta == "thinking"
+        ));
+
+        let wire = event_to_wire(DriverEvent::ReasoningEnded {
+            part: "reasoning:msg_1:0".into(),
+            text: Some("thinking!".into()),
+        })
+        .unwrap();
+        assert_eq!(wire.kind, "reasoningEnded");
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::ReasoningEnded { part, text }
+                if part == "reasoning:msg_1:0" && text.as_deref() == Some("thinking!")
+        ));
+    }
+
+    #[test]
+    fn a_pre_keying_reasoning_delta_degrades_to_the_unkeyed_path() {
+        // An older daemon serializes reasoning deltas as bare strings; the
+        // decoded event carries an empty part key, which the app maps to its
+        // phase-based fallback instead of failing the stream.
+        let wire = WireDriverEvent::new(
+            "reasoningDelta".to_owned(),
+            serde_json::Value::String("thinking".to_owned()),
+        );
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::ReasoningDelta { part, delta }
+                if part.is_empty() && delta == "thinking"
         ));
     }
 

@@ -823,6 +823,19 @@ struct SessionRuntime {
     pending_steers: VecDeque<ComposerSubmission>,
     stream_phase: Option<StreamPhase>,
     stream_remeasure_pending: bool,
+    /// The provider's open reasoning fragments (opencode part keys) mapped to
+    /// the transcript activity each one streams into. Deltas of a fragment
+    /// can land after intervening tool events, so binding — not transcript
+    /// position — decides where they append. Presentation state only: it
+    /// never persists and is cleared with the phase at turn boundaries.
+    open_reasoning: HashMap<String, Uuid>,
+    /// Reasoning fragments that already settled from their authoritative end
+    /// event. A tail delta can trail its own `ended` on the wire (the provider
+    /// flushes buffered deltas asynchronously); the fragment's text is then
+    /// already complete in its block, so further deltas for the key are
+    /// dropped instead of opening a stray fragment. A fresh `started` reopens
+    /// the key. Cleared with `open_reasoning`.
+    settled_reasoning: HashSet<String>,
     /// The provider's busy/retry report for the live turn, if any. Runtime
     /// presentation state: it never persists and always dies with the turn.
     provider_phase: Option<ProviderPhase>,

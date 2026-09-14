@@ -19,7 +19,7 @@ impl Fintwind {
     ) {
         let previous_phase = runtime.stream_phase;
         if previous_phase == Some(StreamPhase::Reasoning) {
-            self.complete_reasoning_activity(session_id);
+            self.complete_reasoning_activity(session_id, runtime);
         }
         let continuing = previous_phase == Some(StreamPhase::Text);
         append_text_delta_to_session(&mut self.state.sessions, session_id, continuing, delta);
@@ -27,11 +27,12 @@ impl Fintwind {
         runtime.stream_phase = Some(StreamPhase::Text);
     }
 
-    fn complete_reasoning_activity(&mut self, session_id: Uuid) {
+    fn complete_reasoning_activity(&mut self, session_id: Uuid, runtime: &SessionRuntime) {
+        let bound = runtime.open_reasoning.values().copied().collect::<Vec<_>>();
         let completed_block = self
             .state
             .session_mut(session_id)
-            .and_then(complete_latest_reasoning_activity);
+            .and_then(|session| complete_reasoning_activity_bound(session, &bound));
         // Live reasoning auto-collapses on a phase change and may already sit
         // outside the three-row streaming remeasure window.
         if self.state.selected_session == Some(session_id)
@@ -41,7 +42,123 @@ impl Fintwind {
         }
     }
 
+    /// A provider reasoning fragment opened (opencode `session.reasoning.started`).
+    /// The fragment is the persisted part's identity, so its deltas route by
+    /// key rather than transcript position — a provider can flush a tail delta
+    /// after the next tool's events have already landed, and that tail belongs
+    /// back inside its own thought, not in a stray new one.
+    fn open_reasoning_fragment(
+        &mut self,
+        session_id: Uuid,
+        runtime: &mut SessionRuntime,
+        part: String,
+    ) {
+        // Reopening a key abandons whatever the previous fragment under it
+        // produced — and lifts any settle — so the next delta opens a fresh
+        // block.
+        runtime.open_reasoning.remove(&part);
+        runtime.settled_reasoning.remove(&part);
+        if runtime.stream_phase == Some(StreamPhase::Reasoning) {
+            self.complete_reasoning_activity(session_id, runtime);
+            // The opened fragment continues the same stretch of work (its
+            // block grouping follows), but its first delta must start a new
+            // activity instead of appending to the one just completed.
+            runtime.stream_phase = Some(StreamPhase::Activity);
+        }
+    }
+
     pub(super) fn append_reasoning_delta(
+        &mut self,
+        session_id: Uuid,
+        runtime: &mut SessionRuntime,
+        part: String,
+        delta: String,
+    ) {
+        if part.is_empty() {
+            self.append_unkeyed_reasoning_delta(session_id, runtime, delta);
+            return;
+        }
+        let continuing_work = matches!(
+            runtime.stream_phase,
+            Some(StreamPhase::Reasoning | StreamPhase::Activity)
+        );
+        let opened = if let Some(session) = self.state.session_mut(session_id) {
+            let opened = bind_keyed_reasoning_delta(
+                session,
+                &mut runtime.open_reasoning,
+                &runtime.settled_reasoning,
+                &part,
+                &delta,
+                continuing_work,
+            );
+            session.updated_at = unix_time();
+            opened
+        } else {
+            return;
+        };
+        if opened {
+            self.finish_streaming_assistant(session_id);
+        }
+        runtime.stream_phase = Some(StreamPhase::Reasoning);
+    }
+
+    /// A fragment settled (opencode `session.reasoning.ended`). Its durable
+    /// `text` is what the stored reasoning part keeps, so it overwrites the
+    /// accumulated deltas — healing anything lost or reordered. An empty text
+    /// retires the fragment's block, mirroring the replay path that filters
+    /// empty stored parts.
+    fn complete_reasoning_fragment(
+        &mut self,
+        session_id: Uuid,
+        runtime: &mut SessionRuntime,
+        part: String,
+        text: Option<String>,
+    ) {
+        if part.is_empty() {
+            if runtime.stream_phase == Some(StreamPhase::Reasoning) {
+                self.complete_reasoning_activity(session_id, runtime);
+                runtime.stream_phase = None;
+            }
+            return;
+        }
+        let continuing_work = matches!(
+            runtime.stream_phase,
+            Some(StreamPhase::Reasoning | StreamPhase::Activity)
+        );
+        let settled_block = if let Some(session) = self.state.session_mut(session_id) {
+            let settled = settle_keyed_reasoning_fragment(
+                session,
+                &mut runtime.open_reasoning,
+                &part,
+                text.as_deref(),
+                continuing_work,
+            );
+            session.updated_at = unix_time();
+            settled
+        } else {
+            None
+        };
+        // The fragment is now complete on the provider side: any tail delta
+        // still in flight for the key carries nothing the end event did not.
+        runtime.settled_reasoning.insert(part);
+        // Live reasoning auto-collapses on a phase change and may already sit
+        // outside the three-row streaming remeasure window.
+        if self.state.selected_session == Some(session_id)
+            && let Some(block_index) = settled_block
+        {
+            self.remeasure_transcript_block(block_index);
+        }
+        // The turn stays mid-work after one fragment settles: the next
+        // fragment's block must continue the same transcript group, exactly
+        // as the replay path merges consecutive stored parts into one block.
+        // Activity (not Reasoning) so an unkeyed delta cannot append into the
+        // just-settled thought.
+        runtime.stream_phase = Some(StreamPhase::Activity);
+    }
+
+    /// Pre-keying transports (older daemons on the wire) carry no fragment
+    /// identity: deltas group by transcript phase exactly as they always did.
+    fn append_unkeyed_reasoning_delta(
         &mut self,
         session_id: Uuid,
         runtime: &mut SessionRuntime,
@@ -99,7 +216,7 @@ impl Fintwind {
             self.finish_streaming_assistant(session_id);
         }
         if previous_phase == Some(StreamPhase::Reasoning) {
-            self.complete_reasoning_activity(session_id);
+            self.complete_reasoning_activity(session_id, runtime);
         }
 
         let continuing_work = matches!(
@@ -320,10 +437,22 @@ impl Fintwind {
                     self.append_text_delta(session_id, runtime, delta);
                 }
             }
-            DriverEvent::ReasoningDelta(delta) => {
+            DriverEvent::ReasoningStarted { part } => {
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
-                    self.append_reasoning_delta(session_id, runtime, delta);
+                    self.open_reasoning_fragment(session_id, runtime, part);
+                }
+            }
+            DriverEvent::ReasoningDelta { part, delta } => {
+                if self.accepts_turn_output(session_id) {
+                    runtime.provider_phase = None;
+                    self.append_reasoning_delta(session_id, runtime, part, delta);
+                }
+            }
+            DriverEvent::ReasoningEnded { part, text } => {
+                if self.accepts_turn_output(session_id) {
+                    runtime.provider_phase = None;
+                    self.complete_reasoning_fragment(session_id, runtime, part, text);
                 }
             }
             DriverEvent::Activity {
@@ -629,6 +758,8 @@ impl Fintwind {
                 self.finish_streaming_assistant(session_id);
                 self.complete_turn_blocks(session_id);
                 runtime.stream_phase = None;
+                runtime.open_reasoning.clear();
+            runtime.settled_reasoning.clear();
                 runtime.provider_phase = None;
                 let needs_fallback = !self.turn_has_assistant_message(session_id);
                 if let Some(session) = self.state.session_mut(session_id) {
@@ -723,6 +854,8 @@ impl Fintwind {
                 self.finish_streaming_assistant(session_id);
                 self.complete_turn_blocks(session_id);
                 runtime.stream_phase = None;
+                runtime.open_reasoning.clear();
+            runtime.settled_reasoning.clear();
                 runtime.provider_phase = None;
                 runtime.pending_permission = None;
                 runtime.pending_user_input = None;
@@ -762,23 +895,163 @@ impl Fintwind {
     }
 }
 
-pub(super) fn complete_latest_reasoning_activity(session: &mut AgentSession) -> Option<usize> {
-    let (block_index, reasoning) = session
+/// Complete the reasoning activity a phase change settles. Fragments still
+/// bound on the provider side win over transcript position — with keyed
+/// fragments, "latest" and "open" can differ when a tail delta trails a tool.
+pub(super) fn complete_reasoning_activity_bound(
+    session: &mut AgentSession,
+    bound: &[Uuid],
+) -> Option<usize> {
+    let mut latest_incomplete = None;
+    let mut latest_bound = None;
+    for (block_index, block) in session.transcript_blocks.iter_mut().enumerate().rev() {
+        for (activity_index, activity) in block.activities.iter_mut().enumerate().rev() {
+            if activity.reasoning.is_some() && !activity.complete {
+                if latest_incomplete.is_none() {
+                    latest_incomplete = Some((block_index, activity_index));
+                }
+                if bound.contains(&activity.id) {
+                    latest_bound = Some((block_index, activity_index));
+                    break;
+                }
+            }
+        }
+        if latest_bound.is_some() {
+            break;
+        }
+    }
+    let (block_index, activity_index) = latest_bound.or(latest_incomplete)?;
+    let activity = session
+        .transcript_blocks
+        .get_mut(block_index)?
+        .activities
+        .get_mut(activity_index)?;
+    activity.complete = true;
+    session.updated_at = unix_time();
+    Some(block_index)
+}
+
+/// The block and activity a reasoning fragment is bound to, located by the
+/// activity id the fragment registry recorded when the block opened.
+fn find_activity_mut(
+    session: &mut AgentSession,
+    activity_id: Uuid,
+) -> Option<(usize, &mut ActivityItem)> {
+    session
         .transcript_blocks
         .iter_mut()
         .enumerate()
-        .rev()
         .find_map(|(block_index, block)| {
             block
                 .activities
                 .iter_mut()
-                .rev()
-                .find(|activity| activity.reasoning.is_some() && !activity.complete)
+                .find(|activity| activity.id == activity_id)
                 .map(|activity| (block_index, activity))
-        })?;
-    reasoning.complete = true;
-    session.updated_at = unix_time();
-    Some(block_index)
+        })
+}
+
+/// Route one keyed reasoning delta to the fragment's own activity. Deltas of
+/// an open fragment append even after intervening tool events — the provider
+/// flushes its buffered tail late, and that tail belongs inside its thought.
+/// A delta trailing its own fragment's end event adds nothing (the end event
+/// already wrote the authoritative text), and neither does an empty one.
+/// Returns whether a fresh activity opened (text can no longer be streaming
+/// then).
+pub(super) fn bind_keyed_reasoning_delta(
+    session: &mut AgentSession,
+    open_reasoning: &mut HashMap<String, Uuid>,
+    settled: &HashSet<String>,
+    part: &str,
+    delta: &str,
+    continuing_work: bool,
+) -> bool {
+    if delta.is_empty() || settled.contains(part) {
+        return false;
+    }
+    let now = unix_time_millis();
+    if let Some(activity_id) = open_reasoning.get(part).copied()
+        && let Some((_, activity)) = find_activity_mut(session, activity_id)
+        && let Some(reasoning) = activity.reasoning.as_mut()
+    {
+        reasoning.content.push_str(delta);
+        reasoning.finished_at_ms = now;
+        return false;
+    }
+    let mut item = ActivityItem::from_reasoning(
+        ReasoningBlock {
+            content: delta.to_owned(),
+            started_at_ms: now,
+            finished_at_ms: now,
+        },
+        false,
+    );
+    item.source_id = Some(part.to_owned());
+    let item_id = item.id;
+    push_transcript_activity(session, item, continuing_work);
+    open_reasoning.insert(part.to_owned(), item_id);
+    true
+}
+
+/// Close a keyed reasoning fragment with its authoritative text — the exact
+/// content the stored reasoning part keeps, so the live view converges with
+/// what a restart will render. An empty text retires the fragment's block,
+/// mirroring the replay path that filters empty stored parts. Returns the
+/// block whose rows must be remeasured.
+pub(super) fn settle_keyed_reasoning_fragment(
+    session: &mut AgentSession,
+    open_reasoning: &mut HashMap<String, Uuid>,
+    part: &str,
+    text: Option<&str>,
+    continuing_work: bool,
+) -> Option<usize> {
+    let now = unix_time_millis();
+    let located = open_reasoning
+        .remove(part)
+        .and_then(|activity_id| find_activity_mut(session, activity_id));
+    if let Some((block_index, activity)) = located {
+        if text.map(str::trim) == Some("") {
+            let id = activity.id;
+            remove_activity(session, block_index, id);
+            // The block itself may be gone; its old index can no longer name
+            // a row to remeasure.
+            return None;
+        } else {
+            if let (Some(reasoning), Some(text)) = (activity.reasoning.as_mut(), text) {
+                reasoning.content = text.to_owned();
+                reasoning.finished_at_ms = now;
+            }
+            activity.complete = true;
+        }
+        return Some(block_index);
+    }
+    // No delta ever landed for this fragment. Materialize it from the
+    // authoritative text so the live view carries the part the stored
+    // transcript keeps.
+    if let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) {
+        let mut item = ActivityItem::from_reasoning(
+            ReasoningBlock {
+                content: text.to_owned(),
+                started_at_ms: now,
+                finished_at_ms: now,
+            },
+            true,
+        );
+        item.source_id = Some(part.to_owned());
+        push_transcript_activity(session, item, continuing_work);
+    }
+    None
+}
+
+/// Drop one activity from its block, and the block itself when the drop leaves
+/// it empty — the shape the replay path produces for the same input.
+fn remove_activity(session: &mut AgentSession, block_index: usize, activity_id: Uuid) {
+    let Some(block) = session.transcript_blocks.get_mut(block_index) else {
+        return;
+    };
+    block.activities.retain(|activity| activity.id != activity_id);
+    if block.activities.is_empty() {
+        session.transcript_blocks.remove(block_index);
+    }
 }
 
 /// A completed edit or shell command is the earliest provider-neutral point at
@@ -820,7 +1093,17 @@ pub(super) fn push_transcript_activity(
 pub(super) fn stream_delta_kind(event: &DriverEvent) -> Option<StreamDeltaKind> {
     match event {
         DriverEvent::TextDelta(_) => Some(StreamDeltaKind::Text),
-        DriverEvent::ReasoningDelta(_) => Some(StreamDeltaKind::Reasoning),
+        DriverEvent::ReasoningDelta { .. } => Some(StreamDeltaKind::Reasoning),
+        _ => None,
+    }
+}
+
+/// The reasoning fragment key a queued delta belongs to. Adjacent deltas of
+/// one key coalesce into one pump pass; a different key ends the run, because
+/// each fragment's chunk is routed to its own block.
+fn stream_delta_part(event: &DriverEvent) -> Option<&str> {
+    match event {
+        DriverEvent::ReasoningDelta { part, .. } => Some(part),
         _ => None,
     }
 }
@@ -828,7 +1111,13 @@ pub(super) fn stream_delta_kind(event: &DriverEvent) -> Option<StreamDeltaKind> 
 pub(super) fn stream_delta_text(event: &DriverEvent, kind: StreamDeltaKind) -> Option<&str> {
     match (kind, event) {
         (StreamDeltaKind::Text, DriverEvent::TextDelta(text))
-        | (StreamDeltaKind::Reasoning, DriverEvent::ReasoningDelta(text)) => Some(text),
+        | (
+            StreamDeltaKind::Reasoning,
+            DriverEvent::ReasoningDelta { delta: text, .. },
+        ) =>
+    {
+        Some(text)
+    }
         _ => None,
     }
 }
@@ -863,23 +1152,37 @@ pub(super) fn pop_stream_batch(
     kind: StreamDeltaKind,
 ) -> Option<DriverEvent> {
     let mut chunk = String::new();
+    let mut part: Option<String> = None;
     let mut latest_cursor = None;
     loop {
-        match events.front() {
+        let next = match events.front() {
             Some(DriverEvent::RuntimeEventCursorAdvanced(_)) => {
                 latest_cursor = events.pop_front();
+                continue;
             }
             Some(event) if stream_delta_text(event, kind).is_some() => {
-                let event = events.pop_front()?;
-                match (kind, event) {
-                    (StreamDeltaKind::Text, DriverEvent::TextDelta(text))
-                    | (StreamDeltaKind::Reasoning, DriverEvent::ReasoningDelta(text)) => {
-                        chunk.push_str(&text);
-                    }
-                    _ => unreachable!("the stream kind was checked before removing the event"),
+                let next_part = stream_delta_part(event).map(str::to_owned);
+                if part.is_some() && part != next_part {
+                    break;
                 }
+                events.pop_front()
             }
             _ => break,
+        };
+        let Some(event) = next else {
+            break;
+        };
+        part = stream_delta_part(&event).map(str::to_owned);
+        match (kind, event) {
+            (StreamDeltaKind::Text, DriverEvent::TextDelta(text))
+            | (
+                StreamDeltaKind::Reasoning,
+                DriverEvent::ReasoningDelta { delta: text, .. },
+            ) =>
+            {
+                chunk.push_str(&text);
+            }
+            _ => unreachable!("the stream kind was checked before removing the event"),
         }
     }
     if let Some(cursor) = latest_cursor {
@@ -887,7 +1190,10 @@ pub(super) fn pop_stream_batch(
     }
     match kind {
         StreamDeltaKind::Text => Some(DriverEvent::TextDelta(chunk)),
-        StreamDeltaKind::Reasoning => Some(DriverEvent::ReasoningDelta(chunk)),
+        StreamDeltaKind::Reasoning => Some(DriverEvent::ReasoningDelta {
+            part: part.unwrap_or_default(),
+            delta: chunk,
+        }),
     }
 }
 

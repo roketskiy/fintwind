@@ -1486,7 +1486,23 @@ pub enum DriverEvent {
     AvailableCommands(Vec<ReportedCommand>),
     TurnStarted,
     TextDelta(String),
-    ReasoningDelta(String),
+    /// A provider reasoning fragment opened (opencode v2 `session.reasoning.started`,
+    /// a durable event). Deltas that follow belong to this fragment until it
+    /// ends, even when tool activity lands in between — the fragment, not the
+    /// transcript phase, is what a persisted reasoning part is keyed by.
+    /// `part` is the provider's (assistant message, ordinal) identity; empty
+    /// on transports that predate keying, which keeps the phase-based fallback.
+    ReasoningStarted { part: String },
+    /// A reasoning fragment's increment. Deltas of one fragment may arrive
+    /// after intervening tool events (the provider batches and flushes them
+    /// asynchronously), so the app routes them by `part` instead of position.
+    ReasoningDelta { part: String, delta: String },
+    /// The fragment settled with its authoritative full text (opencode v2
+    /// `session.reasoning.ended`, a durable event — the same text the stored
+    /// reasoning part keeps). `Some` replaces whatever the deltas accumulated,
+    /// healing lost or reordered ones; an empty text retires the fragment's
+    /// block so an empty stored part never renders.
+    ReasoningEnded { part: String, text: Option<String> },
     Activity {
         id: Option<String>,
         kind: ActivityKind,

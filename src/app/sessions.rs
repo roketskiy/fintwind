@@ -1086,6 +1086,8 @@ impl Fintwind {
         self.settle_foreground_work(session_id, BackgroundWorkStatus::Stopped);
         if let Some(runtime) = runtime.as_mut() {
             runtime.stream_phase = None;
+            runtime.open_reasoning.clear();
+            runtime.settled_reasoning.clear();
             runtime.provider_phase = None;
             runtime.pending_permission = None;
             runtime.pending_user_input = None;

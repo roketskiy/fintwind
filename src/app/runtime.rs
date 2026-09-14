@@ -1898,11 +1898,12 @@ impl Fintwind {
             }
             self.mark_background_work_lost(session_id);
         } else if let Some(runtime) = self.runtimes.get_mut(&session_id) {
-            runtime
-                .pending_events
+            runtime.pending_events
                 .retain(|event| matches!(event, DriverEvent::BackgroundWork(_)));
             runtime.stream_remeasure_pending = false;
             runtime.stream_phase = None;
+            runtime.open_reasoning.clear();
+            runtime.settled_reasoning.clear();
             runtime.pending_permission = None;
             runtime.pending_user_input = None;
         }
@@ -2132,6 +2133,8 @@ impl Fintwind {
                 pending_steers: VecDeque::new(),
                 stream_phase: None,
                 stream_remeasure_pending: false,
+                open_reasoning: HashMap::new(),
+                settled_reasoning: HashSet::new(),
                 provider_phase: None,
                 pending_permission: None,
                 pending_user_input: None,
@@ -2610,6 +2613,8 @@ impl Fintwind {
             runtime.pending_steers.clear();
             runtime.stream_remeasure_pending = false;
             runtime.stream_phase = None;
+            runtime.open_reasoning.clear();
+            runtime.settled_reasoning.clear();
             runtime.provider_phase = None;
             runtime.pending_permission = None;
             runtime.pending_user_input = None;
@@ -2784,7 +2789,11 @@ impl Fintwind {
                 // second, sailing straight past the 120 ms commit floor.
                 markdown_changed |= matches!(
                     event,
-                    DriverEvent::TextDelta(_) | DriverEvent::ReasoningDelta(_)
+                    DriverEvent::TextDelta(_)
+                        | DriverEvent::ReasoningDelta { .. }
+                        // The authoritative fragment text rewrites the live
+                        // block's markdown in one pass.
+                        | DriverEvent::ReasoningEnded { .. }
                 );
                 if background_output_delta {
                     // The registry batches log text into SharedString at 10Hz;

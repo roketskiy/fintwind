@@ -13,6 +13,8 @@
 //! field's own bindings; when it closes the context disappears and `enter`
 //! submits again.
 
+use crate::theme::ui_px;
+
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
@@ -484,7 +486,7 @@ impl Fintwind {
                             .flex_none()
                             .max_w(px(260.0))
                             .truncate()
-                            .text_size(px(12.0))
+                            .text_size(ui_px(12.0))
                             .child(matched_text(
                                 format!("/{}", command.name),
                                 name_ranges,
@@ -497,7 +499,7 @@ impl Fintwind {
                         element.child(
                             div()
                                 .flex_none()
-                                .text_size(px(11.0))
+                                .text_size(ui_px(11.0))
                                 .text_color(theme.text_ghost)
                                 .child(hint),
                         )
@@ -507,13 +509,13 @@ impl Fintwind {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(11.0))
+                            .text_size(ui_px(11.0))
                             .text_color(theme.text_tertiary)
                             .child(SharedString::from(command.description.clone())),
                     )
                     .child(
                         div()
-                            .h(px(16.0))
+                            .h(ui_px(16.0))
                             .px(px(5.0))
                             .flex_none()
                             .rounded(px(4.0))
@@ -521,7 +523,7 @@ impl Fintwind {
                             .border_color(theme.border)
                             .flex()
                             .items_center()
-                            .text_size(px(9.0))
+                            .text_size(ui_px(9.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(theme.text_tertiary)
                             .child(command.scope.label()),
@@ -552,7 +554,7 @@ impl Fintwind {
                             .flex_none()
                             .max_w(px(300.0))
                             .truncate()
-                            .text_size(px(12.0))
+                            .text_size(ui_px(12.0))
                             .child(matched_text(
                                 name.to_owned(),
                                 highlight_byte_ranges(name, &scored.positions, name_char_offset),
@@ -567,7 +569,7 @@ impl Fintwind {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(11.0))
+                                .text_size(ui_px(11.0))
                                 .child(matched_text(
                                     parent.to_owned(),
                                     highlight_byte_ranges(parent, &scored.positions, 0),

@@ -1,3 +1,5 @@
+use crate::theme::{code_px, ui_px};
+
 use super::right_panel::{DiffRowStyle, render_diff_code_row};
 use super::*;
 use base64::Engine as _;
@@ -604,8 +606,8 @@ impl Render for ConversationNavigationRail {
                     div()
                         .w_full()
                         .truncate()
-                        .text_size(px(14.0))
-                        .line_height(px(20.0))
+                        .text_size(ui_px(14.0))
+                        .line_height(ui_px(20.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text)
                         .child(SharedString::from(turn.prompt.clone())),
@@ -617,8 +619,8 @@ impl Render for ConversationNavigationRail {
                             .max_h(px(60.0))
                             .overflow_hidden()
                             .whitespace_normal()
-                            .text_size(px(13.0))
-                            .line_height(px(20.0))
+                            .text_size(ui_px(13.0))
+                            .line_height(ui_px(20.0))
                             .text_color(theme.text_tertiary)
                             .child(SharedString::from(turn.response.clone())),
                     )
@@ -1262,9 +1264,9 @@ impl Fintwind {
                     let attachments_can_reveal = !self.daemon.is_remote();
                     let menu = self.menu_handle(format!("message-{}", message.id), cx);
                     let metrics = if message.role == MessageRole::User {
-                        MarkdownMetrics::USER_MESSAGE
+                        MarkdownMetrics::user_message()
                     } else {
-                        MarkdownMetrics::BODY
+                        MarkdownMetrics::body()
                     };
                     let animate_streaming = message.streaming && !cx.reduce_motion();
                     let ctx = self.markdown_ctx(
@@ -1492,7 +1494,7 @@ impl Fintwind {
             .items_center()
             .gap(px(6.0))
             .cursor_default()
-            .text_size(px(12.5))
+            .text_size(ui_px(12.5))
             .font_weight(FontWeight::MEDIUM)
             .text_color(theme.text_secondary)
             .focus_visible(|style| style.border_color(theme.accent))
@@ -1554,7 +1556,7 @@ impl Fintwind {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(12.5))
+                                    .text_size(ui_px(12.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
                                     .child(title),
@@ -1564,8 +1566,8 @@ impl Fintwind {
                                     .flex()
                                     .items_center()
                                     .gap(px(6.0))
-                                    .text_size(px(11.0))
-                                    .line_height(px(14.0))
+                                    .text_size(ui_px(11.0))
+                                    .line_height(ui_px(14.0))
                                     .child(
                                         div()
                                             .text_color(theme.success)
@@ -1605,7 +1607,7 @@ impl Fintwind {
                             .min_w_0()
                             .flex_1()
                             .truncate()
-                            .text_size(px(11.5))
+                            .text_size(ui_px(11.5))
                             .text_color(theme.text_secondary)
                             .tooltip(Tooltip::text(file.path.clone()))
                             .child(file.path.clone()),
@@ -1613,14 +1615,14 @@ impl Fintwind {
                     .child(
                         div()
                             .flex_none()
-                            .text_size(px(10.5))
+                            .text_size(ui_px(10.5))
                             .text_color(theme.success)
                             .child(format!("+{}", file.additions)),
                     )
                     .child(
                         div()
                             .flex_none()
-                            .text_size(px(10.5))
+                            .text_size(ui_px(10.5))
                             .text_color(theme.danger)
                             .child(format!("-{}", file.deletions)),
                     ),
@@ -1654,7 +1656,7 @@ impl Fintwind {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_default()
-                    .text_size(px(12.5))
+                    .text_size(ui_px(12.5))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_secondary)
                     .focus_visible(|style| style.bg(theme.overlay_strong))
@@ -1733,8 +1735,8 @@ impl Fintwind {
                     .items_center()
                     .gap(px(5.0))
                     .cursor_default()
-                    .text_size(px(12.5))
-                    .line_height(px(17.0))
+                    .text_size(ui_px(12.5))
+                    .line_height(ui_px(17.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_tertiary)
                     .focus_visible(|style| style.text_color(theme.text))
@@ -1797,8 +1799,8 @@ impl Fintwind {
             .child(working_wave_dots(theme.text_tertiary))
             .child(
                 div()
-                    .text_size(px(11.5))
-                    .line_height(px(16.0))
+                    .text_size(ui_px(11.5))
+                    .line_height(ui_px(16.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_tertiary)
                     .child(SharedString::from(tr!(
@@ -1823,8 +1825,8 @@ impl Fintwind {
             .child(working_wave_dots(theme.text_tertiary))
             .child(
                 div()
-                    .text_size(px(11.5))
-                    .line_height(px(16.0))
+                    .text_size(ui_px(11.5))
+                    .line_height(ui_px(16.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_tertiary)
                     .child(SharedString::from(tr!("transcript.compacting"))),
@@ -1860,8 +1862,8 @@ impl Fintwind {
             .gap(px(6.0))
             .child(
                 div()
-                    .text_size(px(11.5))
-                    .line_height(px(16.0))
+                    .text_size(ui_px(11.5))
+                    .line_height(ui_px(16.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(color)
                     .child(SharedString::from(format!("· {text}"))),
@@ -1976,8 +1978,8 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .cursor_default()
-                    .text_size(px(12.5))
-                    .line_height(px(17.0))
+                    .text_size(ui_px(12.5))
+                    .line_height(ui_px(17.0))
                     .focus_visible(|style| style.text_color(theme.text))
                     .hover(|style| style.text_color(theme.text))
                     .active(|style| style.text_color(theme.text_ghost))
@@ -2005,8 +2007,8 @@ impl Fintwind {
                     div()
                         .w_full()
                         .min_w(px(0.0))
-                        .text_size(px(12.0))
-                        .line_height(px(17.0))
+                        .text_size(ui_px(12.0))
+                        .line_height(ui_px(17.0))
                         .text_color(theme.text_secondary)
                         .child(SharedString::from(line.trim().to_owned())),
                 );
@@ -2016,8 +2018,8 @@ impl Fintwind {
                     .flex()
                     .flex_col()
                     .gap(px(2.0))
-                    .text_size(px(12.0))
-                    .line_height(px(17.0));
+                    .text_size(ui_px(12.0))
+                    .line_height(ui_px(17.0));
                 if !action.title.trim().is_empty() {
                     notice = notice.child(
                         div()
@@ -2157,8 +2159,8 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .gap(px(6.0))
-                    .text_size(px(13.0))
-                    .line_height(px(17.0))
+                    .text_size(ui_px(13.0))
+                    .line_height(ui_px(17.0))
                     .cursor_default()
                     .focus_visible(|style| style.text_color(theme.text))
                     .hover(|style| style.text_color(theme.text))
@@ -2239,7 +2241,7 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .cursor_default()
-                    .text_size(px(10.5))
+                    .text_size(ui_px(10.5))
                     .text_color(color)
                     .focus_visible(|style| style.border_color(theme.accent))
                     .hover(|style| style.bg(theme.overlay_strong))
@@ -2346,8 +2348,8 @@ impl Fintwind {
                         .when(!item_expanded, |element| {
                             element.rounded_bl(px(8.0)).rounded_br(px(8.0))
                         })
-                        .text_size(px(12.5))
-                        .line_height(px(17.0))
+                        .text_size(ui_px(12.5))
+                        .line_height(ui_px(17.0))
                         .when(has_detail || subagent_work.is_some(), |element| {
                             element
                                 .track_focus(&item_focus)
@@ -2493,7 +2495,7 @@ impl Fintwind {
                     let ctx = self.markdown_ctx(
                         format!("reasoning-{id}"),
                         &palette,
-                        MarkdownMetrics::COMPACT,
+                        MarkdownMetrics::compact(),
                         reasoning_live && !cx.reduce_motion(),
                     );
                     let reasoning_viewport = self
@@ -2583,7 +2585,7 @@ impl Fintwind {
                 let ctx = self.markdown_ctx(
                     format!("activity-{id}"),
                     &palette,
-                    MarkdownMetrics::COMPACT,
+                    MarkdownMetrics::compact(),
                     false,
                 );
                 let mut detail_card = div()
@@ -2597,8 +2599,8 @@ impl Fintwind {
                     .flex_col()
                     .gap(px(8.0))
                     .font_family(md::render::MONO_FAMILY)
-                    .text_size(px(10.5))
-                    .line_height(px(16.0))
+                    .text_size(code_px(10.5))
+                    .line_height(code_px(16.0))
                     .text_color(theme.text_secondary)
                     .whitespace_normal()
                     .overflow_hidden();
@@ -2702,8 +2704,8 @@ impl Fintwind {
                                             .track_scroll(&output_viewport.scroll_handle)
                                             .py(px(4.0))
                                             .pr(px(8.0))
-                                            .text_size(px(10.5))
-                                            .line_height(px(16.0))
+                                            .text_size(code_px(10.5))
+                                            .line_height(code_px(16.0))
                                             .child(md::render::plain_text(
                                                 content.clone(),
                                                 md::render::MONO_FAMILY,
@@ -2745,8 +2747,8 @@ impl Fintwind {
                                 div()
                                     .w_full()
                                     .min_w_0()
-                                    .text_size(px(10.5))
-                                    .line_height(px(16.0))
+                                    .text_size(code_px(10.5))
+                                    .line_height(code_px(16.0))
                                     .child(md::render::plain_text(
                                         content.clone(),
                                         md::render::MONO_FAMILY,
@@ -2806,8 +2808,8 @@ impl Fintwind {
             .flex()
             .flex_col()
             .font_family(md::render::MONO_FAMILY)
-            .text_size(px(10.5))
-            .line_height(px(16.0))
+            .text_size(code_px(10.5))
+            .line_height(code_px(16.0))
             .on_scroll_wheel(move |_, _, cx| contain_scroll(&wheel_scroll, cx));
         for (index, line) in diff.snapshot.lines.iter().enumerate() {
             rows = rows.child(self.render_activity_diff_row(
@@ -3000,7 +3002,7 @@ fn activity_diff_break_row(label: Option<String>, theme: &Theme) -> AnyElement {
         .flex()
         .items_center()
         .font_family(md::render::MONO_FAMILY)
-        .text_size(px(10.5))
+        .text_size(code_px(10.5))
         .bg(theme.overlay)
         .text_color(theme.text_ghost)
         .child(

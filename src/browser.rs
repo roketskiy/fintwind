@@ -21,6 +21,8 @@
 //!
 //! [`Fintwind`]: crate::app::Fintwind
 
+use crate::theme::ui_px;
+
 use std::rc::Rc;
 
 use gpui::{
@@ -1634,7 +1636,7 @@ impl BrowserView {
             .child(
                 div()
                     .mt(px(14.0))
-                    .text_size(px(13.0))
+                    .text_size(ui_px(13.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(tr!("browser.browse_web")),
@@ -1644,8 +1646,8 @@ impl BrowserView {
                     .mt(px(6.0))
                     .max_w(px(310.0))
                     .text_center()
-                    .text_size(px(11.0))
-                    .line_height(px(17.0))
+                    .text_size(ui_px(11.0))
+                    .line_height(ui_px(17.0))
                     .text_color(theme.text_tertiary)
                     .whitespace_normal()
                     .child(tr!("browser.start_hint", shortcut = "Ctrl+L")),
@@ -1666,7 +1668,7 @@ impl BrowserView {
             .child(
                 div()
                     .mt(px(14.0))
-                    .text_size(px(13.0))
+                    .text_size(ui_px(13.0))
                     .font_weight(gpui::FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(tr!("browser.unavailable")),
@@ -1676,8 +1678,8 @@ impl BrowserView {
                     .mt(px(6.0))
                     .max_w(px(340.0))
                     .text_center()
-                    .text_size(px(11.0))
-                    .line_height(px(17.0))
+                    .text_size(ui_px(11.0))
+                    .line_height(ui_px(17.0))
                     .text_color(theme.text_tertiary)
                     .whitespace_normal()
                     .child(message),

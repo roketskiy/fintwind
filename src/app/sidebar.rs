@@ -1,3 +1,5 @@
+use crate::theme::ui_px;
+
 use gpui::{KeyBinding, actions};
 
 use super::*;
@@ -207,8 +209,8 @@ impl Fintwind {
             .flex()
             .items_center()
             .gap(px(5.0))
-            .text_size(px(11.0))
-            .line_height(px(0.0))
+            .text_size(ui_px(11.0))
+            .line_height(ui_px(0.0))
             .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(dot))
             .child(
                 div()
@@ -460,7 +462,7 @@ impl Fintwind {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(13.0))
+                    .text_size(ui_px(13.0))
                     .text_color(theme.text_secondary)
                     .child(label),
             )
@@ -528,7 +530,7 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .gap(px(7.0))
-                    .text_size(px(13.0))
+                    .text_size(ui_px(13.0))
                     .text_color(theme.text_secondary)
                     .cursor_default()
                     .hover(|element| element.bg(theme.overlay))
@@ -858,7 +860,7 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .gap(px(2.0))
-                    .text_size(px(12.5))
+                    .text_size(ui_px(12.5))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_tertiary)
                     .child(toggle)
@@ -1079,7 +1081,7 @@ impl Fintwind {
                 .bg(theme.inset)
                 .flex()
                 .items_center()
-                .text_size(px(13.5))
+                .text_size(ui_px(13.5))
                 .text_color(theme.text)
                 .child(rename_input)
                 .into_any_element()
@@ -1088,7 +1090,7 @@ impl Fintwind {
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .text_size(px(13.5))
+                .text_size(ui_px(13.5))
                 .text_color(theme.text)
                 .child(SharedString::from(title_text))
                 .into_any_element()
@@ -1096,7 +1098,7 @@ impl Fintwind {
         let metadata_time = time_label.map(|label| {
             div()
                 .flex_none()
-                .text_size(px(11.0))
+                .text_size(ui_px(11.0))
                 .text_color(if status.is_busy() {
                     theme.text_tertiary
                 } else {
@@ -1115,7 +1117,7 @@ impl Fintwind {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(px(11.0))
+                    .text_size(ui_px(11.0))
                     .text_color(theme.text_tertiary)
                     .child(SharedString::from(project_name)),
             )
@@ -1154,7 +1156,7 @@ impl Fintwind {
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(11.0))
+                            .text_size(ui_px(11.0))
                             .text_color(theme.text_ghost)
                             .child(SharedString::from(branch)),
                     )
@@ -1354,7 +1356,7 @@ impl Fintwind {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(13.0))
+                                .text_size(ui_px(13.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text)
                                 .child(SharedString::from(title)),
@@ -1396,7 +1398,7 @@ impl Fintwind {
                 .child(
                     div()
                         .mt(px(16.0))
-                        .text_size(px(20.0))
+                        .text_size(ui_px(20.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .child(tr_cow!("onboarding.open_project_to_begin")),
@@ -1406,8 +1408,8 @@ impl Fintwind {
                         .mt(px(8.0))
                         .max_w(px(380.0))
                         .text_center()
-                        .text_size(px(12.5))
-                        .line_height(px(19.0))
+                        .text_size(ui_px(12.5))
+                        .line_height(ui_px(19.0))
                         .text_color(theme.text_tertiary)
                         .child(tr_cow!("onboarding.description")),
                 )
@@ -1435,7 +1437,7 @@ impl Fintwind {
                                 .cursor_default()
                                 .bg(theme.inverse)
                                 .text_color(theme.on_inverse)
-                                .text_size(px(12.5))
+                                .text_size(ui_px(12.5))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .hover(|element| element.opacity(0.9))
                                 .active(|element| element.opacity(0.8))
@@ -1462,7 +1464,7 @@ impl Fintwind {
                                 .gap(px(6.0))
                                 .cursor_default()
                                 .text_color(theme.text_secondary)
-                                .text_size(px(12.0))
+                                .text_size(ui_px(12.0))
                                 .hover(|element| element.bg(theme.overlay))
                                 .active(|element| element.bg(theme.overlay_strong))
                                 .child(icon("icons/x.svg", 11.0, theme.text_tertiary))
@@ -1568,7 +1570,7 @@ impl Fintwind {
                     .mt(px(14.0))
                     .flex()
                     .items_baseline()
-                    .text_size(px(20.0))
+                    .text_size(ui_px(20.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .when(projectless_selected, |element| {

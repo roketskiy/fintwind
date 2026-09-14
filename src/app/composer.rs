@@ -1,3 +1,5 @@
+use crate::theme::ui_px;
+
 use super::*;
 
 use anyhow::Context as _;
@@ -50,7 +52,7 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .cursor_default()
-                    .text_size(px(12.5))
+                    .text_size(ui_px(12.5))
                     .font_weight(FontWeight::SEMIBOLD)
                     .when(allow, |element| {
                         element
@@ -92,7 +94,7 @@ impl Fintwind {
                             .child(icon("icons/alert.svg", 13.0, theme.warning))
                             .child(
                                 div()
-                                    .text_size(px(12.5))
+                                    .text_size(ui_px(12.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
                                     .child(SharedString::from(permission.title.clone())),
@@ -108,8 +110,8 @@ impl Fintwind {
                             .rounded(px(7.0))
                             .bg(theme.inset)
                             .font_family(crate::md::render::MONO_FAMILY)
-                            .text_size(px(10.5))
-                            .line_height(px(16.0))
+                            .text_size(ui_px(10.5))
+                            .line_height(ui_px(16.0))
                             .text_color(theme.text_secondary)
                             .whitespace_normal()
                             .child(SharedString::from(permission.detail.clone())),
@@ -184,7 +186,7 @@ impl Fintwind {
                             .min_w_0()
                             .child(
                                 div()
-                                    .text_size(px(12.5))
+                                    .text_size(ui_px(12.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
                                     .child(SharedString::from(option.label.clone())),
@@ -192,8 +194,8 @@ impl Fintwind {
                             .children(option.description.as_ref().map(|description| {
                                 div()
                                     .mt(px(1.0))
-                                    .text_size(px(11.0))
-                                    .line_height(px(14.0))
+                                    .text_size(ui_px(11.0))
+                                    .line_height(ui_px(14.0))
                                     .text_color(theme.text_secondary)
                                     .whitespace_normal()
                                     .child(SharedString::from(description.clone()))
@@ -236,7 +238,7 @@ impl Fintwind {
                 .flex()
                 .items_center()
                 .cursor_default()
-                .text_size(px(12.0))
+                .text_size(ui_px(12.0))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text_tertiary)
                 .focus_visible(|style| style.border_1().border_color(theme.accent))
@@ -264,7 +266,7 @@ impl Fintwind {
             .flex()
             .items_center()
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .font_weight(FontWeight::SEMIBOLD)
             .bg(if can_continue {
                 theme.inverse
@@ -303,7 +305,7 @@ impl Fintwind {
                 .bg(theme.overlay)
                 .flex()
                 .items_center()
-                .text_size(px(9.5))
+                .text_size(ui_px(9.5))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text_tertiary)
                 .child(tr!(
@@ -336,7 +338,7 @@ impl Fintwind {
                         .gap(px(8.0))
                         .child(
                             div()
-                                .text_size(px(10.5))
+                                .text_size(ui_px(10.5))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_tertiary)
                                 .child(SharedString::from(question.header.clone())),
@@ -346,8 +348,8 @@ impl Fintwind {
                 .child(
                     div()
                         .mt(px(5.0))
-                        .text_size(px(13.0))
-                        .line_height(px(18.0))
+                        .text_size(ui_px(13.0))
+                        .line_height(ui_px(18.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .whitespace_normal()
@@ -378,8 +380,8 @@ impl Fintwind {
                         .flex()
                         .items_center()
                         .gap(px(7.0))
-                        .text_size(px(12.5))
-                        .line_height(px(17.0))
+                        .text_size(ui_px(12.5))
+                        .line_height(ui_px(17.0))
                         .child(icon(
                             "icons/pencil.svg",
                             12.0,
@@ -677,7 +679,7 @@ impl Fintwind {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(px(11.5))
+                            .text_size(ui_px(11.5))
                             .text_color(theme.text_ghost)
                             .child(label),
                     );
@@ -730,7 +732,7 @@ impl Fintwind {
                                     .child(
                                         div()
                                             .truncate()
-                                            .text_size(px(13.0))
+                                            .text_size(ui_px(13.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .text_color(theme.text)
                                             .child(SharedString::from(model.name.clone())),
@@ -739,7 +741,7 @@ impl Fintwind {
                                         div()
                                             .mt(px(4.0))
                                             .truncate()
-                                            .text_size(px(11.5))
+                                            .text_size(ui_px(11.5))
                                             .text_color(theme.text_tertiary)
                                             .child(SharedString::from(model.id.clone())),
                                     ),
@@ -1188,7 +1190,7 @@ impl Fintwind {
                                             div()
                                                 .w_full()
                                                 .truncate()
-                                                .text_size(px(12.5))
+                                                .text_size(ui_px(12.5))
                                                 .font_weight(if selected {
                                                     FontWeight::SEMIBOLD
                                                 } else {
@@ -1201,8 +1203,8 @@ impl Fintwind {
                                             div()
                                                 .w_full()
                                                 .mt(px(2.0))
-                                                .text_size(px(11.0))
-                                                .line_height(px(15.0))
+                                                .text_size(ui_px(11.0))
+                                                .line_height(ui_px(15.0))
                                                 .whitespace_normal()
                                                 .text_color(theme.text_tertiary)
                                                 .child(option.description()),
@@ -1247,8 +1249,8 @@ impl Fintwind {
             .items_center()
             .gap(px(7.0))
             .cursor_default()
-            .text_size(px(12.5))
-            .line_height(px(16.0))
+            .text_size(ui_px(12.5))
+            .line_height(ui_px(16.0))
             .text_color(if mode == InteractionMode::Plan {
                 theme.accent
             } else {
@@ -1646,7 +1648,7 @@ impl Fintwind {
                                 div()
                                     .max_w_full()
                                     .truncate()
-                                    .text_size(px(8.5))
+                                    .text_size(ui_px(8.5))
                                     .text_color(theme.text_tertiary)
                                     .child(attachment.name.clone()),
                             ),
@@ -1767,7 +1769,7 @@ impl Fintwind {
                     .focus_visible(|style| style.border_1().border_color(theme.accent))
                     .hover(|element| element.bg(theme.overlay_strong))
                     .active(|element| element.opacity(0.8))
-                    .text_size(px(12.5))
+                    .text_size(ui_px(12.5))
                     .text_color(theme.text_secondary)
                     .child(icon(
                         "icons/corner-down-right.svg",
@@ -1850,7 +1852,7 @@ impl Fintwind {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(13.0))
+                            .text_size(ui_px(13.0))
                             .text_color(theme.text)
                             .child(SharedString::from(content)),
                     )
@@ -2014,8 +2016,8 @@ impl Fintwind {
                         .flex()
                         .items_center()
                         .gap(px(4.0))
-                        .text_size(px(11.5))
-                        .line_height(px(14.0))
+                        .text_size(ui_px(11.5))
+                        .line_height(ui_px(14.0))
                         .child(self.render_provider_model_control(cx))
                         .children(self.render_model_traits_control(cx))
                         .child(self.render_access_control(cx))
@@ -2059,7 +2061,7 @@ impl Fintwind {
                                         .when(escape_stop_armed, |element| {
                                             element.child(
                                                 div()
-                                                    .text_size(px(10.5))
+                                                    .text_size(ui_px(10.5))
                                                     .font_weight(FontWeight::SEMIBOLD)
                                                     .text_color(theme.text)
                                                     .child("Esc"),
@@ -2283,7 +2285,7 @@ impl Fintwind {
                                 .flex()
                                 .items_center()
                                 .gap(px(8.0))
-                                .text_size(px(13.0))
+                                .text_size(ui_px(13.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text)
                                 .child(icon("icons/plus.svg", 14.0, theme.text_secondary))
@@ -2305,7 +2307,7 @@ impl Fintwind {
                         .child(
                             div()
                                 .mt(px(9.0))
-                                .text_size(px(10.5))
+                                .text_size(ui_px(10.5))
                                 .text_color(theme.text_tertiary)
                                 .child(tr!("branches.create_hint")),
                         )
@@ -2319,7 +2321,7 @@ impl Fintwind {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_size(px(11.5))
+                            .text_size(ui_px(11.5))
                             .text_color(theme.text_ghost)
                             .child(tr!("branches.none_found"))
                             .into_any_element()
@@ -2386,8 +2388,8 @@ impl Fintwind {
                                                 .min_w_0()
                                                 .flex_1()
                                                 .truncate()
-                                                .text_size(px(12.5))
-                                                .line_height(px(16.0))
+                                                .text_size(ui_px(12.5))
+                                                .line_height(ui_px(16.0))
                                                 .text_color(color)
                                                 .child(SharedString::from(branch.name.clone())),
                                         )
@@ -2448,8 +2450,8 @@ impl Fintwind {
                             .child(icon("icons/plus.svg", 13.0, theme.text_secondary))
                             .child(
                                 div()
-                                    .text_size(px(12.5))
-                                    .line_height(px(16.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(16.0))
                                     .text_color(theme.text)
                                     .child(tr!("branches.create_and_checkout_ellipsis")),
                             )
@@ -2492,7 +2494,7 @@ impl Fintwind {
                                 .px(px(14.0))
                                 .pt(px(3.0))
                                 .pb(px(7.0))
-                                .text_size(px(12.0))
+                                .text_size(ui_px(12.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text_tertiary)
                                 .child(tr!("branches.title")),
@@ -2725,8 +2727,8 @@ impl Fintwind {
                     .tab_index(0)
                     .tab_group()
                     .tab_stop(false)
-                    .text_size(px(11.5))
-                    .line_height(px(15.0))
+                    .text_size(ui_px(11.5))
+                    .line_height(ui_px(15.0))
                     .child(project_selector)
                     .child(worktree_selector)
                     .children(branch_selector)

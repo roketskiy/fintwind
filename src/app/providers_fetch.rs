@@ -5,6 +5,8 @@
 //! work on the background executor and stores the outcome on the app entity,
 //! so render only ever reads finished state.
 
+use crate::theme::ui_px;
+
 use std::time::Duration;
 
 use gpui::KeyDownEvent;
@@ -612,7 +614,7 @@ fn models_header_with_button(theme: &Theme, label: String, button: Stateful<Div>
                 .px(px(9.0))
                 .flex()
                 .items_baseline()
-                .text_size(px(9.5))
+                .text_size(ui_px(9.5))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_tertiary)
                 .child(SharedString::from(label.to_uppercase())),
@@ -815,7 +817,7 @@ fn connectivity_verdict(
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(10.5))
+                        .text_size(ui_px(10.5))
                         .text_color(theme.success)
                         .child(SharedString::from(tr!(
                             "providers.connection_ok",
@@ -842,7 +844,7 @@ fn connectivity_verdict(
                         div()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(10.5))
+                            .text_size(ui_px(10.5))
                             .text_color(theme.danger)
                             .child(SharedString::from(tr!(
                                 "providers.connection_failed",

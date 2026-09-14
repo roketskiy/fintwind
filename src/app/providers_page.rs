@@ -16,6 +16,8 @@
 //! rename) commit immediately, the same one-shot-action allowance the Skills
 //! page uses.
 
+use crate::theme::ui_px;
+
 use gpui::{ElementId, KeyDownEvent};
 
 use fintwind_client::custom_providers::{self, CustomProvider, CustomProviderModel, ProviderApiFormat};
@@ -718,7 +720,7 @@ impl Fintwind {
                     .pt(px(14.0))
                     .px(px(16.0))
                     .flex_none()
-                    .text_size(px(13.0))
+                    .text_size(ui_px(13.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(tr!("settings.providers")),
@@ -752,7 +754,7 @@ impl Fintwind {
                     .border_color(theme.border)
                     .flex()
                     .items_center()
-                    .text_size(px(9.5))
+                    .text_size(ui_px(9.5))
                     .text_color(theme.text_ghost)
                     .child(self.providers_footer_caption()),
             )
@@ -828,7 +830,7 @@ impl Fintwind {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(12.5))
+                            .text_size(ui_px(12.5))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(if selected || active {
                                 theme.text
@@ -900,7 +902,7 @@ impl Fintwind {
                     ))
                     .child(
                         div()
-                            .text_size(px(12.5))
+                            .text_size(ui_px(12.5))
                             .child(tr!("providers.add_provider")),
                     )
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -998,7 +1000,7 @@ impl Fintwind {
 
         let mut header_title = div().flex().items_baseline().gap(px(7.0)).child(
             div()
-                .text_size(px(15.0))
+                .text_size(ui_px(15.0))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text)
                 .child("OpenCode"),
@@ -1007,7 +1009,7 @@ impl Fintwind {
             header_title = header_title.child(
                 div()
                     .font_family(crate::md::render::MONO_FAMILY)
-                    .text_size(px(10.0))
+                    .text_size(ui_px(10.0))
                     .text_color(theme.text_tertiary)
                     .child(SharedString::from(format!("v{version}"))),
             );
@@ -1025,8 +1027,8 @@ impl Fintwind {
                     .child(icon("icons/info.svg", 12.0, theme.text_tertiary))
                     .child(
                         div()
-                            .text_size(px(10.5))
-                            .line_height(px(15.0))
+                            .text_size(ui_px(10.5))
+                            .line_height(ui_px(15.0))
                             .text_color(theme.text_tertiary)
                             .child(tr!("providers.not_detected_as", command = "opencode")),
                     ),
@@ -1057,7 +1059,7 @@ impl Fintwind {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(11.0))
+                                .text_size(ui_px(11.0))
                                 .text_color(theme.text)
                                 .child(SharedString::from(model.name.clone())),
                         )
@@ -1067,7 +1069,7 @@ impl Fintwind {
                                 .min_w_0()
                                 .truncate()
                                 .font_family(crate::md::render::MONO_FAMILY)
-                                .text_size(px(9.5))
+                                .text_size(ui_px(9.5))
                                 .text_color(theme.text_tertiary)
                                 .child(SharedString::from(model.id.clone())),
                         )
@@ -1101,7 +1103,7 @@ impl Fintwind {
                             div().flex_1().min_w_0().child(header_title).child(
                                 div()
                                     .mt(px(2.0))
-                                    .text_size(px(10.5))
+                                    .text_size(ui_px(10.5))
                                     .text_color(theme.text_tertiary)
                                     .child(if installed {
                                         SharedString::from(if model_count == 1 {
@@ -1122,8 +1124,8 @@ impl Fintwind {
                 .child(
                     div()
                         .mt(px(14.0))
-                        .text_size(px(11.5))
-                        .line_height(px(17.0))
+                        .text_size(ui_px(11.5))
+                        .line_height(ui_px(17.0))
                         .text_color(theme.text_secondary)
                         .child(tr!("providers.description")),
                 )
@@ -1213,7 +1215,7 @@ impl Fintwind {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(15.0))
+                        .text_size(ui_px(15.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .child(SharedString::from(provider.name.clone())),
@@ -1274,7 +1276,7 @@ impl Fintwind {
             .items_center()
             .gap(px(6.0))
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .text_color(if armed {
                 theme.danger
             } else {
@@ -1406,7 +1408,7 @@ impl Fintwind {
                     div()
                         .mt(px(6.0))
                         .pl(px(50.0))
-                        .text_size(px(10.5))
+                        .text_size(ui_px(10.5))
                         .truncate()
                         .text_color(theme.text_tertiary)
                         .child(SharedString::from(provider.slug.clone())),
@@ -1462,7 +1464,7 @@ impl Fintwind {
                         .min_w_0()
                         .truncate()
                         .font_family(crate::md::render::MONO_FAMILY)
-                        .text_size(px(11.0))
+                        .text_size(ui_px(11.0))
                         .text_color(if key.is_empty() {
                             theme.text_ghost
                         } else {
@@ -1528,8 +1530,8 @@ impl Fintwind {
                     .child(icon("icons/info.svg", 12.0, theme.text_tertiary))
                     .child(
                         div()
-                            .text_size(px(10.5))
-                            .line_height(px(15.0))
+                            .text_size(ui_px(10.5))
+                            .line_height(ui_px(15.0))
                             .text_color(theme.text_tertiary)
                             .child(tr!("providers.models_empty")),
                     ),
@@ -1576,7 +1578,7 @@ impl Fintwind {
                             div()
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(11.0))
+                                .text_size(ui_px(11.0))
                                 .text_color(theme.text)
                                 .child(SharedString::from(name.to_owned())),
                         )
@@ -1586,7 +1588,7 @@ impl Fintwind {
                             .min_w_0()
                             .truncate()
                             .font_family(crate::md::render::MONO_FAMILY)
-                            .text_size(px(if named.is_some() { 9.5 } else { 11.0 }))
+                            .text_size(ui_px(if named.is_some() { 9.5 } else { 11.0 }))
                             .text_color(if named.is_some() {
                                 theme.text_tertiary
                             } else {
@@ -1647,7 +1649,7 @@ impl Fintwind {
                         element.border_t_1().border_color(theme.border)
                     })
                     .cursor_default()
-                    .text_size(px(12.0))
+                    .text_size(ui_px(12.0))
                     .text_color(theme.text_secondary)
                     .hover(|element| element.bg(theme.overlay))
                     .child(icon("icons/plus.svg", 12.5, theme.text_tertiary))
@@ -1752,7 +1754,7 @@ impl Fintwind {
                             .items_center()
                             .gap(px(6.0))
                             .cursor_default()
-                            .text_size(px(12.0))
+                            .text_size(ui_px(12.0))
                             .when(valid, |element| {
                                 element
                                     .bg(accent)
@@ -1840,7 +1842,7 @@ impl Fintwind {
                 div()
                     .flex_none()
                     .pr(px(2.0))
-                    .text_size(px(10.0))
+                    .text_size(ui_px(10.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_tertiary)
                     .child(tr!("providers.input_modalities_label")),
@@ -1870,7 +1872,7 @@ impl Fintwind {
             row = row.child(
                 div()
                     .ml(px(2.0))
-                    .text_size(px(10.0))
+                    .text_size(ui_px(10.0))
                     .text_color(theme.text_ghost)
                     .child(tr!("providers.input_modalities_hint")),
             );
@@ -2014,7 +2016,7 @@ impl Fintwind {
             .items_center()
             .justify_center()
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .when(valid, |element| {
                 element
@@ -2056,7 +2058,7 @@ impl Fintwind {
                 .flex_col()
                 .child(
                     div()
-                        .text_size(px(15.0))
+                        .text_size(ui_px(15.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .child(tr!("providers.form_title")),
@@ -2064,8 +2066,8 @@ impl Fintwind {
                 .child(
                     div()
                         .mt(px(4.0))
-                        .text_size(px(11.5))
-                        .line_height(px(17.0))
+                        .text_size(ui_px(11.5))
+                        .line_height(ui_px(17.0))
                         .text_color(theme.text_secondary)
                         .child(tr!("providers.form_description")),
                 )
@@ -2132,8 +2134,8 @@ impl Fintwind {
                                                 ))
                                                 .child(
                                                     div()
-                                                        .text_size(px(10.5))
-                                                        .line_height(px(15.0))
+                                                        .text_size(ui_px(10.5))
+                                                        .line_height(ui_px(15.0))
                                                         .text_color(theme.text_tertiary)
                                                         .child(tr!("providers.models_empty")),
                                                 )
@@ -2157,7 +2159,7 @@ impl Fintwind {
                                         .items_center()
                                         .gap(px(7.0))
                                         .cursor_default()
-                                        .text_size(px(12.0))
+                                        .text_size(ui_px(12.0))
                                         .text_color(theme.text_secondary)
                                         .hover(|element| {
                                             element.bg(theme.overlay).text_color(theme.text)
@@ -2221,7 +2223,7 @@ pub(super) fn section_label(theme: &Theme, label: String, first: bool) -> Div {
         .px(px(9.0))
         .flex()
         .items_baseline()
-        .text_size(px(9.5))
+        .text_size(ui_px(9.5))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(theme.text_tertiary)
         .child(SharedString::from(label.to_uppercase()))
@@ -2251,7 +2253,7 @@ pub(super) fn enabled_badge(theme: &Theme, accent: Hsla, enabled: bool) -> Div {
         .px(px(7.0))
         .py(px(2.0))
         .rounded_full()
-        .text_size(px(9.5))
+        .text_size(ui_px(9.5))
         .when(enabled, |element| {
             element.text_color(accent).bg(accent.opacity(0.14))
         })
@@ -2270,7 +2272,7 @@ pub(super) fn small_pill(theme: &Theme, label: String, color: Option<Hsla>) -> D
         .px(px(6.0))
         .py(px(1.5))
         .rounded_full()
-        .text_size(px(9.0))
+        .text_size(ui_px(9.0))
         .font_family(crate::md::render::MONO_FAMILY)
         .text_color(color.unwrap_or(theme.text_tertiary))
         .bg(theme.overlay)
@@ -2363,7 +2365,7 @@ fn modality_chip(
         .items_center()
         .gap(px(5.0))
         .cursor_default()
-        .text_size(px(11.0))
+        .text_size(ui_px(11.0))
         .text_color(color)
         .children(modality_icon_path(modality).map(|path| icon(path, 11.0, color)))
         .child(SharedString::from(modality_label(modality)))
@@ -2438,8 +2440,8 @@ pub(super) fn info_note(theme: &Theme, icon_path: &'static str, text: String) ->
                 .flex_1()
                 .min_w_0()
                 .whitespace_normal()
-                .text_size(px(10.5))
-                .line_height(px(15.0))
+                .text_size(ui_px(10.5))
+                .line_height(ui_px(15.0))
                 .text_color(theme.text_secondary)
                 .child(SharedString::from(text)),
         )
@@ -2453,7 +2455,7 @@ pub(super) fn form_hint(theme: &Theme, accent: Hsla, text: impl Into<SharedStrin
         .child(icon("icons/alert.svg", 12.0, accent))
         .child(
             div()
-                .text_size(px(10.5))
+                .text_size(ui_px(10.5))
                 .text_color(theme.text_secondary)
                 .child(text.into()),
         )
@@ -2484,7 +2486,7 @@ pub(super) fn outline_button(
         .items_center()
         .gap(px(6.0))
         .cursor_default()
-        .text_size(px(12.0))
+        .text_size(ui_px(12.0))
         .text_color(theme.text_secondary)
         .hover(|element| element.bg(theme.overlay))
         .active(|element| element.bg(theme.overlay_strong))
@@ -2517,7 +2519,7 @@ pub(super) fn small_action_button(
         .items_center()
         .gap(px(5.0))
         .cursor_default()
-        .text_size(px(12.0))
+        .text_size(ui_px(12.0))
         .text_color(color)
         .hover(|element| element.bg(theme.overlay))
         .active(|element| element.bg(theme.overlay_strong))
@@ -2537,7 +2539,7 @@ pub(super) fn labeled_field(
         .gap(px(6.0))
         .child(
             div()
-                .text_size(px(11.0))
+                .text_size(ui_px(11.0))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text)
                 .child(label.into()),

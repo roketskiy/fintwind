@@ -1,3 +1,5 @@
+use crate::theme::{code_px, ui_px};
+
 use super::*;
 
 const MAX_BACKGROUND_OUTPUT_BYTES: usize = 512 * 1024;
@@ -1347,7 +1349,7 @@ impl Fintwind {
             .items_center()
             .gap(px(6.0))
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .focus_visible(|style| style.border_color(theme.accent))
             .hover(|style| style.bg(theme.overlay))
@@ -1428,7 +1430,7 @@ impl Fintwind {
                         .child(icon(work_kind_icon(key.kind), 22.0, theme.text_ghost))
                         .child(
                             div()
-                                .text_size(px(12.0))
+                                .text_size(ui_px(12.0))
                                 .text_color(theme.text_secondary)
                                 .child(tr!("background.no_work")),
                         ),
@@ -1475,7 +1477,7 @@ impl Fintwind {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_default()
-                    .text_size(px(12.0))
+                    .text_size(ui_px(12.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_secondary)
                     .hover(|style| style.bg(theme.danger.opacity(0.10)))
@@ -1532,7 +1534,7 @@ impl Fintwind {
                                 .child(
                                     div()
                                         .truncate()
-                                        .text_size(px(13.0))
+                                        .text_size(ui_px(13.0))
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(theme.text)
                                         .child(item.title.clone()),
@@ -1542,7 +1544,7 @@ impl Fintwind {
                                         .flex()
                                         .items_center()
                                         .gap(px(5.0))
-                                        .text_size(px(10.5))
+                                        .text_size(ui_px(10.5))
                                         .text_color(status_color)
                                         .child(rendered_work_status_icon(
                                             item.status,
@@ -1604,7 +1606,7 @@ impl Fintwind {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(12.0))
+                                    .text_size(ui_px(12.0))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
                                     .child(item.title.clone()),
@@ -1614,7 +1616,7 @@ impl Fintwind {
                                     .flex()
                                     .items_center()
                                     .gap(px(5.0))
-                                    .text_size(px(10.0))
+                                    .text_size(ui_px(10.0))
                                     .text_color(theme.text_tertiary)
                                     .child(rendered_work_status_icon(
                                         item.status,
@@ -1682,13 +1684,13 @@ impl Fintwind {
                     .gap(px(3.0))
                     .child(
                         div()
-                            .text_size(px(9.5))
+                            .text_size(ui_px(9.5))
                             .text_color(theme.text_tertiary)
                             .child(label),
                     )
                     .child(
                         div()
-                            .text_size(px(10.5))
+                            .text_size(code_px(10.5))
                             .font_family(md::render::MONO_FAMILY)
                             .text_color(theme.text_secondary)
                             .child(value),
@@ -1730,7 +1732,7 @@ impl Fintwind {
                         .flex()
                         .items_center()
                         .justify_between()
-                        .text_size(px(9.5))
+                        .text_size(ui_px(9.5))
                         .text_color(theme.text_tertiary)
                         .child(tr!("background.output"))
                         .when(item.output_truncated, |header| {
@@ -1759,8 +1761,8 @@ impl Fintwind {
                                     move |_, _, cx| contain_scroll(&scroll, cx)
                                 })
                                 .p(px(8.0))
-                                .text_size(px(10.5))
-                                .line_height(px(15.0))
+                                .text_size(code_px(10.5))
+                                .line_height(code_px(15.0))
                                 .font_family(md::render::MONO_FAMILY)
                                 .text_color(theme.text_secondary)
                                 .child(output_text),
@@ -1789,9 +1791,9 @@ impl Fintwind {
                 format!("background-message-{}-{}", item.key.provider_id, message.id),
                 &palette,
                 if message.role == MessageRole::User {
-                    MarkdownMetrics::USER_MESSAGE
+                    MarkdownMetrics::user_message()
                 } else {
-                    MarkdownMetrics::BODY
+                    MarkdownMetrics::body()
                 },
                 selection.clone(),
             )
@@ -1864,7 +1866,7 @@ impl Fintwind {
                         .items_center()
                         .gap(px(6.0))
                         .cursor_default()
-                        .text_size(px(12.5))
+                        .text_size(ui_px(12.5))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text_secondary)
                         .focus_visible(|style| style.text_color(theme.text))
@@ -1921,7 +1923,7 @@ impl Fintwind {
                                 .flex()
                                 .items_center()
                                 .gap(px(7.0))
-                                .text_size(px(11.5))
+                                .text_size(ui_px(11.5))
                                 .text_color(theme.text_secondary)
                                 .child(icon(
                                     activity_tool_icon(&activity.title, activity.kind),
@@ -2017,7 +2019,7 @@ fn render_task_capsule_card(
                 .px(px(8.0))
                 .flex()
                 .items_center()
-                .text_size(px(12.5))
+                .text_size(ui_px(12.5))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text_tertiary)
                 .child(tr!("capsule.git_tools"))
@@ -2074,7 +2076,7 @@ fn render_capsule_section_header(id: &'static str, label: String, theme: &Theme)
         .px(px(8.0))
         .flex()
         .items_center()
-        .text_size(px(12.5))
+        .text_size(ui_px(12.5))
         .font_weight(FontWeight::MEDIUM)
         .text_color(theme.text_tertiary)
         .child(label)
@@ -2092,7 +2094,7 @@ fn render_git_tools_section(
             .flex()
             .items_center()
             .gap(px(6.0))
-            .text_size(px(11.5))
+            .text_size(ui_px(11.5))
             .font_weight(FontWeight::MEDIUM)
             .when(environment.additions > 0, |counts| {
                 counts.child(
@@ -2217,7 +2219,7 @@ fn render_capsule_info_row(
                 .min_w_0()
                 .flex_1()
                 .truncate()
-                .text_size(px(13.5))
+                .text_size(ui_px(13.5))
                 .text_color(theme.text_secondary)
                 .child(label),
         )
@@ -2230,7 +2232,7 @@ fn render_todo_section(todo: &TodoSummary, theme: &Theme) -> Div {
             div()
                 .px(px(8.0))
                 .py(px(6.0))
-                .text_size(px(12.0))
+                .text_size(ui_px(12.0))
                 .text_color(theme.text_tertiary)
                 .child(tr!("capsule.todo_empty")),
         );
@@ -2254,7 +2256,7 @@ fn render_todo_section(todo: &TodoSummary, theme: &Theme) -> Div {
                 .justify_between()
                 .child(
                     div()
-                        .text_size(px(12.5))
+                        .text_size(ui_px(12.5))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text_tertiary)
                         .child(tr!("capsule.todo")),
@@ -2315,7 +2317,7 @@ fn render_todo_row(index: usize, entry: &TodoEntry, theme: &Theme) -> Stateful<D
                 .flex_1()
                 .line_clamp(1)
                 .text_ellipsis()
-                .text_size(px(12.5))
+                .text_size(ui_px(12.5))
                 .text_color(label_color)
                 .child(entry.label.clone()),
         )
@@ -2374,7 +2376,7 @@ fn render_environment_action_row(
                 .min_w_0()
                 .flex_1()
                 .truncate()
-                .text_size(px(13.5))
+                .text_size(ui_px(13.5))
                 .text_color(foreground)
                 .child(label),
         )
@@ -2405,7 +2407,7 @@ fn render_background_summary_section(
             div()
                 .px(px(8.0))
                 .py(px(6.0))
-                .text_size(px(12.0))
+                .text_size(ui_px(12.0))
                 .text_color(theme.text_tertiary)
                 .child(empty_label),
         );
@@ -2427,7 +2429,7 @@ fn render_background_summary_section(
         .child(
             div()
                 .px(px(8.0))
-                .text_size(px(13.0))
+                .text_size(ui_px(13.0))
                 .text_color(theme.text_tertiary)
                 .child(label),
         )
@@ -2553,7 +2555,7 @@ fn render_background_summary_row(
                 .flex_1()
                 .line_clamp(1)
                 .text_ellipsis()
-                .text_size(px(if is_process { 12.0 } else { 13.5 }))
+                .text_size(ui_px(if is_process { 12.0 } else { 13.5 }))
                 .text_color(if is_process {
                     theme.text_secondary
                 } else {

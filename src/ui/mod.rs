@@ -1,3 +1,5 @@
+use crate::theme::ui_px;
+
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Hsla, Img, InteractiveElement, Interactivity,
     KeyDownEvent, ParentElement, PathBuilder, Pixels, RenderOnce, ScrollHandle, SharedString,
@@ -467,8 +469,8 @@ impl RenderOnce for MenuChip {
             .flex()
             .items_center()
             .gap(px(7.0))
-            .text_size(px(12.5))
-            .line_height(px(16.0))
+            .text_size(ui_px(12.5))
+            .line_height(ui_px(16.0))
             .cursor_default()
             .focus_visible(|style| style.border_1().border_color(theme.accent))
             .when(self.outlined, |element| {

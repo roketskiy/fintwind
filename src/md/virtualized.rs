@@ -461,7 +461,7 @@ impl Render for ReasoningView {
                                 let ctx = render::Ctx::new(
                                     this.row_id.clone(),
                                     &palette,
-                                    Metrics::COMPACT,
+                                    Metrics::compact(),
                                     this.selection.clone(),
                                 )
                                 .with_link_handler(this.link_handler.clone())

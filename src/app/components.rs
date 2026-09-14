@@ -1,3 +1,5 @@
+use crate::theme::ui_px;
+
 use super::*;
 
 use chrono::{Datelike, Days};
@@ -219,8 +221,8 @@ fn render_message_footer(
         .px(px(4.0))
         .flex()
         .items_center()
-        .text_size(px(11.5))
-        .line_height(px(14.0))
+        .text_size(ui_px(11.5))
+        .line_height(ui_px(14.0))
         .text_color(footer_color)
         .child(format_message_time(footer_time));
     let copy_button = div()
@@ -504,7 +506,7 @@ fn render_sent_message_attachments(
                             .w_full()
                             .truncate()
                             .text_center()
-                            .text_size(px(9.5))
+                            .text_size(ui_px(9.5))
                             .text_color(theme.text_secondary)
                             .child(attachment.name.clone()),
                     ),
@@ -642,7 +644,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                                         .bg(theme.overlay)
                                         .flex()
                                         .items_center()
-                                        .text_size(px(12.5))
+                                        .text_size(ui_px(12.5))
                                         .text_color(theme.text_secondary)
                                         .cursor_default()
                                         .hover(|element| element.bg(theme.overlay_strong))
@@ -668,7 +670,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                                         })
                                         .flex()
                                         .items_center()
-                                        .text_size(px(12.5))
+                                        .text_size(ui_px(12.5))
                                         .font_weight(FontWeight::MEDIUM)
                                         .text_color(if can_submit {
                                             theme.on_inverse
@@ -703,8 +705,8 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                             .bg(theme.raised)
                             .px(px(12.0))
                             .py(px(8.0))
-                            .text_size(px(14.0))
-                            .line_height(px(20.0))
+                            .text_size(ui_px(14.0))
+                            .line_height(ui_px(20.0))
                             .child(body),
                     );
                 }
@@ -744,8 +746,8 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
             if let Some(stats) = assistant_turn_stats {
                 column = column.child(
                     div()
-                        .text_size(px(11.5))
-                        .line_height(px(16.0))
+                        .text_size(ui_px(11.5))
+                        .line_height(ui_px(16.0))
                         .text_color(theme.text_tertiary)
                         .child(stats),
                 );
@@ -772,8 +774,8 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                 .py(px(4.0))
                 .rounded_full()
                 .bg(theme.overlay)
-                .text_size(px(11.0))
-                .line_height(px(16.0))
+                .text_size(ui_px(11.0))
+                .line_height(ui_px(16.0))
                 .child(md::render::plain_text(
                     content.clone(),
                     md::render::SANS_FAMILY,
@@ -863,8 +865,8 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                             .flex()
                             .items_center()
                             .cursor_default()
-                            .text_size(px(12.5))
-                            .line_height(px(17.0))
+                            .text_size(ui_px(12.5))
+                            .line_height(ui_px(17.0))
                             .focus_visible(|style| style.text_color(theme.text))
                             .hover(|style| style.text_color(theme.text))
                             .active(|style| style.text_color(theme.text_ghost))

@@ -1,3 +1,5 @@
+use crate::theme::ui_px;
+
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -2330,8 +2332,8 @@ impl Render for ComposerInput {
                     .overflow_y_scroll()
                     .track_scroll(&scroll_handle)
                     .px(padding_x)
-                    .line_height(px(22.0))
-                    .text_size(px(13.5))
+                    .line_height(ui_px(22.0))
+                    .text_size(ui_px(13.5))
             })
             // A search-mode field is visually one line: the text never wraps,
             // and the overlong remainder slides horizontally under this

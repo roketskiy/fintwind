@@ -6,6 +6,8 @@
 //! SQLite scan. Caret blinks therefore repaint one in-memory snapshot instead
 //! of re-fuzzy-matching history or touching storage every frame.
 
+use crate::theme::ui_px;
+
 use gpui::{KeyBinding, StyledText, TextRun, actions};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Matcher, Utf32Str};
@@ -234,12 +236,12 @@ fn palette_content_match_text(
     StyledText::new(text).with_runs(runs)
 }
 
-fn command_palette_row_height(item: &CommandPaletteItem) -> f32 {
-    if item.content_match.is_some() {
+fn command_palette_row_height(item: &CommandPaletteItem) -> Pixels {
+    ui_px(if item.content_match.is_some() {
         CONTENT_RESULT_ROW_HEIGHT
     } else {
         RESULT_ROW_HEIGHT
-    }
+    })
 }
 
 fn should_show_command_palette_empty_state(result_count: usize, search_pending: bool) -> bool {
@@ -254,25 +256,25 @@ fn should_keep_previous_command_palette_results(
     next_result_count == 0 && search_pending && previous_result_count > 0
 }
 
-fn command_palette_results_height(results: &[CommandPaletteItem], show_empty_state: bool) -> f32 {
+fn command_palette_results_height(results: &[CommandPaletteItem], show_empty_state: bool) -> Pixels {
     let content_height = if show_empty_state {
-        EMPTY_RESULTS_HEIGHT
+        ui_px(EMPTY_RESULTS_HEIGHT)
     } else {
         let mut previous_section = None;
         results
             .iter()
             .map(|item| {
                 let header_height = if previous_section == Some(item.section) {
-                    0.0
+                    Pixels::ZERO
                 } else {
                     previous_section = Some(item.section);
-                    SECTION_HEADER_HEIGHT
+                    ui_px(SECTION_HEADER_HEIGHT)
                 };
                 header_height + command_palette_row_height(item)
             })
             .sum()
     };
-    content_height + RESULTS_BOTTOM_PADDING
+    content_height + ui_px(RESULTS_BOTTOM_PADDING)
 }
 
 pub(super) struct CommandPaletteUi {
@@ -971,14 +973,17 @@ impl Fintwind {
             self.command_palette.results.len(),
             self.command_palette.message_search_pending,
         );
-        let results_height =
-            command_palette_results_height(&self.command_palette.results, show_empty_state)
-                .min((card_max_height - SEARCH_ROW_HEIGHT).max(0.0));
-        let card_height = SEARCH_ROW_HEIGHT + results_height;
+        let search_height = ui_px(SEARCH_ROW_HEIGHT);
+        let results_height = command_palette_results_height(
+            &self.command_palette.results,
+            show_empty_state,
+        )
+        .min((px(card_max_height) - search_height).max(px(0.0)));
+        let card_height = search_height + results_height;
 
         let mut results = div()
             .id("command-palette-results")
-            .h(px(results_height))
+            .h(results_height)
             .flex_none()
             .overflow_y_scroll()
             .track_scroll(&self.command_palette.scroll)
@@ -988,7 +993,7 @@ impl Fintwind {
         if show_empty_state {
             results = results.child(
                 div()
-                    .h(px(EMPTY_RESULTS_HEIGHT))
+                    .h(ui_px(EMPTY_RESULTS_HEIGHT))
                     .flex()
                     .flex_col()
                     .items_center()
@@ -997,7 +1002,7 @@ impl Fintwind {
                     .child(
                         div()
                             .mt(px(12.0))
-                            .text_size(px(13.0))
+                            .text_size(ui_px(13.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_secondary)
                             .child(tr!("command_palette.no_results")),
@@ -1005,7 +1010,7 @@ impl Fintwind {
                     .child(
                         div()
                             .mt(px(5.0))
-                            .text_size(px(11.5))
+                            .text_size(ui_px(11.5))
                             .text_color(theme.text_tertiary)
                             .child(tr!("command_palette.no_results_hint")),
                     ),
@@ -1016,12 +1021,12 @@ impl Fintwind {
                 if previous_section != Some(item.section) {
                     results = results.child(
                         div()
-                            .h(px(SECTION_HEADER_HEIGHT))
+                            .h(ui_px(SECTION_HEADER_HEIGHT))
                             .px(px(9.0))
                             .pt(px(10.0))
                             .flex()
                             .items_center()
-                            .text_size(px(11.0))
+                            .text_size(ui_px(11.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_tertiary)
                             .child(item.section.label()),
@@ -1044,7 +1049,7 @@ impl Fintwind {
                 results = results.child(
                     div()
                         .id(SharedString::from(format!("command-palette-row-{index}")))
-                        .h(px(command_palette_row_height(item)))
+                        .h(command_palette_row_height(item))
                         .px(px(11.0))
                         // Concentric with the palette card: 15px shell minus
                         // the 8px results inset.
@@ -1098,7 +1103,7 @@ impl Fintwind {
                                             div()
                                                 .min_w_0()
                                                 .truncate()
-                                                .text_size(px(14.0))
+                                                .text_size(ui_px(14.0))
                                                 .font_weight(if highlighted {
                                                     FontWeight::MEDIUM
                                                 } else {
@@ -1116,7 +1121,7 @@ impl Fintwind {
                                                 div()
                                                     .min_w_0()
                                                     .truncate()
-                                                    .text_size(px(11.5))
+                                                    .text_size(ui_px(11.5))
                                                     .text_color(theme.text_tertiary)
                                                     .child(detail),
                                             )
@@ -1129,7 +1134,7 @@ impl Fintwind {
                                             .w_full()
                                             .overflow_hidden()
                                             .whitespace_nowrap()
-                                            .text_size(px(11.5))
+                                            .text_size(ui_px(11.5))
                                             .child(palette_content_match_text(
                                                 &matched,
                                                 &search_query,
@@ -1151,7 +1156,7 @@ impl Fintwind {
                                     .items_center()
                                     .justify_center()
                                     .bg(theme.overlay_strong)
-                                    .text_size(px(11.5))
+                                    .text_size(ui_px(11.5))
                                     .text_color(theme.text_tertiary)
                                     .child(shortcut),
                             )
@@ -1191,7 +1196,7 @@ impl Fintwind {
                 }))
                 .w_full()
                 .max_w(px(680.0))
-                .h(px(card_height))
+                .h(card_height)
                 .overflow_hidden()
                 .rounded(px(15.0))
                 .bg(theme.raised)
@@ -1202,14 +1207,14 @@ impl Fintwind {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(
                     div()
-                        .h(px(SEARCH_ROW_HEIGHT))
+                        .h(search_height)
                         .px(px(19.0))
                         .flex_none()
                         .flex()
                         .items_center()
                         .border_b_1()
                         .border_color(theme.border)
-                        .text_size(px(15.5))
+                        .text_size(ui_px(15.5))
                         .text_color(theme.text)
                         .child(
                             div()
@@ -1329,11 +1334,13 @@ mod tests {
         ];
         assert_eq!(
             command_palette_results_height(&items, false),
-            SECTION_HEADER_HEIGHT * 2.0 + RESULT_ROW_HEIGHT * 3.0 + RESULTS_BOTTOM_PADDING
+            ui_px(SECTION_HEADER_HEIGHT) * 2.0
+                + ui_px(RESULT_ROW_HEIGHT) * 3.0
+                + ui_px(RESULTS_BOTTOM_PADDING)
         );
         assert_eq!(
             command_palette_results_height(&[], true),
-            EMPTY_RESULTS_HEIGHT + RESULTS_BOTTOM_PADDING
+            ui_px(EMPTY_RESULTS_HEIGHT) + ui_px(RESULTS_BOTTOM_PADDING)
         );
     }
 

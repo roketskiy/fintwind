@@ -4,6 +4,8 @@
 //! through `InteractiveElement::tooltip`, which asks only for a view to render.
 //! This is that view, and nothing more.
 
+use crate::theme::ui_px;
+
 use gpui::{
     AnyView, App, AppContext, IntoElement, ParentElement, Render, SharedString, Styled, Window,
     div, px,
@@ -55,8 +57,8 @@ impl Render for Tooltip {
                 .flex()
                 .items_center()
                 .gap(px(6.0))
-                .text_size(px(11.0))
-                .line_height(px(15.0))
+                .text_size(ui_px(11.0))
+                .line_height(ui_px(15.0))
                 .text_color(theme.text_secondary)
                 .child(self.label.clone()),
         )

@@ -15,6 +15,8 @@
 //! rename, re-type) commit immediately, the same one-shot-action allowance
 //! the Providers page uses.
 
+use crate::theme::ui_px;
+
 use gpui::KeyDownEvent;
 
 use fintwind_client::custom_providers::unique_provider_slug;
@@ -672,7 +674,7 @@ impl Fintwind {
                     .pt(px(14.0))
                     .px(px(16.0))
                     .flex_none()
-                    .text_size(px(13.0))
+                    .text_size(ui_px(13.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(tr!("settings.mcp_servers")),
@@ -712,7 +714,7 @@ impl Fintwind {
                     .border_color(theme.border)
                     .flex()
                     .items_center()
-                    .text_size(px(9.5))
+                    .text_size(ui_px(9.5))
                     .text_color(theme.text_ghost)
                     .child(self.mcp_footer_caption()),
             )
@@ -806,7 +808,7 @@ impl Fintwind {
                                 div()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(px(12.5))
+                                    .text_size(ui_px(12.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(if selected || enabled {
                                         theme.text
@@ -821,7 +823,7 @@ impl Fintwind {
                                     .min_w_0()
                                     .truncate()
                                     .font_family(crate::md::render::MONO_FAMILY)
-                                    .text_size(px(10.5))
+                                    .text_size(ui_px(10.5))
                                     .text_color(theme.text_tertiary)
                                     .child(SharedString::from(caption)),
                             ),
@@ -889,7 +891,7 @@ impl Fintwind {
                         13.0,
                         if adding { accent } else { theme.text_tertiary },
                     ))
-                    .child(div().text_size(px(12.5)).child(tr!("mcp.add_server")))
+                    .child(div().text_size(ui_px(12.5)).child(tr!("mcp.add_server")))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.begin_add_mcp_server(cx);
                     }))
@@ -1003,7 +1005,7 @@ impl Fintwind {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_size(px(15.0))
+                        .text_size(ui_px(15.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .child(SharedString::from(server.name.clone())),
@@ -1064,7 +1066,7 @@ impl Fintwind {
             .items_center()
             .gap(px(6.0))
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .text_color(if armed {
                 theme.danger
             } else {
@@ -1232,8 +1234,8 @@ impl Fintwind {
                     .child(icon("icons/info.svg", 12.0, theme.text_tertiary))
                     .child(
                         div()
-                            .text_size(px(10.5))
-                            .line_height(px(15.0))
+                            .text_size(ui_px(10.5))
+                            .line_height(ui_px(15.0))
                             .text_color(theme.text_tertiary)
                             .child(tr!("mcp.variables_empty")),
                     ),
@@ -1269,7 +1271,7 @@ impl Fintwind {
                             .flex_none()
                             .truncate()
                             .font_family(crate::md::render::MONO_FAMILY)
-                            .text_size(px(11.0))
+                            .text_size(ui_px(11.0))
                             .text_color(theme.text)
                             .child(SharedString::from(key.clone())),
                     )
@@ -1279,7 +1281,7 @@ impl Fintwind {
                             .min_w_0()
                             .truncate()
                             .font_family(crate::md::render::MONO_FAMILY)
-                            .text_size(px(9.5))
+                            .text_size(ui_px(9.5))
                             .text_color(theme.text_tertiary)
                             .child(SharedString::from(value.clone())),
                     )
@@ -1343,7 +1345,7 @@ impl Fintwind {
                         element.border_t_1().border_color(theme.border)
                     })
                     .cursor_default()
-                    .text_size(px(12.0))
+                    .text_size(ui_px(12.0))
                     .text_color(theme.text_secondary)
                     .hover(|element| element.bg(theme.overlay))
                     .active(|element| element.bg(theme.overlay_strong))
@@ -1445,7 +1447,7 @@ impl Fintwind {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_default()
-                    .text_size(px(12.0))
+                    .text_size(ui_px(12.0))
                     .when(valid, |element| {
                         element
                             .bg(accent)
@@ -1521,7 +1523,7 @@ impl Fintwind {
             )
             .child(
                 div()
-                    .text_size(px(13.5))
+                    .text_size(ui_px(13.5))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(tr!("mcp.count_zero")),
@@ -1530,8 +1532,8 @@ impl Fintwind {
                 div()
                     .max_w(px(340.0))
                     .text_center()
-                    .text_size(px(11.5))
-                    .line_height(px(17.0))
+                    .text_size(ui_px(11.5))
+                    .line_height(ui_px(17.0))
                     .text_color(theme.text_secondary)
                     .child(tr!("mcp.empty_description")),
             )
@@ -1549,7 +1551,7 @@ impl Fintwind {
                     .items_center()
                     .justify_center()
                     .cursor_default()
-                    .text_size(px(12.0))
+                    .text_size(ui_px(12.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(on_mcp_accent(theme))
                     .hover(|element| element.bg(accent.opacity(0.85)))
@@ -1623,7 +1625,7 @@ impl Fintwind {
             .items_center()
             .justify_center()
             .cursor_default()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .when(valid, |element| {
                 element
@@ -1663,7 +1665,7 @@ impl Fintwind {
                 .flex_col()
                 .child(
                     div()
-                        .text_size(px(15.0))
+                        .text_size(ui_px(15.0))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text)
                         .child(tr!("mcp.form_title")),
@@ -1671,8 +1673,8 @@ impl Fintwind {
                 .child(
                     div()
                         .mt(px(4.0))
-                        .text_size(px(11.5))
-                        .line_height(px(17.0))
+                        .text_size(ui_px(11.5))
+                        .line_height(ui_px(17.0))
                         .text_color(theme.text_secondary)
                         .child(tr!("mcp.form_description")),
                 )

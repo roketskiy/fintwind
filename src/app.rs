@@ -1,3 +1,5 @@
+use crate::theme::ui_px;
+
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
@@ -57,7 +59,7 @@ use crate::persistence::{
 use crate::query::{Query, QueryCache};
 use crate::review_diff::{Snapshot as ReviewDiffSnapshot, Source as ReviewDiffSource};
 use crate::terminal::TerminalView;
-use crate::theme::{Theme, ThemePreference};
+use crate::theme::{TextSizePreset, Theme, ThemePreference};
 use crate::ui::text_field::TextField;
 use crate::ui::{
     MenuChip, ProjectNameSelector, activity_noun, activity_tool_icon, contain_scroll, file_icon,
@@ -794,7 +796,7 @@ fn traits_choice(theme: Theme, label: String, is_default: bool, selected: bool) 
                         .bg(theme.overlay)
                         .flex()
                         .items_center()
-                        .text_size(px(9.0))
+                        .text_size(ui_px(9.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(theme.text_tertiary)
                         .child(tr!("common.default")),
@@ -1917,6 +1919,8 @@ impl Fintwind {
             eprintln!("could not normalize daemon settings after migration: {error:#}");
         }
         crate::i18n::set_language(state.language);
+        crate::theme::set_ui_text_scale(state.ui_text_scale);
+        crate::theme::set_code_text_scale(state.code_text_scale);
 
         let composer = cx.new(|cx| ComposerInput::new(window, cx).padding_x(px(14.0)));
         let user_input_answer = cx.new(|cx| {

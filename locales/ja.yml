@@ -57,7 +57,7 @@ settings.providers: プロバイダー
 settings.usage: 使用状況
 settings.daemon: デーモン
 settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン
-settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語
+settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語 文字サイズ コード
 settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
 settings.skills: スキル
 settings.skills_keywords: スキル ライブラリ エージェント 無効 有効 削除 claude codex cursor opencode pi amp 共有
@@ -134,6 +134,14 @@ web.error_secure_websocket_required: 安全な fintwind Web ページからは w
 web.error_daemon_token_required: デーモントークンを入力してください
 settings.theme: テーマ
 settings.theme_description: システム、ライト、ダークのいずれかのテーマを選択します
+settings.ui_text_size: インターフェースの文字サイズ
+settings.ui_text_size_description: アプリのインターフェース文字のサイズを調整します。変更はすぐに反映されます。
+settings.code_text_size: コードの文字サイズ
+settings.code_text_size_description: 会話記録、ツール出力、差分、ファイルペインのコードのサイズを調整します。
+settings.text_size_small: 小
+settings.text_size_default: デフォルト
+settings.text_size_large: 大
+settings.text_size_extra_large: 特大
 settings.theme_system: システム
 settings.theme_light: ライト
 settings.theme_dark: ダーク

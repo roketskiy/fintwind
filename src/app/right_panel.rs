@@ -1,3 +1,5 @@
+use crate::theme::{code_px, ui_px};
+
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -459,8 +461,8 @@ pub(super) fn render_diff_code_row(
         .flex()
         .items_stretch()
         .font_family(md::render::MONO_FAMILY)
-        .text_size(px(10.5))
-        .line_height(px(style.row_height))
+        .text_size(code_px(10.5))
+        .line_height(code_px(style.row_height))
         .when_some(edge, |row, edge| row.border_l_2().border_color(edge))
         .child(gutter)
         .child(body)
@@ -2389,7 +2391,7 @@ impl Fintwind {
                             .flex_1()
                             .line_clamp(1)
                             .text_ellipsis()
-                            .text_size(px(12.0))
+                            .text_size(ui_px(12.0))
                             .text_color(if active {
                                 theme.text
                             } else {
@@ -2562,7 +2564,7 @@ impl Fintwind {
                     .items_center()
                     .child(
                         div()
-                            .text_size(px(13.0))
+                            .text_size(ui_px(13.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text)
                             .child(tr!("right_panel.open_surface")),
@@ -2570,7 +2572,7 @@ impl Fintwind {
                     .child(
                         div()
                             .mt(px(5.0))
-                            .text_size(px(11.0))
+                            .text_size(ui_px(11.0))
                             .text_color(theme.text_tertiary)
                             .child(tr!("right_panel.choose_surface")),
                     )
@@ -2643,7 +2645,7 @@ impl Fintwind {
             .child(
                 div()
                     .mt(px(12.0))
-                    .text_size(px(12.5))
+                    .text_size(ui_px(12.5))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(label),
@@ -2651,8 +2653,8 @@ impl Fintwind {
             .child(
                 div()
                     .mt(px(4.0))
-                    .text_size(px(10.5))
-                    .line_height(px(15.0))
+                    .text_size(ui_px(10.5))
+                    .line_height(ui_px(15.0))
                     .text_color(theme.text_tertiary)
                     .whitespace_normal()
                     .line_clamp(2)
@@ -2739,7 +2741,7 @@ impl Fintwind {
                         .min_w_0()
                         .flex_1()
                         .truncate()
-                        .text_size(px(11.5))
+                        .text_size(ui_px(11.5))
                         .text_color(theme.text_secondary)
                         .child(entry.name),
                 );
@@ -2780,7 +2782,7 @@ impl Fintwind {
                             .min_w_0()
                             .flex_1()
                             .truncate()
-                            .text_size(px(11.5))
+                            .text_size(ui_px(11.5))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text_secondary)
                             .child(project_name),
@@ -2840,7 +2842,7 @@ impl Fintwind {
                             .min_w_0()
                             .flex_1()
                             .truncate()
-                            .text_size(px(11.0))
+                            .text_size(ui_px(11.0))
                             .text_color(theme.text_secondary)
                             .child(relative_path.clone()),
                     ),
@@ -3073,6 +3075,11 @@ impl Fintwind {
         const TEXT_SIZE: f32 = 10.5;
         const GUTTER_PAD_RIGHT: f32 = 8.0;
         const CONTENT_PAD_TOP: f32 = 6.0;
+        // The pane is a code surface: content, line-height, and the gutter's
+        // own line numbers all follow the code text scale so they stay in
+        // lockstep — the field inherits these metrics for its layout.
+        let line_height = crate::theme::code_px(LINE_HEIGHT);
+        let text_size = crate::theme::code_px(TEXT_SIZE);
 
         // An open find bar follows whichever file this body is showing; a
         // cheap comparison every frame, one recompute on the frame after the
@@ -3086,7 +3093,7 @@ impl Fintwind {
         let heights = field.wrapped_line_heights();
         let gutter_width = 20.0 + 6.0 * (line_count.to_string().len() as f32);
         let content_height = if heights.is_empty() {
-            px(LINE_HEIGHT) * line_count as f32
+            line_height * line_count as f32
         } else {
             heights.iter().fold(Pixels::ZERO, |total, h| total + *h)
         };
@@ -3099,10 +3106,7 @@ impl Fintwind {
                 let visible = viewport.bounds();
                 let mut y = bounds.origin.y;
                 for number in 1..=line_count {
-                    let height = heights
-                        .get(number - 1)
-                        .copied()
-                        .unwrap_or_else(|| px(LINE_HEIGHT));
+                    let height = heights.get(number - 1).copied().unwrap_or(line_height);
                     // Everything below the viewport is unreachable from here on.
                     if y > visible.bottom() {
                         break;
@@ -3118,11 +3122,11 @@ impl Fintwind {
                         let line =
                             window
                                 .text_system()
-                                .shape_line(text, px(TEXT_SIZE), &[run], None);
+                                .shape_line(text, text_size, &[run], None);
                         let origin = point(bounds.right() - line.width, y);
                         let _ = line.paint(
                             origin,
-                            px(LINE_HEIGHT),
+                            line_height,
                             gpui::TextAlign::Left,
                             None,
                             window,
@@ -3148,8 +3152,8 @@ impl Fintwind {
             .flex_col()
             .bg(theme.surface)
             .font_family(md::render::MONO_FAMILY)
-            .text_size(px(TEXT_SIZE))
-            .line_height(px(LINE_HEIGHT))
+            .text_size(text_size)
+            .line_height(line_height)
             .children(find_bar)
             .child(
                 div()
@@ -3494,14 +3498,14 @@ impl Fintwind {
             .child(source)
             .child(
                 div()
-                    .text_size(px(11.5))
+                    .text_size(ui_px(11.5))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.success)
                     .child(format!("+{additions}")),
             )
             .child(
                 div()
-                    .text_size(px(11.5))
+                    .text_size(ui_px(11.5))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.danger)
                     .child(format!("-{deletions}")),
@@ -3509,7 +3513,7 @@ impl Fintwind {
             .when(truncated, |row| {
                 row.child(
                     div()
-                        .text_size(px(10.5))
+                        .text_size(ui_px(10.5))
                         .text_color(theme.warning)
                         .child(tr!("diff.truncated")),
                 )
@@ -3594,7 +3598,7 @@ impl Fintwind {
                         .min_w_0()
                         .flex_1()
                         .truncate()
-                        .text_size(px(11.5))
+                        .text_size(ui_px(11.5))
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(theme.text_secondary)
                         .tooltip(Tooltip::text(file.path.clone()))
@@ -3602,13 +3606,13 @@ impl Fintwind {
                 )
                 .child(
                     div()
-                        .text_size(px(10.5))
+                        .text_size(ui_px(10.5))
                         .text_color(theme.success)
                         .child(format!("+{}", file.additions)),
                 )
                 .child(
                     div()
-                        .text_size(px(10.5))
+                        .text_size(ui_px(10.5))
                         .text_color(theme.danger)
                         .child(format!("-{}", file.deletions)),
                 )
@@ -3697,7 +3701,7 @@ impl Fintwind {
                     .min_w_0()
                     .flex()
                     .items_center()
-                    .text_size(px(10.5))
+                    .text_size(ui_px(10.5))
                     .text_color(theme.text_tertiary)
                     .child(gutter)
                     .child(label)
@@ -3710,8 +3714,8 @@ impl Fintwind {
                 .flex()
                 .items_stretch()
                 .font_family(md::render::MONO_FAMILY)
-                .text_size(px(10.0))
-                .line_height(px(16.0))
+                .text_size(code_px(10.0))
+                .line_height(code_px(16.0))
                 .text_color(theme.text_tertiary)
                 .child(
                     div()
@@ -3745,8 +3749,8 @@ impl Fintwind {
                 .flex()
                 .items_stretch()
                 .font_family(md::render::MONO_FAMILY)
-                .text_size(px(10.5))
-                .line_height(px(16.0))
+                .text_size(code_px(10.5))
+                .line_height(code_px(16.0))
                 .text_color(theme.text_tertiary)
                 .child(div().w(px(52.0)).min_h(px(24.0)).self_stretch().flex_none())
                 .child(
@@ -3998,7 +4002,7 @@ impl Fintwind {
                                 .min_w_0()
                                 .flex_1()
                                 .truncate()
-                                .text_size(px(11.0))
+                                .text_size(ui_px(11.0))
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(theme.text_secondary)
                                 .child(name),
@@ -4061,7 +4065,7 @@ impl Fintwind {
                                     .min_w_0()
                                     .flex_1()
                                     .truncate()
-                                    .text_size(px(11.0))
+                                    .text_size(ui_px(11.0))
                                     .text_color(if selected {
                                         theme.text
                                     } else {
@@ -4081,7 +4085,7 @@ impl Fintwind {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .text_size(px(9.0))
+                                    .text_size(ui_px(9.0))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(status_color)
                                     .child(status),
@@ -4116,7 +4120,7 @@ impl Fintwind {
             .pb(px(32.0))
             .child(
                 div()
-                    .text_size(px(13.0))
+                    .text_size(ui_px(13.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text)
                     .child(title),
@@ -4126,8 +4130,8 @@ impl Fintwind {
                     .mt(px(6.0))
                     .max_w(px(300.0))
                     .text_center()
-                    .text_size(px(11.0))
-                    .line_height(px(17.0))
+                    .text_size(ui_px(11.0))
+                    .line_height(ui_px(17.0))
                     .text_color(theme.text_tertiary)
                     .child(description),
             )

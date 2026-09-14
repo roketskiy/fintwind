@@ -109,7 +109,7 @@ settings.daemon:
 settings.general_keywords:
   en: general local projects conversations privacy version
 settings.appearance_keywords:
-  en: appearance theme system light dark language english chinese simplified
+  en: appearance theme system light dark language english chinese simplified text size font code
 settings.providers_keywords:
   en: providers agents models custom add api key base url endpoint cli version install detect fetch models.dev connectivity test latency first token modality responses claude codex cursor opencode amp grok pi
 settings.skills:
@@ -260,6 +260,22 @@ settings.theme:
   en: Theme
 settings.theme_description:
   en: Choose between system, light, or dark themes
+settings.ui_text_size:
+  en: Interface text size
+settings.ui_text_size_description:
+  en: Scale the app's interface text. Changes apply immediately.
+settings.code_text_size:
+  en: Code text size
+settings.code_text_size_description:
+  en: Scale code in transcripts, tool output, diffs, and the file pane.
+settings.text_size_small:
+  en: Small
+settings.text_size_default:
+  en: Default
+settings.text_size_large:
+  en: Large
+settings.text_size_extra_large:
+  en: Extra large
 settings.theme_system:
   en: System
 settings.theme_light:

@@ -18,6 +18,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.2]
+
 - Show turn-footer token stats and provider retry cards
 - Reconnect the daemon in place after a disconnect instead of failing permanently
 - Keep late-arriving reasoning from splitting into an orphan thinking block

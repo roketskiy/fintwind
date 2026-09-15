@@ -21,7 +21,7 @@ const SETTINGS_SEARCH_CONTEXT: &str = "SettingsSidebar > ComposerInput";
 
 /// The sidebar's rows in display order, each with the keyword haystack the
 /// search field filters against.
-const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 6] = [
+const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
     (
         SettingsPage::General,
         "settings.general",
@@ -51,6 +51,12 @@ const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 6] = [
         "settings.mcp_servers",
         "icons/wrench.svg",
         "settings.mcp_servers_keywords",
+    ),
+    (
+        SettingsPage::McpMarket,
+        "settings.mcp_market",
+        "icons/sparkle.svg",
+        "settings.mcp_market_keywords",
     ),
     (
         SettingsPage::Daemon,
@@ -110,6 +116,11 @@ impl Fintwind {
             // selection survives, and the config is re-read so entries added
             // with the CLI are already on the list.
             self.reset_mcp_page(cx);
+        }
+        if page == SettingsPage::McpMarket {
+            self.mcp_list_scroll.set_offset(gpui::Point::default());
+            self.mcp_detail_scroll.set_offset(gpui::Point::default());
+            self.load_mcp_servers_from_config(cx);
         }
         cx.notify();
     }
@@ -334,7 +345,10 @@ impl Fintwind {
         // titlebar region.
         if matches!(
             page,
-            SettingsPage::Skills | SettingsPage::Providers | SettingsPage::McpServers
+            SettingsPage::Skills
+                | SettingsPage::Providers
+                | SettingsPage::McpServers
+                | SettingsPage::McpMarket
         ) {
             return div()
                 .flex_1()
@@ -355,6 +369,7 @@ impl Fintwind {
                 .child(div().flex_1().min_h_0().child(match page {
                     SettingsPage::Skills => self.render_skills_settings(cx),
                     SettingsPage::McpServers => self.render_mcp_page(cx),
+                    SettingsPage::McpMarket => self.render_mcp_market_page(cx),
                     _ => self.render_providers_page(cx),
                 }));
         }
@@ -379,6 +394,7 @@ impl Fintwind {
                         SettingsPage::Providers => tr!("settings.providers"),
                         SettingsPage::Skills => tr!("settings.skills"),
                         SettingsPage::McpServers => tr!("settings.mcp_servers"),
+                        SettingsPage::McpMarket => tr!("settings.mcp_market"),
                         SettingsPage::Daemon => tr!("settings.daemon"),
                         SettingsPage::Appearance => tr!("settings.appearance"),
                     }),
@@ -388,6 +404,7 @@ impl Fintwind {
                 SettingsPage::Providers => self.render_providers_page(cx),
                 SettingsPage::Skills => self.render_skills_settings(cx),
                 SettingsPage::McpServers => self.render_mcp_page(cx),
+                SettingsPage::McpMarket => self.render_mcp_market_page(cx),
                 SettingsPage::Daemon => self.render_daemon_settings(cx),
                 SettingsPage::Appearance => self.render_appearance_settings(cx),
             });

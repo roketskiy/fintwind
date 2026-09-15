@@ -20,7 +20,7 @@ use crate::theme::ui_px;
 use gpui::KeyDownEvent;
 
 use fintwind_client::custom_providers::unique_provider_slug;
-use fintwind_client::opencode_config::{McpServer, McpServerKind};
+use fintwind_client::opencode_config::{McpOAuthMode, McpServer, McpServerKind};
 
 use super::providers_page::{
     enabled_badge, form_hint, info_note, labeled_field, outline_button, provider_tile,
@@ -103,6 +103,9 @@ pub(super) struct McpVariableEditor {
 pub(super) enum McpField {
     Command,
     Url,
+    OAuthClientId,
+    OAuthClientSecret,
+    OAuthScope,
 }
 
 fn mcp_server_icon(kind: McpServerKind) -> &'static str {
@@ -116,6 +119,14 @@ fn mcp_kind_label(kind: McpServerKind) -> String {
     match kind {
         McpServerKind::Local => tr!("mcp.type_local"),
         McpServerKind::Remote => tr!("mcp.type_remote"),
+    }
+}
+
+fn mcp_oauth_mode_label(mode: McpOAuthMode) -> String {
+    match mode {
+        McpOAuthMode::Automatic => tr!("mcp.oauth_automatic"),
+        McpOAuthMode::Disabled => tr!("mcp.oauth_disabled"),
+        McpOAuthMode::Custom => tr!("mcp.oauth_custom"),
     }
 }
 
@@ -144,6 +155,27 @@ fn mcp_parse_command(text: &str) -> Vec<String> {
 
 fn mcp_url_valid(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
+}
+
+fn run_opencode_mcp_auth(
+    binary: &std::path::Path,
+    name: &str,
+) -> std::io::Result<std::process::Output> {
+    let mut command = std::process::Command::new(binary);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt as _;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+        .arg("mcp")
+        .arg("auth")
+        .arg(name)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output()
 }
 
 /// The one-line summary under a server's name: the command it launches or
@@ -206,6 +238,9 @@ impl Fintwind {
         };
         let command_text = server.command.join(" ");
         let url = server.url;
+        let client_id = server.oauth.client_id;
+        let client_secret = server.oauth.client_secret;
+        let scope = server.oauth.scope;
         self.mcp_command_input.update(cx, |input, cx| {
             if input.content() != command_text {
                 input.set_content(command_text, cx);
@@ -214,6 +249,21 @@ impl Fintwind {
         self.mcp_url_input.update(cx, |input, cx| {
             if input.content() != url {
                 input.set_content(url, cx);
+            }
+        });
+        self.mcp_oauth_client_id.update(cx, |input, cx| {
+            if input.content() != client_id {
+                input.set_content(client_id, cx);
+            }
+        });
+        self.mcp_oauth_client_secret.update(cx, |input, cx| {
+            if input.content() != client_secret {
+                input.set_content(client_secret, cx);
+            }
+        });
+        self.mcp_oauth_scope.update(cx, |input, cx| {
+            if input.content() != scope {
+                input.set_content(scope, cx);
             }
         });
     }
@@ -290,7 +340,8 @@ impl Fintwind {
     /// Commit the working roster straight into OpenCode's configuration.
     /// OpenCode watches the file and hot-reloads, so running serves pick the
     /// change up without a restart.
-    fn commit_mcp_servers(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn commit_mcp_servers(&mut self, cx: &mut Context<Self>) {
+        self.mcp_load_generation += 1;
         if let Err(error) = fintwind_client::opencode_config::save_mcp_servers(&self.mcp_servers) {
             self.show_toast(tr!("mcp.sync_failed", error = error.to_string()));
         }
@@ -328,7 +379,7 @@ impl Fintwind {
         let Some(server) = self.selected_mcp_server_mut() else {
             return;
         };
-        let changed = match field {
+        let persist = match field {
             McpField::Command => {
                 let command = mcp_parse_command(&value);
                 if server.command == command {
@@ -344,11 +395,32 @@ impl Fintwind {
                 server.url = value;
                 true
             }
+            McpField::OAuthClientId => {
+                if server.oauth.client_id == value {
+                    return;
+                }
+                server.oauth.client_id = value;
+                server.oauth.mode == McpOAuthMode::Custom
+            }
+            McpField::OAuthClientSecret => {
+                if server.oauth.client_secret == value {
+                    return;
+                }
+                server.oauth.client_secret = value;
+                server.oauth.mode == McpOAuthMode::Custom
+            }
+            McpField::OAuthScope => {
+                if server.oauth.scope == value {
+                    return;
+                }
+                server.oauth.scope = value;
+                server.oauth.mode == McpOAuthMode::Custom
+            }
         };
-        if changed {
+        if persist {
             self.schedule_mcp_commit(cx);
-            cx.notify();
         }
+        cx.notify();
     }
 
     // ── Mutations ──────────────────────────────────────────────────────────
@@ -405,6 +477,7 @@ impl Fintwind {
             url,
             environment: Vec::new(),
             headers: Vec::new(),
+            oauth: Default::default(),
             enabled: true,
             raw: serde_json::Value::Null,
         };
@@ -455,6 +528,77 @@ impl Fintwind {
             server.kind = kind;
             self.commit_mcp_servers(cx);
         }
+    }
+
+    fn set_mcp_oauth_mode(&mut self, name: String, mode: McpOAuthMode, cx: &mut Context<Self>) {
+        if let Some(server) = self
+            .mcp_servers
+            .iter_mut()
+            .find(|server| server.name == name)
+        {
+            if server.oauth.mode == mode {
+                cx.notify();
+                return;
+            }
+            server.oauth.mode = mode;
+            self.commit_mcp_servers(cx);
+        }
+    }
+
+    fn start_mcp_oauth_login(&mut self, name: String, cx: &mut Context<Self>) {
+        if self.mcp_oauth_auth_name.is_some() {
+            return;
+        }
+        let Some(binary) = self.native_binary_path() else {
+            self.show_toast(tr!("mcp.oauth_missing_opencode"));
+            return;
+        };
+        self.commit_mcp_servers(cx);
+        self.mcp_oauth_auth_generation += 1;
+        let generation = self.mcp_oauth_auth_generation;
+        self.mcp_oauth_auth_name = Some(name.clone());
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { run_opencode_mcp_auth(&binary, &name) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.mcp_oauth_auth_generation != generation {
+                    return;
+                }
+                let finished = this.mcp_oauth_auth_name.take();
+                match result {
+                    Ok(output) if output.status.success() => {
+                        let name = finished.unwrap_or_default();
+                        this.show_success_toast(tr!("mcp.oauth_signed_in", name = name));
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let detail = stderr.trim();
+                        let detail = if detail.is_empty() {
+                            stdout.trim()
+                        } else {
+                            detail
+                        };
+                        this.show_toast(if detail.is_empty() {
+                            tr!("mcp.oauth_sign_in_failed")
+                        } else {
+                            tr!("mcp.oauth_sign_in_failed_detail", error = detail)
+                        });
+                    }
+                    Err(error) => {
+                        this.show_toast(tr!(
+                            "mcp.oauth_sign_in_failed_detail",
+                            error = error.to_string()
+                        ));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn begin_mcp_rename(&mut self, cx: &mut Context<Self>) {
@@ -919,7 +1063,7 @@ impl Fintwind {
         self.render_mcp_empty_detail(theme, cx)
     }
 
-    fn mcp_scrollable_detail(&self, content: Div) -> AnyElement {
+    pub(super) fn mcp_scrollable_detail(&self, content: Div) -> AnyElement {
         div()
             .flex_1()
             .min_h_0()
@@ -1073,7 +1217,11 @@ impl Fintwind {
                 theme.text_secondary
             })
             .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
-            .active(|element| element.bg(theme.danger.opacity(0.18)).text_color(theme.danger))
+            .active(|element| {
+                element
+                    .bg(theme.danger.opacity(0.18))
+                    .text_color(theme.danger)
+            })
             .child(icon(
                 "icons/trash.svg",
                 12.5,
@@ -1199,9 +1347,137 @@ impl Fintwind {
                         .child(labeled_field(theme, tr!("mcp.type_label"), kind_selector))
                         .child(connection_field),
                 )
+                .children(self.render_mcp_oauth(server, theme, cx))
                 .child(variables_section)
                 .child(info_note(theme, "icons/info.svg", tr!("mcp.managed_note"))),
         )
+    }
+
+    fn render_mcp_oauth(
+        &self,
+        server: &McpServer,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<Div> {
+        if server.kind != McpServerKind::Remote {
+            return None;
+        }
+        let current = server.oauth.mode;
+        let weak = cx.entity().downgrade();
+        let handle = self.menu_handle("mcp-oauth-selector", cx);
+        let selector = dropdown_menu(
+            MenuChip::new("mcp-oauth-selector")
+                .label(mcp_oauth_mode_label(current))
+                .outlined()
+                .selected(handle.is_open())
+                .w(px(280.0))
+                .justify_between(),
+            "mcp-oauth-selector-menu",
+            &handle,
+            MenuAlign::BelowLeft,
+            move |_| {
+                [
+                    McpOAuthMode::Automatic,
+                    McpOAuthMode::Disabled,
+                    McpOAuthMode::Custom,
+                ]
+                .into_iter()
+                .map(|mode| {
+                    let weak = weak.clone();
+                    MenuItem::new(mcp_oauth_mode_label(mode), move |_, cx| {
+                        let _ = weak.update(cx, |this, cx| {
+                            if let Some(name) = this.mcp_selected.clone() {
+                                this.set_mcp_oauth_mode(name, mode, cx);
+                            }
+                        });
+                    })
+                    .selected(mode == current)
+                })
+                .collect()
+            },
+        );
+
+        let mut section = div()
+            .mt(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(14.0))
+            .child(labeled_field(theme, tr!("mcp.oauth_label"), selector))
+            .child(
+                div()
+                    .px(px(1.0))
+                    .text_size(ui_px(10.5))
+                    .line_height(ui_px(15.0))
+                    .text_color(theme.text_tertiary)
+                    .child(tr!("mcp.oauth_note")),
+            );
+        if current == McpOAuthMode::Custom {
+            section = section
+                .child(labeled_field(
+                    theme,
+                    tr!("mcp.oauth_client_id"),
+                    TextField::new(
+                        "mcp-oauth-client-id-field",
+                        self.mcp_oauth_client_id.clone(),
+                    )
+                    .w_full(),
+                ))
+                .child(labeled_field(
+                    theme,
+                    tr!("mcp.oauth_client_secret"),
+                    TextField::new(
+                        "mcp-oauth-client-secret-field",
+                        self.mcp_oauth_client_secret.clone(),
+                    )
+                    .w_full(),
+                ))
+                .child(labeled_field(
+                    theme,
+                    tr!("mcp.oauth_scope"),
+                    TextField::new("mcp-oauth-scope-field", self.mcp_oauth_scope.clone()).w_full(),
+                ));
+        }
+        if current != McpOAuthMode::Disabled {
+            let authenticating = self.mcp_oauth_auth_name.is_some();
+            let waiting = self.mcp_oauth_auth_name.as_deref() == Some(server.name.as_str());
+            let name = server.name.clone();
+            let accent = mcp_accent(theme);
+            section = section.child(
+                small_action_button(
+                    "mcp-oauth-sign-in",
+                    "icons/external-link.svg",
+                    if waiting {
+                        tr!("mcp.oauth_signing_in")
+                    } else {
+                        tr!("mcp.oauth_sign_in")
+                    },
+                    if authenticating {
+                        theme.text_tertiary
+                    } else {
+                        accent
+                    },
+                    theme,
+                )
+                .when(!authenticating, |element| {
+                    element
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.start_mcp_oauth_login(name.clone(), cx);
+                        }))
+                        .on_key_down({
+                            let name = server.name.clone();
+                            cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                                if !event.keystroke.modifiers.modified()
+                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                {
+                                    this.start_mcp_oauth_login(name.clone(), cx);
+                                    cx.stop_propagation();
+                                }
+                            })
+                        })
+                }),
+            );
+        }
+        Some(section)
     }
 
     /// The selected server's key-value table (environment for local servers,

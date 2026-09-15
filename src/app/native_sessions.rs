@@ -218,7 +218,7 @@ impl Fintwind {
     }
 
     /// The OpenCode binary the provider probe found, if any.
-    fn native_binary_path(&self) -> Option<PathBuf> {
+    pub(super) fn native_binary_path(&self) -> Option<PathBuf> {
         self.probes
             .first()
             .and_then(|probe| probe.path.clone())
@@ -561,9 +561,7 @@ impl Fintwind {
                             .is_some_and(|session| session.status.is_busy())
                             || this.runtimes.contains_key(&session_id)
                             || this.submission_preparations.contains(&session_id);
-                        if !live
-                            && let Some(session) = this.state.session_mut(session_id)
-                        {
+                        if !live && let Some(session) = this.state.session_mut(session_id) {
                             session.messages = transcript.messages;
                             session.transcript_blocks = transcript.blocks;
                             session.turns = transcript.turns;

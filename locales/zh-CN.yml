@@ -63,6 +63,8 @@ settings.back: 返回
 settings.search: 搜索设置
 settings.mcp_servers: MCP 服务器
 settings.mcp_servers_keywords: MCP 服务器 工具 stdio http sse 本地 远程 npx 环境变量 请求头
+settings.mcp_market: MCP 市场
+settings.mcp_market_keywords: MCP 市场 smithery 网页搜索 学术 论文 代码 安装 context7 github arxiv pubmed brave exa tavily
 daemon.expose_title: 暴露由 fintwind 管理的守护进程
 daemon.expose_description: 允许本机之外的 fintwind 客户端连接。更改此项只会重启守护进程。
 daemon.status_local: 仅本机
@@ -278,6 +280,23 @@ mcp.command_label: 命令
 mcp.command_placeholder: 例如 npx -y @antv/mcp-server-chart
 mcp.url_label: URL
 mcp.url_placeholder: "https://mcp.example.com"
+mcp.oauth_label: OAuth
+mcp.oauth_automatic: 自动
+mcp.oauth_disabled: 关闭
+mcp.oauth_custom: 自定义客户端
+mcp.oauth_client_id: Client ID
+mcp.oauth_client_secret: Client secret
+mcp.oauth_scope: Scope
+mcp.oauth_client_id_placeholder: "{env:MCP_CLIENT_ID}"
+mcp.oauth_client_secret_placeholder: "{env:MCP_CLIENT_SECRET}"
+mcp.oauth_scope_placeholder: 例如 tools:read tools:execute
+mcp.oauth_note: 自动模式下，服务器返回 401 时 OpenCode 会拉起网页登录。也可现在点「在浏览器中登录」。若只用请求头里的 API 密钥，请关闭。
+mcp.oauth_sign_in: 在浏览器中登录
+mcp.oauth_signing_in: 等待浏览器…
+mcp.oauth_signed_in: "已登录 %{name}"
+mcp.oauth_sign_in_failed: 浏览器登录未完成
+mcp.oauth_sign_in_failed_detail: "浏览器登录失败：%{error}"
+mcp.oauth_missing_opencode: 未找到 OpenCode，无法打开浏览器登录。
 mcp.no_connection: 尚无命令或 URL
 mcp.environment_label: 环境变量
 mcp.headers_label: 请求头
@@ -302,6 +321,47 @@ mcp.hint_need_command: 请输入启动服务器的命令。
 mcp.hint_invalid_url: URL 必须以 http:// 或 https:// 开头。
 mcp.sync_failed: "无法更新 OpenCode 的 MCP 配置:%{error}"
 mcp.managed_note: 此名单来自 OpenCode 自己的配置文件(opencode.json)的 mcp 段。CLI 与 TUI 看到的是同一批服务器,OpenCode 会热加载该文件。timeout、cwd、oauth 等额外字段会原样保留。
+
+mcp_market.search_placeholder: 搜索市场…
+mcp_market.filter_all: 全部
+mcp_market.filter_web: 网页搜索
+mcp_market.filter_academic: 学术
+mcp_market.filter_code: 代码
+mcp_market.install: 添加
+mcp_market.installed: 已添加
+mcp_market.available: 可添加
+mcp_market.remove: 移除
+mcp_market.open_servers: 在 MCP 服务器中打开
+mcp_market.open_smithery: 在 Smithery 打开
+mcp_market.source: Smithery
+mcp_market.auth_note: 添加后该服务器可能需要 API 密钥或登录。可在 MCP 服务器页设置请求头或 OAuth。
+mcp_market.empty: 没有匹配的服务器
+mcp_market.subtitle: 从 Smithery 精选的网页搜索、学术与代码 MCP 服务器。
+mcp_market.count: "%{count} 个服务器"
+mcp_market.filter_caption: "%{shown} / %{total}"
+mcp_market.added_toast: "已添加 %{name}"
+mcp_market.removed_toast: "已移除 %{name}"
+mcp_market.note: 添加会把远程 MCP 服务器写入 OpenCode 配置。OpenCode 会热加载该文件，下一个任务即可使用。
+mcp_market.desc.brave: 用 Brave 独立索引搜索网页、新闻、图片和视频。
+mcp_market.desc.exa: 快速网页搜索与抓取，适合查库、API 和时新事实。
+mcp_market.desc.tavily: 面向 AI 的网页搜索，返回干净摘要、来源链接，并可抓取页面。
+mcp_market.desc.keenable: 免费远程网页搜索，结果可抓成 Markdown。无需账号或 API 密钥。
+mcp_market.desc.parallel: 为 AI 智能体设计的高精度网页搜索。
+mcp_market.desc.linkup: 实时网页搜索，带来源依据的答案和最新新闻。
+mcp_market.desc.brightdata: 搜索、抓取并提取公开网页，降低被拦截的概率。
+mcp_market.desc.pubmed: 检索 MEDLINE 生物医学文献，包括论文、摘要和相关文章。
+mcp_market.desc.arxiv: 按标题、作者、摘要或分类检索 arXiv 论文。
+mcp_market.desc.consensus: 检索学术论文，并从文献中提取有证据的结论。
+mcp_market.desc.paper_search: 在一个服务器上检索 arXiv、PubMed、bioRxiv、Semantic Scholar 和 Google Scholar。
+mcp_market.desc.semantic_scholar: 检索 Semantic Scholar 与 arXiv，支持引用分析和开放获取 PDF。
+mcp_market.desc.huggingface: 在 Hugging Face 上发现模型、数据集和文档。
+mcp_market.desc.wikipedia: 搜索维基百科，阅读摘要或全文，并跳转到章节。
+mcp_market.desc.context7: 把最新、带版本的库文档和代码示例拉进提示。
+mcp_market.desc.github: 操作 GitHub 仓库、议题、拉取请求和工作流。
+mcp_market.desc.deepwiki: 按主题浏览 GitHub 仓库文档，并就项目提问。
+mcp_market.desc.grep: 在公开 GitHub 代码中搜索语法、API 和生产用法。
+mcp_market.desc.microsoft_learn: Microsoft 官方文档，覆盖 Azure、.NET 等相关产品。
+mcp_market.desc.gread: 读取公开 GitHub 仓库源码，若有文档仓库也会一并提供。
 common.settings: 设置
 common.copy: 复制
 common.remove: 移除

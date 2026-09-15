@@ -192,7 +192,10 @@ pub fn save_providers_at(path: &Path, providers: &[CustomProvider]) -> io::Resul
         Err(error) => return Err(error),
     };
 
-    let managed: HashSet<&str> = providers.iter().map(|provider| provider.slug.as_str()).collect();
+    let managed: HashSet<&str> = providers
+        .iter()
+        .map(|provider| provider.slug.as_str())
+        .collect();
 
     let mut provider_map = Map::new();
     for provider in providers {
@@ -311,22 +314,20 @@ fn provider_entry(provider: &CustomProvider) -> Value {
                 limit.insert("context".into(), Value::from(window));
                 // A fetched output limit fills the missing slot; an output the
                 // entry already carries is never overwritten.
-                limit
-                    .entry("output".to_owned())
-                    .or_insert_with(|| {
-                        Value::from(model.output_limit.unwrap_or(DEFAULT_OUTPUT_LIMIT))
-                    });
+                limit.entry("output".to_owned()).or_insert_with(|| {
+                    Value::from(model.output_limit.unwrap_or(DEFAULT_OUTPUT_LIMIT))
+                });
                 spec.insert("limit".into(), Value::Object(limit));
             }
             None => {
-                if let Some(limit) = spec
-                    .get("limit")
-                    .and_then(Value::as_object)
-                    .cloned()
-                    .map(|mut limit| {
-                        limit.remove("context");
-                        limit
-                    })
+                if let Some(limit) =
+                    spec.get("limit")
+                        .and_then(Value::as_object)
+                        .cloned()
+                        .map(|mut limit| {
+                            limit.remove("context");
+                            limit
+                        })
                 {
                     if limit.is_empty() {
                         spec.remove("limit");
@@ -388,6 +389,24 @@ fn provider_entry(provider: &CustomProvider) -> Value {
     Value::Object(entry)
 }
 
+fn write_mcp_oauth(entry: &mut Map<String, Value>, oauth: &McpOAuth) {
+    match oauth.mode {
+        McpOAuthMode::Automatic => {
+            entry.remove("oauth");
+        }
+        McpOAuthMode::Disabled => {
+            entry.insert("oauth".into(), Value::Bool(false));
+        }
+        McpOAuthMode::Custom => {
+            let mut map = Map::new();
+            set_or_remove_string(&mut map, "clientId", &oauth.client_id);
+            set_or_remove_string(&mut map, "clientSecret", &oauth.client_secret);
+            set_or_remove_string(&mut map, "scope", &oauth.scope);
+            entry.insert("oauth".into(), Value::Object(map));
+        }
+    }
+}
+
 fn set_or_remove_string(map: &mut Map<String, Value>, key: &str, value: &str) {
     let value = value.trim();
     if value.is_empty() {
@@ -400,8 +419,8 @@ fn set_or_remove_string(map: &mut Map<String, Value>, key: &str, value: &str) {
 /// One MCP server under opencode.json's top-level `mcp` map. Verified
 /// against opencode's published schema: a `local` server carries `command`
 /// (an argv vector) plus `environment`, a `remote` server carries `url`
-/// plus `headers`; both may carry `enabled` and unknown fields (`cwd`,
-/// `timeout`, `oauth`, …) which ride along in [`McpServer::raw`].
+/// plus `headers` and optional `oauth`; both may carry `enabled` and unknown
+/// fields (`cwd`, `timeout`, …) which ride along in [`McpServer::raw`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct McpServer {
     /// The entry's key in the `mcp` map — also its display name.
@@ -418,6 +437,9 @@ pub struct McpServer {
     pub environment: Vec<(String, String)>,
     /// The entry's `headers` object, as ordered pairs.
     pub headers: Vec<(String, String)>,
+    /// `remote` only: OpenCode OAuth. Parsed whatever the kind so re-typing
+    /// never drops a custom client. Written only while the server is remote.
+    pub oauth: McpOAuth,
     pub enabled: bool,
     /// The original record, preserved so unknown fields ride along on save.
     pub raw: Value,
@@ -428,6 +450,26 @@ pub enum McpServerKind {
     #[default]
     Local,
     Remote,
+}
+
+/// How a remote MCP server authenticates over OAuth.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum McpOAuthMode {
+    /// Omit `oauth` so OpenCode auto-detects a 401 and runs the flow.
+    #[default]
+    Automatic,
+    /// `oauth: false` — API keys / headers only.
+    Disabled,
+    /// Pre-registered client credentials.
+    Custom,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct McpOAuth {
+    pub mode: McpOAuthMode,
+    pub client_id: String,
+    pub client_secret: String,
+    pub scope: String,
 }
 
 impl McpServerKind {
@@ -509,6 +551,7 @@ fn mcp_server_from_config(key: &str, entry: &Value) -> McpServer {
             .to_owned(),
         environment: string_pairs("environment"),
         headers: string_pairs("headers"),
+        oauth: mcp_oauth_from_config(entry),
         // OpenCode runs servers whose entries omit `enabled`, so absence
         // loads as on and the UI's toggle then writes the flag explicitly.
         enabled: entry
@@ -516,6 +559,46 @@ fn mcp_server_from_config(key: &str, entry: &Value) -> McpServer {
             .and_then(Value::as_bool)
             .unwrap_or(true),
         raw: entry.clone(),
+    }
+}
+
+fn mcp_oauth_from_config(entry: &Value) -> McpOAuth {
+    match entry.get("oauth") {
+        Some(Value::Bool(false)) => McpOAuth {
+            mode: McpOAuthMode::Disabled,
+            ..McpOAuth::default()
+        },
+        Some(Value::Object(map)) => {
+            let client_id = map
+                .get("clientId")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let client_secret = map
+                .get("clientSecret")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let scope = map
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let custom = !client_id.trim().is_empty()
+                || !client_secret.trim().is_empty()
+                || !scope.trim().is_empty();
+            McpOAuth {
+                mode: if custom {
+                    McpOAuthMode::Custom
+                } else {
+                    McpOAuthMode::Automatic
+                },
+                client_id,
+                client_secret,
+                scope,
+            }
+        }
+        _ => McpOAuth::default(),
     }
 }
 
@@ -577,6 +660,7 @@ fn mcp_server_entry(server: &McpServer) -> Value {
         McpServerKind::Local => {
             set_or_remove_string_table(&mut entry, "environment", &server.environment);
             entry.remove("headers");
+            entry.remove("oauth");
             entry.insert(
                 "command".into(),
                 Value::Array(
@@ -594,6 +678,7 @@ fn mcp_server_entry(server: &McpServer) -> Value {
             entry.remove("environment");
             set_or_remove_string(&mut entry, "url", &server.url);
             entry.remove("command");
+            write_mcp_oauth(&mut entry, &server.oauth);
         }
     }
 
@@ -603,7 +688,11 @@ fn mcp_server_entry(server: &McpServer) -> Value {
 
 /// Insert `pairs` as an object under `key`, dropping blank keys and removing
 /// the key entirely when nothing remains.
-fn set_or_remove_string_table(entry: &mut Map<String, Value>, key: &str, pairs: &[(String, String)]) {
+fn set_or_remove_string_table(
+    entry: &mut Map<String, Value>,
+    key: &str,
+    pairs: &[(String, String)],
+) {
     let mut table = Map::new();
     for (name, value) in pairs {
         let name = name.trim();
@@ -641,17 +730,19 @@ pub fn migrate_legacy_override_file() -> bool {
     let Ok(bytes) = std::fs::read(&legacy) else {
         return false;
     };
-    let migrated = serde_json::from_slice::<Value>(&bytes).ok().and_then(|document| {
-        let entries = document.get("provider")?.as_object()?.clone();
-        if entries.is_empty() {
-            return Some(Vec::new());
-        }
-        let providers: Vec<CustomProvider> = entries
-            .iter()
-            .map(|(key, entry)| provider_from_config(key, entry, &HashSet::new()))
-            .collect();
-        Some(providers)
-    });
+    let migrated = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .and_then(|document| {
+            let entries = document.get("provider")?.as_object()?.clone();
+            if entries.is_empty() {
+                return Some(Vec::new());
+            }
+            let providers: Vec<CustomProvider> = entries
+                .iter()
+                .map(|(key, entry)| provider_from_config(key, entry, &HashSet::new()))
+                .collect();
+            Some(providers)
+        });
     let migrated = match migrated {
         Some(providers) => save_providers_at(&config_path(), &providers).is_ok(),
         None => false,
@@ -737,15 +828,21 @@ mod tests {
 
     #[test]
     fn saving_a_new_provider_writes_thinking_modes_and_survives_reload() {
-        let directory = std::env::temp_dir().join(format!(
-            "fintwind-thinking-config-{}", uuid::Uuid::new_v4()
-        ));
-        let path = write_fixture(&directory, &serde_json::json!({"instructions": ["keep.md"]}));
+        let directory =
+            std::env::temp_dir().join(format!("fintwind-thinking-config-{}", uuid::Uuid::new_v4()));
+        let path = write_fixture(
+            &directory,
+            &serde_json::json!({"instructions": ["keep.md"]}),
+        );
         let providers = vec![CustomProvider::new(
-            "thinking-test".into(), "Thinking test".into(),
-            "https://example.invalid/v1".into(), ProviderApiFormat::OpenAiResponses,
-            "test-key".into(), vec![CustomProviderModel {
-                id: "gpt-5.5".into(), ..Default::default()
+            "thinking-test".into(),
+            "Thinking test".into(),
+            "https://example.invalid/v1".into(),
+            ProviderApiFormat::OpenAiResponses,
+            "test-key".into(),
+            vec![CustomProviderModel {
+                id: "gpt-5.5".into(),
+                ..Default::default()
             }],
         )];
         save_providers_at(&path, &providers).unwrap();
@@ -836,9 +933,15 @@ mod tests {
 
         // Unrelated top-level keys survive verbatim.
         assert_eq!(saved["mcp"]["context7"]["url"], "https://mcp.example.com");
-        assert_eq!(saved["skills"]["paths"][0], "C:/Users/example/.config/opencode/skills");
+        assert_eq!(
+            saved["skills"]["paths"][0],
+            "C:/Users/example/.config/opencode/skills"
+        );
         // The disabled catalog provider outside the roster stays listed.
-        assert_eq!(saved["disabled_providers"], serde_json::json!(["catalog-provider", "deepseek"]));
+        assert_eq!(
+            saved["disabled_providers"],
+            serde_json::json!(["catalog-provider", "deepseek"])
+        );
 
         // The renamed, disabled, edited entry kept its unknown fields.
         let deepseek = &saved["provider"]["deepseek"];
@@ -887,7 +990,10 @@ mod tests {
         save_providers_at(&path, &providers).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         // The roster entry left the list; the catalog entry survives alone.
-        assert_eq!(saved["disabled_providers"], serde_json::json!(["catalog-provider"]));
+        assert_eq!(
+            saved["disabled_providers"],
+            serde_json::json!(["catalog-provider"])
+        );
 
         let _ = std::fs::remove_dir_all(directory);
     }
@@ -909,7 +1015,10 @@ mod tests {
         save_providers_at(&path, &providers).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(saved["provider"]["openrouter"].get("npm").is_none());
-        assert_eq!(saved["provider"]["openrouter"]["options"]["apiKey"], "sk-or");
+        assert_eq!(
+            saved["provider"]["openrouter"]["options"]["apiKey"],
+            "sk-or"
+        );
         assert_eq!(
             saved["provider"]["openrouter"]["models"]["vendor/model"]["limit"],
             serde_json::json!({"context": 1000000, "output": 32000})
@@ -973,7 +1082,13 @@ mod tests {
         let relay = providers.iter_mut().find(|p| p.slug == "relay").unwrap();
         let vision = relay.model("vision-model").unwrap();
         assert_eq!(vision.input_modalities, vec!["text", "image"]);
-        assert!(relay.model("plain-model").unwrap().input_modalities.is_empty());
+        assert!(
+            relay
+                .model("plain-model")
+                .unwrap()
+                .input_modalities
+                .is_empty()
+        );
 
         // A fresh selection replaces `input` and leaves `output` in place.
         let relay = providers.iter_mut().find(|p| p.slug == "relay").unwrap();
@@ -1094,6 +1209,64 @@ mod tests {
         let org = servers.iter().find(|s| s.name == "org-remote").unwrap();
         assert_eq!(org.kind, McpServerKind::Remote);
         assert!(org.enabled);
+        assert_eq!(org.oauth.mode, McpOAuthMode::Disabled);
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn save_mcp_writes_remote_oauth_modes() {
+        let directory =
+            std::env::temp_dir().join(format!("fintwind-oc-mcp-oauth-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("opencode.json");
+
+        let automatic = McpServer {
+            name: "auto".into(),
+            kind: McpServerKind::Remote,
+            command: Vec::new(),
+            url: "https://auto.example.com/mcp".into(),
+            environment: Vec::new(),
+            headers: Vec::new(),
+            oauth: McpOAuth::default(),
+            enabled: true,
+            raw: Value::Null,
+        };
+        let custom = McpServer {
+            name: "custom".into(),
+            kind: McpServerKind::Remote,
+            command: Vec::new(),
+            url: "https://custom.example.com/mcp".into(),
+            environment: Vec::new(),
+            headers: Vec::new(),
+            oauth: McpOAuth {
+                mode: McpOAuthMode::Custom,
+                client_id: "id".into(),
+                client_secret: String::new(),
+                scope: "tools:read".into(),
+            },
+            enabled: true,
+            raw: Value::Null,
+        };
+        save_mcp_servers_at(&path, &[automatic, custom]).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(saved["mcp"]["auto"].get("oauth").is_none());
+        assert_eq!(saved["mcp"]["custom"]["oauth"]["clientId"], "id");
+        assert!(
+            saved["mcp"]["custom"]["oauth"]
+                .get("clientSecret")
+                .is_none()
+        );
+        assert_eq!(saved["mcp"]["custom"]["oauth"]["scope"], "tools:read");
+
+        let loaded = load_mcp_servers_at(&path).unwrap();
+        let custom = loaded
+            .iter()
+            .find(|server| server.name == "custom")
+            .unwrap();
+        assert_eq!(custom.oauth.mode, McpOAuthMode::Custom);
+        assert_eq!(custom.oauth.client_id, "id");
+        assert_eq!(custom.oauth.scope, "tools:read");
 
         let _ = std::fs::remove_dir_all(directory);
     }
@@ -1174,6 +1347,7 @@ mod tests {
                 ("   ".to_owned(), "dropped".to_owned()),
             ],
             headers: Vec::new(),
+            oauth: McpOAuth::default(),
             enabled: true,
             raw: Value::Null,
         };
@@ -1184,7 +1358,10 @@ mod tests {
         assert_eq!(saved["$schema"], "https://opencode.ai/config.json");
         let entry = &saved["mcp"]["fresh-server"];
         assert_eq!(entry["type"], "local");
-        assert_eq!(entry["command"], serde_json::json!(["bun", "x", "some-server"]));
+        assert_eq!(
+            entry["command"],
+            serde_json::json!(["bun", "x", "some-server"])
+        );
         assert_eq!(entry["environment"], serde_json::json!({"KEY": "value"}));
         assert_eq!(entry["enabled"], true);
 
@@ -1236,18 +1413,20 @@ mod tests {
         let Ok(bytes) = std::fs::read(legacy) else {
             return false;
         };
-        let migrated = serde_json::from_slice::<Value>(&bytes).ok().and_then(|document| {
-            let entries = document.get("provider")?.as_object()?.clone();
-            if entries.is_empty() {
-                return Some(Vec::new());
-            }
-            Some(
-                entries
-                    .iter()
-                    .map(|(key, entry)| provider_from_config(key, entry, &HashSet::new()))
-                    .collect::<Vec<CustomProvider>>(),
-            )
-        });
+        let migrated = serde_json::from_slice::<Value>(&bytes)
+            .ok()
+            .and_then(|document| {
+                let entries = document.get("provider")?.as_object()?.clone();
+                if entries.is_empty() {
+                    return Some(Vec::new());
+                }
+                Some(
+                    entries
+                        .iter()
+                        .map(|(key, entry)| provider_from_config(key, entry, &HashSet::new()))
+                        .collect::<Vec<CustomProvider>>(),
+                )
+            });
         let migrated = match migrated {
             Some(providers) => save_providers_at(config, &providers).is_ok(),
             None => false,

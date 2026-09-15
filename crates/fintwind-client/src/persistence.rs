@@ -19,7 +19,9 @@ use crate::{Command, DaemonExposureSettings, DaemonSettings, DaemonSupervisor, R
 use fintwind_protocol::i18n::AppLanguage;
 use fintwind_protocol::identity::DATA_DIRECTORY_NAME;
 use fintwind_protocol::model::{AgentSession, FavoriteModel, OPENCODE_PROVIDER, Project};
-use fintwind_protocol::provider_session::{NativeSessionSummary, NativeTranscript};
+use fintwind_protocol::provider_session::{
+    McpServerStatus, NativeSessionSummary, NativeTranscript,
+};
 use fintwind_protocol::theme::ThemePreference;
 
 pub use fintwind_protocol::persistence::{
@@ -941,6 +943,31 @@ impl StateStore {
                 )
                 .map_err(to_io_error),
         )
+    }
+
+    /// The workspace server's MCP connection statuses. Blocking RPC; call
+    /// off the UI thread — the daemon may need to start the server first.
+    pub fn list_mcp_server_statuses(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+    ) -> io::Result<Vec<McpServerStatus>> {
+        match self
+            .daemon
+            .client()
+            .request_with_timeout(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::ListMcpServerStatuses { binary, directory },
+                Duration::from_secs(90),
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::McpServerStatuses { statuses } => Ok(statuses),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an invalid MCP status list",
+            )),
+        }
     }
 
     /// Delete a native session on the OpenCode server. Blocking RPC.

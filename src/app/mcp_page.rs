@@ -168,6 +168,50 @@ fn mcp_row_caption(server: &McpServer) -> String {
     }
 }
 
+/// One MCP server's live connection state as the workspace's OpenCode server
+/// reports it.
+pub(super) type McpStatusEntry = fintwind_client::provider_session::McpServerStatus;
+
+/// Each state pairs a distinct glyph with its color, so the status reads
+/// without relying on hue alone — failed and needs_auth differ in shape,
+/// pending spins, disabled is hollow.
+fn mcp_status_glyph(
+    state: fintwind_client::provider_session::McpConnectionState,
+) -> &'static str {
+    use fintwind_client::provider_session::McpConnectionState as State;
+    match state {
+        State::Connected => "icons/check.svg",
+        State::Pending => "icons/loader-circle.svg",
+        State::Disabled => "icons/block.svg",
+        State::Failed => "icons/alert.svg",
+        State::NeedsAuth => "icons/lock.svg",
+    }
+}
+
+fn mcp_status_color(
+    state: fintwind_client::provider_session::McpConnectionState,
+    theme: &Theme,
+) -> Hsla {
+    use fintwind_client::provider_session::McpConnectionState as State;
+    match state {
+        State::Connected => theme.success,
+        State::Pending => mcp_accent(theme),
+        State::Disabled => theme.text_tertiary,
+        State::Failed | State::NeedsAuth => theme.danger,
+    }
+}
+
+fn mcp_status_label(entry: &McpStatusEntry) -> String {
+    use fintwind_client::provider_session::McpConnectionState as State;
+    match entry.status {
+        State::Connected => tr!("mcp.status_connected"),
+        State::Pending => tr!("mcp.status_pending"),
+        State::Disabled => tr!("mcp.status_disabled"),
+        State::Failed => tr!("mcp.status_failed"),
+        State::NeedsAuth => tr!("mcp.status_needs_auth"),
+    }
+}
+
 impl Fintwind {
     // ── Selection & state ──────────────────────────────────────────────────
 
@@ -261,6 +305,7 @@ impl Fintwind {
             self.load_mcp_fields(&name, cx);
         }
         self.load_mcp_servers_from_config(cx);
+        self.refresh_mcp_statuses(cx);
     }
 
     // ── Persistence ────────────────────────────────────────────────────────
@@ -346,6 +391,57 @@ impl Fintwind {
             });
         })
         .detach();
+    }
+
+    /// Refresh the roster's live connection statuses from the workspace's
+    /// OpenCode server. Best-effort: a server that cannot be reached leaves
+    /// the previous snapshot in place; the list simply renders without dots
+    /// until one succeeds. The listing RPC is blocking, so it runs on the
+    /// background executor — never reachable from `render`.
+    pub(super) fn refresh_mcp_statuses(&mut self, cx: &mut Context<Self>) {
+        let Some(binary) = self.native_binary_path() else {
+            return;
+        };
+        let directory = self.mcp_auth_directory();
+        self.mcp_status_generation += 1;
+        let generation = self.mcp_status_generation;
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let fetched = cx
+                .background_executor()
+                .spawn(async move {
+                    fintwind_client::persistence::StateStore::remote(daemon)
+                        .list_mcp_server_statuses(binary, directory)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.mcp_status_generation != generation {
+                    return;
+                }
+                match fetched {
+                    Ok(statuses) => {
+                        this.mcp_statuses = Some(
+                            statuses
+                                .into_iter()
+                                .map(|entry| (entry.name.clone(), entry))
+                                .collect(),
+                        );
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        eprintln!("could not refresh MCP statuses: {error}");
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The status snapshot for `name`, when one has been fetched.
+    fn mcp_status(&self, name: &str) -> Option<&McpStatusEntry> {
+        self.mcp_statuses
+            .as_ref()
+            .and_then(|statuses| statuses.get(name))
     }
 
     /// A detail field was edited. Applies the new value to the selected
@@ -465,12 +561,18 @@ impl Fintwind {
         self.mcp_adding = false;
         self.commit_mcp_servers(cx);
         self.select_mcp_server(key, cx);
+        // The new server joins the workspace's roster on the next refresh;
+        // its connection state arrives with it.
+        self.refresh_mcp_statuses(cx);
         self.show_success_toast(tr!("mcp.added_toast", name = name));
     }
 
     fn delete_mcp_server(&mut self, name: String, cx: &mut Context<Self>) {
         self.mcp_servers.retain(|server| server.name != name);
         self.mcp_delete_arming = None;
+        if let Some(statuses) = self.mcp_statuses.as_mut() {
+            statuses.remove(&name);
+        }
         self.commit_mcp_servers(cx);
         if self.mcp_selected.as_deref() == Some(name.as_str()) {
             // Land the detail on whichever server the fallback picks next.
@@ -493,6 +595,9 @@ impl Fintwind {
             server.enabled = !server.enabled;
         }
         self.commit_mcp_servers(cx);
+        // OpenCode hot-reloads the file and reconnects the server; its new
+        // connection state lands with the next refresh.
+        self.refresh_mcp_statuses(cx);
     }
 
     fn set_mcp_server_kind(&mut self, name: String, kind: McpServerKind, cx: &mut Context<Self>) {
@@ -507,6 +612,12 @@ impl Fintwind {
             }
             server.kind = kind;
             self.commit_mcp_servers(cx);
+            // A kind switch changes what the server connects to, so the
+            // old status no longer describes it.
+            if let Some(statuses) = self.mcp_statuses.as_mut() {
+                statuses.remove(&name);
+            }
+            self.refresh_mcp_statuses(cx);
         }
     }
 
@@ -577,6 +688,7 @@ impl Fintwind {
                     Ok(()) => {
                         let name = finished.unwrap_or_default();
                         this.show_success_toast(tr!("mcp.oauth_signed_in", name = name));
+                        this.refresh_mcp_statuses(cx);
                     }
                     Err(error) => {
                         if this.mcp_oauth_cancel_requested {
@@ -654,6 +766,11 @@ impl Fintwind {
             .find(|server| server.name == selected)
         {
             server.name = name.clone();
+        }
+        if let Some(statuses) = self.mcp_statuses.as_mut()
+            && let Some(entry) = statuses.remove(&selected)
+        {
+            statuses.insert(name.clone(), entry);
         }
         self.mcp_selected = Some(name);
         self.commit_mcp_servers(cx);
@@ -918,6 +1035,7 @@ impl Fintwind {
         let toggle_name = name.clone();
         let caption = mcp_row_caption(server);
         let enabled = server.enabled;
+        let status = self.mcp_status(&server.name);
         div()
             .child(
                 div()
@@ -989,6 +1107,13 @@ impl Fintwind {
                                     .child(SharedString::from(caption)),
                             ),
                     )
+                    .children(status.map(|entry| {
+                        icon(
+                            mcp_status_glyph(entry.status),
+                            12.0,
+                            mcp_status_color(entry.status, theme),
+                        )
+                    }))
                     .child(toggle_switch(
                         SharedString::from(format!("mcp-toggle-{}", server.name)),
                         enabled,
@@ -1334,6 +1459,46 @@ impl Fintwind {
         let variables_section =
             self.render_mcp_variables(server, McpVariableTable::for_kind(current_kind), theme, cx);
 
+        let status_section = self.mcp_status(&server.name).map(|entry| {
+            let color = mcp_status_color(entry.status, theme);
+            div()
+                .mt(px(16.0))
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .child(icon(mcp_status_glyph(entry.status), 13.0, color))
+                        .child(
+                            div()
+                                .text_size(ui_px(12.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(color)
+                                .child(mcp_status_label(entry)),
+                        ),
+                )
+                .children(entry.error.clone().map(|error| {
+                    div()
+                        .text_size(ui_px(10.5))
+                        .line_height(ui_px(15.0))
+                        .text_color(theme.text_tertiary)
+                        .child(SharedString::from(error))
+                }))
+                .child(
+                    div()
+                        .text_size(ui_px(10.5))
+                        .line_height(ui_px(15.0))
+                        .text_color(theme.text_tertiary)
+                        .child(tr!(
+                            "mcp.status_refresh_hint",
+                            name = server.name.clone()
+                        )),
+                )
+        });
+
         self.mcp_scrollable_detail(
             div()
                 .flex()
@@ -1364,6 +1529,7 @@ impl Fintwind {
                         .child(labeled_field(theme, tr!("mcp.type_label"), kind_selector))
                         .child(connection_field),
                 )
+                .children(status_section)
                 .children(self.render_mcp_oauth(server, theme, cx))
                 .child(variables_section)
                 .child(info_note(theme, "icons/info.svg", tr!("mcp.managed_note"))),

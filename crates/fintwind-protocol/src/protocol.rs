@@ -9,7 +9,8 @@ use crate::attachments::{AttachmentUpload, StoredAttachment};
 use crate::model::{AgentSession, Project, ProviderProbe, UserInputAnswer};
 use crate::persistence::{ComposerDraftChange, ComposerDrafts, SessionMessageMatch};
 use crate::provider_session::{
-    NativeSessionSummary, NativeTranscript, ProviderSessionFork, ProviderSessionForkRequest,
+    McpServerStatus, NativeSessionSummary, NativeTranscript, ProviderSessionFork,
+    ProviderSessionForkRequest,
 };
 use crate::settings::DaemonSettings;
 use crate::skills::SkillsCatalog;
@@ -193,6 +194,13 @@ pub enum Command {
         binary: PathBuf,
         directory: PathBuf,
         name: String,
+    },
+    /// Ask the workspace's OpenCode server for its MCP servers' live
+    /// connection statuses. Works without any session: the server holds the
+    /// connections itself.
+    ListMcpServerStatuses {
+        binary: PathBuf,
+        directory: PathBuf,
     },
     /// Kill the pending `opencode mcp auth` child for `name`. Ack succeeds
     /// whether or not a flow was running, so the button is idempotent.
@@ -422,6 +430,9 @@ pub enum ResponsePayload {
     },
     ProviderSessions {
         sessions: Vec<NativeSessionSummary>,
+    },
+    McpServerStatuses {
+        statuses: Vec<McpServerStatus>,
     },
     NativeTranscript {
         transcript: NativeTranscript,

@@ -633,6 +633,18 @@ mcp.hint_invalid_url:
   en: The URL must start with http:// or https://.
 mcp.sync_failed:
   en: "Could not update OpenCode's MCP configuration: %{error}"
+mcp.status_connected:
+  en: Connected
+mcp.status_pending:
+  en: Connecting…
+mcp.status_disabled:
+  en: Disabled
+mcp.status_failed:
+  en: Connection failed
+mcp.status_needs_auth:
+  en: Sign-in required
+mcp.status_refresh_hint:
+  en: "Statuses come from the running OpenCode server for %{name}'s workspace; they refresh when this page opens or the server is toggled."
 mcp.managed_note:
   en: This roster is mcp.servers in OpenCode's own configuration file (opencode.json). The CLI and TUI see the same servers, and OpenCode hot-reloads the file. Extra fields like timeout, cwd, or oauth are preserved.
 

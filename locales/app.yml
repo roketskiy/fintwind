@@ -126,6 +126,10 @@ settings.mcp_servers:
   en: MCP Servers
 settings.mcp_servers_keywords:
   en: mcp servers tools stdio http sse local remote npx environment variables headers
+settings.mcp_market:
+  en: MCP Marketplace
+settings.mcp_market_keywords:
+  en: mcp marketplace smithery web search academic code install context7 github arxiv pubmed brave exa tavily
 daemon.expose_title:
   en: Expose managed daemon
 daemon.expose_description:
@@ -549,6 +553,40 @@ mcp.url_label:
   en: URL
 mcp.url_placeholder:
   en: "https://mcp.example.com"
+mcp.oauth_label:
+  en: OAuth
+mcp.oauth_automatic:
+  en: Automatic
+mcp.oauth_disabled:
+  en: Disabled
+mcp.oauth_custom:
+  en: Custom client
+mcp.oauth_client_id:
+  en: Client ID
+mcp.oauth_client_secret:
+  en: Client secret
+mcp.oauth_scope:
+  en: Scope
+mcp.oauth_client_id_placeholder:
+  en: "{env:MCP_CLIENT_ID}"
+mcp.oauth_client_secret_placeholder:
+  en: "{env:MCP_CLIENT_SECRET}"
+mcp.oauth_scope_placeholder:
+  en: "e.g. tools:read tools:execute"
+mcp.oauth_note:
+  en: Automatic lets OpenCode sign in when the server returns 401. Sign in in browser opens the provider's login page now. Disable this for API keys in headers.
+mcp.oauth_sign_in:
+  en: Sign in in browser
+mcp.oauth_signing_in:
+  en: Waiting for browser…
+mcp.oauth_signed_in:
+  en: "Signed in to %{name}"
+mcp.oauth_sign_in_failed:
+  en: Browser sign-in did not finish
+mcp.oauth_sign_in_failed_detail:
+  en: "Browser sign-in failed: %{error}"
+mcp.oauth_missing_opencode:
+  en: OpenCode is not installed, so the browser sign-in cannot start.
 mcp.no_connection:
   en: No command or URL yet
 mcp.environment_label:
@@ -597,6 +635,87 @@ mcp.sync_failed:
   en: "Could not update OpenCode's MCP configuration: %{error}"
 mcp.managed_note:
   en: This roster is the mcp section of OpenCode's own configuration file (opencode.json). The CLI and TUI see the same servers, and OpenCode hot-reloads the file. Extra fields like timeout, cwd, or oauth are preserved.
+
+mcp_market.search_placeholder:
+  en: Search the marketplace…
+mcp_market.filter_all:
+  en: All
+mcp_market.filter_web:
+  en: Web search
+mcp_market.filter_academic:
+  en: Academic
+mcp_market.filter_code:
+  en: Code
+mcp_market.install:
+  en: Add
+mcp_market.installed:
+  en: Added
+mcp_market.available:
+  en: Available
+mcp_market.remove:
+  en: Remove
+mcp_market.open_servers:
+  en: Open in MCP Servers
+mcp_market.open_smithery:
+  en: Open on Smithery
+mcp_market.source:
+  en: Smithery
+mcp_market.auth_note:
+  en: This server may ask for an API key or sign-in after you add it. You can set headers or OAuth on the MCP Servers page.
+mcp_market.empty:
+  en: No matching servers
+mcp_market.subtitle:
+  en: A short list of useful web search, academic, and code MCP servers from Smithery.
+mcp_market.count:
+  en: "%{count} servers"
+mcp_market.filter_caption:
+  en: "%{shown} of %{total}"
+mcp_market.added_toast:
+  en: "Added %{name}"
+mcp_market.removed_toast:
+  en: "Removed %{name}"
+mcp_market.note:
+  en: Adding a listing writes a remote MCP server into OpenCode's configuration. OpenCode hot-reloads the file, so the next task can use it.
+mcp_market.desc.brave:
+  en: Search the web, news, images, and videos with Brave's independent index.
+mcp_market.desc.exa:
+  en: Fast web search and page fetch, strong for libraries, APIs, and current facts.
+mcp_market.desc.tavily:
+  en: AI-oriented web search with clean snippets, source URLs, and optional crawl.
+mcp_market.desc.keenable:
+  en: Free remote web search and page fetch as markdown. No account or API key.
+mcp_market.desc.parallel:
+  en: High-accuracy web search built for AI agents.
+mcp_market.desc.linkup:
+  en: Real-time web search with source-backed answers and current news.
+mcp_market.desc.brightdata:
+  en: Search, crawl, and extract public web pages without getting blocked.
+mcp_market.desc.pubmed:
+  en: Search biomedical literature across MEDLINE — papers, abstracts, and related articles.
+mcp_market.desc.arxiv:
+  en: Search and retrieve arXiv papers by title, author, abstract, or category.
+mcp_market.desc.consensus:
+  en: Search academic papers and extract evidence-based findings from the literature.
+mcp_market.desc.paper_search:
+  en: Search arXiv, PubMed, bioRxiv, Semantic Scholar, and Google Scholar from one server.
+mcp_market.desc.semantic_scholar:
+  en: Search Semantic Scholar and arXiv, with citation analysis and open-access PDFs.
+mcp_market.desc.huggingface:
+  en: Discover models, datasets, and documentation on the Hugging Face hub.
+mcp_market.desc.wikipedia:
+  en: Search Wikipedia, read summaries or full articles, and jump to sections.
+mcp_market.desc.context7:
+  en: Pull up-to-date, version-specific library docs and code examples into the prompt.
+mcp_market.desc.github:
+  en: Work with GitHub repositories, issues, pull requests, and workflows.
+mcp_market.desc.deepwiki:
+  en: Explore GitHub repository documentation by topic and ask questions about a project.
+mcp_market.desc.grep:
+  en: Search real code on public GitHub for syntax, APIs, and production usage patterns.
+mcp_market.desc.microsoft_learn:
+  en: Official Microsoft documentation for Azure, .NET, and related products.
+mcp_market.desc.gread:
+  en: Read source from public GitHub repositories, including docs repos when present.
 
 common.settings:
   en: Settings

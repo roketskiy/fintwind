@@ -256,7 +256,10 @@ fn should_keep_previous_command_palette_results(
     next_result_count == 0 && search_pending && previous_result_count > 0
 }
 
-fn command_palette_results_height(results: &[CommandPaletteItem], show_empty_state: bool) -> Pixels {
+fn command_palette_results_height(
+    results: &[CommandPaletteItem],
+    show_empty_state: bool,
+) -> Pixels {
     let content_height = if show_empty_state {
         ui_px(EMPTY_RESULTS_HEIGHT)
     } else {
@@ -654,6 +657,12 @@ impl Fintwind {
                 "settings preferences mcp servers tools stdio http sse local remote npx environment headers",
             ),
             (
+                SettingsPage::McpMarket,
+                "settings.mcp_market",
+                "icons/sparkle.svg",
+                "settings preferences mcp marketplace smithery web search academic code install",
+            ),
+            (
                 SettingsPage::Daemon,
                 "settings.daemon",
                 "icons/server.svg",
@@ -974,11 +983,9 @@ impl Fintwind {
             self.command_palette.message_search_pending,
         );
         let search_height = ui_px(SEARCH_ROW_HEIGHT);
-        let results_height = command_palette_results_height(
-            &self.command_palette.results,
-            show_empty_state,
-        )
-        .min((px(card_max_height) - search_height).max(px(0.0)));
+        let results_height =
+            command_palette_results_height(&self.command_palette.results, show_empty_state)
+                .min((px(card_max_height) - search_height).max(px(0.0)));
         let card_height = search_height + results_height;
 
         let mut results = div()

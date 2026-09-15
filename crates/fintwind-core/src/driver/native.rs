@@ -171,15 +171,8 @@ pub(crate) fn rename_session(
     session_id: &str,
     title: &str,
 ) -> anyhow::Result<()> {
-    let path = format!(
-        "/api/session/{}/rename",
-        encode_path_segment(session_id)
-    );
-    server.request(
-        "POST",
-        &path,
-        Some(&serde_json::json!({"title": title})),
-    )?;
+    let path = format!("/api/session/{}/rename", encode_path_segment(session_id));
+    server.request("POST", &path, Some(&serde_json::json!({"title": title})))?;
     Ok(())
 }
 
@@ -199,8 +192,8 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
     };
 
     for row in rows {
-        let created_at = ms_to_seconds(row.get("time").and_then(|time| time.get("created")))
-            .unwrap_or_default();
+        let created_at =
+            ms_to_seconds(row.get("time").and_then(|time| time.get("created"))).unwrap_or_default();
         match row.get("type").and_then(Value::as_str) {
             Some("compaction") => {
                 // opencode stores a completed compaction as its own message
@@ -312,16 +305,15 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                 }
                 // A settled assistant message carries its completion time;
                 // that is when the turn ended.
-                let completed_at = ms_to_seconds(row.pointer("/time/completed"))
-                    .unwrap_or(created_at);
+                let completed_at =
+                    ms_to_seconds(row.pointer("/time/completed")).unwrap_or(created_at);
                 // The response belongs to the last open turn; an assistant
                 // message without a user turn above it (a pre-title or
                 // synthetic open) models its own turn so block/turn
                 // references stay consistent.
                 let turn_id = match transcript.turns.last_mut() {
                     Some(turn) => {
-                        turn.completed_at =
-                            Some(completed_at.max(turn.completed_at.unwrap_or(0)));
+                        turn.completed_at = Some(completed_at.max(turn.completed_at.unwrap_or(0)));
                         turn.id
                     }
                     None => {
@@ -353,11 +345,13 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                         {
                             block.activities.extend(activities);
                         }
-                        _ => transcript.blocks.push(fintwind_protocol::model::TranscriptBlock {
-                            after_message,
-                            turn_id: Some(turn_id),
-                            activities,
-                        }),
+                        _ => transcript
+                            .blocks
+                            .push(fintwind_protocol::model::TranscriptBlock {
+                                after_message,
+                                turn_id: Some(turn_id),
+                                activities,
+                            }),
                     }
                 }
                 if !text.trim().is_empty() {
@@ -539,7 +533,10 @@ mod tests {
         assert_eq!(summary.session_id, "ses_1");
         assert_eq!(summary.title.as_deref(), Some("迁移会话"));
         assert_eq!(summary.created_at, 1_788_253_280_u64);
-        assert_eq!(summary.model.as_deref(), Some("opencode-go/deepseek-v4-flash"));
+        assert_eq!(
+            summary.model.as_deref(),
+            Some("opencode-go/deepseek-v4-flash")
+        );
         // The child carries a parentID; `list_sessions` filters it out.
         assert!(is_child_session(&child_row));
         assert!(!is_child_session(&server_row));
@@ -605,7 +602,12 @@ mod tests {
         assert_eq!(transcript.blocks[0].turn_id, transcript.messages[1].turn_id);
         // Every message references its turn.
         for message in &transcript.messages {
-            assert!(transcript.turns.iter().any(|turn| Some(turn.id) == message.turn_id));
+            assert!(
+                transcript
+                    .turns
+                    .iter()
+                    .any(|turn| Some(turn.id) == message.turn_id)
+            );
         }
     }
 
@@ -781,7 +783,11 @@ mod tests {
         assert_eq!(item.source_id.as_deref(), Some("call_02"));
         assert!(item.failed);
         assert!(!item.file_changes.is_empty());
-        assert!(item.output.as_deref().is_some_and(|output| output.contains("patch did not apply")));
+        assert!(
+            item.output
+                .as_deref()
+                .is_some_and(|output| output.contains("patch did not apply"))
+        );
     }
 
     #[test]

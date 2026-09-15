@@ -332,7 +332,10 @@ impl Fintwind {
 
     /// Opens the selected session's workspace folder on the desktop.
     fn reveal_selected_project_folder(&mut self, cx: &mut Context<Self>) {
-        if let Some(path) = self.selected_workspace_path().map(|path| path.to_path_buf()) {
+        if let Some(path) = self
+            .selected_workspace_path()
+            .map(|path| path.to_path_buf())
+        {
             self.open_host_path(&path, cx);
         }
     }
@@ -745,14 +748,10 @@ impl Fintwind {
             .find(|project| project.id == project_id)
             .map(Project::display_name)
             .unwrap_or_else(|| tr!("sidebar.unknown_project"));
-        let chevron = icon("icons/chevron-down.svg", 11.0, theme.text_ghost).when(
-            collapsed,
-            |icon| {
-                icon.with_transformation(gpui::Transformation::rotate(gpui::percentage(
-                    0.75,
-                )))
-            },
-        );
+        let chevron = icon("icons/chevron-down.svg", 11.0, theme.text_ghost)
+            .when(collapsed, |icon| {
+                icon.with_transformation(gpui::Transformation::rotate(gpui::percentage(0.75)))
+            });
         let fintwind = cx.entity().downgrade();
         let menu = self.menu_handle(format!("project-{project_id}"), cx);
         let keyboard_menu = menu.clone();

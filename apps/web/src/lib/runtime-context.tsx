@@ -1566,9 +1566,7 @@ function upsertBackgroundItem(
         role: incoming.role ?? existing.role,
         model: incoming.model ?? existing.model,
         parentId: incoming.parentId ?? existing.parentId,
-        status: existing.status === 'stopping' && isStoppableBackgroundStatus(incoming.status)
-          ? 'stopping'
-          : incoming.status,
+        status: mergeBackgroundStatus(existing.status, incoming.status),
       }
     : {
         ...incoming,
@@ -1600,7 +1598,16 @@ function reconcileBackgroundItems(
     }
     return item
   })
-  for (const item of incoming) next = upsertBackgroundItem(next, item)
+  for (const item of incoming) {
+    const existing = next.find((entry) => sameBackgroundKey(entry.key, item.key))
+    const recovered = existing?.status === 'lost'
+    const reconciled = existing
+      && !recovered
+      && backgroundStatusProgress(existing.status) >= backgroundStatusProgress(item.status)
+      ? { ...item, status: existing.status }
+      : item
+    next = upsertBackgroundItem(next, reconciled)
+  }
   return next
 }
 
@@ -1677,8 +1684,24 @@ function isLiveBackgroundStatus(status: BackgroundWorkStatus) {
     || status === 'stopping'
 }
 
-function isStoppableBackgroundStatus(status: BackgroundWorkStatus) {
-  return status === 'starting' || status === 'running' || status === 'monitoring'
+function backgroundStatusProgress(status: BackgroundWorkStatus) {
+  if (status === 'starting') return 0
+  if (status === 'running' || status === 'monitoring' || status === 'stopping') return 1
+  return 2
+}
+
+function mergeBackgroundStatus(
+  current: BackgroundWorkStatus,
+  incoming: BackgroundWorkStatus,
+): BackgroundWorkStatus {
+  if (current === 'stopping') {
+    if (isLiveBackgroundStatus(incoming)) return 'stopping'
+    return incoming === 'lost' ? 'lost' : 'stopped'
+  }
+  if (current === 'stopped' && !isLiveBackgroundStatus(incoming) && incoming !== 'lost') {
+    return 'stopped'
+  }
+  return incoming
 }
 
 function boundBackgroundOutput(output: string) {

@@ -496,7 +496,8 @@ impl Backend for FintwindBackend {
                 // a transient one is started and killed with the handle
                 // otherwise. Blocking I/O, so this runs on the request thread.
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let sessions = crate::driver::native::list_sessions(&server, &directory.to_string_lossy())?;
+                let sessions =
+                    crate::driver::native::list_sessions(&server, &directory.to_string_lossy())?;
                 Ok(ResponsePayload::ProviderSessions { sessions })
             }
             Command::FetchNativeTranscript {
@@ -891,7 +892,10 @@ impl FintwindBackend {
             bail!("the checkpoint before this message is unavailable");
         }
 
-        let safety_ref = format!("refs/fintwind/revert-backup-{session_id}-{}", Uuid::new_v4());
+        let safety_ref = format!(
+            "refs/fintwind/revert-backup-{session_id}-{}",
+            Uuid::new_v4()
+        );
         crate::checkpoint::capture_ref(&cwd, &safety_ref)
             .context("could not create a rewind safety snapshot")?;
         if let Err(error) = crate::checkpoint::restore_ref(&cwd, &restore_ref) {
@@ -980,8 +984,7 @@ impl FintwindBackend {
         cwd: &Path,
         provider_turn_count: usize,
     ) -> anyhow::Result<(ProviderResumeCursor, HashMap<String, String>)> {
-        let Some(ProviderResumeCursor::OpenCode { session_id }) =
-            source.provider_cursor.as_ref()
+        let Some(ProviderResumeCursor::OpenCode { session_id }) = source.provider_cursor.as_ref()
         else {
             bail!("OpenCode's native session is unavailable");
         };
@@ -1355,9 +1358,7 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             }),
         ),
         DriverEvent::PlanUsageUpdated(usage) => ("planUsageUpdated", serde_json::to_value(usage)?),
-        DriverEvent::TurnStatsUpdated(stats) => {
-            ("turnStatsUpdated", serde_json::to_value(stats)?)
-        }
+        DriverEvent::TurnStatsUpdated(stats) => ("turnStatsUpdated", serde_json::to_value(stats)?),
         DriverEvent::CompactionUpdated(state) => {
             ("compactionUpdated", serde_json::to_value(state)?)
         }
@@ -1487,12 +1488,8 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
             }
         }
         "planUsageUpdated" => DriverEvent::PlanUsageUpdated(serde_json::from_value(payload)?),
-        "turnStatsUpdated" => {
-            DriverEvent::TurnStatsUpdated(serde_json::from_value(payload)?)
-        }
-        "compactionUpdated" => {
-            DriverEvent::CompactionUpdated(serde_json::from_value(payload)?)
-        }
+        "turnStatsUpdated" => DriverEvent::TurnStatsUpdated(serde_json::from_value(payload)?),
+        "compactionUpdated" => DriverEvent::CompactionUpdated(serde_json::from_value(payload)?),
         "providerBusy" => DriverEvent::ProviderBusy,
         "providerRetry" => {
             let retry: ProviderRetryWire = serde_json::from_value(payload)?;

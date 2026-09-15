@@ -137,7 +137,9 @@ impl Fintwind {
                         .background_executor()
                         .spawn(async move {
                             match workspace.request(
-                                fintwind_client::WorkspaceOperation::CurrentBranch { cwd: fetch_path },
+                                fintwind_client::WorkspaceOperation::CurrentBranch {
+                                    cwd: fetch_path,
+                                },
                             ) {
                                 Ok(fintwind_client::WorkspaceResult::CurrentBranch { branch }) => {
                                     Ok(branch)

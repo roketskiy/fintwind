@@ -2408,12 +2408,8 @@ impl Fintwind {
                                 .rounded_full()
                                 .bg(theme.warning)
                                 .tooltip(|window, cx| {
-                                    Tooltip::new(tr!(
-                                        "files.unsaved_changes",
-                                        shortcut =
-                                            "Ctrl+S"
-                                    ))
-                                    .build(window, cx)
+                                    Tooltip::new(tr!("files.unsaved_changes", shortcut = "Ctrl+S"))
+                                        .build(window, cx)
                                 }),
                         )
                     })
@@ -3005,49 +3001,53 @@ impl Fintwind {
                     async move { read_right_panel_file(&workspace, &project_path, &relative_path) }
                 })
                 .await;
-            fintwind.update(cx, |fintwind, cx| {
-                if fintwind.state.selected_session != Some(session_id)
-                    || fintwind
-                        .selected_workspace_path()
-                        .is_none_or(|path| path != project_path)
-                {
-                    // The editor moved into another session's stored state, or
-                    // the project changed. Clear the flag so a later reload can
-                    // ask again, and drop the text.
-                    if let Some(editor) = fintwind.right_panel_file_editors.get_mut(&relative_path) {
-                        editor.reading = false;
+            fintwind
+                .update(cx, |fintwind, cx| {
+                    if fintwind.state.selected_session != Some(session_id)
+                        || fintwind
+                            .selected_workspace_path()
+                            .is_none_or(|path| path != project_path)
+                    {
+                        // The editor moved into another session's stored state, or
+                        // the project changed. Clear the flag so a later reload can
+                        // ask again, and drop the text.
+                        if let Some(editor) =
+                            fintwind.right_panel_file_editors.get_mut(&relative_path)
+                        {
+                            editor.reading = false;
+                        }
+                        return;
                     }
-                    return;
-                }
-                let (content, writable) = read;
-                let Some(editor) = fintwind.right_panel_file_editors.get_mut(&relative_path) else {
-                    return;
-                };
-                // A save landed while the read was in flight, so this text
-                // describes the file as it was before that save.
-                if editor.read_epoch != epoch {
-                    return;
-                }
-                editor.reading = false;
-                // An edit landed while the read was in flight; the user's text
-                // wins over the copy on disk.
-                if editor.dirty {
-                    return;
-                }
-                if editor.disk_content == content && editor.writable == writable {
-                    return;
-                }
-                editor.disk_content = content.clone();
-                editor.writable = writable;
-                editor.dirty = false;
-                let state = editor.state.clone();
-                state.update(cx, |state, cx| {
-                    state.set_read_only(!writable);
-                    state.set_content(content, cx);
-                });
-                cx.notify();
-            })
-            .ok();
+                    let (content, writable) = read;
+                    let Some(editor) = fintwind.right_panel_file_editors.get_mut(&relative_path)
+                    else {
+                        return;
+                    };
+                    // A save landed while the read was in flight, so this text
+                    // describes the file as it was before that save.
+                    if editor.read_epoch != epoch {
+                        return;
+                    }
+                    editor.reading = false;
+                    // An edit landed while the read was in flight; the user's text
+                    // wins over the copy on disk.
+                    if editor.dirty {
+                        return;
+                    }
+                    if editor.disk_content == content && editor.writable == writable {
+                        return;
+                    }
+                    editor.disk_content = content.clone();
+                    editor.writable = writable;
+                    editor.dirty = false;
+                    let state = editor.state.clone();
+                    state.update(cx, |state, cx| {
+                        state.set_read_only(!writable);
+                        state.set_content(content, cx);
+                    });
+                    cx.notify();
+                })
+                .ok();
         })
         .detach();
     }
@@ -3119,10 +3119,9 @@ impl Fintwind {
                             color: number_color,
                             ..Default::default()
                         };
-                        let line =
-                            window
-                                .text_system()
-                                .shape_line(text, text_size, &[run], None);
+                        let line = window
+                            .text_system()
+                            .shape_line(text, text_size, &[run], None);
                         let origin = point(bounds.right() - line.width, y);
                         let _ = line.paint(
                             origin,
@@ -3266,11 +3265,13 @@ impl Fintwind {
                     let relative_path = relative_path.clone();
                     let content = content.clone();
                     async move {
-                        match workspace.request(fintwind_client::WorkspaceOperation::WriteTextFile {
-                            root: project_path,
-                            relative_path: PathBuf::from(relative_path),
-                            content,
-                        })? {
+                        match workspace.request(
+                            fintwind_client::WorkspaceOperation::WriteTextFile {
+                                root: project_path,
+                                relative_path: PathBuf::from(relative_path),
+                                content,
+                            },
+                        )? {
                             fintwind_client::WorkspaceResult::Ack => Ok(()),
                             _ => anyhow::bail!("the daemon returned an invalid file response"),
                         }
@@ -3287,7 +3288,8 @@ impl Fintwind {
                 }
                 match result {
                     Ok(()) => {
-                        if let Some(editor) = fintwind.right_panel_file_editors.get_mut(&relative_path)
+                        if let Some(editor) =
+                            fintwind.right_panel_file_editors.get_mut(&relative_path)
                             && editor.read_epoch == epoch
                         {
                             let current = editor.state.read(cx).content();
@@ -4177,41 +4179,44 @@ impl Fintwind {
                         .spawn({
                             let path = project_path.clone();
                             async move {
-                                match workspace.request(fintwind_client::WorkspaceOperation::ListTree {
-                                    root: path,
-                                    expanded_paths: expanded.into_iter().collect(),
-                                }) {
-                                    Ok(fintwind_client::WorkspaceResult::WorkingTree { entries }) => {
-                                        entries
-                                            .into_iter()
-                                            .map(|entry| WorkingTreeEntry {
-                                                file_icon: (!entry.is_dir)
-                                                    .then(|| file_icon_for_name(&entry.name)),
-                                                relative_path: entry.relative_path,
-                                                absolute_path: entry.absolute_path,
-                                                name: entry.name,
-                                                is_dir: entry.is_dir,
-                                                expanded: entry.expanded,
-                                                depth: entry.depth,
-                                            })
-                                            .collect()
-                                    }
+                                match workspace.request(
+                                    fintwind_client::WorkspaceOperation::ListTree {
+                                        root: path,
+                                        expanded_paths: expanded.into_iter().collect(),
+                                    },
+                                ) {
+                                    Ok(fintwind_client::WorkspaceResult::WorkingTree {
+                                        entries,
+                                    }) => entries
+                                        .into_iter()
+                                        .map(|entry| WorkingTreeEntry {
+                                            file_icon: (!entry.is_dir)
+                                                .then(|| file_icon_for_name(&entry.name)),
+                                            relative_path: entry.relative_path,
+                                            absolute_path: entry.absolute_path,
+                                            name: entry.name,
+                                            is_dir: entry.is_dir,
+                                            expanded: entry.expanded,
+                                            depth: entry.depth,
+                                        })
+                                        .collect(),
                                     Ok(_) | Err(_) => Vec::new(),
                                 }
                             }
                         })
                         .await;
-                    fintwind.update(cx, |fintwind, cx| {
-                        if fintwind.working_trees.fulfill(token, entries.clone())
-                            && fintwind
-                                .selected_workspace_path()
-                                .is_some_and(|path| path == project_path)
-                        {
-                            fintwind.right_panel_working_tree = entries;
-                            cx.notify();
-                        }
-                    })
-                    .ok();
+                    fintwind
+                        .update(cx, |fintwind, cx| {
+                            if fintwind.working_trees.fulfill(token, entries.clone())
+                                && fintwind
+                                    .selected_workspace_path()
+                                    .is_some_and(|path| path == project_path)
+                            {
+                                fintwind.right_panel_working_tree = entries;
+                                cx.notify();
+                            }
+                        })
+                        .ok();
                 })
                 .detach();
             }
@@ -4344,54 +4349,57 @@ impl Fintwind {
                     }
                 })
                 .await;
-            fintwind.update(cx, |fintwind, cx| {
-                let still_current = fintwind.state.selected_session == Some(session_id)
-                    && fintwind.right_panel_diff_generation == generation
-                    && fintwind.right_panel_diff_source == source
-                    && fintwind
-                        .selected_workspace_path()
-                        .is_some_and(|path| path == project_path);
-                if !still_current {
-                    return;
-                }
+            fintwind
+                .update(cx, |fintwind, cx| {
+                    let still_current = fintwind.state.selected_session == Some(session_id)
+                        && fintwind.right_panel_diff_generation == generation
+                        && fintwind.right_panel_diff_source == source
+                        && fintwind
+                            .selected_workspace_path()
+                            .is_some_and(|path| path == project_path);
+                    if !still_current {
+                        return;
+                    }
 
-                fintwind.right_panel_diff_loading = false;
-                match result {
-                    Ok(snapshot) => {
-                        fintwind.right_panel_diff_selection.clear();
-                        let directories = review_diff_directory_paths(&snapshot.files);
-                        if had_snapshot {
-                            fintwind.right_panel_diff_expanded_paths
-                                .retain(|path| directories.contains(path));
-                            fintwind.right_panel_diff_expanded_paths
-                                .extend(directories.difference(&previous_directories).cloned());
-                        } else {
-                            fintwind.right_panel_diff_expanded_paths = directories;
+                    fintwind.right_panel_diff_loading = false;
+                    match result {
+                        Ok(snapshot) => {
+                            fintwind.right_panel_diff_selection.clear();
+                            let directories = review_diff_directory_paths(&snapshot.files);
+                            if had_snapshot {
+                                fintwind
+                                    .right_panel_diff_expanded_paths
+                                    .retain(|path| directories.contains(path));
+                                fintwind
+                                    .right_panel_diff_expanded_paths
+                                    .extend(directories.difference(&previous_directories).cloned());
+                            } else {
+                                fintwind.right_panel_diff_expanded_paths = directories;
+                            }
+                            fintwind.right_panel_diff_selected_file = selected_path
+                                .as_deref()
+                                .and_then(|path| {
+                                    snapshot.files.iter().position(|file| file.path == path)
+                                })
+                                .or_else(|| (!snapshot.files.is_empty()).then_some(0));
+                            let line_count = snapshot.lines.len();
+                            fintwind.right_panel_diff_snapshot = Some(Arc::new(snapshot));
+                            fintwind.right_panel_diff_error = None;
+                            fintwind.right_panel_diff_list_state.reset(line_count);
+                            fintwind.sync_right_panel_diff_tree_rows(cx);
                         }
-                        fintwind.right_panel_diff_selected_file = selected_path
-                            .as_deref()
-                            .and_then(|path| {
-                                snapshot.files.iter().position(|file| file.path == path)
-                            })
-                            .or_else(|| (!snapshot.files.is_empty()).then_some(0));
-                        let line_count = snapshot.lines.len();
-                        fintwind.right_panel_diff_snapshot = Some(Arc::new(snapshot));
-                        fintwind.right_panel_diff_error = None;
-                        fintwind.right_panel_diff_list_state.reset(line_count);
-                        fintwind.sync_right_panel_diff_tree_rows(cx);
-                    }
-                    Err(error) => {
-                        let message = error.to_string();
-                        if fintwind.right_panel_diff_snapshot.is_some() {
-                            fintwind.show_toast(tr!("diff.refresh_failed", error = message));
-                        } else {
-                            fintwind.right_panel_diff_error = Some(message);
+                        Err(error) => {
+                            let message = error.to_string();
+                            if fintwind.right_panel_diff_snapshot.is_some() {
+                                fintwind.show_toast(tr!("diff.refresh_failed", error = message));
+                            } else {
+                                fintwind.right_panel_diff_error = Some(message);
+                            }
                         }
                     }
-                }
-                cx.notify();
-            })
-            .ok();
+                    cx.notify();
+                })
+                .ok();
         })
         .detach();
     }

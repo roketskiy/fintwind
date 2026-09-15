@@ -100,10 +100,7 @@ impl Fintwind {
     /// because the model segment resolves its display name through the
     /// provider probe, which can land after the turn did; without it a late
     /// catalog would leave the cached line on the raw `provider/id` key.
-    pub(super) fn assistant_turn_stats_cached(
-        &self,
-        message_index: usize,
-    ) -> Option<SharedString> {
+    pub(super) fn assistant_turn_stats_cached(&self, message_index: usize) -> Option<SharedString> {
         self.refresh_transcript_row_kinds();
         let fingerprint = self.transcript_row_kinds_fingerprint.get().map(|rows| {
             mix(
@@ -751,9 +748,7 @@ fn assistant_turn_stats(
         .turn_id
         .and_then(|turn_id| session.turns.iter().find(|turn| turn.id == turn_id));
     let stats = turn.and_then(|turn| turn.stats.as_ref());
-    if turn.is_none()
-        || (stats.is_none() && turn.is_some_and(|turn| turn.completed_at.is_none()))
-    {
+    if turn.is_none() || (stats.is_none() && turn.is_some_and(|turn| turn.completed_at.is_none())) {
         return None;
     }
     let agent = stats
@@ -763,11 +758,14 @@ fn assistant_turn_stats(
         .and_then(|stats| stats.model.as_deref())
         .map(|key| app.model_display_name(Some(key)));
     let duration_ms = turn.and_then(|turn| {
-        turn.completed_at
-            .map(|completed| completed.saturating_sub(turn.started_at).saturating_mul(1_000))
+        turn.completed_at.map(|completed| {
+            completed
+                .saturating_sub(turn.started_at)
+                .saturating_mul(1_000)
+        })
     });
-    let (output_tokens, stream_ms) = stats
-        .map_or((0, 0), |stats| (stats.output_tokens, stats.stream_ms));
+    let (output_tokens, stream_ms) =
+        stats.map_or((0, 0), |stats| (stats.output_tokens, stats.stream_ms));
     turn_stats_line(
         Some(agent.as_str()),
         model_display.as_deref(),

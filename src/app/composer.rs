@@ -415,7 +415,11 @@ impl Fintwind {
         let selected_model_name = self.model_display_name(selected_model);
         // The mark names the model's company, so a router serving Grok still
         // reads as Grok; unknown models keep the provider's letter glyph.
-        let model_icon = model_icon(selected_model.unwrap_or(""), &selected_model_name, &provider);
+        let model_icon = model_icon(
+            selected_model.unwrap_or(""),
+            &selected_model_name,
+            &provider,
+        );
         let picker_enabled = session.is_some_and(|session| session.can_choose_model());
 
         if !picker_enabled {
@@ -513,10 +517,7 @@ impl Fintwind {
 
         popover(
             MenuChip::new("composer-provider-model")
-                .icon(
-                    model_icon,
-                    provider_color(&theme, &provider).opacity(0.9),
-                )
+                .icon(model_icon, provider_color(&theme, &provider).opacity(0.9))
                 .label(selected_model_name)
                 .caret(false)
                 .selected(handle.is_open()),

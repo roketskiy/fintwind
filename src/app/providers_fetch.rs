@@ -239,11 +239,13 @@ impl Fintwind {
                 .spawn(async move {
                     let cached = fintwind_client::models_dev::cached_catalog();
                     let best = match (&session_table, cached) {
-                        (Some(session), Some(cached)) => Some(if session.fetched_at >= cached.fetched_at {
-                            (**session).clone()
-                        } else {
-                            cached
-                        }),
+                        (Some(session), Some(cached)) => {
+                            Some(if session.fetched_at >= cached.fetched_at {
+                                (**session).clone()
+                            } else {
+                                cached
+                            })
+                        }
                         (Some(session), None) => Some((**session).clone()),
                         (None, cached) => cached,
                     };
@@ -427,8 +429,7 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         let mut merged = self.form_transient_provider(cx);
-        let outcome =
-            fintwind_client::models_dev::merge_api_models(&mut merged, api_models, table);
+        let outcome = fintwind_client::models_dev::merge_api_models(&mut merged, api_models, table);
         if outcome.added == 0 && outcome.filled == 0 {
             self.show_success_toast(tr!("providers.fetch_up_to_date"));
             return;
@@ -479,12 +480,11 @@ impl Fintwind {
             // stay a display fallback and must not freeze into the config on
             // a fetch-plus-submit the user never toggled.
             let input_modalities = model.input_modalities.clone();
-            self.providers_form_models
-                .push(ProviderFormModelDraft {
-                    id,
-                    context,
-                    input_modalities,
-                });
+            self.providers_form_models.push(ProviderFormModelDraft {
+                id,
+                context,
+                input_modalities,
+            });
         }
         cx.notify();
     }
@@ -526,9 +526,7 @@ impl Fintwind {
     /// Whether the add form's Base URL is one the requests can run against;
     /// gates the form's two buttons.
     fn form_endpoint_ready(&self, cx: &App) -> bool {
-        custom_providers::base_url_valid(
-            self.provider_form_base_url.read(cx).content().trim(),
-        )
+        custom_providers::base_url_valid(self.provider_form_base_url.read(cx).content().trim())
     }
 
     /// Leave the add form: its probe state is void — the fields it described
@@ -553,7 +551,10 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         let key = (provider_id.clone(), model_id.clone());
-        if matches!(self.model_latency.get(&key), Some(ModelLatencyState::Testing)) {
+        if matches!(
+            self.model_latency.get(&key),
+            Some(ModelLatencyState::Testing)
+        ) {
             return;
         }
         let Some(provider) = self
@@ -568,12 +569,12 @@ impl Fintwind {
         cx.notify();
         cx.spawn(async move |this, cx| {
             let probe_model_id = model_id.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    custom_providers::first_token_latency(&provider, &probe_model_id)
-                })
-                .await;
+            let result =
+                cx.background_executor()
+                    .spawn(async move {
+                        custom_providers::first_token_latency(&provider, &probe_model_id)
+                    })
+                    .await;
             let _ = this.update(cx, |this, cx| {
                 let key = (provider_id, model_id);
                 this.model_latency.insert(
@@ -659,10 +660,9 @@ pub(super) fn first_token_error_text(error: &FirstTokenError) -> String {
         FirstTokenError::Unreachable(error) => {
             tr!("providers.error_unreachable", error = error.clone())
         }
-        FirstTokenError::NoStreamData { message } => append_detail(
-            &tr!("providers.ttft_error_no_stream"),
-            message.as_deref(),
-        ),
+        FirstTokenError::NoStreamData { message } => {
+            append_detail(&tr!("providers.ttft_error_no_stream"), message.as_deref())
+        }
         FirstTokenError::Timeout => tr!(
             "providers.ttft_error_timeout",
             seconds = custom_providers::FIRST_TOKEN_TIMEOUT_SECS.to_string()
@@ -804,9 +804,10 @@ fn connectivity_verdict(
 ) -> Option<AnyElement> {
     match state? {
         ProviderConnectivityState::Testing => None,
-        ProviderConnectivityState::Done(
-            custom_providers::ConnectivityOutcome::Reachable { models, latency },
-        ) => Some(
+        ProviderConnectivityState::Done(custom_providers::ConnectivityOutcome::Reachable {
+            models,
+            latency,
+        }) => Some(
             div()
                 .flex()
                 .items_center()

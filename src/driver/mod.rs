@@ -2,9 +2,7 @@
 
 use std::sync::Arc;
 
-use crate::model::{
-    BackgroundWorkKey, DriverEvent, ProviderResumeCursor, RuntimeEventCursor,
-};
+use crate::model::{BackgroundWorkKey, DriverEvent, ProviderResumeCursor, RuntimeEventCursor};
 
 pub use fintwind_client::driver::{
     DriverControl, DriverEventSender, DriverHandle, DriverStartOptions, SessionOptions,
@@ -91,9 +89,9 @@ fn connect_remote(
                 };
                 let event = match fintwind_client::event_from_wire(sequenced.event) {
                     Ok(event) => event,
-                    Err(error) => {
-                        DriverEvent::Error(format!("fintwind daemon sent an invalid event: {error}"))
-                    }
+                    Err(error) => DriverEvent::Error(format!(
+                        "fintwind daemon sent an invalid event: {error}"
+                    )),
                 };
                 saw_process_exit |= matches!(&event, DriverEvent::ProcessExited);
                 if forwarding_events.send(event).is_err()
@@ -174,7 +172,9 @@ impl DriverControl for RemoteDriverControl {
 
     fn stop_background_work(&self, key: BackgroundWorkKey, control_id: String) {
         match serde_json::to_value(key) {
-            Ok(key) => self.notify(fintwind_client::Command::StopBackgroundWork { key, control_id }),
+            Ok(key) => {
+                self.notify(fintwind_client::Command::StopBackgroundWork { key, control_id })
+            }
             Err(error) => {
                 let _ = self.events.send(DriverEvent::Error(format!(
                     "could not encode background-work command: {error}"

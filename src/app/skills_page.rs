@@ -1069,7 +1069,11 @@ impl Fintwind {
                 theme.text_secondary
             })
             .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
-            .active(|element| element.bg(theme.danger.opacity(0.18)).text_color(theme.danger))
+            .active(|element| {
+                element
+                    .bg(theme.danger.opacity(0.18))
+                    .text_color(theme.danger)
+            })
             .child(icon(
                 "icons/trash.svg",
                 12.5,
@@ -1248,13 +1252,16 @@ impl Fintwind {
                         .items_center()
                         .gap(px(6.0))
                         .child(icon("icons/alert.svg", 11.0, theme.warning))
-                        .child(div().text_size(ui_px(10.0)).text_color(theme.warning).child(
-                            SharedString::from(if skill.duplicates == 1 {
-                                tr!("skills.duplicate_one")
-                            } else {
-                                tr!("skills.duplicate_many", count = skill.duplicates)
-                            }),
-                        )),
+                        .child(
+                            div()
+                                .text_size(ui_px(10.0))
+                                .text_color(theme.warning)
+                                .child(SharedString::from(if skill.duplicates == 1 {
+                                    tr!("skills.duplicate_one")
+                                } else {
+                                    tr!("skills.duplicate_many", count = skill.duplicates)
+                                })),
+                        ),
                 )
             })
             .child(

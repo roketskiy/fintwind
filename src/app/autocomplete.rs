@@ -159,20 +159,21 @@ impl Fintwind {
                                     project_root: path,
                                 },
                             ) {
-                                Ok(fintwind_client::WorkspaceResult::SlashCommands { commands }) => {
-                                    commands
-                                }
+                                Ok(fintwind_client::WorkspaceResult::SlashCommands {
+                                    commands,
+                                }) => commands,
                                 Ok(_) | Err(_) => Vec::new(),
                             }
                         })
                         .await;
-                    fintwind.update(cx, |fintwind, cx| {
-                        if fintwind.slash_commands.fulfill(token, commands) {
-                            fintwind.refresh_composer_sources(cx);
-                            cx.notify();
-                        }
-                    })
-                    .ok();
+                    fintwind
+                        .update(cx, |fintwind, cx| {
+                            if fintwind.slash_commands.fulfill(token, commands) {
+                                fintwind.refresh_composer_sources(cx);
+                                cx.notify();
+                            }
+                        })
+                        .ok();
                 })
                 .detach();
             }
@@ -213,13 +214,14 @@ impl Fintwind {
                             }
                         })
                         .await;
-                    fintwind.update(cx, |fintwind, cx| {
-                        if fintwind.mention_files.fulfill(token, files) {
-                            fintwind.refresh_composer_sources(cx);
-                            cx.notify();
-                        }
-                    })
-                    .ok();
+                    fintwind
+                        .update(cx, |fintwind, cx| {
+                            if fintwind.mention_files.fulfill(token, files) {
+                                fintwind.refresh_composer_sources(cx);
+                                cx.notify();
+                            }
+                        })
+                        .ok();
                 })
                 .detach();
             }

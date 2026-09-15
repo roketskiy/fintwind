@@ -4,9 +4,9 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+pub use fintwind_protocol::settings::DaemonSettings;
 use parking_lot::Mutex;
 use uuid::Uuid;
-pub use fintwind_protocol::settings::DaemonSettings;
 
 pub struct DaemonSettingsStore {
     path: PathBuf,

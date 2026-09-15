@@ -103,7 +103,11 @@ pub fn to_unicode(latex: &str) -> String {
 
 /// The cached raster for `key`, if one has already been rendered. Render-path
 /// only: a miss means "not ready yet", and the caller shows the fallback.
-pub fn cached(latex: &str, font_size: f32, color: gpui::Hsla) -> Option<(Arc<gpui::Image>, f32, f32)> {
+pub fn cached(
+    latex: &str,
+    font_size: f32,
+    color: gpui::Hsla,
+) -> Option<(Arc<gpui::Image>, f32, f32)> {
     let key = MathKey::new(latex, font_size, color);
     let cache = CACHE.lock();
     match cache.entries.get(&key) {
@@ -204,9 +208,8 @@ fn render_formula(key: &MathKey) -> Result<(Arc<gpui::Image>, f32, f32), String>
     let em_px = key.font_size as f32 * DEVICE_PIXEL_RATIO;
     let pad_px = PADDING * DEVICE_PIXEL_RATIO;
     let width = ((display_list.width as f32 * em_px + 2.0 * pad_px).ceil() as u32).max(1);
-    let height = (((display_list.height + display_list.depth) as f32 * em_px
-        + 2.0 * pad_px)
-        .ceil() as u32)
+    let height = (((display_list.height + display_list.depth) as f32 * em_px + 2.0 * pad_px).ceil()
+        as u32)
         .max(1);
 
     Ok((
@@ -283,7 +286,11 @@ mod tests {
         let (image, width, height) = render_formula(&key).expect("rendering should succeed");
 
         assert!(width > 0.0 && height > 0.0);
-        assert_eq!(&image.bytes[..8], b"\x89PNG\r\n\x1a\n", "output must be PNG");
+        assert_eq!(
+            &image.bytes[..8],
+            b"\x89PNG\r\n\x1a\n",
+            "output must be PNG"
+        );
         // 2× dpr: the bitmap is twice the logical layout size, so the source
         // must have produced a bitmap wider than a bare glyph or two.
         assert!(width * 2.0 >= 16.0);

@@ -797,11 +797,15 @@ mod tests {
     /// `core.autocrlf` would otherwise hand CRLF back where a fixture wrote
     /// LF.
     fn test_repository() -> PathBuf {
-        let directory = std::env::temp_dir().join(format!("fintwind-checkpoints-{}", Uuid::new_v4()));
+        let directory =
+            std::env::temp_dir().join(format!("fintwind-checkpoints-{}", Uuid::new_v4()));
         fs::create_dir_all(&directory).unwrap();
         git_ok(&directory, &["init", "--quiet", "--initial-branch=main"]);
         git_ok(&directory, &["config", "user.name", "Fintwind Test"]);
-        git_ok(&directory, &["config", "user.email", "fintwind@example.com"]);
+        git_ok(
+            &directory,
+            &["config", "user.email", "fintwind@example.com"],
+        );
         git_ok(&directory, &["config", "core.autocrlf", "false"]);
         directory
     }

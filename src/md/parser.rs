@@ -986,8 +986,9 @@ mod tests {
 
     #[test]
     fn explicit_links_and_inline_code_are_not_relinkified() {
-        let tree =
-            parse("[docs at https://example.com](https://fintwind.gg) and `https://example.com/code`");
+        let tree = parse(
+            "[docs at https://example.com](https://fintwind.gg) and `https://example.com/code`",
+        );
         let Block::Paragraph { runs } = &tree.blocks[0].block else {
             panic!("expected a paragraph");
         };
@@ -1083,7 +1084,10 @@ mod tests {
         let Block::Paragraph { runs } = &tree.blocks[0].block else {
             panic!("expected a paragraph");
         };
-        assert_eq!(paragraph_text(&tree.blocks[0].block), "given x² + y² obviously");
+        assert_eq!(
+            paragraph_text(&tree.blocks[0].block),
+            "given x² + y² obviously"
+        );
         assert!(runs.iter().all(|run| !run.text.contains('$')));
     }
 

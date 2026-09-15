@@ -11,9 +11,9 @@ use std::ops::Range;
 use std::path::Path;
 
 use crate::model::ReportedCommand;
+pub use fintwind_protocol::composer::{CommandScope, FileEntry, SlashCommand};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Matcher, Utf32Str};
-pub use fintwind_protocol::composer::{CommandScope, FileEntry, SlashCommand};
 
 /// How many rows a filter pass returns. The popup shows a screenful and the
 /// keyboard walks the rest; past this the tail is noise, not choice.
@@ -1055,12 +1055,12 @@ mod tests {
             );
         }
         // The instructions file matches OpenCode's convention.
-        assert!(
-            commands
-                .iter()
-                .find(|c| c.name == "init")
-                .is_some_and(|c| c.template.as_deref().unwrap_or_default().contains("AGENTS.md"))
-        );
+        assert!(commands.iter().find(|c| c.name == "init").is_some_and(|c| {
+            c.template
+                .as_deref()
+                .unwrap_or_default()
+                .contains("AGENTS.md")
+        }));
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1085,7 +1085,10 @@ mod tests {
             "skills are sent raw, never expanded"
         );
         // Raw passthrough end to end: no expansion applies at submit.
-        assert_eq!(expanded_submission("/deploy-runbook staging", &commands), None);
+        assert_eq!(
+            expanded_submission("/deploy-runbook staging", &commands),
+            None
+        );
 
         // OpenCode's own project-level skill tree is read too.
         let skill_dir = root.join(".opencode/skills").join("native-skill");

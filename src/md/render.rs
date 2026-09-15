@@ -1363,7 +1363,10 @@ fn render_math_block(latex: &str, ctx: &Ctx) -> AnyElement {
 
     let body = match super::math::cached(latex, font_size, color) {
         Some((image, width, height)) => img(image)
-            .id(SharedString::from(format!("math-{}-{}", key.row, key.index)))
+            .id(SharedString::from(format!(
+                "math-{}-{}",
+                key.row, key.index
+            )))
             .w(px(width))
             .h(px(height))
             .max_w(relative(1.0))
@@ -1396,15 +1399,10 @@ fn render_math_block(latex: &str, ctx: &Ctx) -> AnyElement {
         .py(px(2.0))
         .child(body)
         .child(
-            canvas(
-                |_, _, _| (),
-                {
-                    let latex = latex.to_owned();
-                    move |_, _, _, cx| {
-                        super::math::ensure_rendered(&latex, font_size, color, cx)
-                    }
-                },
-            )
+            canvas(|_, _, _| (), {
+                let latex = latex.to_owned();
+                move |_, _, _, cx| super::math::ensure_rendered(&latex, font_size, color, cx)
+            })
             .absolute()
             .w(px(0.0))
             .h(px(0.0)),

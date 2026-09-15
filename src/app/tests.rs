@@ -9,14 +9,11 @@ use super::{
     NAVIGATION_RAIL_TICK_HEIGHT, NAVIGATION_RAIL_TURN_HEIGHT, PendingUserInput, SessionNavigation,
     StreamDeltaKind, TranscriptRowKind::*, active_navigation_turn_index,
     append_text_delta_to_session, assistant_response_footer, assistant_response_footer_index,
-    upsert_compaction_transcript,
-    assistant_response_footer_time, bind_keyed_reasoning_delta,
-    changed_files_inline_message_index, compact_driver_error,
-    complete_reasoning_activity_bound, disclosure_leading_space, fenced_code,
+    assistant_response_footer_time, bind_keyed_reasoning_delta, changed_files_inline_message_index,
+    compact_driver_error, complete_reasoning_activity_bound, disclosure_leading_space, fenced_code,
     fitted_file_tree_width, fitted_panel_widths, folded_transcript_row_kinds,
-    folded_transcript_row_kinds_with_retry,
-    format_worked_duration, format_working_elapsed, format_turn_stats_duration,
-    maintain_transcript_anchor, message_opens_turn,
+    folded_transcript_row_kinds_with_retry, format_turn_stats_duration, format_worked_duration,
+    format_working_elapsed, maintain_transcript_anchor, message_opens_turn,
     message_starts_followup_turn, navigation_preview_snippet, navigation_rail_fade_visibility,
     navigation_rail_height, navigation_rail_scale, paused_toast_duration, pop_stream_batch,
     push_transcript_activity, session_is_reapable, settle_keyed_reasoning_fragment,
@@ -24,9 +21,9 @@ use super::{
     should_show_scroll_to_bottom, task_id_from_notification_tag, task_notification_tag,
     transcript_anchor_end_space, transcript_navigation_turns, transcript_rests_at_tail,
     transcript_row_kinds, transcript_row_splice, transcript_rows_fingerprint,
-    transcript_rows_fingerprint_with_retry,
-    turn_stats_line, turn_tokens_per_second,
-    widened_panel_width_for_file_editor, widened_panel_width_for_review,
+    transcript_rows_fingerprint_with_retry, turn_stats_line, turn_tokens_per_second,
+    upsert_compaction_transcript, widened_panel_width_for_file_editor,
+    widened_panel_width_for_review,
 };
 use crate::git_branch::BranchEntry;
 use crate::model::{
@@ -367,7 +364,10 @@ fn task_notification_tags_route_to_the_corresponding_task() {
     let tag = task_notification_tag(session_id);
 
     assert_eq!(task_id_from_notification_tag(&tag), Some(session_id));
-    assert_eq!(task_id_from_notification_tag("fintwind-task:not-a-uuid"), None);
+    assert_eq!(
+        task_id_from_notification_tag("fintwind-task:not-a-uuid"),
+        None
+    );
     assert_eq!(task_id_from_notification_tag(&session_id.to_string()), None);
 }
 
@@ -879,7 +879,10 @@ fn completing_reasoning_identifies_the_row_that_must_be_remeasured() {
         });
     }
 
-    assert_eq!(complete_reasoning_activity_bound(&mut session, &[]), Some(1));
+    assert_eq!(
+        complete_reasoning_activity_bound(&mut session, &[]),
+        Some(1)
+    );
     assert!(!session.transcript_blocks[0].activities[0].complete);
     assert!(session.transcript_blocks[1].activities[0].complete);
 }
@@ -906,7 +909,13 @@ fn a_reasoning_tail_delta_after_tool_events_returns_to_its_own_thought() {
     );
     push_transcript_activity(
         &mut session,
-        ActivityItem::new(Some("call_1".into()), ActivityKind::Search, "web", None, false),
+        ActivityItem::new(
+            Some("call_1".into()),
+            ActivityKind::Search,
+            "web",
+            None,
+            false,
+        ),
         true,
     );
     let opened = bind_keyed_reasoning_delta(
@@ -918,7 +927,10 @@ fn a_reasoning_tail_delta_after_tool_events_returns_to_its_own_thought() {
         true,
     );
 
-    assert!(!opened, "a late tail delta must rejoin its fragment's activity");
+    assert!(
+        !opened,
+        "a late tail delta must rejoin its fragment's activity"
+    );
     assert_eq!(session.transcript_blocks.len(), 1, "no stray thought block");
     let activities = &session.transcript_blocks[0].activities;
     assert_eq!(activities.len(), 2);
@@ -975,7 +987,10 @@ fn a_reasoning_fragment_settles_to_the_stored_transcript_shape() {
         activities[0].reasoning.as_ref().unwrap().content,
         "**Thought** full text!"
     );
-    assert!(open_reasoning.is_empty(), "the fragment unbinds once settled");
+    assert!(
+        open_reasoning.is_empty(),
+        "the fragment unbinds once settled"
+    );
 
     // A fragment whose deltas never landed materializes from its end text.
     let settled = settle_keyed_reasoning_fragment(
@@ -989,7 +1004,10 @@ fn a_reasoning_fragment_settles_to_the_stored_transcript_shape() {
     let activities = &session.transcript_blocks[0].activities;
     assert_eq!(activities.len(), 2);
     assert!(activities[1].complete);
-    assert_eq!(activities[1].reasoning.as_ref().unwrap().content, "late thought");
+    assert_eq!(
+        activities[1].reasoning.as_ref().unwrap().content,
+        "late thought"
+    );
 
     // A fragment that settles empty leaves nothing behind, like the replay
     // path's filter over stored parts.
@@ -1051,7 +1069,10 @@ fn a_tail_delta_after_its_fragment_settled_opens_nothing() {
         "!",
         true,
     );
-    assert!(!opened, "a settled fragment must not reopen for a stray tail");
+    assert!(
+        !opened,
+        "a settled fragment must not reopen for a stray tail"
+    );
     assert_eq!(session.transcript_blocks.len(), 1);
     assert_eq!(session.transcript_blocks[0].activities.len(), 1);
     assert_eq!(
@@ -1778,7 +1799,13 @@ fn turn_stats_duration_follows_the_tui_ladder() {
 fn turn_stats_line_assembles_segments_and_titlecases_the_agent() {
     // The TUI's own example line, rebuilt end to end.
     assert_eq!(
-        turn_stats_line(Some("build"), Some("MiMo V2.5 Free"), Some(25_900), 645, 10_000),
+        turn_stats_line(
+            Some("build"),
+            Some("MiMo V2.5 Free"),
+            Some(25_900),
+            645,
+            10_000
+        ),
         Some("Build · MiMo V2.5 Free · 25.9s · 64.5 tok/s".to_owned())
     );
     // Titlecase capitalizes the head of every word, like the TUI's regex.

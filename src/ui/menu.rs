@@ -31,8 +31,8 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, Bounds, Display, Element, ElementId, FocusHandle, FontWeight, GlobalElementId,
     InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, ParentElement, Pixels, Point, Position, RenderOnce, SharedString, Size, Style,
-    StatefulInteractiveElement, Styled, Window, actions, anchored, canvas, deferred, div,
+    MouseDownEvent, ParentElement, Pixels, Point, Position, RenderOnce, SharedString, Size,
+    StatefulInteractiveElement, Style, Styled, Window, actions, anchored, canvas, deferred, div,
     prelude::FluentBuilder, px,
 };
 

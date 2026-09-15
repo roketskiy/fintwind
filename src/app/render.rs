@@ -310,12 +310,14 @@ impl Render for Fintwind {
                         .flex_none()
                         .w(px(panels.sidebar))
                         .when(panels.sidebar_sliding, |element| element.overflow_hidden())
-                        .child(self.sidebar_pane.clone().cached(
-                            StyleRefinement::default()
-                                .w(px(panels.sidebar_content))
-                                .h_full()
-                                .flex_none(),
-                        )),
+                        .child(
+                            self.sidebar_pane.clone().cached(
+                                StyleRefinement::default()
+                                    .w(px(panels.sidebar_content))
+                                    .h_full()
+                                    .flex_none(),
+                            ),
+                        ),
                 )
             })
             .child(
@@ -335,9 +337,7 @@ impl Render for Fintwind {
                     } else {
                         self.transcript_pane
                             .clone()
-                            .cached(
-                                StyleRefinement::default().flex_1().min_h(px(0.0)).w_full(),
-                            )
+                            .cached(StyleRefinement::default().flex_1().min_h(px(0.0)).w_full())
                             .into_any_element()
                     })
                     .children(permission)
@@ -374,14 +374,16 @@ impl Render for Fintwind {
                         // Pinned to the window's right edge, so the panel is
                         // uncovered from that edge inward rather than dragged
                         // across the screen.
-                        .child(self.right_panel_pane.clone().cached(
-                            StyleRefinement::default()
-                                .absolute()
-                                .top_0()
-                                .right_0()
-                                .w(px(panels.right_panel_content))
-                                .h_full(),
-                        )),
+                        .child(
+                            self.right_panel_pane.clone().cached(
+                                StyleRefinement::default()
+                                    .absolute()
+                                    .top_0()
+                                    .right_0()
+                                    .w(px(panels.right_panel_content))
+                                    .h_full(),
+                            ),
+                        ),
                 )
             })
             .children(command_palette)

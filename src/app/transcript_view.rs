@@ -1411,15 +1411,12 @@ impl Fintwind {
         } else {
             self.expanded_compactions.insert(message_id);
         }
-        if let Some(message_index) = self
-            .selected_session()
-            .and_then(|session| {
-                session
-                    .messages
-                    .iter()
-                    .position(|message| message.id == message_id)
-            })
-        {
+        if let Some(message_index) = self.selected_session().and_then(|session| {
+            session
+                .messages
+                .iter()
+                .position(|message| message.id == message_id)
+        }) {
             self.remeasure_transcript_message(message_index);
         }
         cx.notify();
@@ -2461,7 +2458,9 @@ impl Fintwind {
                                     format!("reasoning-{id}"),
                                     self.transcript_selection.clone(),
                                     self.markdown_link_handler.clone(),
-                                    self.activity_scroll_viewports.borrow().get(&id)
+                                    self.activity_scroll_viewports
+                                        .borrow()
+                                        .get(&id)
                                         .filter(|viewport| !viewport.follow_tail.get())
                                         .map(|viewport| -viewport.scroll_handle.offset().y),
                                     cx,

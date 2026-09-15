@@ -914,19 +914,22 @@ impl DriverControl for OpenCodeDriver {
                     "/api/session/{}/interrupt",
                     encode_path_segment(&control_id)
                 );
-                if let Err(error) = crate::opencode_session::request_json_on_port(
+                match crate::opencode_session::request_json_on_port(
                     port,
                     "POST",
                     &path,
                     None,
                     Duration::from_secs(10),
                 ) {
-                    let _ = events.send(DriverEvent::BackgroundWork(
-                        BackgroundWorkEvent::StopFailed {
-                            key,
-                            message: error.to_string(),
-                        },
-                    ));
+                    Ok(_) => emit_stopped_subagent(&events, key),
+                    Err(error) => {
+                        let _ = events.send(DriverEvent::BackgroundWork(
+                            BackgroundWorkEvent::StopFailed {
+                                key,
+                                message: error.to_string(),
+                            },
+                        ));
+                    }
                 }
             });
     }
@@ -1547,9 +1550,7 @@ fn opencode_usage_seeds(messages: &Value, session: Option<&Value>) -> UsageSeed 
             seed.newest.get_or_insert(usage);
         }
     }
-    if let Some((total, cache_read, prompt)) =
-        session.and_then(opencode_session_row_totals)
-    {
+    if let Some((total, cache_read, prompt)) = session.and_then(opencode_session_row_totals) {
         seed.total = total;
         seed.cache_read = cache_read;
         seed.prompt = prompt;
@@ -1786,6 +1787,25 @@ fn child_activity_event(
         BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Activity {
             key: key.clone(),
             activity,
+        }),
+    ));
+}
+
+fn emit_stopped_subagent(events: &impl DriverEventSink, key: BackgroundWorkKey) {
+    let mut item = BackgroundWorkItem::new(
+        BackgroundWorkKind::Subagent,
+        key.provider_id.clone(),
+        String::new(),
+        BackgroundWorkStatus::Stopped,
+    );
+    item.background = true;
+    let _ = events.send(DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(
+        item,
+    )));
+    let _ = events.send(DriverEvent::BackgroundWork(
+        BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
+            key,
+            success: false,
         }),
     ));
 }
@@ -2413,9 +2433,7 @@ fn handle_event(
                 // The runner's idle report may precede the execution event or
                 // replace it entirely; either way a turn the app still holds
                 // open must be settled (see `settle_on_idle_report`).
-                Some("idle") => {
-                    settle_on_idle_report(port, session_id, turn_active, state, events)
-                }
+                Some("idle") => settle_on_idle_report(port, session_id, turn_active, state, events),
                 _ => {}
             }
         }
@@ -3117,10 +3135,14 @@ mod tests {
 
     #[test]
     fn model_reference_carries_variant_and_preserves_nested_model_ids() {
-        assert_eq!(opencode_model_ref("gateway/vendor/model", Some("high")),
-            Some(json!({"id": "vendor/model", "providerID": "gateway", "variant": "high"})));
-        assert_eq!(opencode_model_ref("gateway/model", None),
-            Some(json!({"id": "model", "providerID": "gateway"})));
+        assert_eq!(
+            opencode_model_ref("gateway/vendor/model", Some("high")),
+            Some(json!({"id": "vendor/model", "providerID": "gateway", "variant": "high"}))
+        );
+        assert_eq!(
+            opencode_model_ref("gateway/model", None),
+            Some(json!({"id": "model", "providerID": "gateway"}))
+        );
     }
 
     fn harness() -> (
@@ -3335,7 +3357,8 @@ mod tests {
         {
             let (events, event_rx, _commands, _command_rx, turn, mut state) = harness();
             let port = serve_one_message_response(
-                json!({"data": [{"type": "user"}, {"type": "assistant", "id": "msg_1"}]}).to_string(),
+                json!({"data": [{"type": "user"}, {"type": "assistant", "id": "msg_1"}]})
+                    .to_string(),
             );
             handle_event(
                 &json!({
@@ -3379,6 +3402,25 @@ mod tests {
         );
         assert!(event_rx.try_recv().is_err());
         assert!(*turn.lock());
+    }
+
+    #[test]
+    fn a_successful_subagent_interrupt_settles_as_stopped() {
+        let (events, event_rx, _commands, _command_rx, _turn, _state) = harness();
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        emit_stopped_subagent(&events, key.clone());
+        let seen = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(seen.iter().any(|event| matches!(
+            event,
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item))
+                if item.key == key && item.status == BackgroundWorkStatus::Stopped
+        )));
+        assert!(seen.iter().any(|event| matches!(
+            event,
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Transcript(
+                BackgroundWorkTranscriptEvent::Finished { success: false, .. }
+            ))
+        )));
     }
 
     #[test]
@@ -4468,9 +4510,9 @@ mod tests {
             };
             match event {
                 DriverEvent::ProviderBusy => saw_busy = true,
-                DriverEvent::ProviderRetry { attempt, message, .. } => {
-                    retries.push((attempt, message))
-                }
+                DriverEvent::ProviderRetry {
+                    attempt, message, ..
+                } => retries.push((attempt, message)),
                 DriverEvent::TextDelta(delta) => text.push_str(&delta),
                 DriverEvent::TurnFinished { success, .. } => finished = Some(success),
                 DriverEvent::Error(error) => panic!("the server reported: {error}"),
@@ -4687,7 +4729,9 @@ mod tests {
             json!({"type":"session.execution.succeeded","data":{"sessionID":"ses_1"}}),
         ];
         for event in wire {
-            handle_event(&event, &events, &commands, &turn, 0, "ses_1", true, &mut state);
+            handle_event(
+                &event, &events, &commands, &turn, 0, "ses_1", true, &mut state,
+            );
         }
 
         let mut seen = Vec::new();
@@ -4695,7 +4739,9 @@ mod tests {
             seen.push(event);
         }
         assert!(matches!(&seen[0], DriverEvent::TextDelta(text) if text == "OK"));
-        assert!(matches!(&seen[1], DriverEvent::ReasoningDelta { delta: text, .. } if text == "thinking"));
+        assert!(
+            matches!(&seen[1], DriverEvent::ReasoningDelta { delta: text, .. } if text == "thinking")
+        );
         assert!(matches!(&seen[2], DriverEvent::RichActivity(item)
                 if item.source_id.as_deref() == Some("call_1")
                     && item.kind == ActivityKind::FileRead && !item.complete
@@ -4739,22 +4785,32 @@ mod tests {
             json!({"type":"session.reasoning.ended","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"text":"let me look!"}}),
         ];
         for event in wire {
-            handle_event(&event, &events, &commands, &turn, 0, "ses_1", true, &mut state);
+            handle_event(
+                &event, &events, &commands, &turn, 0, "ses_1", true, &mut state,
+            );
         }
 
         let mut seen = Vec::new();
         while let Ok(event) = event_rx.try_recv() {
             seen.push(event);
         }
-        assert!(matches!(&seen[0], DriverEvent::ReasoningStarted { part } if part == "reasoning:msg_1:0"));
-        assert!(matches!(&seen[1], DriverEvent::ReasoningDelta { part, delta }
-                if part == "reasoning:msg_1:0" && delta == "let me look"));
+        assert!(
+            matches!(&seen[0], DriverEvent::ReasoningStarted { part } if part == "reasoning:msg_1:0")
+        );
+        assert!(
+            matches!(&seen[1], DriverEvent::ReasoningDelta { part, delta }
+                if part == "reasoning:msg_1:0" && delta == "let me look")
+        );
         assert!(matches!(&seen[2], DriverEvent::RichActivity(_)));
         // The late tail keeps its fragment key even though a tool preceded it.
-        assert!(matches!(&seen[3], DriverEvent::ReasoningDelta { part, delta }
-                if part == "reasoning:msg_1:0" && delta == "!"));
-        assert!(matches!(&seen[4], DriverEvent::ReasoningEnded { part, text }
-                if part == "reasoning:msg_1:0" && text.as_deref() == Some("let me look!")));
+        assert!(
+            matches!(&seen[3], DriverEvent::ReasoningDelta { part, delta }
+                if part == "reasoning:msg_1:0" && delta == "!")
+        );
+        assert!(
+            matches!(&seen[4], DriverEvent::ReasoningEnded { part, text }
+                if part == "reasoning:msg_1:0" && text.as_deref() == Some("let me look!"))
+        );
         assert_eq!(seen.len(), 5, "non-transcript events leaked");
     }
 
@@ -4855,11 +4911,15 @@ mod tests {
             json!({"type":"session.execution.succeeded","data":{"sessionID":"ses_1"}}),
         ];
         for event in wire {
-            handle_event(&event, &events, &commands, &turn, 0, "ses_1", true, &mut state);
+            handle_event(
+                &event, &events, &commands, &turn, 0, "ses_1", true, &mut state,
+            );
         }
 
         let seen = event_rx.try_iter().collect::<Vec<_>>();
-        assert!(matches!(&seen[0], DriverEvent::ReasoningDelta { delta: text, .. } if text == "thinking"));
+        assert!(
+            matches!(&seen[0], DriverEvent::ReasoningDelta { delta: text, .. } if text == "thinking")
+        );
         assert!(matches!(&seen[1], DriverEvent::TextDelta(text) if text == "answer"));
         assert!(matches!(&seen[2], DriverEvent::TextDelta(text) if text == " tail"));
         assert!(matches!(
@@ -5146,7 +5206,11 @@ mod tests {
                 _ => {}
             }
         }
-        assert_eq!(stats.len(), 1, "the flush happens once, at the terminal event");
+        assert_eq!(
+            stats.len(),
+            1,
+            "the flush happens once, at the terminal event"
+        );
         assert_eq!(stats[0].output_tokens, 102);
         // 2_500 from the tool step's payload time, plus a wall-clock
         // fallback that only has to be non-negative on the final step.
@@ -5768,7 +5832,16 @@ mod tests {
             }
         });
 
-        handle_event(&permission, &events, &commands, &turn, 0, "ses_1", false, &mut state);
+        handle_event(
+            &permission,
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
         let DriverEvent::Permission {
             request_id,
             options,
@@ -5802,7 +5875,9 @@ mod tests {
                 "always": ["rm -rf *"]
             }
         });
-        handle_event(&repeated, &events, &commands, &turn, 0, "ses_1", false, &mut state);
+        handle_event(
+            &repeated, &events, &commands, &turn, 0, "ses_1", false, &mut state,
+        );
         let Ok(CommandMessage::Respond { option_id, .. }) = command_rx.try_recv() else {
             panic!("the driver's remembered rule should answer without asking again");
         };
@@ -5810,7 +5885,16 @@ mod tests {
         assert!(event_rx.try_recv().is_err());
 
         let mut isolated = OpenCodeStreamState::default();
-        handle_event(&repeated, &events, &commands, &turn, 0, "ses_1", false, &mut isolated);
+        handle_event(
+            &repeated,
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut isolated,
+        );
         assert!(matches!(
             event_rx.try_recv().unwrap(),
             DriverEvent::Permission { request_id, .. } if request_id == "per_def"

@@ -747,10 +747,7 @@ mod tests {
         let messages = server
             .request(
                 "GET",
-                &format!(
-                    "/api/session/{}/message",
-                    encode_path_segment(&fork_id)
-                ),
+                &format!("/api/session/{}/message", encode_path_segment(&fork_id)),
                 None,
             )
             .expect("the fork should be readable");

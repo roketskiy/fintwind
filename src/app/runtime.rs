@@ -1862,7 +1862,12 @@ impl Fintwind {
             cleanup_error,
         } = prepared;
         let retained_turn_count = turn_count.saturating_sub(1);
-        if !self.state.sessions.iter().any(|session| session.id == session_id) {
+        if !self
+            .state
+            .sessions
+            .iter()
+            .any(|session| session.id == session_id)
+        {
             return;
         }
         if selected {
@@ -1898,7 +1903,8 @@ impl Fintwind {
             }
             self.mark_background_work_lost(session_id);
         } else if let Some(runtime) = self.runtimes.get_mut(&session_id) {
-            runtime.pending_events
+            runtime
+                .pending_events
                 .retain(|event| matches!(event, DriverEvent::BackgroundWork(_)));
             runtime.stream_remeasure_pending = false;
             runtime.stream_phase = None;
@@ -2611,7 +2617,9 @@ impl Fintwind {
         };
         self.invalidate_checkpoint_refs();
         if let Some(runtime) = self.runtimes.get_mut(&session_id) {
-            runtime.pending_events.retain(|event| matches!(event, DriverEvent::BackgroundWork(_)));
+            runtime
+                .pending_events
+                .retain(|event| matches!(event, DriverEvent::BackgroundWork(_)));
             runtime.pending_steers.clear();
             runtime.stream_remeasure_pending = false;
             runtime.stream_phase = None;

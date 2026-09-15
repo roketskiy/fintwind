@@ -56,10 +56,7 @@ pub fn user_skill_locations() -> Vec<SkillLocation> {
     };
     let home_join = |suffix: &str| home.as_deref().map(|home| home.join(suffix));
     push(SkillSource::Shared, home_join(".agents/skills"));
-    push(
-        SkillSource::OpenCode,
-        home_join(".config/opencode/skills"),
-    );
+    push(SkillSource::OpenCode, home_join(".config/opencode/skills"));
     locations
 }
 
@@ -371,7 +368,8 @@ mod tests {
     use super::*;
 
     fn temp_root(tag: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("fintwind-skills-{tag}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("fintwind-skills-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         root
@@ -493,7 +491,11 @@ mod tests {
         // User scope leads, alphabetical inside each group.
         assert_eq!(
             names,
-            vec![("review", None), ("zeta", None), ("review", Some("fintwind"))]
+            vec![
+                ("review", None),
+                ("zeta", None),
+                ("review", Some("fintwind"))
+            ]
         );
         // A user-scope and a project-scope copy stay separate rows — the
         // project one shadows at invocation — and both carry the note.
@@ -539,7 +541,10 @@ mod tests {
     fn every_ecosystem_root_is_listed() {
         let projects = vec![("fintwind".to_owned(), PathBuf::from("/tmp/fintwind"))];
         let locations = skill_locations(&projects);
-        let roots: Vec<PathBuf> = locations.iter().map(|location| location.root.clone()).collect();
+        let roots: Vec<PathBuf> = locations
+            .iter()
+            .map(|location| location.root.clone())
+            .collect();
         for expected in [".agents/skills", ".config/opencode/skills"] {
             assert!(
                 roots.iter().any(|root| root.ends_with(expected)),

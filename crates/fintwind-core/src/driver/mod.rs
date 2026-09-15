@@ -187,8 +187,7 @@ pub(crate) fn start_local(
 ) -> anyhow::Result<DriverHandle> {
     // OpenCode's own server is its real API, and it is what exposes
     // interactive permission requests.
-    let inner: Arc<dyn DriverControl> =
-        Arc::new(opencode::OpenCodeDriver::start(options, events)?);
+    let inner: Arc<dyn DriverControl> = Arc::new(opencode::OpenCodeDriver::start(options, events)?);
     Ok(DriverHandle { inner })
 }
 

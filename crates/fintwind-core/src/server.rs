@@ -978,9 +978,9 @@ mod tests {
     use crate::WireDriverStartOptions;
     #[cfg(unix)]
     use crate::daemon::FintwindBackend;
+    use crate::model::AgentSession;
     #[cfg(unix)]
     use crate::model::Project;
-    use crate::model::AgentSession;
     #[cfg(unix)]
     use crate::persistence::StateStore;
     #[cfg(unix)]
@@ -988,9 +988,9 @@ mod tests {
     #[cfg(unix)]
     use base64::Engine as _;
     use crossbeam_channel::bounded;
+    use fintwind_client::DaemonClient;
     use serde_json::json;
     use std::path::PathBuf;
-    use fintwind_client::DaemonClient;
 
     #[derive(Default)]
     struct TestBackend {

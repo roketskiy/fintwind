@@ -314,8 +314,6 @@ impl BackgroundWorkRegistry {
         self.output_viewports.entry(key.clone()).or_default();
         let output_changed;
         if let Some(current) = self.items.get_mut(&incoming.key) {
-            let preserve_stopping =
-                current.status == BackgroundWorkStatus::Stopping && incoming.status.is_stoppable();
             if incoming.title.is_empty() {
                 incoming.title.clone_from(&current.title);
             }
@@ -350,9 +348,7 @@ impl BackgroundWorkRegistry {
             } else {
                 false
             };
-            if !preserve_stopping {
-                current.status = incoming.status;
-            }
+            current.status = merge_work_status(current.status, incoming.status);
         } else {
             output_changed = incoming.output.is_some();
             self.order.push(incoming.key.clone());
@@ -806,6 +802,25 @@ fn status_progress(status: BackgroundWorkStatus) -> u8 {
     }
 }
 
+fn merge_work_status(
+    current: BackgroundWorkStatus,
+    incoming: BackgroundWorkStatus,
+) -> BackgroundWorkStatus {
+    match current {
+        BackgroundWorkStatus::Stopping if incoming.is_live() => BackgroundWorkStatus::Stopping,
+        BackgroundWorkStatus::Stopping if incoming == BackgroundWorkStatus::Lost => {
+            BackgroundWorkStatus::Lost
+        }
+        BackgroundWorkStatus::Stopping => BackgroundWorkStatus::Stopped,
+        BackgroundWorkStatus::Stopped
+            if !incoming.is_live() && incoming != BackgroundWorkStatus::Lost =>
+        {
+            BackgroundWorkStatus::Stopped
+        }
+        _ => incoming,
+    }
+}
+
 fn recover_subagent_origin(session: &AgentSession, item: &mut BackgroundWorkItem) {
     if item.key.kind != BackgroundWorkKind::Subagent {
         return;
@@ -1027,7 +1042,12 @@ impl Fintwind {
         session_id: Uuid,
         mut event: BackgroundWorkEvent,
     ) {
-        if let Some(session) = self.state.sessions.iter().find(|session| session.id == session_id) {
+        if let Some(session) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+        {
             match &mut event {
                 // A live upsert from the driver already names every call that
                 // bound the child, so only a card that arrived with no origin
@@ -2661,6 +2681,27 @@ mod tests {
         assert!(!registry.items[&key].status.is_stoppable());
     }
 
+    #[test]
+    fn a_manual_stop_settles_as_stopped_even_if_the_provider_reports_completion() {
+        let mut registry = BackgroundWorkRegistry::default();
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Running));
+        registry.apply(BackgroundWorkEvent::StopRequested(key.clone()));
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Completed));
+        assert_eq!(registry.items[&key].status, BackgroundWorkStatus::Stopped);
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Failed));
+        assert_eq!(registry.items[&key].status, BackgroundWorkStatus::Stopped);
+    }
+
+    #[test]
+    fn a_stopped_child_can_still_resume() {
+        let mut registry = BackgroundWorkRegistry::default();
+        let key = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Stopped));
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Running));
+        assert_eq!(registry.items[&key].status, BackgroundWorkStatus::Running);
+    }
+
     fn subagent_item(id: &str, status: BackgroundWorkStatus) -> BackgroundWorkItem {
         let mut item = BackgroundWorkItem::new(
             BackgroundWorkKind::Subagent,
@@ -2860,11 +2901,14 @@ mod tests {
                 turns: Vec::new(),
             },
         });
-        parent.background_work.push(registry.snapshot(&key).unwrap());
+        parent
+            .background_work
+            .push(registry.snapshot(&key).unwrap());
 
         let stored = serde_json::to_string(&parent).unwrap();
         let restored_session: AgentSession = serde_json::from_str(&stored).unwrap();
-        let mut restored = BackgroundWorkRegistry::from_snapshots(&restored_session.background_work);
+        let mut restored =
+            BackgroundWorkRegistry::from_snapshots(&restored_session.background_work);
         restored.apply_transcript(BackgroundWorkTranscriptEvent::Snapshot {
             key: key.clone(),
             transcript: BackgroundWorkTranscript::default(),
@@ -2874,7 +2918,10 @@ mod tests {
             restored.items[&key].origin_activity_ids,
             vec!["call_parent".to_owned()]
         );
-        assert_eq!(restored.transcripts[&key].messages[0].content, "child answer");
+        assert_eq!(
+            restored.transcripts[&key].messages[0].content,
+            "child answer"
+        );
     }
 
     #[test]

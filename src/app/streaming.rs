@@ -418,9 +418,7 @@ impl Fintwind {
                 // whether or not the provider retracted it.
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
-                    runtime.provider_phase = Some(ProviderPhase::Responding {
-                        since: unix_time(),
-                    });
+                    runtime.provider_phase = Some(ProviderPhase::Responding { since: unix_time() });
                 }
             }
             DriverEvent::ProviderRetry {
@@ -1152,7 +1150,9 @@ fn remove_activity(session: &mut AgentSession, block_index: usize, activity_id: 
     let Some(block) = session.transcript_blocks.get_mut(block_index) else {
         return;
     };
-    block.activities.retain(|activity| activity.id != activity_id);
+    block
+        .activities
+        .retain(|activity| activity.id != activity_id);
     if block.activities.is_empty() {
         session.transcript_blocks.remove(block_index);
     }
@@ -1215,13 +1215,9 @@ fn stream_delta_part(event: &DriverEvent) -> Option<&str> {
 pub(super) fn stream_delta_text(event: &DriverEvent, kind: StreamDeltaKind) -> Option<&str> {
     match (kind, event) {
         (StreamDeltaKind::Text, DriverEvent::TextDelta(text))
-        | (
-            StreamDeltaKind::Reasoning,
-            DriverEvent::ReasoningDelta { delta: text, .. },
-        ) =>
-    {
-        Some(text)
-    }
+        | (StreamDeltaKind::Reasoning, DriverEvent::ReasoningDelta { delta: text, .. }) => {
+            Some(text)
+        }
         _ => None,
     }
 }
@@ -1279,11 +1275,7 @@ pub(super) fn pop_stream_batch(
         part = stream_delta_part(&event).map(str::to_owned);
         match (kind, event) {
             (StreamDeltaKind::Text, DriverEvent::TextDelta(text))
-            | (
-                StreamDeltaKind::Reasoning,
-                DriverEvent::ReasoningDelta { delta: text, .. },
-            ) =>
-            {
+            | (StreamDeltaKind::Reasoning, DriverEvent::ReasoningDelta { delta: text, .. }) => {
                 chunk.push_str(&text);
             }
             _ => unreachable!("the stream kind was checked before removing the event"),
@@ -1349,13 +1341,17 @@ pub(super) fn upsert_compaction_transcript(session: &mut AgentSession, state: &C
     else {
         return;
     };
-    if session.messages.iter().any(|message| {
-        message.role == MessageRole::Compaction && message.content.trim() == summary
-    }) {
+    if session
+        .messages
+        .iter()
+        .any(|message| message.role == MessageRole::Compaction && message.content.trim() == summary)
+    {
         return;
     }
     // A compaction is a conversation-level divider, not part of the live
     // turn: attaching it would fold the summary behind "Worked for N".
-    session.messages.push(Message::new(MessageRole::Compaction, summary));
+    session
+        .messages
+        .push(Message::new(MessageRole::Compaction, summary));
     session.updated_at = unix_time();
 }

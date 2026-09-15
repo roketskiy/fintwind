@@ -240,11 +240,7 @@ impl Fintwind {
         self.invalidate_composer_sources(cx);
     }
 
-    pub(super) fn create_session_for(
-        &mut self,
-        project_id: Uuid,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn create_session_for(&mut self, project_id: Uuid, cx: &mut Context<Self>) {
         if let Some(draft_id) = self
             .state
             .sessions
@@ -342,10 +338,11 @@ impl Fintwind {
             let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
             cx.background_executor()
                 .spawn(async move {
-                    let _ = workspace.request(fintwind_client::WorkspaceOperation::DeleteSessionRefs {
-                        cwd: project_path,
-                        session_id,
-                    });
+                    let _ =
+                        workspace.request(fintwind_client::WorkspaceOperation::DeleteSessionRefs {
+                            cwd: project_path,
+                            session_id,
+                        });
                 })
                 .detach();
         }
@@ -980,19 +977,11 @@ impl Fintwind {
         else {
             return;
         };
-        self.state.remember_model_traits(
-            &model,
-            reasoning_effort,
-            service_tier,
-            context_window,
-        );
+        self.state
+            .remember_model_traits(&model, reasoning_effort, service_tier, context_window);
     }
 
-    pub(super) fn choose_model(
-        &mut self,
-        model: String,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn choose_model(&mut self, model: String, cx: &mut Context<Self>) {
         let Some(session_id) = self
             .selected_session()
             .filter(|session| {
@@ -1078,11 +1067,7 @@ impl Fintwind {
         }
     }
 
-    pub(super) fn toggle_favorite_model(
-        &mut self,
-        model: String,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn toggle_favorite_model(&mut self, model: String, cx: &mut Context<Self>) {
         if let Some(index) = self
             .state
             .favorite_models

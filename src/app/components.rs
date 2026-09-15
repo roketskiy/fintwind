@@ -1677,14 +1677,9 @@ mod message_time_tests {
         );
         assert_eq!(
             activity_disclosure_text(&activity).as_deref(),
-            Some(
-                "Arguments\n{\n  \"actions\": []\n}\n\nOutput\ntool closed its session"
-            )
+            Some("Arguments\n{\n  \"actions\": []\n}\n\nOutput\ntool closed its session")
         );
-        assert_eq!(
-            activity_preview(&activity),
-            "tool closed its session"
-        );
+        assert_eq!(activity_preview(&activity), "tool closed its session");
 
         let image_only = ActivityItem::new(
             Some("tool-2".into()),
@@ -2000,7 +1995,9 @@ mod message_time_tests {
             None,
             true,
         )
-        .with_arguments(Some(serde_json::json!({"query": "Fintwind GPUI"}).to_string()));
+        .with_arguments(Some(
+            serde_json::json!({"query": "Fintwind GPUI"}).to_string(),
+        ));
         assert_eq!(
             activity_display_title(&web_search),
             "Searched the web for Fintwind GPUI"

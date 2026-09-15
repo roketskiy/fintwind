@@ -183,9 +183,11 @@ impl Fintwind {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    match workspace_client.request(fintwind_client::WorkspaceOperation::InspectCommit {
-                        cwd: workspace.clone(),
-                    }) {
+                    match workspace_client.request(
+                        fintwind_client::WorkspaceOperation::InspectCommit {
+                            cwd: workspace.clone(),
+                        },
+                    ) {
                         Ok(fintwind_client::WorkspaceResult::CommitSnapshot { snapshot }) => {
                             Ok(snapshot)
                         }
@@ -195,7 +197,10 @@ impl Fintwind {
                 })
                 .await;
             let _ = fintwind.update(cx, |fintwind, cx| {
-                let Some(dialog) = fintwind.commit_dialog.as_mut().filter(|dialog| dialog.id == id)
+                let Some(dialog) = fintwind
+                    .commit_dialog
+                    .as_mut()
+                    .filter(|dialog| dialog.id == id)
                 else {
                     return;
                 };
@@ -336,7 +341,9 @@ impl Fintwind {
                             invocation,
                         },
                     ) {
-                        Ok(fintwind_client::WorkspaceResult::CommitMessage { message }) => Ok(message),
+                        Ok(fintwind_client::WorkspaceResult::CommitMessage { message }) => {
+                            Ok(message)
+                        }
                         Ok(_) => {
                             Err("the daemon returned an invalid commit message response".into())
                         }
@@ -358,8 +365,10 @@ impl Fintwind {
                         if let Some(operation) = fintwind.commit_operation.as_mut() {
                             operation.pending = CommitPending::Git(action);
                         }
-                        if let Some(dialog) =
-                            fintwind.commit_dialog.as_mut().filter(|dialog| dialog.id == id)
+                        if let Some(dialog) = fintwind
+                            .commit_dialog
+                            .as_mut()
+                            .filter(|dialog| dialog.id == id)
                         {
                             dialog
                                 .message
@@ -377,8 +386,10 @@ impl Fintwind {
                     }
                     Err(error) => {
                         fintwind.commit_operation = None;
-                        if let Some(dialog) =
-                            fintwind.commit_dialog.as_mut().filter(|dialog| dialog.id == id)
+                        if let Some(dialog) = fintwind
+                            .commit_dialog
+                            .as_mut()
+                            .filter(|dialog| dialog.id == id)
                         {
                             dialog.error = Some(error);
                             dialog
@@ -418,12 +429,14 @@ impl Fintwind {
                             include_unstaged,
                             push: false,
                         },
-                        CommitAction::CommitAndPush => fintwind_client::WorkspaceOperation::Commit {
-                            cwd: operation_workspace.clone(),
-                            message,
-                            include_unstaged,
-                            push: true,
-                        },
+                        CommitAction::CommitAndPush => {
+                            fintwind_client::WorkspaceOperation::Commit {
+                                cwd: operation_workspace.clone(),
+                                message,
+                                include_unstaged,
+                                push: true,
+                            }
+                        }
                         CommitAction::Push => fintwind_client::WorkspaceOperation::Push {
                             cwd: operation_workspace.clone(),
                         },
@@ -486,8 +499,10 @@ impl Fintwind {
                         dialog_was_open.then(|| fintwind.composer_focus(cx))
                     }
                     Err(error) => {
-                        if let Some(dialog) =
-                            fintwind.commit_dialog.as_mut().filter(|dialog| dialog.id == id)
+                        if let Some(dialog) = fintwind
+                            .commit_dialog
+                            .as_mut()
+                            .filter(|dialog| dialog.id == id)
                         {
                             dialog.error = Some(error);
                             if let Some(snapshot) = refreshed_snapshot {
@@ -609,14 +624,15 @@ impl Fintwind {
                 )
                 .when(include_enabled, |row| {
                     row.on_click(move |_, _, cx| {
-                        let _ = click_weak.update(cx, |fintwind, cx| fintwind.toggle_include_unstaged(cx));
+                        let _ = click_weak
+                            .update(cx, |fintwind, cx| fintwind.toggle_include_unstaged(cx));
                     })
                     .on_key_down(move |event: &KeyDownEvent, _, cx| {
                         if !event.keystroke.modifiers.modified()
                             && matches!(event.keystroke.key.as_str(), "enter" | "space")
                         {
-                            let _ =
-                                key_weak.update(cx, |fintwind, cx| fintwind.toggle_include_unstaged(cx));
+                            let _ = key_weak
+                                .update(cx, |fintwind, cx| fintwind.toggle_include_unstaged(cx));
                             cx.stop_propagation();
                         }
                     })
@@ -690,12 +706,16 @@ impl Fintwind {
         let card = div()
             .id("commit-dialog-card")
             .key_context(DIALOG_CONTEXT)
-            .on_action(cx.listener(|fintwind, _: &ConfirmCommitDialog, window, cx| {
-                fintwind.request_commit_action(CommitAction::Commit, window, cx)
-            }))
-            .on_action(cx.listener(|fintwind, _: &DismissCommitDialog, window, cx| {
-                fintwind.close_commit_dialog(window, cx)
-            }))
+            .on_action(
+                cx.listener(|fintwind, _: &ConfirmCommitDialog, window, cx| {
+                    fintwind.request_commit_action(CommitAction::Commit, window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|fintwind, _: &DismissCommitDialog, window, cx| {
+                    fintwind.close_commit_dialog(window, cx)
+                }),
+            )
             .tab_group()
             .tab_stop(false)
             .w_full()

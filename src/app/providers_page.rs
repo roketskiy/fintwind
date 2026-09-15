@@ -20,7 +20,9 @@ use crate::theme::ui_px;
 
 use gpui::{ElementId, KeyDownEvent};
 
-use fintwind_client::custom_providers::{self, CustomProvider, CustomProviderModel, ProviderApiFormat};
+use fintwind_client::custom_providers::{
+    self, CustomProvider, CustomProviderModel, ProviderApiFormat,
+};
 
 use super::*;
 
@@ -217,7 +219,8 @@ impl Fintwind {
     /// watches the file and hot-reloads, so running serves pick the change up
     /// without a restart.
     pub(super) fn commit_custom_providers(&mut self, cx: &mut Context<Self>) {
-        if let Err(error) = fintwind_client::opencode_config::save_providers(&self.providers_store) {
+        if let Err(error) = fintwind_client::opencode_config::save_providers(&self.providers_store)
+        {
             self.show_toast(tr!("providers.sync_failed", error = error.to_string()));
         }
         self.refresh_provider_detection();
@@ -1283,7 +1286,11 @@ impl Fintwind {
                 theme.text_secondary
             })
             .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
-            .active(|element| element.bg(theme.danger.opacity(0.18)).text_color(theme.danger))
+            .active(|element| {
+                element
+                    .bg(theme.danger.opacity(0.18))
+                    .text_color(theme.danger)
+            })
             .child(icon(
                 "icons/trash.svg",
                 12.5,
@@ -1556,13 +1563,8 @@ impl Fintwind {
                 &model.input_modalities,
                 SharedString::from(format!("modality-{index}")),
             );
-            let latency_cluster = self.render_model_latency_cluster(
-                &provider.id,
-                &model.id,
-                index,
-                theme,
-                cx,
-            );
+            let latency_cluster =
+                self.render_model_latency_cluster(&provider.id, &model.id, index, theme, cx);
             rows = rows.child(
                 div()
                     .px(px(10.0))
@@ -1834,19 +1836,15 @@ impl Fintwind {
         toggle: impl Fn(&mut Self, &str, &mut Context<Self>) + Copy + 'static,
     ) -> Div {
         let accent = providers_accent(theme);
-        let mut row = div()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .child(
-                div()
-                    .flex_none()
-                    .pr(px(2.0))
-                    .text_size(ui_px(10.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text_tertiary)
-                    .child(tr!("providers.input_modalities_label")),
-            );
+        let mut row = div().flex().items_center().gap(px(6.0)).child(
+            div()
+                .flex_none()
+                .pr(px(2.0))
+                .text_size(ui_px(10.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text_tertiary)
+                .child(tr!("providers.input_modalities_label")),
+        );
         for modality in custom_providers::INPUT_MODALITIES {
             let active = selected.iter().any(|entry| entry == modality);
             row = row.child(
@@ -1858,14 +1856,16 @@ impl Fintwind {
                     active,
                 )
                 .on_click(cx.listener(move |this, _, _, cx| toggle(this, modality, cx)))
-                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                    if !event.keystroke.modifiers.modified()
-                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                    {
-                        toggle(this, modality, cx);
-                        cx.stop_propagation();
-                    }
-                })),
+                .on_key_down(cx.listener(
+                    move |this, event: &KeyDownEvent, _, cx| {
+                        if !event.keystroke.modifiers.modified()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            toggle(this, modality, cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                )),
             );
         }
         if hint {
@@ -1970,7 +1970,8 @@ impl Fintwind {
             );
         }
         let models_empty = draft_count == 0;
-        let valid = !name.is_empty() && custom_providers::base_url_valid(&base_url) && model_count > 0;
+        let valid =
+            !name.is_empty() && custom_providers::base_url_valid(&base_url) && model_count > 0;
 
         let current_format = self.providers_form_format;
         let weak = cx.entity().downgrade();
@@ -2044,13 +2045,17 @@ impl Fintwind {
             })
             .child(tr!("providers.add_provider"));
 
-        let hint: Option<AnyElement> = if !base_url.is_empty() && !custom_providers::base_url_valid(&base_url) {
-            Some(form_hint(theme, accent, tr!("providers.hint_invalid_url")))
-        } else if custom_providers::base_url_valid(&base_url) && model_count == 0 && !name.is_empty() {
-            Some(form_hint(theme, accent, tr!("providers.hint_need_model")))
-        } else {
-            None
-        };
+        let hint: Option<AnyElement> =
+            if !base_url.is_empty() && !custom_providers::base_url_valid(&base_url) {
+                Some(form_hint(theme, accent, tr!("providers.hint_invalid_url")))
+            } else if custom_providers::base_url_valid(&base_url)
+                && model_count == 0
+                && !name.is_empty()
+            {
+                Some(form_hint(theme, accent, tr!("providers.hint_need_model")))
+            } else {
+                None
+            };
 
         self.scrollable_detail(
             div()
@@ -2340,7 +2345,11 @@ fn modality_chip(
     modality: &str,
     selected: bool,
 ) -> Stateful<Div> {
-    let color = if selected { accent } else { theme.text_secondary };
+    let color = if selected {
+        accent
+    } else {
+        theme.text_secondary
+    };
     div()
         .id(id)
         .tab_index(0)

@@ -29,8 +29,8 @@ use crate::blob_store::BlobStore;
 use crate::i18n::AppLanguage;
 use crate::identity::DATA_DIRECTORY_NAME;
 use crate::model::{
-    AgentSession, FavoriteModel, InteractionMode, Message, MessageAttachment, MessageRole, Project,
-    RuntimeMode, SessionWorkspace, OPENCODE_PROVIDER,
+    AgentSession, FavoriteModel, InteractionMode, Message, MessageAttachment, MessageRole,
+    OPENCODE_PROVIDER, Project, RuntimeMode, SessionWorkspace,
 };
 use crate::theme::ThemePreference;
 pub use fintwind_protocol::persistence::{
@@ -330,12 +330,8 @@ impl PersistedState {
         session
             .reasoning_effort
             .clone_from(&self.last_reasoning_effort);
-        session
-            .service_tier
-            .clone_from(&self.last_service_tier);
-        session
-            .context_window
-            .clone_from(&self.last_context_window);
+        session.service_tier.clone_from(&self.last_service_tier);
+        session.context_window.clone_from(&self.last_context_window);
         session
     }
 
@@ -2422,11 +2418,7 @@ mod tests {
         assert_eq!(restored.sessions[0].context_window.as_deref(), Some("1m"));
         assert_eq!(
             restored.model_traits_for("gpt-5.6-luna"),
-            (
-                Some("xhigh".into()),
-                Some("fast".into()),
-                Some("1m".into())
-            )
+            (Some("xhigh".into()), Some("fast".into()), Some("1m".into()))
         );
         assert_eq!(
             restored.sessions[0].runtime_mode,
@@ -2840,22 +2832,24 @@ mod tests {
         let store = store_in(&directory);
         let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
         state.sessions[0].begin_turn("Parent prompt");
-        state.sessions[0].background_work.push(BackgroundWorkSnapshot {
-            item: BackgroundWorkItem::new(
-                BackgroundWorkKind::Subagent,
-                "child-session",
-                "Child session",
-                BackgroundWorkStatus::Starting,
-            ),
-            transcript: BackgroundWorkTranscript {
-                messages: vec![crate::model::Message::new(
-                    MessageRole::Assistant,
-                    "restored child answer",
-                )],
-                transcript_blocks: Vec::new(),
-                turns: Vec::new(),
-            },
-        });
+        state.sessions[0]
+            .background_work
+            .push(BackgroundWorkSnapshot {
+                item: BackgroundWorkItem::new(
+                    BackgroundWorkKind::Subagent,
+                    "child-session",
+                    "Child session",
+                    BackgroundWorkStatus::Starting,
+                ),
+                transcript: BackgroundWorkTranscript {
+                    messages: vec![crate::model::Message::new(
+                        MessageRole::Assistant,
+                        "restored child answer",
+                    )],
+                    transcript_blocks: Vec::new(),
+                    turns: Vec::new(),
+                },
+            });
         store.save(&mut state).unwrap();
 
         let restored = load_hydrated(&store_in(&directory));
@@ -3330,12 +3324,7 @@ mod tests {
     #[test]
     fn model_traits_are_remembered_by_model() {
         let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
-        state.remember_model_traits(
-            "gpt-5.6-sol",
-            Some("max".into()),
-            Some("fast".into()),
-            None,
-        );
+        state.remember_model_traits("gpt-5.6-sol", Some("max".into()), Some("fast".into()), None);
 
         assert_eq!(
             state.model_traits_for("gpt-5.6-terra"),

@@ -82,7 +82,8 @@ impl Fintwind {
         while let Ok((provider, result)) = self.plan_usage_events.try_recv() {
             self.plan_usage_pending.remove(&provider);
             self.plan_usage_stale.remove(&provider);
-            self.plan_usage_checked_at.insert(provider.clone(), Instant::now());
+            self.plan_usage_checked_at
+                .insert(provider.clone(), Instant::now());
             match result {
                 Ok(Some(usage)) => {
                     changed |= self.plan_usage.get(&provider) != Some(&usage)
@@ -164,9 +165,8 @@ impl Fintwind {
         let error = self.plan_usage_error.get(&provider).cloned();
         // Fetchable but nothing cached yet: the panel shows a skeleton
         // whether the fetch is already in flight or lands on the next tick.
-        let plan_loading = plan.is_none()
-            && error.is_none()
-            && !self.plan_usage_unconfigured.contains(&provider);
+        let plan_loading =
+            plan.is_none() && error.is_none() && !self.plan_usage_unconfigured.contains(&provider);
 
         let weak = cx.entity().downgrade();
         let panel_weak = cx.entity().downgrade();
@@ -219,10 +219,7 @@ impl Fintwind {
                 percent = format!("{percent:.1}"),
                 shortcut = "Ctrl+U"
             )),
-            (None, None) => SharedString::from(tr!(
-                "usage.shortcut",
-                shortcut = "Ctrl+U"
-            )),
+            (None, None) => SharedString::from(tr!("usage.shortcut", shortcut = "Ctrl+U")),
         };
 
         let trigger = div()
@@ -417,7 +414,10 @@ fn usage_panel(
     // through the context numbers above, which the provider re-reports
     // smaller on its next call.
     if let Some(state) = compaction.as_ref().filter(|state| {
-        matches!(state.status, CompactionStatus::Running | CompactionStatus::Failed)
+        matches!(
+            state.status,
+            CompactionStatus::Running | CompactionStatus::Failed
+        )
     }) {
         panel = panel
             .child(div().h(px(1.0)).flex_none().bg(theme.border))
@@ -523,9 +523,7 @@ fn usage_totals_row(theme: &Theme, usage: ContextUsage) -> Option<Div> {
     if total.is_none() && hit.is_none() {
         return None;
     }
-    let cell = move |label: String,
-                     value: Option<String>,
-                     theme: &Theme| {
+    let cell = move |label: String, value: Option<String>, theme: &Theme| {
         div()
             .flex()
             .items_center()

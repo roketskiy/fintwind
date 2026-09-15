@@ -194,27 +194,53 @@ const MODEL_COMPANY_MARKS: &[(&[&str], &str)] = &[
     (&["grok"], "icons/companies/xai.svg"),
     (&["claude"], "icons/companies/anthropic.svg"),
     (
-        &["gpt", "o1", "o3", "o4", "codex", "davinci", "chatgpt", "openai"],
+        &[
+            "gpt", "o1", "o3", "o4", "codex", "davinci", "chatgpt", "openai",
+        ],
         "icons/companies/openai.svg",
     ),
     (&["gemini", "gemma", "google"], "icons/companies/google.svg"),
     (&["deepseek"], "icons/companies/deepseek.svg"),
-    (&["qwen", "tongyi", "qwq", "qvq"], "icons/companies/qwen.svg"),
+    (
+        &["qwen", "tongyi", "qwq", "qvq"],
+        "icons/companies/qwen.svg",
+    ),
     (&["kimi", "moonshot"], "icons/companies/moonshot.svg"),
-    (&["glm", "chatglm", "zhipu", "zai"], "icons/companies/zai.svg"),
+    (
+        &["glm", "chatglm", "zhipu", "zai"],
+        "icons/companies/zai.svg",
+    ),
     (&["llama", "meta"], "icons/companies/meta.svg"),
     (
         &[
-            "mistral", "mixtral", "codestral", "pixtral", "magistral", "ministral", "devstral",
+            "mistral",
+            "mixtral",
+            "codestral",
+            "pixtral",
+            "magistral",
+            "ministral",
+            "devstral",
             "voxtral",
         ],
         "icons/companies/mistral.svg",
     ),
-    (&["minimax", "hailuo", "abab"], "icons/companies/minimax.svg"),
-    (&["doubao", "bytedance", "ui-tars"], "icons/companies/bytedance.svg"),
-    (&["phi", "microsoft", "mai"], "icons/companies/microsoft.svg"),
+    (
+        &["minimax", "hailuo", "abab"],
+        "icons/companies/minimax.svg",
+    ),
+    (
+        &["doubao", "bytedance", "ui-tars"],
+        "icons/companies/bytedance.svg",
+    ),
+    (
+        &["phi", "microsoft", "mai"],
+        "icons/companies/microsoft.svg",
+    ),
     (&["nova", "amazon"], "icons/companies/amazon.svg"),
-    (&["sonar", "perplexity", "r1-1776"], "icons/companies/perplexity.svg"),
+    (
+        &["sonar", "perplexity", "r1-1776"],
+        "icons/companies/perplexity.svg",
+    ),
 ];
 
 /// The company mark for a model, or `None` when no company matches and the
@@ -314,7 +340,10 @@ pub fn activity_icon(kind: ActivityKind) -> &'static str {
 /// a purpose-picked icon; everything else falls back to the category icon for
 /// [`ActivityKind`], so an unfamiliar tool still reads as "a tool call".
 pub fn activity_tool_icon(tool_name: &str, kind: ActivityKind) -> &'static str {
-    let normalized = tool_name.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+    let normalized = tool_name
+        .trim()
+        .to_ascii_lowercase()
+        .replace(['-', ' '], "_");
     if normalized.is_empty() {
         return activity_icon(kind);
     }
@@ -732,9 +761,18 @@ mod tests {
             "icons/companies/google.svg"
         );
         // Short tokens land on real models but not inside other words.
-        assert_eq!(model_company_icon("openai/o3-mini", "").unwrap(), "icons/companies/openai.svg");
-        assert_eq!(model_company_icon("microsoft/phi-4", ""), Some("icons/companies/microsoft.svg"));
-        assert_eq!(model_company_icon("qwen/qwen3-o", ""), Some("icons/companies/qwen.svg"));
+        assert_eq!(
+            model_company_icon("openai/o3-mini", "").unwrap(),
+            "icons/companies/openai.svg"
+        );
+        assert_eq!(
+            model_company_icon("microsoft/phi-4", ""),
+            Some("icons/companies/microsoft.svg")
+        );
+        assert_eq!(
+            model_company_icon("qwen/qwen3-o", ""),
+            Some("icons/companies/qwen.svg")
+        );
         assert_eq!(model_company_icon("test/domain-x", ""), None);
         // No match: the provider's icon carries on.
         assert_eq!(
@@ -755,7 +793,10 @@ mod tests {
             activity_tool_icon("Web Search", ActivityKind::Search),
             "icons/search.svg"
         );
-        assert_eq!(activity_tool_icon("task", ActivityKind::Tool), "icons/bot.svg");
+        assert_eq!(
+            activity_tool_icon("task", ActivityKind::Tool),
+            "icons/bot.svg"
+        );
         assert_eq!(
             activity_tool_icon("AskUserQuestion", ActivityKind::Tool),
             "icons/info.svg"

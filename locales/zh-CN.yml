@@ -320,6 +320,12 @@ mcp.duplicate_variable: 该名称已在此列表中使用
 mcp.hint_need_command: 请输入启动服务器的命令。
 mcp.hint_invalid_url: URL 必须以 http:// 或 https:// 开头。
 mcp.sync_failed: "无法更新 OpenCode 的 MCP 配置:%{error}"
+mcp.status_connected: 已连接
+mcp.status_pending: 连接中…
+mcp.status_disabled: 已停用
+mcp.status_failed: 连接失败
+mcp.status_needs_auth: 需要登录
+mcp.status_refresh_hint: "状态来自 %{name} 所在工作区正在运行的 OpenCode 服务器,打开本页或切换服务器开关时刷新。"
 mcp.managed_note: 此名单来自 OpenCode 自己的配置文件(opencode.json)的 mcp.servers。CLI 与 TUI 看到的是同一批服务器,OpenCode 会热加载该文件。timeout、cwd、oauth 等额外字段会原样保留。
 
 mcp_market.search_placeholder: 搜索市场…

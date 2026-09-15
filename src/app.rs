@@ -1473,6 +1473,11 @@ pub struct Fintwind {
     /// Generation token for the background config load; a newer load
     /// supersedes an older one's result.
     mcp_load_generation: usize,
+    /// The MCP servers' live connection statuses from the workspace's
+    /// OpenCode server, keyed by server name. `None` means "not yet known"
+    /// and renders nothing rather than a stale state.
+    mcp_statuses: Option<HashMap<String, mcp_page::McpStatusEntry>>,
+    mcp_status_generation: u64,
     /// The MCP list pane's search field.
     mcp_search: Entity<ComposerInput>,
     /// The selected server's editable connection fields, one per kind.
@@ -3014,6 +3019,8 @@ impl Fintwind {
                 mcp_commit_generation: 0,
                 mcp_servers: Vec::new(),
                 mcp_load_generation: 0,
+                mcp_statuses: None,
+                mcp_status_generation: 0,
                 mcp_search,
                 mcp_command_input,
                 mcp_url_input,

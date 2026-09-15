@@ -328,6 +328,12 @@ mcp.duplicate_variable: この名前はこの表で既に使われています
 mcp.hint_need_command: サーバーを起動するコマンドを入力してください。
 mcp.hint_invalid_url: URLは http:// または https:// で始まる必要があります。
 mcp.sync_failed: "OpenCodeのMCP設定を更新できませんでした:%{error}"
+mcp.status_connected: 接続済み
+mcp.status_pending: 接続中…
+mcp.status_disabled: 無効
+mcp.status_failed: 接続に失敗しました
+mcp.status_needs_auth: ログインが必要です
+mcp.status_refresh_hint: "状態は %{name} のワークスペースで実行中の OpenCode サーバーから取得され、このページを開いたときやサーバーの切り替え時に更新されます。"
 mcp.managed_note: このリストはOpenCode自身の設定ファイル(opencode.json)の mcp.servers です。CLIとTUIも同じサーバーを使い、OpenCodeはファイルをホットリロードします。timeout、cwd、oauth などの追加フィールドはそのまま保持されます。
 
 mcp_market.search_placeholder: マーケットを検索…

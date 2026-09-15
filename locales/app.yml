@@ -574,15 +574,15 @@ mcp.oauth_client_secret_placeholder:
 mcp.oauth_scope_placeholder:
   en: "e.g. tools:read tools:execute"
 mcp.oauth_note:
-  en: Automatic lets OpenCode sign in when the server returns 401. Sign in in browser opens the provider's login page now. Disable this for API keys in headers.
+  en: Remote servers use OAuth unless this is disabled. Sign in in browser starts the flow on the running OpenCode server and opens the provider's login page. Credentials stay outside the config file. Disable this for API keys in headers.
 mcp.oauth_sign_in:
   en: Sign in in browser
-mcp.oauth_signing_in:
-  en: Waiting for browser…
+mcp.oauth_cancel:
+  en: Cancel sign-in
+mcp.oauth_cancelled:
+  en: Browser sign-in cancelled
 mcp.oauth_signed_in:
   en: "Signed in to %{name}"
-mcp.oauth_sign_in_failed:
-  en: Browser sign-in did not finish
 mcp.oauth_sign_in_failed_detail:
   en: "Browser sign-in failed: %{error}"
 mcp.oauth_missing_opencode:
@@ -634,7 +634,7 @@ mcp.hint_invalid_url:
 mcp.sync_failed:
   en: "Could not update OpenCode's MCP configuration: %{error}"
 mcp.managed_note:
-  en: This roster is the mcp section of OpenCode's own configuration file (opencode.json). The CLI and TUI see the same servers, and OpenCode hot-reloads the file. Extra fields like timeout, cwd, or oauth are preserved.
+  en: This roster is mcp.servers in OpenCode's own configuration file (opencode.json). The CLI and TUI see the same servers, and OpenCode hot-reloads the file. Extra fields like timeout, cwd, or oauth are preserved.
 
 mcp_market.search_placeholder:
   en: Search the marketplace…

@@ -186,6 +186,19 @@ pub enum Command {
         directory: PathBuf,
         session_id: String,
     },
+    /// Run `opencode mcp auth <name>` on the daemon, open the CLI-printed
+    /// authorization URL in the browser, and wait for the flow to finish.
+    /// Tokens stay in OpenCode's store, not in opencode.json.
+    AuthenticateMcpServer {
+        binary: PathBuf,
+        directory: PathBuf,
+        name: String,
+    },
+    /// Kill the pending `opencode mcp auth` child for `name`. Ack succeeds
+    /// whether or not a flow was running, so the button is idempotent.
+    CancelAuthenticateMcpServer {
+        name: String,
+    },
     HydrateSession {
         session_id: Uuid,
     },

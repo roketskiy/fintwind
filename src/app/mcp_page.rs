@@ -3,13 +3,14 @@
 //! connection and variables on the right, or the add-server form in the
 //! detail's place.
 //!
-//! The roster is the top-level `mcp` map of OpenCode's own configuration
-//! file (`~/.config/opencode/opencode.json`), loaded when the page opens and
+//! The roster is `mcp.servers` in OpenCode's own configuration file
+//! (`~/.config/opencode/opencode.json`), loaded when the page opens and
 //! committed straight back on every mutation — the same single-source-of-
 //! truth contract as the Providers page, so entries added with the CLI, the
 //! TUI, or an editor are the same data. OpenCode watches the file and
 //! hot-reloads, so a commit reaches running `opencode serve` processes
-//! without a restart.
+//! without a restart. Remote OAuth runs `opencode mcp auth <name>` on the
+//! daemon and opens the CLI-printed authorization URL in the browser.
 //!
 //! Field edits debounce their commit; discrete actions (add, delete, toggle,
 //! rename, re-type) commit immediately, the same one-shot-action allowance
@@ -157,27 +158,6 @@ fn mcp_url_valid(url: &str) -> bool {
     url.starts_with("http://") || url.starts_with("https://")
 }
 
-fn run_opencode_mcp_auth(
-    binary: &std::path::Path,
-    name: &str,
-) -> std::io::Result<std::process::Output> {
-    let mut command = std::process::Command::new(binary);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt as _;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    command
-        .arg("mcp")
-        .arg("auth")
-        .arg(name)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-}
-
 /// The one-line summary under a server's name: the command it launches or
 /// the endpoint it serves, exactly what identifies it in the config file.
 fn mcp_row_caption(server: &McpServer) -> String {
@@ -285,7 +265,7 @@ impl Fintwind {
 
     // ── Persistence ────────────────────────────────────────────────────────
 
-    /// Load the roster from the `mcp` map of OpenCode's own configuration
+    /// Load the roster from `mcp.servers` in OpenCode's own configuration
     /// off-thread. The result replaces the working store unless a newer load
     /// started or a debounced field edit is pending.
     pub(super) fn load_mcp_servers_from_config(&mut self, cx: &mut Context<Self>) {
@@ -545,6 +525,25 @@ impl Fintwind {
         }
     }
 
+    fn mcp_auth_directory(&self) -> PathBuf {
+        self.state
+            .selected_project
+            .and_then(|project_id| {
+                self.state
+                    .projects
+                    .iter()
+                    .find(|project| project.id == project_id)
+                    .map(|project| project.path.clone())
+            })
+            .or_else(|| {
+                self.state
+                    .projects
+                    .first()
+                    .map(|project| project.path.clone())
+            })
+            .unwrap_or_else(|| dirs::home_dir().unwrap_or_else(std::env::temp_dir))
+    }
+
     fn start_mcp_oauth_login(&mut self, name: String, cx: &mut Context<Self>) {
         if self.mcp_oauth_auth_name.is_some() {
             return;
@@ -557,11 +556,17 @@ impl Fintwind {
         self.mcp_oauth_auth_generation += 1;
         let generation = self.mcp_oauth_auth_generation;
         self.mcp_oauth_auth_name = Some(name.clone());
+        let directory = self.mcp_auth_directory();
+        let daemon = self.daemon.clone();
+        self.mcp_oauth_cancel_requested = false;
         cx.notify();
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { run_opencode_mcp_auth(&binary, &name) })
+                .spawn(async move {
+                    fintwind_client::persistence::StateStore::remote(daemon)
+                        .authenticate_mcp_server(binary, directory, name)
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.mcp_oauth_auth_generation != generation {
@@ -569,36 +574,48 @@ impl Fintwind {
                 }
                 let finished = this.mcp_oauth_auth_name.take();
                 match result {
-                    Ok(output) if output.status.success() => {
+                    Ok(()) => {
                         let name = finished.unwrap_or_default();
                         this.show_success_toast(tr!("mcp.oauth_signed_in", name = name));
                     }
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let detail = stderr.trim();
-                        let detail = if detail.is_empty() {
-                            stdout.trim()
-                        } else {
-                            detail
-                        };
-                        this.show_toast(if detail.is_empty() {
-                            tr!("mcp.oauth_sign_in_failed")
-                        } else {
-                            tr!("mcp.oauth_sign_in_failed_detail", error = detail)
-                        });
-                    }
                     Err(error) => {
-                        this.show_toast(tr!(
-                            "mcp.oauth_sign_in_failed_detail",
-                            error = error.to_string()
-                        ));
+                        if this.mcp_oauth_cancel_requested {
+                            this.show_toast(tr!("mcp.oauth_cancelled"));
+                        } else {
+                            this.show_toast(tr!(
+                                "mcp.oauth_sign_in_failed_detail",
+                                error = error.to_string()
+                            ));
+                        }
                     }
                 }
+                this.mcp_oauth_cancel_requested = false;
                 cx.notify();
             });
         })
         .detach();
+    }
+
+    /// Fire the daemon cancel for the running browser sign-in. The pending
+    /// login RPC fails on its own request thread, so this only needs the ack;
+    /// `mcp_oauth_auth_name` clears when that failure lands.
+    fn cancel_mcp_oauth_login(&mut self, cx: &mut Context<Self>) {
+        let Some(name) = self.mcp_oauth_auth_name.clone() else {
+            return;
+        };
+        self.mcp_oauth_cancel_requested = true;
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |_, cx| {
+            let _ = cx
+                .background_executor()
+                .spawn(async move {
+                    let _ = fintwind_client::persistence::StateStore::remote(daemon)
+                        .cancel_mcp_server(name);
+                })
+                .await;
+        })
+        .detach();
+        cx.notify();
     }
 
     fn begin_mcp_rename(&mut self, cx: &mut Context<Self>) {
@@ -611,7 +628,7 @@ impl Fintwind {
         cx.notify();
     }
 
-    /// Renaming an MCP server rewrites its key in the `mcp` map, so a name
+    /// Renaming an MCP server rewrites its key in `mcp.servers`, so a name
     /// must stay unique on the roster.
     pub(super) fn confirm_mcp_rename(&mut self, cx: &mut Context<Self>) {
         if !self.mcp_renaming {
@@ -1442,40 +1459,59 @@ impl Fintwind {
             let waiting = self.mcp_oauth_auth_name.as_deref() == Some(server.name.as_str());
             let name = server.name.clone();
             let accent = mcp_accent(theme);
-            section = section.child(
-                small_action_button(
-                    "mcp-oauth-sign-in",
-                    "icons/external-link.svg",
-                    if waiting {
-                        tr!("mcp.oauth_signing_in")
-                    } else {
-                        tr!("mcp.oauth_sign_in")
-                    },
-                    if authenticating {
-                        theme.text_tertiary
-                    } else {
-                        accent
-                    },
-                    theme,
-                )
-                .when(!authenticating, |element| {
-                    element
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.start_mcp_oauth_login(name.clone(), cx);
-                        }))
-                        .on_key_down({
-                            let name = server.name.clone();
-                            cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                                if !event.keystroke.modifiers.modified()
-                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                                {
-                                    this.start_mcp_oauth_login(name.clone(), cx);
-                                    cx.stop_propagation();
-                                }
+            if waiting {
+                section = section.child(
+                    small_action_button(
+                        "mcp-oauth-cancel",
+                        "icons/stop.svg",
+                        tr!("mcp.oauth_cancel"),
+                        theme.text_secondary,
+                        theme,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.cancel_mcp_oauth_login(cx);
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if !event.keystroke.modifiers.modified()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            this.cancel_mcp_oauth_login(cx);
+                            cx.stop_propagation();
+                        }
+                    })),
+                );
+            } else {
+                section = section.child(
+                    small_action_button(
+                        "mcp-oauth-sign-in",
+                        "icons/external-link.svg",
+                        tr!("mcp.oauth_sign_in"),
+                        if authenticating {
+                            theme.text_tertiary
+                        } else {
+                            accent
+                        },
+                        theme,
+                    )
+                    .when(!authenticating, |element| {
+                        element
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.start_mcp_oauth_login(name.clone(), cx);
+                            }))
+                            .on_key_down({
+                                let name = server.name.clone();
+                                cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                                    if !event.keystroke.modifiers.modified()
+                                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                    {
+                                        this.start_mcp_oauth_login(name.clone(), cx);
+                                        cx.stop_propagation();
+                                    }
+                                })
                             })
-                        })
-                }),
-            );
+                    }),
+                );
+            }
         }
         Some(section)
     }

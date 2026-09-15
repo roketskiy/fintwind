@@ -290,11 +290,11 @@ mcp.oauth_scope: Scope
 mcp.oauth_client_id_placeholder: "{env:MCP_CLIENT_ID}"
 mcp.oauth_client_secret_placeholder: "{env:MCP_CLIENT_SECRET}"
 mcp.oauth_scope_placeholder: 例如 tools:read tools:execute
-mcp.oauth_note: 自动模式下，服务器返回 401 时 OpenCode 会拉起网页登录。也可现在点「在浏览器中登录」。若只用请求头里的 API 密钥，请关闭。
+mcp.oauth_note: 远程服务器默认走 OAuth。点「在浏览器中登录」会通过正在运行的 OpenCode 拉起网页授权，凭据存在配置文件之外。只用请求头里的 API 密钥时请关闭。
 mcp.oauth_sign_in: 在浏览器中登录
-mcp.oauth_signing_in: 等待浏览器…
+mcp.oauth_cancel: 终止登录
+mcp.oauth_cancelled: 已终止浏览器登录
 mcp.oauth_signed_in: "已登录 %{name}"
-mcp.oauth_sign_in_failed: 浏览器登录未完成
 mcp.oauth_sign_in_failed_detail: "浏览器登录失败：%{error}"
 mcp.oauth_missing_opencode: 未找到 OpenCode，无法打开浏览器登录。
 mcp.no_connection: 尚无命令或 URL
@@ -320,7 +320,7 @@ mcp.duplicate_variable: 该名称已在此列表中使用
 mcp.hint_need_command: 请输入启动服务器的命令。
 mcp.hint_invalid_url: URL 必须以 http:// 或 https:// 开头。
 mcp.sync_failed: "无法更新 OpenCode 的 MCP 配置:%{error}"
-mcp.managed_note: 此名单来自 OpenCode 自己的配置文件(opencode.json)的 mcp 段。CLI 与 TUI 看到的是同一批服务器,OpenCode 会热加载该文件。timeout、cwd、oauth 等额外字段会原样保留。
+mcp.managed_note: 此名单来自 OpenCode 自己的配置文件(opencode.json)的 mcp.servers。CLI 与 TUI 看到的是同一批服务器,OpenCode 会热加载该文件。timeout、cwd、oauth 等额外字段会原样保留。
 
 mcp_market.search_placeholder: 搜索市场…
 mcp_market.filter_all: 全部

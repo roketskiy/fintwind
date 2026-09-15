@@ -696,19 +696,31 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
             } else {
                 if !content.trim().is_empty() {
                     let body = render_markdown_message_body(&content, markdown, theme, ctx);
-                    column = column.child(
+                    // `w_full()` + `max_w` on a column child measures height at
+                    // the unclamped width (Taffy). Put width on the main axis
+                    // so max_w is applied before the text is measured.
+                    let bubble = div()
+                        .max_w(px(540.0))
+                        .min_w_0()
+                        .when(user_message_fill_width, |element| element.w_full())
+                        .rounded(px(12.0))
+                        .bg(theme.raised)
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .text_size(ui_px(14.0))
+                        .line_height(ui_px(20.0))
+                        .child(body);
+                    column = column.child(if user_message_fill_width {
                         div()
-                            .max_w(px(540.0))
+                            .w_full()
                             .min_w_0()
-                            .when(user_message_fill_width, |element| element.w_full())
-                            .rounded(px(12.0))
-                            .bg(theme.raised)
-                            .px(px(12.0))
-                            .py(px(8.0))
-                            .text_size(ui_px(14.0))
-                            .line_height(ui_px(20.0))
-                            .child(body),
-                    );
+                            .flex()
+                            .flex_row()
+                            .justify_end()
+                            .child(bubble)
+                    } else {
+                        bubble
+                    });
                 }
                 column = column.child(render_message_footer(
                     theme,

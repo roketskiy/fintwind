@@ -1,6 +1,6 @@
 # Bug 调查报告：子代理面板的用户气泡随面板变宽而变矮
 
-日期：2026-09-15　|　现场：`dev` 运行中的构建（截图 21:03）　|　状态：已定位根因，未修复
+日期：2026-09-15　|　现场：`dev` 运行中的构建（截图 21:03）　|　状态：已修复
 
 ## 现象
 
@@ -68,15 +68,13 @@
 - 滚动：滚动内容高度按错误的框高累加，溢出到父级高度之外的部分可能滚不到底。
 - 选择：`md::render::selection` 的选取几何基于实际文本布局，与气泡背景不一致；跨行复制体验受损。
 
-## 修复方向（未实施）
+## 修复
 
-根因是「列容器里 `width:100%` + `max-width` 的交叉轴夹取没有进入子内容的已知宽度」。让宽度变成**主轴**即可：
+根因是「列容器里 `width:100%` + `max-width` 的交叉轴夹取没有进入子内容的已知宽度」。让宽度变成**主轴**：
 
-- 在气泡外套一层 `div().w_full().flex().flex_row().justify_end()`，气泡本身保留 `max_w(540)`（去掉 `w_full()`）。
-  这样 Taffy 会先在 `resolve_flexible_lengths` 里把宽度夹到 540，再由 `determine_hypothetical_cross_size`（`is_row` 分支用 `child.target_size.width`）以 540 去测量高度，测量宽度与绘制宽度一致。
-- 备选：完全不用 `w_full()` + `max_w` 组合，改用不依赖交叉轴夹取的显式宽度写法。
+在 `user_message_fill_width` 路径下，气泡外套一层 `div().w_full().flex().flex_row().justify_end()`，气泡本身保留 `max_w(540)` 与 `w_full()`。Taffy 会先在 `resolve_flexible_lengths` 里把宽度夹到 540，再由 `determine_hypothetical_cross_size`（`is_row` 分支用 `child.target_size.width`）以 540 去测量高度，测量宽度与绘制宽度一致。
 
-两种都只影响子代理面板（`user_message_fill_width: true`）的路径；主会话传 `false`，行为不变。
+主会话仍传 `user_message_fill_width: false`，不走这层包装，行为不变。
 
 ## 复现与验证
 

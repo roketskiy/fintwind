@@ -251,6 +251,7 @@ enum SettingsPage {
     Providers,
     Skills,
     McpServers,
+    McpMarket,
     Daemon,
     Appearance,
 }
@@ -1477,6 +1478,12 @@ pub struct Fintwind {
     /// The selected server's editable connection fields, one per kind.
     mcp_command_input: Entity<ComposerInput>,
     mcp_url_input: Entity<ComposerInput>,
+    mcp_oauth_client_id: Entity<ComposerInput>,
+    mcp_oauth_client_secret: Entity<ComposerInput>,
+    mcp_oauth_scope: Entity<ComposerInput>,
+    /// Remote MCP OAuth currently waiting on the browser; `None` if idle.
+    mcp_oauth_auth_name: Option<String>,
+    mcp_oauth_auth_generation: u64,
     mcp_rename_input: Entity<ComposerInput>,
     /// Shared key and value fields of the inline variable editor.
     mcp_variable_key_input: Entity<ComposerInput>,
@@ -1492,6 +1499,9 @@ pub struct Fintwind {
     mcp_list_scrollbar: Rc<ScrollbarState>,
     mcp_detail_scroll: ScrollHandle,
     mcp_detail_scrollbar: Rc<ScrollbarState>,
+    mcp_market_search: Entity<ComposerInput>,
+    mcp_market_category: mcp_market_page::McpMarketCategory,
+    mcp_market_selected: Option<String>,
     /// Scroll position of the settings content column, tracked so the pane
     /// can draw a scrollbar and mark the titlebar boundary once content
     /// slides under it.
@@ -1648,6 +1658,7 @@ mod composer;
 mod drafts;
 mod file_search;
 mod image_preview;
+mod mcp_market_page;
 mod mcp_page;
 mod native_sessions;
 mod providers_fetch;
@@ -1673,6 +1684,7 @@ pub use command_palette::init as init_command_palette;
 pub use commit_dialog::init as init_commit_dialog_keys;
 use components::*;
 pub use image_preview::init as init_image_preview_keys;
+pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
 use sidebar::SidebarRow;
 pub use sidebar::init as init_sidebar_keys;
@@ -2013,6 +2025,11 @@ impl Fintwind {
                 .search_field()
                 .placeholder(tr!("mcp.search_placeholder"))
         });
+        let mcp_market_search = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp_market.search_placeholder"))
+        });
         let mcp_command_input = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
@@ -2022,6 +2039,21 @@ impl Fintwind {
             ComposerInput::new(window, cx)
                 .search_field()
                 .placeholder(tr!("mcp.url_placeholder"))
+        });
+        let mcp_oauth_client_id = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.oauth_client_id_placeholder"))
+        });
+        let mcp_oauth_client_secret = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.oauth_client_secret_placeholder"))
+        });
+        let mcp_oauth_scope = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("mcp.oauth_scope_placeholder"))
         });
         let mcp_rename_input = cx.new(|cx| ComposerInput::new(window, cx).search_field());
         let mcp_variable_key_input = cx.new(|cx| {
@@ -2582,9 +2614,24 @@ impl Fintwind {
                 }
             })
             .detach();
+            cx.subscribe(
+                &mcp_market_search,
+                |_: &mut Self, _, event: &ComposerEvent, cx| {
+                    if matches!(event, ComposerEvent::Edited) {
+                        cx.notify();
+                    }
+                },
+            )
+            .detach();
             for (input, field) in [
                 (&mcp_command_input, mcp_page::McpField::Command),
                 (&mcp_url_input, mcp_page::McpField::Url),
+                (&mcp_oauth_client_id, mcp_page::McpField::OAuthClientId),
+                (
+                    &mcp_oauth_client_secret,
+                    mcp_page::McpField::OAuthClientSecret,
+                ),
+                (&mcp_oauth_scope, mcp_page::McpField::OAuthScope),
             ] {
                 cx.subscribe(input, move |this, input, event: &ComposerEvent, cx| {
                     if matches!(event, ComposerEvent::Edited) {
@@ -2967,6 +3014,11 @@ impl Fintwind {
                 mcp_search,
                 mcp_command_input,
                 mcp_url_input,
+                mcp_oauth_client_id,
+                mcp_oauth_client_secret,
+                mcp_oauth_scope,
+                mcp_oauth_auth_name: None,
+                mcp_oauth_auth_generation: 0,
                 mcp_rename_input,
                 mcp_variable_key_input,
                 mcp_variable_value_input,
@@ -2978,6 +3030,9 @@ impl Fintwind {
                 mcp_list_scrollbar: ScrollbarState::new(),
                 mcp_detail_scroll: ScrollHandle::new(),
                 mcp_detail_scrollbar: ScrollbarState::new(),
+                mcp_market_search,
+                mcp_market_category: Default::default(),
+                mcp_market_selected: None,
                 settings_scroll: ScrollHandle::new(),
                 settings_scrollbar: ScrollbarState::new(),
                 header_drag_armed: false,

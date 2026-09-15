@@ -67,6 +67,8 @@ settings.back: 戻る
 settings.search: 設定を検索
 settings.mcp_servers: MCPサーバー
 settings.mcp_servers_keywords: MCP サーバー ツール stdio http sse ローカル リモート npx 環境変数 ヘッダー
+settings.mcp_market: MCPマーケット
+settings.mcp_market_keywords: MCP マーケット smithery ウェブ検索 学術 論文 コード インストール context7 github arxiv pubmed brave exa tavily
 daemon.expose_title: 管理対象デーモンを公開
 daemon.expose_description: このマシン以外の fintwind クライアントから接続できるようにします。変更時はデーモンだけが再起動します。
 daemon.status_local: このマシンのみ
@@ -286,6 +288,23 @@ mcp.command_label: コマンド
 mcp.command_placeholder: "例: npx -y @antv/mcp-server-chart"
 mcp.url_label: URL
 mcp.url_placeholder: "https://mcp.example.com"
+mcp.oauth_label: OAuth
+mcp.oauth_automatic: 自動
+mcp.oauth_disabled: 無効
+mcp.oauth_custom: カスタムクライアント
+mcp.oauth_client_id: Client ID
+mcp.oauth_client_secret: Client secret
+mcp.oauth_scope: Scope
+mcp.oauth_client_id_placeholder: "{env:MCP_CLIENT_ID}"
+mcp.oauth_client_secret_placeholder: "{env:MCP_CLIENT_SECRET}"
+mcp.oauth_scope_placeholder: "例: tools:read tools:execute"
+mcp.oauth_note: 自動では、サーバーが 401 を返したときに OpenCode がブラウザログインを開始します。「ブラウザでログイン」で今すぐ開けます。ヘッダーの API キーだけを使う場合は無効にしてください。
+mcp.oauth_sign_in: ブラウザでログイン
+mcp.oauth_signing_in: ブラウザを待っています…
+mcp.oauth_signed_in: "%{name} にログインしました"
+mcp.oauth_sign_in_failed: ブラウザログインが完了しませんでした
+mcp.oauth_sign_in_failed_detail: "ブラウザログインに失敗しました: %{error}"
+mcp.oauth_missing_opencode: OpenCode が見つからないため、ブラウザログインを開始できません。
 mcp.no_connection: コマンドまたはURLがまだありません
 mcp.environment_label: 環境変数
 mcp.headers_label: ヘッダー
@@ -310,6 +329,47 @@ mcp.hint_need_command: サーバーを起動するコマンドを入力してく
 mcp.hint_invalid_url: URLは http:// または https:// で始まる必要があります。
 mcp.sync_failed: "OpenCodeのMCP設定を更新できませんでした:%{error}"
 mcp.managed_note: このリストはOpenCode自身の設定ファイル(opencode.json)のmcpセクションです。CLIとTUIも同じサーバーを使い、OpenCodeはファイルをホットリロードします。timeout、cwd、oauth などの追加フィールドはそのまま保持されます。
+
+mcp_market.search_placeholder: マーケットを検索…
+mcp_market.filter_all: すべて
+mcp_market.filter_web: ウェブ検索
+mcp_market.filter_academic: 学術
+mcp_market.filter_code: コード
+mcp_market.install: 追加
+mcp_market.installed: 追加済み
+mcp_market.available: 追加可能
+mcp_market.remove: 削除
+mcp_market.open_servers: MCPサーバーで開く
+mcp_market.open_smithery: Smitheryで開く
+mcp_market.source: Smithery
+mcp_market.auth_note: 追加後にAPIキーやサインインが必要な場合があります。ヘッダーやOAuthはMCPサーバーページで設定できます。
+mcp_market.empty: 一致するサーバーがありません
+mcp_market.subtitle: Smitheryから選んだウェブ検索、学術、コード向けMCPサーバーです。
+mcp_market.count: "%{count} 個のサーバー"
+mcp_market.filter_caption: "%{shown} / %{total}"
+mcp_market.added_toast: "%{name} を追加しました"
+mcp_market.removed_toast: "%{name} を削除しました"
+mcp_market.note: 追加するとリモートMCPサーバーがOpenCodeの設定に書き込まれます。OpenCodeはファイルをホットリロードするので、次のタスクから使えます。
+mcp_market.desc.brave: Braveの独自インデックスでウェブ、ニュース、画像、動画を検索します。
+mcp_market.desc.exa: 高速なウェブ検索とページ取得。ライブラリ、API、最新の事実に強いです。
+mcp_market.desc.tavily: AI向けのウェブ検索。クリーンなスニペット、出典URL、任意のクロールに対応します。
+mcp_market.desc.keenable: 無料のリモートウェブ検索。ページをMarkdownで取得できます。アカウントもAPIキーも不要です。
+mcp_market.desc.parallel: AIエージェント向けの高精度ウェブ検索です。
+mcp_market.desc.linkup: 出典付きの回答と最新ニュースを返すリアルタイムウェブ検索です。
+mcp_market.desc.brightdata: 公開ウェブページの検索、クロール、抽出。ブロックされにくくします。
+mcp_market.desc.pubmed: MEDLINEの生物医学文献を検索し、論文、抄録、関連記事を見つけます。
+mcp_market.desc.arxiv: タイトル、著者、抄録、カテゴリでarXiv論文を検索・取得します。
+mcp_market.desc.consensus: 学術論文を検索し、文献から根拠のある知見を取り出します。
+mcp_market.desc.paper_search: arXiv、PubMed、bioRxiv、Semantic Scholar、Google Scholarを1つのサーバーで検索します。
+mcp_market.desc.semantic_scholar: Semantic ScholarとarXivを検索し、引用分析とオープンアクセスPDFに対応します。
+mcp_market.desc.huggingface: Hugging Faceハブでモデル、データセット、ドキュメントを見つけます。
+mcp_market.desc.wikipedia: Wikipediaを検索し、要約や全文を読み、セクションへ移動します。
+mcp_market.desc.context7: 最新でバージョン指定のライブラリドキュメントとコード例をプロンプトに取り込みます。
+mcp_market.desc.github: GitHubのリポジトリ、Issue、プルリクエスト、ワークフローを操作します。
+mcp_market.desc.deepwiki: GitHubリポジトリのドキュメントをトピック別に調べ、プロジェクトについて質問できます。
+mcp_market.desc.grep: 公開GitHubの実コードから構文、API、本番の使い方を検索します。
+mcp_market.desc.microsoft_learn: Azureや.NETなど、Microsoft公式ドキュメントです。
+mcp_market.desc.gread: 公開GitHubリポジトリのソースを読みます。ドキュメント用リポジトリがあれば合わせて提供します。
 
 common.settings: 設定
 common.copy: コピー

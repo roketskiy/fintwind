@@ -298,11 +298,11 @@ mcp.oauth_scope: Scope
 mcp.oauth_client_id_placeholder: "{env:MCP_CLIENT_ID}"
 mcp.oauth_client_secret_placeholder: "{env:MCP_CLIENT_SECRET}"
 mcp.oauth_scope_placeholder: "例: tools:read tools:execute"
-mcp.oauth_note: 自動では、サーバーが 401 を返したときに OpenCode がブラウザログインを開始します。「ブラウザでログイン」で今すぐ開けます。ヘッダーの API キーだけを使う場合は無効にしてください。
+mcp.oauth_note: リモートサーバーは無効にしない限り OAuth を使います。「ブラウザでログイン」は実行中の OpenCode サーバーでフローを開始し、プロバイダのログインページを開きます。資格情報は設定ファイルの外に保存されます。ヘッダーの API キーだけを使う場合は無効にしてください。
 mcp.oauth_sign_in: ブラウザでログイン
-mcp.oauth_signing_in: ブラウザを待っています…
+mcp.oauth_cancel: ログインをキャンセル
+mcp.oauth_cancelled: ブラウザログインをキャンセルしました
 mcp.oauth_signed_in: "%{name} にログインしました"
-mcp.oauth_sign_in_failed: ブラウザログインが完了しませんでした
 mcp.oauth_sign_in_failed_detail: "ブラウザログインに失敗しました: %{error}"
 mcp.oauth_missing_opencode: OpenCode が見つからないため、ブラウザログインを開始できません。
 mcp.no_connection: コマンドまたはURLがまだありません
@@ -328,7 +328,7 @@ mcp.duplicate_variable: この名前はこの表で既に使われています
 mcp.hint_need_command: サーバーを起動するコマンドを入力してください。
 mcp.hint_invalid_url: URLは http:// または https:// で始まる必要があります。
 mcp.sync_failed: "OpenCodeのMCP設定を更新できませんでした:%{error}"
-mcp.managed_note: このリストはOpenCode自身の設定ファイル(opencode.json)のmcpセクションです。CLIとTUIも同じサーバーを使い、OpenCodeはファイルをホットリロードします。timeout、cwd、oauth などの追加フィールドはそのまま保持されます。
+mcp.managed_note: このリストはOpenCode自身の設定ファイル(opencode.json)の mcp.servers です。CLIとTUIも同じサーバーを使い、OpenCodeはファイルをホットリロードします。timeout、cwd、oauth などの追加フィールドはそのまま保持されます。
 
 mcp_market.search_placeholder: マーケットを検索…
 mcp_market.filter_all: すべて

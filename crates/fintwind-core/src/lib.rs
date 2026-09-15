@@ -28,6 +28,7 @@ pub mod git_branch;
 pub mod git_commit;
 pub mod i18n;
 pub mod identity;
+pub mod mcp_auth;
 pub mod model;
 pub mod model_catalog;
 pub mod opencode_pool;

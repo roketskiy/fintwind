@@ -1484,6 +1484,9 @@ pub struct Fintwind {
     /// Remote MCP OAuth currently waiting on the browser; `None` if idle.
     mcp_oauth_auth_name: Option<String>,
     mcp_oauth_auth_generation: u64,
+    /// Set when the user presses the cancel button, so the login callback
+    /// shows a neutral "cancelled" note instead of a failure.
+    mcp_oauth_cancel_requested: bool,
     mcp_rename_input: Entity<ComposerInput>,
     /// Shared key and value fields of the inline variable editor.
     mcp_variable_key_input: Entity<ComposerInput>,
@@ -3019,6 +3022,7 @@ impl Fintwind {
                 mcp_oauth_scope,
                 mcp_oauth_auth_name: None,
                 mcp_oauth_auth_generation: 0,
+                mcp_oauth_cancel_requested: false,
                 mcp_rename_input,
                 mcp_variable_key_input,
                 mcp_variable_value_input,

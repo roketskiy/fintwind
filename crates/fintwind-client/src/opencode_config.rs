@@ -399,8 +399,8 @@ fn write_mcp_oauth(entry: &mut Map<String, Value>, oauth: &McpOAuth) {
         }
         McpOAuthMode::Custom => {
             let mut map = Map::new();
-            set_or_remove_string(&mut map, "clientId", &oauth.client_id);
-            set_or_remove_string(&mut map, "clientSecret", &oauth.client_secret);
+            set_or_remove_string(&mut map, "client_id", &oauth.client_id);
+            set_or_remove_string(&mut map, "client_secret", &oauth.client_secret);
             set_or_remove_string(&mut map, "scope", &oauth.scope);
             entry.insert("oauth".into(), Value::Object(map));
         }
@@ -416,14 +416,16 @@ fn set_or_remove_string(map: &mut Map<String, Value>, key: &str, value: &str) {
     }
 }
 
-/// One MCP server under opencode.json's top-level `mcp` map. Verified
-/// against opencode's published schema: a `local` server carries `command`
-/// (an argv vector) plus `environment`, a `remote` server carries `url`
-/// plus `headers` and optional `oauth`; both may carry `enabled` and unknown
-/// fields (`cwd`, `timeout`, …) which ride along in [`McpServer::raw`].
+/// One MCP server under opencode.json's `mcp.servers` map. Verified
+/// against OpenCode V2: a `local` server carries `command` (an argv vector)
+/// plus `environment`, a `remote` server carries `url` plus `headers` and
+/// optional `oauth`; both may carry `disabled` and unknown fields (`cwd`,
+/// `timeout`, …) which ride along in [`McpServer::raw`]. V1 files that still
+/// place server names directly under `mcp` are read and rewritten into
+/// `mcp.servers`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct McpServer {
-    /// The entry's key in the `mcp` map — also its display name.
+    /// The entry's key in `mcp.servers` — also its display name.
     pub name: String,
     pub kind: McpServerKind,
     /// `local` only: the argv vector the server is launched with.
@@ -491,17 +493,28 @@ pub fn load_mcp_servers_at(path: &Path) -> io::Result<Vec<McpServer>> {
     let bytes = std::fs::read(path)?;
     let document: Value = serde_json::from_slice(&bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    let servers = document
-        .get("mcp")
-        .and_then(Value::as_object)
-        .map(|entries| {
+    let servers = match document.get("mcp").and_then(Value::as_object) {
+        Some(mcp) => {
+            let (entries, nested) = match mcp.get("servers").and_then(Value::as_object) {
+                Some(servers) => (servers, true),
+                None => (mcp, false),
+            };
             entries
                 .iter()
+                .filter(|(key, entry)| nested || (*key != "timeout" && is_mcp_server_entry(entry)))
                 .map(|(key, entry)| mcp_server_from_config(key, entry))
                 .collect()
-        })
-        .unwrap_or_default();
+        }
+        None => Vec::new(),
+    };
     Ok(servers)
+}
+
+fn is_mcp_server_entry(entry: &Value) -> bool {
+    let Some(object) = entry.as_object() else {
+        return false;
+    };
+    object.contains_key("type") || object.contains_key("command") || object.contains_key("url")
 }
 
 fn mcp_server_from_config(key: &str, entry: &Value) -> McpServer {
@@ -552,14 +565,19 @@ fn mcp_server_from_config(key: &str, entry: &Value) -> McpServer {
         environment: string_pairs("environment"),
         headers: string_pairs("headers"),
         oauth: mcp_oauth_from_config(entry),
-        // OpenCode runs servers whose entries omit `enabled`, so absence
-        // loads as on and the UI's toggle then writes the flag explicitly.
-        enabled: entry
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true),
+        enabled: mcp_enabled_from_config(entry),
         raw: entry.clone(),
     }
+}
+
+fn mcp_enabled_from_config(entry: &Value) -> bool {
+    if entry.get("disabled").and_then(Value::as_bool) == Some(true) {
+        return false;
+    }
+    entry
+        .get("enabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 fn mcp_oauth_from_config(entry: &Value) -> McpOAuth {
@@ -569,16 +587,8 @@ fn mcp_oauth_from_config(entry: &Value) -> McpOAuth {
             ..McpOAuth::default()
         },
         Some(Value::Object(map)) => {
-            let client_id = map
-                .get("clientId")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            let client_secret = map
-                .get("clientSecret")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
+            let client_id = oauth_string(map, "client_id", "clientId");
+            let client_secret = oauth_string(map, "client_secret", "clientSecret");
             let scope = map
                 .get("scope")
                 .and_then(Value::as_str)
@@ -602,10 +612,19 @@ fn mcp_oauth_from_config(entry: &Value) -> McpOAuth {
     }
 }
 
-/// Commit the working roster to OpenCode's configuration. The `mcp` map is
+fn oauth_string(map: &Map<String, Value>, snake: &str, camel: &str) -> String {
+    map.get(snake)
+        .or_else(|| map.get(camel))
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// Commit the working roster to OpenCode's configuration. `mcp.servers` is
 /// rebuilt from `servers` (per-entry unknown fields ride along in
-/// [`McpServer::raw`]); everything outside it is preserved. An empty roster
-/// drops the key entirely.
+/// [`McpServer::raw`]); `mcp.timeout` and everything outside `mcp` is
+/// preserved. An empty roster drops `mcp.servers`, and drops `mcp` when
+/// nothing else remains.
 pub fn save_mcp_servers(servers: &[McpServer]) -> io::Result<()> {
     save_mcp_servers_at(&config_path(), servers)
 }
@@ -625,14 +644,22 @@ pub fn save_mcp_servers_at(path: &Path, servers: &[McpServer]) -> io::Result<()>
         Err(error) => return Err(error),
     };
 
-    if servers.is_empty() {
-        document.remove("mcp");
-    } else {
+    let mut mcp = match document.remove("mcp") {
+        Some(Value::Object(existing)) => existing,
+        _ => Map::new(),
+    };
+    mcp.retain(|key, value| key != "servers" && !is_mcp_server_entry(value));
+    if !servers.is_empty() {
         let mut map = Map::new();
         for server in servers {
             map.insert(server.name.clone(), mcp_server_entry(server));
         }
-        document.insert("mcp".into(), Value::Object(map));
+        mcp.insert("servers".into(), Value::Object(map));
+    }
+    if mcp.is_empty() {
+        document.remove("mcp");
+    } else {
+        document.insert("mcp".into(), Value::Object(mcp));
     }
 
     write_json_atomically(path, &Value::Object(document))
@@ -682,7 +709,12 @@ fn mcp_server_entry(server: &McpServer) -> Value {
         }
     }
 
-    entry.insert("enabled".into(), Value::from(server.enabled));
+    entry.remove("enabled");
+    if server.enabled {
+        entry.remove("disabled");
+    } else {
+        entry.insert("disabled".into(), Value::Bool(true));
+    }
     Value::Object(entry)
 }
 
@@ -1250,14 +1282,20 @@ mod tests {
         };
         save_mcp_servers_at(&path, &[automatic, custom]).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert!(saved["mcp"]["auto"].get("oauth").is_none());
-        assert_eq!(saved["mcp"]["custom"]["oauth"]["clientId"], "id");
+        assert!(saved["mcp"]["servers"]["auto"].get("oauth").is_none());
+        assert_eq!(
+            saved["mcp"]["servers"]["custom"]["oauth"]["client_id"],
+            "id"
+        );
         assert!(
-            saved["mcp"]["custom"]["oauth"]
-                .get("clientSecret")
+            saved["mcp"]["servers"]["custom"]["oauth"]
+                .get("client_secret")
                 .is_none()
         );
-        assert_eq!(saved["mcp"]["custom"]["oauth"]["scope"], "tools:read");
+        assert_eq!(
+            saved["mcp"]["servers"]["custom"]["oauth"]["scope"],
+            "tools:read"
+        );
 
         let loaded = load_mcp_servers_at(&path).unwrap();
         let custom = loaded
@@ -1267,6 +1305,55 @@ mod tests {
         assert_eq!(custom.oauth.mode, McpOAuthMode::Custom);
         assert_eq!(custom.oauth.client_id, "id");
         assert_eq!(custom.oauth.scope, "tools:read");
+
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn load_mcp_reads_v2_servers_and_snake_case_oauth() {
+        let directory =
+            std::env::temp_dir().join(format!("fintwind-oc-mcp-v2-{}", std::process::id()));
+        let path = write_fixture(
+            &directory,
+            &serde_json::json!({
+                "$schema": "https://opencode.ai/config.json",
+                "mcp": {
+                    "timeout": { "startup": 45000 },
+                    "servers": {
+                        "sentry": {
+                            "type": "remote",
+                            "url": "https://mcp.sentry.dev/mcp",
+                            "oauth": {
+                                "client_id": "{env:MCP_CLIENT_ID}",
+                                "scope": "tools:read"
+                            }
+                        },
+                        "charts": {
+                            "type": "local",
+                            "command": ["npx", "-y", "chart"],
+                            "disabled": true
+                        }
+                    }
+                }
+            }),
+        );
+
+        let servers = load_mcp_servers_at(&path).unwrap();
+        assert_eq!(servers.len(), 2);
+        let sentry = servers
+            .iter()
+            .find(|server| server.name == "sentry")
+            .unwrap();
+        assert_eq!(sentry.kind, McpServerKind::Remote);
+        assert!(sentry.enabled);
+        assert_eq!(sentry.oauth.mode, McpOAuthMode::Custom);
+        assert_eq!(sentry.oauth.client_id, "{env:MCP_CLIENT_ID}");
+        assert_eq!(sentry.oauth.scope, "tools:read");
+        let charts = servers
+            .iter()
+            .find(|server| server.name == "charts")
+            .unwrap();
+        assert!(!charts.enabled);
 
         let _ = std::fs::remove_dir_all(directory);
     }
@@ -1298,21 +1385,22 @@ mod tests {
             "DeepSeek Chat"
         );
 
-        let charts = &saved["mcp"]["charts"];
+        let charts = &saved["mcp"]["servers"]["charts"];
         assert_eq!(charts["type"], "remote");
         assert_eq!(charts["url"], "https://charts.example.com/mcp");
         assert!(charts.get("command").is_none());
         assert!(charts.get("environment").is_none());
         assert_eq!(charts["timeout"], 9000);
 
-        let context7 = &saved["mcp"]["context7"];
-        assert_eq!(context7["enabled"], false);
+        let context7 = &saved["mcp"]["servers"]["context7"];
+        assert_eq!(context7["disabled"], true);
+        assert!(context7.get("enabled").is_none());
         assert!(context7.get("headers").is_none());
         assert_eq!(context7["url"], "https://mcp.example.com");
 
         // The dropped entry is gone; the untouched one kept its unknowns.
-        assert!(saved["mcp"].get("no-type").is_none());
-        assert_eq!(saved["mcp"]["org-remote"]["oauth"], false);
+        assert!(saved["mcp"]["servers"].get("no-type").is_none());
+        assert_eq!(saved["mcp"]["servers"]["org-remote"]["oauth"], false);
 
         // Round-trip: the saved file loads back to the same roster.
         let reloaded = load_mcp_servers_at(&path).unwrap();
@@ -1356,14 +1444,15 @@ mod tests {
 
         // A fresh file gains OpenCode's schema pin alongside the entry.
         assert_eq!(saved["$schema"], "https://opencode.ai/config.json");
-        let entry = &saved["mcp"]["fresh-server"];
+        let entry = &saved["mcp"]["servers"]["fresh-server"];
         assert_eq!(entry["type"], "local");
         assert_eq!(
             entry["command"],
             serde_json::json!(["bun", "x", "some-server"])
         );
         assert_eq!(entry["environment"], serde_json::json!({"KEY": "value"}));
-        assert_eq!(entry["enabled"], true);
+        assert!(entry.get("enabled").is_none());
+        assert!(entry.get("disabled").is_none());
 
         let _ = std::fs::remove_dir_all(directory);
     }

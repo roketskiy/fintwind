@@ -153,6 +153,16 @@ impl DaemonClient {
         runtime_id: Uuid,
         command: Command,
     ) -> anyhow::Result<ResponsePayload> {
+        self.request_with_timeout(session_id, runtime_id, command, REQUEST_TIMEOUT)
+    }
+
+    pub fn request_with_timeout(
+        &self,
+        session_id: Uuid,
+        runtime_id: Uuid,
+        command: Command,
+        timeout: Duration,
+    ) -> anyhow::Result<ResponsePayload> {
         if self.inner.disconnected.load(Ordering::Acquire) {
             bail!("fintwind daemon is disconnected");
         }
@@ -174,7 +184,7 @@ impl DaemonClient {
             self.inner.pending.lock().remove(&request_id);
             bail!("fintwind daemon connection is closed");
         }
-        match response_rx.recv_timeout(REQUEST_TIMEOUT) {
+        match response_rx.recv_timeout(timeout) {
             Ok(Ok(payload)) => Ok(payload),
             Ok(Err(error)) => Err(anyhow!(error.message)),
             Err(error) => {

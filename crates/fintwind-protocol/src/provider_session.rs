@@ -49,6 +49,29 @@ pub struct NativeSessionSummary {
     pub model: Option<String>,
 }
 
+/// One MCP server's live connection status as the OpenCode server reports
+/// it — the state of the process or HTTP connection itself, independent of
+/// any session.
+#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct McpServerStatus {
+    pub name: String,
+    pub status: McpConnectionState,
+    /// Server-side failure detail for `failed` and `needs_auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum McpConnectionState {
+    Connected,
+    Pending,
+    Disabled,
+    Failed,
+    NeedsAuth,
+}
+
 /// A native session's transcript translated into the app's rendering model:
 /// the same shapes a live session persists, so an imported session renders
 /// through the ordinary transcript pipeline.

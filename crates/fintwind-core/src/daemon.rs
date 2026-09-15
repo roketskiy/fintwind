@@ -528,6 +528,26 @@ impl Backend for FintwindBackend {
                 crate::driver::native::delete_session(&server, &session_id)?;
                 Ok(ResponsePayload::Ack)
             }
+            Command::AuthenticateMcpServer {
+                binary,
+                directory,
+                name,
+            } => {
+                crate::mcp_auth::authenticate(&binary, &directory, &name)?;
+                Ok(ResponsePayload::Ack)
+            }
+            Command::ListMcpServerStatuses { binary, directory } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let statuses = crate::driver::native::list_mcp_statuses(
+                    &server,
+                    &directory.to_string_lossy(),
+                )?;
+                Ok(ResponsePayload::McpServerStatuses { statuses })
+            }
+            Command::CancelAuthenticateMcpServer { name } => {
+                crate::mcp_auth::cancel(&name);
+                Ok(ResponsePayload::Ack)
+            }
             Command::Workspace {
                 operation:
                     WorkspaceOperation::CaptureTurn {
@@ -1238,6 +1258,9 @@ fn handle_driver_command(
         | Command::FetchNativeTranscript { .. }
         | Command::RenameProviderSession { .. }
         | Command::DeleteProviderSession { .. }
+        | Command::AuthenticateMcpServer { .. }
+        | Command::ListMcpServerStatuses { .. }
+        | Command::CancelAuthenticateMcpServer { .. }
         | Command::Workspace { .. }
         | Command::OpenTerminal { .. }
         | Command::WriteTerminal { .. }

@@ -9,7 +9,8 @@ use crate::attachments::{AttachmentUpload, StoredAttachment};
 use crate::model::{AgentSession, Project, ProviderProbe, UserInputAnswer};
 use crate::persistence::{ComposerDraftChange, ComposerDrafts, SessionMessageMatch};
 use crate::provider_session::{
-    NativeSessionSummary, NativeTranscript, ProviderSessionFork, ProviderSessionForkRequest,
+    McpServerStatus, NativeSessionSummary, NativeTranscript, ProviderSessionFork,
+    ProviderSessionForkRequest,
 };
 use crate::settings::DaemonSettings;
 use crate::skills::SkillsCatalog;
@@ -185,6 +186,26 @@ pub enum Command {
         binary: PathBuf,
         directory: PathBuf,
         session_id: String,
+    },
+    /// Run `opencode mcp auth <name>` on the daemon, open the CLI-printed
+    /// authorization URL in the browser, and wait for the flow to finish.
+    /// Tokens stay in OpenCode's store, not in opencode.json.
+    AuthenticateMcpServer {
+        binary: PathBuf,
+        directory: PathBuf,
+        name: String,
+    },
+    /// Ask the workspace's OpenCode server for its MCP servers' live
+    /// connection statuses. Works without any session: the server holds the
+    /// connections itself.
+    ListMcpServerStatuses {
+        binary: PathBuf,
+        directory: PathBuf,
+    },
+    /// Kill the pending `opencode mcp auth` child for `name`. Ack succeeds
+    /// whether or not a flow was running, so the button is idempotent.
+    CancelAuthenticateMcpServer {
+        name: String,
     },
     HydrateSession {
         session_id: Uuid,
@@ -409,6 +430,9 @@ pub enum ResponsePayload {
     },
     ProviderSessions {
         sessions: Vec<NativeSessionSummary>,
+    },
+    McpServerStatuses {
+        statuses: Vec<McpServerStatus>,
     },
     NativeTranscript {
         transcript: NativeTranscript,

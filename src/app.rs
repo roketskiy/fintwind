@@ -1473,6 +1473,11 @@ pub struct Fintwind {
     /// Generation token for the background config load; a newer load
     /// supersedes an older one's result.
     mcp_load_generation: usize,
+    /// The MCP servers' live connection statuses from the workspace's
+    /// OpenCode server, keyed by server name. `None` means "not yet known"
+    /// and renders nothing rather than a stale state.
+    mcp_statuses: Option<HashMap<String, mcp_page::McpStatusEntry>>,
+    mcp_status_generation: u64,
     /// The MCP list pane's search field.
     mcp_search: Entity<ComposerInput>,
     /// The selected server's editable connection fields, one per kind.
@@ -1484,6 +1489,9 @@ pub struct Fintwind {
     /// Remote MCP OAuth currently waiting on the browser; `None` if idle.
     mcp_oauth_auth_name: Option<String>,
     mcp_oauth_auth_generation: u64,
+    /// Set when the user presses the cancel button, so the login callback
+    /// shows a neutral "cancelled" note instead of a failure.
+    mcp_oauth_cancel_requested: bool,
     mcp_rename_input: Entity<ComposerInput>,
     /// Shared key and value fields of the inline variable editor.
     mcp_variable_key_input: Entity<ComposerInput>,
@@ -3011,6 +3019,8 @@ impl Fintwind {
                 mcp_commit_generation: 0,
                 mcp_servers: Vec::new(),
                 mcp_load_generation: 0,
+                mcp_statuses: None,
+                mcp_status_generation: 0,
                 mcp_search,
                 mcp_command_input,
                 mcp_url_input,
@@ -3019,6 +3029,7 @@ impl Fintwind {
                 mcp_oauth_scope,
                 mcp_oauth_auth_name: None,
                 mcp_oauth_auth_generation: 0,
+                mcp_oauth_cancel_requested: false,
                 mcp_rename_input,
                 mcp_variable_key_input,
                 mcp_variable_value_input,

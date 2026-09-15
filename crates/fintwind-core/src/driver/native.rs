@@ -23,7 +23,9 @@ use std::time::Duration;
 
 use serde_json::Value;
 
-use fintwind_protocol::provider_session::{NativeSessionSummary, NativeTranscript};
+use fintwind_protocol::provider_session::{
+    McpConnectionState, McpServerStatus, NativeSessionSummary, NativeTranscript,
+};
 
 use crate::model::{
     ActivityItem, AgentTurn, Message, MessageRole, ReasoningBlock, TurnStats, TurnStatus,
@@ -84,6 +86,58 @@ pub(crate) fn list_sessions(
     }
     summaries.reverse();
     Ok(summaries)
+}
+
+/// Ask the workspace's server for its MCP servers' live connection statuses.
+/// The server owns the MCP connections, so this answers the same whether or
+/// not any session exists. Verified against the V2 OpenAPI `mcp.list`
+/// response: `{data: [{name, status: {status: "connected"|"pending"|
+/// "disabled"|"failed"|"needs_auth", error?}}]}`.
+pub(crate) fn list_mcp_statuses(
+    server: &OpenCodeServer,
+    directory: &str,
+) -> anyhow::Result<Vec<McpServerStatus>> {
+    let path = format!(
+        "/api/mcp?directory={}",
+        encode_path_segment(directory)
+    );
+    let response = server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT)?;
+    let mut statuses = Vec::new();
+    for row in response
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+    {
+        let Some(name) = row.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let state = row
+            .pointer("/status/status")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let error = row
+            .pointer("/status/error")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let status = match state {
+            "connected" => McpConnectionState::Connected,
+            "pending" => McpConnectionState::Pending,
+            "disabled" => McpConnectionState::Disabled,
+            "failed" => McpConnectionState::Failed,
+            "needs_auth" => McpConnectionState::NeedsAuth,
+            other => {
+                eprintln!("unknown MCP status {other:?} for server {name:?}");
+                continue;
+            }
+        };
+        statuses.push(McpServerStatus {
+            name: name.to_owned(),
+            status,
+            error,
+        });
+    }
+    Ok(statuses)
 }
 
 /// Fork/compaction children model the same conversation as their parent, so

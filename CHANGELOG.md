@@ -18,6 +18,14 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.3]
+
+- Add a font size setting
+- Add the ability to remove a project
+- Add an MCP marketplace and remote MCP OAuth login, with live connection status
+- Fix the subagent lifecycle status in the UI
+- Keep subagent user-message bubbles from shrinking as the panel widens
+
 ## [0.1.2]
 
 - Show turn-footer token stats and provider retry cards

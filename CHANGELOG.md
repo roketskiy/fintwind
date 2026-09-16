@@ -18,6 +18,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.4]
+
 - Show the app version in General settings, and an Update button next to Settings when a newer GitHub release is available
 
 ## [0.1.3]

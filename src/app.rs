@@ -63,7 +63,7 @@ use crate::theme::{TextSizePreset, Theme, ThemePreference};
 use crate::ui::text_field::TextField;
 use crate::ui::{
     MenuChip, ProjectNameSelector, activity_noun, activity_tool_icon, contain_scroll, file_icon,
-    icon, icon_button, model_icon, motion, provider_color, provider_icon, status_color,
+    icon, icon_button, model_icon, motion, provider_color, provider_icon, spin_halo, status_color,
     toggle_switch,
 };
 use crate::{

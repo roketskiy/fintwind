@@ -175,9 +175,7 @@ pub(super) type McpStatusEntry = fintwind_client::provider_session::McpServerSta
 /// Each state pairs a distinct glyph with its color, so the status reads
 /// without relying on hue alone — failed and needs_auth differ in shape,
 /// pending spins, disabled is hollow.
-fn mcp_status_glyph(
-    state: fintwind_client::provider_session::McpConnectionState,
-) -> &'static str {
+fn mcp_status_glyph(state: fintwind_client::provider_session::McpConnectionState) -> &'static str {
     use fintwind_client::provider_session::McpConnectionState as State;
     match state {
         State::Connected => "icons/check.svg",
@@ -1492,10 +1490,7 @@ impl Fintwind {
                         .text_size(ui_px(10.5))
                         .line_height(ui_px(15.0))
                         .text_color(theme.text_tertiary)
-                        .child(tr!(
-                            "mcp.status_refresh_hint",
-                            name = server.name.clone()
-                        )),
+                        .child(tr!("mcp.status_refresh_hint", name = server.name.clone())),
                 )
         });
 
@@ -1637,14 +1632,16 @@ impl Fintwind {
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.cancel_mcp_oauth_login(cx);
                     }))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                        if !event.keystroke.modifiers.modified()
-                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                        {
-                            this.cancel_mcp_oauth_login(cx);
-                            cx.stop_propagation();
-                        }
-                    })),
+                    .on_key_down(cx.listener(
+                        move |this, event: &KeyDownEvent, _, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.cancel_mcp_oauth_login(cx);
+                                cx.stop_propagation();
+                            }
+                        },
+                    )),
                 );
             } else {
                 section = section.child(

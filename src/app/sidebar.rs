@@ -37,7 +37,10 @@ fn append_project_group_rows(
 /// Height of a session card plus the separation reserved beneath it in the
 /// virtualized sidebar list. Keep the gap inside the list row so measured and
 /// estimated heights stay identical for off-screen sessions.
-const SIDEBAR_SESSION_CARD_HEIGHT: f32 = 64.0;
+const SIDEBAR_SESSION_CARD_HEIGHT: f32 = 52.0;
+const SESSION_AVATAR_SIZE: f32 = 36.0;
+const SESSION_AVATAR_INNER: f32 = 26.0;
+const SESSION_AVATAR_ICON: f32 = 14.0;
 const SIDEBAR_SESSION_ROW_GAP: f32 = 2.0;
 const SIDEBAR_SESSION_ROW_HEIGHT: f32 = SIDEBAR_SESSION_CARD_HEIGHT + SIDEBAR_SESSION_ROW_GAP;
 const SIDEBAR_ACTION_ROW_HEIGHT: f32 = 32.0;
@@ -1012,7 +1015,17 @@ impl Fintwind {
         let theme = Theme::current(cx);
         // Everything the card draws is read off the session before the branch
         // cache is consulted, because its read needs `&mut self`.
-        let (status, working, time_label, project_name, title_text, stored_branch, workspace_path) = {
+        let (
+            status,
+            working,
+            time_label,
+            title_text,
+            stored_branch,
+            workspace_path,
+            model_id,
+            model_name,
+            provider,
+        ) = {
             let Some(session) = self
                 .state
                 .sessions
@@ -1021,13 +1034,6 @@ impl Fintwind {
             else {
                 return div().into_any_element();
             };
-            let project_name = self
-                .state
-                .projects
-                .iter()
-                .find(|project| project.id == session.project_id)
-                .map(Project::display_name)
-                .unwrap_or_else(|| tr!("sidebar.unknown_project"));
             // A materialized worktree already stores its branch. A local
             // checkout reads the lightweight per-workspace branch cache, which
             // answers from memory and only schedules background work on a miss.
@@ -1039,6 +1045,8 @@ impl Fintwind {
                         .map(std::path::Path::to_path_buf),
                 ),
             };
+            let model_id = self.model_for_session(session).map(str::to_owned);
+            let model_name = self.model_display_name(model_id.as_deref());
             (
                 session.status,
                 matches!(
@@ -1046,10 +1054,12 @@ impl Fintwind {
                     SessionStatus::Connecting | SessionStatus::Working
                 ),
                 session_time_label(session, unix_time()),
-                project_name,
                 localized_session_title(session),
                 stored_branch,
                 workspace_path,
+                model_id,
+                model_name,
+                session.provider.clone(),
             )
         };
         let branch = if let Some(branch) = stored_branch {
@@ -1111,6 +1121,12 @@ impl Fintwind {
                 .child(SharedString::from(title_text))
                 .into_any_element()
         };
+        let avatar = session_model_avatar(
+            model_icon(model_id.as_deref().unwrap_or(""), &model_name, &provider),
+            provider_color(&theme, &provider),
+            working,
+            &theme,
+        );
         let metadata_time = time_label.map(|label| {
             div()
                 .flex_none()
@@ -1122,22 +1138,6 @@ impl Fintwind {
                 })
                 .child(SharedString::from(label))
         });
-        let project_row = div()
-            .w_full()
-            .min_w_0()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(ui_px(11.0))
-                    .text_color(theme.text_tertiary)
-                    .child(SharedString::from(project_name)),
-            )
-            .when_some(metadata_time, |element, time| element.child(time));
         let title_row = div()
             .w_full()
             .min_w_0()
@@ -1145,37 +1145,37 @@ impl Fintwind {
             .items_center()
             .gap(px(6.0))
             .child(title)
-            .when(working, |element| {
-                element.child(motion::spin_slow(icon(
-                    "icons/loader-circle.svg",
-                    12.0,
-                    status_color(&theme, status),
-                )))
-            })
             .when(status == SessionStatus::Waiting, |element| {
                 element.child(icon("icons/alert.svg", 12.0, status_color(&theme, status)))
             })
             .when(status == SessionStatus::Failed, |element| {
                 element.child(icon("icons/x.svg", 12.0, status_color(&theme, status)))
             });
-        let has_branch = branch.is_some();
-        let branch_row = div()
+        let has_meta = metadata_time.is_some() || branch.is_some();
+        let meta_row = div()
             .w_full()
             .min_w_0()
             .flex()
             .items_center()
-            .gap(px(5.0))
+            .gap(px(8.0))
+            .when_some(metadata_time, |element, time| element.child(time))
             .when_some(branch, |element, branch| {
-                element
-                    .child(icon("icons/git-branch.svg", 11.0, theme.text_ghost))
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(ui_px(11.0))
-                            .text_color(theme.text_ghost)
-                            .child(SharedString::from(branch)),
-                    )
+                element.child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(5.0))
+                        .child(icon("icons/git-branch.svg", 11.0, theme.text_ghost))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_size(ui_px(11.0))
+                                .text_color(theme.text_ghost)
+                                .child(SharedString::from(branch)),
+                        ),
+                )
             });
 
         let fintwind = cx.entity().downgrade();
@@ -1189,11 +1189,9 @@ impl Fintwind {
             .h(px(SIDEBAR_SESSION_CARD_HEIGHT))
             .flex_none()
             .flex()
-            .flex_col()
-            .justify_center()
-            .gap(px(2.0))
+            .items_center()
+            .gap(px(8.0))
             .px(px(8.0))
-            .py(px(6.0))
             .rounded(px(8.0))
             .cursor_default()
             .when(selected, |element| {
@@ -1201,9 +1199,18 @@ impl Fintwind {
             })
             .hover(|element| element.bg(theme.sidebar_item_background))
             .active(|element| element.bg(theme.overlay_strong))
-            .child(project_row)
-            .child(title_row)
-            .when(has_branch, |element| element.child(branch_row))
+            .child(avatar)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .justify_center()
+                    .gap(px(2.0))
+                    .child(title_row)
+                    .when(has_meta, |element| element.child(meta_row)),
+            )
             .when(!renaming, |element| {
                 element
                     .track_focus(&row_focus)
@@ -1600,6 +1607,42 @@ impl Fintwind {
                     }),
             )
     }
+}
+
+fn session_model_avatar(
+    icon_path: &'static str,
+    icon_color: Hsla,
+    working: bool,
+    theme: &Theme,
+) -> AnyElement {
+    div()
+        .size(px(SESSION_AVATAR_SIZE))
+        .flex_none()
+        .relative()
+        .flex()
+        .items_center()
+        .justify_center()
+        .when(working, |element| {
+            element.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .child(spin_halo(theme.accent, SESSION_AVATAR_SIZE)),
+            )
+        })
+        .child(
+            div()
+                .size(px(SESSION_AVATAR_INNER))
+                .rounded_full()
+                .bg(theme.raised)
+                .border_1()
+                .border_color(theme.border_strong)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(icon(icon_path, SESSION_AVATAR_ICON, icon_color)),
+        )
+        .into_any_element()
 }
 
 fn localized_session_title(session: &AgentSession) -> String {

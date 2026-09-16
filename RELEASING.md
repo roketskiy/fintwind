@@ -3,7 +3,8 @@
 Users download a per-user **`fintwind-<version>-<arch>-Setup.exe`** (or the
 portable zip) from the
 [GitHub Releases](https://github.com/roketskiy/fintwind/releases) page. The app
-does not update itself.
+checks that page for a newer version and offers a button that opens it; it
+does not install the update itself.
 
 Fintwind versions live in the root `Cargo.toml` and are **independent of
 waku**. Development happens on `main`. Never reuse a published `v*` tag, and

@@ -1063,6 +1063,7 @@ pub struct Fintwind {
     daemon_reconfigure_pending: bool,
     daemon_token_revealed: bool,
     settings_focus: FocusHandle,
+    latest_available: Option<String>,
     onboarding_add_project_focus: FocusHandle,
     onboarding_projectless_focus: FocusHandle,
     sidebar_add_project_focus: FocusHandle,
@@ -1801,6 +1802,23 @@ impl Fintwind {
         } else {
             crate::platform::reveal_in_file_manager(path, cx);
         }
+    }
+
+    fn check_for_update(&self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            let latest = cx
+                .background_executor()
+                .spawn(async { crate::update::fetch_newer_release() })
+                .await;
+            let Some(version) = latest else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                this.latest_available = Some(version);
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn show_toast_with_tone(&mut self, message: impl Into<String>, tone: ToastTone) {
@@ -2826,6 +2844,7 @@ impl Fintwind {
                 daemon_reconfigure_pending: false,
                 daemon_token_revealed: false,
                 settings_focus,
+                latest_available: None,
                 onboarding_add_project_focus,
                 onboarding_projectless_focus,
                 sidebar_add_project_focus,
@@ -3155,6 +3174,7 @@ impl Fintwind {
             // sidebar must reconcile with what the CLI and TUI left there.
             // It retries once the provider probe finds the binary.
             this.schedule_native_session_reconcile(cx);
+            this.check_for_update(cx);
         });
         entity
     }

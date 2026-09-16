@@ -1332,16 +1332,23 @@ function AgentPresetControl({
 }
 
 const ACCESS_MODES: Array<{
-  id: Exclude<AgentSession['runtime_mode'], 'plan'>
+  id: Exclude<AgentSession['runtime_mode'], 'plan' | 'auto'>
   labelKey: string
   descriptionKey: string
-  icon: 'lock' | 'pencil' | 'sparkle' | 'lockOpen'
+  icon: 'lock' | 'pencil' | 'lockOpen'
 }> = [
   { id: 'ask', labelKey: 'mode.supervised', descriptionKey: 'mode.supervised_description', icon: 'lock' },
   { id: 'autoAcceptEdits', labelKey: 'mode.auto_accept_edits', descriptionKey: 'mode.auto_accept_edits_description', icon: 'pencil' },
-  { id: 'auto', labelKey: 'mode.auto', descriptionKey: 'mode.auto_description', icon: 'sparkle' },
   { id: 'fullAccess', labelKey: 'mode.full_access', descriptionKey: 'mode.full_access_description', icon: 'lockOpen' },
 ]
+
+function accessModeId(
+  mode: AgentSession['runtime_mode'],
+): Exclude<AgentSession['runtime_mode'], 'plan' | 'auto'> {
+  if (mode === 'plan' || mode === 'ask') return 'ask'
+  if (mode === 'autoAcceptEdits') return 'autoAcceptEdits'
+  return 'fullAccess'
+}
 
 function AccessControl({
   session,
@@ -1353,8 +1360,8 @@ function AccessControl({
   returnFocus: RefObject<HTMLElement | null>
 }) {
   const { t } = useI18n()
-  const selectedId = session.runtime_mode === 'plan' ? 'ask' : session.runtime_mode
-  const selected = ACCESS_MODES.find((mode) => mode.id === selectedId) ?? ACCESS_MODES[3]!
+  const selectedId = accessModeId(session.runtime_mode)
+  const selected = ACCESS_MODES.find((mode) => mode.id === selectedId) ?? ACCESS_MODES[2]!
   return (
     <ControlMenu
       caret={false}

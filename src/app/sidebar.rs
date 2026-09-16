@@ -524,6 +524,7 @@ impl Fintwind {
             .px(px(10.0))
             .flex()
             .items_center()
+            .gap(px(4.0))
             .child(
                 div()
                     .id("open-settings")
@@ -548,6 +549,41 @@ impl Fintwind {
                         this.open_settings_action(&OpenSettings, window, cx);
                     })),
             )
+            .when_some(self.latest_available.clone(), |footer, version| {
+                footer.child(
+                    div()
+                        .id("open-update")
+                        .tab_index(0)
+                        .focus_visible(|style| style.border_1().border_color(theme.accent))
+                        .h(px(32.0))
+                        .px(px(10.0))
+                        .flex_none()
+                        .rounded(px(8.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(7.0))
+                        .text_size(ui_px(13.0))
+                        .text_color(theme.text_secondary)
+                        .cursor_default()
+                        .hover(|element| element.bg(theme.overlay))
+                        .active(|element| element.bg(theme.overlay_strong))
+                        .tooltip(Tooltip::text(tr!(
+                            "sidebar.update_tooltip",
+                            version = version
+                        )))
+                        .child(icon("icons/download.svg", 15.0, theme.text_tertiary))
+                        .child(tr_cow!("sidebar.update"))
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            cx.open_url(crate::update::RELEASES_LATEST_URL);
+                        }))
+                        .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                cx.open_url(crate::update::RELEASES_LATEST_URL);
+                                cx.stop_propagation();
+                            }
+                        })),
+                )
+            })
             .child(div().flex_1())
     }
 

@@ -477,6 +477,16 @@ impl Fintwind {
                             .child(tr!("settings.local_by_default_description")),
                     ),
             )
+            .child(
+                div()
+                    .mt(px(12.0))
+                    .text_size(ui_px(12.0))
+                    .text_color(theme.text_tertiary)
+                    .child(tr!(
+                        "settings.app_version",
+                        version = crate::update::APP_VERSION
+                    )),
+            )
             .into_any_element()
     }
 

@@ -2365,7 +2365,7 @@ mod tests {
             Some("fast".into()),
             Some("1m".into()),
         );
-        state.sessions[0].runtime_mode = crate::model::RuntimeMode::Auto;
+        state.sessions[0].runtime_mode = crate::model::RuntimeMode::AutoAcceptEdits;
         state.favorite_models.push(FavoriteModel {
             model: "gpt-5.6-luna".into(),
         });
@@ -2422,7 +2422,7 @@ mod tests {
         );
         assert_eq!(
             restored.sessions[0].runtime_mode,
-            crate::model::RuntimeMode::Auto
+            crate::model::RuntimeMode::AutoAcceptEdits
         );
         assert_eq!(restored.favorite_models, state.favorite_models);
         assert_eq!(restored.theme, ThemePreference::Light);

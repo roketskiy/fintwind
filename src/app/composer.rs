@@ -1155,8 +1155,7 @@ impl Fintwind {
         let theme = Theme::current(cx);
         let selected_mode = self
             .selected_session()
-            .map(|session| session.runtime_mode)
-            .filter(|mode| *mode != RuntimeMode::Plan)
+            .map(|session| session.runtime_mode.access())
             .unwrap_or_default();
         let weak = cx.entity().downgrade();
         let handle = self.menu_handle("runtime-mode", cx);

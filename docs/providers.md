@@ -591,17 +591,18 @@ which its `--print` transport did not emit at all.
 
 ## Access modes across providers
 
-Fintwind's `InteractionMode` (Build / Plan) and `RuntimeMode` (Supervised /
-Auto-accept edits / Auto / Full access) collapse into each CLI's own vocabulary.
-Plan always wins over the access mode.
+Fintwind's `InteractionMode` (Build / Plan) maps to OpenCode agents. `RuntimeMode`
+(Supervised / Auto-accept edits / Full access) maps to session `permissions`
+rules. Legacy `Auto` is treated as Full access. Plan always wins over the access
+mode for edits.
 
 | Fintwind | Codex (`approvalPolicy` / `sandbox` / reviewer) | Claude `--permission-mode` | Cursor | OpenCode | Grok |
 | --- | --- | --- | --- | --- | --- |
 | Plan | `never` / `read-only` / `user` | `plan` | `session/set_mode` → `plan` | `agent: plan` | `session/set_mode` → `plan` |
-| Supervised | `untrusted` / `read-only` / `user` | `default` + `can_use_tool` reaches the user | `session/request_permission` reaches the user | permission requests reach the user | `session/request_permission` reaches the user |
-| Auto-accept edits | `on-request` / `workspace-write` / `user` | `acceptEdits` | auto-answered | auto-answered (`always`) | auto-answered |
-| Auto | `on-request` / `workspace-write` / `auto_review` | `auto` | auto-answered | auto-answered (`always`) | auto-answered |
-| Full access | `never` / `danger-full-access` / `user` | `bypassPermissions` + `--dangerously-skip-permissions` | auto-answered | auto-answered (`always`) | auto-answered |
+| Supervised | `untrusted` / `read-only` / `user` | `default` + `can_use_tool` reaches the user | `session/request_permission` reaches the user | session `permissions`: `edit`+`shell` → `ask` | `session/request_permission` reaches the user |
+| Auto-accept edits | `on-request` / `workspace-write` / `user` | `acceptEdits` | auto-answered | session `permissions`: `edit` → `allow`, `shell` → `ask` | auto-answered |
+| Auto | `on-request` / `workspace-write` / `auto_review` | `auto` | auto-answered | legacy; same as Full access | auto-answered |
+| Full access | `never` / `danger-full-access` / `user` | `bypassPermissions` + `--dangerously-skip-permissions` | auto-answered | session `permissions`: `*` → `allow` | auto-answered |
 
 Amp and Pi accept Build + Full access only and always run wide open
 (`--dangerously-allow-all`, `--approve`).

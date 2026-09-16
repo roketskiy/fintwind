@@ -1086,6 +1086,7 @@ impl Fintwind {
         if mode == RuntimeMode::Plan {
             return;
         }
+        let mode = mode.access();
         if let Some(session) = self.selected_session_mut()
             && session.runtime_mode != mode
         {

@@ -1,5 +1,7 @@
 use crate::theme::ui_px;
 
+use std::time::Duration;
+
 use gpui::{
     AnyElement, App, Context, Div, ElementId, Hsla, Img, InteractiveElement, Interactivity,
     KeyDownEvent, ParentElement, PathBuilder, Pixels, RenderOnce, ScrollHandle, SharedString,
@@ -320,6 +322,65 @@ pub fn status_color(theme: &Theme, status: SessionStatus) -> Hsla {
         SessionStatus::Waiting => theme.warning,
         SessionStatus::Failed => theme.danger,
     }
+}
+
+/// A rotating arc around a circular avatar. Slow stride: a sidebar full of
+/// working sessions rebuilds its subtree per tick, and this motion survives
+/// ~15 fps the way the old row spinner did.
+pub fn spin_halo(color: Hsla, size: f32) -> AnyElement {
+    const STROKE: f32 = 2.0;
+    const ARC: f32 = 0.72;
+    motion::pulse(Duration::from_millis(900), move |phase| {
+        canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                let center = bounds.center();
+                let radius = px((size - STROKE) / 2.0);
+
+                let mut track = PathBuilder::stroke(px(STROKE));
+                track.move_to(point(center.x + radius, center.y));
+                track.arc_to(
+                    point(radius, radius),
+                    px(0.0),
+                    false,
+                    true,
+                    point(center.x - radius, center.y),
+                );
+                track.arc_to(
+                    point(radius, radius),
+                    px(0.0),
+                    false,
+                    true,
+                    point(center.x + radius, center.y),
+                );
+                if let Ok(path) = track.build() {
+                    window.paint_path(path, color.opacity(0.22));
+                }
+
+                let start = -std::f32::consts::FRAC_PI_2 + phase * std::f32::consts::TAU;
+                let end = start + ARC * std::f32::consts::TAU;
+                let mut arc = PathBuilder::stroke(px(STROKE));
+                arc.move_to(point(
+                    center.x + radius * start.cos(),
+                    center.y + radius * start.sin(),
+                ));
+                arc.arc_to(
+                    point(radius, radius),
+                    px(0.0),
+                    ARC > 0.5,
+                    true,
+                    point(center.x + radius * end.cos(), center.y + radius * end.sin()),
+                );
+                if let Ok(path) = arc.build() {
+                    window.paint_path(path, color);
+                }
+            },
+        )
+        .size(px(size))
+        .into_any_element()
+    })
+    .every(2)
+    .into_any_element()
 }
 
 pub fn activity_icon(kind: ActivityKind) -> &'static str {

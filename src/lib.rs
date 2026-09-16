@@ -41,6 +41,7 @@ mod review_diff;
 mod terminal;
 mod theme;
 mod ui;
+mod update;
 
 pub use fintwind_client::{
     checkpoint, command_env, composer_complete, git_branch, git_commit, i18n, identity, model,

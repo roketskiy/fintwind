@@ -18,6 +18,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- Show the app version in General settings, and an Update button next to Settings when a newer GitHub release is available
+
 ## [0.1.3]
 
 - Add a font size setting

@@ -162,6 +162,7 @@ common.creating: 正在创建…
 settings.local_by_default: 默认存储在本地
 settings.local_by_default_description: 项目、对话和设置均存储在这台 Mac 上
 settings.local_by_default_web_description: 项目、对话和附件保留在所连接的守护进程主机上。fintwind Web 的偏好设置保留在此浏览器中。
+settings.app_version: fintwind %{version}
 providers.coding_agents: 编程智能体
 providers.description: fintwind 调用安装在本机上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新
 providers.web_description: fintwind 调用安装在守护进程主机上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新
@@ -375,6 +376,8 @@ common.rename: 重命名
 session.new_task: 新任务
 session.reveal_project_folder: 在文件管理器中显示项目文件夹
 sidebar.search: 搜索
+sidebar.update: 更新
+sidebar.update_tooltip: 有新版本 %{version}
 sidebar.working: 工作中 · %{elapsed}
 sidebar.just_now: 刚刚
 sidebar.minutes_ago: "%{count} 分钟前"

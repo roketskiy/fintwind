@@ -15,7 +15,7 @@ fintwind 是 [OpenCode](https://opencode.ai) 的原生 Windows 桌面应用，�
 ## 安装
 
 从[最新 release](https://github.com/roketskiy/fintwind/releases/latest) 下载
-`fintwind-<version>-<arch>-Setup.exe` 运行即可。它按用户安装、自动更新，
+`fintwind-<version>-<arch>-Setup.exe` 运行即可。
 同时提供便携版 `.zip`。系统要求与尚未支持的功能见
 [docs/windows.md](docs/windows.md)。
 

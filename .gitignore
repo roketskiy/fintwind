@@ -21,3 +21,6 @@ skills-lock.json
 
 # Local search index data
 .zvec-grep/
+
+# Generated architecture diagram (archify), local only
+docs/architecture*

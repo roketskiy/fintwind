@@ -1913,7 +1913,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "fintwind"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -1933,7 +1933,7 @@ dependencies = [
  "pulldown-cmark",
  "ratex-layout",
  "ratex-parser",
- "ratex-render",
+ "ratex-svg",
  "ratex-types",
  "raw-window-handle",
  "regex",
@@ -1942,8 +1942,8 @@ dependencies = [
  "serde",
  "serde_json",
  "smol",
+ "unicode-linebreak",
  "unicode-segmentation",
- "unicodeit",
  "url",
  "uuid",
  "webview2-com",
@@ -5051,23 +5051,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "ratex-render"
+name = "ratex-svg"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55c423b56c30c5da2efccf080b960cd1df7918443dc5ce81db056ce6c9fffc67"
+checksum = "5a0948b4d4926858332fe04471e861f54103e655a64f74cc1b3eac0c59bf67bb"
 dependencies = [
  "ab_glyph",
- "png 0.17.16",
+ "base64",
  "ratex-font",
  "ratex-font-loader",
  "ratex-katex-fonts",
- "ratex-layout",
- "ratex-parser",
  "ratex-types",
  "ratex-unicode-font",
- "serde_json",
- "tiny-skia",
- "ttf-parser",
 ]
 
 [[package]]
@@ -6989,18 +6984,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unicodeit"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1c58ef1816c0901804d0e1e4df281cd4e3d7eb12a0616fd19ec851f5a48bcf4b"
-dependencies = [
- "aho-corasick",
- "cfg-if",
- "memchr",
- "regex",
-]
 
 [[package]]
 name = "untrusted"

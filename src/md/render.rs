@@ -8,6 +8,9 @@
 //! per block is therefore one measured-layout node and one `shape_text` call,
 //! which GPUI's line-layout cache reuses verbatim across frames when the text
 //! and wrap width are unchanged.
+//! Math paragraphs use one measured element with retained native glyph layouts
+//! and cached formula images (see [`math_text`]); ordinary prose stays on the
+//! StyledText path.
 //!
 //! **Color is paint, geometry is layout.** Syntax highlighting, inline-code
 //! washes and the selection wash are all painted from geometry read back out of
@@ -38,10 +41,47 @@ use super::selection::{
 };
 use super::veil::{RowVeil, apply_veil};
 use crate::theme::Theme;
+use crate::ui::menu::{ContextMenuHandle, context_menu};
 use crate::ui::tooltip::Tooltip;
 
+mod math_text;
+
 /// Selection geometry: the laid-out text handle for one painted element.
-pub type TextGeometry = TextLayout;
+#[derive(Clone)]
+pub enum TextGeometry {
+    Text(TextLayout),
+    Math(math_text::Geometry),
+}
+
+impl TextGeometry {
+    fn bounds(&self) -> Bounds<Pixels> {
+        match self {
+            Self::Text(layout) => layout.bounds(),
+            Self::Math(layout) => layout.bounds(),
+        }
+    }
+
+    fn index_for_position(&self, position: Point<Pixels>) -> Result<usize, usize> {
+        match self {
+            Self::Text(layout) => layout.index_for_position(position),
+            Self::Math(layout) => layout.index_for_position(position),
+        }
+    }
+
+    fn is_missing(&self) -> bool {
+        match self {
+            Self::Text(layout) => layout_missing(layout),
+            Self::Math(layout) => layout.is_missing(),
+        }
+    }
+
+    fn formula_range_at(&self, position: Point<Pixels>) -> Option<Range<usize>> {
+        match self {
+            Self::Text(_) => None,
+            Self::Math(layout) => layout.formula_range_at(position),
+        }
+    }
+}
 
 /// The transcript's shared selection handles, specialised to real geometry.
 pub type TranscriptSelection = SelectionState<TextGeometry>;
@@ -236,6 +276,7 @@ pub struct FlatText {
     pub runs: Vec<TextRun>,
     pub links: Vec<(Range<usize>, String)>,
     pub code_ranges: Vec<Range<usize>>,
+    pub math: Option<Rc<math_text::MathData>>,
 }
 
 /// Flatten inline runs for shaping. Pure given the palette and base weight.
@@ -249,6 +290,7 @@ pub fn flatten(
     let mut out: Vec<TextRun> = Vec::with_capacity(runs.len());
     let mut links: Vec<(Range<usize>, String)> = Vec::new();
     let mut code_ranges: Vec<Range<usize>> = Vec::new();
+    let mut math = Vec::new();
 
     for run in runs {
         if run.text.is_empty() {
@@ -257,6 +299,13 @@ pub fn flatten(
         let start = text.len();
         text.push_str(&run.text);
         let end = text.len();
+        if run.style.math {
+            math.push(math_text::MathSpan {
+                range: start..end,
+                latex: std::sync::Arc::from(run.text.as_str()),
+                display: false,
+            });
+        }
 
         let mut run_font = font(if run.style.code {
             MONO_FAMILY
@@ -322,6 +371,7 @@ pub fn flatten(
         runs: out,
         links,
         code_ranges,
+        math: (!math.is_empty()).then(|| Rc::new(math_text::MathData::new(math))),
     }
 }
 
@@ -352,6 +402,7 @@ pub fn flatten_plain(
         runs,
         links: Vec::new(),
         code_ranges: Vec::new(),
+        math: None,
     }
 }
 
@@ -498,7 +549,7 @@ impl MarkdownView {
         let settled = if self.tail.is_empty() {
             all.len()
         } else {
-            all.len().saturating_sub(1)
+            self.parser.display_tail_start()
         };
         all[..settled]
             .iter()
@@ -512,6 +563,7 @@ impl MarkdownView {
 /// Everything a render pass needs, plus the element counter that assigns
 /// document-ordered keys. Keys stay stable frame to frame as long as the block
 /// structure does, which is what lets a selection survive scrolling.
+#[derive(Clone)]
 pub struct Ctx<'a> {
     row: Rc<str>,
     palette: &'a Palette,
@@ -524,6 +576,9 @@ pub struct Ctx<'a> {
     /// Set while rendering the first element of a block, for copy spacing.
     starts_block: Cell<bool>,
     animate_streaming: bool,
+    math_enabled: bool,
+    math_menu: Option<ContextMenuHandle>,
+    wrap_math_menu: bool,
     now: Instant,
 }
 
@@ -544,6 +599,9 @@ impl<'a> Ctx<'a> {
             next_ordinal: Cell::new(0),
             starts_block: Cell::new(true),
             animate_streaming: true,
+            math_enabled: true,
+            math_menu: None,
+            wrap_math_menu: false,
             now: Instant::now(),
         }
     }
@@ -562,6 +620,27 @@ impl<'a> Ctx<'a> {
         self
     }
 
+    #[allow(dead_code)]
+    pub fn with_math_enabled(mut self, enabled: bool) -> Self {
+        self.math_enabled = enabled;
+        self
+    }
+
+    /// Contribute formula actions to an existing message menu.
+    pub fn with_context_menu(mut self, menu: ContextMenuHandle) -> Self {
+        self.math_menu = Some(menu);
+        self.wrap_math_menu = false;
+        self
+    }
+
+    /// Give a standalone Markdown surface its own formula context menu.
+    #[allow(dead_code)]
+    pub fn with_math_context_menu(mut self, menu: ContextMenuHandle) -> Self {
+        self.math_menu = Some(menu);
+        self.wrap_math_menu = true;
+        self
+    }
+
     fn with_cache(&self, view: &'a MarkdownView) -> Self {
         Self {
             row: self.row.clone(),
@@ -573,6 +652,9 @@ impl<'a> Ctx<'a> {
             next_ordinal: Cell::new(self.next_ordinal.get()),
             starts_block: Cell::new(self.starts_block.get()),
             animate_streaming: self.animate_streaming,
+            math_enabled: self.math_enabled,
+            math_menu: self.math_menu.clone(),
+            wrap_math_menu: self.wrap_math_menu,
             now: Instant::now(),
         }
     }
@@ -673,7 +755,7 @@ fn text_element_with_selection(
                 key: key.clone(),
                 text: Rc::from(text.as_ref()),
                 block_break,
-                geometry: layout.clone(),
+                geometry: TextGeometry::Text(layout.clone()),
             });
         }
     })
@@ -690,7 +772,10 @@ fn text_element_with_selection(
         .into_any_element()
 }
 
-fn text_element(flat: &FlatText, key: TextKey, ctx: &Ctx) -> AnyElement {
+fn text_element(flat: &Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement {
+    if ctx.math_enabled && flat.math.is_some() {
+        return math_text::element(flat.clone(), key, ctx);
+    }
     let runs = match ctx
         .cache
         .filter(|view| ctx.animate_streaming && view.streaming.get())
@@ -858,7 +943,7 @@ fn registry_point(
 ) -> Option<(usize, usize)> {
     let mut best: Option<(usize, f32)> = None;
     for (index, entry) in registry.entries().iter().enumerate() {
-        if layout_missing(&entry.geometry) {
+        if entry.geometry.is_missing() {
             continue;
         }
         let bounds = entry.geometry.bounds();
@@ -901,8 +986,7 @@ pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection)
             }
             let registry = state.registry.borrow();
             let hit = registry.entries().iter().enumerate().find(|(_, entry)| {
-                !layout_missing(&entry.geometry)
-                    && entry.geometry.bounds().contains(&event.position)
+                !entry.geometry.is_missing() && entry.geometry.bounds().contains(&event.position)
             });
             let mut selection = state.selection.borrow_mut();
             match hit {
@@ -914,7 +998,10 @@ pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection)
                         2 => selection.begin_with_span(
                             entry.key.clone(),
                             entry.text.clone(),
-                            word_range(&entry.text, offset),
+                            entry
+                                .geometry
+                                .formula_range_at(event.position)
+                                .unwrap_or_else(|| word_range(&entry.text, offset)),
                         ),
                         count if count >= 3 => selection.begin_with_span(
                             entry.key.clone(),
@@ -1028,7 +1115,8 @@ pub fn markdown<'a>(view: &'a MarkdownView, ctx: &Ctx<'a>) -> Option<AnyElement>
     // stay cacheable across appends.
     let last_base = block_ordinal_base(blocks.len() - 1);
     ctx.next_ordinal.set(last_base);
-    view.volatile_from.set(last_base);
+    view.volatile_from
+        .set(block_ordinal_base(view.parser.display_tail_start()));
     children.push(render_block(last, &ctx));
     if ctx.animate_streaming && view.streaming.get() {
         // Every element visible on the attach pass has synchronously adopted
@@ -1036,15 +1124,27 @@ pub fn markdown<'a>(view: &'a MarkdownView, ctx: &Ctx<'a>) -> Option<AnyElement>
         view.veil.borrow_mut().finish_frame();
     }
 
+    let element = div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .gap(px(ctx.metrics.block_gap))
+        .children(children);
     Some(
-        div()
-            .w_full()
-            .min_w_0()
-            .flex()
-            .flex_col()
-            .gap(px(ctx.metrics.block_gap))
-            .children(children)
-            .into_any_element(),
+        if ctx.math_enabled
+            && ctx.wrap_math_menu
+            && let Some(menu) = &ctx.math_menu
+        {
+            context_menu(
+                element,
+                SharedString::from(format!("math-menu-{}", ctx.row)),
+                menu,
+                |_| Vec::new(),
+            )
+        } else {
+            element.into_any_element()
+        },
     )
 }
 
@@ -1168,7 +1268,32 @@ fn render_block_content(block: &Block, ctx: &Ctx) -> AnyElement {
                 .into_any_element()
         }
         Block::Image { url, alt } => render_image(url, alt, ctx),
-        Block::DisplayMath { latex } => render_math_block(latex, ctx),
+        Block::DisplayMath { latex } => {
+            let key = ctx.next_key();
+            let flat = ctx.flat(key.index, || {
+                let mut flat = flatten_plain(
+                    latex.clone(),
+                    MONO_FAMILY,
+                    FontWeight::NORMAL,
+                    ctx.palette.text,
+                );
+                flat.math = Some(Rc::new(math_text::MathData::new(vec![
+                    math_text::MathSpan {
+                        range: 0..latex.len(),
+                        latex: std::sync::Arc::from(latex.as_str()),
+                        display: true,
+                    },
+                ])));
+                flat
+            });
+            div()
+                .w_full()
+                .min_w_0()
+                .text_size(px(ctx.metrics.text_size))
+                .line_height(px(ctx.metrics.line_height))
+                .child(text_element(&flat, key, ctx))
+                .into_any_element()
+        }
         Block::CodeBlock { language, code } => render_code_block(language.as_deref(), code, ctx),
         Block::BlockQuote { children } => {
             let rendered = children
@@ -1352,64 +1477,6 @@ fn render_image(url: &str, alt: &str, ctx: &Ctx) -> AnyElement {
         .into_any_element()
 }
 
-/// A `$$…$$` formula. The typeset raster comes from the background math cache
-/// (`math::ensure_rendered`, kicked by a zero-size canvas sibling below);
-/// until it arrives — or permanently, for malformed LaTeX — the raw source
-/// shows as selectable mono text so the content is never lost.
-fn render_math_block(latex: &str, ctx: &Ctx) -> AnyElement {
-    let key = ctx.next_key();
-    let font_size = ctx.metrics.text_size;
-    let color = ctx.palette.text;
-
-    let body = match super::math::cached(latex, font_size, color) {
-        Some((image, width, height)) => img(image)
-            .id(SharedString::from(format!(
-                "math-{}-{}",
-                key.row, key.index
-            )))
-            .w(px(width))
-            .h(px(height))
-            .max_w(relative(1.0))
-            .object_fit(gpui::ObjectFit::ScaleDown)
-            .into_any_element(),
-        None => {
-            let flat = ctx.flat(key.index, || {
-                flatten_plain(
-                    latex.to_owned(),
-                    MONO_FAMILY,
-                    FontWeight::NORMAL,
-                    ctx.palette.secondary,
-                )
-            });
-            div()
-                .min_w_0()
-                .text_size(px(ctx.metrics.code_text_size))
-                .line_height(px(ctx.metrics.code_line_height))
-                .text_color(ctx.palette.secondary)
-                .child(text_element(&flat, key.clone(), ctx))
-                .into_any_element()
-        }
-    };
-
-    div()
-        .w_full()
-        .min_w_0()
-        .flex()
-        .justify_center()
-        .py(px(2.0))
-        .child(body)
-        .child(
-            canvas(|_, _, _| (), {
-                let latex = latex.to_owned();
-                move |_, _, _, cx| super::math::ensure_rendered(&latex, font_size, color, cx)
-            })
-            .absolute()
-            .w(px(0.0))
-            .h(px(0.0)),
-        )
-        .into_any_element()
-}
-
 const CODE_COPY_FEEDBACK_DURATION: Duration = Duration::from_secs(3);
 type CodeCopyFeedback = Rc<RefCell<HashMap<usize, u64>>>;
 
@@ -1484,6 +1551,7 @@ fn render_code_fragment(
             runs: code_runs(code, lang, &code_font, ctx.palette),
             links: Vec::new(),
             code_ranges: Vec::new(),
+            math: None,
         }
     });
     let label = language

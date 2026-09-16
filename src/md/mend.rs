@@ -54,6 +54,30 @@ pub fn close_hanging(text: &str) -> Option<String> {
         let ch = chars[index].1;
 
         if code.is_none() && ch == '\\' {
+            if let Some(next) = at(index + 1)
+                && matches!(next, '[' | '(')
+            {
+                let closer = if next == '[' { ']' } else { ')' };
+                let mut scan = index + 2;
+                let mut closed = false;
+                while scan < chars.len() {
+                    if at(scan) == Some('\\') {
+                        if at(scan + 1) == Some(closer) {
+                            index = scan + 2;
+                            last_content = Some(index - 1);
+                            closed = true;
+                            break;
+                        }
+                        scan += 2;
+                        continue;
+                    }
+                    scan += 1;
+                }
+                if closed {
+                    continue;
+                }
+                return None;
+            }
             // An escape and its escapee are both literal, but the escapee is
             // still content that can justify closing an opener.
             if index + 1 < chars.len() {
@@ -84,6 +108,35 @@ pub fn close_hanging(text: &str) -> Option<String> {
             last_content = Some(index);
             index += 1;
             continue;
+        }
+
+        if ch == '$' {
+            // TeX brackets, underscores and backticks are not Markdown
+            // delimiters. Never synthesize a closer inside unfinished math.
+            let run = run_length(&chars, index).min(2);
+            let mut scan = index + run;
+            let mut closed = false;
+            while scan < chars.len() {
+                if at(scan) == Some('\\') {
+                    scan += 2;
+                    continue;
+                }
+                if at(scan) == Some('$') && run_length(&chars, scan) >= run {
+                    index = scan + run;
+                    last_content = Some(index - 1);
+                    closed = true;
+                    break;
+                }
+                scan += 1;
+            }
+            if closed {
+                continue;
+            }
+            if run == 2
+                || at(index + 1).is_some_and(|ch| !ch.is_whitespace() && !ch.is_ascii_digit())
+            {
+                return None;
+            }
         }
 
         match ch {
@@ -325,6 +378,16 @@ mod tests {
         assert_eq!(close_hanging("an _em").as_deref(), Some("an _em_"));
         assert_eq!(close_hanging("__strong").as_deref(), Some("__strong__"));
         assert_eq!(close_hanging("~~struck").as_deref(), Some("~~struck~~"));
+        assert_eq!(
+            close_hanging("It costs $5, **cheap").as_deref(),
+            Some("It costs $5, **cheap**")
+        );
+        assert_eq!(
+            close_hanging(r"\[a\] **cheap").as_deref(),
+            Some(r"\[a\] **cheap**")
+        );
+        assert_eq!(close_hanging(r"\[a ** b"), None);
+        assert_eq!(close_hanging(r"\(a ** b"), None);
     }
 
     #[test]

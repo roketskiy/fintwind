@@ -78,6 +78,15 @@ fn split_runs(runs: &[InlineRun]) -> Vec<Vec<InlineRun>> {
     let mut chunks = vec![Vec::new()];
     let mut bytes = 0;
     for run in runs {
+        if run.style.math {
+            if bytes > 0 && bytes + run.text.len() > ROW_BYTES {
+                chunks.push(Vec::new());
+                bytes = 0;
+            }
+            chunks.last_mut().unwrap().push(run.clone());
+            bytes += run.text.len();
+            continue;
+        }
         for part in text_parts(&run.text) {
             if bytes > 0 && bytes + part.len() > ROW_BYTES {
                 chunks.push(Vec::new());
@@ -253,14 +262,19 @@ impl Document {
         let old = self.rows.split_off(row_start);
         let tail = live.then(|| self.parser.display_tail()).flatten();
         let blocks = &self.parser.tree().blocks;
+        let tail_start = if tail.is_some() {
+            self.parser.display_tail_start()
+        } else {
+            usize::MAX
+        };
         for (index, block) in blocks.iter().enumerate().skip(block_start) {
             self.block_rows.push(self.rows.len());
-            if index + 1 == blocks.len()
-                && let Some(tail) = &tail
-            {
-                for block in tail {
+            if index == tail_start {
+                for block in tail.as_ref().unwrap() {
                     push_block(&block.block, &mut self.rows, &mut self.codes);
                 }
+            } else if index > tail_start {
+                // Already replaced as part of the mended source group.
             } else {
                 push_block(&block.block, &mut self.rows, &mut self.codes);
             }

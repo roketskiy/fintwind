@@ -1,222 +1,343 @@
-//! Display-math rendering: `$$…$$` → typeset PNG, on a background thread.
-//!
-//! The pipeline is the RaTeX family (a KaTeX port in pure Rust — no JS, no
-//! WebView): `ratex_parser` turns LaTeX into an AST, `ratex_layout` typesets it
-//! into a `DisplayList`, and `ratex_render` rasterizes that into PNG bytes with
-//! the KaTeX fonts embedded in the binary. Nothing here touches the UI thread:
-//! the render path only reads the cache below and paints whatever is already
-//! there, degrading to the raw LaTeX source until (or unless) the raster
-//! arrives.
-//!
-//! The cache is content-addressed — `(latex, font size, quantized paint
-//! color)` — so a theme switch or a metrics change naturally produces a new
-//! key and re-renders. Entries are immutable once stored, which also means a
-//! re-render raced into by an evicted task writes byte-identical output; no
-//! generation guard is needed. The store itself is a process-wide static
-//! rather than a GPUI global because the *read* happens in the render path,
-//! which has no `App` handle; the write path uses `AsyncApp::update` only to
-//! reach `cx.refresh()`.
+//! Bounded native math workers. Frames only look up immutable results; neither
+//! the TeX engine nor SVG/font loading is ever called on the UI thread.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, LazyLock};
 
-use gpui::{App, ImageFormat};
+use gpui::{App, EntityId, Global, Hsla, RenderImage, SvgRenderer};
 use parking_lot::Mutex;
+use ratex_types::{color::Color, display_item::DisplayList, math_style::MathStyle};
 
-/// Cache bound in formulas, not bytes: a typical rendered equation is a few
-/// KB of PNG, so 256 entries stay well under a megabyte while covering a
-/// whole long conversation of math-heavy output.
+const MAX_SOURCE_BYTES: usize = 8 * 1024;
 const MAX_ENTRIES: usize = 256;
-/// Formulas rasterize at 2× and display at logical size, so they stay crisp
-/// on high-refresh HIDPI screens without per-scale-factor re-renders.
-const DEVICE_PIXEL_RATIO: f32 = 2.0;
-/// Transparent margin so glyph edges never touch the bitmap's bounds.
-const PADDING: f32 = 3.0;
+const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_PENDING: usize = 128;
+const WORKERS: usize = 2;
+const BATCH_SIZE: usize = 8;
+const MAX_PIXELS: f64 = 2_000_000.0;
 
-/// Content-addressed identity of one rendered formula.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct MathKey {
-    latex: Arc<str>,
-    /// Rounded body text size the formula is typeset at. Exact `f32` equality
-    /// would fragment the cache across renderings of the same metrics.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) struct Key {
+    pub latex: Arc<str>,
+    pub display: bool,
     font_size: u32,
-    /// The RGBA8 the raster actually paints with. Quantizing into the key lets
-    /// two `Hsla`s that land on the same bytes share one entry.
+    scale: u32,
     color: [u8; 4],
 }
 
-impl MathKey {
-    fn new(latex: &str, font_size: f32, color: gpui::Hsla) -> Self {
+impl Key {
+    pub fn new(latex: Arc<str>, display: bool, font_size: f32, scale: f32, color: Hsla) -> Self {
+        let color: gpui::Rgba = color.into();
         Self {
-            latex: Arc::from(latex),
-            font_size: font_size.round().max(1.0) as u32,
-            color: quantize(color),
+            latex,
+            display,
+            font_size: font_size.clamp(6.0, 96.0).to_bits(),
+            scale: scale.clamp(1.0, 3.0).to_bits(),
+            color: [color.r, color.g, color.b, color.a].map(|v| (v * 255.0).round() as u8),
         }
     }
 }
 
-fn quantize(color: gpui::Hsla) -> [u8; 4] {
-    let rgba = gpui::Rgba::from(color);
-    [
-        (rgba.r * 255.0) as u8,
-        (rgba.g * 255.0) as u8,
-        (rgba.b * 255.0) as u8,
-        (rgba.a * 255.0).round() as u8,
-    ]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Metrics {
+    pub width: f32,
+    pub ascent: f32,
+    pub descent: f32,
 }
 
-enum MathImage {
-    Ready {
-        image: Arc<gpui::Image>,
-        /// Logical size to lay the bitmap out at (pixels ÷ dpr).
-        width: f32,
-        height: f32,
-    },
+pub(super) struct Rendered {
+    pub metrics: Metrics,
+    pub image: Arc<RenderImage>,
+}
+
+#[derive(Clone)]
+pub(super) enum Lookup {
+    Ready(Arc<Rendered>),
+    Pending,
     Failed,
 }
 
+
+
+enum State {
+    Pending(HashSet<EntityId>),
+    // Failures are cached too, so malformed input does not retry every frame.
+    Ready(Option<Arc<Rendered>>),
+}
+
+struct Entry {
+    state: State,
+    touched: u64,
+    bytes: usize,
+}
+
 #[derive(Default)]
-struct MathCacheState {
-    entries: HashMap<MathKey, MathImage>,
-    /// Renders currently on the background executor, deduplicating the
-    /// per-frame kick so one formula renders exactly once.
-    inflight: HashSet<MathKey>,
-    /// Insertion order for FIFO eviction.
-    order: VecDeque<MathKey>,
+struct Cache {
+    entries: HashMap<Key, Entry>,
+    queue: VecDeque<Key>,
+    waiting: HashSet<EntityId>,
+    clock: u64,
+    bytes: usize,
+    active: usize,
+    pending: usize,
+    retired: Vec<Arc<RenderImage>>,
 }
 
-static CACHE: LazyLock<Mutex<MathCacheState>> =
-    LazyLock::new(|| Mutex::new(MathCacheState::default()));
+// Interior mutability lets cache hits avoid GPUI's global-observer effects.
+// This store belongs to the UI thread and never takes a blocking lock.
+#[derive(Default)]
+struct Store(RefCell<Cache>);
+impl Global for Store {}
 
-/// Inline `$…$` has no block geometry to preserve, so it renders as Unicode
-/// text (`x^2 + y^2` → `x² + y²`) inside the surrounding run. Unknown input
-/// degrades to itself; the conversion is best-effort by design.
-pub fn to_unicode(latex: &str) -> String {
-    let text = unicodeit::replace(latex);
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        latex.trim().to_owned()
-    } else {
-        trimmed.to_owned()
-    }
-}
-
-/// The cached raster for `key`, if one has already been rendered. Render-path
-/// only: a miss means "not ready yet", and the caller shows the fallback.
-pub fn cached(
-    latex: &str,
-    font_size: f32,
-    color: gpui::Hsla,
-) -> Option<(Arc<gpui::Image>, f32, f32)> {
-    let key = MathKey::new(latex, font_size, color);
-    let cache = CACHE.lock();
-    match cache.entries.get(&key) {
-        Some(MathImage::Ready {
-            image,
-            width,
-            height,
-        }) => Some((image.clone(), *width, *height)),
-        Some(MathImage::Failed) | None => None,
-    }
-}
-
-/// Kick a background render for `key` unless one is cached or already running.
-/// Called from a paint pass, which has the `App` handle the render path lacks.
-/// Idempotent per frame by construction: cache hit and inflight mark both
-/// return without touching the executor.
-pub fn ensure_rendered(latex: &str, font_size: f32, color: gpui::Hsla, cx: &mut App) {
-    let key = MathKey::new(latex, font_size, color);
-    {
-        let mut cache = CACHE.lock();
-        match cache.entries.get(&key) {
-            Some(MathImage::Ready { .. } | MathImage::Failed) => return,
-            None => {}
+impl Cache {
+    fn request(&mut self, key: &Key, view: EntityId) -> Lookup {
+        self.clock += 1;
+        if let Some(entry) = self.entries.get_mut(key) {
+            entry.touched = self.clock;
+            return match &mut entry.state {
+                State::Pending(views) => {
+                    views.insert(view);
+                    Lookup::Pending
+                }
+                State::Ready(Some(rendered)) => Lookup::Ready(rendered.clone()),
+                State::Ready(None) => Lookup::Failed,
+            };
         }
-        if !cache.inflight.insert(key.clone()) {
-            return;
+        if self.pending >= MAX_PENDING {
+            self.waiting.insert(view);
+            return Lookup::Pending;
         }
-    }
-
-    cx.spawn(async move |cx| {
-        let task_key = key.clone();
-        let rendered = cx
-            .background_executor()
-            .spawn(async move { render_formula(&task_key) })
-            .await;
-        let image = match rendered {
-            Ok((image, width, height)) => MathImage::Ready {
-                image,
-                width,
-                height,
+        self.entries.insert(
+            key.clone(),
+            Entry {
+                state: State::Pending(HashSet::from([view])),
+                touched: self.clock,
+                bytes: 0,
             },
-            Err(_) => MathImage::Failed,
-        };
-        cx.update(|_| {
-            let mut cache = CACHE.lock();
-            cache.inflight.remove(&key);
-            insert_and_evict(&mut cache, key, image);
+        );
+        self.queue.push_back(key.clone());
+        self.pending += 1;
+        Lookup::Pending
+    }
+
+    fn trim(&mut self, retain: &[Key]) {
+        while self.entries.len() > MAX_ENTRIES || self.bytes > MAX_CACHE_BYTES {
+            let oldest = self
+                .entries
+                .iter()
+                .filter(|(key, entry)| {
+                    matches!(entry.state, State::Ready(_)) && !retain.iter().any(|kept| kept == *key)
+                })
+                .min_by_key(|(_, entry)| entry.touched)
+                .map(|(key, _)| key.clone());
+            let Some(key) = oldest else { break };
+            let entry = self.entries.remove(&key).unwrap();
+            self.bytes -= entry.bytes;
+            if let State::Ready(Some(rendered)) = entry.state {
+                self.retired.push(rendered.image.clone());
+            }
+        }
+    }
+
+    fn complete(&mut self, results: Vec<(Key, Option<Arc<Rendered>>)>) -> HashSet<EntityId> {
+        let mut notify = std::mem::take(&mut self.waiting);
+        for (key, result) in results {
+            // Pending entries are never evicted or replaced. Content, size,
+            // theme and display scale are part of the immutable key, so an old
+            // completion cannot overwrite a newer formula/style.
+            if let Some(entry) = self.entries.get_mut(&key) {
+                let State::Pending(views) = &mut entry.state else {
+                    continue;
+                };
+                notify.extend(views.drain());
+                entry.bytes = result
+                    .as_ref()
+                    .map_or(0, |r| r.image.as_bytes(0).map_or(0, |b| b.len()));
+                self.bytes += entry.bytes;
+                entry.state = State::Ready(result);
+                self.pending -= 1;
+            }
+        }
+        self.trim(&[]);
+        notify
+    }
+}
+
+/// Queue a visible paragraph's formulas together, deduplicating across every
+/// MarkdownView and notifying each observing pane once per completed batch.
+pub(super) fn request(keys: &[Key], view: EntityId, cx: &mut App) -> Vec<Lookup> {
+    if !cx.has_global::<Store>() {
+        cx.set_global(Store::default());
+    }
+    let results = {
+        let mut cache = cx.global::<Store>().0.borrow_mut();
+        let results = keys
+            .iter()
+            .map(|key| cache.request(key, view))
+            .collect::<Vec<_>>();
+        cache.trim(keys);
+        results
+    };
+    retire_images(cx);
+    pump(cx);
+    results
+}
+
+fn retire_images(cx: &mut App) {
+    let images = std::mem::take(&mut cx.global::<Store>().0.borrow_mut().retired);
+    if !images.is_empty() {
+        // An Arc dropping does not remove GPUI's sprite-atlas entry. Do that
+        // explicitly after the current frame, as GPUI's native image caches do.
+        cx.defer(move |cx| {
+            for image in images {
+                cx.drop_image(image, None);
+            }
         });
-        cx.refresh();
-    })
-    .detach();
+    }
 }
 
-fn insert_and_evict(cache: &mut MathCacheState, key: MathKey, image: MathImage) {
-    // Only first inserts extend the eviction order; overwriting an existing
-    // entry (Ready raced against an identical re-render) keeps its position.
-    if cache.entries.insert(key.clone(), image).is_none() {
-        cache.order.push_back(key);
-    }
-    while cache.entries.len() > MAX_ENTRIES {
-        let Some(oldest) = cache.order.pop_front() else {
-            break;
+fn pump(cx: &mut App) {
+    loop {
+        let batch = {
+            let mut cache = cx.global::<Store>().0.borrow_mut();
+            if cache.active >= WORKERS || cache.queue.is_empty() {
+                return;
+            }
+            cache.active += 1;
+            let count = BATCH_SIZE.min(cache.queue.len());
+            cache.queue.drain(..count).collect::<Vec<_>>()
         };
-        cache.entries.remove(&oldest);
+        let renderer = cx.svg_renderer();
+        let task = cx.background_executor().spawn(async move {
+            batch
+                .into_iter()
+                .map(|key| {
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        render(&key, &renderer).ok().map(Arc::new)
+                    }))
+                    .ok()
+                    .flatten();
+                    (key, result)
+                })
+                .collect()
+        });
+        cx.spawn(async move |cx| {
+            let results = task.await;
+            let _ = cx.update(|cx| {
+                let mut cache = cx.global::<Store>().0.borrow_mut();
+                cache.active -= 1;
+                let views = cache.complete(results);
+                drop(cache);
+                for view in views {
+                    cx.notify(view);
+                }
+                retire_images(cx);
+                pump(cx);
+            });
+        })
+        .detach();
     }
 }
 
-/// Parse → typeset → rasterize, entirely off the UI thread. Returns the PNG
-/// plus its logical layout size.
-fn render_formula(key: &MathKey) -> Result<(Arc<gpui::Image>, f32, f32), String> {
-    let nodes = ratex_parser::parse(&key.latex).map_err(|error| format!("{error:?}"))?;
-    let [r, g, b, a] = key.color.map(f32::from).map(|channel| channel / 255.0);
-    let layout_box = ratex_layout::layout(
-        &nodes,
-        &ratex_layout::LayoutOptions {
-            style: ratex_types::MathStyle::Display,
-            color: ratex_types::Color { r, g, b, a },
+// Color/scale-independent typesetting survives a theme or monitor change.
+// This mutex is accessed ONLY by workers, never by a frame or UI callback.
+type LayoutKey = (Arc<str>, bool);
+#[derive(Default)]
+struct LayoutCache {
+    entries: HashMap<LayoutKey, Arc<DisplayList>>,
+    order: VecDeque<LayoutKey>,
+    items: usize,
+}
+static LAYOUTS: LazyLock<Mutex<LayoutCache>> = LazyLock::new(|| Mutex::new(LayoutCache::default()));
+
+fn typeset(latex: &Arc<str>, display: bool) -> anyhow::Result<Arc<DisplayList>> {
+    anyhow::ensure!(
+        !latex.trim().is_empty() && latex.len() <= MAX_SOURCE_BYTES,
+        "math source limit"
+    );
+    let key = (latex.clone(), display);
+    if let Some(layout) = LAYOUTS.lock().entries.get(&key).cloned() {
+        return Ok(layout);
+    }
+    let ast = ratex_parser::parse(latex).map_err(|error| anyhow::anyhow!("{error:?}"))?;
+    let options = ratex_layout::LayoutOptions {
+        style: if display {
+            MathStyle::Display
+        } else {
+            MathStyle::Text
+        },
+        ..Default::default()
+    };
+    let layout = ratex_layout::layout(&ast, &options);
+    let list = Arc::new(ratex_layout::to_display_list(&layout));
+    anyhow::ensure!(list.items.len() <= 8192, "math layout limit");
+    let mut cache = LAYOUTS.lock();
+    if let Some(existing) = cache.entries.get(&key) {
+        return Ok(existing.clone());
+    }
+    cache.items += list.items.len();
+    cache.entries.insert(key.clone(), list.clone());
+    cache.order.push_back(key);
+    while cache.entries.len() > 128 || cache.items > 32768 {
+        if let Some(key) = cache.order.pop_front() {
+            if let Some(list) = cache.entries.remove(&key) {
+                cache.items -= list.items.len();
+            }
+        }
+    }
+    Ok(list)
+}
+
+fn render(key: &Key, renderer: &SvgRenderer) -> anyhow::Result<Rendered> {
+    let mut list = (*typeset(&key.latex, key.display)?).clone();
+    let color = key.color.map(|v| v as f32 / 255.0);
+    let color = Color::new(color[0], color[1], color[2], color[3]);
+    for item in &mut list.items {
+        use ratex_types::display_item::DisplayItem::*;
+        let (GlyphPath { color: paint, .. }
+        | Line { color: paint, .. }
+        | Rect { color: paint, .. }
+        | Path { color: paint, .. }) = item;
+        // Preserve explicit TeX colors; the default ink follows the theme.
+        if *paint == Color::BLACK {
+            *paint = color;
+        }
+    }
+    let font_size = f32::from_bits(key.font_size) as f64;
+    let metrics = Metrics {
+        width: (list.width * font_size + 2.0) as f32,
+        ascent: (list.height * font_size + 1.0) as f32,
+        descent: (list.depth * font_size + 1.0) as f32,
+    };
+    let width = metrics.width as f64;
+    let height = (metrics.ascent + metrics.descent) as f64;
+    // GPUI supersamples SVGs at 2x in addition to the display's scale factor.
+    let raster_scale = f32::from_bits(key.scale) as f64 * 2.0;
+    anyhow::ensure!(
+        width.is_finite()
+            && height.is_finite()
+            && width > 0.0
+            && height > 0.0
+            && width * raster_scale <= 4096.0
+            && height * raster_scale <= 4096.0
+            && width * height * raster_scale * raster_scale <= MAX_PIXELS,
+        "math image limit"
+    );
+    let svg = ratex_svg::render_to_svg_with_color_syntax(
+        &list,
+        &ratex_svg::SvgOptions {
+            font_size,
+            padding: 1.0,
+            embed_glyphs: true,
             ..Default::default()
         },
+        ratex_svg::SvgColorSyntax::Rgb,
     );
-    let display_list = ratex_layout::to_display_list(&layout_box);
-    let options = ratex_render::RenderOptions {
-        font_size: key.font_size as f32,
-        padding: PADDING,
-        background_color: ratex_types::Color {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.0,
-        },
-        font_dir: String::new(),
-        device_pixel_ratio: DEVICE_PIXEL_RATIO,
-    };
-    let png = ratex_render::render_to_png(&display_list, &options)?;
-
-    // Mirror render_to_png's own pixel arithmetic to recover the logical size
-    // the bitmap lays out at, instead of decoding the PNG header.
-    let em_px = key.font_size as f32 * DEVICE_PIXEL_RATIO;
-    let pad_px = PADDING * DEVICE_PIXEL_RATIO;
-    let width = ((display_list.width as f32 * em_px + 2.0 * pad_px).ceil() as u32).max(1);
-    let height = (((display_list.height + display_list.depth) as f32 * em_px + 2.0 * pad_px).ceil()
-        as u32)
-        .max(1);
-
-    Ok((
-        Arc::new(gpui::Image::from_bytes(ImageFormat::Png, png)),
-        width as f32 / DEVICE_PIXEL_RATIO,
-        height as f32 / DEVICE_PIXEL_RATIO,
-    ))
+    // RaTeX labels its viewport in pt; our metrics are logical pixels.
+    let svg = svg.replacen("pt\"", "\"", 2);
+    let image = renderer.render_single_frame(svg.as_bytes(), f32::from_bits(key.scale))?;
+    Ok(Rendered { metrics, image })
 }
 
 #[cfg(test)]
@@ -224,81 +345,170 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unicode_conversion_maps_commands_and_keeps_unknown_text() {
-        assert_eq!(to_unicode(r"x^2 + y^2"), "x² + y²");
-        assert_eq!(to_unicode(r"\alpha \beta"), "α β");
-        // Not math at all: degrades to itself rather than emptying out.
-        assert_eq!(to_unicode("plain text"), "plain text");
+    fn native_typesetting_covers_common_formulas_and_reuses_layout() {
+        for source in [
+            r"E=mc^2",
+            r"\frac{-b\pm\sqrt{b^2-4ac}}{2a}",
+            r"\int_0^\infty e^{-x}\,dx=1",
+            r"\begin{pmatrix}a&b\\c&d\end{pmatrix}",
+        ] {
+            let source: Arc<str> = source.into();
+            let layout = typeset(&source, true).unwrap();
+            assert!(layout.width > 0.0 && layout.height > 0.0 && !layout.items.is_empty());
+            assert!(Arc::ptr_eq(&layout, &typeset(&source, true).unwrap()));
+        }
     }
 
     #[test]
-    fn quantized_colors_share_one_cache_identity() {
-        let base = gpui::hsla(0.0, 0.0, 0.9, 1.0);
-        let key = MathKey::new(r"\int", 14.0, base);
-        // Same rounded size and color → same key, regardless of f32 noise.
-        let same = MathKey::new(r"\int", 14.2, gpui::hsla(0.0, 0.0, 0.9005, 1.0));
-        assert_eq!(key, same);
-        assert_ne!(key, MathKey::new(r"\int", 15.0, base));
-        assert_ne!(key, MathKey::new(r"\sum", 14.0, base));
+    fn invalid_and_oversized_input_fails_without_rasterizing() {
+        assert!(typeset(&Arc::from(r"\notARealMathCommand{x}"), false).is_err());
+        assert!(typeset(&Arc::from("x".repeat(MAX_SOURCE_BYTES + 1)), false).is_err());
+        assert!(typeset(&Arc::from(""), false).is_err());
     }
 
     #[test]
-    fn cache_evicts_oldest_beyond_the_bound() {
-        let mut cache = MathCacheState::default();
-        let entry = |font_size: u32| {
-            (
-                MathKey {
-                    latex: Arc::from("latex"),
-                    font_size,
-                    color: [0; 4],
-                },
-                MathImage::Ready {
-                    image: Arc::new(gpui::Image::from_bytes(ImageFormat::Png, Vec::new())),
-                    width: 10.0,
-                    height: 10.0,
-                },
+    fn native_raster_is_visible_and_theme_changes_preserve_geometry() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        let key = Key::new(
+            Arc::from(r"\frac{x^2+1}{\sqrt{y}}"),
+            true,
+            14.0,
+            2.0,
+            gpui::black(),
+        );
+        let dark = render(&key, &renderer).unwrap();
+        let light = render(
+            &Key {
+                color: [240, 240, 240, 255],
+                ..key.clone()
+            },
+            &renderer,
+        )
+        .unwrap();
+        assert_eq!(dark.metrics, light.metrics);
+        assert!(
+            dark.image
+                .as_bytes(0)
+                .unwrap()
+                .chunks_exact(4)
+                .any(|pixel| pixel[3] > 0)
+        );
+        assert_ne!(dark.image.as_bytes(0), light.image.as_bytes(0));
+        assert!(
+            render(
+                &Key::new(
+                    Arc::from(r"\rule{10000em}{10000em}"),
+                    true,
+                    14.0,
+                    2.0,
+                    gpui::black()
+                ),
+                &renderer
             )
-        };
-        for index in 0..(MAX_ENTRIES + 8) {
-            let (key, image) = entry(index as u32);
-            insert_and_evict(&mut cache, key, image);
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn pending_work_is_deduplicated_bounded_and_failures_are_cached() {
+        let mut cache = Cache::default();
+        let key = Key::new(Arc::from("x"), false, 14.0, 2.0, gpui::black());
+        let view = EntityId::from(1);
+        for _ in 0..1000 {
+            assert!(matches!(cache.request(&key, view), Lookup::Pending));
+        }
+        assert_eq!(cache.queue.len(), 1);
+        assert_eq!(cache.pending, 1);
+        assert_eq!(
+            cache.complete(vec![(key.clone(), None)]),
+            HashSet::from([view])
+        );
+        cache.queue.clear();
+        for _ in 0..1000 {
+            assert!(matches!(cache.request(&key, view), Lookup::Failed));
+        }
+        assert!(cache.queue.is_empty());
+        for i in 0..MAX_PENDING * 2 {
+            cache.request(
+                &Key {
+                    latex: Arc::from(format!("x_{i}")),
+                    ..key.clone()
+                },
+                view,
+            );
+        }
+        assert_eq!(cache.pending, MAX_PENDING);
+        assert_eq!(cache.queue.len(), MAX_PENDING);
+    }
+
+    #[test]
+    fn cache_evicts_old_results_without_replacing_pending_work() {
+        let mut cache = Cache::default();
+        let key = Key::new(Arc::from("x"), false, 14.0, 1.0, gpui::black());
+        let view = EntityId::from(1);
+        cache.request(&key, view);
+        for i in 0..MAX_ENTRIES * 2 {
+            let next = Key {
+                latex: Arc::from(format!("y_{i}")),
+                ..key.clone()
+            };
+            cache.request(&next, view);
+            cache.complete(vec![(next, None)]);
+            cache.queue.retain(|queued| queued == &key);
         }
         assert_eq!(cache.entries.len(), MAX_ENTRIES);
-        assert_eq!(cache.order.len(), MAX_ENTRIES);
-        // The oldest eight were evicted; the newest survive.
-        let oldest = MathKey {
-            latex: Arc::from("latex"),
-            font_size: 0,
-            color: [0; 4],
-        };
-        let newest = MathKey {
-            latex: Arc::from("latex"),
-            font_size: MAX_ENTRIES as u32 + 7,
-            color: [0; 4],
-        };
-        assert!(!cache.entries.contains_key(&oldest));
-        assert!(cache.entries.contains_key(&newest));
+        assert!(matches!(cache.entries[&key].state, State::Pending(_)));
+        assert_eq!(cache.pending, 1);
     }
 
     #[test]
-    fn the_full_pipeline_rasterizes_a_formula_to_png() {
-        let key = MathKey::new(r"\int_0^1 x^2 \, dx = \frac{1}{3}", 14.0, gpui::black());
-        let (image, width, height) = render_formula(&key).expect("rendering should succeed");
+    fn trim_keeps_keys_requested_in_the_same_batch() {
+        let mut cache = Cache::default();
+        let view = EntityId::from(1);
+        let kept = Key::new(Arc::from("keep"), false, 14.0, 1.0, gpui::black());
+        cache.request(&kept, view);
+        cache.complete(vec![(kept.clone(), None)]);
+        for i in 0..(MAX_ENTRIES - 1) {
+            let next = Key::new(Arc::from(format!("n_{i}")), false, 14.0, 1.0, gpui::black());
+            cache.request(&next, view);
+            cache.complete(vec![(next, None)]);
+        }
+        assert_eq!(cache.entries.len(), MAX_ENTRIES);
+        let extra = Key::new(Arc::from("extra"), false, 14.0, 1.0, gpui::black());
+        cache.request(&extra, view);
+        cache.trim(&[kept.clone(), extra.clone()]);
+        assert!(matches!(cache.request(&kept, view), Lookup::Failed));
+        assert!(matches!(cache.entries[&extra].state, State::Pending(_)));
+    }
 
-        assert!(width > 0.0 && height > 0.0);
-        assert_eq!(
-            &image.bytes[..8],
-            b"\x89PNG\r\n\x1a\n",
-            "output must be PNG"
+    #[test]
+    #[ignore = "manual performance measurement"]
+    fn benchmark_native_math_cache() {
+        let renderer = SvgRenderer::new(Arc::new(()));
+        let started = std::time::Instant::now();
+        let key = Key::new(
+            Arc::from(r"\frac{-b\pm\sqrt{b^2-4ac}}{2a}"),
+            true,
+            14.0,
+            2.0,
+            gpui::black(),
         );
-        // 2× dpr: the bitmap is twice the logical layout size, so the source
-        // must have produced a bitmap wider than a bare glyph or two.
-        assert!(width * 2.0 >= 16.0);
-    }
-
-    #[test]
-    fn malformed_latex_fails_without_panicking() {
-        let key = MathKey::new(r"\frac{", 14.0, gpui::black());
-        assert!(render_formula(&key).is_err());
+        let rendered = Arc::new(render(&key, &renderer).unwrap());
+        let cold = started.elapsed();
+        let mut cache = Cache::default();
+        let view = EntityId::from(1);
+        cache.request(&key, view);
+        cache.queue.clear();
+        cache.complete(vec![(key.clone(), Some(rendered))]);
+        let started = std::time::Instant::now();
+        for _ in 0..100_000 {
+            std::hint::black_box(cache.request(&key, view));
+        }
+        let warm = started.elapsed();
+        assert!(cache.queue.is_empty());
+        eprintln!(
+            "math: cold typeset+raster {cold:?}; 100000 cached lookups {warm:?} ({:?}/lookup)",
+            warm / 100_000
+        );
     }
 }

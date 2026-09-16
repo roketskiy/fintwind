@@ -1,10 +1,12 @@
 //! Block-level markdown parsing over `pulldown-cmark`.
 //!
 //! A full parse produces a [`BlockTree`]: top-level blocks paired with their
-//! byte ranges in the source. The range start of the last top-level block is a
-//! *stable boundary* — appending to the source cannot change anything before
-//! it — which is what [`IncrementalParser`] exploits so a streamed delta costs
-//! roughly O(delta + last block) instead of O(document).
+//! byte ranges in the source. The range start of the second-to-last
+//! source-level block is a *stable boundary* — appending to the source cannot
+//! change anything before it (see [`IncrementalParser::settled_prefix`] for
+//! why the final block alone is not enough) — which is what
+//! [`IncrementalParser`] exploits so a streamed delta costs roughly
+//! O(delta + last two blocks) instead of O(document).
 //!
 //! Soundness guard: link reference definitions (`[label]: url`) resolve
 //! non-locally, so a source containing one drops back to full reparses.
@@ -30,6 +32,8 @@ pub struct InlineStyle {
     pub bold: bool,
     pub italic: bool,
     pub code: bool,
+    /// An indivisible LaTeX expression, kept separate from adjacent math runs.
+    pub math: bool,
     pub strikethrough: bool,
     /// Destination URL when inside a link.
     pub link: Option<String>,
@@ -67,13 +71,13 @@ pub struct ListItem {
     pub blocks: Vec<Block>,
 }
 
-/// One piece of inline content. Images and display math interrupt a run of
-/// text rather than styling it, so they cannot be an [`InlineStyle`] flag.
+/// One piece of inline content. Images interrupt a run of text rather than
+/// styling it, so they cannot be an [`InlineStyle`] flag.
 #[derive(Clone, Debug, PartialEq)]
 enum InlinePiece {
     Run(InlineRun),
     Image { url: String, alt: String },
-    DisplayMath { latex: String },
+    DisplayMath(String),
 }
 
 /// A markdown block. Containers nest.
@@ -88,8 +92,6 @@ pub enum Block {
         url: String,
         alt: String,
     },
-    /// A `$$…$$` formula. Rendered as typeset math on its own block; inline
-    /// `$…$` formulas degrade to Unicode text inside the text runs instead.
     DisplayMath {
         latex: String,
     },
@@ -146,9 +148,216 @@ fn options() -> Options {
         | Options::ENABLE_MATH
 }
 
+/// pulldown-cmark only tokenizes `$…$` / `$$…$$`. Models often emit TeX
+/// brackets, which CommonMark would unescape into `[…]` / `(…)`. Rewrite those
+/// delimiters into dollars before parsing, then map ranges back.
+struct OffsetMap {
+    points: Vec<(usize, usize)>,
+}
+
+impl OffsetMap {
+    fn to_original(&self, rewritten: usize) -> usize {
+        let index = self
+            .points
+            .partition_point(|(rewritten_at, _)| *rewritten_at <= rewritten)
+            .saturating_sub(1);
+        let (rewritten_at, original_at) = self.points[index];
+        original_at + (rewritten - rewritten_at)
+    }
+
+    fn map_range(&self, range: Range<usize>, source_len: usize) -> Range<usize> {
+        self.to_original(range.start)..self.to_original(range.end).min(source_len)
+    }
+}
+
+struct Rewriter {
+    out: String,
+    orig: usize,
+    map: OffsetMap,
+}
+
+impl Rewriter {
+    fn new(source_len: usize) -> Self {
+        Self {
+            out: String::with_capacity(source_len),
+            orig: 0,
+            map: OffsetMap {
+                points: vec![(0, 0)],
+            },
+        }
+    }
+
+    fn copy_to(&mut self, source: &str, end: usize) {
+        if end > self.orig {
+            self.out.push_str(&source[self.orig..end]);
+            self.orig = end;
+        }
+    }
+
+    fn replace(&mut self, end: usize, replacement: &str) {
+        self.out.push_str(replacement);
+        self.orig = end;
+        let rewritten = self.out.len();
+        let original = self.orig;
+        let (rewritten_at, original_at) = *self.map.points.last().unwrap();
+        if rewritten - rewritten_at != original - original_at {
+            self.map.points.push((rewritten, original));
+        }
+    }
+}
+
+fn line_start(source: &str, index: usize) -> bool {
+    index == 0 || source.as_bytes()[index - 1] == b'\n'
+}
+
+fn tick_run(bytes: &[u8], mut index: usize, marker: u8) -> usize {
+    let start = index;
+    while index < bytes.len() && bytes[index] == marker {
+        index += 1;
+    }
+    index - start
+}
+
+fn unescaped_backslash(bytes: &[u8], index: usize) -> bool {
+    bytes[index] == b'\\' && bytes.get(index.wrapping_sub(1)) != Some(&b'\\')
+}
+
+fn rewrite_tex_brackets(source: &str) -> (String, OffsetMap) {
+    let bytes = source.as_bytes();
+    let mut index = 0;
+    let mut rewriter = Rewriter::new(source.len());
+    let mut fence: Option<(u8, usize)> = None;
+    let mut inline_ticks = 0;
+    let mut dollars = 0;
+    let mut tex_display = 0usize;
+    let mut tex_inline = 0usize;
+
+    while index < bytes.len() {
+        if tex_display > 0 {
+            if unescaped_backslash(bytes, index) && bytes.get(index + 1) == Some(&b']') {
+                rewriter.copy_to(source, index);
+                rewriter.replace(index + 2, "$$");
+                tex_display -= 1;
+                index += 2;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+        if tex_inline > 0 {
+            if unescaped_backslash(bytes, index) && bytes.get(index + 1) == Some(&b')') {
+                rewriter.copy_to(source, index);
+                rewriter.replace(index + 2, "$");
+                tex_inline -= 1;
+                index += 2;
+                continue;
+            }
+            index += 1;
+            continue;
+        }
+
+        if inline_ticks == 0 && dollars == 0 && line_start(source, index) {
+            let mut cursor = index;
+            let mut spaces = 0;
+            while cursor < bytes.len() && bytes[cursor] == b' ' && spaces < 3 {
+                cursor += 1;
+                spaces += 1;
+            }
+            let marker = match bytes.get(cursor) {
+                Some(b'`') => Some(b'`'),
+                Some(b'~') => Some(b'~'),
+                _ => None,
+            };
+            if let Some(marker) = marker {
+                let count = tick_run(bytes, cursor, marker);
+                if count >= 3 {
+                    match fence {
+                        Some((open, needed)) if marker == open && count >= needed => {
+                            fence = None;
+                        }
+                        None => fence = Some((marker, count)),
+                        Some(_) => {}
+                    }
+                    rewriter.copy_to(source, cursor + count);
+                    index = cursor + count;
+                    continue;
+                }
+            }
+        }
+
+        if fence.is_some() {
+            index += 1;
+            continue;
+        }
+
+        if dollars == 0 && bytes[index] == b'`' {
+            let count = tick_run(bytes, index, b'`');
+            if inline_ticks == 0 {
+                inline_ticks = count;
+            } else if count == inline_ticks {
+                inline_ticks = 0;
+            }
+            index += count;
+            continue;
+        }
+        if inline_ticks > 0 {
+            index += 1;
+            continue;
+        }
+
+        if bytes[index] == b'$' {
+            if dollars == 0 {
+                dollars = if bytes.get(index + 1) == Some(&b'$') {
+                    2
+                } else {
+                    1
+                };
+                index += dollars;
+            } else {
+                let count = tick_run(bytes, index, b'$').min(dollars);
+                if count == dollars {
+                    dollars = 0;
+                }
+                index += count;
+            }
+            continue;
+        }
+        if dollars > 0 {
+            index += 1;
+            continue;
+        }
+
+        if unescaped_backslash(bytes, index) {
+            match bytes.get(index + 1) {
+                Some(b'[') => {
+                    rewriter.copy_to(source, index);
+                    rewriter.replace(index + 2, "$$");
+                    tex_display += 1;
+                    index += 2;
+                    continue;
+                }
+                Some(b'(') => {
+                    rewriter.copy_to(source, index);
+                    rewriter.replace(index + 2, "$");
+                    tex_inline += 1;
+                    index += 2;
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        index += 1;
+    }
+
+    rewriter.copy_to(source, source.len());
+    (rewriter.out, rewriter.map)
+}
+
 /// Parse a whole source into a [`BlockTree`].
 pub fn parse(source: &str) -> BlockTree {
-    let events = Parser::new_ext(source, options())
+    let (rewritten, map) = rewrite_tex_brackets(source);
+    let events = Parser::new_ext(&rewritten, options())
         .into_offset_iter()
         .collect::<Vec<_>>();
     let mut cursor = Cursor {
@@ -157,7 +366,7 @@ pub fn parse(source: &str) -> BlockTree {
     };
     let mut blocks = Vec::new();
     while let Some((event, range)) = cursor.peek() {
-        let range = range.clone();
+        let range = map.map_range(range.clone(), source.len());
         match event {
             Event::Rule => {
                 cursor.bump();
@@ -456,7 +665,7 @@ fn pieces_into_blocks(pieces: Vec<InlinePiece>) -> Vec<Block> {
                 }
                 blocks.push(Block::Image { url, alt });
             }
-            InlinePiece::DisplayMath { latex } => {
+            InlinePiece::DisplayMath(latex) => {
                 if !runs.is_empty() {
                     blocks.push(Block::Paragraph {
                         runs: std::mem::take(&mut runs),
@@ -472,9 +681,7 @@ fn pieces_into_blocks(pieces: Vec<InlinePiece>) -> Vec<Block> {
     blocks
 }
 
-/// Flatten pieces to runs for contexts that cannot host a block-level image or
-/// formula. Display math degrades to the same Unicode rendering inline math
-/// gets, rather than dropping the content.
+/// Flatten pieces to runs for contexts that cannot host a block-level image.
 fn pieces_into_runs(pieces: Vec<InlinePiece>) -> Vec<InlineRun> {
     merge_runs(
         pieces
@@ -482,9 +689,13 @@ fn pieces_into_runs(pieces: Vec<InlinePiece>) -> Vec<InlineRun> {
             .map(|piece| match piece {
                 InlinePiece::Run(run) => run,
                 InlinePiece::Image { alt, .. } => InlineRun::plain(alt),
-                InlinePiece::DisplayMath { latex } => {
-                    InlineRun::plain(super::math::to_unicode(&latex))
-                }
+                InlinePiece::DisplayMath(text) => InlineRun {
+                    text,
+                    style: InlineStyle {
+                        math: true,
+                        ..Default::default()
+                    },
+                },
             })
             .collect(),
     )
@@ -510,6 +721,15 @@ fn parse_inline_event(cursor: &mut Cursor, pieces: &mut Vec<InlinePiece>, style:
                 style,
             });
         }
+        Event::InlineMath(text) => {
+            let mut style = style.clone();
+            style.math = true;
+            push_run(InlineRun {
+                text: text.into_string(),
+                style,
+            });
+        }
+        Event::DisplayMath(text) => pieces.push(InlinePiece::DisplayMath(text.into_string())),
         // A hard or soft break inside a paragraph is a line break in the
         // rendered run: shaped text splits on '\n' on its own.
         Event::SoftBreak | Event::HardBreak => push_run(InlineRun {
@@ -572,15 +792,6 @@ fn parse_inline_event(cursor: &mut Cursor, pieces: &mut Vec<InlinePiece>, style:
             text: if checked { "[x] " } else { "[ ] " }.to_owned(),
             style: style.clone(),
         }),
-        // Inline math has no block geometry to preserve: it degrades to
-        // Unicode text in the run flow, styled like the prose around it.
-        Event::InlineMath(latex) => push_run(InlineRun {
-            text: super::math::to_unicode(&latex),
-            style: style.clone(),
-        }),
-        Event::DisplayMath(latex) => pieces.push(InlinePiece::DisplayMath {
-            latex: latex.to_string(),
-        }),
         Event::End(_) | Event::Rule => {}
     }
 }
@@ -634,7 +845,7 @@ fn merge_pieces(pieces: Vec<InlinePiece>) -> Vec<InlinePiece> {
         match piece {
             InlinePiece::Run(run) if run.text.is_empty() => {}
             InlinePiece::Run(run) => match merged.last_mut() {
-                Some(InlinePiece::Run(last)) if last.style == run.style => {
+                Some(InlinePiece::Run(last)) if !run.style.math && last.style == run.style => {
                     last.text.push_str(&run.text)
                 }
                 _ => merged.push(InlinePiece::Run(run)),
@@ -652,7 +863,9 @@ fn linkify_bare_urls(pieces: Vec<InlinePiece>) -> Vec<InlinePiece> {
     let mut linked = Vec::with_capacity(pieces.len());
     for piece in pieces {
         match piece {
-            InlinePiece::Run(run) if !run.style.code && run.style.link.is_none() => {
+            InlinePiece::Run(run)
+                if !run.style.code && !run.style.math && run.style.link.is_none() =>
+            {
                 push_linkified_run(run, &mut linked);
             }
             piece => linked.push(piece),
@@ -702,7 +915,9 @@ fn merge_runs(runs: Vec<InlineRun>) -> Vec<InlineRun> {
             continue;
         }
         match merged.last_mut() {
-            Some(last) if last.style == run.style => last.text.push_str(&run.text),
+            Some(last) if !run.style.math && last.style == run.style => {
+                last.text.push_str(&run.text)
+            }
             _ => merged.push(run),
         }
     }
@@ -828,7 +1043,10 @@ impl IncrementalParser {
         let last = self.tree.blocks.last()?;
         // A code block's content is literal: mending would corrupt it, and a
         // half-typed fence must not be reinterpreted.
-        if matches!(last.block, Block::CodeBlock { .. }) {
+        if matches!(
+            last.block,
+            Block::CodeBlock { .. } | Block::DisplayMath { .. }
+        ) {
             return None;
         }
         let mended = super::mend::close_hanging(&self.text[last.range.start..])?;
@@ -854,15 +1072,48 @@ impl IncrementalParser {
         let Some(tail) = self.display_tail() else {
             return self.tree.clone();
         };
-        let mut blocks = self.tree.blocks[..self.tree.blocks.len() - 1].to_vec();
+        let mut blocks = self.tree.blocks[..self.display_tail_start()].to_vec();
         blocks.extend(tail);
         BlockTree { blocks }
     }
 
-    /// All blocks but the last are settled: markdown block structure only ever
-    /// extends the final block, so everything before it is immune to appends.
+    /// Images and display math can split one source paragraph into several
+    /// blocks. Mending replaces that whole source group, not just its last
+    /// rendered piece.
+    pub fn display_tail_start(&self) -> usize {
+        let Some(last) = self.tree.blocks.last() else {
+            return 0;
+        };
+        self.tree
+            .blocks
+            .partition_point(|block| block.range.start < last.range.start)
+    }
+
+    /// Index of the first block an append could still change.
+    ///
+    /// Appending mostly only extends the final block, but two cases reach
+    /// further back, so the last *two* source-level groups stay unsettled:
+    ///
+    /// - A GFM table absorbs the line after it once that line becomes a valid
+    ///   row, yet a partial row of just `|` transiently parses as its own
+    ///   paragraph. Settling the table then would strand every later row in
+    ///   that trailing paragraph.
+    /// - A paragraph split around an inline image yields several blocks that
+    ///   share one source range; they must settle and reparse as a unit or the
+    ///   pieces before the image get re-emitted on the next append.
     fn settled_prefix(&self) -> usize {
-        self.tree.blocks.len().saturating_sub(1)
+        let blocks = &self.tree.blocks;
+        let mut index = blocks.len();
+        for _ in 0..2 {
+            let Some(group_start) = index.checked_sub(1).map(|last| blocks[last].range.start)
+            else {
+                break;
+            };
+            while index > 0 && blocks[index - 1].range.start == group_start {
+                index -= 1;
+            }
+        }
+        index
     }
 }
 
@@ -1076,19 +1327,87 @@ mod tests {
         assert_eq!(paragraph_text(&tree.blocks[0].block), "first\nsecond");
     }
 
-    /// Inline `$…$` degrades to Unicode text inside the surrounding run flow;
-    /// the dollars disappear with it.
     #[test]
-    fn inline_math_becomes_unicode_text() {
-        let tree = parse("given $x^2 + y^2$ obviously");
+    fn math_keeps_inline_order_styles_and_display_blocks() {
+        let tree = parse(r"Before **$a_1$**$b^2$ after $$\frac{1}{2}$$ done");
         let Block::Paragraph { runs } = &tree.blocks[0].block else {
-            panic!("expected a paragraph");
+            panic!("{tree:?}")
         };
-        assert_eq!(
-            paragraph_text(&tree.blocks[0].block),
-            "given x² + y² obviously"
+        let math = runs.iter().filter(|run| run.style.math).collect::<Vec<_>>();
+        assert_eq!(math.len(), 2);
+        assert_eq!(math[0].text, "a_1");
+        assert!(math[0].style.bold);
+        assert_eq!(math[1].text, "b^2");
+        assert!(
+            matches!(&tree.blocks[1].block, Block::DisplayMath { latex } if latex == r"\frac{1}{2}")
         );
-        assert!(runs.iter().all(|run| !run.text.contains('$')));
+        assert_eq!(paragraph_text(&tree.blocks[2].block), " done");
+    }
+
+    #[test]
+    fn math_is_literal_in_code_escapes_and_unclosed_delimiters() {
+        for source in [r"`$a_1$`", r"\$a_1\$", r"unfinished $\frac{a}{b}"] {
+            let tree = parse(source);
+            let Block::Paragraph { runs } = &tree.blocks[0].block else {
+                panic!("{tree:?}")
+            };
+            assert!(runs.iter().all(|run| !run.style.math), "{source}");
+        }
+        let tree = parse("```latex\n$$x^2$$\n```");
+        assert!(
+            matches!(&tree.blocks[0].block, Block::CodeBlock { code, .. } if code == "$$x^2$$")
+        );
+    }
+
+    #[test]
+    fn math_works_in_lists_quotes_headings_and_tables_without_linkifying_tex() {
+        let tree = parse("# $x$\n\n> $y$\n\n- $z$\n\n| Value |\n| --- |\n| $x^2$ |\n");
+        assert!(matches!(&tree.blocks[0].block, Block::Heading { runs, .. } if runs[0].style.math));
+        let Block::Table { rows, .. } = &tree.blocks[3].block else {
+            panic!("{tree:?}")
+        };
+        assert!(rows[0][0][0].style.math);
+        let tree = parse(r"$\text{https://example.com}$");
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!()
+        };
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].style.math && runs[0].style.link.is_none());
+    }
+
+    #[test]
+    fn streamed_math_matches_full_parse_at_every_character_boundary() {
+        for source in [
+            "Intro\n\nBefore $x_1$ and $y$ after\n\n$$\n\\frac{a}{b}\n$$\n\nDone",
+            "- Before $$x$$ after\n- Next $y$\n",
+            "before $$x$$ after **bold**",
+            "before \\[x\\] after **bold**",
+            "inline \\(a_1\\) and $$b$$",
+        ] {
+            let mut parser = IncrementalParser::new();
+            for ch in source.chars() {
+                parser.append(&ch.to_string());
+                assert_eq!(parser.tree(), &parse(parser.text()), "{}", parser.text());
+            }
+        }
+    }
+
+    #[test]
+    fn mended_math_does_not_duplicate_a_split_paragraph_or_edit_tex() {
+        let mut parser = IncrementalParser::new();
+        parser.set_text("before $$x$$ after **bold");
+        assert_eq!(parser.display_tree().blocks.len(), 3);
+        for source in [
+            r"$[x]_1$",
+            r"$$\left[x\right]_1$$",
+            r"$a*b$",
+            r"$\frac{a_1}{b}",
+            r"\[a * b",
+            r"\(a_1",
+        ] {
+            parser.set_text(source);
+            assert_eq!(parser.display_tree(), *parser.tree(), "{source}");
+        }
     }
 
     /// A standalone `$$…$$` becomes its own typed block carrying the raw
@@ -1117,15 +1436,45 @@ mod tests {
         assert_eq!(paragraph_text(&tree.blocks[2].block), " after");
     }
 
-    /// A table cell cannot host block-level math, so it degrades to the same
-    /// Unicode rendering inline math gets rather than dropping content.
     #[test]
-    fn display_math_in_table_cells_falls_back_to_unicode() {
+    fn tex_brackets_become_dollar_math() {
+        let tree = parse(r"before \[x^2\] after");
+        assert_eq!(tree.len(), 3);
+        assert_eq!(paragraph_text(&tree.blocks[0].block), "before ");
+        assert!(
+            matches!(&tree.blocks[1].block, Block::DisplayMath { latex } if latex == "x^2")
+        );
+        assert_eq!(paragraph_text(&tree.blocks[2].block), " after");
+
+        let tree = parse(r"given \(a_1\) obviously");
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("{tree:?}")
+        };
+        let math = runs.iter().filter(|run| run.style.math).collect::<Vec<_>>();
+        assert_eq!(math.len(), 1);
+        assert_eq!(math[0].text, "a_1");
+
+        let tree = parse("```tex\n\\[x\\]\n```");
+        assert!(
+            matches!(&tree.blocks[0].block, Block::CodeBlock { code, .. } if code == "\\[x\\]")
+        );
+        let tree = parse(r"`\[x\]` and \\[y\\]");
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("{tree:?}")
+        };
+        assert!(runs.iter().all(|run| !run.style.math), "{runs:?}");
+    }
+
+    /// A table cell cannot host a block-level formula, so display math becomes
+    /// a math-styled inline run rather than dropping the content.
+    #[test]
+    fn display_math_in_table_cells_becomes_a_math_run() {
         let tree = parse("| a | b |\n|---|---|\n| $$x^2$$ | plain |\n");
         let Block::Table { rows, .. } = &tree.blocks[0].block else {
             panic!("expected a table");
         };
-        assert_eq!(rows[0][0][0].text, "x²");
+        assert_eq!(rows[0][0][0].text, "x^2");
+        assert!(rows[0][0][0].style.math);
     }
 
     /// The incremental path must agree with a full parse at every prefix —

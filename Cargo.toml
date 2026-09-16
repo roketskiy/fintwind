@@ -1,6 +1,6 @@
 [package]
 name = "fintwind"
-version = "0.1.4"
+version = "0.1.5"
 edition = "2024"
 description = "A native Windows desktop app for OpenCode"
 license = "GPL-3.0-only"
@@ -44,18 +44,17 @@ parking_lot = "0.12"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 unicode-segmentation = "1.12"
+unicode-linebreak = "0.1.5"
 url = "2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-client = { path = "crates/fintwind-client" }
 fintwind-protocol = { path = "crates/fintwind-protocol" }
 pulldown-cmark = "0.13"
-# Inline math renders as Unicode text; display math rasterizes on a background
-# thread through the RaTeX family (KaTeX-compatible, fonts embedded in-binary).
-unicodeit = "0.2"
-ratex-parser = "0.1"
-ratex-layout = "0.1"
-ratex-types = "0.1"
-ratex-render = { version = "0.1", features = ["embed-fonts"] }
+# Native, offline math typesetting; all layout and raster work runs on workers.
+ratex-parser = "=0.1.14"
+ratex-layout = "=0.1.14"
+ratex-types = "=0.1.14"
+ratex-svg = { version = "=0.1.14", features = ["embed-fonts"] }
 regex = "1"
 rust-i18n = "4"
 smol = "2"

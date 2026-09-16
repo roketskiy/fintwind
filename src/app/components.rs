@@ -574,6 +574,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         composer,
     } = params;
 
+    let ctx = ctx.clone().with_context_menu(menu.clone());
     let content = message.visible_content().to_owned();
     // "Copy Message" must match what the row presents. The terminal part of a
     // settled response stands in for the whole visible answer, so its menu
@@ -695,7 +696,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                 );
             } else {
                 if !content.trim().is_empty() {
-                    let body = render_markdown_message_body(&content, markdown, theme, ctx);
+                    let body = render_markdown_message_body(&content, markdown, theme, &ctx);
                     // `w_full()` + `max_w` on a column child measures height at
                     // the unclamped width (Taffy). Put width on the main axis
                     // so max_w is applied before the text is measured.
@@ -739,7 +740,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         }
         MessageRole::Assistant => {
             let group_name = SharedString::from(format!("assistant-message-{message_id}"));
-            let body = render_markdown_message_body(&content, markdown, theme, ctx);
+            let body = render_markdown_message_body(&content, markdown, theme, &ctx);
             let mut column = div()
                 .w_full()
                 .min_w_0()
@@ -793,7 +794,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                     md::render::SANS_FAMILY,
                     FontWeight::NORMAL,
                     theme.text_tertiary,
-                    ctx,
+                    &ctx,
                 )),
         ),
         MessageRole::Compaction => {
@@ -919,7 +920,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                         .px(px(10.0))
                         .pb(px(8.0))
                         .min_w_0()
-                        .child(render_markdown_message_body(&content, markdown, theme, ctx)),
+                        .child(render_markdown_message_body(&content, markdown, theme, &ctx)),
                 );
             }
             card

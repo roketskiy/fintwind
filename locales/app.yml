@@ -829,6 +829,8 @@ common.copy_to_composer:
   en: Copy to Composer
 common.copy_code:
   en: Copy Code
+common.copy_expression:
+  en: Copy Expression
 common.cancel:
   en: Cancel
 common.send:

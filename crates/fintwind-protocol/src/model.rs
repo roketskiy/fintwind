@@ -52,12 +52,15 @@ pub enum RuntimeMode {
 }
 
 impl RuntimeMode {
-    pub const ACCESS_OPTIONS: [Self; 4] = [
-        Self::Ask,
-        Self::AutoAcceptEdits,
-        Self::Auto,
-        Self::FullAccess,
-    ];
+    pub const ACCESS_OPTIONS: [Self; 3] = [Self::Ask, Self::AutoAcceptEdits, Self::FullAccess];
+
+    pub fn access(self) -> Self {
+        match self {
+            Self::Plan | Self::Ask => Self::Ask,
+            Self::AutoAcceptEdits => Self::AutoAcceptEdits,
+            Self::Auto | Self::FullAccess => Self::FullAccess,
+        }
+    }
 
     pub fn label(self) -> String {
         match self {
@@ -937,6 +940,9 @@ impl AgentSession {
         if self.runtime_mode == RuntimeMode::Plan {
             self.runtime_mode = RuntimeMode::Ask;
             self.interaction_mode = InteractionMode::Plan;
+        }
+        if self.runtime_mode == RuntimeMode::Auto {
+            self.runtime_mode = RuntimeMode::FullAccess;
         }
         if self.provider_cursor.is_none()
             && let Some(id) = self.provider_session_id.take()
@@ -4132,6 +4138,25 @@ mod tests {
 
         let activities = &session.transcript_blocks[0].activities;
         assert_eq!(activities[0].title, "Browsed the web");
+    }
+
+    #[test]
+    fn legacy_auto_runtime_mode_becomes_full_access() {
+        let project = Project::from_path(PathBuf::from("/tmp/fintwind"));
+        let mut session = AgentSession::new(project.id);
+        session.runtime_mode = RuntimeMode::Auto;
+        session.migrate_legacy_state();
+        assert_eq!(session.runtime_mode, RuntimeMode::FullAccess);
+        assert_eq!(RuntimeMode::Auto.access(), RuntimeMode::FullAccess);
+        assert_eq!(RuntimeMode::Plan.access(), RuntimeMode::Ask);
+        assert_eq!(
+            RuntimeMode::ACCESS_OPTIONS,
+            [
+                RuntimeMode::Ask,
+                RuntimeMode::AutoAcceptEdits,
+                RuntimeMode::FullAccess
+            ]
+        );
     }
 
     #[test]

@@ -51,6 +51,102 @@ use crate::opencode_session::{
 /// waits to reach the UI while costing next to nothing when idle.
 const PERMISSION_POLL_INTERVAL: Duration = Duration::from_millis(400);
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AutoApprove {
+    None,
+    Edits,
+    All,
+}
+
+impl From<bool> for AutoApprove {
+    fn from(all: bool) -> Self {
+        if all {
+            Self::All
+        } else {
+            Self::None
+        }
+    }
+}
+
+impl From<RuntimeMode> for AutoApprove {
+    fn from(mode: RuntimeMode) -> Self {
+        match mode.access() {
+            RuntimeMode::FullAccess => Self::All,
+            RuntimeMode::AutoAcceptEdits => Self::Edits,
+            _ => Self::None,
+        }
+    }
+}
+
+impl AutoApprove {
+    fn allows(self, action: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Edits => is_edit_action(action),
+            Self::None => false,
+        }
+    }
+}
+
+fn is_edit_action(action: &str) -> bool {
+    matches!(action, "edit" | "write" | "patch" | "multiedit")
+}
+
+fn json_str_field<'a>(value: &'a Value, keys: &[&str]) -> &'a str {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_str))
+        .unwrap_or("")
+}
+
+fn json_str_list(value: &Value, keys: &[&str]) -> Vec<String> {
+    keys.iter()
+        .find_map(|key| value.get(*key).and_then(Value::as_array))
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn opencode_session_permissions(mode: RuntimeMode, interaction_mode: InteractionMode) -> Value {
+    let access = mode.access();
+    if interaction_mode == InteractionMode::Plan {
+        let effect = if access == RuntimeMode::FullAccess {
+            "allow"
+        } else {
+            "ask"
+        };
+        return json!([{ "action": "shell", "resource": "*", "effect": effect }]);
+    }
+    match access {
+        RuntimeMode::Ask => json!([
+            { "action": "edit", "resource": "*", "effect": "ask" },
+            { "action": "shell", "resource": "*", "effect": "ask" },
+        ]),
+        RuntimeMode::AutoAcceptEdits => json!([
+            { "action": "edit", "resource": "*", "effect": "allow" },
+            { "action": "shell", "resource": "*", "effect": "ask" },
+        ]),
+        _ => json!([{ "action": "*", "resource": "*", "effect": "allow" }]),
+    }
+}
+
+fn apply_opencode_session_permissions(
+    server: &crate::opencode_pool::PooledServer,
+    session_id: &str,
+    mode: RuntimeMode,
+    interaction_mode: InteractionMode,
+) {
+    let path = format!("/api/session/{}", encode_path_segment(session_id));
+    let _ = server.request(
+        "PATCH",
+        &path,
+        Some(&json!({
+            "permissions": opencode_session_permissions(mode, interaction_mode),
+        })),
+    );
+}
+
 enum CommandMessage {
     Prompt(String),
     Steer(String),
@@ -59,12 +155,229 @@ enum CommandMessage {
     Respond {
         request_id: String,
         option_id: String,
+        session_id: Option<String>,
     },
     RespondUserInput {
         request_id: String,
         answers: Vec<UserInputAnswer>,
+        session_id: Option<String>,
     },
     Shutdown,
+}
+
+/// Parent session plus any descendant whose `parentID` chain reaches it.
+/// Shared by the event thread and the permission poll so a child request is
+/// neither dropped as someone else's session nor answered on the parent URL.
+struct SessionFamily {
+    root: String,
+    members: Mutex<HashSet<String>>,
+    rejected: Mutex<HashSet<String>>,
+}
+
+impl SessionFamily {
+    fn new(root: String) -> Self {
+        let mut members = HashSet::new();
+        members.insert(root.clone());
+        Self {
+            root,
+            members: Mutex::new(members),
+            rejected: Mutex::new(HashSet::new()),
+        }
+    }
+
+    fn remember(&self, session_id: impl Into<String>) {
+        let session_id = session_id.into();
+        if session_id.is_empty() {
+            return;
+        }
+        self.members.lock().insert(session_id.clone());
+        self.rejected.lock().remove(&session_id);
+    }
+
+    fn contains(&self, session_id: &str) -> bool {
+        self.members.lock().contains(session_id)
+    }
+
+    fn belongs(&self, session_id: &str, port: u16) -> bool {
+        self.belongs_with_probe(session_id, |id| probe_session_parent(port, id))
+    }
+
+    fn belongs_with_probe<F>(&self, session_id: &str, mut probe: F) -> bool
+    where
+        F: FnMut(&str) -> Result<Option<String>, SessionProbeError>,
+    {
+        if session_id.is_empty() {
+            return false;
+        }
+        if self.contains(session_id) {
+            return true;
+        }
+        if self.rejected.lock().contains(session_id) {
+            return false;
+        }
+
+        let mut current = session_id.to_owned();
+        let mut chain = vec![current.clone()];
+        for _ in 0..8 {
+            match probe(&current) {
+                Err(SessionProbeError::Unavailable) => return false,
+                Err(SessionProbeError::NotFound) | Ok(None) => {
+                    reject_chain(&self.rejected, &self.root, &chain);
+                    return false;
+                }
+                Ok(Some(parent)) => {
+                    if parent.is_empty() {
+                        reject_chain(&self.rejected, &self.root, &chain);
+                        return false;
+                    }
+                    if self.contains(&parent) {
+                        for id in chain {
+                            self.remember(id);
+                        }
+                        return true;
+                    }
+                    if self.rejected.lock().contains(&parent) {
+                        reject_chain(&self.rejected, &self.root, &chain);
+                        return false;
+                    }
+                    if chain.iter().any(|id| *id == parent) {
+                        return false;
+                    }
+                    current = parent;
+                    chain.push(current.clone());
+                }
+            }
+        }
+        false
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionProbeError {
+    NotFound,
+    Unavailable,
+}
+
+fn reject_chain(rejected: &Mutex<HashSet<String>>, root: &str, chain: &[String]) {
+    let mut rejected = rejected.lock();
+    for id in chain {
+        if id != root {
+            rejected.insert(id.clone());
+        }
+    }
+}
+
+fn is_http_not_found(error: &anyhow::Error) -> bool {
+    error.to_string().contains("HTTP 404")
+}
+
+fn permission_reply_path(session_id: &str, request_id: &str) -> String {
+    format!(
+        "/api/session/{}/permission/{}/reply",
+        encode_path_segment(session_id),
+        encode_path_segment(request_id)
+    )
+}
+
+fn form_reply_path(session_id: &str, form_id: &str) -> String {
+    format!(
+        "/api/session/{}/form/{}/reply",
+        encode_path_segment(session_id),
+        encode_path_segment(form_id)
+    )
+}
+
+fn value_session_id(value: &Value) -> Option<&str> {
+    value
+        .get("sessionID")
+        .or_else(|| value.get("sessionId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+}
+
+fn lookup_pending_item_session(pending: &Value, request_id: &str) -> Option<String> {
+    pending
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .find_map(|item| {
+            (item.get("id").and_then(Value::as_str) == Some(request_id))
+                .then(|| value_session_id(item).map(str::to_owned))
+                .flatten()
+        })
+}
+
+fn retry_session_after_not_found(
+    attempted: &str,
+    request_id: &str,
+    pending: &Value,
+) -> Option<String> {
+    let found = lookup_pending_item_session(pending, request_id)?;
+    (found != attempted).then_some(found)
+}
+
+fn session_parent_id_from_response(value: &Value) -> Option<String> {
+    let info = value.get("data").unwrap_or(value);
+    info.get("parentID")
+        .or_else(|| info.get("parentId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+fn probe_session_parent(port: u16, session_id: &str) -> Result<Option<String>, SessionProbeError> {
+    let path = format!("/api/session/{}", encode_path_segment(session_id));
+    match crate::opencode_session::request_json_on_port(
+        port,
+        "GET",
+        &path,
+        None,
+        Duration::from_secs(2),
+    ) {
+        Ok(value) => Ok(session_parent_id_from_response(&value)),
+        Err(error) if is_http_not_found(&error) => Err(SessionProbeError::NotFound),
+        Err(_) => Err(SessionProbeError::Unavailable),
+    }
+}
+
+fn is_session_prompt_event(kind: &str) -> bool {
+    kind.starts_with("permission.") || kind.starts_with("form.") || kind.starts_with("question.")
+}
+
+fn post_owned_reply(
+    mut post: impl FnMut(&str) -> anyhow::Result<Value>,
+    get: impl Fn(&str) -> anyhow::Result<Value>,
+    mut reject: impl FnMut(&str) -> anyhow::Result<Value>,
+    path_for: impl Fn(&str) -> String,
+    preferred_session: &str,
+    request_id: &str,
+    list_path: &str,
+) -> anyhow::Result<()> {
+    match post(&path_for(preferred_session)) {
+        Ok(_) => Ok(()),
+        Err(error) if is_http_not_found(&error) => {
+            let pending = get(list_path).ok();
+            let retry_session = pending.as_ref().and_then(|pending| {
+                retry_session_after_not_found(preferred_session, request_id, pending)
+            });
+            if let Some(retry_session) = retry_session {
+                match post(&path_for(&retry_session)) {
+                    Ok(_) => Ok(()),
+                    Err(retry_error) => {
+                        let _ = reject(&path_for(&retry_session));
+                        Err(retry_error)
+                    }
+                }
+            } else {
+                let _ = reject(&path_for(preferred_session));
+                Err(error)
+            }
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// The prompt body both turn starts and steers post; opencode keeps the
@@ -109,6 +422,7 @@ pub struct OpenCodeDriver {
     background_transcript_hydrations: Arc<Mutex<HashSet<String>>>,
     commands: Sender<CommandMessage>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
+    forms: Arc<Mutex<OpenCodeFormState>>,
     event_stream: Arc<OpenCodeEventStreamControl>,
     mode: RuntimeMode,
     interaction_mode: InteractionMode,
@@ -181,6 +495,7 @@ impl OpenCodeDriver {
             &format!("/api/session/{}/agent", encode_path_segment(&session_id)),
             Some(&json!({"agent": agent})),
         );
+        apply_opencode_session_permissions(&server, &session_id, mode, interaction_mode);
 
         // opencode keeps the model on the session instead of on every
         // prompt. A startup model override switches it once; later switches
@@ -320,12 +635,13 @@ impl OpenCodeDriver {
                 }
             })?;
 
-        let auto_approve = mode != RuntimeMode::Ask;
+        let auto_approve = AutoApprove::from(mode);
         let (commands, command_rx) = unbounded();
         let turn_active = Arc::new(Mutex::new(false));
         let permissions = Arc::new(Mutex::new(OpenCodePermissionState::default()));
         let forms = Arc::new(Mutex::new(OpenCodeFormState::default()));
         let event_stream = Arc::new(OpenCodeEventStreamControl::default());
+        let session_family = Arc::new(SessionFamily::new(session_id.clone()));
 
         // opencode answers permission requests through a polling endpoint
         // (`GET /api/permission/request`) instead of the event stream v1
@@ -333,15 +649,16 @@ impl OpenCodeDriver {
         // the same approval path the event handler used. The request shape
         // maps straight onto the v1 event payload: `action` is the
         // permission, `resources` the patterns, `save` the always-rules.
+        // Pending items belong to a session; accept this driver's family
+        // (parent plus descendants) and skip everyone else on the shared
+        // server.
         let permission_port = server.port;
-        let permission_session = session_id.clone();
         let permission_events = events.clone();
         let permission_commands = commands.clone();
         let permission_state = Arc::clone(&permissions);
         let poll_forms = Arc::clone(&forms);
         let permission_stream = Arc::clone(&event_stream);
-        let permission_seen = Arc::new(Mutex::new(HashSet::new()));
-        let poll_permission_seen = Arc::clone(&permission_seen);
+        let poll_family = Arc::clone(&session_family);
         thread::Builder::new()
             .name("fintwind-opencode-permissions".into())
             .spawn(move || {
@@ -358,15 +675,13 @@ impl OpenCodeDriver {
                             continue;
                         };
                         for request in requests {
-                            let Some(request_id) = request.get("id").and_then(Value::as_str) else {
-                                continue;
-                            };
-                            if request.get("sessionID").and_then(Value::as_str)
-                                != Some(permission_session.as_str())
-                            {
+                            if request.get("id").and_then(Value::as_str).is_none() {
                                 continue;
                             }
-                            if !poll_permission_seen.lock().insert(request_id.to_owned()) {
+                            let Some(request_session) = value_session_id(request) else {
+                                continue;
+                            };
+                            if !poll_family.belongs(request_session, permission_port) {
                                 continue;
                             }
                             let adapted = json!({
@@ -404,9 +719,10 @@ impl OpenCodeDriver {
                             .into_iter()
                             .flatten()
                         {
-                            if form.get("sessionID").and_then(Value::as_str)
-                                != Some(permission_session.as_str())
-                            {
+                            let Some(form_session) = value_session_id(form) else {
+                                continue;
+                            };
+                            if !poll_family.belongs(form_session, permission_port) {
                                 continue;
                             }
                             let _ = request_user_input_from_form(
@@ -433,6 +749,7 @@ impl OpenCodeDriver {
         let stream_permissions = Arc::clone(&permissions);
         let stream_forms = Arc::clone(&forms);
         let stream_control = Arc::clone(&event_stream);
+        let stream_family = Arc::clone(&session_family);
         thread::Builder::new()
             .name("fintwind-opencode-events".into())
             .spawn(move || {
@@ -454,74 +771,16 @@ impl OpenCodeDriver {
                             let Ok(value) = serde_json::from_str::<Value>(payload.trim()) else {
                                 continue;
                             };
-                            let session = event_session_id(&value);
-                            let is_child = session
-                                .filter(|session| *session != stream_session)
-                                .is_some_and(|session| {
-                                    state.children.get(session).is_some_and(|child| {
-                                        child.item.parent_id.as_deref()
-                                            == Some(stream_session.as_str())
-                                    })
-                                });
-                            if is_child {
-                                handle_child_event(
-                                    &value,
-                                    &stream_session,
-                                    &stream_event_sink,
-                                    &stream_commands,
-                                    mode == RuntimeMode::FullAccess,
-                                    &mut state,
-                                );
-                                continue;
-                            }
-                            // Lifecycle events can announce a new child before
-                            // its session id is otherwise known. Route only
-                            // sessions whose payload explicitly points at this
-                            // foreground session; unrelated runtime traffic is
-                            // discarded.
-                            if matches!(
-                                value.get("type").and_then(Value::as_str),
-                                Some("session.created" | "session.updated")
-                            ) && child_parent_id(&value).as_deref()
-                                == Some(stream_session.as_str())
-                            {
-                                handle_child_event(
-                                    &value,
-                                    &stream_session,
-                                    &stream_event_sink,
-                                    &stream_commands,
-                                    mode == RuntimeMode::FullAccess,
-                                    &mut state,
-                                );
-                                continue;
-                            }
-                            let lifecycle = matches!(
-                                value.get("type").and_then(Value::as_str),
-                                Some("session.created" | "session.updated" | "session.deleted")
-                            );
-                            if session.is_some_and(|session| session != stream_session) {
-                                // Other clients share this server; their
-                                // sessions never touch this transcript, but
-                                // the sidebar still reconciles against the
-                                // server's roster when one appears or goes.
-                                if lifecycle {
-                                    let _ =
-                                        stream_event_sink.send(DriverEvent::NativeSessionsChanged);
-                                }
-                                continue;
-                            }
-                            if !lifecycle && session.is_none() {
-                                continue;
-                            }
-                            handle_event(
+                            dispatch_server_event(
                                 &value,
+                                &stream_session,
                                 &stream_event_sink,
                                 &stream_commands,
                                 &stream_turn,
                                 stream_port,
-                                &stream_session,
-                                mode == RuntimeMode::FullAccess,
+                                auto_approve,
                                 &mut state,
+                                &stream_family,
                             );
                         }
                     }
@@ -546,7 +805,6 @@ impl OpenCodeDriver {
         let worker_session = session_id.clone();
         let worker_events = events;
         let worker_turn = turn_active;
-        let worker_permission_seen = Arc::clone(&permission_seen);
         let worker_forms = Arc::clone(&forms);
         thread::Builder::new()
             .name("fintwind-opencode-driver".into())
@@ -678,18 +936,22 @@ impl OpenCodeDriver {
                         CommandMessage::Respond {
                             request_id,
                             option_id,
+                            session_id,
                         } => {
-                            let path = format!(
-                                "/api/session/{}/permission/{}/reply",
-                                encode_path_segment(&worker_session),
-                                encode_path_segment(&request_id)
-                            );
-                            if let Err(error) = worker_server.request(
-                                "POST",
-                                &path,
-                                Some(&json!({"reply": option_id})),
+                            let target = session_id
+                                .filter(|id| !id.is_empty())
+                                .unwrap_or_else(|| worker_session.clone());
+                            let body = json!({"reply": option_id});
+                            let reject_body = json!({"reply": "reject"});
+                            if let Err(error) = post_owned_reply(
+                                |path| worker_server.request("POST", path, Some(&body)),
+                                |path| worker_server.request("GET", path, None),
+                                |path| worker_server.request("POST", path, Some(&reject_body)),
+                                |session| permission_reply_path(session, &request_id),
+                                &target,
+                                &request_id,
+                                "/api/permission/request",
                             ) {
-                                worker_permission_seen.lock().remove(&request_id);
                                 let _ = worker_events.send(DriverEvent::Error(tr!(
                                     "errors.answer_provider_permission",
                                     provider = "OpenCode",
@@ -700,47 +962,61 @@ impl OpenCodeDriver {
                         CommandMessage::RespondUserInput {
                             request_id,
                             answers,
+                            session_id,
                         } => {
                             // Current opencode routes the question tool's
                             // answers through the form that carried the
                             // prompt; the dedicated question route stays for
                             // releases that still publish `question.asked`.
-                            let (path, body) = if request_id.starts_with("frm_") {
-                                let fields = worker_forms
-                                    .lock()
-                                    .fields
-                                    .get(&request_id)
-                                    .cloned()
-                                    .unwrap_or_default();
-                                (
-                                    format!(
-                                        "/api/session/{}/form/{}/reply",
-                                        encode_path_segment(&worker_session),
-                                        encode_path_segment(&request_id)
-                                    ),
-                                    json!({"answer": form_reply_answer(&fields, &answers)}),
-                                )
-                            } else {
-                                (
-                                    format!(
-                                        "/api/question/{}/reply",
-                                        encode_path_segment(&request_id)
-                                    ),
-                                    json!({
-                                        "answers": answers
-                                            .iter()
-                                            .map(|answer| json!(answer.answers))
-                                            .collect::<Vec<_>>()
-                                    }),
-                                )
-                            };
-                            match worker_server.request("POST", &path, Some(&body)) {
-                                Ok(_) => {
-                                    if request_id.starts_with("frm_") {
-                                        worker_forms.lock().fields.remove(&request_id);
+                            if request_id.starts_with("frm_") {
+                                let (fields, stored_session) = {
+                                    let forms = worker_forms.lock();
+                                    (
+                                        forms.fields.get(&request_id).cloned().unwrap_or_default(),
+                                        forms.sessions.get(&request_id).cloned(),
+                                    )
+                                };
+                                let target = session_id
+                                    .filter(|id| !id.is_empty())
+                                    .or(stored_session)
+                                    .unwrap_or_else(|| worker_session.clone());
+                                let body = json!({"answer": form_reply_answer(&fields, &answers)});
+                                match post_owned_reply(
+                                    |path| worker_server.request("POST", path, Some(&body)),
+                                    |path| worker_server.request("GET", path, None),
+                                    |_| Ok(Value::Null),
+                                    |session| form_reply_path(session, &request_id),
+                                    &target,
+                                    &request_id,
+                                    "/api/form/request",
+                                ) {
+                                    Ok(_) => {
+                                        let mut forms = worker_forms.lock();
+                                        forms.fields.remove(&request_id);
+                                        forms.sessions.remove(&request_id);
+                                    }
+                                    Err(error) => {
+                                        let _ = worker_events.send(DriverEvent::Error(tr!(
+                                            "errors.answer_provider_question",
+                                            provider = "OpenCode",
+                                            error = error
+                                        )));
                                     }
                                 }
-                                Err(error) => {
+                            } else {
+                                let path = format!(
+                                    "/api/question/{}/reply",
+                                    encode_path_segment(&request_id)
+                                );
+                                let body = json!({
+                                    "answers": answers
+                                        .iter()
+                                        .map(|answer| json!(answer.answers))
+                                        .collect::<Vec<_>>()
+                                });
+                                if let Err(error) =
+                                    worker_server.request("POST", &path, Some(&body))
+                                {
                                     let _ = worker_events.send(DriverEvent::Error(tr!(
                                         "errors.answer_provider_question",
                                         provider = "OpenCode",
@@ -765,6 +1041,7 @@ impl OpenCodeDriver {
             background_transcript_hydrations: Arc::new(Mutex::new(HashSet::new())),
             commands,
             permissions,
+            forms,
             event_stream,
             mode,
             interaction_mode,
@@ -947,20 +1224,23 @@ impl DriverControl for OpenCodeDriver {
     }
 
     fn respond(&self, request_id: String, option_id: String) {
-        for (request_id, option_id) in
+        for (request_id, option_id, session_id) in
             permission_responses(&self.permissions, &request_id, &option_id)
         {
             let _ = self.commands.send(CommandMessage::Respond {
                 request_id,
                 option_id,
+                session_id,
             });
         }
     }
 
     fn respond_user_input(&self, request_id: String, answers: Vec<UserInputAnswer>) {
+        let session_id = self.forms.lock().sessions.get(&request_id).cloned();
         let _ = self.commands.send(CommandMessage::RespondUserInput {
             request_id,
             answers,
+            session_id,
         });
     }
 
@@ -1259,6 +1539,7 @@ fn push_origin_activity(origins: &mut Vec<String>, activity_id: String) -> bool 
 struct OpenCodeFormState {
     fields: HashMap<String, Vec<(String, bool)>>,
     announced: HashSet<String>,
+    sessions: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -1282,11 +1563,12 @@ struct OpenCodeUsageMetadata {
     authoritative_totals: Mutex<bool>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct OpenCodePermissionRequest {
     permission: String,
     patterns: Vec<String>,
     always: Vec<String>,
+    session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -1299,6 +1581,7 @@ struct OpenCodePermissionRule {
 struct OpenCodePermissionState {
     pending: HashMap<String, OpenCodePermissionRequest>,
     approved: HashSet<OpenCodePermissionRule>,
+    announced: HashSet<String>,
 }
 
 impl OpenCodePermissionState {
@@ -1829,14 +2112,81 @@ fn child_update(
     )));
 }
 
+fn dispatch_server_event(
+    value: &Value,
+    root: &str,
+    events: &impl DriverEventSink,
+    commands: &Sender<CommandMessage>,
+    turn_active: &Mutex<bool>,
+    port: u16,
+    auto_approve: impl Into<AutoApprove>,
+    state: &mut OpenCodeStreamState,
+    family: &SessionFamily,
+) {
+    let auto_approve = auto_approve.into();
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let session = event_session_id(value);
+    let lifecycle = matches!(
+        kind,
+        "session.created" | "session.updated" | "session.deleted"
+    );
+
+    if let Some(session) = session.filter(|session| *session != root) {
+        let known_child = state
+            .children
+            .get(session)
+            .is_some_and(|child| child.item.parent_id.as_deref() == Some(root));
+        // Lifecycle events can announce a new child before its session id
+        // is otherwise known. Route only sessions whose payload explicitly
+        // points at this foreground session.
+        let announced_child = matches!(kind, "session.created" | "session.updated")
+            && child_parent_id(value).as_deref() == Some(root);
+        if known_child
+            || announced_child
+            || (is_session_prompt_event(kind) && family.contains(session))
+        {
+            handle_child_event(value, root, events, commands, auto_approve, state);
+            if state.children.contains_key(session) {
+                family.remember(session.to_owned());
+            }
+            return;
+        }
+        // Other clients share this server; their sessions never touch this
+        // transcript, but the sidebar still reconciles against the server's
+        // roster when one appears or goes.
+        if lifecycle {
+            let _ = events.send(DriverEvent::NativeSessionsChanged);
+        }
+        return;
+    }
+
+    if !lifecycle && session.is_none() {
+        return;
+    }
+    handle_event(
+        value,
+        events,
+        commands,
+        turn_active,
+        port,
+        root,
+        auto_approve,
+        state,
+    );
+}
+
 fn handle_child_event(
     value: &Value,
     parent_id: &str,
     events: &impl DriverEventSink,
     commands: &Sender<CommandMessage>,
-    auto_approve: bool,
+    auto_approve: impl Into<AutoApprove>,
     state: &mut OpenCodeStreamState,
 ) {
+    let auto_approve = auto_approve.into();
     let kind = value
         .get("type")
         .and_then(Value::as_str)
@@ -1845,6 +2195,31 @@ fn handle_child_event(
     let Some(session_id) = event_session_id(value).map(str::to_owned) else {
         return;
     };
+    // A subagent can request permissions or ask the user questions exactly
+    // like the foreground session. Those prompts belong to the child
+    // session and can race ahead of `session.created`, so they must not
+    // wait for a child row.
+    if kind.starts_with("permission.") {
+        request_permission(payload, events, commands, auto_approve, &state.permissions);
+        return;
+    }
+    match kind {
+        "form.created" => {
+            let _ = request_user_input_from_form(payload, &state.forms, events);
+            return;
+        }
+        "form.replied" | "form.cancelled" => {
+            let form = payload.get("form").unwrap_or(payload);
+            if let Some(id) = form.get("id").and_then(Value::as_str) {
+                let mut forms = state.forms.lock();
+                forms.fields.remove(id);
+                forms.sessions.remove(id);
+                forms.announced.remove(id);
+            }
+            return;
+        }
+        _ => {}
+    }
     if kind == "session.deleted" {
         // Remove the entry before settling it: late deltas and a replayed
         // `execution.started` must not revive a deleted child.
@@ -2081,24 +2456,6 @@ fn handle_child_event(
                 }),
             ));
         }
-        // A subagent can request permissions or ask the user questions
-        // exactly like the foreground session; the request ids are global,
-        // so the parent's reply plumbing answers them unchanged. Without
-        // this passthrough the child would stall on a prompt nobody sees.
-        _ if kind.starts_with("permission.") => {
-            request_permission(payload, events, commands, auto_approve, &state.permissions);
-        }
-        "form.created" => {
-            let _ = request_user_input_from_form(payload, &state.forms, events);
-        }
-        "form.replied" | "form.cancelled" => {
-            let form = payload.get("form").unwrap_or(payload);
-            if let Some(id) = form.get("id").and_then(Value::as_str) {
-                let mut forms = state.forms.lock();
-                forms.fields.remove(id);
-                forms.announced.remove(id);
-            }
-        }
         _ => {}
     }
 }
@@ -2109,9 +2466,10 @@ fn handle_event(
     turn_active: &Mutex<bool>,
     port: u16,
     session_id: &str,
-    auto_approve: bool,
+    auto_approve: impl Into<AutoApprove>,
     state: &mut OpenCodeStreamState,
 ) {
+    let auto_approve = auto_approve.into();
     let kind = value
         .get("type")
         .and_then(Value::as_str)
@@ -2532,6 +2890,7 @@ fn handle_event(
             if let Some(id) = form.get("id").and_then(Value::as_str) {
                 let mut forms = state.forms.lock();
                 forms.fields.remove(id);
+                forms.sessions.remove(id);
                 forms.announced.remove(id);
             }
         }
@@ -2911,7 +3270,7 @@ fn request_user_input_from_form(
 ) -> Option<()> {
     let form = payload.get("form").unwrap_or(payload);
     let form_id = form.get("id").and_then(Value::as_str)?;
-    if form.get("sessionID").and_then(Value::as_str).is_none() {
+    if value_session_id(form).is_none() {
         return None;
     }
     let is_question = form
@@ -2984,6 +3343,11 @@ fn request_user_input_from_form(
         return None;
     }
     state.fields.insert(form_id.to_owned(), field_shapes);
+    if let Some(session_id) = value_session_id(form) {
+        state
+            .sessions
+            .insert(form_id.to_owned(), session_id.to_owned());
+    }
     let _ = events.send(DriverEvent::UserInputRequested {
         request_id: form_id.to_owned(),
         questions,
@@ -2995,7 +3359,7 @@ fn request_permission(
     properties: &Value,
     events: &impl DriverEventSink,
     commands: &Sender<CommandMessage>,
-    auto_approve: bool,
+    auto_approve: AutoApprove,
     permissions: &Mutex<OpenCodePermissionState>,
 ) {
     // The request is either the properties themselves or nested under a key,
@@ -3008,38 +3372,33 @@ fn request_permission(
     let Some(request_id) = request.get("id").and_then(Value::as_str) else {
         return;
     };
+    {
+        let mut permissions = permissions.lock();
+        if !permissions.announced.insert(request_id.to_owned()) {
+            return;
+        }
+    }
+    let session_id = value_session_id(request)
+        .or_else(|| value_session_id(properties))
+        .map(str::to_owned);
     let permission_request = OpenCodePermissionRequest {
-        permission: request
-            .get("permission")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
-        patterns: request
-            .get("patterns")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect(),
-        always: request
-            .get("always")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_owned)
-            .collect(),
+        permission: json_str_field(request, &["permission", "action"]).to_owned(),
+        patterns: json_str_list(request, &["patterns", "resources"]),
+        always: json_str_list(request, &["always", "save"]),
+        session_id: session_id.clone(),
     };
 
     // OpenCode's `always` response updates a process-wide approval cache. A
     // pooled Full Access task must never suppress prompts in a Supervised task,
     // so Fintwind sends only one-shot provider replies and retains durable choices
     // in this driver's session-local state.
-    if auto_approve || permissions.lock().is_approved(&permission_request) {
+    if auto_approve.allows(&permission_request.permission)
+        || permissions.lock().is_approved(&permission_request)
+    {
         let _ = commands.send(CommandMessage::Respond {
             request_id: request_id.to_owned(),
             option_id: "once".into(),
+            session_id,
         });
         return;
     }
@@ -3096,16 +3455,17 @@ fn permission_responses(
     permissions: &Mutex<OpenCodePermissionState>,
     request_id: &str,
     option_id: &str,
-) -> Vec<(String, String)> {
+) -> Vec<(String, String, Option<String>)> {
     let mut permissions = permissions.lock();
-    let request = permissions.pending.remove(request_id);
+    let Some(request) = permissions.pending.remove(request_id) else {
+        return Vec::new();
+    };
+    let session_id = request.session_id.clone();
     if option_id != "always" {
-        return vec![(request_id.to_owned(), option_id.to_owned())];
+        return vec![(request_id.to_owned(), option_id.to_owned(), session_id)];
     }
 
-    if let Some(request) = request.as_ref() {
-        permissions.remember(request);
-    }
+    permissions.remember(&request);
     // OpenCode normally applies an `always` reply to other matching requests
     // already pending in the same session. Preserve that behavior locally,
     // but send every provider reply as one-shot so the shared server's cache
@@ -3114,17 +3474,17 @@ fn permission_responses(
         .pending
         .iter()
         .filter(|(_, request)| permissions.is_approved(request))
-        .map(|(request_id, _)| request_id.clone())
+        .map(|(request_id, request)| (request_id.clone(), request.session_id.clone()))
         .collect::<Vec<_>>();
-    for request_id in &additional {
+    for (request_id, _) in &additional {
         permissions.pending.remove(request_id);
     }
 
-    std::iter::once((request_id.to_owned(), "once".into()))
+    std::iter::once((request_id.to_owned(), "once".into(), session_id))
         .chain(
             additional
                 .into_iter()
-                .map(|request_id| (request_id, "once".into())),
+                .map(|(request_id, session_id)| (request_id, "once".into(), session_id)),
         )
         .collect()
 }
@@ -4195,7 +4555,7 @@ mod tests {
             "supervised asks wait for the user instead of auto-approving"
         );
 
-        // Auto mode: the same ask is answered one-shot without prompting.
+        // Full access: the same ask is answered one-shot without prompting.
         handle_child_event(
             &json!({
                 "type": "permission.requested",
@@ -4207,11 +4567,412 @@ mod tests {
             true,
             &mut state,
         );
-        let Ok(CommandMessage::Respond { request_id, .. }) = command_rx.try_recv() else {
-            panic!("auto mode must answer a child permission ask");
+        let Ok(CommandMessage::Respond {
+            request_id,
+            session_id,
+            ..
+        }) = command_rx.try_recv()
+        else {
+            panic!("full access must answer a child permission ask");
         };
         assert_eq!(request_id, "per_child_2");
+        assert_eq!(session_id.as_deref(), Some("ses_child"));
         assert!(event_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn auto_accept_edits_answers_edits_and_asks_for_shell() {
+        let (events, event_rx, commands, command_rx, _turn, mut state) = harness();
+        handle_child_event(
+            &json!({
+                "type": "permission.requested",
+                "data": {
+                    "id": "per_edit",
+                    "sessionID": "ses_child",
+                    "action": "edit",
+                    "resources": ["src/main.rs"]
+                }
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            AutoApprove::Edits,
+            &mut state,
+        );
+        let Ok(CommandMessage::Respond { request_id, .. }) = command_rx.try_recv() else {
+            panic!("auto-accept edits must answer an edit ask");
+        };
+        assert_eq!(request_id, "per_edit");
+        assert!(event_rx.try_recv().is_err());
+
+        handle_child_event(
+            &json!({
+                "type": "permission.requested",
+                "data": {
+                    "id": "per_shell",
+                    "sessionID": "ses_child",
+                    "permission": "shell",
+                    "patterns": ["git status"]
+                }
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            AutoApprove::Edits,
+            &mut state,
+        );
+        assert!(
+            command_rx.try_recv().is_err(),
+            "auto-accept edits must still ask for shell"
+        );
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::Permission { request_id, .. } if request_id == "per_shell"
+        ));
+    }
+
+    #[test]
+    fn session_permission_rules_match_opencode_access_modes() {
+        assert_eq!(
+            opencode_session_permissions(RuntimeMode::Ask, InteractionMode::Build),
+            json!([
+                { "action": "edit", "resource": "*", "effect": "ask" },
+                { "action": "shell", "resource": "*", "effect": "ask" },
+            ])
+        );
+        assert_eq!(
+            opencode_session_permissions(RuntimeMode::AutoAcceptEdits, InteractionMode::Build),
+            json!([
+                { "action": "edit", "resource": "*", "effect": "allow" },
+                { "action": "shell", "resource": "*", "effect": "ask" },
+            ])
+        );
+        assert_eq!(
+            opencode_session_permissions(RuntimeMode::Auto, InteractionMode::Build),
+            json!([{ "action": "*", "resource": "*", "effect": "allow" }])
+        );
+        assert_eq!(
+            opencode_session_permissions(RuntimeMode::Ask, InteractionMode::Plan),
+            json!([{ "action": "shell", "resource": "*", "effect": "ask" }])
+        );
+        assert_eq!(
+            opencode_session_permissions(RuntimeMode::FullAccess, InteractionMode::Plan),
+            json!([{ "action": "shell", "resource": "*", "effect": "allow" }])
+        );
+    }
+
+    #[test]
+    fn child_permission_reply_targets_the_child_session() {
+        assert_eq!(
+            permission_reply_path("ses_child", "per_child"),
+            "/api/session/ses_child/permission/per_child/reply"
+        );
+        assert!(
+            !permission_reply_path("ses_child", "per_child").contains("ses_parent"),
+            "a child reply must not be posted on the parent session"
+        );
+        assert_eq!(
+            form_reply_path("ses_child", "frm_child"),
+            "/api/session/ses_child/form/frm_child/reply"
+        );
+    }
+
+    #[test]
+    fn child_permission_before_session_created_still_surfaces() {
+        let (events, event_rx, commands, command_rx, _turn, mut state) = harness();
+        handle_child_event(
+            &json!({
+                "type": "permission.requested",
+                "data": {
+                    "id": "per_early",
+                    "sessionID": "ses_child",
+                    "permission": "external_directory",
+                    "patterns": ["C:/Users/foo/.cargo/git/checkouts"]
+                }
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            false,
+            &mut state,
+        );
+        let DriverEvent::Permission { request_id, .. } = event_rx.try_recv().unwrap() else {
+            panic!("a child permission that races ahead of session.created must still surface");
+        };
+        assert_eq!(request_id, "per_early");
+        assert!(command_rx.try_recv().is_err());
+        assert_eq!(
+            state
+                .permissions
+                .lock()
+                .pending
+                .get("per_early")
+                .and_then(|request| request.session_id.as_deref()),
+            Some("ses_child")
+        );
+    }
+
+    #[test]
+    fn session_family_accepts_descendants_and_rejects_strangers() {
+        let family = SessionFamily::new("ses_parent".into());
+        let probe = |id: &str| match id {
+            "ses_child" => Ok(Some("ses_parent".into())),
+            "ses_grand" => Ok(Some("ses_child".into())),
+            "ses_other" => Ok(Some("ses_unrelated".into())),
+            "ses_root" => Ok(None),
+            "ses_missing" => Err(SessionProbeError::NotFound),
+            _ => Err(SessionProbeError::Unavailable),
+        };
+        assert!(family.belongs_with_probe("ses_parent", probe));
+        assert!(family.belongs_with_probe("ses_child", probe));
+        assert!(family.belongs_with_probe("ses_grand", probe));
+        assert!(!family.belongs_with_probe("ses_other", probe));
+        assert!(!family.belongs_with_probe("ses_root", probe));
+        assert!(!family.belongs_with_probe("ses_missing", probe));
+        assert!(
+            family.contains("ses_child") && family.contains("ses_grand"),
+            "successful probes must be remembered for the poll and later events"
+        );
+        assert!(
+            !family.contains("ses_other"),
+            "a shared-server stranger must not join this session family"
+        );
+    }
+
+    #[test]
+    fn permission_404_retries_on_the_owning_session() {
+        let pending = json!({
+            "data": [{
+                "id": "per_child",
+                "sessionID": "ses_child"
+            }]
+        });
+        assert_eq!(
+            retry_session_after_not_found("ses_parent", "per_child", &pending).as_deref(),
+            Some("ses_child")
+        );
+        assert_eq!(
+            retry_session_after_not_found("ses_child", "per_child", &pending),
+            None,
+            "retrying the same session cannot recover a genuine miss"
+        );
+
+        let mut attempted = Vec::new();
+        let mut rejected = Vec::new();
+        let result = post_owned_reply(
+            |path| {
+                attempted.push(path.to_owned());
+                if path.contains("ses_parent") {
+                    anyhow::bail!("OpenCode session request failed with HTTP 404: not found");
+                }
+                Ok(Value::Null)
+            },
+            |_path| Ok(pending.clone()),
+            |path| {
+                rejected.push(path.to_owned());
+                Ok(Value::Null)
+            },
+            |session| permission_reply_path(session, "per_child"),
+            "ses_parent",
+            "per_child",
+            "/api/permission/request",
+        );
+        assert!(result.is_ok());
+        assert_eq!(
+            attempted,
+            [
+                permission_reply_path("ses_parent", "per_child"),
+                permission_reply_path("ses_child", "per_child"),
+            ]
+        );
+        assert!(rejected.is_empty());
+
+        let mut attempted = Vec::new();
+        let mut rejected = Vec::new();
+        let result = post_owned_reply(
+            |path| {
+                attempted.push(path.to_owned());
+                anyhow::bail!("OpenCode session request failed with HTTP 404: not found");
+            },
+            |_path| Ok(pending.clone()),
+            |path| {
+                rejected.push(path.to_owned());
+                Ok(Value::Null)
+            },
+            |session| permission_reply_path(session, "per_child"),
+            "ses_parent",
+            "per_child",
+            "/api/permission/request",
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            rejected,
+            [permission_reply_path("ses_child", "per_child")],
+            "a failed retry must reject on the owning session so the tool does not stay running"
+        );
+    }
+
+    #[test]
+    fn dispatch_accepts_remembered_child_permission() {
+        let (events, event_rx, commands, command_rx, turn, mut state) = harness();
+        let family = SessionFamily::new("ses_parent".into());
+        family.remember("ses_child");
+        dispatch_server_event(
+            &json!({
+                "type": "permission.requested",
+                "data": {
+                    "id": "per_child",
+                    "sessionID": "ses_child",
+                    "permission": "external_directory",
+                    "patterns": ["C:/Users/foo/.cargo"]
+                }
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            &turn,
+            0,
+            false,
+            &mut state,
+            &family,
+        );
+        let DriverEvent::Permission { request_id, .. } = event_rx.try_recv().unwrap() else {
+            panic!("the poll and event paths must accept a known child session");
+        };
+        assert_eq!(request_id, "per_child");
+        assert_eq!(
+            permission_responses(&state.permissions, "per_child", "once"),
+            [("per_child".into(), "once".into(), Some("ses_child".into()))]
+        );
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn unknown_child_permission_waits_for_family_membership() {
+        let (events, event_rx, commands, command_rx, turn, mut state) = harness();
+        let family = SessionFamily::new("ses_parent".into());
+        dispatch_server_event(
+            &json!({
+                "type": "permission.requested",
+                "data": {
+                    "id": "per_early",
+                    "sessionID": "ses_child",
+                    "permission": "external_directory"
+                }
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            &turn,
+            0,
+            false,
+            &mut state,
+            &family,
+        );
+        assert!(
+            event_rx.try_recv().is_err(),
+            "the event thread must not block on HTTP to classify an unknown session"
+        );
+        assert!(command_rx.try_recv().is_err());
+        family.remember("ses_child");
+        dispatch_server_event(
+            &json!({
+                "type": "permission.requested",
+                "data": {
+                    "id": "per_early",
+                    "sessionID": "ses_child",
+                    "permission": "external_directory"
+                }
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            &turn,
+            0,
+            false,
+            &mut state,
+            &family,
+        );
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::Permission { request_id, .. } if request_id == "per_early"
+        ));
+    }
+
+    #[test]
+    fn missing_pending_permission_does_not_fall_back_to_the_parent() {
+        let permissions = Mutex::new(OpenCodePermissionState::default());
+        assert!(permission_responses(&permissions, "per_gone", "once").is_empty());
+    }
+
+    #[test]
+    fn foreign_permission_events_do_not_surface_on_this_session() {
+        let (events, event_rx, commands, command_rx, turn, mut state) = harness();
+        let family = SessionFamily::new("ses_parent".into());
+        assert!(!family.belongs_with_probe("ses_stranger", |_| Ok(None)));
+        dispatch_server_event(
+            &json!({
+                "type": "permission.requested",
+                "data": {
+                    "id": "per_other",
+                    "sessionID": "ses_stranger",
+                    "permission": "bash"
+                }
+            }),
+            "ses_parent",
+            &events,
+            &commands,
+            &turn,
+            0,
+            false,
+            &mut state,
+            &family,
+        );
+        assert!(
+            event_rx.try_recv().is_err(),
+            "pending asks on a shared server must not pop in this session"
+        );
+        assert!(command_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn child_form_records_the_owning_session() {
+        let (events, event_rx) = unbounded();
+        let forms = Mutex::new(OpenCodeFormState::default());
+        request_user_input_from_form(
+            &json!({
+                "form": {
+                    "id": "frm_child",
+                    "sessionID": "ses_child",
+                    "metadata": {"kind": "question"},
+                    "fields": [{
+                        "key": "q0",
+                        "title": "Color",
+                        "description": "Which?",
+                        "type": "string",
+                        "options": [{"value": "Red", "label": "Red"}]
+                    }]
+                }
+            }),
+            &forms,
+            &events,
+        )
+        .expect("a child question form must surface");
+        assert!(matches!(
+            event_rx.try_recv().unwrap(),
+            DriverEvent::UserInputRequested { request_id, .. } if request_id == "frm_child"
+        ));
+        assert_eq!(
+            forms.lock().sessions.get("frm_child").map(String::as_str),
+            Some("ses_child")
+        );
+        assert_eq!(
+            form_reply_path(
+                forms.lock().sessions.get("frm_child").unwrap(),
+                "frm_child"
+            ),
+            "/api/session/ses_child/form/frm_child/reply"
+        );
     }
 
     #[test]
@@ -5861,7 +6622,7 @@ mod tests {
 
         assert_eq!(
             permission_responses(&state.permissions, "per_abc", "always"),
-            [("per_abc".into(), "once".into())],
+            [("per_abc".into(), "once".into(), Some("ses_1".into()))],
             "provider-wide durable approval must be translated to one-shot"
         );
         let repeated = json!({
@@ -5944,12 +6705,13 @@ mod tests {
                 permission: "bash".into(),
                 patterns: vec!["cargo test".into()],
                 always: Vec::new(),
+                session_id: None,
             },
         );
 
         assert_eq!(
             permission_responses(&permissions, "per_once", "always"),
-            [("per_once".into(), "once".into())]
+            [("per_once".into(), "once".into(), None)]
         );
         assert!(permissions.lock().approved.is_empty());
     }
@@ -5961,6 +6723,7 @@ mod tests {
             permission: "bash".into(),
             patterns: patterns.iter().map(|pattern| (*pattern).into()).collect(),
             always: vec!["cargo *".into()],
+            session_id: None,
         };
         permissions
             .lock()
@@ -5978,8 +6741,8 @@ mod tests {
         assert_eq!(
             permission_responses(&permissions, "per_first", "always"),
             [
-                ("per_first".into(), "once".into()),
-                ("per_matching".into(), "once".into()),
+                ("per_first".into(), "once".into(), None),
+                ("per_matching".into(), "once".into(), None),
             ]
         );
         let permissions = permissions.lock();

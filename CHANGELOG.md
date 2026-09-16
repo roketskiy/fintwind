@@ -18,9 +18,20 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.5]
+
+- Typeset inline and display math natively instead of approximating it with Unicode characters, so formulas keep their real glyphs, sizes and theme color
+- Accept the `\[…\]` and `\(…\)` delimiters models emit far more often than `$…$`, without CommonMark unescaping them into plain text
+- Add Copy Expression to a formula's context menu
+- Keep unfinished math in a streaming message from swallowing the markdown that follows it
+- Typeset formulas on background workers with cached results, so the UI thread never blocks on the math engine
+
 ## [0.1.4]
 
 - Show the app version in General settings, and an Update button next to Settings when a newer GitHub release is available
+- Give sidebar session cards a provider-colored model avatar with a spinning halo while the session works, replacing the cramped three-line layout
+- Simplify access modes to Ask, Auto-accept edits, and Full access; sessions saved with the old Auto mode open as Full access
+- Fix subagent permission prompts and form replies being routed to the parent session, which left tools stuck as running until manually stopped
 
 ## [0.1.3]
 

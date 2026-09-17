@@ -94,29 +94,51 @@ pub(crate) fn authenticate(binary: &Path, directory: &Path, name: &str) -> anyho
     let cancelled = Arc::new(AtomicBool::new(false));
     let child_slot = Arc::new(Mutex::new(Some(child)));
     let generation = GENERATION.fetch_add(1, Ordering::SeqCst);
-    let registered = pending().lock().ok().and_then(|mut pending| {
-        if pending.contains_key(name) {
-            return None;
-        }
-        pending.insert(
-            name.to_string(),
-            ChildHandle {
-                child: child_slot.clone(),
-                cancelled: cancelled.clone(),
-                generation,
-            },
-        )
-    });
-    if registered.is_none() {
+    if !try_register(name, child_slot.clone(), cancelled.clone(), generation) {
         // A concurrent request won the race; drop the fresh CLI so the two
         // flows do not fight over the same OAuth callback.
         kill_child(&child_slot);
         bail!("a browser sign-in for {name} is already in progress");
     }
+    let _guard = PendingGuard {
+        name: name.to_string(),
+        generation,
+    };
     let browser = Arc::new(BrowserLaunch::default());
-    let result = run_flow(name, stdout, stderr, cancelled, &child_slot, &browser);
-    take_pending(name, generation);
-    result
+    run_flow(name, stdout, stderr, cancelled, &child_slot, &browser)
+}
+
+fn try_register(
+    name: &str,
+    child_slot: Arc<Mutex<Option<std::process::Child>>>,
+    cancelled: Arc<AtomicBool>,
+    generation: u64,
+) -> bool {
+    pending()
+        .lock()
+        .ok()
+        .is_some_and(|mut pending| match pending.entry(name.to_string()) {
+            std::collections::hash_map::Entry::Occupied(_) => false,
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(ChildHandle {
+                    child: child_slot,
+                    cancelled,
+                    generation,
+                });
+                true
+            }
+        })
+}
+
+struct PendingGuard {
+    name: String,
+    generation: u64,
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        take_pending(&self.name, self.generation);
+    }
 }
 
 fn run_flow(
@@ -316,5 +338,37 @@ mod tests {
         let line = "https://auth.smithery.ai/Tavily/authorize?response_type=code&client_id=https%3A%2F%2Fopencode.ai";
         assert_eq!(https_url_in(line), Some(line));
         assert_eq!(https_url_in("Authorize tavily in your browser."), None);
+    }
+
+    fn register_fixture(name: &str) -> u64 {
+        let _ = pending().lock().map(|mut pending| pending.remove(name));
+        let generation = GENERATION.fetch_add(1, Ordering::SeqCst);
+        assert!(try_register(
+            name,
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicBool::new(false)),
+            generation,
+        ));
+        generation
+    }
+
+    #[test]
+    fn try_register_accepts_the_first_flow() {
+        let name = "unit-test-mcp-register-idle";
+        let generation = register_fixture(name);
+        take_pending(name, generation);
+    }
+
+    #[test]
+    fn try_register_rejects_a_second_flow() {
+        let name = "unit-test-mcp-register-dup";
+        let generation = register_fixture(name);
+        assert!(!try_register(
+            name,
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicBool::new(false)),
+            GENERATION.fetch_add(1, Ordering::SeqCst),
+        ));
+        take_pending(name, generation);
     }
 }

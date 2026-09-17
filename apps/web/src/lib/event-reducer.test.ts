@@ -92,6 +92,41 @@ describe('reduceRuntimeEvent', () => {
     expect(result.session.turns[0]?.provider_resume_at).toBe('provider-message')
   })
 
+  test('reopens a settled turn when the provider starts another execution', () => {
+    let session = reduceRuntimeEvent(
+      runningSession(),
+      event('turnFinished', { success: true, summary: null }),
+      clock,
+    ).session
+    const turnId = session.turns[0]?.id
+    session = apply(session, 'turnStarted', null)
+    session = apply(session, 'textDelta', 'compile finished')
+
+    expect(session.status).toBe('working')
+    expect(session.turns[0]?.id).toBe(turnId)
+    expect(session.turns[0]?.status).toBe('running')
+    expect(session.turns[0]?.completed_at).toBeNull()
+    expect(session.messages.at(-1)?.content).toBe('compile finished')
+  })
+
+  test('does not revive a turn the user stopped', () => {
+    let session = runningSession()
+    session = reduceRuntimeEvent(
+      session,
+      event('turnFinished', { success: false, summary: null }),
+      clock,
+    ).session
+    session.turns[0]!.status = 'interrupted'
+    session.status = 'idle'
+    const messageCount = session.messages.length
+    session = apply(session, 'turnStarted', null)
+    session = apply(session, 'textDelta', 'should stay dropped')
+
+    expect(session.status).toBe('idle')
+    expect(session.turns[0]?.status).toBe('interrupted')
+    expect(session.messages).toHaveLength(messageCount)
+  })
+
   test('ignores late turn output and permission events after a turn settles', () => {
     let session = reduceRuntimeEvent(
       runningSession(),

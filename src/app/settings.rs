@@ -21,7 +21,7 @@ const SETTINGS_SEARCH_CONTEXT: &str = "SettingsSidebar > ComposerInput";
 
 /// The sidebar's rows in display order, each with the keyword haystack the
 /// search field filters against.
-const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
+const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 8] = [
     (
         SettingsPage::General,
         "settings.general",
@@ -57,6 +57,12 @@ const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
         "settings.mcp_market",
         "icons/sparkle.svg",
         "settings.mcp_market_keywords",
+    ),
+    (
+        SettingsPage::Usage,
+        "settings.usage",
+        "icons/chart-column.svg",
+        "settings.usage_keywords",
     ),
     (
         SettingsPage::Daemon,
@@ -121,6 +127,11 @@ impl Fintwind {
             self.mcp_list_scroll.set_offset(gpui::Point::default());
             self.mcp_detail_scroll.set_offset(gpui::Point::default());
             self.load_mcp_servers_from_config(cx);
+        }
+        if page == SettingsPage::Usage {
+            // A stored scan inside the staleness window serves immediately;
+            // an expired one refreshes in the background.
+            self.ensure_usage_stats(false, cx);
         }
         cx.notify();
     }
@@ -395,6 +406,7 @@ impl Fintwind {
                         SettingsPage::Skills => tr!("settings.skills"),
                         SettingsPage::McpServers => tr!("settings.mcp_servers"),
                         SettingsPage::McpMarket => tr!("settings.mcp_market"),
+                        SettingsPage::Usage => tr!("settings.usage"),
                         SettingsPage::Daemon => tr!("settings.daemon"),
                         SettingsPage::Appearance => tr!("settings.appearance"),
                     }),
@@ -405,6 +417,7 @@ impl Fintwind {
                 SettingsPage::Skills => self.render_skills_settings(cx),
                 SettingsPage::McpServers => self.render_mcp_page(cx),
                 SettingsPage::McpMarket => self.render_mcp_market_page(cx),
+                SettingsPage::Usage => self.render_usage_page(cx),
                 SettingsPage::Daemon => self.render_daemon_settings(cx),
                 SettingsPage::Appearance => self.render_appearance_settings(cx),
             });

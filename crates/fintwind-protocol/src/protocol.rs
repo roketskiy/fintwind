@@ -10,7 +10,7 @@ use crate::model::{AgentSession, Project, ProviderProbe, UserInputAnswer};
 use crate::persistence::{ComposerDraftChange, ComposerDrafts, SessionMessageMatch};
 use crate::provider_session::{
     McpServerStatus, NativeSessionSummary, NativeTranscript, ProviderSessionFork,
-    ProviderSessionForkRequest,
+    ProviderSessionForkRequest, UsageStats,
 };
 use crate::settings::DaemonSettings;
 use crate::skills::SkillsCatalog;
@@ -171,6 +171,16 @@ pub enum Command {
         binary: PathBuf,
         directory: PathBuf,
         session_id: String,
+    },
+    /// Walk the OpenCode store's whole session list in one pass and collect
+    /// every top-level session's cumulative usage, for the usage statistics
+    /// page. `directory` only anchors which resident server to ask — the
+    /// listing itself is global, so every session in the store is covered
+    /// no matter which project the app is showing. Blocking traversal on
+    /// the daemon; the client aggregates the returned entries itself.
+    FetchUsageStats {
+        binary: PathBuf,
+        directory: PathBuf,
     },
     /// Rename a native session on the OpenCode server, so the title matches
     /// what the CLI and TUI show.
@@ -436,6 +446,9 @@ pub enum ResponsePayload {
     },
     NativeTranscript {
         transcript: NativeTranscript,
+    },
+    UsageStats {
+        stats: UsageStats,
     },
     ComposerDrafts {
         drafts: ComposerDrafts,

@@ -2798,6 +2798,11 @@ fn handle_event(
         // Deprecated companion of `session.status idle` (both publish on the
         // same transition); the second settlement attempt is a no-op.
         "session.idle" => settle_on_idle_report(port, session_id, turn_active, state, events),
+        // A background bash (or any server-initiated run) can start after
+        // this client already settled. Child sessions reopen on this event;
+        // the foreground session must too, or the continuation's deltas are
+        // dropped (`accepts_turn_output` is false while Idle).
+        "session.execution.started" => ensure_foreground_turn_active(turn_active, events),
         "session.execution.succeeded" => {
             clear_foreground_turn_state(state, events);
             if std::mem::take(&mut *turn_active.lock()) {
@@ -2895,12 +2900,26 @@ fn handle_event(
             }
         }
         // `session.text.started`/`ended`, `session.step.streamed`,
-        // `session.inbox.*`, `session.execution.started`,
-        // `session.instructions.updated`, `server.connected`, and the
-        // heartbeat comment lines are not transcript content. The reasoning
-        // started/ended/delta trio is handled above.
+        // `session.inbox.*`, `session.instructions.updated`,
+        // `server.connected`, and the heartbeat comment lines are not
+        // transcript content. The reasoning started/ended/delta trio is
+        // handled above.
         _ => {}
     }
+}
+
+/// Marks the foreground turn live when the server starts an execution this
+/// client did not prompt. A second start while the turn is already held is a
+/// no-op, so a user-submitted prompt that already set the flag is unchanged.
+fn ensure_foreground_turn_active(turn_active: &Mutex<bool>, events: &impl DriverEventSink) {
+    {
+        let mut active = turn_active.lock();
+        if *active {
+            return;
+        }
+        *active = true;
+    }
+    let _ = events.send(DriverEvent::TurnStarted);
 }
 
 /// Settles a still-active turn when the server's runner reports idle.
@@ -3741,6 +3760,81 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn execution_started_reopens_an_inactive_foreground_turn() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        *turn.lock() = false;
+        handle_event(
+            &json!({
+                "type": "session.execution.started",
+                "data": {"sessionID": "ses_1"}
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        assert!(matches!(event_rx.recv(), Ok(DriverEvent::TurnStarted)));
+        assert!(*turn.lock(), "the server-initiated run must arm the turn");
+
+        // A start while the turn is already held is the user-prompt path;
+        // it must not emit a second TurnStarted.
+        handle_event(
+            &json!({
+                "type": "session.execution.started",
+                "data": {"sessionID": "ses_1"}
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        assert!(event_rx.try_recv().is_err());
+        assert!(*turn.lock());
+
+        handle_event(
+            &json!({
+                "type": "session.text.delta",
+                "data": {"sessionID": "ses_1", "delta": "compile finished"}
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.execution.succeeded",
+                "data": {"sessionID": "ses_1"}
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        let seen = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(seen.iter().any(
+            |event| matches!(event, DriverEvent::TextDelta(text) if text == "compile finished")
+        ));
+        assert!(
+            seen.iter()
+                .any(|event| matches!(event, DriverEvent::TurnFinished { success: true, .. }))
+        );
+        assert!(!*turn.lock(), "the continuation must settle exactly once");
     }
 
     #[test]

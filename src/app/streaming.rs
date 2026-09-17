@@ -406,11 +406,8 @@ impl Fintwind {
                 runtime.last_driver_error = None;
                 runtime.provider_phase = None;
                 self.provider_retries.remove(&session_id);
-                if let Some(session) = self.state.session_mut(session_id)
-                    && session.active_turn_id().is_some()
-                {
-                    session.mark_active_turn_provider_started();
-                    session.status = SessionStatus::Working;
+                if let Some(session) = self.state.session_mut(session_id) {
+                    session.resume_provider_turn();
                 }
             }
             DriverEvent::ProviderBusy => {

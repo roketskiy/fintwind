@@ -2153,12 +2153,14 @@ fn settings_search_filters_pages_for_arrow_cycling() {
         SettingsPage::Skills,
         SettingsPage::McpServers,
         SettingsPage::McpMarket,
+        SettingsPage::Usage,
         SettingsPage::Daemon,
     ];
     assert_eq!(pages(""), all_pages);
 
     assert_eq!(pages("theme"), vec![SettingsPage::Appearance]);
     assert_eq!(pages("skill"), vec![SettingsPage::Skills]);
+    assert_eq!(pages("heatmap"), vec![SettingsPage::Usage]);
 
     // A keyword shared across pages keeps them all reachable.
     assert_eq!(

@@ -20,7 +20,7 @@ use fintwind_protocol::i18n::AppLanguage;
 use fintwind_protocol::identity::DATA_DIRECTORY_NAME;
 use fintwind_protocol::model::{AgentSession, FavoriteModel, OPENCODE_PROVIDER, Project};
 use fintwind_protocol::provider_session::{
-    McpServerStatus, NativeSessionSummary, NativeTranscript,
+    McpServerStatus, NativeSessionSummary, NativeTranscript, UsageStats,
 };
 use fintwind_protocol::theme::ThemePreference;
 
@@ -874,6 +874,28 @@ impl StateStore {
             ResponsePayload::NativeTranscript { transcript } => Ok(transcript),
             _ => Err(io::Error::other(
                 "fintwind daemon returned an invalid native transcript",
+            )),
+        }
+    }
+
+    /// The whole OpenCode store's usage scan: one entry per top-level
+    /// session, collected in a single daemon-side pass over the session
+    /// list. `directory` only anchors which resident server to ask. Blocking
+    /// RPC; call off the UI thread.
+    pub fn fetch_usage_stats(&self, binary: PathBuf, directory: PathBuf) -> io::Result<UsageStats> {
+        match self
+            .daemon
+            .client()
+            .request(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::FetchUsageStats { binary, directory },
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::UsageStats { stats } => Ok(stats),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an invalid usage scan",
             )),
         }
     }

@@ -24,7 +24,8 @@ use std::time::Duration;
 use serde_json::Value;
 
 use fintwind_protocol::provider_session::{
-    McpConnectionState, McpServerStatus, NativeSessionSummary, NativeTranscript,
+    McpConnectionState, McpServerStatus, NativeSessionSummary, NativeTranscript, UsageEntry,
+    UsageStats,
 };
 
 use crate::model::{
@@ -34,8 +35,10 @@ use crate::opencode_session::{OpenCodeServer, encode_path_segment};
 
 /// Page size for paged lists; matches the live transcript reader.
 const PAGE_LIMIT: usize = 200;
+/// Page size for the global session listing, whose rows are small.
+const SESSION_LIST_LIMIT: usize = 500;
 /// Sessions per workspace are bounded in practice; the cap keeps a pathological
-/// store from paging forever.
+/// store from paging forever. At 500 per page this covers 12 500 sessions.
 const MAX_SESSION_PAGES: usize = 25;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -215,6 +218,101 @@ pub(crate) fn fetch_transcript(
     let mut rows = pages.into_iter().flatten().collect::<Vec<_>>();
     rows.reverse();
     Ok(translate_rows(&rows))
+}
+
+/// Walk the whole OpenCode store's session list in one pass and collect
+/// every top-level session's cumulative usage for the usage statistics page.
+/// The list itself is global — no `directory` filter — so sessions from
+/// every project the CLI, TUI, or any client ever used are covered. One
+/// request per page of sessions, nothing per session: the rows already
+/// carry the tokens, cost, model, and timestamps.
+pub(crate) fn fetch_usage_stats(server: &OpenCodeServer) -> anyhow::Result<UsageStats> {
+    let mut stats = UsageStats::default();
+    let mut cursor: Option<String> = None;
+    for page in 0..MAX_SESSION_PAGES {
+        let mut path = format!("/api/session?limit={SESSION_LIST_LIMIT}");
+        if let Some(token) = &cursor {
+            path.push_str(&format!("&cursor={}", encode_path_segment(token)));
+        }
+        let response = server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT)?;
+        let rows = response
+            .pointer("/data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let exhausted = rows.is_empty();
+        for row in &rows {
+            if is_child_session(row) {
+                continue;
+            }
+            if let Some(entry) = usage_entry_from_row(row) {
+                stats.entries.push(entry);
+            }
+        }
+        // The next cursor repeats when the list is exhausted; stop then.
+        match response
+            .pointer("/cursor/next")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        {
+            Some(next) if cursor.as_deref() != Some(next.as_str()) && !exhausted => {
+                cursor = Some(next);
+            }
+            _ => {
+                if !exhausted
+                    && page + 1 == MAX_SESSION_PAGES
+                    && response
+                        .pointer("/cursor/next")
+                        .and_then(Value::as_str)
+                        .is_some()
+                {
+                    eprintln!(
+                        "usage scan hit the {MAX_SESSION_PAGES}-page session cap; \
+                         statistics cover only the newest portion"
+                    );
+                }
+                break;
+            }
+        }
+    }
+    stats.entries.sort_by_key(|entry| entry.timestamp);
+    Ok(stats)
+}
+
+/// One session row's contribution to the usage scan. Rows without a usable
+/// timestamp fold out: they cannot land on a day, and the totals the page
+/// draws are all day-bucketed. A row without `tokens` still counts as a
+/// session — it just adds zero tokens.
+fn usage_entry_from_row(row: &Value) -> Option<UsageEntry> {
+    let time = row.get("time")?;
+    // Last activity is when the session's tokens were spent, as far as a
+    // day bucket can tell.
+    let timestamp =
+        ms_to_seconds(time.get("updated")).or_else(|| ms_to_seconds(time.get("created")))?;
+    let empty_tokens = Value::Null;
+    let tokens = row.get("tokens").unwrap_or(&empty_tokens);
+    let lane = |pointer: &str| tokens.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
+    Some(UsageEntry {
+        timestamp,
+        model: row.get("model").and_then(|model| {
+            let provider = model.get("providerID").and_then(Value::as_str)?;
+            let id = model.get("id").and_then(Value::as_str)?;
+            Some(format!("{provider}/{id}"))
+        }),
+        directory: row
+            .pointer("/location/directory")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        cost: row
+            .get("cost")
+            .and_then(Value::as_f64)
+            .filter(|cost| *cost > 0.0),
+        input_tokens: lane("/input"),
+        output_tokens: lane("/output"),
+        reasoning_tokens: lane("/reasoning"),
+        cache_read_tokens: lane("/cache/read"),
+        cache_write_tokens: lane("/cache/write"),
+    })
 }
 
 /// Rename a native session on the server. This beta exposes rename as
@@ -797,6 +895,55 @@ mod tests {
         let item = tool_item(&failed);
         assert!(item.failed);
         assert!(item.complete);
+    }
+
+    /// The session-row shape the global usage scan reduces: five token
+    /// lanes, the model pair, the project directory, and `time.updated` as
+    /// the preferred stamp.
+    #[test]
+    fn usage_entry_parses_the_session_row_shape() {
+        let row = json!({
+            "id": "ses_1", "title": "迁移会话",
+            "time": {"created": 1_788_253_280_101_u64, "updated": 1_788_253_300_500_u64},
+            "model": {"id": "glm-5.3", "providerID": "glmcoding"},
+            "tokens": {"input": 130, "output": 90, "reasoning": 7, "cache": {"read": 1_000, "write": 10}},
+            "cost": 1.25,
+            "location": {"directory": "E:\\work\\x"}
+        });
+        let entry = usage_entry_from_row(&row).unwrap();
+        assert_eq!(entry.timestamp, 1_788_253_300);
+        assert_eq!(entry.model.as_deref(), Some("glmcoding/glm-5.3"));
+        assert_eq!(entry.directory.as_deref(), Some("E:\\work\\x"));
+        assert_eq!(entry.cost, Some(1.25));
+        assert_eq!(entry.input_tokens, 130);
+        assert_eq!(entry.output_tokens, 90);
+        assert_eq!(entry.reasoning_tokens, 7);
+        assert_eq!(entry.cache_read_tokens, 1_000);
+        assert_eq!(entry.cache_write_tokens, 10);
+        assert_eq!(entry.total_tokens(), 1_237);
+
+        // A zero cost folds out to `None`; a row that only stamped
+        // `time.created` still lands on it.
+        let free = json!({
+            "id": "ses_2", "time": {"updated": 2_000_u64},
+            "tokens": {"input": 5, "output": 1}, "cost": 0
+        });
+        let entry = usage_entry_from_row(&free).unwrap();
+        assert_eq!(entry.cost, None);
+        assert_eq!(entry.timestamp, 2);
+        assert_eq!(entry.total_tokens(), 6);
+
+        // A session that never reported tokens still counts as a session,
+        // just with zero tokens.
+        let tokenless = json!({"id": "ses_4", "time": {"updated": 3_000_u64}});
+        let entry = usage_entry_from_row(&tokenless).unwrap();
+        assert_eq!(entry.timestamp, 3);
+        assert_eq!(entry.total_tokens(), 0);
+
+        // A child session is skipped by the scan itself; a timeless row
+        // cannot land on a day and folds out here.
+        let timeless = json!({"id": "ses_3", "tokens": {"input": 1}});
+        assert!(usage_entry_from_row(&timeless).is_none());
     }
 
     #[test]

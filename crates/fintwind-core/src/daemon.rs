@@ -509,6 +509,15 @@ impl Backend for FintwindBackend {
                 let transcript = crate::driver::native::fetch_transcript(&server, &session_id)?;
                 Ok(ResponsePayload::NativeTranscript { transcript })
             }
+            Command::FetchUsageStats { binary, directory } => {
+                // One pass over the whole session store; `directory` only
+                // anchors which resident server to ask. Blocking I/O, so
+                // this runs on the request thread like the other
+                // sessionless OpenCode reads.
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let stats = crate::driver::native::fetch_usage_stats(&server)?;
+                Ok(ResponsePayload::UsageStats { stats })
+            }
             Command::RenameProviderSession {
                 binary,
                 directory,
@@ -1256,6 +1265,7 @@ fn handle_driver_command(
         | Command::ForkProviderSession { .. }
         | Command::ListProviderSessions { .. }
         | Command::FetchNativeTranscript { .. }
+        | Command::FetchUsageStats { .. }
         | Command::RenameProviderSession { .. }
         | Command::DeleteProviderSession { .. }
         | Command::AuthenticateMcpServer { .. }

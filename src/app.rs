@@ -252,6 +252,7 @@ enum SettingsPage {
     Skills,
     McpServers,
     McpMarket,
+    Usage,
     Daemon,
     Appearance,
 }
@@ -1511,6 +1512,21 @@ pub struct Fintwind {
     mcp_market_search: Entity<ComposerInput>,
     mcp_market_category: mcp_market_page::McpMarketCategory,
     mcp_market_selected: Option<String>,
+    /// The Usage page's scan snapshot, fetched off the UI thread. `None`
+    /// until the first scan lands; frames never touch the entries inside.
+    usage_stats: Option<Rc<fintwind_client::provider_session::UsageStats>>,
+    /// The last scan's failure, when the page has nothing cached to show.
+    usage_stats_error: Option<String>,
+    /// Bumped per scan; a result from a superseded scan is discarded.
+    usage_stats_generation: u64,
+    usage_stats_pending: bool,
+    usage_stats_loaded_at: Option<Instant>,
+    /// What the Usage page's KPIs, daily bars, and model ranking aggregate
+    /// over. The heatmap keeps its own fixed week window.
+    usage_range: usage_page::UsageRange,
+    /// Aggregated view models for the current range, rebuilt when a scan
+    /// lands or the range changes. Frames read only this.
+    usage_views: usage_page::UsageViews,
     /// Scroll position of the settings content column, tracked so the pane
     /// can draw a scrollbar and mark the titlebar boundary once content
     /// slides under it.
@@ -1695,6 +1711,7 @@ mod streaming;
 mod transcript;
 mod transcript_view;
 mod usage_meter;
+mod usage_page;
 mod window_chrome;
 
 pub use autocomplete::init as init_composer_autocomplete;
@@ -3075,6 +3092,13 @@ impl Fintwind {
                 mcp_market_search,
                 mcp_market_category: Default::default(),
                 mcp_market_selected: None,
+                usage_stats: None,
+                usage_stats_error: None,
+                usage_stats_generation: 0,
+                usage_stats_pending: false,
+                usage_stats_loaded_at: None,
+                usage_range: Default::default(),
+                usage_views: Default::default(),
                 settings_scroll: ScrollHandle::new(),
                 settings_scrollbar: ScrollbarState::new(),
                 header_drag_armed: false,

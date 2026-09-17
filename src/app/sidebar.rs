@@ -19,19 +19,24 @@ pub fn init(cx: &mut App) {
     )]);
 }
 
-fn append_project_group_rows(
-    rows: &mut Vec<SidebarRow>,
-    project_id: Uuid,
-    sessions: &[Uuid],
-    collapsed: bool,
-) {
-    // A project with no started sessions keeps its header so every added
-    // project stays visible; it just lists nothing beneath it.
-    rows.push(SidebarRow::Header(project_id));
-    if !collapsed {
-        rows.extend(sessions.iter().copied().map(SidebarRow::Session));
-    }
-    rows.push(SidebarRow::GroupSpacer);
+/// One project group in the sidebar: its header, plus the sessions listed
+/// beneath it while it is unfolded. Whether it is unfolded belongs to the row
+/// rather than to a lookup at paint time: a group's height depends on it, so
+/// the row value has to move with it for the virtualized list to notice.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SidebarGroup {
+    pub(super) project_id: Uuid,
+    /// Shared so a frame clones a pointer instead of every session id.
+    pub(super) sessions: Rc<Vec<Uuid>>,
+    pub(super) unfolded: bool,
+}
+
+/// The scroll state behind one unfolded group's body. Held per project so a
+/// group keeps its scroll position when it is folded and unfolded again.
+#[derive(Clone)]
+pub(super) struct SidebarGroupScroll {
+    pub(super) list: ListState,
+    pub(super) scrollbar: Rc<ScrollbarState>,
 }
 
 /// Height of a session card plus the separation reserved beneath it in the
@@ -49,6 +54,20 @@ const SIDEBAR_SEARCH_BOTTOM_GAP: f32 = 10.0;
 /// old text-only row so the trailing new-session control has a usable hit area.
 const SIDEBAR_PROJECT_CARD_HEIGHT: f32 = 34.0;
 const SIDEBAR_PROJECT_CARD_BOTTOM_GAP: f32 = 6.0;
+/// An unfolded group's body stops growing here — six session cards — and the
+/// rest scrolls inside the group, so one busy project cannot push every other
+/// project off screen.
+const SIDEBAR_GROUP_BODY_MAX_HEIGHT: f32 = SIDEBAR_SESSION_ROW_HEIGHT * 6.0;
+/// How far a group list renders above and below its viewport.
+const SIDEBAR_GROUP_OVERDRAW: f32 = SIDEBAR_SESSION_ROW_HEIGHT * 2.0;
+
+/// Height of an unfolded group's body: its session rows, capped at
+/// [`SIDEBAR_GROUP_BODY_MAX_HEIGHT`] so the remainder scrolls in place. Rows
+/// are a fixed height, so the cap falls on a row boundary and no card is ever
+/// cut in half.
+fn sidebar_group_body_height(sessions: usize) -> f32 {
+    (sessions as f32 * SIDEBAR_SESSION_ROW_HEIGHT).min(SIDEBAR_GROUP_BODY_MAX_HEIGHT)
+}
 
 /// The session row's trailing time: how long the live turn has been working,
 /// or how long ago the agent last replied. A session that has never replied
@@ -138,15 +157,15 @@ fn sidebar_project_groups(
         .collect()
 }
 
-/// One row of the virtualized sidebar session history.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// One row of the virtualized sidebar session history. A project contributes a
+/// single row — its header and, while unfolded, its own capped session list —
+/// so a group's height and its internal scroll belong to one list item.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum SidebarRow {
     /// Opens the window-wide command palette and scrolls with history.
     Search,
-    /// Project group header carrying the project's id.
-    Header(Uuid),
-    /// A started session.
-    Session(Uuid),
+    /// A project group carrying its id and its started sessions.
+    Group(Rc<SidebarGroup>),
     /// Spacing between project groups.
     GroupSpacer,
 }
@@ -716,12 +735,12 @@ impl Fintwind {
         for (project_id, sessions) in
             sidebar_project_groups(&self.state.sessions, &self.state.projects)
         {
-            append_project_group_rows(
-                &mut rows,
+            rows.push(SidebarRow::Group(Rc::new(SidebarGroup {
                 project_id,
-                &sessions,
-                !self.sidebar_expanded_groups.contains(&project_id),
-            );
+                sessions: Rc::new(sessions),
+                unfolded: self.sidebar_expanded_groups.contains(&project_id),
+            })));
+            rows.push(SidebarRow::GroupSpacer);
         }
         rows
     }
@@ -754,6 +773,12 @@ impl Fintwind {
                 .clone()
                 .with_uniform_item_height(px(SIDEBAR_SESSION_ROW_HEIGHT));
         }
+        // A group row is several times taller than the session hint, and the
+        // list's scroll extent comes from those hints until a row is measured.
+        // Measure every row once per snapshot instead: there is one per
+        // project, and a body's height is fixed, so this lays out the headers
+        // and bodies — never the session rows inside them.
+        let _ = self.sidebar_list_state.clone().measure_all();
     }
 
     fn sidebar_row(
@@ -765,21 +790,105 @@ impl Fintwind {
         let Some(row) = rows.get(index) else {
             return div().into_any_element();
         };
-        match *row {
+        match row {
             SidebarRow::Search => self.render_sidebar_search(cx).into_any_element(),
-            SidebarRow::Header(project_id) => self
-                .render_sidebar_group_header(project_id, cx)
-                .into_any_element(),
-            SidebarRow::Session(session_id) => self
-                .render_sidebar_session_item(session_id, cx)
+            SidebarRow::Group(group) => self
+                .render_sidebar_group(group, cx)
                 .into_any_element(),
             SidebarRow::GroupSpacer => div().w_full().h(px(10.0)).into_any_element(),
         }
     }
 
-    fn render_sidebar_group_header(&self, project_id: Uuid, cx: &mut Context<Self>) -> Div {
+    /// One project group: the header card, and — while the group is unfolded —
+    /// its sessions in a capped, virtualized list of their own, so a project
+    /// with hundreds of tasks scrolls inside its own group instead of pushing
+    /// the rest of the sidebar off screen.
+    fn render_sidebar_group(&self, group: &SidebarGroup, cx: &mut Context<Self>) -> Div {
+        let container = div()
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(self.render_sidebar_group_header(group.project_id, !group.unfolded, cx));
+        if !group.unfolded || group.sessions.is_empty() {
+            return container;
+        }
+        let scroll = self.sidebar_group_scroll(group.project_id, group.sessions.len());
+        let sessions = group.sessions.clone();
+        let entity = cx.entity().downgrade();
+        let wheel_list = scroll.list.clone();
+        container.child(
+            div()
+                .id(SharedString::from(format!(
+                    "sidebar-group-body-{}",
+                    group.project_id
+                )))
+                .w_full()
+                .min_w_0()
+                .h(px(sidebar_group_body_height(group.sessions.len())))
+                .relative()
+                // The group list is nested in the sidebar list, so keep the
+                // wheel inside it while it has overflow of its own; a group
+                // that fits keeps chaining to the sidebar as before.
+                .on_scroll_wheel(move |_, _, cx| contain_scroll(&wheel_list, cx))
+                .child(
+                    list(scroll.list.clone(), move |index, _window, cx| {
+                        let Some(session_id) = sessions.get(index).copied() else {
+                            return div().into_any_element();
+                        };
+                        entity
+                            .upgrade()
+                            .map(|entity| {
+                                entity.update(cx, |this, cx| {
+                                    this.render_sidebar_session_item(session_id, cx)
+                                })
+                            })
+                            .unwrap_or_else(|| div().into_any_element())
+                    })
+                    .size_full(),
+                )
+                .child(scrollbar::vertical(&scroll.list, &scroll.scrollbar)),
+        )
+    }
+
+    /// The scroll state behind one unfolded group's body, created on first use
+    /// and kept for the window's lifetime so the group's scroll position
+    /// survives folding it away and unfolding it again.
+    fn sidebar_group_scroll(&self, project_id: Uuid, sessions: usize) -> SidebarGroupScroll {
+        let mut scrolls = self.sidebar_group_scrolls.borrow_mut();
+        let scroll = scrolls
+            .entry(project_id)
+            .or_insert_with(|| SidebarGroupScroll {
+                list: ListState::new(0, ListAlignment::Top, px(SIDEBAR_GROUP_OVERDRAW)),
+                scrollbar: ScrollbarState::new(),
+            });
+        if scroll.list.item_count() != sessions {
+            // Splicing the whole range drops the list to the top, so hold the
+            // user's place across a task being added or removed. A task added
+            // at the top is revealed by `reveal_sidebar_session_project`.
+            let anchor = scroll.list.logical_scroll_top();
+            scroll.list.splice(0..scroll.list.item_count(), sessions);
+            // Session rows are a fixed height, and the body is sized from the
+            // same constant, so the hint makes the group's extent exact before
+            // any of its rows have been measured.
+            let _ = scroll
+                .list
+                .clone()
+                .with_uniform_item_height(px(SIDEBAR_SESSION_ROW_HEIGHT));
+            if anchor.item_ix < sessions {
+                scroll.list.scroll_to(anchor);
+            }
+        }
+        scroll.clone()
+    }
+
+    fn render_sidebar_group_header(
+        &self,
+        project_id: Uuid,
+        collapsed: bool,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let theme = Theme::current(cx);
-        let collapsed = !self.sidebar_expanded_groups.contains(&project_id);
         let project_name = self
             .state
             .projects
@@ -809,7 +918,6 @@ impl Fintwind {
             .gap(px(5.0))
             .cursor_default()
             .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .active(|element| element.bg(theme.overlay_strong))
             .child(icon("icons/folder.svg", 12.0, theme.text_ghost))
             .child(
                 div()
@@ -886,10 +994,9 @@ impl Fintwind {
                     // whole header lights up as one surface, the way the
                     // session cards do — a hover on the inner toggle would
                     // otherwise paint a detached blob that stops short of the
-                    // new-session control. Press feedback stays on the
-                    // controls themselves: the toggle is focusable and the
-                    // button stops mousedown propagation, so a card-level
-                    // active state would never trigger for them.
+                    // new-session control. The toggle unfolds the group rather
+                    // than selecting anything, so only focus is drawn on it;
+                    // the new-session button keeps its own press highlight.
                     .id(SharedString::from(format!(
                         "sidebar-project-card-{project_id}"
                     )))
@@ -958,6 +1065,8 @@ impl Fintwind {
 
     /// Reveals the group that owns `session_id` so a task the user just
     /// switched to (or created) is visible even though groups start folded.
+    /// The group's body is capped, so unfolding it is not enough on its own:
+    /// the task is also brought into the group's own viewport.
     pub(super) fn reveal_sidebar_session_project(
         &mut self,
         session_id: Uuid,
@@ -975,6 +1084,44 @@ impl Fintwind {
         if self.sidebar_expanded_groups.insert(project_id) {
             cx.notify();
         }
+        let rows = self.sidebar_rows_cached();
+        let Some((sessions, index)) = rows.iter().find_map(|row| match row {
+            SidebarRow::Group(group) if group.project_id == project_id => group
+                .sessions
+                .iter()
+                .position(|session| *session == session_id)
+                .map(|index| (group.sessions.len(), index)),
+            _ => None,
+        }) else {
+            return;
+        };
+        self.reveal_sidebar_group_session(project_id, sessions, index);
+    }
+
+    /// Bring session `index` of a group into view inside the group's capped
+    /// body, leaving the group's scroll alone when the row is already visible.
+    ///
+    /// Row and body heights are both fixed constants, so the visible window is
+    /// known before the body has ever been laid out — which is the case that
+    /// matters here, since the group is usually unfolded by this very switch.
+    fn reveal_sidebar_group_session(&self, project_id: Uuid, sessions: usize, index: usize) {
+        let scroll = self.sidebar_group_scroll(project_id, sessions);
+        let row_height = SIDEBAR_SESSION_ROW_HEIGHT;
+        let row_top = index as f32 * row_height;
+        let viewport = sidebar_group_body_height(sessions);
+        let scrolled = -f32::from(scroll.list.scroll_px_offset_for_scrollbar().y);
+        if row_top >= scrolled && row_top + row_height <= scrolled + viewport {
+            return;
+        }
+        // Park the row at the bottom of the window: the rows above it are the
+        // group's newer tasks, and revealing an old one should not push those
+        // off screen.
+        let target = (row_top + row_height - viewport).max(0.0);
+        let item_ix = (target / row_height).floor() as usize;
+        scroll.list.scroll_to(ListOffset {
+            item_ix,
+            offset_in_item: px(target - item_ix as f32 * row_height),
+        });
     }
 
     fn begin_session_rename(
@@ -1771,26 +1918,18 @@ mod tests {
     }
 
     #[test]
-    fn collapsed_project_group_keeps_only_its_header_and_spacer() {
-        let project = Uuid::new_v4();
-        let sessions = [Uuid::from_u128(1), Uuid::from_u128(2)];
-        let mut expanded = Vec::new();
-        append_project_group_rows(&mut expanded, project, &sessions, false);
+    fn an_unfolded_group_caps_its_body_height() {
+        // A short group is exactly as tall as its rows; a long one stops at the
+        // cap, so the remainder scrolls inside the group.
+        assert_eq!(sidebar_group_body_height(0), 0.0);
         assert_eq!(
-            expanded,
-            vec![
-                SidebarRow::Header(project),
-                SidebarRow::Session(sessions[0]),
-                SidebarRow::Session(sessions[1]),
-                SidebarRow::GroupSpacer,
-            ]
+            sidebar_group_body_height(2),
+            SIDEBAR_SESSION_ROW_HEIGHT * 2.0
         );
-
-        let mut collapsed = Vec::new();
-        append_project_group_rows(&mut collapsed, project, &sessions, true);
+        assert_eq!(sidebar_group_body_height(6), SIDEBAR_GROUP_BODY_MAX_HEIGHT);
         assert_eq!(
-            collapsed,
-            vec![SidebarRow::Header(project), SidebarRow::GroupSpacer]
+            sidebar_group_body_height(200),
+            SIDEBAR_GROUP_BODY_MAX_HEIGHT
         );
     }
 

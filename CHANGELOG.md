@@ -18,6 +18,14 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.6]
+
+- Add a Usage page that scans OpenCode session records for token and cost stats, with KPI cards, an activity heatmap, daily bars, and per-model ranking
+- Cap the expanded height of the project sidebar, tool lists, and expanded cards so long lists stay inside the window
+- Probe OpenCode 2.0.5's `/api/status` health endpoint first, falling back to `/api/health` for older CLIs
+- Keep a session's transcript visible after the backend process exits, instead of dropping the render
+- Fix remote MCP OAuth login so the authenticate flow completes instead of failing on the CLI callback chain
+
 ## [0.1.5]
 
 - Typeset inline and display math natively instead of approximating it with Unicode characters, so formulas keep their real glyphs, sizes and theme color

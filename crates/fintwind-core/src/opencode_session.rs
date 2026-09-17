@@ -27,6 +27,9 @@ const FORK_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 /// A startup probe caught there must give up quickly and retry — at the full
 /// `HTTP_TIMEOUT` one hung probe would eat the whole start budget.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
+/// OpenCode 2.0.5 replaced `/api/health` with `/api/status`. Probe the current
+/// path first and keep the old one so a still-supported earlier CLI can start.
+const HEALTH_PROBE_PATHS: [&str; 2] = ["/api/status", "/api/health"];
 /// How many messages one request of the native transcript may return before
 /// the page boundary is hit; the batch keeps going with the cursor.
 const MESSAGE_PAGE_LIMIT: usize = 200;
@@ -265,10 +268,7 @@ impl OpenCodeServer {
         };
         let started_at = Instant::now();
         loop {
-            if server
-                .request_with_timeout("GET", "/api/health", None, HEALTH_PROBE_TIMEOUT)
-                .is_ok()
-            {
+            if server_is_ready(&server) {
                 return Ok(server);
             }
             if let Some(status) = server.child.lock().try_wait()? {
@@ -309,6 +309,14 @@ impl OpenCodeServer {
             .try_wait()
             .is_ok_and(|status| status.is_none())
     }
+}
+
+fn server_is_ready(server: &OpenCodeServer) -> bool {
+    HEALTH_PROBE_PATHS.iter().any(|path| {
+        server
+            .request_with_timeout("GET", path, None, HEALTH_PROBE_TIMEOUT)
+            .is_ok()
+    })
 }
 
 fn is_native_user_turn(message: &Value) -> bool {

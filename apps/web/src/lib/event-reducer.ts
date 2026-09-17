@@ -90,11 +90,7 @@ export function reduceRuntimeEvent(
       if (Array.isArray(payload)) session.available_commands = payload as ReportedCommand[]
       break
     case 'turnStarted': {
-      const turn = activeTurn(session)
-      if (turn) {
-        turn.provider_turn_started = true
-        session.status = 'working'
-      }
+      resumeProviderTurn(session, clock)
       break
     }
     case 'textDelta':
@@ -440,6 +436,35 @@ function ensureActivities(block: TranscriptBlock): ActivityItem[] {
 function activeTurn(session: AgentSession) {
   const turn = session.turns.at(-1)
   return turn?.status === 'running' ? turn : undefined
+}
+
+function resumeProviderTurn(session: AgentSession, clock: ReducerClock) {
+  const turn = session.turns.at(-1)
+  if (turn?.status === 'running') {
+    turn.provider_turn_started = true
+    session.status = 'working'
+    return
+  }
+  if (turn) {
+    if (turn.status === 'interrupted') {
+      return
+    }
+    turn.status = 'running'
+    turn.completed_at = null
+    turn.provider_turn_started = true
+    session.status = 'working'
+    return
+  }
+  session.turns.push({
+    id: clock.randomUUID(),
+    turn_count: 1,
+    status: 'running',
+    provider_turn_started: true,
+    started_at: clock.nowSeconds(),
+    completed_at: null,
+    checkpoint: null,
+  })
+  session.status = 'working'
 }
 
 function acceptsTurnOutput(session: AgentSession) {

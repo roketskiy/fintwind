@@ -1130,6 +1130,43 @@ impl AgentSession {
         }
     }
 
+    /// Re-open the live turn when the provider starts an execution this client
+    /// did not prompt — a background bash finishing and auto-continuing, or
+    /// any other server-initiated run. Without this, `TurnStarted` is a no-op
+    /// on an idle session and every later delta is dropped.
+    pub fn resume_provider_turn(&mut self) {
+        if self.active_turn_id().is_some() {
+            self.mark_active_turn_provider_started();
+            self.status = SessionStatus::Working;
+            return;
+        }
+        if let Some(turn) = self.turns.last_mut() {
+            // A user Stop settled this turn; a late or un-cancelled
+            // `execution.started` must not revive it.
+            if turn.status == TurnStatus::Interrupted {
+                return;
+            }
+            turn.status = TurnStatus::Running;
+            turn.completed_at = None;
+            turn.provider_turn_started = true;
+            self.status = SessionStatus::Working;
+            return;
+        }
+        let now = unix_time();
+        self.turns.push(AgentTurn {
+            id: Uuid::new_v4(),
+            turn_count: 1,
+            status: TurnStatus::Running,
+            provider_turn_started: true,
+            provider_resume_at: None,
+            started_at: now,
+            completed_at: None,
+            checkpoint: None,
+            stats: None,
+        });
+        self.status = SessionStatus::Working;
+    }
+
     pub fn mark_active_turn_provider_resume_at(&mut self, message_id: String) {
         if let Some(turn) = self
             .turns
@@ -1521,6 +1558,9 @@ pub enum DriverEvent {
     /// Authoritative over filesystem discovery, which cannot see plugin or
     /// dynamically registered commands.
     AvailableCommands(Vec<ReportedCommand>),
+    /// A provider execution began. Emitted when this client prompts, and when
+    /// the server starts a run on its own (opencode `session.execution.started`
+    /// after a settled turn — background-task auto-continue).
     TurnStarted,
     TextDelta(String),
     /// A provider reasoning fragment opened (opencode v2 `session.reasoning.started`,
@@ -3881,6 +3921,47 @@ mod tests {
         let title = session.auto_title.as_deref().unwrap();
         assert_eq!(title.chars().count(), 54);
         assert!(title.ends_with('…'));
+    }
+
+    #[test]
+    fn provider_execution_resumes_the_settled_turn() {
+        let project = Project::from_path(PathBuf::from("/tmp/fintwind"));
+        let mut session = AgentSession::new(project.id);
+        let turn_id = session.begin_turn("go");
+        session.push_message(MessageRole::Assistant, "waiting on compile");
+        session.finish_active_turn(TurnStatus::Completed);
+        session.status = SessionStatus::Idle;
+        assert!(session.active_turn_id().is_none());
+
+        session.resume_provider_turn();
+        assert_eq!(session.active_turn_id(), Some(turn_id));
+        assert_eq!(session.status, SessionStatus::Working);
+        assert_eq!(session.turns[0].status, TurnStatus::Running);
+        assert!(session.turns[0].provider_turn_started);
+        assert!(session.turns[0].completed_at.is_none());
+        assert_eq!(session.messages.len(), 2);
+
+        // An already-running turn just marks the provider started.
+        session.resume_provider_turn();
+        assert_eq!(session.active_turn_id(), Some(turn_id));
+        assert_eq!(session.turns.len(), 1);
+        assert_eq!(session.status, SessionStatus::Working);
+    }
+
+    #[test]
+    fn provider_execution_does_not_revive_a_stopped_turn() {
+        let project = Project::from_path(PathBuf::from("/tmp/fintwind"));
+        let mut session = AgentSession::new(project.id);
+        let turn_id = session.begin_turn("go");
+        session.push_message(MessageRole::Assistant, "working");
+        session.finish_active_turn(TurnStatus::Interrupted);
+        session.status = SessionStatus::Idle;
+
+        session.resume_provider_turn();
+        assert_eq!(session.active_turn_id(), None);
+        assert_eq!(session.turns[0].id, turn_id);
+        assert_eq!(session.turns[0].status, TurnStatus::Interrupted);
+        assert_eq!(session.status, SessionStatus::Idle);
     }
 
     #[test]

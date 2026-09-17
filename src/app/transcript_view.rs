@@ -12,6 +12,11 @@ const CHANGED_FILES_EXPANDED_LIMIT: usize = 12;
 /// An expanded edit stays one transcript row tall; past this the diff scrolls
 /// in place, the same as long command output.
 const ACTIVITY_DIFF_MAX_HEIGHT: f32 = 400.0;
+/// One disclosure section inside a tool card scrolls past this.
+const ACTIVITY_SECTION_MAX_HEIGHT: f32 = 400.0;
+/// The whole expanded detail area caps here so arguments, output, and images
+/// together can never push the rest of the transcript around.
+const ACTIVITY_DETAIL_MAX_HEIGHT: f32 = 800.0;
 /// Aligns a hunk separator with the line numbers in the rows below it; see
 /// `DiffRowStyle::ACTIVITY`.
 const ACTIVITY_DIFF_GUTTER_WIDTH: f32 = 52.0;
@@ -873,6 +878,10 @@ impl Fintwind {
                 // edit the session ever made.
                 this.activity_diffs.borrow_mut().remove(&id);
                 this.activity_diff_viewports.borrow_mut().remove(&id);
+                this.activity_detail_viewports.borrow_mut().remove(&id);
+                this.activity_section_viewports
+                    .borrow_mut()
+                    .retain(|(activity_id, _), _| *activity_id != id);
             }
         });
     }
@@ -2587,11 +2596,15 @@ impl Fintwind {
                     MarkdownMetrics::compact(),
                     false,
                 );
+                let detail_viewport = self
+                    .activity_detail_viewports
+                    .borrow_mut()
+                    .entry(id)
+                    .or_default()
+                    .clone();
                 let mut detail_card = div()
                     .w_full()
                     .min_w_0()
-                    .border_t_1()
-                    .border_color(theme.border_strong)
                     .px(px(12.0))
                     .py(px(8.0))
                     .flex()
@@ -2689,7 +2702,7 @@ impl Fintwind {
                                     .w_full()
                                     .min_w_0()
                                     .relative()
-                                    .max_h(px(400.0))
+                                    .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
                                     .overflow_hidden()
                                     .child(
                                         div()
@@ -2698,7 +2711,7 @@ impl Fintwind {
                                             )))
                                             .w_full()
                                             .min_w_0()
-                                            .max_h(px(400.0))
+                                            .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
                                             .overflow_y_scroll()
                                             .track_scroll(&output_viewport.scroll_handle)
                                             .py(px(4.0))
@@ -2742,19 +2755,92 @@ impl Fintwind {
                                     )),
                             );
                         } else {
+                            let section_viewport = self
+                                .activity_section_viewports
+                                .borrow_mut()
+                                .entry((id, section_kind))
+                                .or_default()
+                                .clone();
+                            let wheel_scroll = section_viewport.scroll_handle.clone();
+                            let wheel_follow_tail = section_viewport.follow_tail.clone();
+                            // Scrolling inside a section stops propagation, so
+                            // the card viewport never sees the wheel. Release
+                            // its tail-follow here or a live card would yank
+                            // the section out of view on the next stream tick.
+                            let card_follow_tail = detail_viewport.follow_tail.clone();
+                            let card_scroll = detail_viewport.scroll_handle.clone();
                             section_view = section_view.child(
                                 div()
                                     .w_full()
                                     .min_w_0()
-                                    .text_size(code_px(10.5))
-                                    .line_height(code_px(16.0))
-                                    .child(md::render::plain_text(
-                                        content.clone(),
-                                        md::render::MONO_FAMILY,
-                                        FontWeight::NORMAL,
-                                        theme.text_secondary,
-                                        &ctx,
-                                    )),
+                                    .relative()
+                                    .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
+                                    .overflow_hidden()
+                                    .child(
+                                        div()
+                                            .id(SharedString::from(format!(
+                                                "activity-section-scroll-{}-{}",
+                                                id,
+                                                section_kind.id()
+                                            )))
+                                            .w_full()
+                                            .min_w_0()
+                                            .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
+                                            .overflow_y_scroll()
+                                            .track_scroll(&section_viewport.scroll_handle)
+                                            .pr(px(8.0))
+                                            .text_size(code_px(10.5))
+                                            .line_height(code_px(16.0))
+                                            .child(md::render::plain_text(
+                                                content.clone(),
+                                                md::render::MONO_FAMILY,
+                                                FontWeight::NORMAL,
+                                                theme.text_secondary,
+                                                &ctx,
+                                            ))
+                                            .on_scroll_wheel(move |_, window, cx| {
+                                                contain_scroll(&wheel_scroll, cx);
+                                                let scroll = wheel_scroll.clone();
+                                                let follow_tail = wheel_follow_tail.clone();
+                                                let card_follow_tail = card_follow_tail.clone();
+                                                let card_scroll = card_scroll.clone();
+                                                window.defer(cx, move |_, _| {
+                                                    let at_bottom =
+                                                        activity_scroll_at_bottom(&scroll);
+                                                    follow_tail.set(at_bottom);
+                                                    if !at_bottom {
+                                                        card_follow_tail.set(
+                                                            activity_scroll_at_bottom(
+                                                                &card_scroll,
+                                                            ),
+                                                        );
+                                                    }
+                                                });
+                                            }),
+                                    )
+                                    .child(activity_scroll_fade(
+                                        section_viewport.scroll_handle.clone(),
+                                        ActivityScrollFadeSide::Top,
+                                        activity_surface,
+                                    ))
+                                    .child(activity_scroll_fade(
+                                        section_viewport.scroll_handle.clone(),
+                                        ActivityScrollFadeSide::Bottom,
+                                        activity_surface,
+                                    ))
+                                    .child(scrollbar::vertical(
+                                        &section_viewport.scroll_handle,
+                                        &section_viewport.scrollbar,
+                                    ))
+                                    .when(
+                                        section_kind == ActivityDisclosureSectionKind::Output,
+                                        |element| {
+                                            element.child(activity_scroll_guard(
+                                                section_viewport,
+                                                !activity.complete,
+                                            ))
+                                        },
+                                    ),
                             );
                         }
                     }
@@ -2770,7 +2856,51 @@ impl Fintwind {
                         theme,
                     ));
                 }
-                item = item.child(detail_card);
+                let wheel_scroll = detail_viewport.scroll_handle.clone();
+                let wheel_follow_tail = detail_viewport.follow_tail.clone();
+                item = item.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .relative()
+                        .max_h(px(ACTIVITY_DETAIL_MAX_HEIGHT))
+                        .overflow_hidden()
+                        .border_t_1()
+                        .border_color(theme.border_strong)
+                        .child(
+                            div()
+                                .id(SharedString::from(format!("activity-detail-scroll-{id}")))
+                                .w_full()
+                                .min_w_0()
+                                .max_h(px(ACTIVITY_DETAIL_MAX_HEIGHT))
+                                .overflow_y_scroll()
+                                .track_scroll(&detail_viewport.scroll_handle)
+                                .child(detail_card)
+                                .on_scroll_wheel(move |_, window, cx| {
+                                    contain_scroll(&wheel_scroll, cx);
+                                    let scroll = wheel_scroll.clone();
+                                    let follow_tail = wheel_follow_tail.clone();
+                                    window.defer(cx, move |_, _| {
+                                        follow_tail.set(activity_scroll_at_bottom(&scroll));
+                                    });
+                                }),
+                        )
+                        .child(activity_scroll_fade(
+                            detail_viewport.scroll_handle.clone(),
+                            ActivityScrollFadeSide::Top,
+                            activity_surface,
+                        ))
+                        .child(activity_scroll_fade(
+                            detail_viewport.scroll_handle.clone(),
+                            ActivityScrollFadeSide::Bottom,
+                            activity_surface,
+                        ))
+                        .child(scrollbar::vertical(
+                            &detail_viewport.scroll_handle,
+                            &detail_viewport.scrollbar,
+                        ))
+                        .child(activity_scroll_guard(detail_viewport, !activity.complete)),
+                );
             }
             items = items.child(item);
         }

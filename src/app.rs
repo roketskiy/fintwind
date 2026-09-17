@@ -1625,6 +1625,14 @@ pub struct Fintwind {
     /// Viewports for those diffs. Separate from `activity_scroll_viewports`
     /// because a failed edit shows both its diff and the error it returned.
     activity_diff_viewports: RefCell<HashMap<Uuid, ActivityScrollViewport>>,
+    /// Viewports for individual disclosure sections (arguments, output,
+    /// detail) inside an expanded tool card, keyed by activity and section so
+    /// each keeps its own scroll position.
+    activity_section_viewports:
+        RefCell<HashMap<(Uuid, ActivityDisclosureSectionKind), ActivityScrollViewport>>,
+    /// Viewport for a whole expanded detail card, capping the combined
+    /// sections so no card can push the rest of the transcript around.
+    activity_detail_viewports: RefCell<HashMap<Uuid, ActivityScrollViewport>>,
     /// One allocation for every transcript markdown context to share. The
     /// callback knows about the active workspace; the renderer deliberately
     /// does not.
@@ -3118,6 +3126,8 @@ impl Fintwind {
                 activity_scroll_viewports: RefCell::new(HashMap::new()),
                 activity_diffs: RefCell::new(HashMap::new()),
                 activity_diff_viewports: RefCell::new(HashMap::new()),
+                activity_section_viewports: RefCell::new(HashMap::new()),
+                activity_detail_viewports: RefCell::new(HashMap::new()),
                 markdown_link_handler,
                 transcript_selection: TranscriptSelection::default(),
                 toast_selection: TranscriptSelection::default(),

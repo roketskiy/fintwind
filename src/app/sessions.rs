@@ -946,6 +946,8 @@ impl Fintwind {
         drop(activity_markdown);
         self.reasoning_views.borrow_mut().clear();
         self.activity_scroll_viewports.borrow_mut().clear();
+        self.activity_section_viewports.borrow_mut().clear();
+        self.activity_detail_viewports.borrow_mut().clear();
         self.menus.borrow_mut().clear();
         self.message_edit = None;
         self.hide_toast();

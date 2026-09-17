@@ -1539,6 +1539,10 @@ pub struct Fintwind {
     /// Fingerprint + snapshot pair backing `sidebar_rows_cached`.
     sidebar_rows_fingerprint: Cell<Option<u64>>,
     sidebar_rows_snapshot: RefCell<Rc<Vec<SidebarRow>>>,
+    /// Scroll state of the session list inside each unfolded sidebar group,
+    /// keyed by project id, so a group scrolls on its own and keeps its
+    /// position across folding it away and back.
+    sidebar_group_scrolls: RefCell<HashMap<Uuid, SidebarGroupScroll>>,
     transcript_row_kinds: RefCell<Vec<TranscriptRowKind>>,
     /// Fingerprint of the transcript inputs `transcript_row_kinds` was folded
     /// from, so an unchanged transcript costs nothing on a frame. `None` until
@@ -1703,7 +1707,7 @@ use components::*;
 pub use image_preview::init as init_image_preview_keys;
 pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
-use sidebar::SidebarRow;
+use sidebar::{SidebarGroupScroll, SidebarRow};
 pub use sidebar::init as init_sidebar_keys;
 pub use skills_page::init as init_skills_keys;
 use streaming::*;
@@ -3098,6 +3102,7 @@ impl Fintwind {
                 sidebar_row_cache: RefCell::new(Vec::new()),
                 sidebar_rows_fingerprint: Cell::new(None),
                 sidebar_rows_snapshot: RefCell::new(Rc::new(Vec::new())),
+                sidebar_group_scrolls: RefCell::new(HashMap::new()),
                 transcript_row_kinds: RefCell::new(Vec::new()),
                 transcript_row_kinds_fingerprint: Cell::new(None),
                 transcript_navigation_turns: RefCell::new(Rc::new(Vec::new())),

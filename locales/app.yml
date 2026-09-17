@@ -2351,3 +2351,85 @@ usage_error.claude_access_token_missing:
   en: Claude Code credentials have no access token
 usage_error.curl_failed:
   en: "curl failed: %{error}"
+
+settings.usage:
+  en: Usage
+settings.usage_keywords:
+  en: usage statistics tokens heatmap daily chart models activity cache
+
+usage_page.range_all:
+  en: All time
+usage_page.range_30d:
+  en: 30 days
+usage_page.range_7d:
+  en: 7 days
+usage_page.refresh:
+  en: Refresh
+usage_page.loading:
+  en: Gathering usage…
+usage_page.load_failed:
+  en: "Usage scan failed: %{error}"
+usage_page.retry:
+  en: Retry
+usage_page.no_workspace_title:
+  en: No workspace selected
+usage_page.no_workspace_body:
+  en: Pick a project to connect to OpenCode; the statistics cover its whole session store.
+usage_page.empty_title:
+  en: No usage recorded yet
+usage_page.empty_body:
+  en: Start a conversation and model usage will appear here.
+usage_page.kpi_total_tokens:
+  en: Total tokens
+usage_page.kpi_generated_tokens:
+  en: Generated tokens
+usage_page.tokens_input:
+  en: in
+usage_page.tokens_output:
+  en: out
+usage_page.tokens_cache:
+  en: cache
+usage_page.incl_reasoning:
+  en: incl. reasoning
+usage_page.active_days_value:
+  en: "%{count} active days"
+usage_page.heatmap_title:
+  en: Activity heatmap
+usage_page.heatmap_caption:
+  en: Last %{weeks} weeks · %{active} active days
+usage_page.weekday_mon:
+  en: Mon
+usage_page.weekday_wed:
+  en: Wed
+usage_page.weekday_fri:
+  en: Fri
+usage_page.legend_less:
+  en: Less
+usage_page.legend_more:
+  en: More
+usage_page.day_tooltip:
+  en: "%{date} · %{tokens} tokens · %{sessions} sessions"
+usage_page.daily_title:
+  en: Daily usage (excl. cache)
+usage_page.daily_caption:
+  en: Last %{days} days
+usage_page.models_title:
+  en: Model usage
+usage_page.models_caption:
+  en: "%{count} models"
+usage_page.model_sessions:
+  en: "%{count} sessions"
+usage_page.unknown_model:
+  en: Unknown model
+usage_page.kpi_sessions:
+  en: Sessions
+usage_page.kpi_cost:
+  en: Cost
+usage_page.cost_sessions:
+  en: "%{count} billed sessions"
+usage_page.cache_hit_short:
+  en: hit
+usage_page.projects_title:
+  en: Projects
+usage_page.projects_caption:
+  en: "%{count} projects"

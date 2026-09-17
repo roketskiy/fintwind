@@ -1221,3 +1221,41 @@ usage_error.claude_credentials_invalid: Claude Code の認証情報は有効な 
 usage_error.claude_oauth_missing: Claude Code の認証情報に claudeAiOauth の項目がありません
 usage_error.claude_access_token_missing: Claude Code の認証情報にアクセストークンがありません
 usage_error.curl_failed: "curl に失敗しました：%{error}"
+usage_page.range_all: 全期間
+usage_page.range_30d: 直近30日
+usage_page.range_7d: 直近7日
+usage_page.refresh: 更新
+usage_page.loading: 使用状況を集計中…
+usage_page.load_failed: "使用状況の取得に失敗しました：%{error}"
+usage_page.retry: 再試行
+usage_page.no_workspace_title: ワークスペースが未選択
+usage_page.no_workspace_body: プロジェクトを選択して OpenCode に接続すると、ストア全体の使用状況が表示されます。
+usage_page.empty_title: 使用記録はまだありません
+usage_page.empty_body: 会話を始めると、ここにモデルの使用状況が表示されます。
+usage_page.kpi_total_tokens: 合計トークン
+usage_page.kpi_generated_tokens: 生成トークン
+usage_page.tokens_input: 入力
+usage_page.tokens_output: 出力
+usage_page.tokens_cache: キャッシュ
+usage_page.incl_reasoning: 推論込み
+usage_page.active_days_value: "%{count}日間アクティブ"
+usage_page.heatmap_title: アクティビティヒートマップ
+usage_page.heatmap_caption: 直近%{weeks}週間 · アクティブ%{active}日
+usage_page.weekday_mon: 月
+usage_page.weekday_wed: 水
+usage_page.weekday_fri: 金
+usage_page.legend_less: 少ない
+usage_page.legend_more: 多い
+usage_page.day_tooltip: "%{date} · %{tokens} トークン · %{sessions} セッション"
+usage_page.daily_title: 日別使用量（キャッシュ除く）
+usage_page.daily_caption: 直近%{days}日間
+usage_page.models_title: モデル別使用状況
+usage_page.models_caption: 全%{count}モデル
+usage_page.model_sessions: "%{count} セッション"
+usage_page.unknown_model: 不明なモデル
+usage_page.kpi_sessions: セッション数
+usage_page.kpi_cost: コスト
+usage_page.cost_sessions: "課金セッション %{count}件"
+usage_page.cache_hit_short: ヒット
+usage_page.projects_title: プロジェクト別
+usage_page.projects_caption: 全%{count}プロジェクト

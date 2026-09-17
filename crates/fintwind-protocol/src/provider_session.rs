@@ -82,3 +82,51 @@ pub struct NativeTranscript {
     pub blocks: Vec<TranscriptBlock>,
     pub turns: Vec<AgentTurn>,
 }
+
+/// One session's cumulative usage, as the OpenCode server's session list
+/// reports it. The usage page aggregates these into whatever view it draws,
+/// so a range change never re-fetches.
+#[derive(Clone, Debug, Deserialize, Serialize, TS, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageEntry {
+    /// When the session was last active, in unix seconds — the stamp its
+    /// tokens are bucketed under.
+    pub timestamp: u64,
+    /// `<providerID>/<modelID>` when the server recorded one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The working directory the session ran in, for the per-project
+    /// ranking. Absent on rows the server did not localize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<String>,
+    /// The server-side cost estimate, when the provider reported one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost: Option<f64>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+}
+
+impl UsageEntry {
+    /// Input + output + reasoning + both cache lanes — the full traffic the
+    /// provider reported for the session.
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.reasoning_tokens)
+            .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_write_tokens)
+    }
+}
+
+/// The whole OpenCode store's usage scan: one entry per top-level session,
+/// collected in a single pass over the session list. The client aggregates
+/// these into whatever view it draws, so a range change never re-fetches.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, TS, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageStats {
+    /// Sessions, oldest first.
+    pub entries: Vec<UsageEntry>,
+}

@@ -1170,3 +1170,41 @@ usage_error.claude_credentials_invalid: Claude Code 凭据不是有效的 JSON
 usage_error.claude_oauth_missing: Claude Code 凭据中没有 claudeAiOauth 项
 usage_error.claude_access_token_missing: Claude Code 凭据中没有访问令牌
 usage_error.curl_failed: "curl 失败：%{error}"
+usage_page.range_all: 全部
+usage_page.range_30d: 近 30 天
+usage_page.range_7d: 近 7 天
+usage_page.refresh: 刷新
+usage_page.loading: 正在统计用量…
+usage_page.load_failed: "用量统计失败：%{error}"
+usage_page.retry: 重试
+usage_page.no_workspace_title: 未选择项目
+usage_page.no_workspace_body: 选择一个项目以连接 OpenCode；这里的统计覆盖它的全部会话数据。
+usage_page.empty_title: 还没有使用记录
+usage_page.empty_body: 开始对话后，这里会展示模型用量统计。
+usage_page.kpi_total_tokens: 总 Tokens
+usage_page.kpi_generated_tokens: 生成 Tokens
+usage_page.tokens_input: 输入
+usage_page.tokens_output: 输出
+usage_page.tokens_cache: 缓存
+usage_page.incl_reasoning: 含推理
+usage_page.active_days_value: 活跃 %{count} 天
+usage_page.heatmap_title: 活动热力图
+usage_page.heatmap_caption: 近 %{weeks} 周 · 活跃 %{active} 天
+usage_page.weekday_mon: 一
+usage_page.weekday_wed: 三
+usage_page.weekday_fri: 五
+usage_page.legend_less: 少
+usage_page.legend_more: 多
+usage_page.day_tooltip: "%{date} · %{tokens} tokens · %{sessions} 个会话"
+usage_page.daily_title: 每日用量（不含缓存）
+usage_page.daily_caption: 近 %{days} 天
+usage_page.models_title: 模型使用排行
+usage_page.models_caption: 共 %{count} 个模型
+usage_page.model_sessions: "%{count} 个会话"
+usage_page.unknown_model: 未知模型
+usage_page.kpi_sessions: 会话数
+usage_page.kpi_cost: 费用
+usage_page.cost_sessions: "%{count} 个会话计费"
+usage_page.cache_hit_short: 命中
+usage_page.projects_title: 项目分布
+usage_page.projects_caption: 共 %{count} 个项目

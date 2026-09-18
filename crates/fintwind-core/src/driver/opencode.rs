@@ -60,11 +60,7 @@ enum AutoApprove {
 
 impl From<bool> for AutoApprove {
     fn from(all: bool) -> Self {
-        if all {
-            Self::All
-        } else {
-            Self::None
-        }
+        if all { Self::All } else { Self::None }
     }
 }
 
@@ -2384,10 +2380,27 @@ fn handle_child_event(
                 let item = activity::tool_activity(
                     Some(id.to_owned()),
                     activity_kind,
-                    activity::input_title(arguments).unwrap_or(title),
+                    title,
                     arguments,
                     None,
                     payload.get("input"),
+                    false,
+                    false,
+                );
+                child_activity_event(&key, item, events);
+            }
+        }
+        "session.tool.progress" => {
+            if let Some(id) = payload.get("id").and_then(Value::as_str)
+                && let Some((kind, title)) = child.tools.get(id).cloned()
+            {
+                let item = activity::tool_activity(
+                    Some(id.to_owned()),
+                    kind,
+                    title,
+                    payload.get("input"),
+                    None,
+                    Some(payload),
                     false,
                     false,
                 );
@@ -2863,7 +2876,8 @@ fn handle_event(
         "session.tool.called" => {
             tool_called(payload, events, state);
         }
-        "session.tool.progress" | "session.tool.input.ended" => {}
+        "session.tool.progress" => tool_progress(payload, events, state),
+        "session.tool.input.ended" => {}
         "session.created" | "session.updated" | "session.deleted" => {
             // Lifecycle news for the sidebar's reconciliation; debounced
             // app-side, so one send per event is fine.
@@ -3031,14 +3045,33 @@ fn tool_called(payload: &Value, events: &impl DriverEventSink, state: &mut OpenC
             });
         }
     }
-    let display = activity::input_title(arguments);
     let item = activity::tool_activity(
         Some(id.to_owned()),
         kind,
-        display.unwrap_or(title),
+        title,
         arguments,
         None,
         payload.get("input"),
+        false,
+        false,
+    );
+    let _ = events.send(DriverEvent::RichActivity(item));
+}
+
+fn tool_progress(payload: &Value, events: &impl DriverEventSink, state: &mut OpenCodeStreamState) {
+    let Some(id) = payload.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some((kind, title)) = state.tools.get(id).cloned() else {
+        return;
+    };
+    let item = activity::tool_activity(
+        Some(id.to_owned()),
+        kind,
+        title,
+        payload.get("input"),
+        None,
+        Some(payload),
         false,
         false,
     );
@@ -5061,10 +5094,7 @@ mod tests {
             Some("ses_child")
         );
         assert_eq!(
-            form_reply_path(
-                forms.lock().sessions.get("frm_child").unwrap(),
-                "frm_child"
-            ),
+            form_reply_path(forms.lock().sessions.get("frm_child").unwrap(), "frm_child"),
             "/api/session/ses_child/form/frm_child/reply"
         );
     }
@@ -5623,6 +5653,43 @@ mod tests {
         ));
         assert_eq!(seen.len(), 7, "non-transcript events leaked");
         assert!(!*turn.lock(), "the turn should be settled exactly once");
+    }
+
+    #[test]
+    fn execute_progress_surfaces_codemode_nested_tool_calls() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        let wire = [
+            json!({"type":"session.tool.input.started","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"call_ex","name":"execute"}}),
+            json!({"type":"session.tool.called","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"call_ex","input":{"code":"return await tools.context7.query_docs({ libraryId: '/opencode' })"}}}),
+            json!({"type":"session.tool.progress","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"call_ex","metadata":{"toolCalls":[{"tool":"context7.query_docs","status":"running"}]}}}),
+            json!({"type":"session.tool.success","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","id":"call_ex","content":[{"type":"text","text":"ok"}],"metadata":{"toolCalls":[{"tool":"context7.query_docs","status":"completed"}]}}}),
+        ];
+        for event in wire {
+            handle_event(
+                &event, &events, &commands, &turn, 0, "ses_1", true, &mut state,
+            );
+        }
+
+        let mut seen = Vec::new();
+        while let Ok(event) = event_rx.try_recv() {
+            seen.push(event);
+        }
+        assert!(matches!(&seen[0], DriverEvent::RichActivity(item)
+            if item.source_id.as_deref() == Some("call_ex")
+                && item.kind == ActivityKind::Tool
+                && item.title == "execute"
+                && !item.complete));
+        assert!(matches!(&seen[1], DriverEvent::RichActivity(item)
+            if item.kind == ActivityKind::Tool
+                && item.display_target.as_deref()
+                    == Some("return await tools.context7.query_docs({ libraryId: '/opencode' })")));
+        assert!(matches!(&seen[2], DriverEvent::RichActivity(item)
+            if item.display_target.as_deref() == Some("context7.query_docs") && !item.complete));
+        assert!(matches!(&seen[3], DriverEvent::RichActivity(item)
+            if item.complete
+                && item.title == "execute"
+                && item.display_target.as_deref() == Some("context7.query_docs")));
+        assert_eq!(seen.len(), 4);
     }
 
     #[test]

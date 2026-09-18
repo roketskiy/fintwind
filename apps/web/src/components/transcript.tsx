@@ -10,7 +10,7 @@ import { Virtuoso, type ListItem, type VirtuosoHandle } from 'react-virtuoso'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { PreviewableImage } from '@/components/image-preview'
-import { FileTypeIcon, FintwindIcon, type FintwindIconName } from '@/components/fintwind-icon'
+import { FileTypeIcon, FintwindIcon } from '@/components/fintwind-icon'
 import { readAttachmentImage } from '@/lib/attachments'
 import { useDaemon } from '@/lib/daemon-context'
 import { activitiesForBlock } from '@/lib/event-reducer'
@@ -1487,7 +1487,6 @@ function ActivityRow({
   const reasoningContent = activity.reasoning?.content.trim() ?? ''
   const hasDetail = Boolean(reasoningContent || sections.length)
   const [expanded, setExpanded] = useState(Boolean(activity.reasoning && !activity.complete))
-  const iconName = activityIcon(activity)
   const preview = expanded || activity.reasoning ? '' : activityPreview(activity, t)
   const actionLabel = activityActionLabel(activity, t)
   const rowDetail = activityRowDetail(activity, t) || preview
@@ -1531,7 +1530,6 @@ function ActivityRow({
           type="button"
           onClick={() => setExpanded((value) => !value)}
         >
-          <FintwindIcon className="size-3 shrink-0 text-[var(--text-tertiary)]" name={iconName} />
           <span className="shrink-0 font-semibold text-[var(--text-secondary)]">{actionLabel}</span>
           {rowDetail && (
             <span className="min-w-0 flex-1 truncate text-[var(--text-secondary)]">
@@ -1936,17 +1934,6 @@ function ActivityImage({ reference, t }: { reference: string; t: Translator }) {
       }}
     />
   )
-}
-
-function activityIcon(activity: ActivityItem): FintwindIconName {
-  if (activity.reasoning || activity.kind === 'reasoning') return 'sparkle'
-  if (activity.kind === 'command') return 'terminal'
-  if (activity.kind === 'search' || activity.kind === 'fileSearch') return 'search'
-  if (activity.kind === 'fileRead') return 'file'
-  if (activity.kind === 'fileChange') return 'pencil'
-  if (activity.kind === 'fileList') return 'folder'
-  if (activity.kind === 'plan') return 'list'
-  return 'wrench'
 }
 
 function lastIndexWhere<T>(values: readonly T[], predicate: (value: T) => boolean) {

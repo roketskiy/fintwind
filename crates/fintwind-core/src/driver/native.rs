@@ -100,10 +100,7 @@ pub(crate) fn list_mcp_statuses(
     server: &OpenCodeServer,
     directory: &str,
 ) -> anyhow::Result<Vec<McpServerStatus>> {
-    let path = format!(
-        "/api/mcp?directory={}",
-        encode_path_segment(directory)
-    );
+    let path = format!("/api/mcp?directory={}", encode_path_segment(directory));
     let response = server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT)?;
     let mut statuses = Vec::new();
     for row in response
@@ -625,12 +622,6 @@ fn tool_item(part: &Value) -> ActivityItem {
         .and_then(Value::as_str)
         .unwrap_or("tool");
     let kind = crate::model::ActivityKind::from_tool_name(name);
-    let title = state
-        .get("title")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or_else(|| name.to_owned());
     let failed = state.get("status").and_then(Value::as_str) == Some("error");
     let output: Option<Value> = state
         .get("output")
@@ -648,16 +639,26 @@ fn tool_item(part: &Value) -> ActivityItem {
                 .filter(|content| !content.is_null())
                 .cloned()
         });
-    super::activity::tool_activity(
+    let mut item = super::activity::tool_activity(
         source_id,
         kind,
-        title,
+        name.to_owned(),
         state.get("input"),
         output.as_ref(),
         state.get("metadata"),
         failed,
         true,
-    )
+    );
+    if item.display_target.is_none()
+        && let Some(state_title) = state
+            .get("title")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|title| !title.is_empty() && *title != name)
+    {
+        item.display_target = Some(state_title.to_owned());
+    }
+    item
 }
 
 #[cfg(test)]
@@ -964,6 +965,7 @@ mod tests {
         });
         let item = tool_item(&part);
         assert_eq!(item.kind, crate::model::ActivityKind::FileRead);
+        assert_eq!(item.title, "read");
         assert_eq!(item.display_target.as_deref(), Some("src/workspace.rs"));
         // The restored activity keeps the provider call id, which is what
         // re-links it to a live background item (e.g. a subagent's card).
@@ -989,6 +991,37 @@ mod tests {
                 .as_deref()
                 .is_some_and(|output| output.contains("patch did not apply"))
         );
+
+        let execute = json!({
+            "type": "tool", "id": "call_ex", "name": "execute",
+            "state": {
+                "status": "completed",
+                "input": {"code": "return await tools.context7.query_docs({ libraryId: '/opencode' })"},
+                "content": [{"type": "text", "text": "ok"}],
+                "metadata": {
+                    "toolCalls": [
+                        {"tool": "context7.query_docs", "status": "completed"}
+                    ]
+                }
+            }
+        });
+        let item = tool_item(&execute);
+        assert_eq!(item.kind, crate::model::ActivityKind::Tool);
+        assert_eq!(item.title, "execute");
+        assert_eq!(item.display_target.as_deref(), Some("context7.query_docs"));
+
+        let titled = json!({
+            "type": "tool", "id": "call_js", "name": "Js",
+            "state": {
+                "status": "completed",
+                "title": "Inspect Helium browser",
+                "input": {"code": "sky.get_app_state()"},
+                "content": [{"type": "text", "text": "ok"}]
+            }
+        });
+        let item = tool_item(&titled);
+        assert_eq!(item.title, "Js");
+        assert_eq!(item.display_target.as_deref(), Some("sky.get_app_state()"));
     }
 
     #[test]

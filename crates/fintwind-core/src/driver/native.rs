@@ -883,7 +883,8 @@ mod tests {
         });
         let item = tool_item(&part);
         assert_eq!(item.kind, crate::model::ActivityKind::Command);
-        assert_eq!(item.title, "Run the tests");
+        assert_eq!(item.title, "bash");
+        assert_eq!(item.display_target.as_deref(), Some("cargo test"));
         assert_eq!(item.source_id.as_deref(), Some("call_1"));
         assert_eq!(item.output.as_deref(), Some("test result: ok"));
         assert!(!item.failed);

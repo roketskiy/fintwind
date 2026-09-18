@@ -114,7 +114,7 @@ mod tests {
         );
         assert_eq!(spec["variants"]["high"]["reasoningEffort"], "custom");
         assert_eq!(spec["variants"]["nothinking"]["reasoningEffort"], "none");
-        assert_eq!(spec["options"]["reasoningEffort"], "xhigh");
+        assert_eq!(spec["options"]["reasoningEffort"], "medium");
         assert_eq!(spec["options"]["temperature"], 0.4);
         let previous = spec.clone();
         fill_model_variants(
@@ -152,11 +152,11 @@ mod tests {
             ProviderApiFormat::Anthropic,
         );
         assert_eq!(
-            spec["variants"]["nothinking"]["thinking"]["type"],
-            "disabled"
+            spec["variants"]["low"]["thinking"]["budgetTokens"],
+            1024
         );
         assert_eq!(
-            spec["variants"]["extended"]["thinking"]["budgetTokens"],
+            spec["variants"]["max"]["thinking"]["budgetTokens"],
             24576
         );
     }

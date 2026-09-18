@@ -280,7 +280,9 @@ mod tests {
         ]}));
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].reasoning_efforts.len(), 2);
-        assert_eq!(models[0].default_reasoning_effort.as_deref(), Some("xhigh"));
+        // The bundled reference's default (medium) is not in this server's
+        // catalog, so no default survives the catalog-existence filter.
+        assert_eq!(models[0].default_reasoning_effort.as_deref(), None);
         assert_eq!(models[1].reasoning_efforts[0].id, "my-budget");
         assert!(models[1].default_reasoning_effort.is_none());
     }

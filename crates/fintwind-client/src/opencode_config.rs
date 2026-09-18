@@ -880,8 +880,8 @@ mod tests {
         save_providers_at(&path, &providers).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let model = &saved["provider"]["thinking-test"]["models"]["gpt-5.5"];
-        assert_eq!(model["variants"].as_object().unwrap().len(), 6);
-        assert_eq!(model["options"]["reasoningEffort"], "xhigh");
+        assert_eq!(model["variants"].as_object().unwrap().len(), 5);
+        assert_eq!(model["options"]["reasoningEffort"], "medium");
         assert_eq!(saved["instructions"], serde_json::json!(["keep.md"]));
         let loaded = load_providers_at(&path).unwrap();
         save_providers_at(&path, &loaded).unwrap();

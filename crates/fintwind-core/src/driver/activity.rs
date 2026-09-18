@@ -46,11 +46,13 @@ pub(super) fn tool_activity(
     ActivityItem::new(source_id, kind, title, detail, complete)
         .with_arguments(arguments)
         .with_activity_source(raw_arguments)
+        .with_tool_metadata(image_source)
         .with_output(formatted_output)
         .with_image_urls(image_urls)
         .with_failed(failed)
 }
 
+#[cfg(test)]
 pub(super) fn input_title(value: Option<&Value>) -> Option<String> {
     let value = value?;
     value

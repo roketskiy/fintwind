@@ -58,180 +58,48 @@ export function reasoningTitle(activity: ActivityItem, t?: Translator) {
 }
 
 export function activityDisplayTitle(activity: ActivityItem, t?: Translator) {
-  const target = activity.display_target?.trim() || null
-  switch (activity.kind) {
-    case 'fileChange': {
-      const changes = activity.file_changes ?? []
-      const subject = changes.length === 1
-        ? pathName(changes[0]!.path)
-        : changes.length > 1
-          ? t ? t('activity.file_count', { count: changes.length }) : `${changes.length} files`
-          : null
-      if (!subject && !isGenericActivityTitle(activity)) return activity.title
-      if (!activity.complete) return t
-        ? t(subject ? 'activity.editing_named_file' : 'activity.editing_files', subject ? { file: subject } : undefined)
-        : subject ? `Editing ${subject}` : 'Editing files'
-      if (activity.failed) return t
-        ? t(subject ? 'activity.edit_failed_named_file' : 'activity.edit_failed', subject ? { file: subject } : undefined)
-        : subject ? `Failed to edit ${subject}` : 'Failed to edit files'
-      return t
-        ? t(subject ? 'activity.edited_named_file' : 'activity.edited_files', subject ? { file: subject } : undefined)
-        : subject ? `Edited ${subject}` : 'Edited files'
-    }
-    case 'fileRead': {
-      const file = target ? pathName(target) : null
-      if (!file && !isGenericActivityTitle(activity)) return activity.title
-      if (!activity.complete) return t
-        ? t(file ? 'activity.reading_named_file' : 'activity.reading_file', file ? { file } : undefined)
-        : file ? `Reading ${file}` : 'Reading file'
-      if (activity.failed) return t
-        ? t(file ? 'activity.read_named_file_failed' : 'activity.read_file_failed', file ? { file } : undefined)
-        : file ? `Failed to read ${file}` : 'Failed to read file'
-      return t
-        ? t(file ? 'activity.read_named_file' : 'activity.read_file_completed', file ? { file } : undefined)
-        : file ? `Read ${file}` : 'Read file'
-    }
-    case 'fileSearch': {
-      if (!target && !isGenericActivityTitle(activity)) return activity.title
-      if (!activity.complete) return t
-        ? t(target ? 'activity.searching_files_for' : 'activity.searching_files', target ? { query: target } : undefined)
-        : target ? `Searching files for ${target}` : 'Searching files'
-      if (activity.failed) return t
-        ? t(target ? 'activity.file_search_failed_for' : 'activity.file_search_failed', target ? { query: target } : undefined)
-        : target ? `Failed to search files for ${target}` : 'Failed to search files'
-      return t
-        ? t(target ? 'activity.searched_files_for' : 'activity.searched_files', target ? { query: target } : undefined)
-        : target ? `Searched files for ${target}` : 'Searched files'
-    }
-    case 'fileList': {
-      const directory = target ? pathName(target) : null
-      if (!directory && !isGenericActivityTitle(activity)) return activity.title
-      if (!activity.complete) return t
-        ? t(directory ? 'activity.listing_files_in' : 'activity.listing_files', directory ? { directory } : undefined)
-        : directory ? `Listing files in ${directory}` : 'Listing files'
-      if (activity.failed) return t
-        ? t(directory ? 'activity.file_list_failed_in' : 'activity.file_list_failed', directory ? { directory } : undefined)
-        : directory ? `Failed to list files in ${directory}` : 'Failed to list files'
-      return t
-        ? t(directory ? 'activity.listed_files_in' : 'activity.listed_files', directory ? { directory } : undefined)
-        : directory ? `Listed files in ${directory}` : 'Listed files'
-    }
-    case 'command':
-      if (activity.display_description?.trim()) {
-        if (!activity.complete) return t
-          ? t('activity.running_described_command', { description: activity.display_description })
-          : `Running command: ${activity.display_description}`
-        return activity.failed
-          ? t
-            ? t('activity.described_command_failed', { description: activity.display_description })
-            : `Command failed: ${activity.display_description}`
-          : t
-            ? t('activity.ran_described_command', { description: activity.display_description })
-            : `Ran command: ${activity.display_description}`
-      }
-      if (target) {
-        if (!activity.complete) return t ? t('activity.running_named_command', { command: target }) : `Running ${target}`
-        return activity.failed
-          ? t ? t('activity.named_command_failed', { command: target }) : `Command failed: ${target}`
-          : t ? t('activity.ran_named_command', { command: target }) : `Ran ${target}`
-      }
-      if (!isGenericActivityTitle(activity)) return activity.title
-      if (!activity.complete) return t ? t('activity.running_command') : 'Running command'
-      return activity.failed
-        ? t ? t('activity.command_failed') : 'Command failed'
-        : t ? t('activity.ran_command') : 'Ran command'
-    case 'search':
-      if (target) {
-        if (!activity.complete) return t ? t('activity.searching_web_for', { query: target }) : `Searching the web for ${target}`
-        return activity.failed
-          ? t ? t('activity.web_search_failed_for', { query: target }) : `Failed to search the web for ${target}`
-          : t ? t('activity.searched_web_for', { query: target }) : `Searched the web for ${target}`
-      }
-      if (!isGenericActivityTitle(activity)) return activity.title
-      if (!activity.complete) return t ? t('activity.searching_web') : 'Searching the web'
-      return activity.failed
-        ? t ? t('activity.web_search_failed') : 'Failed to search the web'
-        : t ? t('activity.searched_the_web') : 'Searched the web'
-    case 'plan':
-      if (!isGenericActivityTitle(activity)) return activity.title
-      if (!activity.complete) return t ? t('activity.updating_plan') : 'Updating plan'
-      return activity.failed
-        ? t ? t('activity.plan_update_failed') : 'Failed to update plan'
-        : t ? t('activity.updated_plan') : 'Updated plan'
-    case 'tool':
-      return activityToolDisplayName(activity, t)
-    case 'reasoning':
-      return activity.title
+  if (activity.kind === 'reasoning') {
+    return activity.reasoning ? reasoningTitle(activity, t) : activityActionLabel(activity, t)
   }
+  const action = activityActionLabel(activity, t)
+  const detail = activityRowDetail(activity, t)
+  if (!detail || detail === action) return action
+  return `${action} ${detail}`
 }
 
 export function activityActionLabel(activity: ActivityItem, t?: Translator) {
-  if (isAskUserQuestion(activity)) {
-    return t ? t('activity.ask_questions') : 'Ask questions'
-  }
-  const key = activity.kind === 'reasoning'
-    ? 'activity.action_think'
-    : activity.kind === 'command'
-      ? 'activity.action_run'
-      : activity.kind === 'fileChange'
-        ? 'activity.action_edit'
-        : activity.kind === 'fileRead'
-          ? 'activity.action_read'
-          : activity.kind === 'fileSearch' || activity.kind === 'search'
-            ? 'activity.action_search'
-            : activity.kind === 'fileList'
-              ? 'activity.action_list'
-              : activity.kind === 'plan'
-                ? 'activity.action_plan'
-                : 'activity.tool'
-  if (t) return t(key)
-  return {
-    'activity.action_think': 'Think',
-    'activity.action_run': 'Run',
-    'activity.action_edit': 'Edit',
-    'activity.action_read': 'Read',
-    'activity.action_search': 'Search',
-    'activity.action_list': 'List',
-    'activity.action_plan': 'Plan',
-    'activity.tool': 'Tool',
-  }[key]!
+  if (activity.kind === 'reasoning') return 'thinking'
+  const title = activity.title.trim()
+  if (title) return title
+  return t ? t('activity.tool') : 'Tool'
 }
 
 export function activityRowDetail(activity: ActivityItem, t?: Translator) {
-  const customTitle = !isGenericActivityTitle(activity) ? activity.title : ''
   switch (activity.kind) {
     case 'reasoning':
       return reasoningTitle(activity, t)
     case 'command':
-      return activity.display_description?.trim() || activity.display_target?.trim() || customTitle
+      return activity.display_target?.trim() || activity.display_description?.trim() || ''
     case 'fileChange': {
       const changes = activity.file_changes ?? []
       if (changes.length === 1) return pathName(changes[0]!.path)
-      if (changes.length > 1) return t
-        ? t('activity.file_count', { count: changes.length })
-        : `${changes.length} files`
-      return customTitle
+      if (changes.length > 1) {
+        return t
+          ? t('activity.file_count', { count: changes.length })
+          : `${changes.length} files`
+      }
+      return ''
     }
     case 'fileRead':
     case 'fileList':
-      return activity.display_target?.trim()
-        ? pathName(activity.display_target)
-        : customTitle
+      return activity.display_target?.trim() ? pathName(activity.display_target) : ''
     case 'fileSearch':
-      return activityDisplayTitle(activity, t)
     case 'search':
-      return activity.display_target?.trim()
-        ? t
-          ? t('activity.search_for', { query: activity.display_target })
-          : `Search for ${activity.display_target}`
-        : customTitle
     case 'plan':
-      return customTitle
+      return activity.display_target?.trim() || ''
     case 'tool':
       if (isAskUserQuestion(activity)) return ''
-      return activity.display_target?.trim() || !isGenericActivityTitle(activity)
-        ? activityToolDisplayName(activity, t)
-        : ''
+      return activity.display_target?.trim() || ''
   }
 }
 
@@ -251,7 +119,7 @@ export function activityDisclosureSections(activity: ActivityItem, t?: Translato
     else if (activity.image_urls?.length) sections.push({ kind: 'output', label: t ? t('activity.output') : 'Output', content: '' })
     return sections
   }
-  const argumentsText = activity.arguments?.trim()
+  const argumentsText = unwrapCodeModeArguments(activity.arguments?.trim() ?? '')
   const output = activity.output?.trim()
   if (argumentsText) sections.push({ kind: 'arguments', label: t ? t('activity.arguments') : 'Arguments', content: argumentsText })
   if (output) sections.push({ kind: 'output', label: t ? t('activity.output') : 'Output', content: output })
@@ -574,43 +442,26 @@ function toolNameLeaf(name: string) {
 }
 
 function isAskUserQuestion(activity: ActivityItem) {
-  return activity.kind === 'tool'
-    && toolNameLeaf(activity.title).replace(/[\s_-]+/g, '').toLocaleLowerCase() === 'askuserquestion'
+  const leaf = toolNameLeaf(activity.title).replace(/[\s_-]+/g, '').toLocaleLowerCase()
+  return activity.kind === 'tool' && (leaf === 'askuserquestion' || leaf === 'question')
 }
 
-function humanizeToolName(name: string) {
-  const trimmed = name.trim()
-  if (/\s/.test(trimmed)) return trimmed
-  const display = toolNameLeaf(trimmed)
-    .replace(/[_-]+/g, ' ')
-    .replace(/([a-z\d])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
-    .trim()
-  return display ? display[0]!.toLocaleUpperCase() + display.slice(1) : 'Tool'
-}
-
-function activityToolDisplayName(activity: ActivityItem, t?: Translator) {
-  if (isAskUserQuestion(activity)) {
-    return t ? t('activity.ask_questions') : 'Ask questions'
+function unwrapCodeModeArguments(argumentsText: string) {
+  if (!argumentsText) return ''
+  try {
+    const value = JSON.parse(argumentsText) as unknown
+    if (
+      value
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && Object.keys(value).length === 1
+      && typeof (value as { code?: unknown }).code === 'string'
+      && (value as { code: string }).code.trim()
+    ) {
+      return (value as { code: string }).code
+    }
+  } catch {
+    return argumentsText
   }
-  const target = activity.display_target?.trim()
-  if (target) return target
-  if (!isGenericActivityTitle(activity)) return humanizeToolName(activity.title)
-  return t ? t('activity.tool') : 'Tool'
-}
-
-function isGenericActivityTitle(activity: ActivityItem) {
-  const normalized = activity.title.trim().toLocaleLowerCase().replace(/[\s_-]+/g, '')
-  const generic = {
-    command: ['command', 'runcommand', 'shell', 'shellcommand', 'execute', 'exec'],
-    fileChange: ['filechange', 'editfile', 'writefile', 'patch', 'applypatch'],
-    fileRead: ['fileread', 'readfile', 'read'],
-    fileSearch: ['filesearch', 'searchfiles', 'findfiles', 'grep'],
-    fileList: ['filelist', 'listfiles', 'listdirectory', 'ls'],
-    search: ['search', 'websearch'],
-    plan: ['plan', 'planupdated', 'updateplan'],
-    tool: ['tool'],
-    reasoning: ['reasoning'],
-  }[activity.kind]
-  return generic.includes(normalized)
+  return argumentsText
 }

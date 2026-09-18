@@ -1945,15 +1945,11 @@ impl Fintwind {
                                 .gap(px(7.0))
                                 .text_size(ui_px(11.5))
                                 .text_color(theme.text_secondary)
-                                .child(icon(
-                                    activity_tool_icon(&activity.title, activity.kind),
-                                    12.0,
-                                    color,
-                                ))
                                 .child(
                                     div()
                                         .flex_none()
                                         .font_weight(FontWeight::MEDIUM)
+                                        .text_color(color)
                                         .child(activity_action_label(activity)),
                                 )
                                 .when(!detail.is_empty(), |row| {

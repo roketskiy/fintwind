@@ -62,9 +62,8 @@ use crate::terminal::TerminalView;
 use crate::theme::{TextSizePreset, Theme, ThemePreference};
 use crate::ui::text_field::TextField;
 use crate::ui::{
-    MenuChip, ProjectNameSelector, activity_noun, activity_tool_icon, contain_scroll, file_icon,
-    icon, icon_button, model_icon, motion, provider_color, provider_icon, spin_halo, status_color,
-    toggle_switch,
+    MenuChip, ProjectNameSelector, activity_noun, contain_scroll, file_icon, icon, icon_button,
+    model_icon, motion, provider_color, provider_icon, spin_halo, status_color, toggle_switch,
 };
 use crate::{
     CancelTurn, CloseFind, CloseWindow, CopySelection, FindNext, FindPrevious, FocusComposer,
@@ -1724,8 +1723,8 @@ use components::*;
 pub use image_preview::init as init_image_preview_keys;
 pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
-use sidebar::{SidebarGroupScroll, SidebarRow};
 pub use sidebar::init as init_sidebar_keys;
+use sidebar::{SidebarGroupScroll, SidebarRow};
 pub use skills_page::init as init_skills_keys;
 use streaming::*;
 use transcript::*;

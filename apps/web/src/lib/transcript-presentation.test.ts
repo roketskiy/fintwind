@@ -49,15 +49,15 @@ describe('desktop transcript language', () => {
     }
     const activities = [reasoning(true, 0, 1_000), command]
 
-    expect(activityHeaderTitle(activities, true)).toBe('Running git log --oneline -15')
+    expect(activityHeaderTitle(activities, true)).toBe('command git log --oneline -15')
     command.complete = true
-    expect(activityHeaderTitle(activities, true)).toBe('Ran git log --oneline -15')
+    expect(activityHeaderTitle(activities, true)).toBe('command git log --oneline -15')
     expect(activityHeaderTitle(activities, false)).toBe('Ran 1 thought · 1 command')
-    expect(activityActionLabel(command)).toBe('Run')
+    expect(activityActionLabel(command)).toBe('command')
     expect(activityRowDetail(command)).toBe('git log --oneline -15')
   })
 
-  test('keeps generic tool names and labels AskUserQuestion by purpose', () => {
+  test('keeps the raw provider tool name on activity rows', () => {
     const named = {
       ...activity('tool', true),
       title: 'mcp__threads__create_thread',
@@ -71,44 +71,44 @@ describe('desktop transcript language', () => {
       title: 'Tool',
     }
 
-    expect(activityActionLabel(named)).toBe('Tool')
-    expect(activityRowDetail(named)).toBe('Create thread')
-    expect(activityDisplayTitle(named)).toBe('Create thread')
+    expect(activityActionLabel(named)).toBe('mcp__threads__create_thread')
+    expect(activityRowDetail(named)).toBe('')
+    expect(activityDisplayTitle(named)).toBe('mcp__threads__create_thread')
     expect(activityActionLabel(unnamed)).toBe('Tool')
     expect(activityRowDetail(unnamed)).toBe('')
-    expect(activityActionLabel(question)).toBe('Ask questions')
+    expect(activityActionLabel(question)).toBe('AskUserQuestion')
     expect(activityRowDetail(question)).toBe('')
-    expect(activityDisplayTitle(question)).toBe('Ask questions')
+    expect(activityDisplayTitle(question)).toBe('AskUserQuestion')
   })
 
   test('derives the same provider-neutral activity titles as desktop', () => {
     expect(activityDisplayTitle({
       ...activity('fileChange', true),
-      title: 'Edit file',
+      title: 'edit',
       file_changes: [{ path: '/tmp/src/app.ts', additions: 4, deletions: 1 }],
-    })).toBe('Edited app.ts')
+    })).toBe('edit app.ts')
     expect(activityDisplayTitle({
       ...activity('command', false),
-      title: 'Run command',
+      title: 'shell',
       display_target: 'bun test',
-    })).toBe('Running bun test')
+    })).toBe('shell bun test')
     expect(activityDisplayTitle({
       ...activity('command', true),
-      title: 'Run command',
+      title: 'shell',
       display_target: 'python3 analyze.py',
       display_description: 'Analyze color statistics',
-    })).toBe('Ran command: Analyze color statistics')
+    })).toBe('shell python3 analyze.py')
     expect(activityDisplayTitle({
       ...activity('command', false),
-      title: 'Run command',
+      title: 'shell',
       display_target: 'python3 analyze.py',
       display_description: 'Analyze color statistics',
-    })).toBe('Running command: Analyze color statistics')
+    })).toBe('shell python3 analyze.py')
     expect(activityDisplayTitle({
       ...activity('fileRead', true),
-      title: 'Read file',
+      title: 'read',
       display_target: '/tmp/README.md',
-    })).toBe('Read README.md')
+    })).toBe('read README.md')
   })
 
   test('keeps activity arguments and output in separate disclosure sections', () => {

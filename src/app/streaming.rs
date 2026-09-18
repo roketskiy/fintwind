@@ -256,9 +256,7 @@ impl Fintwind {
                     if !item.file_changes.is_empty() {
                         activity.file_changes = item.file_changes;
                     }
-                    if item.display_target.is_some()
-                        && (activity.display_target.is_none() || has_arguments)
-                    {
+                    if item.display_target.is_some() {
                         activity.display_target = item.display_target;
                     }
                     if item.display_description.is_some()

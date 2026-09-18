@@ -1770,10 +1770,8 @@ impl Fintwind {
             .justify_center()
             .px_8()
             .pb(px(52.0))
-            .child(icon("icons/sparkle.svg", 20.0, theme.accent))
             .child(
                 div()
-                    .mt(px(14.0))
                     .flex()
                     .items_baseline()
                     .text_size(ui_px(20.0))

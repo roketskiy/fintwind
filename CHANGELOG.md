@@ -18,6 +18,12 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.7]
+
+- Show raw OpenCode tool names (read, grep, execute, …) on activity cards, replacing generic icons, and render nested Code Mode tool calls from `toolCalls`
+- Add settings to change the UI and code fonts
+- Update the model thinking-level reference table for 2026 models
+
 ## [0.1.6]
 
 - Add a Usage page that scans OpenCode session records for token and cost stats, with KPI cards, an activity heatmap, daily bars, and per-model ranking

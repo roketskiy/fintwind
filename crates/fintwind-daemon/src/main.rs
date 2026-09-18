@@ -9,8 +9,8 @@ use fintwind_protocol::{DAEMON_TOKEN_ENV, DaemonReady, PROTOCOL_VERSION};
 
 fn main() -> anyhow::Result<()> {
     let arguments = Arguments::parse(std::env::args().skip(1))?;
-    let token =
-        std::env::var(DAEMON_TOKEN_ENV).context("Fintwind daemon authentication token is missing")?;
+    let token = std::env::var(DAEMON_TOKEN_ENV)
+        .context("Fintwind daemon authentication token is missing")?;
     // The bearer capability belongs only to this server process. Remove it
     // before any provider or workspace subprocess can inherit the daemon's
     // environment.
@@ -53,7 +53,9 @@ fn main() -> anyhow::Result<()> {
     fintwind_core::serve(
         listener,
         token,
-        Arc::new(fintwind_core::daemon::FintwindBackend::new(settings, task_store)?),
+        Arc::new(fintwind_core::daemon::FintwindBackend::new(
+            settings, task_store,
+        )?),
         shutdown,
         fintwind_core::ServerOptions {
             allowed_origins: arguments.allowed_origins.into_iter().collect(),

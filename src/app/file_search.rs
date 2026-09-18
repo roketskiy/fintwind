@@ -931,7 +931,7 @@ impl Fintwind {
                 .border_b_1()
                 .border_color(theme.border)
                 .bg(theme.surface)
-                .font_family(".SystemUIFont")
+                .font_family(crate::theme::ui_font_family())
                 .cursor_default()
                 .flex()
                 .items_start()

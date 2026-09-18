@@ -1011,7 +1011,7 @@ impl Fintwind {
         if let Some(version) = version {
             header_title = header_title.child(
                 div()
-                    .font_family(crate::md::render::MONO_FAMILY)
+                    .font_family(crate::md::render::mono_family())
                     .text_size(ui_px(10.0))
                     .text_color(theme.text_tertiary)
                     .child(SharedString::from(format!("v{version}"))),
@@ -1071,7 +1071,7 @@ impl Fintwind {
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .font_family(crate::md::render::MONO_FAMILY)
+                                .font_family(crate::md::render::mono_family())
                                 .text_size(ui_px(9.5))
                                 .text_color(theme.text_tertiary)
                                 .child(SharedString::from(model.id.clone())),
@@ -1470,7 +1470,7 @@ impl Fintwind {
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .font_family(crate::md::render::MONO_FAMILY)
+                        .font_family(crate::md::render::mono_family())
                         .text_size(ui_px(11.0))
                         .text_color(if key.is_empty() {
                             theme.text_ghost
@@ -1589,7 +1589,7 @@ impl Fintwind {
                         div()
                             .min_w_0()
                             .truncate()
-                            .font_family(crate::md::render::MONO_FAMILY)
+                            .font_family(crate::md::render::mono_family())
                             .text_size(ui_px(if named.is_some() { 9.5 } else { 11.0 }))
                             .text_color(if named.is_some() {
                                 theme.text_tertiary
@@ -2278,7 +2278,7 @@ pub(super) fn small_pill(theme: &Theme, label: String, color: Option<Hsla>) -> D
         .py(px(1.5))
         .rounded_full()
         .text_size(ui_px(9.0))
-        .font_family(crate::md::render::MONO_FAMILY)
+        .font_family(crate::md::render::mono_family())
         .text_color(color.unwrap_or(theme.text_tertiary))
         .bg(theme.overlay)
         .child(SharedString::from(label))

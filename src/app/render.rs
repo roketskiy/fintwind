@@ -298,7 +298,7 @@ impl Render for Fintwind {
             .relative()
             .flex()
             .text_color(theme.text)
-            .font_family(".SystemUIFont")
+            .font_family(crate::theme::ui_font_family())
             // Both panels slide through a container that narrows while their
             // content keeps its full width and is clipped: the sidebar list
             // and the right panel's surfaces never reflow on the way in or
@@ -450,7 +450,7 @@ impl Fintwind {
         );
         let message = md::render::plain_text(
             message,
-            md::render::SANS_FAMILY,
+            md::render::sans_family(),
             FontWeight::NORMAL,
             theme.text,
             &text_ctx,

@@ -11,17 +11,17 @@ pub mod custom_providers;
 pub mod driver;
 pub mod models_dev;
 pub mod opencode_config;
-mod provider_thinking;
 pub mod persistence;
 mod process;
+mod provider_thinking;
 mod workspace_client;
 
 pub use client::DaemonClient;
+pub use fintwind_protocol::*;
 pub use process::{
     DEFAULT_EXPOSED_DAEMON_PORT, DaemonExposureSettings, DaemonProcess, DaemonSupervisor,
     parse_allowed_origins,
 };
-pub use fintwind_protocol::*;
 pub use workspace_client::WorkspaceClient;
 
 pub mod git_branch {

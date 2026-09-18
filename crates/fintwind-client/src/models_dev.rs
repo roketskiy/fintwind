@@ -122,17 +122,13 @@ impl ModelsDevTable {
             output_limit: mode(matches.iter().map(|model| model.output_limit)),
             // Models without modality information do not vote for "empty":
             // the majority is taken over the copies that say.
-            input_modalities: mode(
-                matches
-                    .iter()
-                    .map(|model| (!model.input_modalities.is_empty()).then(|| model.input_modalities.clone())),
-            )
+            input_modalities: mode(matches.iter().map(|model| {
+                (!model.input_modalities.is_empty()).then(|| model.input_modalities.clone())
+            }))
             .unwrap_or_default(),
-            output_modalities: mode(
-                matches
-                    .iter()
-                    .map(|model| (!model.output_modalities.is_empty()).then(|| model.output_modalities.clone())),
-            )
+            output_modalities: mode(matches.iter().map(|model| {
+                (!model.output_modalities.is_empty()).then(|| model.output_modalities.clone())
+            }))
             .unwrap_or_default(),
         }
     }
@@ -527,11 +523,15 @@ mod tests {
             vec!["text".to_owned(), "image".to_owned()]
         );
         // Nothing known about the id: empty.
-        assert_eq!(table.resolve_input_modalities("other"), Vec::<String>::new());
+        assert_eq!(
+            table.resolve_input_modalities("other"),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
-    fn resolves_a_model_id_across_every_provider_by_majority() {        // Multiple catalog providers serve the same id with slightly
+    fn resolves_a_model_id_across_every_provider_by_majority() {
+        // Multiple catalog providers serve the same id with slightly
         // different metadata; the majority value wins per field.
         let document = r#"{
             "openai": {

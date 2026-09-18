@@ -922,7 +922,7 @@ impl Fintwind {
             div()
                 .min_w_0()
                 .truncate()
-                .font_family(crate::md::render::MONO_FAMILY)
+                .font_family(crate::md::render::mono_family())
                 .text_size(ui_px(size))
                 .text_color(theme.text_secondary)
                 .child(SharedString::from(value))
@@ -1130,7 +1130,7 @@ impl Fintwind {
                 .border_color(theme.border)
                 .child(
                     div()
-                        .font_family(crate::md::render::MONO_FAMILY)
+                        .font_family(crate::md::render::mono_family())
                         .text_size(ui_px(9.5))
                         .text_color(theme.text_ghost)
                         .child("SKILL.md"),

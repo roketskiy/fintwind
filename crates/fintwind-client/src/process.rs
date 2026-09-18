@@ -145,7 +145,8 @@ impl DaemonProcess {
     ) -> anyhow::Result<Self> {
         let settings = settings.validate()?;
         let token = settings.token.clone();
-        let app_executable = std::env::current_exe().context("could not locate fintwind executable")?;
+        let app_executable =
+            std::env::current_exe().context("could not locate fintwind executable")?;
         let mut command = ProcessCommand::new(executable);
         // The desktop is a GUI-subsystem binary on Windows, so a console
         // child would get a console window of its own. `stderr` still reaches
@@ -177,11 +178,10 @@ impl DaemonProcess {
             .spawn()
             .with_context(|| format!("could not launch {}", executable.display()))?;
         #[cfg(windows)]
-        let job = match windows_job::JobObject::new()
-            .and_then(|job| {
-                job.assign_process(child.id())?;
-                Ok(job)
-            }) {
+        let job = match windows_job::JobObject::new().and_then(|job| {
+            job.assign_process(child.id())?;
+            Ok(job)
+        }) {
             Ok(job) => job,
             Err(error) => {
                 let _ = child.kill();
@@ -293,9 +293,9 @@ mod windows_job {
         Foundation::{CloseHandle, HANDLE},
         System::{
             JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-                JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
             },
             Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE},
         },
@@ -671,9 +671,8 @@ fn monitor_daemon(
         };
         let observed_stamp = ExecutableStamp::read(executable).ok();
         let executable_changed = watch_for_rebuilds
-            && observed_stamp.is_some_and(|observed| {
-                active_stamp.is_none_or(|active| observed != active)
-            });
+            && observed_stamp
+                .is_some_and(|observed| active_stamp.is_none_or(|active| observed != active));
         if !process_exited && !connection_lost && !executable_changed {
             continue;
         }

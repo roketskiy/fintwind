@@ -172,11 +172,21 @@ impl Metrics {
     }
 }
 
+#[cfg(test)]
 pub const SANS_FAMILY: &str = ".SystemUIFont";
 /// The bundled mono face. "SF Mono" only exists on machines that installed it
 /// with Xcode or Terminal, and silently falls back to the sans face when it
 /// does not — which reads as proportional code.
+#[cfg(test)]
 pub const MONO_FAMILY: &str = "JetBrains Mono";
+
+pub fn sans_family() -> SharedString {
+    crate::theme::ui_font_family()
+}
+
+pub fn mono_family() -> SharedString {
+    crate::theme::code_font_family()
+}
 
 /// Inline-code wash geometry. Paint-only: the box overhangs the glyphs
 /// horizontally and insets vertically inside the line box.
@@ -308,9 +318,9 @@ pub fn flatten(
         }
 
         let mut run_font = font(if run.style.code {
-            MONO_FAMILY
+            mono_family()
         } else {
-            SANS_FAMILY
+            sans_family()
         });
         run_font.weight = if run.style.bold && base_weight < FontWeight::SEMIBOLD {
             FontWeight::SEMIBOLD
@@ -378,7 +388,7 @@ pub fn flatten(
 /// A flat string with uniform styling, for non-markdown transcript text.
 pub fn flatten_plain(
     text: impl Into<SharedString>,
-    family: &'static str,
+    family: impl Into<SharedString>,
     weight: FontWeight,
     color: Hsla,
 ) -> FlatText {
@@ -423,9 +433,9 @@ pub struct MarkdownView {
     /// knows how many text elements each block expands into.
     volatile_from: Cell<usize>,
     /// Style the cached flats were built for. Colors live inside `TextRun`s, so
-    /// a theme switch has to drop them or the transcript keeps painting the old
-    /// palette.
-    style: Cell<Option<(Palette, Metrics)>>,
+    /// a theme or font switch has to drop them or the transcript keeps painting
+    /// the old palette / face.
+    style: Cell<Option<(Palette, Metrics, u64)>>,
     /// Per-element opacity spans for the live response. Text is committed to
     /// layout immediately; only these paint colors animate.
     veil: RefCell<RowVeil>,
@@ -526,7 +536,7 @@ impl MarkdownView {
 
     /// Drop cached flats if the style they were built for no longer applies.
     fn sync_style(&self, palette: &Palette, metrics: &Metrics) {
-        let current = (*palette, *metrics);
+        let current = (*palette, *metrics, crate::theme::font_generation());
         if self.style.get() != Some(current) {
             self.style.set(Some(current));
             self.flats.borrow_mut().clear();
@@ -831,13 +841,17 @@ pub fn selectable_flat_text(
 /// is not markdown but still takes part in transcript-wide selection.
 pub fn plain_text(
     text: impl Into<SharedString>,
-    family: &'static str,
+    family: impl Into<SharedString>,
     weight: FontWeight,
     color: Hsla,
     ctx: &Ctx,
 ) -> AnyElement {
     let key = ctx.next_key();
-    let flat = ctx.flat(key.index, || flatten_plain(text, family, weight, color));
+    let text = text.into();
+    let family = family.into();
+    let flat = ctx.flat(key.index, move || {
+        flatten_plain(text, family, weight, color)
+    });
     text_element(&flat, key, ctx)
 }
 
@@ -1273,7 +1287,7 @@ fn render_block_content(block: &Block, ctx: &Ctx) -> AnyElement {
             let flat = ctx.flat(key.index, || {
                 let mut flat = flatten_plain(
                     latex.clone(),
-                    MONO_FAMILY,
+                    mono_family(),
                     FontWeight::NORMAL,
                     ctx.palette.text,
                 );
@@ -1544,7 +1558,7 @@ fn render_code_fragment(
     // code block is exactly the case the cache exists for.
     let flat = ctx.flat(key.index, || {
         let lang = language.and_then(highlight::lang_for_tag);
-        let mut code_font = font(MONO_FAMILY);
+        let mut code_font = font(mono_family());
         code_font.weight = FontWeight::NORMAL;
         FlatText {
             text: SharedString::from(code.to_owned()),

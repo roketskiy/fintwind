@@ -1,8 +1,12 @@
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use gpui::{App, Global, Hsla, Pixels, Window, WindowAppearance, hsla, px, rgb};
+use gpui::{App, Global, Hsla, Pixels, SharedString, Window, WindowAppearance, hsla, px, rgb};
+use parking_lot::Mutex;
 
-pub use fintwind_client::persistence::{DEFAULT_CODE_TEXT_SCALE, DEFAULT_UI_TEXT_SCALE};
+pub use fintwind_client::persistence::{
+    DEFAULT_CODE_FONT_FAMILY, DEFAULT_CODE_TEXT_SCALE, DEFAULT_UI_FONT_FAMILY,
+    DEFAULT_UI_TEXT_SCALE,
+};
 pub use fintwind_client::theme::ThemePreference;
 
 /// The user's UI text scale, stored as raw f32 bits. Atomics rather than a
@@ -12,6 +16,14 @@ pub use fintwind_client::theme::ThemePreference;
 static UI_TEXT_SCALE: AtomicU32 = AtomicU32::new(0);
 /// The user's code text scale, stored as raw f32 bits.
 static CODE_TEXT_SCALE: AtomicU32 = AtomicU32::new(0);
+/// Current UI font family. Mutex rather than a GPUI global for the same
+/// reason as the text scales: flatteners deep in the tree read this without
+/// an App.
+static UI_FONT_FAMILY: Mutex<Option<SharedString>> = Mutex::new(None);
+/// Current code font family.
+static CODE_FONT_FAMILY: Mutex<Option<SharedString>> = Mutex::new(None);
+/// Bumped when either font family changes so cached text runs drop.
+static FONT_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Publish the text-size preferences so every later frame renders with them.
 /// Call again after the user changes the setting; the next paint reflows.
@@ -51,6 +63,51 @@ pub fn ui_px(size: f32) -> Pixels {
 /// blocks, editor panes, and the gutters that must line up with them.
 pub fn code_px(size: f32) -> Pixels {
     px((size * code_text_scale() * 4.0).round() / 4.0)
+}
+
+fn stored_font(slot: &Mutex<Option<SharedString>>, default: &'static str) -> SharedString {
+    slot.lock()
+        .clone()
+        .unwrap_or_else(|| SharedString::new_static(default))
+}
+
+fn publish_font(
+    slot: &Mutex<Option<SharedString>>,
+    family: impl Into<SharedString>,
+    default: &'static str,
+) {
+    let family = family.into();
+    let family = if family.is_empty() {
+        SharedString::new_static(default)
+    } else {
+        family
+    };
+    let mut slot = slot.lock();
+    if slot.as_ref() == Some(&family) {
+        return;
+    }
+    *slot = Some(family);
+    FONT_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn set_ui_font_family(family: impl Into<SharedString>) {
+    publish_font(&UI_FONT_FAMILY, family, DEFAULT_UI_FONT_FAMILY);
+}
+
+pub fn ui_font_family() -> SharedString {
+    stored_font(&UI_FONT_FAMILY, DEFAULT_UI_FONT_FAMILY)
+}
+
+pub fn set_code_font_family(family: impl Into<SharedString>) {
+    publish_font(&CODE_FONT_FAMILY, family, DEFAULT_CODE_FONT_FAMILY);
+}
+
+pub fn code_font_family() -> SharedString {
+    stored_font(&CODE_FONT_FAMILY, DEFAULT_CODE_FONT_FAMILY)
+}
+
+pub fn font_generation() -> u64 {
+    FONT_GENERATION.load(Ordering::Relaxed)
 }
 
 /// The text-size presets the appearance page offers, shared by the UI and

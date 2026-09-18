@@ -8,7 +8,7 @@
         "name_en": "Low",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": null
       },
       {
@@ -17,7 +17,7 @@
         "name_en": "Medium",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       },
       {
@@ -94,28 +94,14 @@
         "vendor_label": null
       },
       {
-        "mode_key": "high",
-        "name_zh": "高",
-        "name_en": "High",
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
         "vendor_label": null
       },
-      {
-        "mode_key": "xhigh",
-        "name_zh": "极高",
-        "name_en": "Extra-High",
-        "mode_type": "tiered",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      }
-    ]
-  },
-  {
-    "name": "Muse Spark 1.3",
-    "thinking_modes": [
       {
         "mode_key": "xhigh",
         "name_zh": "极高",
@@ -136,30 +122,52 @@
         "name_en": "Adaptive Thinking",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
-      }
-    ]
-  },
-  {
-    "name": "Spark-X2.5-4B",
-    "thinking_modes": [
+      },
       {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
         "vendor_label": null
       },
       {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": true,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "xhigh",
+        "name_zh": "极高",
+        "name_en": "Extra-High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "max",
+        "name_zh": "最高",
+        "name_en": "Max",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
         "vendor_label": null
       }
     ]
@@ -314,10 +322,28 @@
         "vendor_label": null
       },
       {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "xhigh",
+        "name_zh": "极高",
+        "name_en": "Extra-High",
+        "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": true,
         "vendor_label": null
@@ -369,12 +395,21 @@
         "vendor_label": null
       },
       {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
         "mode_key": "high",
         "name_zh": "高",
         "name_en": "High",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": null
       },
       {
@@ -383,7 +418,7 @@
         "name_en": "Max",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       }
     ]
@@ -529,9 +564,9 @@
         "vendor_label": null
       },
       {
-        "mode_key": "high",
-        "name_zh": "高",
-        "name_en": "High",
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
@@ -611,6 +646,24 @@
     "name": "Gemini 3.6 Flash",
     "thinking_modes": [
       {
+        "mode_key": "nothinking",
+        "name_zh": "关闭",
+        "name_en": "Off",
+        "mode_type": "toggle",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
         "mode_key": "medium",
         "name_zh": "中",
         "name_en": "Medium",
@@ -633,6 +686,15 @@
   {
     "name": "Gemini 3.5 Flash-Lite",
     "thinking_modes": [
+      {
+        "mode_key": "nothinking",
+        "name_zh": "关闭",
+        "name_en": "Off",
+        "mode_type": "toggle",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
       {
         "mode_key": "low",
         "name_zh": "低",
@@ -675,9 +737,9 @@
         "vendor_label": null
       },
       {
-        "mode_key": "high",
-        "name_zh": "高",
-        "name_en": "High",
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
@@ -806,67 +868,11 @@
   },
   {
     "name": "GPT-Live-1",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "low",
-        "name_zh": "低",
-        "name_en": "Low",
-        "mode_type": "tiered",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "medium",
-        "name_zh": "中",
-        "name_en": "Medium",
-        "mode_type": "tiered",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "high",
-        "name_zh": "高",
-        "name_en": "High",
-        "mode_type": "tiered",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "GPT-Live-1 mini",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "low",
-        "name_zh": "低",
-        "name_en": "Low",
-        "mode_type": "tiered",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Hy3",
@@ -904,18 +910,54 @@
     "name": "Claude Sonnet 5",
     "thinking_modes": [
       {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
+        "mode_key": "adaptive",
+        "name_zh": "自适应思考",
+        "name_en": "Adaptive Thinking",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
         "is_default": false,
         "vendor_label": null
       },
       {
-        "mode_key": "deep",
-        "name_zh": "深度",
-        "name_en": "Deep",
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "xhigh",
+        "name_zh": "极高",
+        "name_en": "Extra-High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "max",
+        "name_zh": "最高",
+        "name_en": "Max",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
@@ -950,7 +992,7 @@
         "name_en": "Medium",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": null
       },
       {
@@ -968,7 +1010,7 @@
         "name_en": "Extra-High",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       },
       {
@@ -1020,6 +1062,24 @@
         "thinking_budget_tokens": null,
         "is_default": false,
         "vendor_label": null
+      },
+      {
+        "mode_key": "xhigh",
+        "name_zh": "极高",
+        "name_en": "Extra-High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "max",
+        "name_zh": "最高",
+        "name_en": "Max",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
       }
     ]
   },
@@ -1057,6 +1117,24 @@
         "mode_key": "high",
         "name_zh": "高",
         "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "xhigh",
+        "name_zh": "极高",
+        "name_en": "Extra-High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "max",
+        "name_zh": "最高",
+        "name_en": "Max",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
@@ -1159,12 +1237,21 @@
         "vendor_label": null
       },
       {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
+      {
         "mode_key": "high",
         "name_zh": "高",
         "name_en": "High",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       }
     ]
@@ -1187,7 +1274,7 @@
         "name_en": "High",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       },
       {
@@ -1196,7 +1283,7 @@
         "name_en": "Max",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": null
       }
     ]
@@ -1224,7 +1311,52 @@
         "name_en": "Adaptive Thinking",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
         "is_default": true,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "xhigh",
+        "name_zh": "极高",
+        "name_en": "Extra-High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "max",
+        "name_zh": "最高",
+        "name_en": "Max",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
         "vendor_label": null
       }
     ]
@@ -1384,15 +1516,6 @@
     "name": "Qwen3.7-Max-Preview",
     "thinking_modes": [
       {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
         "mode_key": "thinking",
         "name_zh": "开启",
         "name_en": "On",
@@ -1428,39 +1551,11 @@
   },
   {
     "name": "Gemini Omni",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Composer 2.5",
     "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
       {
         "mode_key": "thinking",
         "name_zh": "开启",
@@ -1595,12 +1690,21 @@
         "vendor_label": null
       },
       {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
         "mode_key": "high",
         "name_zh": "高",
         "name_en": "High",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": null
       },
       {
@@ -1609,7 +1713,7 @@
         "name_en": "Max",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       }
     ]
@@ -1641,7 +1745,7 @@
         "name_en": "Medium",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": null
       },
       {
@@ -1657,15 +1761,6 @@
         "mode_key": "xhigh",
         "name_zh": "极高",
         "name_en": "Extra-High",
-        "mode_type": "tiered",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "max",
-        "name_zh": "最高",
-        "name_en": "Max",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
@@ -1715,16 +1810,25 @@
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
         "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）,深度思考（Deeper Thinking Mode）"
+        "vendor_label": null
       },
       {
-        "mode_key": "deep",
-        "name_zh": "深度",
-        "name_en": "Deep",
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）,深度思考（Deeper Thinking Mode）"
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
       }
     ]
   },
@@ -1753,26 +1857,7 @@
   },
   {
     "name": "GPT-image-2",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Kimi K2.6",
@@ -1783,7 +1868,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
       },
       {
@@ -1792,7 +1877,7 @@
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
       }
     ]
@@ -1821,21 +1906,7 @@
     ]
   },
   {
-    "name": "Grok 4.3 Beta",
-    "thinking_modes": [
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "思考模式（Thinking Mode）"
-      }
-    ]
-  },
-  {
-    "name": "Opus 4.7",
+    "name": "Grok 4.3",
     "thinking_modes": [
       {
         "mode_key": "nothinking",
@@ -1844,6 +1915,15 @@
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
         "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
         "vendor_label": null
       },
       {
@@ -1863,6 +1943,38 @@
         "thinking_budget_tokens": null,
         "is_default": false,
         "vendor_label": null
+      }
+    ]
+  },
+  {
+    "name": "Opus 4.7",
+    "thinking_modes": [
+      {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
       },
       {
         "mode_key": "xhigh",
@@ -1874,12 +1986,12 @@
         "vendor_label": null
       },
       {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
+        "mode_key": "max",
+        "name_zh": "最高",
+        "name_en": "Max",
+        "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       }
     ]
@@ -1893,7 +2005,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
       },
       {
@@ -1902,33 +2014,14 @@
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
       }
     ]
   },
   {
     "name": "Gemini 3.1 Flash TTS",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Muse Spark",
@@ -1957,18 +2050,9 @@
     "name": "Claude Mythos Preview",
     "thinking_modes": [
       {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
+        "mode_key": "adaptive",
+        "name_zh": "自适应思考",
+        "name_en": "Adaptive Thinking",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
         "is_default": true,
@@ -2092,7 +2176,7 @@
     ]
   },
   {
-    "name": "Qwen 3.6 Plus Preview",
+    "name": "Qwen3.6-Plus",
     "thinking_modes": [
       {
         "mode_key": "nothinking",
@@ -2210,15 +2294,6 @@
     "name": "Composer 2",
     "thinking_modes": [
       {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
         "mode_key": "thinking",
         "name_zh": "开启",
         "name_en": "On",
@@ -2256,6 +2331,15 @@
     "name": "GPT-5.4 mini",
     "thinking_modes": [
       {
+        "mode_key": "nothinking",
+        "name_zh": "关闭",
+        "name_en": "Off",
+        "mode_type": "toggle",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
+      {
         "mode_key": "low",
         "name_zh": "低",
         "name_en": "Low",
@@ -2279,7 +2363,7 @@
         "name_en": "High",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       },
       {
@@ -2297,6 +2381,15 @@
     "name": "GPT-5.4 nano",
     "thinking_modes": [
       {
+        "mode_key": "nothinking",
+        "name_zh": "关闭",
+        "name_en": "Off",
+        "mode_type": "toggle",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
+      {
         "mode_key": "low",
         "name_zh": "低",
         "name_en": "Low",
@@ -2320,7 +2413,7 @@
         "name_en": "High",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       },
       {
@@ -2336,6 +2429,10 @@
   },
   {
     "name": "Gemini Embedding 2",
+    "thinking_modes": []
+  },
+  {
+    "name": "Grok 4.20",
     "thinking_modes": [
       {
         "mode_key": "nothinking",
@@ -2343,23 +2440,9 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
         "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
-  },
-  {
-    "name": "Grok 4.20",
-    "thinking_modes": [
+        "vendor_label": null
+      },
       {
         "mode_key": "thinking",
         "name_zh": "开启",
@@ -2374,6 +2457,15 @@
   {
     "name": "GPT-5.4",
     "thinking_modes": [
+      {
+        "mode_key": "nothinking",
+        "name_zh": "关闭",
+        "name_en": "Off",
+        "mode_type": "toggle",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
       {
         "mode_key": "low",
         "name_zh": "低",
@@ -2407,7 +2499,7 @@
         "name_en": "Extra-High",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       }
     ]
@@ -2436,29 +2528,6 @@
     ]
   },
   {
-    "name": "Qwen3.5-9B",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      }
-    ]
-  },
-  {
     "name": "Qwen3.5-27B",
     "thinking_modes": [
       {
@@ -2471,22 +2540,13 @@
         "vendor_label": null
       },
       {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      },
-      {
         "mode_key": "thinking",
         "name_zh": "开启",
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
+        "is_default": true,
+        "vendor_label": null
       }
     ]
   },
@@ -2503,22 +2563,13 @@
         "vendor_label": null
       },
       {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      },
-      {
         "mode_key": "thinking",
         "name_zh": "开启",
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
+        "is_default": true,
+        "vendor_label": null
       }
     ]
   },
@@ -2535,22 +2586,13 @@
         "vendor_label": null
       },
       {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      },
-      {
         "mode_key": "thinking",
         "name_zh": "开启",
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
+        "is_default": true,
+        "vendor_label": null
       }
     ]
   },
@@ -2561,6 +2603,15 @@
         "mode_key": "low",
         "name_zh": "低",
         "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
@@ -2674,97 +2725,6 @@
     ]
   },
   {
-    "name": "Qwen3.5-35B-A3B-Instruct",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      }
-    ]
-  },
-  {
-    "name": "Gemini 3 Deep Think - 2620",
-    "thinking_modes": [
-      {
-        "mode_key": "deep",
-        "name_zh": "深度",
-        "name_en": "Deep",
-        "mode_type": "tiered",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "深度思考(Deeper Thinking Mode)"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "4k",
-        "name_zh": "4K",
-        "name_en": "4K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 4096,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "8k",
-        "name_zh": "8K",
-        "name_en": "8K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 8192,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "16k",
-        "name_zh": "16K",
-        "name_en": "16K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 16384,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "32k",
-        "name_zh": "32K",
-        "name_en": "32K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 32768,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "64k",
-        "name_zh": "64K",
-        "name_en": "64K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 65536,
-        "is_default": false,
-        "vendor_label": null
-      }
-    ]
-  },
-  {
     "name": "MiniMax M2.5",
     "thinking_modes": [
       {
@@ -2789,26 +2749,7 @@
   },
   {
     "name": "Seedance 2.0",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "GLM-5",
@@ -2823,51 +2764,23 @@
         "vendor_label": null
       },
       {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
+        "mode_key": "thinking",
+        "name_zh": "开启",
+        "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": null
       }
     ]
   },
   {
     "name": "Qwen-Image-2.0",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Composer 1.5",
     "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
       {
         "mode_key": "thinking",
         "name_zh": "开启",
@@ -2933,15 +2846,6 @@
     "name": "GPT-5.3 Codex",
     "thinking_modes": [
       {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）,深度思考（Deeper Thinking Mode）"
-      },
-      {
         "mode_key": "low",
         "name_zh": "低",
         "name_en": "Low",
@@ -2976,15 +2880,6 @@
         "thinking_budget_tokens": null,
         "is_default": false,
         "vendor_label": null
-      },
-      {
-        "mode_key": "deep",
-        "name_zh": "深度",
-        "name_en": "Deep",
-        "mode_type": "tiered",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）,深度思考（Deeper Thinking Mode）"
       }
     ]
   },
@@ -2997,51 +2892,14 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
         "is_default": true,
         "vendor_label": null
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
       }
     ]
   },
   {
     "name": "GLM-OCR",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Step 3.5 Flash",
@@ -3075,7 +2933,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）,深度思考（Deeper Thinking Mode）"
       },
       {
@@ -3084,7 +2942,7 @@
         "name_en": "Deep",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）,深度思考（Deeper Thinking Mode）"
       }
     ]
@@ -3098,7 +2956,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）"
       },
       {
@@ -3107,7 +2965,7 @@
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": "常规模式（Non-Thinking Mode）"
       }
     ]
@@ -3144,7 +3002,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）"
       },
       {
@@ -3153,33 +3011,14 @@
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": "常规模式（Non-Thinking Mode）"
       }
     ]
   },
   {
     "name": "DeepSeek-OCR 2",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Kimi K2.5",
@@ -3194,22 +3033,13 @@
         "vendor_label": null
       },
       {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
         "mode_key": "thinking",
         "name_zh": "开启",
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
+        "is_default": true,
+        "vendor_label": null
       }
     ]
   },
@@ -3217,31 +3047,13 @@
     "name": "Qwen3-Max-Thinking",
     "thinking_modes": [
       {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
-      },
-      {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": null
-      },
-      {
         "mode_key": "thinking",
         "name_zh": "开启",
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
+        "is_default": true,
+        "vendor_label": null
       }
     ]
   },
@@ -3293,26 +3105,7 @@
   },
   {
     "name": "Stable-DiffCoder-8B-Base",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Qwen3-TTS-12Hz-0.6B-CustomVoice",
@@ -3431,26 +3224,7 @@
   },
   {
     "name": "TranslateGemma 4B",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Qwen3-TTS 0.6B",
@@ -3477,95 +3251,19 @@
   },
   {
     "name": "TranslateGemma 12B",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "TranslateGemma 27B",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "GLM-Image",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "MedGemma 1.5",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Baichuan-M3-235B",
@@ -3580,9 +3278,9 @@
         "vendor_label": null
       },
       {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
+        "mode_key": "thinking",
+        "name_zh": "开启",
+        "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
         "is_default": false,
@@ -3691,15 +3389,6 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
         "is_default": true,
         "vendor_label": null
       },
@@ -3710,7 +3399,7 @@
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
         "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
+        "vendor_label": null
       }
     ]
   },
@@ -3723,26 +3412,8 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "extended",
-        "name_zh": "扩展",
-        "name_en": "Extended",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
         "is_default": true,
         "vendor_label": null
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
       }
     ]
   },
@@ -3948,7 +3619,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）"
       },
       {
@@ -4000,26 +3671,7 @@
   },
   {
     "name": "FunctionGemma 270M IT",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
+    "thinking_modes": []
   },
   {
     "name": "Gemini 3.0 Flash",
@@ -4249,7 +3901,7 @@
         "name_en": "Medium",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       },
       {
@@ -4267,7 +3919,7 @@
         "name_en": "Extra-High",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": null
       },
       {
@@ -4276,7 +3928,7 @@
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "思考模式（Thinking Mode）"
       }
     ]
@@ -4290,7 +3942,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）"
       },
       {
@@ -4465,60 +4117,6 @@
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": true,
-        "vendor_label": "Deep Think Mode（思考模式）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "4k",
-        "name_zh": "4K",
-        "name_en": "4K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 4096,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "8k",
-        "name_zh": "8K",
-        "name_en": "8K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 8192,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "16k",
-        "name_zh": "16K",
-        "name_en": "16K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 16384,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "32k",
-        "name_zh": "32K",
-        "name_en": "32K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 32768,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
-        "mode_key": "64k",
-        "name_zh": "64K",
-        "name_en": "64K",
-        "mode_type": "budget",
-        "thinking_budget_tokens": 65536,
-        "is_default": false,
         "vendor_label": null
       }
     ]
@@ -4762,7 +4360,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
       },
       {
@@ -4771,7 +4369,7 @@
         "name_en": "Extended",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       },
       {
@@ -4780,7 +4378,7 @@
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": false,
+        "is_default": true,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
       }
     ]
@@ -4863,7 +4461,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）,深度思考（Deeper Thinking Mode）"
       },
       {
@@ -4954,7 +4552,7 @@
         "name_en": "Off",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
       },
       {
@@ -5113,7 +4711,7 @@
         "name_en": "Extended",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
-        "is_default": true,
+        "is_default": false,
         "vendor_label": null
       },
       {
@@ -6331,29 +5929,6 @@
   },
   {
     "name": "ERNIE-4.5-VL-28B-A3B",
-    "thinking_modes": [
-      {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      },
-      {
-        "mode_key": "thinking",
-        "name_zh": "开启",
-        "name_en": "On",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）"
-      }
-    ]
-  },
-  {
-    "name": "Qwen-Image-Edit",
     "thinking_modes": [
       {
         "mode_key": "nothinking",

@@ -58,8 +58,6 @@ pub(super) enum Lookup {
     Failed,
 }
 
-
-
 enum State {
     Pending(HashSet<EntityId>),
     // Failures are cached too, so malformed input does not retry every frame.
@@ -127,7 +125,8 @@ impl Cache {
                 .entries
                 .iter()
                 .filter(|(key, entry)| {
-                    matches!(entry.state, State::Ready(_)) && !retain.iter().any(|kept| kept == *key)
+                    matches!(entry.state, State::Ready(_))
+                        && !retain.iter().any(|kept| kept == *key)
                 })
                 .min_by_key(|(_, entry)| entry.touched)
                 .map(|(key, _)| key.clone());

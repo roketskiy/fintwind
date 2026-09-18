@@ -4,9 +4,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::model::{
-    AgentTurn, Message, ProviderResumeCursor, TranscriptBlock,
-};
+use crate::model::{AgentTurn, Message, ProviderResumeCursor, TranscriptBlock};
 
 /// Daemon-host native-session operation used when no live driver can fork.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]

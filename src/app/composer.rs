@@ -109,7 +109,7 @@ impl Fintwind {
                             .p(px(8.0))
                             .rounded(px(7.0))
                             .bg(theme.inset)
-                            .font_family(crate::md::render::MONO_FAMILY)
+                            .font_family(crate::md::render::mono_family())
                             .text_size(ui_px(10.5))
                             .line_height(ui_px(16.0))
                             .text_color(theme.text_secondary)

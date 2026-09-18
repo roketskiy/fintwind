@@ -85,6 +85,29 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
+fn font_family_label(family: &str) -> String {
+    match family {
+        crate::theme::DEFAULT_UI_FONT_FAMILY => tr!("settings.font_system"),
+        ".SystemUIFontMonospaced" => tr!("settings.font_system_mono"),
+        _ => family.to_owned(),
+    }
+}
+
+fn available_font_families(cx: &App, keep: &[&str]) -> Vec<String> {
+    let mut names = cx.text_system().all_font_names();
+    names.extend(keep.iter().map(|family| (*family).to_owned()));
+    names.retain(|name| !name.starts_with('.') || keep.contains(&name.as_str()));
+    names.sort();
+    names.dedup();
+    for (index, family) in keep.iter().enumerate() {
+        if let Some(pos) = names.iter().position(|name| name == family) {
+            let item = names.remove(pos);
+            names.insert(index, item);
+        }
+    }
+    names
+}
+
 /// The sidebar rows the query leaves visible, in display order. `query` must
 /// already be trimmed and lowercased; when it is empty every page matches.
 pub(super) fn visible_settings_pages(
@@ -159,7 +182,7 @@ impl Fintwind {
             .flex()
             .bg(theme.canvas)
             .text_color(theme.text)
-            .font_family(".SystemUIFont")
+            .font_family(crate::theme::ui_font_family())
             .child(self.render_settings_sidebar(window, cx))
             .child(self.render_settings_content(window, cx))
             .into_any_element()
@@ -1304,6 +1327,85 @@ impl Fintwind {
             },
         );
 
+        let selected_ui_font = self.state.ui_font_family.clone();
+        let weak = cx.entity().downgrade();
+        let ui_font_handle = self.menu_handle("ui-font-selector", cx);
+        let ui_font_selector = dropdown_menu(
+            MenuChip::new("ui-font-selector")
+                .label(font_family_label(&selected_ui_font))
+                .outlined()
+                .selected(ui_font_handle.is_open())
+                .w(px(200.0))
+                .justify_between(),
+            "ui-font-selector-menu",
+            &ui_font_handle,
+            MenuAlign::BelowRight,
+            {
+                let selected_ui_font = selected_ui_font.clone();
+                move |cx| {
+                    let mut names =
+                        available_font_families(cx, &[crate::theme::DEFAULT_UI_FONT_FAMILY]);
+                    if !names.iter().any(|name| name == &selected_ui_font) {
+                        names.insert(1.min(names.len()), selected_ui_font.clone());
+                    }
+                    names
+                        .into_iter()
+                        .map(|family| {
+                            let weak = weak.clone();
+                            let selected = family == selected_ui_font;
+                            MenuItem::new(font_family_label(&family), move |window, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.set_ui_font_family(family.clone(), window, cx);
+                                });
+                            })
+                            .selected(selected)
+                        })
+                        .collect()
+                }
+            },
+        );
+
+        let selected_code_font = self.state.code_font_family.clone();
+        let weak = cx.entity().downgrade();
+        let code_font_handle = self.menu_handle("code-font-selector", cx);
+        let code_font_selector = dropdown_menu(
+            MenuChip::new("code-font-selector")
+                .label(font_family_label(&selected_code_font))
+                .outlined()
+                .selected(code_font_handle.is_open())
+                .w(px(200.0))
+                .justify_between(),
+            "code-font-selector-menu",
+            &code_font_handle,
+            MenuAlign::BelowRight,
+            {
+                let selected_code_font = selected_code_font.clone();
+                move |cx| {
+                    let keep = [
+                        crate::theme::DEFAULT_CODE_FONT_FAMILY,
+                        ".SystemUIFontMonospaced",
+                    ];
+                    let mut names = available_font_families(cx, &keep);
+                    if !names.iter().any(|name| name == &selected_code_font) {
+                        names.insert(keep.len().min(names.len()), selected_code_font.clone());
+                    }
+                    names
+                        .into_iter()
+                        .map(|family| {
+                            let weak = weak.clone();
+                            let selected = family == selected_code_font;
+                            MenuItem::new(font_family_label(&family), move |window, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.set_code_font_family(family.clone(), window, cx);
+                                });
+                            })
+                            .selected(selected)
+                        })
+                        .collect()
+                }
+            },
+        );
+
         div()
             .mt(px(15.0))
             .w_full()
@@ -1426,6 +1528,38 @@ impl Fintwind {
                                     .text_size(ui_px(13.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
+                                    .child(tr!("settings.ui_font")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.ui_font_description")),
+                            ),
+                    )
+                    .child(ui_font_selector),
+            )
+            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(
+                div()
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
                                     .child(tr!("settings.code_text_size")),
                             )
                             .child(
@@ -1438,6 +1572,38 @@ impl Fintwind {
                             ),
                     )
                     .child(code_text_size_selector),
+            )
+            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(
+                div()
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.code_font")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.code_font_description")),
+                            ),
+                    )
+                    .child(code_font_selector),
             )
             .into_any_element()
     }
@@ -1463,6 +1629,33 @@ impl Fintwind {
         }
         self.state.code_text_scale = scale;
         crate::theme::set_code_text_scale(scale);
+        self.save();
+        window.refresh();
+        cx.notify();
+    }
+
+    fn set_ui_font_family(&mut self, family: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.ui_font_family == family {
+            return;
+        }
+        self.state.ui_font_family = family.clone();
+        crate::theme::set_ui_font_family(family);
+        self.save();
+        window.refresh();
+        cx.notify();
+    }
+
+    fn set_code_font_family(
+        &mut self,
+        family: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.code_font_family == family {
+            return;
+        }
+        self.state.code_font_family = family.clone();
+        crate::theme::set_code_font_family(family);
         self.save();
         window.refresh();
         cx.notify();

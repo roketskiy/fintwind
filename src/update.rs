@@ -16,13 +16,12 @@ pub fn fetch_newer_release() -> Option<String> {
         format!("User-Agent: fintwind/{APP_VERSION}"),
         "Accept: application/vnd.github+json".to_string(),
     ];
-    let (status, body) = fintwind_protocol::http::http_get(LATEST_RELEASE_API, &headers, 15).ok()?;
+    let (status, body) =
+        fintwind_protocol::http::http_get(LATEST_RELEASE_API, &headers, 15).ok()?;
     if status != 200 {
         return None;
     }
-    let remote = serde_json::from_str::<LatestRelease>(&body)
-        .ok()?
-        .tag_name;
+    let remote = serde_json::from_str::<LatestRelease>(&body).ok()?.tag_name;
     if remote.is_empty() || !is_newer(&remote, APP_VERSION) {
         return None;
     }

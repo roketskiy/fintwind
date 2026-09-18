@@ -956,6 +956,8 @@ impl RenderOnce for MenuCard {
             })
             .min_w(px(184.0))
             .max_w(px(320.0))
+            .max_h(px(360.0))
+            .overflow_y_scroll()
             .py(px(5.0))
             .rounded(px(10.0))
             .border_1()

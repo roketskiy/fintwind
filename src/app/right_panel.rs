@@ -460,7 +460,7 @@ pub(super) fn render_diff_code_row(
         .flex_none()
         .flex()
         .items_stretch()
-        .font_family(md::render::MONO_FAMILY)
+        .font_family(md::render::mono_family())
         .text_size(code_px(10.5))
         .line_height(code_px(style.row_height))
         .when_some(edge, |row, edge| row.border_l_2().border_color(edge))
@@ -472,7 +472,7 @@ pub(super) fn render_diff_code_row(
 fn review_diff_flat_text(line: &crate::review_diff::Line, theme: &Theme) -> md::render::FlatText {
     let text = line.content.clone();
     let palette = MarkdownPalette::from_theme(theme);
-    let code_font = font(md::render::MONO_FAMILY);
+    let code_font = font(md::render::mono_family());
     let mut runs = Vec::with_capacity(line.tokens.len() * 2 + 1);
     let mut offset = 0;
     let mut push = |len: usize, color: Hsla| {
@@ -3116,7 +3116,7 @@ impl Fintwind {
                         let text = SharedString::from(number.to_string());
                         let run = gpui::TextRun {
                             len: text.len(),
-                            font: gpui::font(md::render::MONO_FAMILY),
+                            font: gpui::font(md::render::mono_family()),
                             color: number_color,
                             ..Default::default()
                         };
@@ -3151,7 +3151,7 @@ impl Fintwind {
             .flex()
             .flex_col()
             .bg(theme.surface)
-            .font_family(md::render::MONO_FAMILY)
+            .font_family(md::render::mono_family())
             .text_size(text_size)
             .line_height(line_height)
             .children(find_bar)
@@ -3716,7 +3716,7 @@ impl Fintwind {
                 .min_w_0()
                 .flex()
                 .items_stretch()
-                .font_family(md::render::MONO_FAMILY)
+                .font_family(md::render::mono_family())
                 .text_size(code_px(10.0))
                 .line_height(code_px(16.0))
                 .text_color(theme.text_tertiary)
@@ -3751,7 +3751,7 @@ impl Fintwind {
                 .min_w_0()
                 .flex()
                 .items_stretch()
-                .font_family(md::render::MONO_FAMILY)
+                .font_family(md::render::mono_family())
                 .text_size(code_px(10.5))
                 .line_height(code_px(16.0))
                 .text_color(theme.text_tertiary)

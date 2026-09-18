@@ -27,9 +27,9 @@ const FORK_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 /// A startup probe caught there must give up quickly and retry — at the full
 /// `HTTP_TIMEOUT` one hung probe would eat the whole start budget.
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
-/// OpenCode 2.0.5 replaced `/api/health` with `/api/status`. Probe the current
-/// path first and keep the old one so a still-supported earlier CLI can start.
-const HEALTH_PROBE_PATHS: [&str; 2] = ["/api/status", "/api/health"];
+/// OpenCode 2.0.5 replaced `/api/health` with `/api/status`; 2.0.6 renamed
+/// that to `/api/info`. Probe newest first, keep older paths for earlier CLIs.
+const HEALTH_PROBE_PATHS: [&str; 3] = ["/api/info", "/api/status", "/api/health"];
 /// How many messages one request of the native transcript may return before
 /// the page boundary is hit; the batch keeps going with the cursor.
 const MESSAGE_PAGE_LIMIT: usize = 200;

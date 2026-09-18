@@ -1449,7 +1449,6 @@ impl ActivityKind {
             compact.as_str(),
             "bash"
                 | "command"
-                | "execute"
                 | "executecommand"
                 | "commandexecution"
                 | "runcommand"
@@ -1569,17 +1568,25 @@ pub enum DriverEvent {
     /// transcript phase, is what a persisted reasoning part is keyed by.
     /// `part` is the provider's (assistant message, ordinal) identity; empty
     /// on transports that predate keying, which keeps the phase-based fallback.
-    ReasoningStarted { part: String },
+    ReasoningStarted {
+        part: String,
+    },
     /// A reasoning fragment's increment. Deltas of one fragment may arrive
     /// after intervening tool events (the provider batches and flushes them
     /// asynchronously), so the app routes them by `part` instead of position.
-    ReasoningDelta { part: String, delta: String },
+    ReasoningDelta {
+        part: String,
+        delta: String,
+    },
     /// The fragment settled with its authoritative full text (opencode v2
     /// `session.reasoning.ended`, a durable event — the same text the stored
     /// reasoning part keeps). `Some` replaces whatever the deltas accumulated,
     /// healing lost or reordered ones; an empty text retires the fragment's
     /// block so an empty stored part never renders.
-    ReasoningEnded { part: String, text: Option<String> },
+    ReasoningEnded {
+        part: String,
+        text: Option<String>,
+    },
     Activity {
         id: Option<String>,
         kind: ActivityKind,
@@ -2074,6 +2081,13 @@ impl ActivityItem {
         self
     }
 
+    pub fn with_tool_metadata(mut self, metadata: Option<&serde_json::Value>) -> Self {
+        if let Some(summary) = metadata.and_then(extract_tool_calls_summary) {
+            self.display_target = Some(summary);
+        }
+        self
+    }
+
     pub fn with_output(mut self, output: Option<String>) -> Self {
         self.output = output;
         self.refresh_command_output();
@@ -2156,7 +2170,9 @@ impl ActivityItem {
                 self.file_changes = extracted;
             }
         }
-        if let Some(target) = extract_activity_display_target(self.kind, source) {
+        if let Some(summary) = extract_tool_calls_summary(source) {
+            self.display_target = Some(summary);
+        } else if let Some(target) = extract_activity_display_target(self.kind, source) {
             self.display_target = Some(target);
         }
         if self.kind == ActivityKind::Command
@@ -2409,6 +2425,26 @@ pub fn is_generic_activity_title(kind: ActivityKind, title: &str) -> bool {
     }
 }
 
+fn extract_tool_calls_summary(source: &serde_json::Value) -> Option<String> {
+    let calls = source
+        .get("toolCalls")
+        .or_else(|| source.pointer("/metadata/toolCalls"))
+        .or_else(|| source.pointer("/state/metadata/toolCalls"))
+        .and_then(serde_json::Value::as_array)?;
+    let names = calls
+        .iter()
+        .filter_map(|call| {
+            call.get("tool")
+                .or_else(|| call.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+    (!names.is_empty()).then(|| compact_activity_target(&names.join(" · ")))
+}
+
 fn extract_activity_display_target(
     kind: ActivityKind,
     source: &serde_json::Value,
@@ -2426,8 +2462,8 @@ fn extract_activity_display_target(
         ],
         ActivityKind::FileSearch => &["pattern", "query", "regex", "glob"],
         ActivityKind::FileList => &["path", "directory", "dir", "root"],
-        ActivityKind::Search => &["query", "queries"],
-        ActivityKind::Tool => &["title"],
+        ActivityKind::Search => &["query", "queries", "url"],
+        ActivityKind::Tool => &["title", "code"],
         _ => return None,
     };
     find_activity_string(source, keys, 0).map(|value| compact_activity_target(&value))
@@ -3404,7 +3440,12 @@ mod tests {
                 "{name}"
             );
         }
-        for name in ["create_thread", "read_mcp_resource", "list_threads"] {
+        for name in [
+            "create_thread",
+            "read_mcp_resource",
+            "list_threads",
+            "execute",
+        ] {
             assert_eq!(
                 ActivityKind::from_tool_name(name),
                 ActivityKind::Tool,
@@ -3455,6 +3496,16 @@ mod tests {
                 "Fintwind GPUI",
             ),
             (
+                ActivityKind::Search,
+                serde_json::json!({"url": "https://opencode.ai/v2/docs"}),
+                "https://opencode.ai/v2/docs",
+            ),
+            (
+                ActivityKind::Tool,
+                serde_json::json!({"code": "return await tools.context7.query_docs({ libraryId: '/opencode' })"}),
+                "return await tools.context7.query_docs({ libraryId: '/opencode' })",
+            ),
+            (
                 ActivityKind::FileRead,
                 serde_json::json!("/tmp/fintwind/README.md"),
                 "/tmp/fintwind/README.md",
@@ -3484,6 +3535,26 @@ mod tests {
             Some("Analyze color statistics")
         );
         assert_eq!(described.arguments.as_deref(), Some("python3 analyze.py"));
+    }
+
+    #[test]
+    fn execute_metadata_prefers_nested_tool_calls_over_code() {
+        let activity = ActivityItem::new(None, ActivityKind::Tool, "execute", None, false)
+            .with_arguments(Some(
+                serde_json::json!({
+                    "code": "return await tools.context7.query_docs({ libraryId: '/opencode' })"
+                })
+                .to_string(),
+            ))
+            .with_tool_metadata(Some(&serde_json::json!({
+                "metadata": {
+                    "toolCalls": [{"tool": "context7.query_docs", "status": "running"}]
+                }
+            })));
+        assert_eq!(
+            activity.display_target.as_deref(),
+            Some("context7.query_docs")
+        );
     }
 
     #[test]
@@ -4348,7 +4419,10 @@ mod tests {
         let activities = &session.transcript_blocks[0].activities;
         assert!(activities[0].detail.is_none());
         assert!(activities[0].arguments.is_some());
-        assert_eq!(activities[0].file_changes[0].path, "/tmp/fintwind/README.md");
+        assert_eq!(
+            activities[0].file_changes[0].path,
+            "/tmp/fintwind/README.md"
+        );
         assert_eq!(activities[0].file_changes[0].additions, Some(2));
         assert_eq!(activities[0].file_changes[0].deletions, Some(1));
     }

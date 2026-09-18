@@ -915,13 +915,9 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                 }
             }
             if expanded {
-                card = card.child(
-                    div()
-                        .px(px(10.0))
-                        .pb(px(8.0))
-                        .min_w_0()
-                        .child(render_markdown_message_body(&content, markdown, theme, &ctx)),
-                );
+                card = card.child(div().px(px(10.0)).pb(px(8.0)).min_w_0().child(
+                    render_markdown_message_body(&content, markdown, theme, &ctx),
+                ));
             }
             card
         }
@@ -1118,275 +1114,64 @@ fn is_ask_user_question(activity: &ActivityItem) -> bool {
         )
 }
 
-fn humanize_tool_name(name: &str) -> String {
-    let name = name.trim();
-    if name.chars().any(char::is_whitespace) {
-        return name.to_owned();
-    }
-
-    let leaf = tool_name_leaf(name);
-    let characters = leaf.chars().collect::<Vec<_>>();
-    let mut display = String::with_capacity(leaf.len() + 4);
-    for (index, character) in characters.iter().copied().enumerate() {
-        if matches!(character, '_' | '-') {
-            if !display.ends_with(' ') {
-                display.push(' ');
-            }
-            continue;
-        }
-        let previous = index.checked_sub(1).and_then(|index| characters.get(index));
-        let next = characters.get(index + 1);
-        let starts_word = character.is_ascii_uppercase()
-            && previous.is_some_and(|previous| {
-                previous.is_ascii_lowercase()
-                    || previous.is_ascii_digit()
-                    || (previous.is_ascii_uppercase()
-                        && next.is_some_and(|next| next.is_ascii_lowercase()))
-            });
-        if starts_word && !display.ends_with(' ') {
-            display.push(' ');
-        }
-        display.push(character);
-    }
-
-    let display = display.trim();
-    let mut characters = display.chars();
-    characters
-        .next()
-        .map(|first| first.to_uppercase().collect::<String>() + characters.as_str())
-        .unwrap_or_else(|| tr!("activity.tool"))
-}
-
-fn activity_tool_display_name(activity: &ActivityItem) -> String {
-    if is_ask_user_question(activity) {
-        return tr!("activity.ask_questions");
-    }
-    if let Some(target) = activity
-        .display_target
-        .as_deref()
-        .map(str::trim)
-        .filter(|target| !target.is_empty())
-    {
-        return target.to_owned();
-    }
-    if !crate::model::is_generic_activity_title(activity.kind, &activity.title) {
-        return humanize_tool_name(&activity.title);
-    }
-    tr!("activity.tool")
-}
-
 pub(super) fn activity_display_title(activity: &ActivityItem) -> String {
-    use crate::model::ActivityKind;
-
-    match activity.kind {
-        ActivityKind::FileChange => {
-            let subject = match activity.file_changes.as_slice() {
-                [change] => Some(change.display_name().to_owned()),
-                changes if !changes.is_empty() => {
-                    Some(tr!("activity.file_count", count = changes.len()))
-                }
-                _ => None,
-            };
-            if subject.is_none()
-                && !crate::model::is_generic_activity_title(activity.kind, &activity.title)
-            {
-                return activity.title.clone();
-            }
-            match (activity.complete, activity.failed, subject) {
-                (false, _, Some(file)) => tr!("activity.editing_named_file", file = file),
-                (true, false, Some(file)) => tr!("activity.edited_named_file", file = file),
-                (true, true, Some(file)) => tr!("activity.edit_failed_named_file", file = file),
-                (false, _, None) => tr!("activity.editing_files"),
-                (true, false, None) => tr!("activity.edited_files"),
-                (true, true, None) => tr!("activity.edit_failed"),
-            }
-        }
-        ActivityKind::FileRead => {
-            let file = activity.display_target.as_deref().map(activity_path_name);
-            if file.is_none()
-                && !crate::model::is_generic_activity_title(activity.kind, &activity.title)
-            {
-                return activity.title.clone();
-            }
-            match (activity.complete, activity.failed, file) {
-                (false, _, Some(file)) => tr!("activity.reading_named_file", file = file),
-                (true, false, Some(file)) => tr!("activity.read_named_file", file = file),
-                (true, true, Some(file)) => tr!("activity.read_named_file_failed", file = file),
-                (false, _, None) => tr!("activity.reading_file"),
-                (true, false, None) => tr!("activity.read_file_completed"),
-                (true, true, None) => tr!("activity.read_file_failed"),
-            }
-        }
-        ActivityKind::FileSearch => {
-            let query = activity.display_target.as_deref();
-            if query.is_none()
-                && !crate::model::is_generic_activity_title(activity.kind, &activity.title)
-            {
-                return activity.title.clone();
-            }
-            match (activity.complete, activity.failed, query) {
-                (false, _, Some(query)) => tr!("activity.searching_files_for", query = query),
-                (true, false, Some(query)) => tr!("activity.searched_files_for", query = query),
-                (true, true, Some(query)) => tr!("activity.file_search_failed_for", query = query),
-                (false, _, None) => tr!("activity.searching_files"),
-                (true, false, None) => tr!("activity.searched_files"),
-                (true, true, None) => tr!("activity.file_search_failed"),
-            }
-        }
-        ActivityKind::FileList => {
-            let directory = activity.display_target.as_deref().map(activity_path_name);
-            if directory.is_none()
-                && !crate::model::is_generic_activity_title(activity.kind, &activity.title)
-            {
-                return activity.title.clone();
-            }
-            match (activity.complete, activity.failed, directory) {
-                (false, _, Some(directory)) => {
-                    tr!("activity.listing_files_in", directory = directory)
-                }
-                (true, false, Some(directory)) => {
-                    tr!("activity.listed_files_in", directory = directory)
-                }
-                (true, true, Some(directory)) => {
-                    tr!("activity.file_list_failed_in", directory = directory)
-                }
-                (false, _, None) => tr!("activity.listing_files"),
-                (true, false, None) => tr!("activity.listed_files"),
-                (true, true, None) => tr!("activity.file_list_failed"),
-            }
-        }
-        ActivityKind::Command => {
-            if let Some(description) = activity.display_description.as_deref() {
-                return match (activity.complete, activity.failed) {
-                    (false, _) => {
-                        tr!(
-                            "activity.running_described_command",
-                            description = description
-                        )
-                    }
-                    (true, false) => {
-                        tr!("activity.ran_described_command", description = description)
-                    }
-                    (true, true) => {
-                        tr!(
-                            "activity.described_command_failed",
-                            description = description
-                        )
-                    }
-                };
-            }
-            if let Some(command) = activity.display_target.as_deref() {
-                return match (activity.complete, activity.failed) {
-                    (false, _) => tr!("activity.running_named_command", command = command),
-                    (true, false) => tr!("activity.ran_named_command", command = command),
-                    (true, true) => tr!("activity.named_command_failed", command = command),
-                };
-            }
-            if !crate::model::is_generic_activity_title(activity.kind, &activity.title) {
-                return activity.title.clone();
-            }
-            match (activity.complete, activity.failed) {
-                (false, _) => tr!("activity.running_command"),
-                (true, false) => tr!("activity.ran_command"),
-                (true, true) => tr!("activity.command_failed"),
-            }
-        }
-        ActivityKind::Search => {
-            if let Some(query) = activity.display_target.as_deref() {
-                return match (activity.complete, activity.failed) {
-                    (false, _) => tr!("activity.searching_web_for", query = query),
-                    (true, false) => tr!("activity.searched_web_for", query = query),
-                    (true, true) => tr!("activity.web_search_failed_for", query = query),
-                };
-            }
-            if ActivityKind::from_tool_name(&activity.title) == ActivityKind::Search {
-                return match (activity.complete, activity.failed) {
-                    (false, _) => tr!("activity.searching_web"),
-                    (true, false) => tr!("activity.searched_the_web"),
-                    (true, true) => tr!("activity.web_search_failed"),
-                };
-            }
-            activity.title.clone()
-        }
-        ActivityKind::Plan => {
-            if !crate::model::is_generic_activity_title(activity.kind, &activity.title) {
-                return activity.title.clone();
-            }
-            match (activity.complete, activity.failed) {
-                (false, _) => tr!("activity.updating_plan"),
-                (true, false) => tr!("activity.updated_plan"),
-                (true, true) => tr!("activity.plan_update_failed"),
-            }
-        }
-        ActivityKind::Tool => activity_tool_display_name(activity),
-        ActivityKind::Reasoning => activity.title.clone(),
+    if activity.kind == crate::model::ActivityKind::Reasoning {
+        return activity.reasoning.as_ref().map_or_else(
+            || activity_action_label(activity),
+            |reasoning| reasoning_activity_title(reasoning, false),
+        );
+    }
+    let action = activity_action_label(activity);
+    let detail = activity_row_detail(activity, false);
+    if detail.is_empty() || detail == action {
+        action
+    } else {
+        format!("{action} {detail}")
     }
 }
 
 pub(super) fn activity_action_label(activity: &ActivityItem) -> String {
-    use crate::model::ActivityKind;
-
-    match activity.kind {
-        ActivityKind::Reasoning => tr!("activity.action_think"),
-        ActivityKind::Command => tr!("activity.action_run"),
-        ActivityKind::FileChange => tr!("activity.action_edit"),
-        ActivityKind::FileRead => tr!("activity.action_read"),
-        ActivityKind::FileSearch | ActivityKind::Search => tr!("activity.action_search"),
-        ActivityKind::FileList => tr!("activity.action_list"),
-        ActivityKind::Plan => tr!("activity.action_plan"),
-        ActivityKind::Tool if is_ask_user_question(activity) => tr!("activity.ask_questions"),
-        ActivityKind::Tool => tr!("activity.tool"),
+    if activity.kind == crate::model::ActivityKind::Reasoning {
+        return "thinking".to_owned();
+    }
+    let title = activity.title.trim();
+    if title.is_empty() {
+        tr!("activity.tool")
+    } else {
+        title.to_owned()
     }
 }
 
 pub(super) fn activity_row_detail(activity: &ActivityItem, reasoning_live: bool) -> String {
     use crate::model::ActivityKind;
 
-    let custom_title = || {
-        (!crate::model::is_generic_activity_title(activity.kind, &activity.title))
-            .then(|| activity.title.clone())
-    };
     match activity.kind {
         ActivityKind::Reasoning => activity.reasoning.as_ref().map_or_else(
             || activity.title.clone(),
             |reasoning| reasoning_activity_title(reasoning, reasoning_live),
         ),
         ActivityKind::Command => activity
-            .display_description
+            .display_target
             .clone()
-            .or_else(|| activity.display_target.clone())
-            .or_else(custom_title)
+            .or_else(|| activity.display_description.clone())
             .unwrap_or_default(),
         ActivityKind::FileChange => match activity.file_changes.as_slice() {
             [change] => change.display_name().to_owned(),
             changes if !changes.is_empty() => {
                 tr!("activity.file_count", count = changes.len())
             }
-            _ => custom_title().unwrap_or_default(),
+            _ => String::new(),
         },
         ActivityKind::FileRead | ActivityKind::FileList => activity
             .display_target
             .as_deref()
             .map(activity_path_name)
-            .or_else(custom_title)
             .unwrap_or_default(),
-        ActivityKind::FileSearch => activity_display_title(activity),
-        ActivityKind::Search => activity.display_target.as_deref().map_or_else(
-            || custom_title().unwrap_or_default(),
-            |query| tr!("activity.search_for", query = query),
-        ),
-        ActivityKind::Plan => custom_title().unwrap_or_default(),
-        ActivityKind::Tool if is_ask_user_question(activity) => String::new(),
-        ActivityKind::Tool => {
-            let has_name = activity
-                .display_target
-                .as_deref()
-                .is_some_and(|target| !target.trim().is_empty())
-                || !crate::model::is_generic_activity_title(activity.kind, &activity.title);
-            has_name
-                .then(|| activity_tool_display_name(activity))
-                .unwrap_or_default()
+        ActivityKind::FileSearch | ActivityKind::Search | ActivityKind::Plan => {
+            activity.display_target.clone().unwrap_or_default()
         }
+        ActivityKind::Tool if is_ask_user_question(activity) => String::new(),
+        ActivityKind::Tool => activity.display_target.clone().unwrap_or_default(),
     }
 }
 
@@ -1525,10 +1310,11 @@ pub(super) fn activity_disclosure_sections(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .filter(|_| !shows_diff)
+        .map(unwrap_code_mode_arguments)
     {
         sections.push(ActivityDisclosureSection {
             kind: ActivityDisclosureSectionKind::Arguments,
-            content: arguments.to_owned(),
+            content: arguments,
         });
     }
     if let Some(output) = activity
@@ -1561,6 +1347,22 @@ pub(super) fn activity_disclosure_sections(
         });
     }
     sections
+}
+
+fn unwrap_code_mode_arguments(arguments: &str) -> String {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(arguments) else {
+        return arguments.to_owned();
+    };
+    let Some(object) = value.as_object() else {
+        return arguments.to_owned();
+    };
+    if object.len() == 1
+        && let Some(code) = object.get("code").and_then(serde_json::Value::as_str)
+        && !code.trim().is_empty()
+    {
+        return code.to_owned();
+    }
+    arguments.to_owned()
 }
 
 pub(super) fn activity_preview(activity: &ActivityItem) -> String {
@@ -1743,7 +1545,7 @@ mod message_time_tests {
     }
 
     #[test]
-    fn activity_display_title_prefers_the_human_facing_tool_argument() {
+    fn activity_display_title_keeps_the_provider_tool_name() {
         let titled = ActivityItem::new(
             Some("tool-1".into()),
             crate::model::ActivityKind::Tool,
@@ -1763,12 +1565,14 @@ mod message_time_tests {
         )
         .with_arguments(Some(r#"{"code":"sky.list_apps()"}"#.into()));
 
-        assert_eq!(activity_display_title(&titled), "Inspect Helium browser");
-        assert_eq!(activity_display_title(&untitled), "Js");
+        assert_eq!(activity_action_label(&titled), "Js");
+        assert_eq!(activity_display_title(&titled), "Js Inspect Helium browser");
+        assert_eq!(activity_action_label(&untitled), "Js");
+        assert_eq!(activity_display_title(&untitled), "Js sky.list_apps()");
     }
 
     #[test]
-    fn generic_tool_rows_keep_a_humanized_provider_name() {
+    fn generic_tool_rows_keep_the_raw_provider_name() {
         let named = ActivityItem::new(
             Some("tool-1".into()),
             crate::model::ActivityKind::Tool,
@@ -1784,15 +1588,18 @@ mod message_time_tests {
             true,
         );
 
-        assert_eq!(activity_action_label(&named), "Tool");
-        assert_eq!(activity_row_detail(&named, false), "Create thread");
-        assert_eq!(activity_display_title(&named), "Create thread");
+        assert_eq!(activity_action_label(&named), "mcp__threads__create_thread");
+        assert_eq!(activity_row_detail(&named, false), "");
+        assert_eq!(
+            activity_display_title(&named),
+            "mcp__threads__create_thread"
+        );
         assert_eq!(activity_action_label(&unnamed), "Tool");
         assert_eq!(activity_row_detail(&unnamed, false), "");
     }
 
     #[test]
-    fn ask_user_question_has_a_purpose_specific_label() {
+    fn ask_user_question_keeps_the_provider_tool_name() {
         let activity = ActivityItem::new(
             Some("tool-1".into()),
             crate::model::ActivityKind::Tool,
@@ -1802,15 +1609,13 @@ mod message_time_tests {
         )
         .with_arguments(Some(r#"{"questions":[]}"#.into()));
 
-        assert_eq!(activity_action_label(&activity), "Ask questions");
+        assert_eq!(activity_action_label(&activity), "AskUserQuestion");
         assert_eq!(activity_row_detail(&activity, false), "");
-        assert_eq!(activity_display_title(&activity), "Ask questions");
+        assert_eq!(activity_display_title(&activity), "AskUserQuestion");
     }
 
     #[test]
-    fn opencode_question_tool_gets_the_ask_questions_label() {
-        // opencode names its question tool `question`; the raw JSON
-        // arguments are a prompt for the user, not transcript detail.
+    fn opencode_question_tool_keeps_the_raw_name() {
         let activity = ActivityItem::new(
             Some("tool-1".into()),
             crate::model::ActivityKind::Tool,
@@ -1822,9 +1627,9 @@ mod message_time_tests {
             r#"{"questions":[{"question":"Favorite color?","header":"Color","options":[{"label":"Red"}]}]}"#.to_string(),
         ));
 
-        assert_eq!(activity_action_label(&activity), "Ask questions");
+        assert_eq!(activity_action_label(&activity), "question");
         assert_eq!(activity_row_detail(&activity, false), "");
-        assert_eq!(activity_display_title(&activity), "Ask questions");
+        assert_eq!(activity_display_title(&activity), "question");
     }
 
     #[test]
@@ -1851,18 +1656,18 @@ mod message_time_tests {
 
         assert_eq!(
             activity_header_title(&activities, true, None),
-            "Running git log --oneline -15"
+            "bash git log --oneline -15"
         );
         activities[1].complete = true;
         assert_eq!(
             activity_header_title(&activities, true, None),
-            "Ran git log --oneline -15"
+            "bash git log --oneline -15"
         );
         assert_eq!(
             activity_header_title(&activities, false, None),
             "Ran 1 thought · 1 command"
         );
-        assert_eq!(activity_action_label(&activities[1]), "Run");
+        assert_eq!(activity_action_label(&activities[1]), "bash");
         assert_eq!(
             activity_row_detail(&activities[1], false),
             "git log --oneline -15"
@@ -1885,15 +1690,16 @@ mod message_time_tests {
             .to_string(),
         ));
 
-        assert_eq!(activity_display_title(&activity), "Editing app.rs");
+        assert_eq!(activity_action_label(&activity), "apply_patch");
+        assert_eq!(activity_display_title(&activity), "apply_patch app.rs");
         assert_eq!(activity_file_change_stats(&activity), None);
 
         activity.complete = true;
-        assert_eq!(activity_display_title(&activity), "Edited app.rs");
+        assert_eq!(activity_display_title(&activity), "apply_patch app.rs");
         assert_eq!(activity_file_change_stats(&activity), Some((2, 1)));
 
         activity.failed = true;
-        assert_eq!(activity_display_title(&activity), "Failed to edit app.rs");
+        assert_eq!(activity_display_title(&activity), "apply_patch app.rs");
         assert_eq!(activity_file_change_stats(&activity), None);
     }
 
@@ -1913,7 +1719,7 @@ mod message_time_tests {
             .to_string(),
         ));
 
-        assert_eq!(activity_display_title(&activity), "Edited 2 files");
+        assert_eq!(activity_display_title(&activity), "apply_patch 2 files");
         assert_eq!(activity_file_change_stats(&activity), Some((2, 2)));
     }
 
@@ -1929,11 +1735,12 @@ mod message_time_tests {
         .with_arguments(Some(
             serde_json::json!({"filePath": "/tmp/fintwind/src/model.rs"}).to_string(),
         ));
-        assert_eq!(activity_display_title(&read), "Reading model.rs");
+        assert_eq!(activity_action_label(&read), "read");
+        assert_eq!(activity_display_title(&read), "read model.rs");
         read.complete = true;
-        assert_eq!(activity_display_title(&read), "Read model.rs");
+        assert_eq!(activity_display_title(&read), "read model.rs");
         read.failed = true;
-        assert_eq!(activity_display_title(&read), "Failed to read model.rs");
+        assert_eq!(activity_display_title(&read), "read model.rs");
 
         let search = ActivityItem::new(
             Some("grep-1".into()),
@@ -1945,10 +1752,8 @@ mod message_time_tests {
         .with_arguments(Some(
             serde_json::json!({"pattern": "ActivityKind"}).to_string(),
         ));
-        assert_eq!(
-            activity_display_title(&search),
-            "Searched files for ActivityKind"
-        );
+        assert_eq!(activity_action_label(&search), "grep");
+        assert_eq!(activity_display_title(&search), "grep ActivityKind");
 
         let list = ActivityItem::new(
             Some("list-1".into()),
@@ -1960,7 +1765,8 @@ mod message_time_tests {
         .with_arguments(Some(
             serde_json::json!({"path": "/tmp/fintwind/src"}).to_string(),
         ));
-        assert_eq!(activity_display_title(&list), "Listing files in src");
+        assert_eq!(activity_action_label(&list), "ls");
+        assert_eq!(activity_display_title(&list), "ls src");
 
         let custom = ActivityItem::new(
             Some("read-2".into()),
@@ -1973,6 +1779,7 @@ mod message_time_tests {
             activity_display_title(&custom),
             "Inspect generated manifest"
         );
+        assert_eq!(activity_action_label(&custom), "Inspect generated manifest");
     }
 
     #[test]
@@ -1991,15 +1798,10 @@ mod message_time_tests {
             })
             .to_string(),
         ));
-        assert_eq!(
-            activity_display_title(&command),
-            "Ran command: Run focused tests"
-        );
+        assert_eq!(activity_action_label(&command), "bash");
+        assert_eq!(activity_display_title(&command), "bash cargo test activity");
         command.complete = false;
-        assert_eq!(
-            activity_display_title(&command),
-            "Running command: Run focused tests"
-        );
+        assert_eq!(activity_display_title(&command), "bash cargo test activity");
 
         let web_search = ActivityItem::new(
             Some("search-1".into()),
@@ -2011,9 +1813,10 @@ mod message_time_tests {
         .with_arguments(Some(
             serde_json::json!({"query": "Fintwind GPUI"}).to_string(),
         ));
+        assert_eq!(activity_action_label(&web_search), "web_search");
         assert_eq!(
             activity_display_title(&web_search),
-            "Searched the web for Fintwind GPUI"
+            "web_search Fintwind GPUI"
         );
 
         let plan = ActivityItem::new(
@@ -2023,6 +1826,44 @@ mod message_time_tests {
             None,
             false,
         );
-        assert_eq!(activity_display_title(&plan), "Updating plan");
+        assert_eq!(activity_action_label(&plan), "update_plan");
+        assert_eq!(activity_display_title(&plan), "update_plan");
+    }
+
+    #[test]
+    fn execute_rows_use_codemode_code_and_nested_tool_calls() {
+        let mut execute = ActivityItem::new(
+            Some("call_execute".into()),
+            crate::model::ActivityKind::Tool,
+            "execute",
+            None,
+            false,
+        )
+        .with_arguments(Some(
+            serde_json::json!({
+                "code": "return await tools.context7.query_docs({ libraryId: '/opencode' })"
+            })
+            .to_string(),
+        ));
+        assert_eq!(activity_action_label(&execute), "execute");
+        assert_eq!(
+            activity_display_title(&execute),
+            "execute return await tools.context7.query_docs({ libraryId: '/opencode' })"
+        );
+        assert_eq!(
+            activity_disclosure_text(&execute).as_deref(),
+            Some("Arguments\nreturn await tools.context7.query_docs({ libraryId: '/opencode' })")
+        );
+
+        execute = execute.with_tool_metadata(Some(&serde_json::json!({
+            "toolCalls": [
+                {"tool": "context7.query_docs", "status": "running"},
+                {"tool": "context7.resolve_library_id", "status": "completed"}
+            ]
+        })));
+        assert_eq!(
+            activity_display_title(&execute),
+            "execute context7.query_docs · context7.resolve_library_id"
+        );
     }
 }

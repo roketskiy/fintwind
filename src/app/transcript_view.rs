@@ -2365,11 +2365,6 @@ impl Fintwind {
                                 .hover(|element| element.bg(activity_hover_surface))
                                 .active(|element| element.bg(activity_active_surface))
                         })
-                        .child(icon(
-                            activity_tool_icon(&activity.title, activity.kind),
-                            13.0,
-                            theme.text_tertiary,
-                        ))
                         .child(
                             div()
                                 .flex_none()
@@ -2810,9 +2805,7 @@ impl Fintwind {
                                                     follow_tail.set(at_bottom);
                                                     if !at_bottom {
                                                         card_follow_tail.set(
-                                                            activity_scroll_at_bottom(
-                                                                &card_scroll,
-                                                            ),
+                                                            activity_scroll_at_bottom(&card_scroll),
                                                         );
                                                     }
                                                 });

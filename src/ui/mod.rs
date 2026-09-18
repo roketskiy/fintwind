@@ -386,6 +386,7 @@ pub fn spin_halo(color: Hsla, size: f32) -> AnyElement {
     .into_any_element()
 }
 
+#[cfg(test)]
 pub fn activity_icon(kind: ActivityKind) -> &'static str {
     match kind {
         ActivityKind::Reasoning => "icons/sparkle.svg",
@@ -403,6 +404,7 @@ pub fn activity_icon(kind: ActivityKind) -> &'static str {
 /// Per-tool glyph for a transcript activity row. Recognizable tool names get
 /// a purpose-picked icon; everything else falls back to the category icon for
 /// [`ActivityKind`], so an unfamiliar tool still reads as "a tool call".
+#[cfg(test)]
 pub fn activity_tool_icon(tool_name: &str, kind: ActivityKind) -> &'static str {
     let normalized = tool_name
         .trim()

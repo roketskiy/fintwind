@@ -25,5 +25,7 @@ mod tests {
         assert_eq!(classify_tool("create_thread"), ActivityKind::Tool);
         assert_eq!(classify_tool("read_mcp_resource"), ActivityKind::Tool);
         assert_eq!(classify_tool("list_threads"), ActivityKind::Tool);
+        assert_eq!(classify_tool("execute"), ActivityKind::Tool);
+        assert_eq!(classify_tool("execute_command"), ActivityKind::Command);
     }
 }

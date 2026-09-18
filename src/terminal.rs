@@ -75,7 +75,7 @@ static TERMINAL_FONT_FALLBACKS: LazyLock<FontFallbacks> = LazyLock::new(|| {
 });
 
 fn terminal_font() -> gpui::Font {
-    let mut terminal_font = font("JetBrains Mono");
+    let mut terminal_font = font(crate::theme::code_font_family());
     terminal_font.fallbacks = Some(TERMINAL_FONT_FALLBACKS.clone());
     terminal_font
 }
@@ -628,6 +628,7 @@ pub struct TerminalView {
     /// Advance width of one grid cell, measured from the terminal font on
     /// first render so grid math matches what `StyledText` actually lays out.
     measured_cell_width: Option<f32>,
+    measured_font_family: Option<SharedString>,
     scrollbar_state: Rc<ScrollbarState>,
     grid_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
     selecting: bool,
@@ -690,6 +691,7 @@ impl TerminalView {
             scroll_accumulator: 0.0,
             panel_width: DEFAULT_RIGHT_PANEL_WIDTH,
             measured_cell_width: None,
+            measured_font_family: None,
             scrollbar_state: ScrollbarState::new(),
             grid_bounds: Rc::new(Cell::new(None)),
             selecting: false,
@@ -1065,6 +1067,11 @@ impl Render for TerminalView {
         // The rows are laid out by `StyledText` at the font's own advance, so
         // the grid must be sized from that same measured advance or the text
         // wraps short of (or past) the panel edge.
+        let font_family = crate::theme::code_font_family();
+        if self.measured_font_family.as_ref() != Some(&font_family) {
+            self.measured_font_family = Some(font_family);
+            self.measured_cell_width = None;
+        }
         let cell_width = *self.measured_cell_width.get_or_insert_with(|| {
             let text_system = cx.text_system();
             let font_id = text_system.resolve_font(&terminal_font());

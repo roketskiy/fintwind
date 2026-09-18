@@ -1987,6 +1987,8 @@ impl Fintwind {
         crate::i18n::set_language(state.language);
         crate::theme::set_ui_text_scale(state.ui_text_scale);
         crate::theme::set_code_text_scale(state.code_text_scale);
+        crate::theme::set_ui_font_family(state.ui_font_family.clone());
+        crate::theme::set_code_font_family(state.code_font_family.clone());
 
         let composer = cx.new(|cx| ComposerInput::new(window, cx).padding_x(px(14.0)));
         let user_input_answer = cx.new(|cx| {

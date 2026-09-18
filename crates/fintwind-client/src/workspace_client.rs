@@ -1,6 +1,6 @@
-use uuid::Uuid;
 use fintwind_protocol::provider_session::{ProviderSessionFork, ProviderSessionForkRequest};
 use fintwind_protocol::{Command, ResponsePayload, WorkspaceOperation, WorkspaceResult};
+use uuid::Uuid;
 
 use crate::DaemonClient;
 

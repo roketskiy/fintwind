@@ -40,6 +40,10 @@ pub const DEFAULT_UI_TEXT_SCALE: f32 = 1.0;
 /// Code text scale at which every code measurement renders at its designed
 /// size. Serde default for the persisted setting.
 pub const DEFAULT_CODE_TEXT_SCALE: f32 = 1.0;
+/// GPUI virtual family that resolves to the OS UI face.
+pub const DEFAULT_UI_FONT_FAMILY: &str = ".SystemUIFont";
+/// Bundled monospace face used for code until the user picks another.
+pub const DEFAULT_CODE_FONT_FAMILY: &str = "JetBrains Mono";
 
 fn default_sidebar_visibility() -> bool {
     true
@@ -63,6 +67,14 @@ fn default_ui_text_scale() -> f32 {
 
 fn default_code_text_scale() -> f32 {
     DEFAULT_CODE_TEXT_SCALE
+}
+
+fn default_ui_font_family() -> String {
+    DEFAULT_UI_FONT_FAMILY.to_owned()
+}
+
+fn default_code_font_family() -> String {
+    DEFAULT_CODE_FONT_FAMILY.to_owned()
 }
 
 fn default_right_panel_width() -> f32 {
@@ -224,6 +236,8 @@ pub struct AppSettings {
     pub language: AppLanguage,
     pub ui_text_scale: f32,
     pub code_text_scale: f32,
+    pub ui_font_family: String,
+    pub code_font_family: String,
     pub daemon_exposure: DaemonExposureSettings,
 }
 
@@ -235,6 +249,8 @@ impl Default for AppSettings {
             language: AppLanguage::default(),
             ui_text_scale: DEFAULT_UI_TEXT_SCALE,
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
+            ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
+            code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             daemon_exposure: DaemonExposureSettings::default(),
         }
     }
@@ -299,6 +315,10 @@ pub struct PersistedState {
     pub ui_text_scale: f32,
     #[serde(default = "default_code_text_scale")]
     pub code_text_scale: f32,
+    #[serde(default = "default_ui_font_family")]
+    pub ui_font_family: String,
+    #[serde(default = "default_code_font_family")]
+    pub code_font_family: String,
     #[serde(default)]
     pub daemon_exposure: DaemonExposureSettings,
     #[serde(default = "default_sidebar_visibility")]
@@ -351,6 +371,8 @@ impl PersistedState {
             language: AppLanguage::default(),
             ui_text_scale: DEFAULT_UI_TEXT_SCALE,
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
+            ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
+            code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             daemon_exposure: DaemonExposureSettings::default(),
             sidebar_visible: true,
             right_panel_visible: false,
@@ -451,6 +473,8 @@ impl PersistedState {
             language: self.language,
             ui_text_scale: self.ui_text_scale,
             code_text_scale: self.code_text_scale,
+            ui_font_family: self.ui_font_family.clone(),
+            code_font_family: self.code_font_family.clone(),
             daemon_exposure: self.daemon_exposure.clone(),
         }
     }
@@ -480,6 +504,8 @@ impl PersistedState {
         self.language = settings.language;
         self.ui_text_scale = settings.ui_text_scale;
         self.code_text_scale = settings.code_text_scale;
+        self.ui_font_family = settings.ui_font_family;
+        self.code_font_family = settings.code_font_family;
         self.daemon_exposure = settings.daemon_exposure;
     }
 
@@ -1214,6 +1240,13 @@ mod tests {
         restore_task_state_skeletons(&mut sessions);
         assert!(!sessions[0].detail_loaded);
         assert!(sessions[0].has_started());
+    }
+
+    #[test]
+    fn missing_font_settings_default_to_bundled_faces() {
+        let settings: AppSettings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(settings.ui_font_family, DEFAULT_UI_FONT_FAMILY);
+        assert_eq!(settings.code_font_family, DEFAULT_CODE_FONT_FAMILY);
     }
 }
 

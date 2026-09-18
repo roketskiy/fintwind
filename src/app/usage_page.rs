@@ -12,9 +12,9 @@ use crate::theme::ui_px;
 use crate::usage::{cache_hit_percent, format_percent, format_tokens};
 
 use super::*;
+use crate::ui::ActivationExt;
 use fintwind_client::provider_session::{UsageEntry, UsageStats};
 use gpui::relative;
-use crate::ui::ActivationExt;
 
 /// Heatmap horizon, in whole weeks ending today.
 pub(super) const HEATMAP_WEEKS: i64 = 26;
@@ -254,13 +254,15 @@ impl Fintwind {
         column = column.child(self.render_usage_toolbar(&theme, cx));
 
         if let Some(error) = &self.usage_stats_error {
-            column = column.child(usage_notice(
-                &theme,
-                "icons/alert.svg",
-                theme.warning,
-                tr!("usage_page.load_failed", error = error.clone()),
-            )
-            .child(usage_retry_button(&theme, cx)));
+            column = column.child(
+                usage_notice(
+                    &theme,
+                    "icons/alert.svg",
+                    theme.warning,
+                    tr!("usage_page.load_failed", error = error.clone()),
+                )
+                .child(usage_retry_button(&theme, cx)),
+            );
         } else if self.usage_stats_pending && first_load {
             let label = tr!("usage_page.loading").to_owned();
             column = column.child(
@@ -422,10 +424,7 @@ impl Fintwind {
                 theme,
                 tr!("usage_page.kpi_cost"),
                 format_cost(totals.cost),
-                tr!(
-                    "usage_page.cost_sessions",
-                    count = totals.costed_sessions
-                ),
+                tr!("usage_page.cost_sessions", count = totals.costed_sessions),
             ))
     }
 
@@ -437,12 +436,8 @@ impl Fintwind {
         // Month label over the first column whose leading day enters a new
         // month; a column that keeps the previous month renders a spacer so
         // the labels stay pinned to their columns.
-        let month_row = div()
-            .flex()
-            .gap(gap)
-            .ml(px(22.0))
-            .mb(px(4.0))
-            .children(views.weeks.iter().enumerate().map(|(index, week)| {
+        let month_row = div().flex().gap(gap).ml(px(22.0)).mb(px(4.0)).children(
+            views.weeks.iter().enumerate().map(|(index, week)| {
                 let month = week
                     .first()
                     .and_then(|cell| cell.as_ref())
@@ -455,9 +450,8 @@ impl Fintwind {
                     .map(|cell| cell.date);
                 let show = month.is_some()
                     && (index == 0
-                        || previous.is_some_and(|previous| {
-                            previous.month() != month.unwrap().month()
-                        }));
+                        || previous
+                            .is_some_and(|previous| previous.month() != month.unwrap().month()));
                 div()
                     .w(pitch)
                     .flex_none()
@@ -467,7 +461,8 @@ impl Fintwind {
                         show.then(|| month_label(month.unwrap()))
                             .unwrap_or_default(),
                     ))
-            }));
+            }),
+        );
 
         // Weekday gutter labels on the Monday/Wednesday/Friday rows.
         let weekday_row = |_row: usize, label: String| {
@@ -482,55 +477,52 @@ impl Fintwind {
                 .text_color(theme.text_tertiary)
                 .child(label)
         };
-        let gutter = div().flex_none().flex().flex_col().child(weekday_row(
-            0,
-            tr!("usage_page.weekday_mon"),
-        ))
-        .child(div().h(cell_size).mb(gap))
-        .child(weekday_row(2, tr!("usage_page.weekday_wed")))
-        .child(div().h(cell_size).mb(gap))
-        .child(weekday_row(4, tr!("usage_page.weekday_fri")));
-
-        let grid = div()
+        let gutter = div()
+            .flex_none()
             .flex()
-            .gap(gap)
-            .children(views.weeks.iter().enumerate().map(|(column_index, week)| {
-                div()
-                    .flex_none()
-                    .flex()
-                    .flex_col()
-                    .gap(gap)
-                    .children(week.iter().enumerate().map(|(row_index, cell)| {
-                        let id = SharedString::from(format!(
-                            "usage-heat-{column_index}-{row_index}"
-                        ));
-                        match cell {
-                            Some(cell) => div()
-                                .id(id)
-                                .size(cell_size)
-                                .rounded(px(3.0))
-                                .flex_none()
-                                .bg(heat_level_color(theme, cell.level))
-                                .border_1()
-                                .border_color(gpui::transparent_black())
-                                .hover(|element| {
-                                    element.border_color(theme.text_tertiary)
-                                })
-                                .tooltip(Tooltip::text(SharedString::from(tr!(
-                                    "usage_page.day_tooltip",
-                                    date = format_day_label(cell.date),
-                                    tokens = format_tokens(cell.total),
-                                    sessions = cell.sessions,
-                                )))),
-                            None => div()
-                                .id(id)
-                                .size(cell_size)
-                                .rounded(px(3.0))
-                                .flex_none()
-                                .bg(theme.inset),
-                        }
-                    }))
-            }));
+            .flex_col()
+            .child(weekday_row(0, tr!("usage_page.weekday_mon")))
+            .child(div().h(cell_size).mb(gap))
+            .child(weekday_row(2, tr!("usage_page.weekday_wed")))
+            .child(div().h(cell_size).mb(gap))
+            .child(weekday_row(4, tr!("usage_page.weekday_fri")));
+
+        let grid =
+            div()
+                .flex()
+                .gap(gap)
+                .children(views.weeks.iter().enumerate().map(|(column_index, week)| {
+                    div().flex_none().flex().flex_col().gap(gap).children(
+                        week.iter().enumerate().map(|(row_index, cell)| {
+                            let id = SharedString::from(format!(
+                                "usage-heat-{column_index}-{row_index}"
+                            ));
+                            match cell {
+                                Some(cell) => div()
+                                    .id(id)
+                                    .size(cell_size)
+                                    .rounded(px(3.0))
+                                    .flex_none()
+                                    .bg(heat_level_color(theme, cell.level))
+                                    .border_1()
+                                    .border_color(gpui::transparent_black())
+                                    .hover(|element| element.border_color(theme.text_tertiary))
+                                    .tooltip(Tooltip::text(SharedString::from(tr!(
+                                        "usage_page.day_tooltip",
+                                        date = format_day_label(cell.date),
+                                        tokens = format_tokens(cell.total),
+                                        sessions = cell.sessions,
+                                    )))),
+                                None => div()
+                                    .id(id)
+                                    .size(cell_size)
+                                    .rounded(px(3.0))
+                                    .flex_none()
+                                    .bg(theme.inset),
+                            }
+                        }),
+                    )
+                }));
 
         let legend_cell = |level: u8| {
             div()
@@ -574,13 +566,7 @@ impl Fintwind {
                     ),
             )
             .child(month_row)
-            .child(
-                div()
-                    .flex()
-                    .gap(px(4.0))
-                    .child(gutter)
-                    .child(grid),
-            )
+            .child(div().flex().gap(px(4.0)).child(gutter).child(grid))
             .child(
                 div()
                     .flex()
@@ -616,12 +602,8 @@ impl Fintwind {
         } else {
             3
         };
-        let chart = div()
-            .h(px(96.0))
-            .flex()
-            .items_end()
-            .gap(px(4.0))
-            .children(views.daily.iter().enumerate().map(|(index, day)| {
+        let chart = div().h(px(96.0)).flex().items_end().gap(px(4.0)).children(
+            views.daily.iter().enumerate().map(|(index, day)| {
                 let fraction = if views.daily_direct_max > 0 {
                     (day.direct as f32 / views.daily_direct_max as f32).clamp(0.0, 1.0)
                 } else {
@@ -652,37 +634,39 @@ impl Fintwind {
                             .rounded(px(3.0))
                             .flex_none()
                             .when(day.direct > 0, |bar| {
-                                bar.h(relative(fraction)).bg(theme.accent).hover(|bar| {
-                                    bar.bg(theme.text_tertiary)
-                                })
+                                bar.h(relative(fraction))
+                                    .bg(theme.accent)
+                                    .hover(|bar| bar.bg(theme.text_tertiary))
                             })
                             .when(day.direct == 0, |bar| {
                                 bar.h(px(2.0)).bg(theme.overlay_strong)
                             }),
                     )
-            }));
+            }),
+        );
         let today = views.daily.last().map(|day| day.date);
-        let axis = div()
-            .flex()
-            .gap(px(4.0))
-            .mt(px(6.0))
-            .children(views.daily.iter().enumerate().map(|(index, day)| {
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .text_size(ui_px(9.0))
-                    .text_color(if Some(day.date) == today {
-                        theme.text_secondary
-                    } else {
-                        theme.text_ghost
-                    })
-                    .child(SharedString::from(
-                        (index % label_step == 0)
-                            .then(|| format_day_label(day.date))
-                            .unwrap_or_default(),
-                    ))
-            }));
+        let axis =
+            div()
+                .flex()
+                .gap(px(4.0))
+                .mt(px(6.0))
+                .children(views.daily.iter().enumerate().map(|(index, day)| {
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .overflow_hidden()
+                        .text_size(ui_px(9.0))
+                        .text_color(if Some(day.date) == today {
+                            theme.text_secondary
+                        } else {
+                            theme.text_ghost
+                        })
+                        .child(SharedString::from(
+                            (index % label_step == 0)
+                                .then(|| format_day_label(day.date))
+                                .unwrap_or_default(),
+                        ))
+                }));
 
         div()
             .w_full()
@@ -749,21 +733,16 @@ impl Fintwind {
                         div()
                             .text_size(ui_px(10.5))
                             .text_color(theme.text_tertiary)
-                            .child(tr!(
-                                "usage_page.models_caption",
-                                count = views.model_count
-                            )),
+                            .child(tr!("usage_page.models_caption", count = views.model_count)),
                     ),
             );
 
         for (index, row) in views.models.iter().enumerate() {
             let (display, full, icon_path) = match &row.model {
                 Some(model) => match model.split_once('/') {
-                    Some((provider, id)) => (
-                        id.to_owned(),
-                        model.clone(),
-                        model_icon(id, id, provider),
-                    ),
+                    Some((provider, id)) => {
+                        (id.to_owned(), model.clone(), model_icon(id, id, provider))
+                    }
                     None => (
                         model.clone(),
                         model.clone(),
@@ -1187,7 +1166,10 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     };
     let today = Local::now().date_naive();
     let now = unix_time();
-    let bar_horizon = range.days().unwrap_or(BAR_HORIZON_DAYS).min(BAR_HORIZON_DAYS);
+    let bar_horizon = range
+        .days()
+        .unwrap_or(BAR_HORIZON_DAYS)
+        .min(BAR_HORIZON_DAYS);
     let bar_start = today - ChronoDuration::days(bar_horizon - 1);
     let range_cutoff = range
         .days()
@@ -1207,8 +1189,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     // server that records `E:\work\x` and `e:/work/x` as the same project
     // ranks as one; the first-seen spelling is what gets displayed.
     let mut projects: HashMap<String, (String, u32, u64, f64)> = HashMap::new();
-    let mut range_days: std::collections::HashSet<NaiveDate> =
-        std::collections::HashSet::new();
+    let mut range_days: std::collections::HashSet<NaiveDate> = std::collections::HashSet::new();
 
     for entry in &stats.entries {
         let date = local_date(entry.timestamp);
@@ -1226,9 +1207,9 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
             row.3 = row.3.max(entry.timestamp);
             if let Some(directory) = &entry.directory {
                 let key = directory.replace('\\', "/").to_lowercase();
-                let row = projects.entry(key).or_insert_with(|| {
-                    (directory.clone(), 0, 0, 0.0)
-                });
+                let row = projects
+                    .entry(key)
+                    .or_insert_with(|| (directory.clone(), 0, 0, 0.0));
                 row.1 += 1;
                 row.2 = row.2.saturating_add(entry.total_tokens());
                 row.3 += entry.cost.unwrap_or_default();
@@ -1254,10 +1235,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     for offset in 0..bar_horizon {
         let date = bar_start + ChronoDuration::days(offset);
         // The map stays intact: the heatmap below reads the same days.
-        let day = days
-            .get(&date)
-            .cloned()
-            .unwrap_or_else(|| empty_day(date));
+        let day = days.get(&date).cloned().unwrap_or_else(|| empty_day(date));
         daily_direct_max = daily_direct_max.max(day.direct);
         daily.push(day);
     }
@@ -1266,8 +1244,8 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     // always contains today and every column starts on a Monday. Days past
     // today (the rest of this week) render as empty placeholders.
     let today_weekday = today.weekday().num_days_from_monday() as i64;
-    let grid_start =
-        today + ChronoDuration::days(6 - today_weekday) - ChronoDuration::days(HEATMAP_WEEKS * 7 - 1);
+    let grid_start = today + ChronoDuration::days(6 - today_weekday)
+        - ChronoDuration::days(HEATMAP_WEEKS * 7 - 1);
     let grid_len = HEATMAP_WEEKS * 7;
     let mut cells: Vec<Option<UsageHeatCell>> = Vec::with_capacity(grid_len as usize);
     let mut max_direct = 0u64;
@@ -1300,7 +1278,9 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         cell.level = if cell.direct == 0 || max_direct == 0 {
             0
         } else {
-            ((cell.direct as f64 / max_direct as f64) * 3.0).ceil().clamp(1.0, 4.0) as u8
+            ((cell.direct as f64 / max_direct as f64) * 3.0)
+                .ceil()
+                .clamp(1.0, 4.0) as u8
         };
     }
     let weeks = cells
@@ -1310,13 +1290,15 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
 
     let mut models: Vec<UsageModelRow> = models
         .into_iter()
-        .map(|(model, (sessions, total, cost, last_used))| UsageModelRow {
-            model,
-            sessions,
-            total,
-            cost,
-            last_used,
-        })
+        .map(
+            |(model, (sessions, total, cost, last_used))| UsageModelRow {
+                model,
+                sessions,
+                total,
+                cost,
+                last_used,
+            },
+        )
         .collect();
     models.sort_by(|a, b| b.total.cmp(&a.total).then(b.last_used.cmp(&a.last_used)));
     let model_count = models.len();

@@ -1711,7 +1711,7 @@ impl Fintwind {
                     .child(
                         div()
                             .text_size(code_px(10.5))
-                            .font_family(md::render::MONO_FAMILY)
+                            .font_family(md::render::mono_family())
                             .text_color(theme.text_secondary)
                             .child(value),
                     ),
@@ -1720,7 +1720,7 @@ impl Fintwind {
         let output = output.unwrap_or_else(|| SharedString::from(tr!("background.no_output")));
         let output_flat = md::render::flatten_plain(
             output,
-            md::render::MONO_FAMILY,
+            md::render::mono_family(),
             FontWeight::NORMAL,
             theme.text_secondary,
         );
@@ -1783,7 +1783,7 @@ impl Fintwind {
                                 .p(px(8.0))
                                 .text_size(code_px(10.5))
                                 .line_height(code_px(15.0))
-                                .font_family(md::render::MONO_FAMILY)
+                                .font_family(md::render::mono_family())
                                 .text_color(theme.text_secondary)
                                 .child(output_text),
                         )

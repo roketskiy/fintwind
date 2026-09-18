@@ -237,7 +237,7 @@ impl Fintwind {
             .child(
                 div()
                     .text_color(theme.text_tertiary)
-                    .font_family(crate::md::render::MONO_FAMILY)
+                    .font_family(crate::md::render::mono_family())
                     .child(SharedString::from(format!("{fps} FPS"))),
             )
     }

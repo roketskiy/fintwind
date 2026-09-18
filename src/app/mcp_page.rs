@@ -1099,7 +1099,7 @@ impl Fintwind {
                                     .mt(px(1.0))
                                     .min_w_0()
                                     .truncate()
-                                    .font_family(crate::md::render::MONO_FAMILY)
+                                    .font_family(crate::md::render::mono_family())
                                     .text_size(ui_px(10.5))
                                     .text_color(theme.text_tertiary)
                                     .child(SharedString::from(caption)),
@@ -1745,7 +1745,7 @@ impl Fintwind {
                             .max_w(px(180.0))
                             .flex_none()
                             .truncate()
-                            .font_family(crate::md::render::MONO_FAMILY)
+                            .font_family(crate::md::render::mono_family())
                             .text_size(ui_px(11.0))
                             .text_color(theme.text)
                             .child(SharedString::from(key.clone())),
@@ -1755,7 +1755,7 @@ impl Fintwind {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .font_family(crate::md::render::MONO_FAMILY)
+                            .font_family(crate::md::render::mono_family())
                             .text_size(ui_px(9.5))
                             .text_color(theme.text_tertiary)
                             .child(SharedString::from(value.clone())),

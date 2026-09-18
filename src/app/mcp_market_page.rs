@@ -944,14 +944,14 @@ impl Fintwind {
                         )
                         .child(
                             div()
-                                .font_family(crate::md::render::MONO_FAMILY)
+                                .font_family(crate::md::render::mono_family())
                                 .text_size(ui_px(11.5))
                                 .text_color(theme.text_secondary)
                                 .child(SharedString::from(entry.smithery_path)),
                         )
                         .child(
                             div()
-                                .font_family(crate::md::render::MONO_FAMILY)
+                                .font_family(crate::md::render::mono_family())
                                 .text_size(ui_px(11.0))
                                 .text_color(theme.text_tertiary)
                                 .child(SharedString::from(entry.url)),

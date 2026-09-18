@@ -2605,7 +2605,7 @@ impl Fintwind {
                     .flex()
                     .flex_col()
                     .gap(px(8.0))
-                    .font_family(md::render::MONO_FAMILY)
+                    .font_family(md::render::mono_family())
                     .text_size(code_px(10.5))
                     .line_height(code_px(16.0))
                     .text_color(theme.text_secondary)
@@ -2715,7 +2715,7 @@ impl Fintwind {
                                             .line_height(code_px(16.0))
                                             .child(md::render::plain_text(
                                                 content.clone(),
-                                                md::render::MONO_FAMILY,
+                                                md::render::mono_family(),
                                                 FontWeight::NORMAL,
                                                 theme.text_secondary,
                                                 &ctx,
@@ -2788,7 +2788,7 @@ impl Fintwind {
                                             .line_height(code_px(16.0))
                                             .child(md::render::plain_text(
                                                 content.clone(),
-                                                md::render::MONO_FAMILY,
+                                                md::render::mono_family(),
                                                 FontWeight::NORMAL,
                                                 theme.text_secondary,
                                                 &ctx,
@@ -2929,7 +2929,7 @@ impl Fintwind {
             .track_scroll(&viewport.scroll_handle)
             .flex()
             .flex_col()
-            .font_family(md::render::MONO_FAMILY)
+            .font_family(md::render::mono_family())
             .text_size(code_px(10.5))
             .line_height(code_px(16.0))
             .on_scroll_wheel(move |_, _, cx| contain_scroll(&wheel_scroll, cx));
@@ -3123,7 +3123,7 @@ fn activity_diff_break_row(label: Option<String>, theme: &Theme) -> AnyElement {
         .flex_none()
         .flex()
         .items_center()
-        .font_family(md::render::MONO_FAMILY)
+        .font_family(md::render::mono_family())
         .text_size(code_px(10.5))
         .bg(theme.overlay)
         .text_color(theme.text_ghost)

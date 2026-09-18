@@ -125,7 +125,14 @@ impl CustomProvider {
 
     /// A freshly created entry: everything the add form collected, with an
     /// empty raw record so the first save writes the standard fields.
-    pub fn new(slug: String, name: String, base_url: String, api_format: ProviderApiFormat, api_key: String, models: Vec<CustomProviderModel>) -> Self {
+    pub fn new(
+        slug: String,
+        name: String,
+        base_url: String,
+        api_format: ProviderApiFormat,
+        api_key: String,
+        models: Vec<CustomProviderModel>,
+    ) -> Self {
         Self {
             id: slug.clone(),
             slug,
@@ -285,7 +292,8 @@ fn fetch_api_model_list_with_timeout(
     let (status, body) = fintwind_protocol::http::http_get(&url, &headers, max_time_secs)
         .map_err(|error| ApiListError::Unreachable(error.to_string()))?;
     match status {
-        200 => parse_api_model_list(&body).map_err(|error| ApiListError::NoModelList(error.to_string())),
+        200 => parse_api_model_list(&body)
+            .map_err(|error| ApiListError::NoModelList(error.to_string())),
         401 | 403 => Err(ApiListError::AuthRejected(status)),
         404 => Err(ApiListError::ListMissing),
         status => Err(ApiListError::HttpStatus(status)),
@@ -329,7 +337,10 @@ pub enum FirstTokenError {
     InvalidBaseUrl,
     /// The endpoint answered with this status; `message` is the provider's
     /// own error sentence when it sent one.
-    HttpStatus { status: u16, message: Option<String> },
+    HttpStatus {
+        status: u16,
+        message: Option<String>,
+    },
     /// No HTTP answer at all: DNS, TLS, connection refused, curl itself.
     Unreachable(String),
     /// A 200 that never streamed a token, with no error document explaining
@@ -353,13 +364,9 @@ pub fn first_token_latency(
         return Err(FirstTokenError::InvalidBaseUrl);
     }
     let (url, headers, body) = first_token_request(provider, model_id);
-    let posted = fintwind_protocol::http::http_post_stream(
-        &url,
-        &headers,
-        &body,
-        FIRST_TOKEN_TIMEOUT_SECS,
-    )
-    .map_err(|error| FirstTokenError::Unreachable(error.to_string()))?;
+    let posted =
+        fintwind_protocol::http::http_post_stream(&url, &headers, &body, FIRST_TOKEN_TIMEOUT_SECS)
+            .map_err(|error| FirstTokenError::Unreachable(error.to_string()))?;
     if let Some((latency, _)) = posted.first_data {
         return Ok(latency);
     }
@@ -605,7 +612,11 @@ mod tests {
         model.name = Some(String::new());
         assert_eq!(model.display_name(), None);
         model.name = Some("deepseek-chat".into());
-        assert_eq!(model.display_name(), None, "a name equal to the id carries no information");
+        assert_eq!(
+            model.display_name(),
+            None,
+            "a name equal to the id carries no information"
+        );
         model.name = Some("DeepSeek Chat".into());
         assert_eq!(model.display_name(), Some("DeepSeek Chat"));
     }
@@ -618,9 +629,11 @@ mod tests {
             "sk-test",
         ));
         assert_eq!(url, "https://api.example.com/v1/models");
-        assert!(headers
-            .iter()
-            .any(|header| header == "Authorization: Bearer sk-test"));
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "Authorization: Bearer sk-test")
+        );
 
         // The Anthropic SDK root omits the version path; the request adds it.
         let (url, headers) = api_list_request(&provider(
@@ -630,9 +643,11 @@ mod tests {
         ));
         assert_eq!(url, "https://api.anthropic.com/v1/models");
         assert!(headers.iter().any(|header| header == "x-api-key: sk-ant"));
-        assert!(headers
-            .iter()
-            .any(|header| header == "anthropic-version: 2023-06-01"));
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "anthropic-version: 2023-06-01")
+        );
 
         // A root that already carries /v1 is not versioned twice.
         let (url, _) = api_list_request(&provider(
@@ -648,9 +663,11 @@ mod tests {
             "https://api.example.com",
             "  ",
         ));
-        assert!(!headers
-            .iter()
-            .any(|header| header.starts_with("Authorization")));
+        assert!(
+            !headers
+                .iter()
+                .any(|header| header.starts_with("Authorization"))
+        );
     }
 
     #[test]
@@ -685,7 +702,10 @@ mod tests {
         // A bare array of id strings also parses; duplicates collapse.
         let models = parse_api_model_list(r#"["a-model","a-model","b-model"]"#).unwrap();
         assert_eq!(
-            models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["a-model", "b-model"]
         );
 
@@ -698,45 +718,82 @@ mod tests {
 
     #[test]
     fn npm_packages_map_the_three_formats() {
-        assert_eq!(ProviderApiFormat::OpenAi.npm_package(), "@ai-sdk/openai-compatible");
-        assert_eq!(ProviderApiFormat::OpenAiResponses.npm_package(), "@ai-sdk/openai");
-        assert_eq!(ProviderApiFormat::Anthropic.npm_package(), "@ai-sdk/anthropic");
+        assert_eq!(
+            ProviderApiFormat::OpenAi.npm_package(),
+            "@ai-sdk/openai-compatible"
+        );
+        assert_eq!(
+            ProviderApiFormat::OpenAiResponses.npm_package(),
+            "@ai-sdk/openai"
+        );
+        assert_eq!(
+            ProviderApiFormat::Anthropic.npm_package(),
+            "@ai-sdk/anthropic"
+        );
         // The round trip is what keeps a saved entry loading as it saved:
         // OpenCode reads the package and picks the API shape from it.
         for format in ProviderApiFormat::ALL {
             let round = serde_json::to_value(format).unwrap();
-            assert_eq!(round.as_str().unwrap(), match format {
-                ProviderApiFormat::OpenAi => "openai",
-                ProviderApiFormat::OpenAiResponses => "openai-responses",
-                ProviderApiFormat::Anthropic => "anthropic",
-            });
+            assert_eq!(
+                round.as_str().unwrap(),
+                match format {
+                    ProviderApiFormat::OpenAi => "openai",
+                    ProviderApiFormat::OpenAiResponses => "openai-responses",
+                    ProviderApiFormat::Anthropic => "anthropic",
+                }
+            );
         }
     }
 
     #[test]
     fn first_token_request_targets_the_formats_chat_endpoint() {
         let (url, headers, body) = first_token_request(
-            &provider(ProviderApiFormat::OpenAi, "https://api.example.com/v1/", "sk-test"),
+            &provider(
+                ProviderApiFormat::OpenAi,
+                "https://api.example.com/v1/",
+                "sk-test",
+            ),
             "deepseek-chat",
         );
         assert_eq!(url, "https://api.example.com/v1/chat/completions");
-        assert!(headers
-            .iter()
-            .any(|header| header == "Authorization: Bearer sk-test"));
-        assert!(headers.iter().any(|header| header == "Content-Type: application/json"));
-        assert!(headers.iter().any(|header| header == "Accept: text/event-stream"));
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "Authorization: Bearer sk-test")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "Content-Type: application/json")
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "Accept: text/event-stream")
+        );
         assert!(body.contains(r#""model":"deepseek-chat""#));
         assert!(body.contains(r#""stream":true"#));
-        assert!(!body.contains("max_tokens"), "the newer OpenAI models reject max_tokens");
+        assert!(
+            !body.contains("max_tokens"),
+            "the newer OpenAI models reject max_tokens"
+        );
 
         // Anthropic: the versioned messages endpoint with its minimum
         // required output budget.
         let (url, headers, body) = first_token_request(
-            &provider(ProviderApiFormat::Anthropic, "https://relay.example.com", ""),
+            &provider(
+                ProviderApiFormat::Anthropic,
+                "https://relay.example.com",
+                "",
+            ),
             "claude-sonnet-4-5",
         );
         assert_eq!(url, "https://relay.example.com/v1/messages");
-        assert!(headers.iter().any(|header| header == "anthropic-version: 2023-06-01"));
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "anthropic-version: 2023-06-01")
+        );
         assert!(body.contains(r#""max_tokens":1"#));
         assert!(body.contains(r#""stream":true"#));
 
@@ -753,13 +810,19 @@ mod tests {
         // The Responses format posts to the responses path with the Responses
         // input shape, and carries no token budget (its floor varies).
         let (url, headers, body) = first_token_request(
-            &provider(ProviderApiFormat::OpenAiResponses, "https://api.example.com/v1/", "sk-test"),
+            &provider(
+                ProviderApiFormat::OpenAiResponses,
+                "https://api.example.com/v1/",
+                "sk-test",
+            ),
             "gpt-5.4",
         );
         assert_eq!(url, "https://api.example.com/v1/responses");
-        assert!(headers
-            .iter()
-            .any(|header| header == "Authorization: Bearer sk-test"));
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "Authorization: Bearer sk-test")
+        );
         assert!(body.contains(r#""model":"gpt-5.4""#));
         assert!(body.contains(r#""input":"Hi""#));
         assert!(body.contains(r#""stream":true"#));
@@ -773,9 +836,11 @@ mod tests {
             "sk-test",
         ));
         assert_eq!(url, "https://relay.example.com/models");
-        assert!(headers
-            .iter()
-            .any(|header| header == "Authorization: Bearer sk-test"));
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "Authorization: Bearer sk-test")
+        );
     }
 
     #[test]
@@ -800,7 +865,10 @@ mod tests {
             error_message(r#"{"message":"relay says no"}"#).as_deref(),
             Some("relay says no")
         );
-        assert_eq!(error_message(r#"{"error":"plain string error"}"#).as_deref(), Some("plain string error"));
+        assert_eq!(
+            error_message(r#"{"error":"plain string error"}"#).as_deref(),
+            Some("plain string error")
+        );
         assert_eq!(error_message("not json"), None);
         assert_eq!(error_message(r#"{"error":{"message":"  "}}"#), None);
     }

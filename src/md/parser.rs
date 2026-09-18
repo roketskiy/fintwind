@@ -1441,9 +1441,7 @@ mod tests {
         let tree = parse(r"before \[x^2\] after");
         assert_eq!(tree.len(), 3);
         assert_eq!(paragraph_text(&tree.blocks[0].block), "before ");
-        assert!(
-            matches!(&tree.blocks[1].block, Block::DisplayMath { latex } if latex == "x^2")
-        );
+        assert!(matches!(&tree.blocks[1].block, Block::DisplayMath { latex } if latex == "x^2"));
         assert_eq!(paragraph_text(&tree.blocks[2].block), " after");
 
         let tree = parse(r"given \(a_1\) obviously");

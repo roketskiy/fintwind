@@ -53,7 +53,7 @@ settings.providers: 服务商
 settings.usage: 用量
 settings.daemon: 守护进程
 settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本
-settings.appearance_keywords: 外观 主题 系统 浅色 深色 语言 英语 中文 简体 字号 文字大小 代码 界面
+settings.appearance_keywords: 外观 主题 系统 浅色 深色 语言 英语 中文 简体 字号 文字大小 代码 界面 字体 等宽
 settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key Base URL 端点 模型列表 命令行 版本 安装 检测 获取模型 models.dev 连通 测试 延迟 首字 模态 responses claude codex cursor opencode amp grok pi
 settings.skills: 技能
 settings.skills_keywords: 技能 技能库 智能体 禁用 启用 删除 claude codex cursor opencode pi amp 共享
@@ -136,6 +136,12 @@ settings.ui_text_size: 界面文字大小
 settings.ui_text_size_description: 调整应用界面文字的大小，更改立即生效。
 settings.code_text_size: 代码文字大小
 settings.code_text_size_description: 调整对话记录、工具输出、差异对比和文件面板中代码的大小。
+settings.ui_font: 界面字体
+settings.ui_font_description: 选择应用界面使用的字体，更改立即生效。
+settings.code_font: 代码字体
+settings.code_font_description: 选择对话记录、工具输出、差异对比、文件面板和终端中代码使用的字体。
+settings.font_system: 系统默认
+settings.font_system_mono: 系统等宽
 settings.text_size_small: 小
 settings.text_size_default: 默认
 settings.text_size_large: 大

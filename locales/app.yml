@@ -1488,16 +1488,6 @@ errors.pi_session_file_unavailable:
   en: Pi's native session file is unavailable
 errors.fork_task:
   en: "Could not fork the task: %{error}"
-errors.create_rewind_snapshot:
-  en: "Could not create a rewind safety snapshot: %{error}"
-errors.restore_checkpoint:
-  en: "Could not restore the checkpoint: %{error}"
-errors.restore_checkpoint_and_safety:
-  en: "Checkpoint restore failed (%{error}); safety restore also failed (%{restore_error}). Recovery ref retained at %{safety_ref}"
-errors.rollback_rejected_workspace_restored:
-  en: "The provider rejected the rollback, so the workspace was restored: %{error}"
-errors.rollback_and_safety_failed:
-  en: "Provider rollback failed (%{error}) and the safety snapshot could not be restored (%{restore_error}). Recovery ref retained at %{safety_ref}"
 errors.no_session_selected:
   en: No session selected
 errors.session_not_found:
@@ -1621,8 +1611,6 @@ session.stop_before_rewind:
   en: Stop the current turn before rewinding the conversation
 session.provider_cannot_rewind:
   en: "%{provider} cannot safely roll back its native conversation yet"
-session.pre_turn_checkpoint_missing:
-  en: The message's pre-turn Git checkpoint is missing
 session.rewind_title:
   en: "%{title} (rewind)"
 session.rewound:

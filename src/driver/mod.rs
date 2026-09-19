@@ -225,20 +225,6 @@ impl DriverControl for RemoteDriverControl {
         )
     }
 
-    fn rollback(&self, turns: usize) -> anyhow::Result<Option<ProviderResumeCursor>> {
-        match self.client.request(
-            self.session_id,
-            self.runtime_id,
-            fintwind_client::Command::Rollback { turns },
-        )? {
-            fintwind_client::ResponsePayload::Cursor { cursor } => cursor
-                .map(serde_json::from_value)
-                .transpose()
-                .map_err(Into::into),
-            _ => anyhow::bail!("fintwind daemon returned an invalid rollback response"),
-        }
-    }
-
     fn fork(&self, turns_to_remove: usize) -> anyhow::Result<ProviderResumeCursor> {
         match self.client.request(
             self.session_id,

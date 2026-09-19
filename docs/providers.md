@@ -481,10 +481,19 @@ agent stops asking about the same permission.
 
 **Cancel** — `POST /session/{id}/abort`.
 
-**Rewind and branch** — `POST /session/{id}/fork`. A live task sends the fork
-through its resident server, avoiding a second OpenCode process contending for
-the same local resources; a cold task may use a short-lived server
-([src/opencode_session.rs](../src/opencode_session.rs)).
+**Rewind and branch** — branch is `POST /session/{id}/fork` with
+`{"boundary": {"type": "before", "messageID": ...}}`, which returns a new
+session. Rewind uses OpenCode's own revert instead
+([src/opencode_session.rs](../src/opencode_session.rs)):
+`POST /session/{id}/revert {messageID}` marks a boundary on the *same* session —
+OpenCode snapshots the worktree, restores the dropped turns' file changes, and
+hides those messages from the next model call; `POST /session/{id}/unrevert`
+clears the marker and restores the snapshot. Nothing is deleted until the next
+`POST /session/{id}/prompt`, whose cleanup physically removes the marked
+messages — so a rewind must be followed by the replacement prompt. A stale
+marker (a previous rewind that never got its prompt) is cleared with unrevert
+before the new boundary is marked. The session id survives, so the stored
+cursor keeps working.
 
 ---
 

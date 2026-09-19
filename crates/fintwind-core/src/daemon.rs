@@ -895,101 +895,43 @@ impl FintwindBackend {
         };
         validate_message_rewind(&source, turn_count)?;
 
-        // Resolve the executable before touching the worktree. Even native
-        // transcript operations are immediately followed by a replacement
-        // prompt, so accepting a rewind that cannot resume would strand the
-        // user at a provider state the UI cannot continue.
-        let binary = self.provider_binary()?;
         let retained_turn_count = turn_count.saturating_sub(1);
-        let previous_turn_count = source.turns.len();
         let rollback_turns = source.provider_turns_after(retained_turn_count);
-        let provider_turn_count = source
-            .turns
-            .iter()
-            .take(retained_turn_count)
-            .filter(|turn| turn.provider_turn_started)
-            .count();
-
-        let turn_start_ref = crate::checkpoint::turn_start_ref(session_id, turn_count);
-        let retained_ref = crate::checkpoint::checkpoint_ref(session_id, retained_turn_count);
-        let restore_ref = if crate::checkpoint::has_ref(&cwd, &turn_start_ref) {
-            turn_start_ref
-        } else {
-            retained_ref
-        };
-        if !crate::checkpoint::has_ref(&cwd, &restore_ref) {
-            bail!("the checkpoint before this message is unavailable");
-        }
-
-        let safety_ref = format!(
-            "refs/fintwind/revert-backup-{session_id}-{}",
-            Uuid::new_v4()
-        );
-        crate::checkpoint::capture_ref(&cwd, &safety_ref)
-            .context("could not create a rewind safety snapshot")?;
-        if let Err(error) = crate::checkpoint::restore_ref(&cwd, &restore_ref) {
-            return Err(restore_rewind_safety(
+        if rollback_turns > 0 {
+            // OpenCode's revert marks a native user-message boundary, so the
+            // index must count only turns that reached the provider — a
+            // locally failed turn has no native message to retain.
+            let provider_turn_count = source
+                .turns
+                .iter()
+                .take(retained_turn_count)
+                .filter(|turn| turn.provider_turn_started)
+                .count();
+            // OpenCode's revert rewrites the worktree with its own snapshot,
+            // so no fintwind git checkpoint is captured or restored here. The
+            // marker is the work: it hides the dropped turns from the next
+            // model call and rolls their file changes back.
+            let binary = self.provider_binary()?;
+            self.rewind_provider_response(
+                &source,
                 &cwd,
-                &safety_ref,
-                "could not restore the selected checkpoint",
-                error,
-            ));
+                &binary,
+                provider_turn_count,
+                rollback_turns,
+            )?;
         }
+        // The native session id survives OpenCode's revert, so the stored
+        // cursor keeps working no matter how many turns were dropped.
+        let provider_cursor = source.provider_cursor.clone();
 
-        let provider_rewind = self.rewind_provider_response(
-            &source,
-            &cwd,
-            &binary,
-            retained_turn_count,
-            rollback_turns,
-            provider_turn_count,
-        );
-        let (provider_cursor, message_ids, reset_native_session) = match provider_rewind {
-            Ok(result) => result,
-            Err(error) => {
-                return Err(restore_rewind_safety(
-                    &cwd,
-                    &safety_ref,
-                    "the provider rejected the rewind",
-                    error,
-                ));
-            }
-        };
-
-        let _ = crate::checkpoint::delete_ref(&cwd, &safety_ref);
-        let cleanup_warning = crate::checkpoint::delete_turn_refs_after(
-            &cwd,
-            session_id,
-            retained_turn_count,
-            previous_turn_count,
-        )
-        .err()
-        .map(|error| error.to_string());
-
-        // Every provider resumes from the newly stored cursor on the next
-        // prompt. Dropping a resident source driver also prevents its late
-        // events from racing the rewound transcript.
+        // Dropping a resident source driver prevents its late events from
+        // racing the rewound transcript; the next prompt starts fresh and
+        // OpenCode's pending cleanup physically removes the dropped turns.
         let removed = self.sessions.lock().remove(&session_id);
         drop(removed);
 
         let mut rewound = source.clone();
-        if !message_ids.is_empty() {
-            for turn in rewound.turns.iter_mut().take(retained_turn_count) {
-                if let Some(remapped) = turn
-                    .provider_resume_at
-                    .as_ref()
-                    .and_then(|message_id| message_ids.get(message_id))
-                    .cloned()
-                {
-                    turn.provider_resume_at = Some(remapped);
-                }
-            }
-        }
-        if reset_native_session {
-            rewound.provider_cursor = None;
-        } else if let Some(cursor) = provider_cursor {
-            rewound.provider_cursor = Some(cursor);
-        }
+        rewound.provider_cursor = provider_cursor;
         rewound.truncate_after_turn(retained_turn_count);
         rewound.status = SessionStatus::Idle;
 
@@ -1004,7 +946,7 @@ impl FintwindBackend {
         self.task_store
             .save(&mut state)
             .context("could not save the rewound task")?;
-        Ok((rewound, cleanup_warning))
+        Ok((rewound, None))
     }
 
     fn fork_provider_response(
@@ -1031,41 +973,23 @@ impl FintwindBackend {
         source: &AgentSession,
         cwd: &Path,
         binary: &Path,
-        retained_turn_count: usize,
-        rollback_turns: usize,
         provider_turn_count: usize,
-    ) -> anyhow::Result<(Option<ProviderResumeCursor>, HashMap<String, String>, bool)> {
+        rollback_turns: usize,
+    ) -> anyhow::Result<()> {
         if rollback_turns == 0 {
-            return Ok((None, HashMap::new(), false));
+            return Ok(());
         }
-        if retained_turn_count == 0 {
-            return Ok((None, HashMap::new(), true));
-        }
-
-        let cursor = if let Some(driver) = self
-            .sessions
-            .lock()
-            .get(&source.id)
-            .map(|(_, driver)| driver.clone())
-        {
-            driver
-                .rollback(rollback_turns)?
-                .ok_or_else(|| anyhow!("OpenCode returned no rewound-session cursor"))?
-        } else {
-            let Some(ProviderResumeCursor::OpenCode { session_id }) =
-                source.provider_cursor.as_ref()
-            else {
-                bail!("OpenCode's native session is unavailable");
-            };
-            fork_provider_session(ProviderSessionForkRequest::OpenCode {
-                binary: binary.to_owned(),
-                cwd: cwd.to_owned(),
-                session_id: session_id.clone(),
-                turn_count: provider_turn_count,
-            })?
-            .cursor
+        let Some(ProviderResumeCursor::OpenCode { session_id }) = source.provider_cursor.as_ref()
+        else {
+            bail!("OpenCode's native session is unavailable");
         };
-        Ok((Some(cursor), HashMap::new(), false))
+        let _ = fork_provider_session(ProviderSessionForkRequest::OpenCodeRevert {
+            binary: binary.to_owned(),
+            cwd: cwd.to_owned(),
+            session_id: session_id.clone(),
+            turn_count: provider_turn_count,
+        })?;
+        Ok(())
     }
 
     fn provider_binary(&self) -> anyhow::Result<PathBuf> {
@@ -1097,23 +1021,6 @@ fn validate_message_rewind(source: &AgentSession, turn_count: usize) -> anyhow::
         bail!("the provider conversation is unavailable");
     }
     Ok(())
-}
-
-fn restore_rewind_safety(
-    cwd: &Path,
-    safety_ref: &str,
-    context: &str,
-    error: anyhow::Error,
-) -> anyhow::Error {
-    match crate::checkpoint::restore_ref(cwd, safety_ref) {
-        Ok(()) => {
-            let _ = crate::checkpoint::delete_ref(cwd, safety_ref);
-            anyhow!("{context}: {error}; the original worktree was restored")
-        }
-        Err(restore_error) => anyhow!(
-            "{context}: {error}; restoring the safety snapshot also failed: {restore_error}; snapshot: {safety_ref}"
-        ),
-    }
 }
 
 fn validate_response_fork(source: &AgentSession, turn_count: usize) -> anyhow::Result<()> {
@@ -1181,6 +1088,24 @@ fn fork_provider_session(
             HashMap::new(),
             None,
         ),
+        // The revert keeps the session id, so the fork's cursor field just
+        // carries the same session onward.
+        ProviderSessionForkRequest::OpenCodeRevert {
+            binary,
+            cwd,
+            session_id,
+            turn_count,
+        } => {
+            let server = crate::opencode_pool::acquire(&binary, &cwd)?;
+            crate::opencode_session::revert_session_at_message(&server, &session_id, turn_count)?;
+            (
+                ProviderResumeCursor::OpenCode {
+                    session_id: session_id.clone(),
+                },
+                HashMap::new(),
+                None,
+            )
+        }
     };
     Ok(ProviderSessionFork {
         cursor,
@@ -1224,13 +1149,6 @@ fn handle_driver_command(
                     context_window: options.context_window,
                 }),
             });
-        }
-        Command::Rollback { turns } => {
-            let cursor = driver
-                .rollback(turns)?
-                .map(serde_json::to_value)
-                .transpose()?;
-            return Ok(ResponsePayload::Cursor { cursor });
         }
         Command::Fork { turns_to_remove } => {
             let cursor = Some(serde_json::to_value(driver.fork(turns_to_remove)?)?);

@@ -22,6 +22,9 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(10);
 /// A long task can legitimately take longer than the ordinary request budget;
 /// this operation already runs off the UI thread.
 const FORK_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
+/// A revert snapshots the worktree before restoring the boundary, so it can
+/// also exceed the ordinary request budget on a large repository.
+const REVERT_HTTP_TIMEOUT: Duration = Duration::from_secs(120);
 /// The server binds its port about a second before the app behind it starts
 /// answering, and a request accepted in that window is never answered at all.
 /// A startup probe caught there must give up quickly and retry — at the full
@@ -90,6 +93,82 @@ pub(crate) fn fork_session_removing_turns_on_server(
     let native = native_messages(server, session_id)?;
     let retained_turns = retained_turn_count(native.user_ids.len(), turns_to_remove)?;
     fork_session_with_message_ids(server, session_id, &native, retained_turns)
+}
+
+/// Whether the native session carries an active revert marker — the user
+/// rewound and has not sent the replacement prompt yet.
+pub(crate) fn native_session_has_revert(
+    server: &OpenCodeServer,
+    session_id: &str,
+) -> anyhow::Result<bool> {
+    let session = server
+        .request_with_timeout(
+            "GET",
+            &format!("/api/session/{}", encode_path_segment(session_id)),
+            None,
+            FORK_HTTP_TIMEOUT,
+        )
+        .context("could not read the OpenCode session")?;
+    let session = session.get("data").unwrap_or(&session);
+    Ok(session
+        .get("revert")
+        .and_then(|revert| revert.get("messageID"))
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty()))
+}
+
+/// Reverts the native conversation to just before one of its user turns.
+///
+/// OpenCode marks the boundary instead of deleting anything: the messages
+/// from that turn onward stay in storage but are excluded from the next
+/// model call, and its own snapshot machinery restores the worktree files
+/// the dropped turns had changed. The session id never changes. The marked
+/// messages are only removed from storage when the next prompt arrives, so
+/// a revert must be followed by the replacement prompt in the same
+/// rewind-and-resend flow.
+pub(crate) fn revert_session_at_message(
+    server: &OpenCodeServer,
+    session_id: &str,
+    retained_turns: usize,
+) -> anyhow::Result<()> {
+    // A previous rewind that never got its replacement prompt leaves a
+    // revert marker behind. Clear it first so this boundary move starts
+    // from the whole conversation, and so the fresh marker's snapshot
+    // describes the worktree the user sees right now.
+    if native_session_has_revert(server, session_id)? {
+        unrevert_session(server, session_id)?;
+    }
+    let native = native_messages(server, session_id)?;
+    let Some(message_id) = fork_message_id(&native.user_ids, retained_turns)? else {
+        // No native user turn sits after the boundary — the conversation is
+        // empty or every turn is already retained — so there is nothing to
+        // hide. Keep the session: the stored cursor still points at it.
+        return Ok(());
+    };
+    // The revert/unrevert routes exist only without the /api prefix: the
+    // prefixed variants fall through to the SPA fallback and return HTML
+    // (verified against the bundled SDK, which posts to /session/{id}/revert).
+    server.request_with_timeout(
+        "POST",
+        &format!("/session/{}/revert", encode_path_segment(session_id)),
+        Some(&json!({"messageID": message_id})),
+        REVERT_HTTP_TIMEOUT,
+    )?;
+    Ok(())
+}
+
+/// Undoes a previous revert: OpenCode restores its snapshot, so the
+/// reverted turns' file changes are back on disk and the transcript is
+/// whole again.
+pub(crate) fn unrevert_session(server: &OpenCodeServer, session_id: &str) -> anyhow::Result<()> {
+    server.request_with_timeout(
+        "POST",
+        // See revert_session_at_message: no /api prefix on these routes.
+        &format!("/session/{}/unrevert", encode_path_segment(session_id)),
+        None,
+        REVERT_HTTP_TIMEOUT,
+    )?;
+    Ok(())
 }
 
 fn retained_turn_count(total_turns: usize, turns_to_remove: usize) -> anyhow::Result<usize> {
@@ -626,6 +705,21 @@ mod tests {
         assert_eq!(retained_turn_count(4, 1).unwrap(), 3);
         assert_eq!(retained_turn_count(4, 4).unwrap(), 0);
         assert!(retained_turn_count(4, 5).is_err());
+    }
+
+    #[test]
+    fn revert_reuses_the_fork_boundary_and_dropping_every_turn_is_out_of_band() {
+        // Retaining all four turns reverts at the fifth user message — the
+        // same boundary arithmetic the fork path uses, so a revert always
+        // marks a real remaining message instead of an off-by-one.
+        let messages = vec![
+            "u1".to_owned(),
+            "u2".to_owned(),
+            "u3".to_owned(),
+            "u4".to_owned(),
+        ];
+        assert_eq!(fork_message_id(&messages, 4).unwrap(), None);
+        assert_eq!(fork_message_id(&messages, 3).unwrap(), Some("u4"));
     }
 
     #[test]

@@ -10,20 +10,6 @@ fn workspace_ack(
     }
 }
 
-fn workspace_has_ref(
-    workspace: &fintwind_client::WorkspaceClient,
-    cwd: &Path,
-    git_ref: &str,
-) -> anyhow::Result<bool> {
-    match workspace.request(fintwind_client::WorkspaceOperation::HasRef {
-        cwd: cwd.to_path_buf(),
-        git_ref: git_ref.to_owned(),
-    })? {
-        fintwind_client::WorkspaceResult::Bool { value } => Ok(value),
-        _ => anyhow::bail!("the daemon returned an invalid checkpoint response"),
-    }
-}
-
 fn start_driver(mut request: DriverStartRequest, cwd: PathBuf) -> anyhow::Result<PreparedDriver> {
     request.options.cwd = cwd;
     let (event_tx, events) = driver::event_channel(request.event_wake);
@@ -210,200 +196,47 @@ fn prepare_submission(
 /// [`perform_message_rewind`] on the background executor.
 struct MessageRewindRequest {
     workspace_client: fintwind_client::WorkspaceClient,
-    session_id: Uuid,
-    provider_cursor: Option<ProviderResumeCursor>,
     project_path: PathBuf,
-    retained_turn_count: usize,
-    previous_turn_count: usize,
     rollback_turns: usize,
     provider_turn_count: usize,
+    provider_cursor: Option<ProviderResumeCursor>,
     binary: Option<PathBuf>,
-    driver: Option<DriverHandle>,
 }
 
-struct PreparedMessageRewind {
-    provider_rewind_cursor: Option<ProviderResumeCursor>,
-    prepared_driver: Option<PreparedDriver>,
-    cleanup_error: Option<String>,
+fn perform_message_rewind(mut request: MessageRewindRequest) -> Result<(), String> {
+    perform_provider_rewind(&mut request).map_err(|error| error.to_string())
 }
 
-fn perform_message_rewind(
-    mut request: MessageRewindRequest,
-) -> Result<PreparedMessageRewind, String> {
-    let session_id = request.session_id;
-    let turn_start_ref =
-        checkpoint::turn_start_ref(session_id, request.retained_turn_count.saturating_add(1));
-    let retained_ref = checkpoint::checkpoint_ref(session_id, request.retained_turn_count);
-    let restore_ref = if workspace_has_ref(
-        &request.workspace_client,
-        &request.project_path,
-        &turn_start_ref,
-    )
-    .map_err(|error| error.to_string())?
-    {
-        turn_start_ref
-    } else {
-        retained_ref
-    };
-    if !workspace_has_ref(
-        &request.workspace_client,
-        &request.project_path,
-        &restore_ref,
-    )
-    .map_err(|error| error.to_string())?
-    {
-        return Err(tr!("session.pre_turn_checkpoint_missing"));
+fn perform_provider_rewind(request: &mut MessageRewindRequest) -> anyhow::Result<()> {
+    if request.rollback_turns == 0 {
+        return Ok(());
     }
-
-    let safety_ref = format!(
-        "refs/fintwind/revert-backup-{session_id}-{}",
-        Uuid::new_v4()
-    );
-    workspace_ack(
-        &request.workspace_client,
-        fintwind_client::WorkspaceOperation::CaptureRef {
-            cwd: request.project_path.clone(),
-            git_ref: safety_ref.clone(),
-        },
-    )
-    .map_err(|error| tr!("errors.create_rewind_snapshot", error = error))?;
-    if let Err(error) = workspace_ack(
-        &request.workspace_client,
-        fintwind_client::WorkspaceOperation::RestoreRef {
-            cwd: request.project_path.clone(),
-            git_ref: restore_ref.clone(),
-        },
-    ) {
-        return Err(
-            match workspace_ack(
-                &request.workspace_client,
-                fintwind_client::WorkspaceOperation::RestoreRef {
-                    cwd: request.project_path.clone(),
-                    git_ref: safety_ref.clone(),
-                },
-            ) {
-                Ok(()) => {
-                    let _ = workspace_ack(
-                        &request.workspace_client,
-                        fintwind_client::WorkspaceOperation::DeleteRef {
-                            cwd: request.project_path.clone(),
-                            git_ref: safety_ref.clone(),
-                        },
-                    );
-                    tr!("errors.restore_checkpoint", error = error)
-                }
-                Err(restore_error) => tr!(
-                    "errors.restore_checkpoint_and_safety",
-                    error = error,
-                    restore_error = restore_error,
-                    safety_ref = safety_ref
-                ),
-            },
-        );
-    }
-
-    let provider_rewind = perform_provider_rewind(&mut request);
-    let (provider_rewind_cursor, _claude_fork, prepared_driver) = match provider_rewind {
-        Ok(rewind) => rewind,
-        Err(error) => {
-            return Err(
-                match workspace_ack(
-                    &request.workspace_client,
-                    fintwind_client::WorkspaceOperation::RestoreRef {
-                        cwd: request.project_path.clone(),
-                        git_ref: safety_ref.clone(),
-                    },
-                ) {
-                    Ok(()) => {
-                        let _ = workspace_ack(
-                            &request.workspace_client,
-                            fintwind_client::WorkspaceOperation::DeleteRef {
-                                cwd: request.project_path.clone(),
-                                git_ref: safety_ref.clone(),
-                            },
-                        );
-                        tr!("errors.rollback_rejected_workspace_restored", error = error)
-                    }
-                    Err(restore_error) => tr!(
-                        "errors.rollback_and_safety_failed",
-                        error = error,
-                        restore_error = restore_error,
-                        safety_ref = safety_ref
-                    ),
-                },
-            );
-        }
+    // A cold rewind (no live driver) asks the daemon to drive OpenCode's own
+    // revert: the server marks the boundary, restores its snapshot, and keeps
+    // the session id. A live driver's native session is the same store, so
+    // both paths run the identical server-side revert.
+    let Some(ProviderResumeCursor::OpenCode {
+        session_id: native_session_id,
+    }) = request.provider_cursor.as_ref()
+    else {
+        anyhow::bail!(tr!(
+            "errors.provider_native_cursor_unavailable",
+            provider = "OpenCode"
+        ));
     };
-
-    let _ = workspace_ack(
-        &request.workspace_client,
-        fintwind_client::WorkspaceOperation::DeleteRef {
+    let binary = request
+        .binary
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!(tr!("errors.provider_not_found", provider = "OpenCode")))?;
+    request.workspace_client.fork_provider_session(
+        fintwind_client::provider_session::ProviderSessionForkRequest::OpenCodeRevert {
+            binary: binary.to_owned(),
             cwd: request.project_path.clone(),
-            git_ref: safety_ref,
+            session_id: native_session_id.clone(),
+            turn_count: request.provider_turn_count,
         },
-    );
-    let cleanup_error = workspace_ack(
-        &request.workspace_client,
-        fintwind_client::WorkspaceOperation::DeleteTurnRefsAfter {
-            cwd: request.project_path.clone(),
-            session_id,
-            retained_turn_count: request.retained_turn_count,
-            previous_turn_count: request.previous_turn_count,
-        },
-    )
-    .err()
-    .map(|error| error.to_string());
-
-    Ok(PreparedMessageRewind {
-        provider_rewind_cursor,
-        prepared_driver,
-        cleanup_error,
-    })
-}
-
-type ProviderRewindResult = (
-    Option<ProviderResumeCursor>,
-    Option<fintwind_client::provider_session::ProviderSessionFork>,
-    Option<PreparedDriver>,
-);
-
-fn perform_provider_rewind(
-    request: &mut MessageRewindRequest,
-) -> anyhow::Result<ProviderRewindResult> {
-    if request.rollback_turns == 0 || request.retained_turn_count == 0 {
-        return Ok((None, None, None));
-    }
-
-    let cursor = if let Some(driver) = request.driver.as_ref() {
-        driver
-            .rollback(request.rollback_turns)?
-            .ok_or_else(|| anyhow::anyhow!("OpenCode returned no cursor for the rewound session"))?
-    } else {
-        let Some(ProviderResumeCursor::OpenCode {
-            session_id: native_session_id,
-        }) = request.provider_cursor.as_ref()
-        else {
-            anyhow::bail!(tr!(
-                "errors.provider_native_cursor_unavailable",
-                provider = "OpenCode"
-            ));
-        };
-        let binary = request.binary.as_deref().ok_or_else(|| {
-            anyhow::anyhow!(tr!("errors.provider_not_found", provider = "OpenCode"))
-        })?;
-        request
-            .workspace_client
-            .fork_provider_session(
-                fintwind_client::provider_session::ProviderSessionForkRequest::OpenCode {
-                    binary: binary.to_owned(),
-                    cwd: request.project_path.clone(),
-                    session_id: native_session_id.clone(),
-                    turn_count: request.provider_turn_count,
-                },
-            )?
-            .cursor
-    };
-    Ok((Some(cursor), None, None))
+    )?;
+    Ok(())
 }
 
 /// Everything a response fork needs after the click has been accepted.
@@ -1704,29 +1537,26 @@ impl Fintwind {
             cx.notify();
             return;
         };
+        // OpenCode's revert marks a native user-message boundary, so the
+        // index counts only turns that reached the provider — a locally
+        // failed turn has no native message to retain.
         let provider_turn_count = source
             .turns
             .iter()
             .take(retained_turn_count)
             .filter(|turn| turn.provider_turn_started)
             .count();
-        let driver = self
-            .runtimes
-            .get(&session_id)
-            .map(|runtime| runtime.driver.clone());
-        // Resolving the binary keeps the daemon's own fork request ready for
-        // the case where no live driver holds the native session.
-        let needs_binary = rollback_turns > 0 && driver.is_none();
-        let binary = needs_binary
-            .then(|| self.probes.first().and_then(|probe| probe.path.clone()))
-            .flatten();
-        if needs_binary && binary.is_none() {
+        // The daemon drives OpenCode's own revert through the workspace's
+        // resident server, so the provider binary must be resolvable up
+        // front — a rewind that cannot reach the session must fail before
+        // the UI leaves edit mode.
+        let binary = self.probes.first().and_then(|probe| probe.path.clone());
+        if rollback_turns > 0 && binary.is_none() {
             self.show_toast(tr!("errors.provider_not_found", provider = "OpenCode"));
             cx.notify();
             return;
         }
         let previous_status = source.status;
-        let previous_turn_count = source.turns.len();
         let provider_cursor = source.provider_cursor.clone();
         let edited_message_id = edit.message_id;
         let Some(edited_message_index) = source
@@ -1747,15 +1577,11 @@ impl Fintwind {
         };
         let request = MessageRewindRequest {
             workspace_client: fintwind_client::WorkspaceClient::new(self.daemon.client()),
-            session_id,
             provider_cursor,
-            previous_turn_count,
             project_path,
-            retained_turn_count,
             rollback_turns,
             provider_turn_count,
             binary,
-            driver,
         };
 
         // Optimistically leave edit mode and show the replacement bubble at
@@ -1814,7 +1640,7 @@ impl Fintwind {
         edited_message_id: Uuid,
         original_message: Message,
         previous_status: SessionStatus,
-        result: Result<PreparedMessageRewind, String>,
+        result: Result<(), String>,
         cx: &mut Context<Self>,
     ) {
         let session_id = edit.session_id;
@@ -1823,44 +1649,36 @@ impl Fintwind {
             return;
         }
         let selected = self.state.selected_session == Some(session_id);
-        let prepared = match result {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                if let Some(session) = self.state.session_mut(session_id) {
-                    if let Some(message) = session
-                        .messages
-                        .iter_mut()
-                        .find(|message| message.id == edited_message_id)
-                    {
-                        *message = original_message;
-                    }
-                    if session.status == SessionStatus::Connecting {
-                        session.status = previous_status;
-                    }
-                }
-                if selected && self.message_edit.is_none() {
-                    self.message_edit = Some(edit.clone());
-                }
-                if selected
-                    && let Some(message_index) = self.selected_session().and_then(|session| {
-                        session
-                            .messages
-                            .iter()
-                            .position(|message| message.id == edited_message_id)
-                    })
+        if let Err(error) = result {
+            if let Some(session) = self.state.session_mut(session_id) {
+                if let Some(message) = session
+                    .messages
+                    .iter_mut()
+                    .find(|message| message.id == edited_message_id)
                 {
-                    self.remeasure_transcript_message(message_index);
+                    *message = original_message;
                 }
-                self.show_toast(error);
-                cx.notify();
-                return;
+                if session.status == SessionStatus::Connecting {
+                    session.status = previous_status;
+                }
             }
-        };
-        let PreparedMessageRewind {
-            provider_rewind_cursor,
-            mut prepared_driver,
-            cleanup_error,
-        } = prepared;
+            if selected && self.message_edit.is_none() {
+                self.message_edit = Some(edit.clone());
+            }
+            if selected
+                && let Some(message_index) = self.selected_session().and_then(|session| {
+                    session
+                        .messages
+                        .iter()
+                        .position(|message| message.id == edited_message_id)
+                })
+            {
+                self.remeasure_transcript_message(message_index);
+            }
+            self.show_toast(error);
+            cx.notify();
+            return;
+        }
         let retained_turn_count = turn_count.saturating_sub(1);
         if !self
             .state
@@ -1879,30 +1697,13 @@ impl Fintwind {
             Vec::new()
         };
         if let Some(session) = self.state.session_mut(session_id) {
-            if let Some(cursor) = provider_rewind_cursor.clone() {
-                session.provider_cursor = Some(cursor);
-            }
+            // OpenCode's revert keeps the native session id, so the stored
+            // cursor keeps working: nothing to rewrite here.
             session.truncate_after_turn(retained_turn_count);
             session.status = SessionStatus::Idle;
         }
 
-        if let Some(prepared) = prepared_driver.as_mut() {
-            // Startup announces the source cursor before a cold driver-backed
-            // rollback finishes. It is stale now; do not let it overwrite the
-            // rewound cursor after this driver is installed.
-            while prepared.events.try_recv().is_ok() {}
-        }
-        if let Some(prepared) = prepared_driver {
-            self.install_prepared_driver(session_id, prepared);
-        }
-        if provider_rewind_cursor.is_some() {
-            // Headless drivers retain their original native session ID. Recreate
-            // them lazily so the next prompt resumes the fork instead.
-            if let Some(runtime) = self.runtimes.remove(&session_id) {
-                runtime.driver.close();
-            }
-            self.mark_background_work_lost(session_id);
-        } else if let Some(runtime) = self.runtimes.get_mut(&session_id) {
+        if let Some(runtime) = self.runtimes.get_mut(&session_id) {
             runtime
                 .pending_events
                 .retain(|event| matches!(event, DriverEvent::BackgroundWork(_)));
@@ -1930,14 +1731,7 @@ impl Fintwind {
             self.expanded_provider_retries.clear();
             self.transcript_control_focuses.borrow_mut().clear();
             self.splice_transcript_rows_after_visibility_change(&previous_kinds);
-            self.show_toast(match cleanup_error {
-                None => tr!("session.rewound", turn = turn_count),
-                Some(error) => tr!(
-                    "session.rewound_with_stale_refs",
-                    turn = turn_count,
-                    error = error
-                ),
-            });
+            self.show_toast(tr!("session.rewound", turn = turn_count));
         }
         cx.notify();
         self.submit_submission_for_session(session_id, submission, cx);

@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{Command, DaemonExposureSettings, DaemonSettings, DaemonSupervisor, ResponsePayload};
+use crate::{Command, DaemonSettings, DaemonSupervisor, ResponsePayload};
 use fintwind_protocol::i18n::AppLanguage;
 use fintwind_protocol::identity::DATA_DIRECTORY_NAME;
 use fintwind_protocol::model::{AgentSession, FavoriteModel, OPENCODE_PROVIDER, Project};
@@ -238,7 +238,6 @@ pub struct AppSettings {
     pub code_text_scale: f32,
     pub ui_font_family: String,
     pub code_font_family: String,
-    pub daemon_exposure: DaemonExposureSettings,
 }
 
 impl Default for AppSettings {
@@ -251,7 +250,6 @@ impl Default for AppSettings {
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
-            daemon_exposure: DaemonExposureSettings::default(),
         }
     }
 }
@@ -319,8 +317,6 @@ pub struct PersistedState {
     pub ui_font_family: String,
     #[serde(default = "default_code_font_family")]
     pub code_font_family: String,
-    #[serde(default)]
-    pub daemon_exposure: DaemonExposureSettings,
     #[serde(default = "default_sidebar_visibility")]
     pub sidebar_visible: bool,
     #[serde(default = "default_right_panel_visibility")]
@@ -373,7 +369,6 @@ impl PersistedState {
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
-            daemon_exposure: DaemonExposureSettings::default(),
             sidebar_visible: true,
             right_panel_visible: false,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -475,7 +470,6 @@ impl PersistedState {
             code_text_scale: self.code_text_scale,
             ui_font_family: self.ui_font_family.clone(),
             code_font_family: self.code_font_family.clone(),
-            daemon_exposure: self.daemon_exposure.clone(),
         }
     }
 
@@ -506,7 +500,6 @@ impl PersistedState {
         self.code_text_scale = settings.code_text_scale;
         self.ui_font_family = settings.ui_font_family;
         self.code_font_family = settings.code_font_family;
-        self.daemon_exposure = settings.daemon_exposure;
     }
 
     fn apply_app_state(&mut self, app_state: AppState) {
@@ -660,35 +653,6 @@ fn read_app_settings_source(
         }
     }
     Ok(None)
-}
-
-/// Load the app-owned launch settings before the managed daemon starts.
-/// Missing settings are initialized immediately so its bearer token remains
-/// stable between this process launch and the later UI state load.
-pub fn load_or_create_app_settings() -> io::Result<AppSettings> {
-    let path = default_app_settings_path();
-    let source = read_app_settings_source(&path, &default_legacy_settings_paths())?;
-    let loaded_from_primary = source.as_ref().is_some_and(|(_, primary)| *primary);
-    let token_was_persisted = source
-        .as_ref()
-        .and_then(|(bytes, _)| serde_json::from_slice::<serde_json::Value>(bytes).ok())
-        .and_then(|value| {
-            value
-                .get("daemon_exposure")
-                .and_then(|daemon| daemon.get("token"))
-                .and_then(serde_json::Value::as_str)
-                .map(|token| !token.trim().is_empty())
-        })
-        .unwrap_or(false);
-    let mut settings: AppSettings = source
-        .map(|(bytes, _)| serde_json::from_slice::<AppSettings>(&bytes).map_err(to_io_error))
-        .transpose()?
-        .unwrap_or_default();
-    let generated_token = settings.daemon_exposure.ensure_token();
-    if !loaded_from_primary || !token_was_persisted || generated_token {
-        write_json_atomically(&path, &settings)?;
-    }
-    Ok(settings)
 }
 
 /// Desktop state store: app files stay local, task data crosses RPC.

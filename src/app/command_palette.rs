@@ -668,12 +668,6 @@ impl Fintwind {
                 "icons/chart-column.svg",
                 "settings preferences usage statistics tokens heatmap chart models daily activity",
             ),
-            (
-                SettingsPage::Daemon,
-                "settings.daemon",
-                "icons/server.svg",
-                "settings preferences daemon server remote web network origin token port",
-            ),
         ] {
             commands.push(CommandPaletteItem::command(
                 PaletteSection::Settings,

@@ -1,17 +1,15 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BranchEntry {
     pub name: String,
     pub checked_out_elsewhere: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct BranchSnapshot {
-    #[ts(type = "string")]
     pub repository: PathBuf,
     pub current: Option<String>,
     pub detached_head: Option<String>,
@@ -27,7 +25,7 @@ impl BranchSnapshot {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommitSnapshot {
     pub branch: String,
     pub additions: u64,
@@ -39,17 +37,15 @@ pub struct CommitSnapshot {
     pub can_push: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentInvocation {
-    #[ts(type = "string")]
     pub binary: PathBuf,
     pub model: Option<String>,
     pub reasoning_effort: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CreatedWorktree {
-    #[ts(type = "string")]
     pub path: PathBuf,
     pub branch: String,
 }

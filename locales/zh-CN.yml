@@ -51,85 +51,20 @@ settings.general: 通用
 settings.appearance: 外观
 settings.providers: 服务商
 settings.usage: 用量
-settings.daemon: 守护进程
 settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本
 settings.appearance_keywords: 外观 主题 系统 浅色 深色 语言 英语 中文 简体 字号 文字大小 代码 界面 字体 等宽
 settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key Base URL 端点 模型列表 命令行 版本 安装 检测 获取模型 models.dev 连通 测试 延迟 首字 模态 responses claude codex cursor opencode amp grok pi
 settings.skills: 技能
 settings.skills_keywords: 技能 技能库 智能体 禁用 启用 删除 claude codex cursor opencode pi amp 共享
 settings.usage_keywords: 用量 令牌 费用 支出 缓存 每日 图表 模型 明细 历史 claude codex
-settings.daemon_keywords: 守护进程 服务 远程 网页 网络 暴露 来源 令牌 端口 websocket
 settings.back: 返回
 settings.search: 搜索设置
 settings.mcp_servers: MCP 服务器
 settings.mcp_servers_keywords: MCP 服务器 工具 stdio http sse 本地 远程 npx 环境变量 请求头
 settings.mcp_market: MCP 市场
 settings.mcp_market_keywords: MCP 市场 smithery 网页搜索 学术 论文 代码 安装 context7 github arxiv pubmed brave exa tavily
-daemon.expose_title: 暴露由 fintwind 管理的守护进程
-daemon.expose_description: 允许本机之外的 fintwind 客户端连接。更改此项只会重启守护进程。
-daemon.status_local: 仅本机
-daemon.status_exposed: 已暴露
-daemon.status_restarting: 正在重启
-daemon.connection_title: 监听访问
-daemon.connection_description: 浏览器来源必须完全匹配。多个来源请用逗号分隔。
-daemon.port: 端口
-daemon.port_description: 启用暴露后，fintwind 会在所有网络接口的此端口上监听。
-daemon.port_placeholder: "34123"
-daemon.allowed_origins: 允许的浏览器来源
-daemon.allowed_origins_description: 可打开 WebSocket 的确切 http:// 或 https:// 来源。
-daemon.allowed_origins_placeholder: https://fintwind.example.com, http://localhost:3001
-daemon.apply: 应用
-daemon.restarting: 正在重启…
-daemon.credentials_title: 连接信息
-daemon.credentials_description: 在 fintwind Web 中输入这些信息。此地址使用本机的局域网主机名。
-daemon.websocket_url: WebSocket 地址
-daemon.token: 令牌
 daemon.reveal_token: 显示令牌
 daemon.hide_token: 隐藏令牌
-daemon.regenerate_token: 重新生成
-daemon.security_warning: 此令牌可完全访问本机上的任务、文件、Git、附件和编程智能体。在私有网络之外请通过受信任的 TLS 代理使用 WSS。
-daemon.external_title: 外部守护进程
-daemon.external_description: 此桌面应用连接到由 fintwind 之外管理的守护进程。请在对应主机上配置监听地址、浏览器来源和令牌。
-daemon.web_external_description: fintwind Web 连接到由浏览器之外管理的守护进程。请在对应主机上配置监听地址、浏览器来源和令牌。
-daemon.web_connection_description: 此浏览器不会启动或停止守护进程。
-daemon.not_configured: 未配置
-daemon.status: 状态
-daemon.disconnect: 断开连接
-daemon.forget: 忘记守护进程
-daemon.reconnect: 重新连接
-daemon.phase_booting: 正在启动
-daemon.phase_disconnected: 已断开
-daemon.phase_connecting: 正在连接
-daemon.phase_connected: 已连接
-daemon.phase_error: 错误
-daemon.invalid_port: 请输入 1 到 65535 之间的端口
-daemon.invalid_settings: 守护进程设置无效：%{error}
-daemon.stop_active_tasks: 更改守护进程访问设置前请先停止进行中的任务
-daemon.settings_applied: 守护进程访问设置已更新
-daemon.restart_failed: 无法重启守护进程：%{error}
-daemon.url_copied: 已复制 WebSocket 地址
-daemon.token_copied: 已复制守护进程令牌
-web.connect_title: 连接 fintwind 守护进程
-web.connect_description: 输入桌面应用“设置 → 守护进程”中显示的远程监听地址和令牌。
-web.token_placeholder: 守护进程访问令牌
-web.remember_device: 在此设备上记住
-web.remember_device_description: 否则，浏览器会话结束时将清除凭据。
-web.connect: 连接
-web.connecting: 正在连接…
-web.security_warning: 浏览器只会将令牌发送到此 WebSocket。在私有网络之外请通过受信任的 TLS 代理使用 WSS。
-web.starting: fintwind 正在启动…
-web.starting_label: fintwind 正在启动
-web.start_failed_label: fintwind 无法启动
-web.load_failed: 无法加载 fintwind
-web.try_again: 重试
-web.daemon_connection_closed: 与守护进程的连接已关闭
-web.daemon_not_configured: 尚未配置守护进程
-web.error_daemon_url_required: 请输入守护进程 URL
-web.error_daemon_url_invalid: 请输入有效的 ws:// 或 wss:// 守护进程 URL
-web.error_daemon_url_scheme: 守护进程 URL 必须使用 ws:// 或 wss://
-web.error_daemon_url_host: 守护进程 URL 必须包含主机，且不能包含凭据
-web.error_secure_websocket_required: 安全的 fintwind Web 页面只能通过 wss:// 连接
-web.error_daemon_token_required: 请输入守护进程令牌
 settings.theme: 主题
 settings.theme_description: 选择跟随系统、浅色或深色主题
 settings.ui_text_size: 界面文字大小
@@ -167,11 +102,9 @@ common.retry: 重试
 common.creating: 正在创建…
 settings.local_by_default: 默认存储在本地
 settings.local_by_default_description: 项目、对话和设置均存储在这台 Mac 上
-settings.local_by_default_web_description: 项目、对话和附件保留在所连接的守护进程主机上。fintwind Web 的偏好设置保留在此浏览器中。
 settings.app_version: fintwind %{version}
 providers.coding_agents: 编程智能体
 providers.description: fintwind 调用安装在本机上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新
-providers.web_description: fintwind 调用安装在守护进程主机上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新
 providers.check_failed: "无法检查 %{command}：%{error}"
 providers.show_settings: 显示 %{provider} 设置
 providers.hide_settings: 隐藏 %{provider} 设置

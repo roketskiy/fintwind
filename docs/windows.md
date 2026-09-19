@@ -95,11 +95,6 @@ Differences worth knowing:
   Keyboard and IME are unaffected — those still reach the page directly once
   it holds focus.
 
-## What is not available yet
-
-- **Terminals over the daemon's browser client.** The desktop terminal works;
-  a remote browser client connected to a Windows daemon cannot open one.
-
 ## Troubleshooting
 
 **The window opens black, or the app exits at startup.** fintwind needs a working

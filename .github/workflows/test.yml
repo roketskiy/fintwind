@@ -44,12 +44,3 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked
-
-      - name: Install JavaScript dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Check generated protocol and browser client
-        run: |
-          bun run protocol:check
-          bun run --filter @fintwind/client check
-          bun run --filter @fintwind/client test

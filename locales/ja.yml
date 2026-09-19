@@ -55,85 +55,20 @@ settings.general: 一般
 settings.appearance: 外観
 settings.providers: プロバイダー
 settings.usage: 使用状況
-settings.daemon: デーモン
 settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン
 settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語 文字サイズ コード フォント
 settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
 settings.skills: スキル
 settings.skills_keywords: スキル ライブラリ エージェント 無効 有効 削除 claude codex cursor opencode pi amp 共有
 settings.usage_keywords: 使用状況 トークン コスト 支出 キャッシュ 日別 グラフ モデル 内訳 履歴 claude codex
-settings.daemon_keywords: デーモン サーバー リモート ウェブ ネットワーク 公開 オリジン トークン ポート websocket
 settings.back: 戻る
 settings.search: 設定を検索
 settings.mcp_servers: MCPサーバー
 settings.mcp_servers_keywords: MCP サーバー ツール stdio http sse ローカル リモート npx 環境変数 ヘッダー
 settings.mcp_market: MCPマーケット
 settings.mcp_market_keywords: MCP マーケット smithery ウェブ検索 学術 論文 コード インストール context7 github arxiv pubmed brave exa tavily
-daemon.expose_title: 管理対象デーモンを公開
-daemon.expose_description: このマシン以外の fintwind クライアントから接続できるようにします。変更時はデーモンだけが再起動します。
-daemon.status_local: このマシンのみ
-daemon.status_exposed: 公開中
-daemon.status_restarting: 再起動中
-daemon.connection_title: リスナーアクセス
-daemon.connection_description: ブラウザのオリジンは完全一致が必要です。複数指定する場合はカンマで区切ります。
-daemon.port: ポート
-daemon.port_description: 公開中は、すべてのネットワークインターフェイスのこのポートで待ち受けます。
-daemon.port_placeholder: "34123"
-daemon.allowed_origins: 許可するブラウザオリジン
-daemon.allowed_origins_description: WebSocket を開ける正確な http:// または https:// オリジンです。
-daemon.allowed_origins_placeholder: https://fintwind.example.com, http://localhost:3001
-daemon.apply: 適用
-daemon.restarting: 再起動中…
-daemon.credentials_title: 接続情報
-daemon.credentials_description: fintwind Web に入力してください。URL にはこのマシンのローカルネットワーク用ホスト名が使われます。
-daemon.websocket_url: WebSocket URL
-daemon.token: トークン
 daemon.reveal_token: トークンを表示
 daemon.hide_token: トークンを隠す
-daemon.regenerate_token: 再生成
-daemon.security_warning: このトークンは、このマシン上のタスク、ファイル、Git、添付ファイル、コーディングエージェントへの完全なアクセス権を持ちます。プライベートネットワーク外では信頼できる TLS プロキシ経由で WSS を使用してください。
-daemon.external_title: 外部デーモン
-daemon.external_description: このデスクトップは fintwind の外部で管理されているデーモンに接続しています。リスナー、ブラウザオリジン、トークンは接続先ホストで設定してください。
-daemon.web_external_description: fintwind Web はブラウザの外部で管理されているデーモンに接続します。リスナー、ブラウザオリジン、トークンは接続先ホストで設定してください。
-daemon.web_connection_description: このブラウザがデーモンを起動または停止することはありません。
-daemon.not_configured: 未設定
-daemon.status: 状態
-daemon.disconnect: 接続を解除
-daemon.forget: デーモンを削除
-daemon.reconnect: 再接続
-daemon.phase_booting: 起動中
-daemon.phase_disconnected: 接続解除済み
-daemon.phase_connecting: 接続中
-daemon.phase_connected: 接続済み
-daemon.phase_error: エラー
-daemon.invalid_port: 1 から 65535 のポートを入力してください
-daemon.invalid_settings: デーモン設定が無効です：%{error}
-daemon.stop_active_tasks: デーモンのアクセス設定を変更する前に実行中のタスクを停止してください
-daemon.settings_applied: デーモンのアクセス設定を更新しました
-daemon.restart_failed: デーモンを再起動できませんでした：%{error}
-daemon.url_copied: WebSocket URL をコピーしました
-daemon.token_copied: デーモントークンをコピーしました
-web.connect_title: fintwind デーモンに接続
-web.connect_description: デスクトップアプリの「設定 → デーモン」に表示されるリモートリスナー URL とトークンを入力してください。
-web.token_placeholder: デーモンアクセストークン
-web.remember_device: このデバイスに保存
-web.remember_device_description: 保存しない場合、ブラウザセッションの終了時に認証情報が消去されます。
-web.connect: 接続
-web.connecting: 接続中…
-web.security_warning: ブラウザはこの WebSocket にのみトークンを送信します。プライベートネットワーク外では信頼できる TLS プロキシ経由で WSS を使用してください。
-web.starting: fintwind を起動中…
-web.starting_label: fintwind を起動中
-web.start_failed_label: fintwind を起動できませんでした
-web.load_failed: fintwind を読み込めませんでした
-web.try_again: もう一度試す
-web.daemon_connection_closed: デーモンとの接続が閉じられました
-web.daemon_not_configured: デーモンが設定されていません
-web.error_daemon_url_required: デーモン URL を入力してください
-web.error_daemon_url_invalid: 有効な ws:// または wss:// のデーモン URL を入力してください
-web.error_daemon_url_scheme: デーモン URL には ws:// または wss:// を使用してください
-web.error_daemon_url_host: デーモン URL にはホストが必要で、認証情報は含められません
-web.error_secure_websocket_required: 安全な fintwind Web ページからは wss:// でのみ接続できます
-web.error_daemon_token_required: デーモントークンを入力してください
 settings.theme: テーマ
 settings.theme_description: システム、ライト、ダークのいずれかのテーマを選択します
 settings.ui_text_size: インターフェースの文字サイズ
@@ -174,12 +109,10 @@ common.creating: 作成中…
 
 settings.local_by_default: デフォルトでローカルに保存
 settings.local_by_default_description: プロジェクト、会話、設定はこの Mac に保存されます
-settings.local_by_default_web_description: プロジェクト、会話、添付ファイルは接続先デーモンのホストに保存されます。fintwind Web の設定はこのブラウザに保存されます。
 settings.app_version: fintwind %{version}
 
 providers.coding_agents: コーディングエージェント
 providers.description: fintwind はこのコンピューターにインストールされたエージェントの CLI を使用します。各エージェントの CLI をインストールするかログインしてから、更新してください
-providers.web_description: fintwind はデーモンホストにインストールされたエージェント CLI を使用します。各エージェントの CLI をインストールするかログインしてから、更新してください
 providers.check_failed: "%{command} を確認できませんでした：%{error}"
 providers.show_settings: "%{provider} の設定を表示"
 providers.hide_settings: "%{provider} の設定を隠す"

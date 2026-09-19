@@ -39,6 +39,8 @@ export type { DaemonReady } from "./DaemonReady";
 export type { DaemonSettings } from "./DaemonSettings";
 export type { FileEntry } from "./FileEntry";
 export type { InteractionMode } from "./InteractionMode";
+export type { McpConnectionState } from "./McpConnectionState";
+export type { McpServerStatus } from "./McpServerStatus";
 export type { Message } from "./Message";
 export type { MessageAttachment } from "./MessageAttachment";
 export type { MessageRole } from "./MessageRole";
@@ -82,6 +84,8 @@ export type { StoredTranscriptBlockContent } from "./StoredTranscriptBlockConten
 export type { TranscriptBlock } from "./TranscriptBlock";
 export type { TurnStats } from "./TurnStats";
 export type { TurnStatus } from "./TurnStatus";
+export type { UsageEntry } from "./UsageEntry";
+export type { UsageStats } from "./UsageStats";
 export type { UserInputAnswer } from "./UserInputAnswer";
 export type { WireDriverEvent } from "./WireDriverEvent";
 export type { WireDriverStartOptions } from "./WireDriverStartOptions";

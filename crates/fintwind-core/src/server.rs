@@ -691,7 +691,6 @@ fn command_targets_runtime(command: &Command) -> bool {
             | Command::Respond { .. }
             | Command::RespondUserInput { .. }
             | Command::ApplyOptions { .. }
-            | Command::Rollback { .. }
             | Command::Fork { .. }
             | Command::ForkSessionFromResponse { .. }
             | Command::RewindSessionToMessage { .. }

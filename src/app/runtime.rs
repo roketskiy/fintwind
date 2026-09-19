@@ -756,6 +756,7 @@ impl Fintwind {
         self.provider_model_discoveries.insert(provider.clone());
         self.provider_model_discoveries_pending
             .insert(provider.clone());
+        let directory = self.selected_workspace_path().map(PathBuf::from);
         let provider_probe_tx = self.provider_probe_tx.clone();
         let event_wake = self.event_wake_tx.clone();
         let daemon = self.daemon.client();
@@ -769,6 +770,7 @@ impl Fintwind {
                         binary_override: None,
                         discover_models: true,
                         probe_version: false,
+                        directory,
                     },
                 ) {
                     Ok(fintwind_client::ResponsePayload::ProviderProbe { probe, .. }) => probe,
@@ -824,6 +826,7 @@ impl Fintwind {
                         binary_override: None,
                         discover_models: false,
                         probe_version: true,
+                        directory: None,
                     },
                 ) {
                     Ok(fintwind_client::ResponsePayload::ProviderProbe { version, .. }) => version,
@@ -870,6 +873,7 @@ impl Fintwind {
                         binary_override: None,
                         discover_models: false,
                         probe_version: false,
+                        directory: None,
                     },
                 );
                 let probe = match response {

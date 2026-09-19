@@ -450,7 +450,11 @@ impl Fintwind {
         let selected_tab = self.model_picker_tab.clone();
         let selected_model = selected_model.map(str::to_owned);
         let probes = self.probes.clone();
-        let pending_discoveries = self.provider_model_discoveries_pending.clone();
+        let catalog_loading = model_picker_catalog_loading(
+            self.provider_model_discoveries_pending
+                .contains(OPENCODE_PROVIDER),
+            self.provider_detection_remaining,
+        );
         let favorites = self.state.favorite_models.clone();
         let weak = cx.entity().downgrade();
         let search = self.model_search.clone();
@@ -669,7 +673,7 @@ impl Fintwind {
                         tr!("models.none_found")
                     } else if selected_tab == ModelPickerTab::Favorites {
                         tr!("models.favorite_hint")
-                    } else if pending_discoveries.contains(OPENCODE_PROVIDER) {
+                    } else if catalog_loading {
                         tr!("models.loading")
                     } else {
                         tr!("models.none_reported")
@@ -2970,6 +2974,13 @@ pub(super) fn visible_picker_tabs(probes: &[ProviderProbe]) -> Vec<ModelPickerTa
         }
     }
     tabs
+}
+
+pub(super) fn model_picker_catalog_loading(
+    discovery_pending: bool,
+    detection_remaining: usize,
+) -> bool {
+    discovery_pending || detection_remaining > 0
 }
 
 pub(super) fn model_picker_provider_label(sub_provider: Option<&str>) -> String {

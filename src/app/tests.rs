@@ -2271,6 +2271,15 @@ fn model_picker_provider_label_normalizes_the_opencode_fallback() {
 }
 
 #[test]
+fn model_picker_treats_in_flight_detection_as_loading() {
+    use super::composer::model_picker_catalog_loading;
+
+    assert!(model_picker_catalog_loading(false, 1));
+    assert!(model_picker_catalog_loading(true, 0));
+    assert!(!model_picker_catalog_loading(false, 0));
+}
+
+#[test]
 fn tab_cycle_walks_favorites_then_dynamic_provider_rail() {
     use super::ModelPickerTab;
     use super::composer::visible_picker_tabs;

@@ -327,62 +327,67 @@ pub fn status_color(theme: &Theme, status: SessionStatus) -> Hsla {
     }
 }
 
-/// A rotating arc around a circular avatar. Slow stride: a sidebar full of
-/// working sessions rebuilds its subtree per tick, and this motion survives
-/// ~15 fps the way the old row spinner did.
+/// A rotating comet-tail arc around a circular avatar. It rides the pulse
+/// clock at full rate: at this period a tick is ~13°, and the earlier
+/// strided ~15 fps cadence stepped ~27°, which read as a stutter. The tail
+/// fades from near-transparent to full brightness over a fixed arc, so the
+/// bright lead is a fraction of the ring rather than most of it; the faint
+/// track under it also hides the segment seams of the fade.
 pub fn spin_halo(color: Hsla, size: f32) -> AnyElement {
     const STROKE: f32 = 2.0;
-    const ARC: f32 = 0.72;
+    const ARC: f32 = 0.66;
+    const SEGMENTS: usize = 10;
     motion::pulse(Duration::from_millis(900), move |phase| {
         canvas(
             |_, _, _| (),
             move |bounds, _, window, _| {
                 let center = bounds.center();
                 let radius = px((size - STROKE) / 2.0);
+                let mut paint_arc = |start_angle: f32, end_angle: f32, paint: Hsla| {
+                    let mut arc = PathBuilder::stroke(px(STROKE));
+                    arc.move_to(point(
+                        center.x + radius * start_angle.cos(),
+                        center.y + radius * start_angle.sin(),
+                    ));
+                    arc.arc_to(
+                        point(radius, radius),
+                        px(0.0),
+                        false,
+                        true,
+                        point(
+                            center.x + radius * end_angle.cos(),
+                            center.y + radius * end_angle.sin(),
+                        ),
+                    );
+                    if let Ok(path) = arc.build() {
+                        window.paint_path(path, paint);
+                    }
+                };
 
-                let mut track = PathBuilder::stroke(px(STROKE));
-                track.move_to(point(center.x + radius, center.y));
-                track.arc_to(
-                    point(radius, radius),
-                    px(0.0),
-                    false,
-                    true,
-                    point(center.x - radius, center.y),
+                paint_arc(0.0, std::f32::consts::PI, color.opacity(0.22));
+                paint_arc(
+                    std::f32::consts::PI,
+                    std::f32::consts::TAU,
+                    color.opacity(0.22),
                 );
-                track.arc_to(
-                    point(radius, radius),
-                    px(0.0),
-                    false,
-                    true,
-                    point(center.x + radius, center.y),
-                );
-                if let Ok(path) = track.build() {
-                    window.paint_path(path, color.opacity(0.22));
-                }
 
-                let start = -std::f32::consts::FRAC_PI_2 + phase * std::f32::consts::TAU;
-                let end = start + ARC * std::f32::consts::TAU;
-                let mut arc = PathBuilder::stroke(px(STROKE));
-                arc.move_to(point(
-                    center.x + radius * start.cos(),
-                    center.y + radius * start.sin(),
-                ));
-                arc.arc_to(
-                    point(radius, radius),
-                    px(0.0),
-                    ARC > 0.5,
-                    true,
-                    point(center.x + radius * end.cos(), center.y + radius * end.sin()),
-                );
-                if let Ok(path) = arc.build() {
-                    window.paint_path(path, color);
+                let head = -std::f32::consts::FRAC_PI_2 + phase * std::f32::consts::TAU;
+                let tail = head - ARC * std::f32::consts::TAU;
+                let segment_angle = ARC * std::f32::consts::TAU / SEGMENTS as f32;
+                for segment in 0..SEGMENTS {
+                    let start = tail + segment as f32 * segment_angle;
+                    let t = (segment + 1) as f32 / SEGMENTS as f32;
+                    paint_arc(
+                        start,
+                        start + segment_angle,
+                        color.opacity(0.06 + 0.94 * t * t),
+                    );
                 }
             },
         )
         .size(px(size))
         .into_any_element()
     })
-    .every(2)
     .into_any_element()
 }
 

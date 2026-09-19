@@ -1643,6 +1643,7 @@ mod tests {
                     binary_override: None,
                     discover_models: false,
                     probe_version: false,
+                    directory: None,
                 },
             },
             outgoing.clone(),

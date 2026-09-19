@@ -229,6 +229,7 @@ impl Backend for FintwindBackend {
                 binary_override,
                 discover_models,
                 probe_version,
+                directory,
             } => {
                 ensure_shell_environment();
                 let mut probe = match binary_override.as_deref() {
@@ -246,7 +247,7 @@ impl Backend for FintwindBackend {
                     })
                     .flatten();
                 if discover_models {
-                    probe = crate::model::discover_provider_models(probe);
+                    probe = crate::model::discover_provider_models(probe, directory.as_deref());
                 }
                 Ok(ResponsePayload::ProviderProbe { probe, version })
             }

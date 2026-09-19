@@ -1,8 +1,12 @@
 //! OpenCode model discovery.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::model::{ProviderAgentPreset, ProviderModel, ProviderModelOption};
+
+const CATALOG_POLL_BUDGET: Duration = Duration::from_secs(30);
+const CATALOG_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 pub fn fallback_models() -> Vec<ProviderModel> {
     // OpenCode's catalog depends on the user's configured providers. An
@@ -14,12 +18,15 @@ pub fn fallback_agent_presets() -> Vec<ProviderAgentPreset> {
     Vec::new()
 }
 
-/// Discovers models from the installed OpenCode CLI (`opencode models`).
-pub fn discover_catalog(binary: &Path) -> (Vec<ProviderModel>, Vec<ProviderAgentPreset>) {
-    let discovered = discover_opencode_models(binary);
+/// Discovers models from OpenCode's `/api/model` for `directory`.
+pub fn discover_catalog(
+    binary: &Path,
+    directory: Option<&Path>,
+) -> (Vec<ProviderModel>, Vec<ProviderAgentPreset>) {
+    let discovered = discover_opencode_models(binary, directory);
     let models = if discovered.is_empty() {
         // A failed or empty probe keeps the last successful discovery over
-        // the hardcoded catalog, so one bad CLI run can't shrink the picker.
+        // an invented fallback, so one bad CLI run can't shrink the picker.
         cached_models().unwrap_or_else(fallback_models)
     } else {
         let models = deduplicate(discovered);
@@ -77,50 +84,49 @@ fn write_models_file(path: &Path, models: &[ProviderModel]) -> std::io::Result<(
     std::fs::rename(temporary, path)
 }
 
-fn discover_opencode_models(binary: &Path) -> Vec<ProviderModel> {
-    // The plain `models` listing discards variants. Query the V2 catalog
-    // through the CLI so discovery shares its authentication/service context.
-    let query = std::env::current_dir()
-        .ok()
+fn catalog_location_query(directory: Option<&Path>) -> String {
+    directory
         .map(|directory| {
             url::form_urlencoded::Serializer::new(String::new())
                 .append_pair("location[directory]", &directory.to_string_lossy())
                 .finish()
         })
-        .unwrap_or_default();
-    let mut activation_command = crate::command_env::command(binary);
-    activation_command.args([
-        "api",
-        "post",
-        &format!("/api/plugin/await-activation?{query}"),
-    ]);
-    let _ = crate::command_env::output(&mut activation_command);
-    let mut catalog_command = crate::command_env::command(binary);
-    catalog_command.args(["api", "get", &format!("/api/model?{query}")]);
-    if let Ok(output) = crate::command_env::output(&mut catalog_command)
-        && output.status.success()
-        && let Ok(value) = serde_json::from_slice(&output.stdout)
-    {
-        let models = parse_opencode_catalog(&value);
-        if !models.is_empty() {
+        .unwrap_or_default()
+}
+
+fn discover_opencode_models(binary: &Path, directory: Option<&Path>) -> Vec<ProviderModel> {
+    // `/api/model` may return 503 or an empty snapshot before plugins settle.
+    // Poll like the session driver; do not fall back to `opencode models`,
+    // which drops variants. Empty after the budget keeps the on-disk cache.
+    let query = catalog_location_query(directory);
+    let path = if query.is_empty() {
+        "/api/model".to_owned()
+    } else {
+        format!("/api/model?{query}")
+    };
+    let started = Instant::now();
+    loop {
+        if let Some(models) = fetch_opencode_catalog(binary, &path)
+            && !models.is_empty()
+        {
             return models;
         }
+        if started.elapsed() >= CATALOG_POLL_BUDGET {
+            return Vec::new();
+        }
+        std::thread::sleep(CATALOG_POLL_INTERVAL);
     }
-    let mut command = crate::command_env::command(binary);
-    command.arg("models");
-    let Ok(output) = crate::command_env::output(&mut command) else {
-        return Vec::new();
-    };
-    let models = parse_opencode_models(&String::from_utf8_lossy(&output.stdout));
-    let cached: std::collections::HashMap<_, _> = cached_models()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|model| (model.id.clone(), model))
-        .collect();
-    models
-        .into_iter()
-        .map(|model| cached.get(&model.id).cloned().unwrap_or(model))
-        .collect()
+}
+
+fn fetch_opencode_catalog(binary: &Path, path: &str) -> Option<Vec<ProviderModel>> {
+    let mut catalog_command = crate::command_env::command(binary);
+    catalog_command.args(["api", "get", path]);
+    let output = crate::command_env::output(&mut catalog_command).ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let value = serde_json::from_slice(&output.stdout).ok()?;
+    Some(parse_opencode_catalog(&value))
 }
 
 fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {
@@ -192,6 +198,7 @@ fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {
         .collect()
 }
 
+#[cfg(test)]
 fn parse_opencode_models(output: &str) -> Vec<ProviderModel> {
     output
         .lines()
@@ -241,6 +248,7 @@ fn display_name_from_slug(slug: &str) -> String {
     }
 }
 
+#[cfg(test)]
 fn strip_ansi(value: &str) -> String {
     let mut output = String::with_capacity(value.len());
     let mut chars = value.chars();
@@ -269,6 +277,15 @@ fn deduplicate(models: Vec<ProviderModel>) -> Vec<ProviderModel> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_location_query_pins_the_workspace_and_omits_unknown() {
+        assert!(catalog_location_query(None).is_empty());
+        let query = catalog_location_query(Some(Path::new("E:\\work\\acme")));
+        assert!(query.contains("location"));
+        assert!(query.contains("directory"));
+        assert!(query.contains("acme"));
+    }
 
     #[test]
     fn catalog_keeps_server_variants_and_filters_unavailable_models() {

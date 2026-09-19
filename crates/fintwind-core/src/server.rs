@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -12,7 +12,7 @@ use subtle::ConstantTimeEq as _;
 use tungstenite::handshake::server::{
     ErrorResponse, Request as HandshakeRequest, Response as HandshakeResponse,
 };
-use tungstenite::http::{StatusCode, header::ORIGIN};
+use tungstenite::http::StatusCode;
 use tungstenite::protocol::WebSocketConfig;
 use tungstenite::{Message, WebSocket, accept_hdr_with_config};
 use uuid::Uuid;
@@ -33,9 +33,6 @@ const MAX_CACHED_RESPONSES: usize = 2048;
 
 #[derive(Clone, Debug, Default)]
 pub struct ServerOptions {
-    /// Browser WebSocket handshakes always carry an Origin header. Native
-    /// clients do not. An empty set therefore permits native clients only.
-    pub allowed_origins: HashSet<String>,
     /// Only a daemon owned by the desktop process should accept the global
     /// shutdown control message. Service-managed daemons keep running when an
     /// authenticated client disconnects.
@@ -537,15 +534,8 @@ fn handle_connection(
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_HANDSHAKE_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_HANDSHAKE_MESSAGE_BYTES));
-    let allowed_origins = options.allowed_origins.clone();
-    let mut socket = accept_hdr_with_config(
-        stream,
-        move |request: &HandshakeRequest, response: HandshakeResponse| {
-            validate_handshake(request, response, &allowed_origins)
-        },
-        Some(config),
-    )
-    .context("WebSocket handshake failed")?;
+    let mut socket = accept_hdr_with_config(stream, validate_handshake, Some(config))
+        .context("WebSocket handshake failed")?;
     let hello = read_client_message(&mut socket)?;
     let resume_from = match hello {
         ClientMessage::Hello {
@@ -641,28 +631,18 @@ fn handle_connection(
     Ok(())
 }
 
+/// The daemon serves exactly one versioned endpoint. Native clients do not
+/// send an Origin header, so no origin check is needed; anything else —
+/// including browser handshakes — is refused here regardless of token.
 fn validate_handshake(
     request: &HandshakeRequest,
     response: HandshakeResponse,
-    allowed_origins: &HashSet<String>,
 ) -> Result<HandshakeResponse, ErrorResponse> {
     if request.uri().path() != "/v1" {
         return Err(handshake_error(
             StatusCode::NOT_FOUND,
             "unknown daemon endpoint",
         ));
-    }
-    if let Some(origin) = request.headers().get(ORIGIN) {
-        let allowed = origin
-            .to_str()
-            .ok()
-            .is_some_and(|origin| allowed_origins.contains(origin));
-        if !allowed {
-            return Err(handshake_error(
-                StatusCode::FORBIDDEN,
-                "WebSocket origin is not allowed",
-            ));
-        }
     }
     Ok(response)
 }
@@ -1553,27 +1533,6 @@ mod tests {
         assert!(matches!(handled.outcome, ResponseOutcome::Ok { .. }));
         assert!(responses.try_recv().is_err());
         assert!(hub.cached_response(Uuid::nil()).is_none());
-    }
-
-    #[test]
-    fn browser_origins_are_denied_unless_explicitly_allowed() {
-        let request = HandshakeRequest::builder()
-            .uri("/v1")
-            .header(ORIGIN, "https://app.fintwind.test")
-            .body(())
-            .unwrap();
-        let response = HandshakeResponse::new(());
-        assert_eq!(
-            validate_handshake(&request, response, &HashSet::new())
-                .unwrap_err()
-                .status(),
-            StatusCode::FORBIDDEN
-        );
-
-        let allowed = HashSet::from(["https://app.fintwind.test".to_owned()]);
-        assert!(validate_handshake(&request, HandshakeResponse::new(()), &allowed).is_ok());
-        let native = HandshakeRequest::builder().uri("/v1").body(()).unwrap();
-        assert!(validate_handshake(&native, HandshakeResponse::new(()), &HashSet::new()).is_ok());
     }
 
     #[test]

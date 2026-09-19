@@ -1,12 +1,11 @@
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 pub const SKILL_FILE: &str = "SKILL.md";
 pub const DISABLED_SKILL_FILE: &str = "SKILL.md.disabled";
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, TS)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SkillSource {
     Shared,
@@ -22,35 +21,32 @@ impl SkillSource {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, TS)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SkillScope {
     User,
     Project,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillLocation {
     pub source: SkillSource,
     pub scope: SkillScope,
-    #[ts(type = "string")]
     pub root: PathBuf,
     pub project: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillInstall {
     pub source: SkillSource,
-    #[ts(type = "string")]
     pub dir: PathBuf,
-    #[ts(type = "string")]
     pub skill_file: PathBuf,
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillEntry {
     pub name: String,
@@ -82,7 +78,7 @@ impl SkillEntry {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize, TS)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillsCatalog {
     pub skills: Vec<SkillEntry>,

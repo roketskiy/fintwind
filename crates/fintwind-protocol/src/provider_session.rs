@@ -6,11 +6,20 @@ use ts_rs::TS;
 
 use crate::model::{AgentTurn, Message, ProviderResumeCursor, TranscriptBlock};
 
-/// Daemon-host native-session operation used when no live driver can fork.
+/// Daemon-host native-session operation used when no live driver can act.
 #[derive(Clone, Debug, Deserialize, Serialize, TS)]
 #[serde(tag = "provider", rename_all = "camelCase")]
 pub enum ProviderSessionForkRequest {
     OpenCode {
+        binary: PathBuf,
+        cwd: PathBuf,
+        session_id: String,
+        turn_count: usize,
+    },
+    /// Rewinds the native conversation with OpenCode's own revert: the
+    /// server marks the boundary, restores its snapshot, and keeps the
+    /// session id. `turn_count` is the number of native user turns kept.
+    OpenCodeRevert {
         binary: PathBuf,
         cwd: PathBuf,
         session_id: String,

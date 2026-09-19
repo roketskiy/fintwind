@@ -784,11 +784,6 @@ errors.claude_fork_checkpoint_missing: Claude からフォーク用チェック�
 errors.claude_turn_checkpoint_unavailable: "そのターンの Claude ネイティブチェックポイントは利用できません：%{error}"
 errors.pi_session_file_unavailable: Pi のネイティブセッションファイルは利用できません
 errors.fork_task: "タスクをフォークできませんでした：%{error}"
-errors.create_rewind_snapshot: "巻き戻し用の安全スナップショットを作成できませんでした：%{error}"
-errors.restore_checkpoint: "チェックポイントを復元できませんでした：%{error}"
-errors.restore_checkpoint_and_safety: "チェックポイントの復元に失敗し（%{error}）、安全スナップショットの復元にも失敗しました（%{restore_error}）。復旧用 ref は %{safety_ref} に保持されています"
-errors.rollback_rejected_workspace_restored: "プロバイダーがロールバックを拒否したため、ワークスペースを復元しました：%{error}"
-errors.rollback_and_safety_failed: "プロバイダーのロールバックに失敗し（%{error}）、安全スナップショットも復元できませんでした（%{restore_error}）。復旧用 ref は %{safety_ref} に保持されています"
 errors.no_session_selected: タスクが選択されていません
 errors.session_not_found: タスクが見つかりません
 errors.task_not_found: タスクが見つかりません
@@ -852,7 +847,6 @@ session.message_unavailable: そのメッセージは利用できなくなりま
 session.select_before_rewind: 会話を巻き戻す前にタスクを選択してください
 session.stop_before_rewind: 会話を巻き戻す前に現在のターンを停止してください
 session.provider_cannot_rewind: "%{provider} はまだネイティブの会話を安全にロールバックできません"
-session.pre_turn_checkpoint_missing: メッセージのターン開始前の Git チェックポイントがありません
 session.rewind_title: "%{title}（巻き戻し）"
 session.rewound: タスクをターン %{turn} の前まで巻き戻しました
 session.rewound_with_stale_refs: "タスクをターン %{turn} の前まで巻き戻しましたが、古い ref が残っています：%{error}"

@@ -1249,13 +1249,6 @@ impl DriverControl for OpenCodeDriver {
             && options.reasoning_effort == self.reasoning_effort
     }
 
-    fn rollback(&self, turns: usize) -> anyhow::Result<Option<ProviderResumeCursor>> {
-        if turns == 0 {
-            return Ok(None);
-        }
-        self.fork(turns).map(Some)
-    }
-
     fn fork(&self, turns_to_remove: usize) -> anyhow::Result<ProviderResumeCursor> {
         let server = self
             .server

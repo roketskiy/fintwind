@@ -749,11 +749,6 @@ errors.claude_fork_checkpoint_missing: Claude 未返回派生任务所需的检�
 errors.claude_turn_checkpoint_unavailable: "Claude 中该轮任务的原生检查点不可用：%{error}"
 errors.pi_session_file_unavailable: Pi 的原生会话文件不可用
 errors.fork_task: "无法派生任务：%{error}"
-errors.create_rewind_snapshot: "无法创建回退前的安全快照：%{error}"
-errors.restore_checkpoint: "无法恢复检查点：%{error}"
-errors.restore_checkpoint_and_safety: "检查点恢复失败（%{error}），安全快照也未能恢复（%{restore_error}）。恢复引用已保留在 %{safety_ref}"
-errors.rollback_rejected_workspace_restored: "服务商拒绝回退，工作区已恢复：%{error}"
-errors.rollback_and_safety_failed: "服务商回退失败（%{error}），安全快照也未能恢复（%{restore_error}）。恢复引用已保留在 %{safety_ref}"
 errors.no_session_selected: 尚未选择任务
 errors.session_not_found: 找不到任务
 errors.task_not_found: 找不到任务
@@ -816,7 +811,6 @@ session.message_unavailable: 该消息已不可用
 session.select_before_rewind: 请先选择该任务，再回退对话
 session.stop_before_rewind: 请先停止当前这一轮，再回退对话
 session.provider_cannot_rewind: "%{provider} 目前还无法安全回退原生会话"
-session.pre_turn_checkpoint_missing: 缺少该消息发送前的 Git 检查点
 session.rewind_title: "%{title}（回退）"
 session.rewound: 已回退到第 %{turn} 轮任务之前
 session.rewound_with_stale_refs: "已回退到第 %{turn} 轮任务之前，但仍有过期引用：%{error}"

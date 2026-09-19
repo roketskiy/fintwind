@@ -80,10 +80,6 @@ impl DriverHandle {
         self.inner.apply_options(options)
     }
 
-    pub fn rollback(&self, turns: usize) -> anyhow::Result<Option<ProviderResumeCursor>> {
-        self.inner.rollback(turns)
-    }
-
     pub fn fork(&self, turns_to_remove: usize) -> anyhow::Result<ProviderResumeCursor> {
         self.inner.fork(turns_to_remove)
     }
@@ -110,7 +106,6 @@ pub trait DriverControl: Send + Sync {
     fn apply_options(&self, _options: SessionOptions) -> bool {
         false
     }
-    fn rollback(&self, turns: usize) -> anyhow::Result<Option<ProviderResumeCursor>>;
     fn fork(&self, _turns_to_remove: usize) -> anyhow::Result<ProviderResumeCursor> {
         anyhow::bail!("conversation forking is not supported by this provider transport")
     }

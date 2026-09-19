@@ -105,6 +105,8 @@ enum PaletteAction {
     CompactContext,
     ToggleSidebar,
     ToggleRightPanel,
+    UndoLastTurn,
+    RedoUndoneTurn,
     OpenSettings(SettingsPage),
     SelectTask(Uuid),
 }
@@ -575,6 +577,30 @@ impl Fintwind {
                 "focus composer prompt input message",
                 next(),
             ));
+            if let Some(session_id) = self.state.selected_session {
+                if self.session_undo_available(session_id) {
+                    commands.push(CommandPaletteItem::command(
+                        PaletteSection::Commands,
+                        tr!("command_palette.undo_turn"),
+                        "icons/rewind.svg",
+                        None,
+                        PaletteAction::UndoLastTurn,
+                        "undo previous turn message conversation revert",
+                        next(),
+                    ));
+                }
+                if self.session_redo_available(session_id) {
+                    commands.push(CommandPaletteItem::command(
+                        PaletteSection::Commands,
+                        tr!("command_palette.redo_turn"),
+                        "icons/rotate-cw.svg",
+                        None,
+                        PaletteAction::RedoUndoneTurn,
+                        "redo undone turn message conversation restore",
+                        next(),
+                    ));
+                }
+            }
             if self.usage_meter_available() {
                 commands.push(CommandPaletteItem::command(
                     PaletteSection::Commands,
@@ -935,6 +961,16 @@ impl Fintwind {
                 // the entry guarantees the selection exists here.
                 if let Some(session_id) = self.selected_session().map(|session| session.id) {
                     self.request_context_compaction(session_id, cx);
+                }
+            }
+            PaletteAction::UndoLastTurn => {
+                if let Some(session_id) = self.selected_session().map(|session| session.id) {
+                    self.undo_last_turn(session_id, cx);
+                }
+            }
+            PaletteAction::RedoUndoneTurn => {
+                if let Some(session_id) = self.selected_session().map(|session| session.id) {
+                    self.redo_turn(session_id, cx);
                 }
             }
             PaletteAction::ChooseModel | PaletteAction::ToggleUsage => {

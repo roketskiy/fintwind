@@ -42,6 +42,8 @@ command_palette.hide_sidebar: サイドバーを隠す
 command_palette.show_right_panel: 右パネルを表示
 command_palette.hide_right_panel: 右パネルを隠す
 command_palette.current: 現在
+command_palette.undo_turn: 直前のターンを取り消す
+command_palette.redo_turn: 取り消したターンをやり直す
 command_palette.you: あなた
 command_palette.agent: エージェント
 command_palette.no_results: 一致するタスクやコマンドはありません
@@ -381,6 +383,13 @@ session.revert_to_here: ここまで戻す
 session.revert_to_here_title: ここまで戻す
 session.reverting_message: メッセージを戻しています…
 session.reverting_message_title: メッセージを戻しています…
+session.undone: 直前のターンを取り消しました — 新しいメッセージを送ると完全に削除され、やり直しで復元できます
+session.undo_failed: "直前のターンを取り消せませんでした：%{error}"
+session.redone: 取り消したターンを復元しました
+session.redo_failed: "ターンを復元できませんでした：%{error}"
+session.nothing_to_undo: 取り消すターンがありません
+session.nothing_to_redo: 復元できるターンがありません
+session.rewind_during_undo: 取り消しの完了を待ってから会話を戻してください
 
 time.yesterday_at: 昨日 %{time}
 time.weekday_at: "%{weekday} %{time}"

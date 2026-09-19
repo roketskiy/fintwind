@@ -2,7 +2,6 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use ts_rs::TS;
 use uuid::Uuid;
 
 use crate::attachments::{AttachmentUpload, StoredAttachment};
@@ -23,7 +22,7 @@ pub const DAEMON_TOKEN_ENV: &str = "FINTWIND_DAEMON_TOKEN";
 pub const DAEMON_ADDRESS_ENV: &str = "FINTWIND_DAEMON_ADDRESS";
 pub const APP_EXECUTABLE_ENV: &str = "FINTWIND_APP_EXECUTABLE";
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DaemonReady {
     pub address: String,
@@ -31,7 +30,7 @@ pub struct DaemonReady {
     pub pid: u32,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -49,7 +48,7 @@ pub enum ClientMessage {
     Shutdown,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Request {
     pub request_id: Uuid,
@@ -58,7 +57,7 @@ pub struct Request {
     pub command: Command,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReplayCursor {
     pub session_id: Uuid,
@@ -68,7 +67,7 @@ pub struct ReplayCursor {
     pub sequence: u64,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -232,7 +231,6 @@ pub enum Command {
     StoreBlob {
         mime_type: String,
         #[serde(with = "base64_bytes")]
-        #[ts(type = "string")]
         bytes: Vec<u8>,
     },
     ImportAttachment {
@@ -240,7 +238,6 @@ pub enum Command {
         upload: AttachmentUpload,
     },
     ImportPathAttachment {
-        #[ts(type = "string")]
         path: PathBuf,
     },
     ReadBlob {
@@ -272,14 +269,12 @@ pub enum Command {
         operation: WorkspaceOperation,
     },
     OpenTerminal {
-        #[ts(type = "string")]
         cwd: PathBuf,
         cols: u16,
         rows: u16,
     },
     WriteTerminal {
         #[serde(with = "base64_bytes")]
-        #[ts(type = "string")]
         data: Vec<u8>,
     },
     ResizeTerminal {
@@ -290,12 +285,10 @@ pub enum Command {
     CloseSession,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WireDriverStartOptions {
-    #[ts(type = "string")]
     pub binary: PathBuf,
-    #[ts(type = "string")]
     pub cwd: PathBuf,
     pub mode: String,
     pub interaction_mode: String,
@@ -307,7 +300,7 @@ pub struct WireDriverStartOptions {
     pub provider_cursor: Option<Value>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WireSessionOptions {
     pub mode: String,
@@ -318,7 +311,7 @@ pub struct WireSessionOptions {
     pub context_window: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WireDriverEvent {
     pub kind: String,
@@ -335,7 +328,7 @@ impl WireDriverEvent {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SequencedEvent {
     pub session_id: Uuid,
@@ -347,7 +340,7 @@ pub struct SequencedEvent {
     pub event: WireDriverEvent,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -375,7 +368,7 @@ pub enum ServerMessage {
     ShuttingDown,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "status",
     rename_all = "camelCase",
@@ -386,7 +379,7 @@ pub enum ResponseOutcome {
     Error { error: RpcError },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(
     tag = "type",
     rename_all = "camelCase",
@@ -459,7 +452,6 @@ pub enum ResponsePayload {
     },
     BlobData {
         #[serde(with = "base64_bytes")]
-        #[ts(type = "string")]
         bytes: Vec<u8>,
     },
     ProviderSessionForked {
@@ -478,7 +470,7 @@ pub enum ResponsePayload {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RpcError {
     pub message: String,
 }

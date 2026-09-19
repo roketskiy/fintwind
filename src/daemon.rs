@@ -27,24 +27,7 @@ pub fn start_process() -> anyhow::Result<fintwind_client::DaemonSupervisor> {
         ),
         (None, None) => {}
     }
-    let app_settings = fintwind_client::persistence::load_or_create_app_settings()
-        .context("could not load desktop daemon settings")?;
-    fintwind_client::DaemonSupervisor::spawn_configured(
-        &daemon_executable_path()?,
-        cfg!(debug_assertions),
-        app_settings.daemon_exposure,
-    )
-}
-
-/// Resolve the local host name once during app construction. Settings can
-/// then show a useful LAN URL without touching the OS from a render frame.
-pub fn local_hostname() -> Option<String> {
-    // `COMPUTERNAME` is always set; `HOSTNAME` covers the shells that export it.
-    ["COMPUTERNAME", "HOSTNAME"]
-        .into_iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .map(|hostname| hostname.trim().to_owned())
-        .find(|hostname| !hostname.is_empty())
+    fintwind_client::DaemonSupervisor::spawn(&daemon_executable_path()?, cfg!(debug_assertions))
 }
 
 fn daemon_executable_path() -> anyhow::Result<PathBuf> {

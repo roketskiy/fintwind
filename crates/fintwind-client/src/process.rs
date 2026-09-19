@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::io::{BufRead as _, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command as ProcessCommand, Stdio};
@@ -11,7 +10,6 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, bail};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::DaemonClient;
@@ -22,129 +20,22 @@ use fintwind_protocol::{
 const START_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 const REBUILD_POLL_INTERVAL: Duration = Duration::from_millis(500);
-pub const DEFAULT_EXPOSED_DAEMON_PORT: u16 = 34_123;
-
-/// Desktop-owned launch configuration for the daemon it supervises.
-///
-/// Provider settings belong to the daemon and live in `settings.json`; this
-/// is an app preference because it controls how the desktop launches its own
-/// child process. The bearer token is intentionally stable across daemon-only
-/// rebuilds and desktop relaunches so a configured web client keeps working.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(default)]
-pub struct DaemonExposureSettings {
-    pub enabled: bool,
-    pub port: u16,
-    pub allowed_origins: Vec<String>,
-    pub token: String,
-}
-
-impl Default for DaemonExposureSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            port: DEFAULT_EXPOSED_DAEMON_PORT,
-            allowed_origins: vec!["http://localhost:3001".into()],
-            token: Self::new_token(),
-        }
-    }
-}
-
-impl DaemonExposureSettings {
-    pub fn new_token() -> String {
-        Uuid::new_v4().simple().to_string()
-    }
-
-    pub fn ensure_token(&mut self) -> bool {
-        if !self.token.trim().is_empty() {
-            return false;
-        }
-        self.token = Self::new_token();
-        true
-    }
-
-    pub fn allowed_origins_text(&self) -> String {
-        self.allowed_origins.join(", ")
-    }
-
-    pub fn with_allowed_origins_text(mut self, text: &str) -> anyhow::Result<Self> {
-        self.allowed_origins = parse_allowed_origins(text)?;
-        Ok(self)
-    }
-
-    pub fn validate(mut self) -> anyhow::Result<Self> {
-        if self.port == 0 {
-            bail!("daemon port must be between 1 and 65535");
-        }
-        if self.token.trim().is_empty() {
-            bail!("daemon authentication token is empty");
-        }
-        self.allowed_origins = parse_allowed_origins(&self.allowed_origins_text())?;
-        Ok(self)
-    }
-
-    fn bind_address(&self) -> String {
-        if self.enabled {
-            format!("0.0.0.0:{}", self.port)
-        } else {
-            "127.0.0.1:0".into()
-        }
-    }
-}
-
-/// Parse the comma-separated exact browser origins edited by the desktop.
-/// Browser Origin headers contain only an HTTP(S) origin, never a path.
-pub fn parse_allowed_origins(text: &str) -> anyhow::Result<Vec<String>> {
-    let mut origins = Vec::new();
-    let mut seen = HashSet::new();
-    for candidate in text
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let url = url::Url::parse(candidate)
-            .with_context(|| format!("invalid browser origin {candidate:?}"))?;
-        if !matches!(url.scheme(), "http" | "https")
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || url.path() != "/"
-        {
-            bail!(
-                "browser origin {candidate:?} must be an exact http:// or https:// origin without a path"
-            );
-        }
-        let origin = url.origin().ascii_serialization();
-        if origin == "null" {
-            bail!("browser origin {candidate:?} is not a network origin");
-        }
-        if seen.insert(origin.clone()) {
-            origins.push(origin);
-        }
-    }
-    Ok(origins)
-}
 
 pub struct DaemonProcess {
     client: DaemonClient,
     client_address: String,
+    token: String,
     child: Child,
     #[cfg(windows)]
     _job: windows_job::JobObject,
 }
 
 impl DaemonProcess {
-    pub fn spawn(executable: &Path) -> anyhow::Result<Self> {
-        Self::spawn_configured(executable, DaemonExposureSettings::default())
-    }
-
-    fn spawn_configured(
-        executable: &Path,
-        settings: DaemonExposureSettings,
-    ) -> anyhow::Result<Self> {
-        let settings = settings.validate()?;
-        let token = settings.token.clone();
+    /// Spawn a loopback-only daemon with a one-time bearer token. Any local
+    /// process could otherwise drive the user's coding agents; the token
+    /// lives only in this process pair's environment and memory.
+    fn spawn_local(executable: &Path) -> anyhow::Result<Self> {
+        let token = Uuid::new_v4().simple().to_string();
         let app_executable =
             std::env::current_exe().context("could not locate fintwind executable")?;
         let mut command = ProcessCommand::new(executable);
@@ -160,15 +51,9 @@ impl DaemonProcess {
         }
         command
             .arg("--bind")
-            .arg(settings.bind_address())
+            .arg("127.0.0.1:0")
             .arg("--parent-pid")
             .arg(std::process::id().to_string());
-        if settings.enabled {
-            command.arg("--allow-non-loopback");
-        }
-        for origin in &settings.allowed_origins {
-            command.arg("--allow-origin").arg(origin);
-        }
         let mut child = command
             .env(DAEMON_TOKEN_ENV, &token)
             .env(APP_EXECUTABLE_ENV, app_executable)
@@ -240,7 +125,7 @@ impl DaemonProcess {
                 return Err(error);
             }
         };
-        let client = match DaemonClient::connect(&client_address, token) {
+        let client = match DaemonClient::connect(&client_address, token.clone()) {
             Ok(client) => client,
             Err(error) => {
                 let _ = child.kill();
@@ -251,6 +136,7 @@ impl DaemonProcess {
         Ok(Self {
             client,
             client_address,
+            token,
             child,
             #[cfg(windows)]
             _job: job,
@@ -259,6 +145,10 @@ impl DaemonProcess {
 
     pub fn client(&self) -> DaemonClient {
         self.client.clone()
+    }
+
+    fn token(&self) -> &str {
+        &self.token
     }
 
     fn has_exited(&mut self) -> bool {
@@ -397,7 +287,6 @@ impl ExecutableStamp {
 struct SupervisorInner {
     executable: Option<PathBuf>,
     target: Mutex<DaemonTarget>,
-    exposure: Mutex<Option<DaemonExposureSettings>>,
     restart: Mutex<()>,
     settings: Mutex<DaemonSettings>,
     persisted_settings: Mutex<Option<DaemonSettings>>,
@@ -434,26 +323,12 @@ pub struct DaemonSupervisor {
 
 impl DaemonSupervisor {
     pub fn spawn(executable: &Path, watch_for_rebuilds: bool) -> anyhow::Result<Self> {
-        Self::spawn_configured(
-            executable,
-            watch_for_rebuilds,
-            DaemonExposureSettings::default(),
-        )
-    }
-
-    pub fn spawn_configured(
-        executable: &Path,
-        watch_for_rebuilds: bool,
-        exposure: DaemonExposureSettings,
-    ) -> anyhow::Result<Self> {
-        let exposure = exposure.validate()?;
-        let process = DaemonProcess::spawn_configured(executable, exposure.clone())?;
+        let process = DaemonProcess::spawn_local(executable)?;
         let settings = read_settings(&process.client())?;
         let initial_stamp = ExecutableStamp::read(executable)?;
         Self::from_target(
             DaemonTarget::Local(process),
             Some(executable.to_owned()),
-            Some(exposure),
             settings,
             Some(initial_stamp),
             watch_for_rebuilds,
@@ -465,14 +340,8 @@ impl DaemonSupervisor {
     pub fn connect(address: &str, token: String) -> anyhow::Result<Self> {
         let client = DaemonClient::connect(address, token.clone())?;
         let settings = read_settings(&client)?;
-        let supervisor = Self::from_target(
-            DaemonTarget::Remote(client),
-            None,
-            None,
-            settings,
-            None,
-            false,
-        )?;
+        let supervisor =
+            Self::from_target(DaemonTarget::Remote(client), None, settings, None, false)?;
         *supervisor.inner.remote_endpoint.lock() = Some((address.to_owned(), token));
         Ok(supervisor)
     }
@@ -480,7 +349,6 @@ impl DaemonSupervisor {
     fn from_target(
         target: DaemonTarget,
         executable: Option<PathBuf>,
-        exposure: Option<DaemonExposureSettings>,
         settings: DaemonSettings,
         initial_stamp: Option<ExecutableStamp>,
         watch_for_rebuilds: bool,
@@ -489,7 +357,6 @@ impl DaemonSupervisor {
         let inner = Arc::new(SupervisorInner {
             executable,
             target: Mutex::new(target),
-            exposure: Mutex::new(exposure),
             restart: Mutex::new(()),
             settings: Mutex::new(settings),
             // The desktop sends one normalized snapshot after it has migrated
@@ -566,44 +433,6 @@ impl DaemonSupervisor {
         self.inner.settings.lock().clone()
     }
 
-    /// Restart only the desktop-managed daemon with a new listener policy.
-    /// The caller should run this off the UI thread.
-    pub fn reconfigure(&self, exposure: DaemonExposureSettings) -> anyhow::Result<()> {
-        let exposure = exposure.validate()?;
-        let executable = self
-            .inner
-            .executable
-            .as_ref()
-            .context("the connected daemon is managed outside fintwind Desktop")?
-            .clone();
-        let _restart = self.inner.restart.lock();
-        let previous = self
-            .inner
-            .exposure
-            .lock()
-            .clone()
-            .context("managed daemon launch settings are unavailable")?;
-        match replace_local_daemon(&self.inner, &executable, &exposure) {
-            Ok(()) => {
-                *self.inner.exposure.lock() = Some(exposure);
-                queue_settings_refresh(&self.inner);
-                Ok(())
-            }
-            Err(error) => {
-                let restore = replace_local_daemon(&self.inner, &executable, &previous);
-                if restore.is_ok() {
-                    queue_settings_refresh(&self.inner);
-                    Err(error)
-                } else {
-                    Err(error.context(format!(
-                        "the previous daemon configuration also failed to restart: {:#}",
-                        restore.unwrap_err()
-                    )))
-                }
-            }
-        }
-    }
-
     /// Queue a daemon settings update without blocking the desktop UI thread.
     pub fn update_settings(&self, settings: DaemonSettings) -> anyhow::Result<()> {
         *self.inner.settings.lock() = settings.clone();
@@ -677,25 +506,23 @@ fn monitor_daemon(
             continue;
         }
         let _restart = inner.restart.lock();
-        let Some(exposure) = inner.exposure.lock().clone() else {
-            return;
-        };
-        // shutdown()/reconfigure() may have replaced the target while this
-        // thread waited for the restart lock; re-read it before acting. A
-        // target that no longer wants this round of recovery (or no longer
-        // needs it) must not fall through to a process restart.
+        // shutdown() may have replaced the target while this thread waited
+        // for the restart lock; re-read it before acting. A target that no
+        // longer wants this round of recovery (or no longer needs it) must
+        // not fall through to a process restart.
         if !process_exited && !executable_changed {
-            let reconnect = match &mut *inner.target.lock() {
+            let reconnect = match &*inner.target.lock() {
                 DaemonTarget::Local(process) if process.client.is_disconnected() => Some((
                     process.client_address.clone(),
+                    process.token().to_owned(),
                     process.client.last_sequences(),
                 )),
                 _ => None,
             };
-            let Some((address, cursors)) = reconnect else {
+            let Some((address, token, cursors)) = reconnect else {
                 continue;
             };
-            match DaemonClient::connect_with_resume(&address, exposure.token.clone(), cursors) {
+            match DaemonClient::connect_with_resume(&address, token, cursors) {
                 Ok(client) => {
                     let replaced = match &mut *inner.target.lock() {
                         DaemonTarget::Local(process) if process.client.is_disconnected() => {
@@ -724,7 +551,7 @@ fn monitor_daemon(
                 }
             }
         }
-        match replace_local_daemon(&inner, executable, &exposure) {
+        match replace_local_daemon(&inner, executable) {
             Ok(()) => {}
             Err(error) => {
                 eprintln!("could not restart rebuilt fintwind daemon: {error:#}");
@@ -772,11 +599,7 @@ fn reconnect_remote(inner: &SupervisorInner) {
     }
 }
 
-fn replace_local_daemon(
-    inner: &SupervisorInner,
-    executable: &Path,
-    exposure: &DaemonExposureSettings,
-) -> anyhow::Result<()> {
+fn replace_local_daemon(inner: &SupervisorInner, executable: &Path) -> anyhow::Result<()> {
     let previous = {
         let mut target = inner.target.lock();
         match &*target {
@@ -798,7 +621,7 @@ fn replace_local_daemon(
     // Dropping can wait briefly for graceful shutdown, but the target lock is
     // already released so UI actions never block behind process teardown.
     drop(previous);
-    let replacement = DaemonProcess::spawn_configured(executable, exposure.clone())?;
+    let replacement = DaemonProcess::spawn_local(executable)?;
     let client = replacement.client();
     *inner.target.lock() = DaemonTarget::Local(replacement);
     inner
@@ -871,16 +694,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn browser_origins_are_exact_and_deduplicated() {
+    fn desktop_uses_loopback_to_reach_an_unspecified_listener() {
         assert_eq!(
-            parse_allowed_origins(
-                "https://app.fintwind.test, http://localhost:3001, https://app.fintwind.test"
-            )
-            .unwrap(),
-            ["https://app.fintwind.test", "http://localhost:3001"]
+            desktop_client_address("0.0.0.0:34123").unwrap(),
+            "127.0.0.1:34123"
         );
-        assert!(parse_allowed_origins("https://app.fintwind.test/path").is_err());
-        assert!(parse_allowed_origins("ws://app.fintwind.test").is_err());
+        assert_eq!(desktop_client_address("[::]:34123").unwrap(), "[::1]:34123");
     }
 
     #[cfg(windows)]
@@ -914,14 +733,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn desktop_uses_loopback_to_reach_an_unspecified_listener() {
-        assert_eq!(
-            desktop_client_address("0.0.0.0:34123").unwrap(),
-            "127.0.0.1:34123"
-        );
-        assert_eq!(desktop_client_address("[::]:34123").unwrap(), "[::1]:34123");
     }
 }

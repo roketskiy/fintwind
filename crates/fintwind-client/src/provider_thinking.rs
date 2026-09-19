@@ -151,13 +151,7 @@ mod tests {
             None,
             ProviderApiFormat::Anthropic,
         );
-        assert_eq!(
-            spec["variants"]["low"]["thinking"]["budgetTokens"],
-            1024
-        );
-        assert_eq!(
-            spec["variants"]["max"]["thinking"]["budgetTokens"],
-            24576
-        );
+        assert_eq!(spec["variants"]["low"]["thinking"]["budgetTokens"], 1024);
+        assert_eq!(spec["variants"]["max"]["thinking"]["budgetTokens"], 24576);
     }
 }

@@ -2,12 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use ts_rs::TS;
 
 use crate::model::{AgentTurn, Message, ProviderResumeCursor, TranscriptBlock};
 
 /// Daemon-host native-session operation used when no live driver can act.
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "provider", rename_all = "camelCase")]
 pub enum ProviderSessionForkRequest {
     OpenCode {
@@ -27,7 +26,7 @@ pub enum ProviderSessionForkRequest {
     },
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderSessionFork {
     pub cursor: ProviderResumeCursor,
@@ -40,7 +39,7 @@ pub struct ProviderSessionFork {
 /// One session on the OpenCode server, as the session list reports it. This
 /// is the reconciliation unit between the app's sidebar and sessions created
 /// outside the app.
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeSessionSummary {
     pub session_id: String,
@@ -59,7 +58,7 @@ pub struct NativeSessionSummary {
 /// One MCP server's live connection status as the OpenCode server reports
 /// it — the state of the process or HTTP connection itself, independent of
 /// any session.
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpServerStatus {
     pub name: String,
@@ -69,7 +68,7 @@ pub struct McpServerStatus {
     pub error: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, TS)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum McpConnectionState {
     Connected,
@@ -82,7 +81,7 @@ pub enum McpConnectionState {
 /// A native session's transcript translated into the app's rendering model:
 /// the same shapes a live session persists, so an imported session renders
 /// through the ordinary transcript pipeline.
-#[derive(Clone, Debug, Deserialize, Serialize, TS)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeTranscript {
     pub messages: Vec<Message>,
@@ -93,7 +92,7 @@ pub struct NativeTranscript {
 /// One session's cumulative usage, as the OpenCode server's session list
 /// reports it. The usage page aggregates these into whatever view it draws,
 /// so a range change never re-fetches.
-#[derive(Clone, Debug, Deserialize, Serialize, TS, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageEntry {
     /// When the session was last active, in unix seconds — the stamp its
@@ -131,7 +130,7 @@ impl UsageEntry {
 /// The whole OpenCode store's usage scan: one entry per top-level session,
 /// collected in a single pass over the session list. The client aggregates
 /// these into whatever view it draws, so a range change never re-fetches.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, TS, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageStats {
     /// Sessions, oldest first.

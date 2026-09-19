@@ -52,12 +52,7 @@ daemon 拥有任务 SQLite 数据、上传的附件、provider 原生的会话�
 工作区文件系统与 Git 操作；它返回的路径一律指 daemon 所在主机。
 桌面端只保留展示状态和可丢弃的预览缓存。
 
-浏览器客户端位于 [`apps/web`](apps/web)，使用
-[`packages/fintwind-client`](packages/fintwind-client) 中生成的浏览器传输层。
-其签入的类型直接由 Rust 协议生成，WebSocket 客户端实现了与 Rust 客户端相同的
-握手、请求 ID、订阅、序列去重和重放游标。改动线上类型后运行
-`bun run protocol:generate` 重新生成，并用 `bun run protocol:check` 验证
-生成文件是最新的。
+daemon 监听仅回环地址，并使用每次启动生成的一次性令牌对客户端鉴权。
 
 无项目的任务工作区位于 daemon 主机的 `~/.fintwind/projects/<日期>/<slug>`
 下。daemon 首次加载时会把旧版 `~/.fintwind/<日期>/<slug>` 布局创建的
@@ -65,9 +60,7 @@ daemon 拥有任务 SQLite 数据、上传的附件、provider 原生的会话�
 
 配置归属同样分离：Release 桌面端写 `~/.fintwind/app.json`，Debug 则隔离在
 `temp/app.json`。daemon 的 provider 设置保存在
-`~/.fintwind/settings.json`。桌面端"设置 → Daemon"页可以把子 daemon
-显式暴露在固定端口上、配置精确的浏览器来源，并复制其稳定的鉴权令牌；
-默认始终只监听回环地址。
+`~/.fintwind/settings.json`。
 
 连接到桌面进程之外托管的 daemon 时，fintwind 绝不在客户机上解释 daemon
 的路径。因此在协议增加 daemon 主机侧的目录选择器与终端流端点之前，

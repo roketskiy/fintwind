@@ -792,9 +792,7 @@ impl Fintwind {
         };
         match row {
             SidebarRow::Search => self.render_sidebar_search(cx).into_any_element(),
-            SidebarRow::Group(group) => self
-                .render_sidebar_group(group, cx)
-                .into_any_element(),
+            SidebarRow::Group(group) => self.render_sidebar_group(group, cx).into_any_element(),
             SidebarRow::GroupSpacer => div().w_full().h(px(10.0)).into_any_element(),
         }
     }

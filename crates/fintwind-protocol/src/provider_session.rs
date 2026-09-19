@@ -16,13 +16,30 @@ pub enum ProviderSessionForkRequest {
         turn_count: usize,
     },
     /// Rewinds the native conversation with OpenCode's own revert: the
-    /// server marks the boundary, restores its snapshot, and keeps the
+    /// server stages a boundary, restores its snapshot, and keeps the
     /// session id. `turn_count` is the number of native user turns kept.
     OpenCodeRevert {
         binary: PathBuf,
         cwd: PathBuf,
         session_id: String,
         turn_count: usize,
+    },
+    /// Undoes the newest native user message: stages a revert boundary on it,
+    /// or moves an existing boundary one user message back. The staged-away
+    /// messages stay in storage until the next prompt (which deletes them) or
+    /// a redo (which restores them). The daemon resolves the boundary from
+    /// the server's own transcript.
+    OpenCodeUndoTurn {
+        binary: PathBuf,
+        cwd: PathBuf,
+        session_id: String,
+    },
+    /// Redoes a previously undone turn: clears the staged revert so the
+    /// staged-away turns return to the conversation.
+    OpenCodeRedoTurn {
+        binary: PathBuf,
+        cwd: PathBuf,
+        session_id: String,
     },
 }
 

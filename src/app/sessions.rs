@@ -300,6 +300,8 @@ impl Fintwind {
         // before the local row disappears (the delete reads the roster).
         self.delete_native_session(session_id, project_path.clone(), cx);
         self.submission_preparations.remove(&session_id);
+        self.staged_undos.remove(&session_id);
+        self.undo_redo_preparations.remove(&session_id);
         self.reset_session_runtime(session_id);
         self.background_work.remove(&session_id);
         self.provider_retries.remove(&session_id);

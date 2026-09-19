@@ -1523,6 +1523,14 @@ impl Fintwind {
             cx.notify();
             return;
         }
+        // The rewind and a pending undo/redo both rewrite the server's revert
+        // boundary; racing them would commit a boundary the other side never
+        // saw. The undo/redo finish path restores Idle, so this is momentary.
+        if self.undo_redo_preparations.contains(&session_id) {
+            self.show_toast(tr!("session.rewind_during_undo"));
+            cx.notify();
+            return;
+        }
         let rollback_turns = source.provider_turns_after(retained_turn_count);
         if rollback_turns > 0 && source.provider_cursor.is_none() {
             self.show_toast(tr!("session.provider_cannot_rewind", provider = "OpenCode"));
@@ -1702,6 +1710,10 @@ impl Fintwind {
             session.truncate_after_turn(retained_turn_count);
             session.status = SessionStatus::Idle;
         }
+        // The rewind's committed revert deleted the staged-away turns along
+        // with everything after the edited message, so any pending redo
+        // ends here.
+        self.clear_staged_undo(session_id);
 
         if let Some(runtime) = self.runtimes.get_mut(&session_id) {
             runtime
@@ -2000,6 +2012,14 @@ impl Fintwind {
         if self.response_fork_preparations.contains_key(&session.id) {
             return;
         }
+        // An undo/redo RPC is rewriting the server's revert boundary; a prompt
+        // landing mid-flight would delete the staged-away turns (or race the
+        // redo's clear) while the finish path still truncates against the old
+        // transcript. Queue the message until the preparation settles.
+        if self.undo_redo_preparations.contains(&session.id) {
+            self.enqueue_follow_up_submission(session.id, submission, cx);
+            return;
+        }
         if Self::is_compact_submission(&submission.prompt) {
             self.request_context_compaction(session.id, cx);
             return;
@@ -2141,8 +2161,14 @@ impl Fintwind {
 
     /// Start the next queued follow-up as a fresh turn. Only called once a
     /// settled turn has been fully closed, so the session is Idle.
-    fn drain_queued_message(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+    pub(super) fn drain_queued_message(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
         if self.response_fork_preparations.contains_key(&session_id) {
+            return;
+        }
+        // Undo/redo finish paths drain the queue themselves once the server's
+        // revert boundary is settled; draining earlier would send a prompt
+        // into a staged revert and delete the staged-away turns.
+        if self.undo_redo_preparations.contains(&session_id) {
             return;
         }
         let Some(session) = self
@@ -2443,7 +2469,13 @@ impl Fintwind {
                 .unwrap_or(prompt);
         let mut failed_to_start = false;
         match driver {
-            Ok(driver) => driver.prompt(driver_prompt),
+            Ok(driver) => {
+                // OpenCode deletes the staged-away turns when this prompt
+                // lands, so redo stops being possible from here. A failed
+                // preparation never reaches the server and keeps the marker.
+                self.clear_staged_undo(session_id);
+                driver.prompt(driver_prompt);
+            }
             Err(error) => {
                 failed_to_start = true;
                 let message = tr!("errors.start_agent", error = error);

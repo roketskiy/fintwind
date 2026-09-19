@@ -492,6 +492,8 @@ impl Fintwind {
             .retain(|session| session.id != session_id);
         self.remove_right_panel_session_state(session_id);
         self.native_transcript_fetched.remove(&session_id);
+        self.staged_undos.remove(&session_id);
+        self.undo_redo_preparations.remove(&session_id);
         self.state.selected_session = self
             .state
             .selected_session
@@ -507,6 +509,13 @@ impl Fintwind {
     /// the CLI write into the same server store, so a conversation continued
     /// elsewhere must refresh exactly like one imported from there.
     pub(super) fn ensure_native_transcript(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        // A staged undo hides turns the server still holds. Staging bumps
+        // the server's `updated_at`, so without this guard the reconcile
+        // would refetch and pull the staged-away turns back onto the
+        // screen. The redo path removes the marker before refetching.
+        if self.staged_undos.contains_key(&session_id) {
+            return;
+        }
         let Some((native_session_id, binary, directory)) = self
             .state
             .sessions
@@ -666,6 +675,248 @@ impl Fintwind {
                     .delete_provider_session(binary, project_path, native_session_id);
             })
             .detach();
+    }
+
+    /// Whether session-level undo is currently available: the session is
+    /// settled, tracks a native conversation, and at least one turn has
+    /// reached the provider.
+    pub(super) fn session_undo_available(&self, session_id: Uuid) -> bool {
+        self.state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .is_some_and(|session| {
+                session.native_session_id.is_some()
+                    && matches!(session.status, SessionStatus::Idle | SessionStatus::Failed)
+                    && !self.undo_redo_preparations.contains(&session_id)
+                    && session.provider_turns_after(0) > 0
+            })
+    }
+
+    /// Whether session-level redo is currently available: an undo is staged
+    /// for this session and nothing is in flight against it.
+    pub(super) fn session_redo_available(&self, session_id: Uuid) -> bool {
+        self.staged_undos.contains_key(&session_id)
+            && !self.undo_redo_preparations.contains(&session_id)
+            && self
+                .state
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .is_some_and(|session| {
+                    matches!(session.status, SessionStatus::Idle | SessionStatus::Failed)
+                })
+    }
+
+    /// Undo the newest provider turn: the daemon stages an OpenCode revert
+    /// boundary just before that turn's user message, and the local
+    /// transcript collapses immediately. The staged-away turn stays on the
+    /// server — a redo restores it, the next prompt deletes it for good.
+    pub(super) fn undo_last_turn(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        if !self.session_undo_available(session_id) {
+            self.show_toast(tr!("session.nothing_to_undo"));
+            cx.notify();
+            return;
+        }
+        let Some(source) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+        else {
+            return;
+        };
+        // The local collapse counts only turns that reached the provider — a
+        // locally failed turn has no native message to hide. The daemon
+        // derives the server-side boundary from the native transcript itself,
+        // which also accounts for steered user messages this transcript
+        // folds into their turn.
+        let retained = source.provider_turns_after(0).saturating_sub(1);
+        let Some((native_session_id, binary, directory)) = self.native_undo_target(session_id)
+        else {
+            self.show_toast(tr!("errors.provider_not_found", provider = "OpenCode"));
+            cx.notify();
+            return;
+        };
+        self.undo_redo_preparations.insert(session_id);
+        cx.notify();
+        let workspace_client = fintwind_client::WorkspaceClient::new(self.daemon.client());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    workspace_client.fork_provider_session(
+                        fintwind_client::provider_session::ProviderSessionForkRequest::OpenCodeUndoTurn {
+                            binary,
+                            cwd: directory,
+                            session_id: native_session_id,
+                        },
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.finish_undo_last_turn(
+                    session_id,
+                    retained,
+                    result.err().map(|error| error.to_string()),
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    fn finish_undo_last_turn(
+        &mut self,
+        session_id: Uuid,
+        retained: usize,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.undo_redo_preparations.remove(&session_id) {
+            return;
+        }
+        if let Some(error) = error {
+            self.show_toast(tr!("session.undo_failed", error = error));
+            // The marker never landed, so nothing is staged: messages queued
+            // while the RPC was in flight can start as-is.
+            self.drain_queued_message(session_id, cx);
+            cx.notify();
+            return;
+        }
+        self.staged_undos.insert(session_id, retained);
+        // Collapse the transcript locally right away. The staged-away turns
+        // remain on the server, so the redo path restores by refetching.
+        if let Some(session) = self.state.session_mut(session_id) {
+            session.truncate_after_turn(Self::local_turn_boundary(session, retained));
+            if session.status == SessionStatus::Failed {
+                session.status = SessionStatus::Idle;
+            }
+            session.updated_at = unix_time();
+        }
+        if self.state.selected_session == Some(session_id) {
+            self.reset_visible_state();
+            self.reset_transcript_rows(self.transcript_row_count());
+        }
+        self.state.mark_session_dirty(session_id);
+        self.save();
+        self.show_toast(tr!("session.undone"));
+        // Messages queued while the RPC was in flight go out now; the prompt
+        // deletes the staged-away turns server-side and clears the marker.
+        self.drain_queued_message(session_id, cx);
+        cx.notify();
+    }
+
+    /// Redo a previously undone turn: the daemon clears the staged revert
+    /// and the transcript is refetched from the server, which still holds
+    /// the staged-away turns.
+    pub(super) fn redo_turn(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        if !self.session_redo_available(session_id) {
+            self.show_toast(tr!("session.nothing_to_redo"));
+            cx.notify();
+            return;
+        }
+        let Some((native_session_id, binary, directory)) = self.native_undo_target(session_id)
+        else {
+            self.show_toast(tr!("errors.provider_not_found", provider = "OpenCode"));
+            cx.notify();
+            return;
+        };
+        self.undo_redo_preparations.insert(session_id);
+        cx.notify();
+        let workspace_client = fintwind_client::WorkspaceClient::new(self.daemon.client());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    workspace_client.fork_provider_session(
+                        fintwind_client::provider_session::ProviderSessionForkRequest::OpenCodeRedoTurn {
+                            binary,
+                            cwd: directory,
+                            session_id: native_session_id,
+                        },
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.finish_redo_turn(
+                    session_id,
+                    result.err().map(|error| error.to_string()),
+                    cx,
+                );
+            });
+        })
+        .detach();
+    }
+
+    fn finish_redo_turn(
+        &mut self,
+        session_id: Uuid,
+        error: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.undo_redo_preparations.remove(&session_id) {
+            return;
+        }
+        if let Some(error) = error {
+            self.show_toast(tr!("session.redo_failed", error = error));
+            // The clear may or may not have landed; the refetch the queued
+            // prompt's submission triggers (or the next reconcile) settles
+            // whichever state the server holds.
+            self.drain_queued_message(session_id, cx);
+            cx.notify();
+            return;
+        }
+        self.staged_undos.remove(&session_id);
+        // The cleared boundary reveals the staged-away turns again; pull the
+        // server's whole transcript rather than replaying local state.
+        self.native_transcript_fetched.remove(&session_id);
+        if self.state.selected_session == Some(session_id) {
+            self.show_toast(tr!("session.redone"));
+        }
+        self.ensure_native_transcript(session_id, cx);
+        self.drain_queued_message(session_id, cx);
+        cx.notify();
+    }
+
+    /// The daemon-side triple (native session id, binary, workspace
+    /// directory) every undo/redo RPC needs. `None` shows the unavailable
+    /// toast when the binary cannot be resolved.
+    fn native_undo_target(
+        &mut self,
+        session_id: Uuid,
+    ) -> Option<(String, PathBuf, PathBuf)> {
+        let native_session_id = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.native_session_id.clone())?;
+        let directory = self.native_session_directory(session_id)?;
+        let binary = self.native_binary_path()?;
+        Some((native_session_id, binary, directory))
+    }
+
+    /// Local `truncate_after_turn` index keeping `retained` provider turns:
+    /// the boundary is the retained-th provider-started turn, with any
+    /// trailing locally-failed turns (no native presence) swept too.
+    fn local_turn_boundary(session: &AgentSession, retained: usize) -> usize {
+        let mut seen = 0usize;
+        for (index, turn) in session.turns.iter().enumerate() {
+            if turn.provider_turn_started {
+                if seen == retained {
+                    return index;
+                }
+                seen += 1;
+            }
+        }
+        session.turns.len()
+    }
+
+    /// Drop a session's staged undo state — the next prompt deletes the
+    /// staged-away turns server-side, so redo is no longer meaningful.
+    pub(super) fn clear_staged_undo(&mut self, session_id: Uuid) {
+        self.staged_undos.remove(&session_id);
     }
 }
 

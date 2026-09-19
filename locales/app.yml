@@ -82,6 +82,10 @@ command_palette.hide_right_panel:
   en: Hide right panel
 command_palette.current:
   en: Current
+command_palette.undo_turn:
+  en: Undo last turn
+command_palette.redo_turn:
+  en: Redo undone turn
 command_palette.you:
   en: You
 command_palette.agent:
@@ -730,6 +734,18 @@ session.reverting_message:
   en: Reverting message…
 session.reverting_message_title:
   en: Reverting Message…
+session.undone:
+  en: Last turn undone — send a message to delete it, or redo to restore it
+session.undo_failed:
+  en: "Could not undo the last turn: %{error}"
+session.redone:
+  en: Undone turn restored
+session.redo_failed:
+  en: "Could not redo the turn: %{error}"
+session.nothing_to_undo:
+  en: Nothing to undo
+session.nothing_to_redo:
+  en: Nothing to redo
 
 time.yesterday_at:
   en: Yesterday %{time}
@@ -1481,6 +1497,8 @@ session.rewind_title:
   en: "%{title} (rewind)"
 session.rewound:
   en: Rewound to before turn %{turn}
+session.rewind_during_undo:
+  en: Wait for the undo to finish before rewinding the conversation
 session.rewound_with_stale_refs:
   en: "Rewound to before turn %{turn}; stale refs remain: %{error}"
 

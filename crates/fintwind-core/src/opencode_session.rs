@@ -95,12 +95,12 @@ pub(crate) fn fork_session_removing_turns_on_server(
     fork_session_with_message_ids(server, session_id, &native, retained_turns)
 }
 
-/// Whether the native session carries an active revert marker — the user
-/// rewound and has not sent the replacement prompt yet.
-pub(crate) fn native_session_has_revert(
+/// The message id a staged revert boundary sits on, if one is staged — the
+/// user rewound or undid and has not sent the replacement prompt yet.
+fn native_revert_boundary(
     server: &OpenCodeServer,
     session_id: &str,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Option<String>> {
     let session = server
         .request_with_timeout(
             "GET",
@@ -114,61 +114,129 @@ pub(crate) fn native_session_has_revert(
         .get("revert")
         .and_then(|revert| revert.get("messageID"))
         .and_then(Value::as_str)
-        .is_some_and(|id| !id.is_empty()))
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned))
 }
 
 /// Reverts the native conversation to just before one of its user turns.
 ///
-/// OpenCode marks the boundary instead of deleting anything: the messages
-/// from that turn onward stay in storage but are excluded from the next
-/// model call, and its own snapshot machinery restores the worktree files
-/// the dropped turns had changed. The session id never changes. The marked
-/// messages are only removed from storage when the next prompt arrives, so
-/// a revert must be followed by the replacement prompt in the same
-/// rewind-and-resend flow.
+/// OpenCode 2.0.x stages a revert boundary and then commits it: the commit
+/// restores the worktree from the boundary's snapshot and physically removes
+/// the staged-away messages. The session id never changes, so the stored
+/// cursor keeps working across the rewind.
 pub(crate) fn revert_session_at_message(
     server: &OpenCodeServer,
     session_id: &str,
     retained_turns: usize,
 ) -> anyhow::Result<()> {
-    // A previous rewind that never got its replacement prompt leaves a
-    // revert marker behind. Clear it first so this boundary move starts
-    // from the whole conversation, and so the fresh marker's snapshot
-    // describes the worktree the user sees right now.
-    if native_session_has_revert(server, session_id)? {
-        unrevert_session(server, session_id)?;
-    }
+    // A previous rewind or undo that never got its follow-up leaves a staged
+    // revert marker behind. Clear it first so this boundary move starts from
+    // the whole conversation, and so the fresh boundary's snapshot describes
+    // the worktree the user sees right now.
+    clear_staged_revert(server, session_id)?;
     let native = native_messages(server, session_id)?;
     let Some(message_id) = fork_message_id(&native.user_ids, retained_turns)? else {
         // No native user turn sits after the boundary — the conversation is
         // empty or every turn is already retained — so there is nothing to
-        // hide. Keep the session: the stored cursor still points at it.
+        // remove. Keep the session: the stored cursor still points at it.
         return Ok(());
     };
-    // The revert/unrevert routes exist only without the /api prefix: the
-    // prefixed variants fall through to the SPA fallback and return HTML
-    // (verified against the bundled SDK, which posts to /session/{id}/revert).
+    stage_revert(server, session_id, message_id)?;
+    commit_revert(server, session_id)?;
+    Ok(())
+}
+
+/// Stages a revert boundary at one native user message without committing.
+///
+/// This is the undo primitive: everything from `message_id` onward is
+/// excluded from the next model call, and the next prompt deletes it from
+/// storage. Staging again with a different message moves the boundary; the
+/// staged-away turns stay in storage until then, which is what redo restores.
+pub(crate) fn stage_revert(
+    server: &OpenCodeServer,
+    session_id: &str,
+    message_id: &str,
+) -> anyhow::Result<()> {
     server.request_with_timeout(
         "POST",
-        &format!("/session/{}/revert", encode_path_segment(session_id)),
+        &format!(
+            "/api/session/{}/revert/stage",
+            encode_path_segment(session_id)
+        ),
         Some(&json!({"messageID": message_id})),
         REVERT_HTTP_TIMEOUT,
     )?;
     Ok(())
 }
 
-/// Undoes a previous revert: OpenCode restores its snapshot, so the
-/// reverted turns' file changes are back on disk and the transcript is
-/// whole again.
-pub(crate) fn unrevert_session(server: &OpenCodeServer, session_id: &str) -> anyhow::Result<()> {
+/// Commits the staged revert: the worktree snapshot is restored and the
+/// staged-away messages are deleted from storage.
+fn commit_revert(server: &OpenCodeServer, session_id: &str) -> anyhow::Result<()> {
     server.request_with_timeout(
         "POST",
-        // See revert_session_at_message: no /api prefix on these routes.
-        &format!("/session/{}/unrevert", encode_path_segment(session_id)),
+        &format!(
+            "/api/session/{}/revert/commit",
+            encode_path_segment(session_id)
+        ),
+        Some(&json!({})),
+        REVERT_HTTP_TIMEOUT,
+    )?;
+    Ok(())
+}
+
+/// Clears a staged revert without deleting anything — the redo primitive.
+/// The previously staged-away turns return to the conversation untouched.
+/// Idempotent: answers 204 whether or not a marker was staged.
+pub(crate) fn clear_staged_revert(server: &OpenCodeServer, session_id: &str) -> anyhow::Result<()> {
+    server.request_with_timeout(
+        "DELETE",
+        &format!("/api/session/{}/revert", encode_path_segment(session_id)),
         None,
         REVERT_HTTP_TIMEOUT,
     )?;
     Ok(())
+}
+
+/// Undoes the newest native user message: stages a revert boundary on it, or
+/// moves an existing boundary one user message back. Boundaries are message
+/// level, matching OpenCode's own undo: steering and other non-turn user
+/// messages count too, so the caller must not index with client-side turn
+/// counts. The staged-away messages stay in storage for redo.
+pub(crate) fn undo_last_turn_on_server(
+    server: &OpenCodeServer,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let native = native_messages(server, session_id)?;
+    let boundary = match native_revert_boundary(server, session_id)? {
+        Some(current) => {
+            let index = native
+                .user_ids
+                .iter()
+                .position(|id| id == &current)
+                .ok_or_else(|| {
+                    anyhow!("the staged revert boundary is no longer a user message of this conversation")
+                })?;
+            if index == 0 {
+                bail!("there is nothing left to undo");
+            }
+            native.user_ids[index - 1].clone()
+        }
+        None => native
+            .user_ids
+            .last()
+            .ok_or_else(|| anyhow!("there is nothing left to undo"))?
+            .clone(),
+    };
+    stage_revert(server, session_id, &boundary)
+}
+
+/// Redoes previously undone messages: clears the staged revert so the
+/// staged-away messages return to the conversation. Clearing is idempotent —
+/// when the marker is already gone (another client moved it, or a prompt
+/// committed the revert server-side) this still succeeds and the caller
+/// refetches the transcript to resynchronize.
+pub(crate) fn redo_turn_on_server(server: &OpenCodeServer, session_id: &str) -> anyhow::Result<()> {
+    clear_staged_revert(server, session_id)
 }
 
 fn retained_turn_count(total_turns: usize, turns_to_remove: usize) -> anyhow::Result<usize> {

@@ -1106,6 +1106,39 @@ fn fork_provider_session(
                 None,
             )
         }
+        // Undo and redo never change the conversation identity either: a
+        // staged boundary only decides what the next model call sees, and a
+        // cleared one restores what staging hid.
+        ProviderSessionForkRequest::OpenCodeUndoTurn {
+            binary,
+            cwd,
+            session_id,
+        } => {
+            let server = crate::opencode_pool::acquire(&binary, &cwd)?;
+            crate::opencode_session::undo_last_turn_on_server(&server, &session_id)?;
+            (
+                ProviderResumeCursor::OpenCode {
+                    session_id: session_id.clone(),
+                },
+                HashMap::new(),
+                None,
+            )
+        }
+        ProviderSessionForkRequest::OpenCodeRedoTurn {
+            binary,
+            cwd,
+            session_id,
+        } => {
+            let server = crate::opencode_pool::acquire(&binary, &cwd)?;
+            crate::opencode_session::redo_turn_on_server(&server, &session_id)?;
+            (
+                ProviderResumeCursor::OpenCode {
+                    session_id: session_id.clone(),
+                },
+                HashMap::new(),
+                None,
+            )
+        }
     };
     Ok(ProviderSessionFork {
         cursor,

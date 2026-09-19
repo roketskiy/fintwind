@@ -1405,6 +1405,14 @@ pub struct Fintwind {
     native_transcript_fetched: HashMap<Uuid, u64>,
     /// Native transcript fetches in flight, keyed by session id.
     native_transcript_fetches: HashSet<Uuid>,
+    /// Sessions with a staged session-level undo. The value is the number of
+    /// native user turns the conversation currently keeps, so repeated undos
+    /// walk backwards and redo is available while the count sits below what
+    /// the conversation had. Cleared when a new prompt deletes the
+    /// staged-away turns server-side. Runtime-only.
+    staged_undos: HashMap<Uuid, usize>,
+    /// Session-level undo/redo daemon RPCs in flight, keyed by session id.
+    undo_redo_preparations: HashSet<Uuid>,
     /// Last reconcile/fetch failure, shown next to the sidebar. `None` means
     /// the last attempt succeeded (or none ran yet).
     native_reconcile_error: Option<String>,
@@ -2997,6 +3005,8 @@ impl Fintwind {
                 native_reconcile_generation: 0,
                 native_transcript_fetched: HashMap::new(),
                 native_transcript_fetches: HashSet::new(),
+                staged_undos: HashMap::new(),
+                undo_redo_preparations: HashSet::new(),
                 native_reconcile_error: None,
                 providers_form_format: Default::default(),
                 providers_form_models: Vec::new(),

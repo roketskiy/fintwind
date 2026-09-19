@@ -40,6 +40,8 @@ command_palette.hide_sidebar: 隐藏侧边栏
 command_palette.show_right_panel: 显示右侧面板
 command_palette.hide_right_panel: 隐藏右侧面板
 command_palette.current: 当前
+command_palette.undo_turn: 撤销上一轮回复
+command_palette.redo_turn: 恢复已撤销的回复
 command_palette.you: 你
 command_palette.agent: 智能体
 command_palette.no_results: 未找到匹配的任务或命令
@@ -365,6 +367,13 @@ session.revert_to_here: 回退到这里
 session.revert_to_here_title: 回退到这里
 session.reverting_message: 正在回退消息…
 session.reverting_message_title: 正在回退消息…
+session.undone: 已撤销上一轮回复 — 发送新消息将彻底删除它，也可执行恢复找回
+session.undo_failed: "无法撤销上一轮回复：%{error}"
+session.redone: 已恢复被撤销的回复
+session.redo_failed: "无法恢复被撤销的回复：%{error}"
+session.nothing_to_undo: 没有可撤销的回复
+session.nothing_to_redo: 没有可恢复的回复
+session.rewind_during_undo: 请等待撤销完成后再回退对话
 time.yesterday_at: 昨天 %{time}
 time.weekday_at: "%{weekday} %{time}"
 time.date_at: "%{month}月%{day}日 %{time}"

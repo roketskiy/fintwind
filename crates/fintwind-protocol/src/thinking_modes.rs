@@ -60,6 +60,23 @@ mod tests {
         assert_eq!(model.name, "GPT-5.5");
         assert!(model.thinking_modes.iter().any(|mode| mode.is_default));
         assert_eq!(find("claude-opus-4-7", None).unwrap().name, "Opus 4.7");
+        assert_eq!(
+            find("stepfun/step-5-preview", None).unwrap().name,
+            "Step 5 Preview"
+        );
+        let step_flash = find("step-3.7-flash", None).unwrap();
+        assert_eq!(step_flash.name, "Step 3.7 Flash");
+        assert!(
+            step_flash
+                .thinking_modes
+                .iter()
+                .any(|mode| mode.mode_key == "medium" && mode.is_default)
+        );
+        assert_eq!(
+            find("step-3.5-flash-2603", None).unwrap().name,
+            "Step 3.5 Flash 2603"
+        );
+        assert_eq!(find("step-3.5-flash", None).unwrap().name, "Step 3.5 Flash");
         assert!(find("gpt-5.5-unknown", None).is_none());
     }
 }

@@ -154,4 +154,42 @@ mod tests {
         assert_eq!(spec["variants"]["low"]["thinking"]["budgetTokens"], 1024);
         assert_eq!(spec["variants"]["max"]["thinking"]["budgetTokens"], 24576);
     }
+
+    #[test]
+    fn stepfun_flash_uses_effort_levels_with_medium_default() {
+        let mut spec = Map::new();
+        fill_model_variants(
+            &mut spec,
+            "step-3.7-flash",
+            Some("Step 3.7 Flash"),
+            ProviderApiFormat::OpenAi,
+        );
+        assert_eq!(spec["variants"]["low"]["reasoningEffort"], "low");
+        assert_eq!(spec["variants"]["medium"]["reasoningEffort"], "medium");
+        assert_eq!(spec["variants"]["high"]["reasoningEffort"], "high");
+        assert_eq!(spec["options"]["reasoningEffort"], "medium");
+        assert!(spec["variants"].get("nothinking").is_none());
+        assert!(spec["variants"].get("deep").is_none());
+
+        spec.clear();
+        fill_model_variants(&mut spec, "step-3.5-flash", None, ProviderApiFormat::OpenAi);
+        assert_eq!(
+            spec["variants"]["thinking"],
+            json!({"enable_thinking": true})
+        );
+        assert!(spec["variants"].get("low").is_none());
+        assert_eq!(spec["options"]["enable_thinking"], true);
+
+        spec.clear();
+        fill_model_variants(
+            &mut spec,
+            "step-3.5-flash-2603",
+            None,
+            ProviderApiFormat::OpenAi,
+        );
+        assert_eq!(spec["variants"]["low"]["reasoningEffort"], "low");
+        assert_eq!(spec["variants"]["high"]["reasoningEffort"], "high");
+        assert!(spec["variants"].get("medium").is_none());
+        assert_eq!(spec["options"]["reasoningEffort"], "high");
+    }
 }

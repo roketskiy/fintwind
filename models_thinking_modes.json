@@ -50,6 +50,38 @@
     ]
   },
   {
+    "name": "Step 5 Preview",
+    "thinking_modes": [
+      {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      }
+    ]
+  },
+  {
     "name": "Gemini 3.8 Flash",
     "thinking_modes": [
       {
@@ -1434,22 +1466,31 @@
     "name": "Step 3.7 Flash",
     "thinking_modes": [
       {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": true,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）,深度思考（Deeper Thinking Mode）"
-      },
-      {
-        "mode_key": "deep",
-        "name_zh": "深度",
-        "name_en": "Deep",
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
         "mode_type": "tiered",
         "thinking_budget_tokens": null,
         "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）,深度思考（Deeper Thinking Mode）"
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
       }
     ]
   },
@@ -2905,22 +2946,36 @@
     "name": "Step 3.5 Flash",
     "thinking_modes": [
       {
-        "mode_key": "nothinking",
-        "name_zh": "关闭",
-        "name_en": "Off",
-        "mode_type": "toggle",
-        "thinking_budget_tokens": null,
-        "is_default": false,
-        "vendor_label": null
-      },
-      {
         "mode_key": "thinking",
         "name_zh": "开启",
         "name_en": "On",
         "mode_type": "toggle",
         "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      }
+    ]
+  },
+  {
+    "name": "Step 3.5 Flash 2603",
+    "thinking_modes": [
+      {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
         "is_default": false,
-        "vendor_label": "常规模式（Non-Thinking Mode）,思考模式（Thinking Mode）"
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
       }
     ]
   },

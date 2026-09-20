@@ -121,10 +121,6 @@ pub enum Command {
         binary_override: Option<String>,
         discover_models: bool,
         probe_version: bool,
-        /// Workspace OpenCode should load configuration from. Live catalog
-        /// discovery must not use the daemon process cwd.
-        #[serde(default)]
-        directory: Option<PathBuf>,
     },
     FetchPlanUsage {
         binary_override: Option<String>,
@@ -536,29 +532,6 @@ mod tests {
             panic!("unexpected command variant");
         };
         assert_eq!(data, vec![0, 1, 2, 255]);
-    }
-
-    #[test]
-    fn probe_provider_directory_defaults_when_omitted() {
-        let json = serde_json::json!({
-            "type": "probeProvider",
-            "binaryOverride": null,
-            "discoverModels": true,
-            "probeVersion": false,
-        });
-        let Command::ProbeProvider {
-            directory,
-            discover_models,
-            probe_version,
-            binary_override,
-        } = serde_json::from_value(json).unwrap()
-        else {
-            panic!("unexpected command variant");
-        };
-        assert!(directory.is_none());
-        assert!(discover_models);
-        assert!(!probe_version);
-        assert!(binary_override.is_none());
     }
 
     #[test]

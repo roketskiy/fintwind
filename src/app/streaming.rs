@@ -645,16 +645,9 @@ impl Fintwind {
                     self.state.mark_session_dirty(session_id);
                 }
             }
-            DriverEvent::PlanUsageUpdated(usage) => {
-                if let Some(provider) = self
-                    .state
-                    .sessions
-                    .iter()
-                    .find(|session| session.id == session_id)
-                    .map(|session| session.provider.clone())
-                {
-                    self.plan_usage.insert(provider, usage);
-                }
+            DriverEvent::PlanUsageUpdated(_) => {
+                // The account plan meters were retired from the usage panel;
+                // the wire event stays for protocol stability and is ignored.
             }
             DriverEvent::UsageUpdated {
                 context_tokens,
@@ -748,19 +741,6 @@ impl Fintwind {
                 );
                 let previous_kinds = self.snapshot_selected_transcript_rows(session_id);
                 runtime.last_driver_error = None;
-                // A settled turn moved the account's rate-limit needles; ask
-                // that provider's plan meter to refresh once its backoff
-                // allows.
-                if let Some(provider) = self
-                    .state
-                    .sessions
-                    .iter()
-                    .find(|session| session.id == session_id)
-                    .map(|session| session.provider.clone())
-                    .filter(|provider| *provider == usage_meter::PLAN_USAGE_PROVIDER)
-                {
-                    self.plan_usage_stale.insert(provider);
-                }
                 if self
                     .state
                     .sessions

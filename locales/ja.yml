@@ -1128,7 +1128,6 @@ usage.active_day_one: "アクティブ %{count} 日"
 usage.active_day_many: "アクティブ %{count} 日"
 usage.filter_projects: プロジェクトを絞り込む…
 usage.chart_description: "Claude Code と Codex の日別 %{metric}。"
-usage.refresh_failed: "使用状況の更新に失敗しました：%{error}"
 usage.context_used: コンテキストウインドウを %{percent}% 使用（%{shortcut}）
 usage.shortcut: 使用状況（%{shortcut}）
 usage.context_window: コンテキストウインドウ
@@ -1137,10 +1136,7 @@ usage.cache_hit_rate: キャッシュヒット率
 usage.compacting: コンテキストを圧縮中…
 usage.compaction_failed: 圧縮に失敗しました
 usage.compaction_retry: 圧縮を再試行
-usage.plan_limits: プランの使用量上限
-usage.plan_limits_named: プランの使用量上限 · %{plan}
 usage.open_account_settings: アカウントの使用状況設定を開く
-usage.unavailable: 利用不可 — %{error}
 usage.usage_limit: 使用量の上限
 usage.hour_limit: "%{count} 時間の上限"
 usage.day_limit: "%{count} 日間の上限"

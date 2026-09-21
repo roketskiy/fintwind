@@ -1078,7 +1078,6 @@ usage.active_day_one: "%{count} 个活跃日"
 usage.active_day_many: "%{count} 个活跃日"
 usage.filter_projects: 筛选项目…
 usage.chart_description: Claude Code 与 Codex 的每日%{metric}分布。
-usage.refresh_failed: "用量刷新失败：%{error}"
 usage.context_used: 上下文窗口已使用 %{percent}%（%{shortcut}）
 usage.shortcut: 用量（%{shortcut}）
 usage.context_window: 上下文窗口
@@ -1087,10 +1086,7 @@ usage.cache_hit_rate: 缓存命中率
 usage.compacting: 正在压缩上下文…
 usage.compaction_failed: 压缩失败
 usage.compaction_retry: 重试压缩
-usage.plan_limits: 套餐用量限额
-usage.plan_limits_named: 套餐用量限额 · %{plan}
 usage.open_account_settings: 打开账户用量设置
-usage.unavailable: 不可用 — %{error}
 usage.usage_limit: 用量限额
 usage.hour_limit: "%{count} 小时限额"
 usage.day_limit: "%{count} 天限额"

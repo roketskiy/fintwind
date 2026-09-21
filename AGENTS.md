@@ -8,8 +8,6 @@
 - 假定 `bun ./scripts/dev.ts` 已经在运行,并且持有当前的 `fintwind.exe`
   进程。源码变更会被自动重新编译并重启。只有在它尚未启动时才需要你自己运行。
 - 除非被要求,否则不做视觉测试。
-- 禁止写不必要的的注释，例如用户说过的话，会话内容等。
-- 非必要不写小的测试。
 - 开始写代码前对用户的命令有不理解的地方和要补充的及时提问
 - 
 ## development:  
@@ -20,8 +18,7 @@
 
 
 ## 代码审查
-- 单论超过三十行的代码修改时，check完成后调用调用一个子代理审查代码，并修复功能性bug和重大漏洞,然后提问用户是否编译release，以及如何编译release。
-
+- 单论超过三十行的代码修改时，check完成后调用调用一个子代理审查代码，并修复功能性bug和重大漏洞。
 ## Windows release 构建
 
 dev watcher 占用的是 `target/debug/fintwind.exe`，release 写到 `target/release`，两者不冲突，不必停 watcher。两个可执行文件必须放在同一目录：应用从自身旁边启动 `fintwind-daemon.exe`。

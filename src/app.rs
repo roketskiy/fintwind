@@ -894,6 +894,9 @@ struct PendingUserInput {
     question_index: usize,
     selections: HashMap<String, Vec<String>>,
     custom_answers: HashMap<String, String>,
+    /// Whether the card body is folded to its header row. Runtime-only
+    /// presentation state: a fresh request always opens.
+    collapsed: bool,
 }
 
 impl PendingUserInput {
@@ -904,6 +907,7 @@ impl PendingUserInput {
             question_index: 0,
             selections: HashMap::new(),
             custom_answers: HashMap::new(),
+            collapsed: false,
         }
     }
 

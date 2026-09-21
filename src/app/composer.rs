@@ -315,6 +315,53 @@ impl Fintwind {
                 ))
         });
 
+        let toggle_focus =
+            self.transcript_control_focus(format!("user-input-{request_id}-toggle"), cx);
+        let toggle = div()
+            .id(SharedString::from(format!(
+                "user-input-{request_id}-toggle"
+            )))
+            .track_focus(&toggle_focus)
+            .tab_index(0)
+            .tab_stop(true)
+            .w_full()
+            .px(px(6.0))
+            .py(px(2.0))
+            .mx(px(-6.0))
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .cursor_default()
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .hover(|style| style.bg(theme.overlay))
+            .active(|style| style.opacity(0.85))
+            .child(
+                div()
+                    .text_size(ui_px(10.5))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(theme.text_tertiary)
+                    .child(SharedString::from(question.header.clone())),
+            )
+            .children(progress)
+            .child(div().flex_1())
+            .child(icon(
+                if pending.collapsed {
+                    "icons/chevron-down.svg"
+                } else {
+                    "icons/chevron-up.svg"
+                },
+                12.0,
+                theme.text_tertiary,
+            ))
+            .on_click(cx.listener(|this, _, _, cx| this.toggle_user_input_collapsed(cx)))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.toggle_user_input_collapsed(cx);
+                    cx.stop_propagation();
+                }
+            }));
+
         div().flex_none().px(px(20.0)).pb(px(8.0)).child(
             div()
                 .id(SharedString::from(format!("user-input-{request_id}")))
@@ -331,77 +378,66 @@ impl Fintwind {
                 .tab_index(0)
                 .tab_group()
                 .tab_stop(false)
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .child(
-                            div()
-                                .text_size(ui_px(10.5))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text_tertiary)
-                                .child(SharedString::from(question.header.clone())),
-                        )
-                        .children(progress),
-                )
-                .child(
-                    div()
-                        .mt(px(5.0))
-                        .text_size(ui_px(13.0))
-                        .line_height(ui_px(18.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .whitespace_normal()
-                        .child(SharedString::from(question.question.clone())),
-                )
-                .children((!question.options.is_empty()).then_some(options))
-                .child(
-                    div()
-                        .mt(px(if question.options.is_empty() {
-                            9.0
-                        } else {
-                            4.0
-                        }))
-                        .h(px(36.0))
-                        .px(px(10.0))
-                        .rounded(px(8.0))
-                        .border_1()
-                        .border_color(if has_custom {
-                            theme.accent.opacity(0.34)
-                        } else {
-                            theme.border.opacity(0.0)
-                        })
-                        .bg(if has_custom {
-                            theme.accent.opacity(0.06)
-                        } else {
-                            theme.overlay
-                        })
-                        .flex()
-                        .items_center()
-                        .gap(px(7.0))
-                        .text_size(ui_px(12.5))
-                        .line_height(ui_px(17.0))
-                        .child(icon(
-                            "icons/pencil.svg",
-                            12.0,
-                            if has_custom {
-                                theme.accent
+                .child(toggle)
+                .when(!pending.collapsed, |card| {
+                    card.child(
+                        div()
+                            .mt(px(5.0))
+                            .text_size(ui_px(13.0))
+                            .line_height(ui_px(18.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .whitespace_normal()
+                            .child(SharedString::from(question.question.clone())),
+                    )
+                    .children((!question.options.is_empty()).then_some(options))
+                    .child(
+                        div()
+                            .mt(px(if question.options.is_empty() {
+                                9.0
                             } else {
-                                theme.text_ghost
-                            },
-                        ))
-                        .child(self.user_input_answer.clone()),
-                )
-                .child(
-                    div()
-                        .mt(px(8.0))
-                        .flex()
-                        .items_center()
-                        .children(back)
-                        .child(div().flex_1())
-                        .child(continue_button),
-                ),
+                                4.0
+                            }))
+                            .h(px(36.0))
+                            .px(px(10.0))
+                            .rounded(px(8.0))
+                            .border_1()
+                            .border_color(if has_custom {
+                                theme.accent.opacity(0.34)
+                            } else {
+                                theme.border.opacity(0.0)
+                            })
+                            .bg(if has_custom {
+                                theme.accent.opacity(0.06)
+                            } else {
+                                theme.overlay
+                            })
+                            .flex()
+                            .items_center()
+                            .gap(px(7.0))
+                            .text_size(ui_px(12.5))
+                            .line_height(ui_px(17.0))
+                            .child(icon(
+                                "icons/pencil.svg",
+                                12.0,
+                                if has_custom {
+                                    theme.accent
+                                } else {
+                                    theme.text_ghost
+                                },
+                            ))
+                            .child(self.user_input_answer.clone()),
+                    )
+                    .child(
+                        div()
+                            .mt(px(8.0))
+                            .flex()
+                            .items_center()
+                            .children(back)
+                            .child(div().flex_1())
+                            .child(continue_button),
+                    )
+                }),
         )
     }
 

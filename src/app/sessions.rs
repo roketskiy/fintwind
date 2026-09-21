@@ -1381,6 +1381,21 @@ impl Fintwind {
         cx.notify();
     }
 
+    pub(super) fn toggle_user_input_collapsed(&mut self, cx: &mut Context<Self>) {
+        let Some(session_id) = self.state.selected_session else {
+            return;
+        };
+        let Some(pending) = self
+            .runtimes
+            .get_mut(&session_id)
+            .and_then(|runtime| runtime.pending_user_input.as_mut())
+        else {
+            return;
+        };
+        pending.collapsed = !pending.collapsed;
+        cx.notify();
+    }
+
     pub(super) fn advance_user_input(&mut self, cx: &mut Context<Self>) {
         let Some(session_id) = self.state.selected_session else {
             return;

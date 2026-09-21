@@ -537,6 +537,47 @@ impl Backend for FintwindBackend {
                 crate::driver::native::delete_session(&server, &session_id)?;
                 Ok(ResponsePayload::Ack)
             }
+            Command::FetchIntegrations { binary, directory } => {
+                // One round trip to the workspace's OpenCode server; the
+                // connection list is the authorization truth. Blocking I/O,
+                // so this runs on the request thread like the other
+                // sessionless OpenCode reads.
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let integrations = crate::driver::native::list_integrations(&server)?;
+                Ok(ResponsePayload::Integrations { integrations })
+            }
+            Command::AuthorizeProvider {
+                binary,
+                directory,
+                provider_id,
+                key,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                crate::driver::native::authorize_integration(&server, &provider_id, &key)?;
+                Ok(ResponsePayload::Ack)
+            }
+            Command::LogoutProvider {
+                binary,
+                directory,
+                provider_id,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                crate::driver::native::logout_integration(&server, &provider_id)?;
+                Ok(ResponsePayload::Ack)
+            }
+            Command::ProbeBuiltinProvider {
+                binary,
+                directory,
+                provider_id,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let (models, latency_ms) =
+                    crate::driver::native::probe_provider_models(&server, &provider_id)?;
+                Ok(ResponsePayload::BuiltinProviderProbed {
+                    models,
+                    latency_ms,
+                })
+            }
             Command::AuthenticateMcpServer {
                 binary,
                 directory,
@@ -1219,6 +1260,10 @@ fn handle_driver_command(
         | Command::FetchUsageStats { .. }
         | Command::RenameProviderSession { .. }
         | Command::DeleteProviderSession { .. }
+        | Command::FetchIntegrations { .. }
+        | Command::AuthorizeProvider { .. }
+        | Command::LogoutProvider { .. }
+        | Command::ProbeBuiltinProvider { .. }
         | Command::AuthenticateMcpServer { .. }
         | Command::ListMcpServerStatuses { .. }
         | Command::CancelAuthenticateMcpServer { .. }

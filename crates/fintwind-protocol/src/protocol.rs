@@ -8,8 +8,8 @@ use crate::attachments::{AttachmentUpload, StoredAttachment};
 use crate::model::{AgentSession, Project, ProviderProbe, UserInputAnswer};
 use crate::persistence::{ComposerDraftChange, ComposerDrafts, SessionMessageMatch};
 use crate::provider_session::{
-    McpServerStatus, NativeSessionSummary, NativeTranscript, ProviderSessionFork,
-    ProviderSessionForkRequest, UsageStats,
+    IntegrationSummary, McpServerStatus, NativeSessionSummary, NativeTranscript,
+    ProviderSessionFork, ProviderSessionForkRequest, UsageStats,
 };
 use crate::settings::DaemonSettings;
 use crate::skills::SkillsCatalog;
@@ -192,6 +192,40 @@ pub enum Command {
         binary: PathBuf,
         directory: PathBuf,
         session_id: String,
+    },
+    /// List the server's provider integrations: the connectable roster with
+    /// each entry's key-method support and live connections. The connection
+    /// list is the source of truth for authorization; no file is.
+    FetchIntegrations {
+        binary: PathBuf,
+        directory: PathBuf,
+    },
+    /// Authorize a catalog provider on the workspace's OpenCode server via
+    /// its connect API. The running server picks the credential up
+    /// immediately and persists it in its own store, so sessions can use it
+    /// without a restart.
+    AuthorizeProvider {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        key: String,
+    },
+    /// Remove a provider's connected credential from the workspace's
+    /// OpenCode server — the logout. The server owns the credential store,
+    /// so removal goes through it; an already-disconnected provider
+    /// acknowledges without error.
+    LogoutProvider {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+    },
+    /// Ask the workspace's OpenCode server how many models it currently
+    /// exposes for `provider_id`, timed. A credential the server accepts is
+    /// what makes models appear, so the count is the connectivity verdict.
+    ProbeBuiltinProvider {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
     },
     /// Run `opencode mcp auth <name>` on the daemon, open the CLI-printed
     /// authorization URL in the browser, and wait for the flow to finish.
@@ -430,6 +464,13 @@ pub enum ResponsePayload {
     },
     ProviderSessions {
         sessions: Vec<NativeSessionSummary>,
+    },
+    Integrations {
+        integrations: Vec<IntegrationSummary>,
+    },
+    BuiltinProviderProbed {
+        models: usize,
+        latency_ms: u64,
     },
     McpServerStatuses {
         statuses: Vec<McpServerStatus>,

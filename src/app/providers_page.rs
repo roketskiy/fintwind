@@ -51,6 +51,16 @@ fn on_providers_accent(theme: &Theme) -> Hsla {
 
 const PROVIDERS_LIST_WIDTH: f32 = 264.0;
 
+/// The selection namespace that separates a catalog provider's id from a
+/// custom roster id or the CLI's own `opencode` key. The models.dev catalog
+/// ships an `opencode` entry, so a bare id cannot tell the two apart.
+pub(super) const BUILTIN_SELECTION_PREFIX: &str = "builtin:";
+
+/// The selection id for a catalog provider.
+pub(super) fn builtin_selection_id(catalog_id: &str) -> String {
+    format!("{BUILTIN_SELECTION_PREFIX}{catalog_id}")
+}
+
 /// Which detail field a keystroke edit landed in.
 #[derive(Clone, Copy)]
 pub(super) enum ProviderField {
@@ -63,6 +73,17 @@ pub(super) enum ProviderField {
 pub(super) enum ProvidersModelEditor {
     Add,
     Edit(usize),
+}
+
+/// Which stage the add-provider form is in: picking a provider (the list
+/// with Custom pinned first), the custom free-endpoint form, or the key
+/// field of a chosen built-in provider.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) enum ProviderFormStage {
+    #[default]
+    Picking,
+    Custom,
+    Builtin(String),
 }
 
 /// One model draft row of the add-provider form: the id and context-window
@@ -87,10 +108,13 @@ impl Fintwind {
     // ── Selection & state ──────────────────────────────────────────────────
 
     /// The provider id the detail pane shows: the stored selection while it
-    /// still resolves, the built-in provider otherwise.
+    /// still resolves, the built-in provider otherwise. Catalog providers
+    /// are namespaced (`builtin:<id>`) so they can never collide with the
+    /// CLI's own `opencode` key or a custom roster id.
     fn effective_provider_id(&self) -> String {
         match self.providers_selected.as_deref() {
             Some(id) if id == OPENCODE_PROVIDER => id.to_owned(),
+            Some(id) if id.starts_with(BUILTIN_SELECTION_PREFIX) => id.to_owned(),
             Some(id)
                 if self
                     .providers_store
@@ -103,7 +127,31 @@ impl Fintwind {
         }
     }
 
-    fn select_provider(&mut self, id: String, cx: &mut Context<Self>) {
+    /// The catalog id when the selection names a built-in provider.
+    pub(super) fn selected_builtin_catalog_id(&self) -> Option<&str> {
+        self.providers_selected
+            .as_deref()
+            .and_then(|id| id.strip_prefix(BUILTIN_SELECTION_PREFIX))
+    }
+
+    /// Whether `id` has a connected credential on the workspace's OpenCode
+    /// server.
+    pub(super) fn provider_is_authorized(&self, id: &str) -> bool {
+        self.providers_authorized.contains(id)
+    }
+
+    /// Whether the server offers `id` a plain API-key connect method. The
+    /// integration list answers when loaded; until then the catalog's
+    /// endpoint field approximates it, so the roster does not flash the
+    /// OAuth wording while the first fetch is in flight.
+    pub(super) fn provider_supports_key(&self, id: &str) -> bool {
+        if !self.providers_key_methods.is_empty() {
+            return self.providers_key_methods.contains(id);
+        }
+        self.builtin_provider(id).is_some_and(|provider| provider.api.is_some())
+    }
+
+    pub(super) fn select_provider(&mut self, id: String, cx: &mut Context<Self>) {
         self.providers_selected = Some(id.clone());
         self.exit_provider_form(cx);
         self.providers_renaming = false;
@@ -111,6 +159,14 @@ impl Fintwind {
         self.providers_delete_arming = None;
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
+        // A probe verdict describes one catalog provider; another selection
+        // must not show it, and an in-flight one must not land on the new
+        // selection.
+        let catalog_id = id.strip_prefix(BUILTIN_SELECTION_PREFIX);
+        if self.providers_builtin_probe_id.as_deref() != catalog_id {
+            self.providers_builtin_connectivity = None;
+            self.providers_builtin_probe_id = None;
+        }
         self.load_provider_fields(&id, cx);
         self.providers_detail_scroll
             .set_offset(gpui::Point::default());
@@ -128,8 +184,7 @@ impl Fintwind {
             .cloned()
         else {
             return;
-        };
-        self.provider_base_url_input.update(cx, |input, cx| {
+        };        self.provider_base_url_input.update(cx, |input, cx| {
             if input.content() != provider.base_url {
                 input.set_content(provider.base_url.clone(), cx);
             }
@@ -157,8 +212,9 @@ impl Fintwind {
             self.load_provider_fields(&id, cx);
         }
         self.load_providers_from_config(cx);
-        // The modality badges need the metadata table; load it for the visit.
-        self.ensure_models_dev_table(cx);
+        // The built-in roster, the authorized set, and the modality badges'
+        // metadata table all load for the visit.
+        self.ensure_builtin_providers(cx);
     }
 
     // ── Persistence ────────────────────────────────────────────────────────
@@ -293,6 +349,9 @@ impl Fintwind {
 
     fn begin_add_provider(&mut self, cx: &mut Context<Self>) {
         self.providers_adding = true;
+        // The form opens on the picker: built-in first, Custom as the
+        // explicit escape hatch.
+        self.providers_form_stage = ProviderFormStage::Picking;
         self.providers_renaming = false;
         self.providers_delete_arming = None;
         self.providers_model_editor = None;
@@ -310,6 +369,7 @@ impl Fintwind {
             &self.provider_form_name,
             &self.provider_form_base_url,
             &self.provider_form_api_key,
+            &self.provider_form_builtin_search,
         ] {
             input.update(cx, |input, cx| input.set_content(String::new(), cx));
         }
@@ -318,6 +378,16 @@ impl Fintwind {
 
     pub(super) fn submit_provider_form(&mut self, cx: &mut Context<Self>) {
         if !self.providers_adding {
+            return;
+        }
+        // The built-in form has its own submit (the key goes to the
+        // OpenCode server's connect API, not the config roster); Return in
+        // its key field takes that path.
+        if let ProviderFormStage::Builtin(provider_id) = self.providers_form_stage.clone() {
+            self.authorize_builtin_provider(provider_id, cx);
+            return;
+        }
+        if self.providers_form_stage != ProviderFormStage::Custom {
             return;
         }
         let name = self.provider_form_name.read(cx).content().trim().to_owned();
@@ -689,11 +759,35 @@ impl Fintwind {
             "OpenCode".to_owned(),
             "icons/provider-opencode.svg",
             selected_id == OPENCODE_PROVIDER,
-            self.provider_probe().is_some_and(|probe| probe.installed),
+            true,
             theme,
             accent,
             cx,
         ));
+        // Every catalog provider that holds a credential — the authorized
+        // built-ins — joins the roster under the built-in section, namespaced
+        // so a catalog id like `opencode` cannot collide with the CLI's key.
+        if let Some(roster) = self.providers_builtin.as_deref() {
+            for provider in roster.sorted() {
+                if !self.provider_is_authorized(&provider.id) {
+                    continue;
+                }
+                rows = rows.child(self.render_provider_list_row(
+                    SharedString::from(format!(
+                        "provider-row-builtin-{}",
+                        provider.id
+                    )),
+                    builtin_selection_id(&provider.id),
+                    provider.name.clone(),
+                    provider_icon(&provider.name),
+                    selected_id == builtin_selection_id(&provider.id),
+                    true,
+                    theme,
+                    accent,
+                    cx,
+                ));
+            }
+        }
 
         rows = rows.child(section_label(theme, tr!("providers.section_custom"), false));
         for (index, provider) in self.providers_store.iter().enumerate() {
@@ -929,10 +1023,17 @@ impl Fintwind {
         if self.providers_adding {
             return self.render_provider_form(theme, cx);
         }
-        if self.effective_provider_id() != OPENCODE_PROVIDER {
-            if let Some(provider) = self.selected_custom_provider() {
-                return self.render_custom_provider_detail(&provider, theme, cx);
-            }
+        // An authorized built-in's page, namespaced from custom ids.
+        if let Some(builtin) = self
+            .selected_builtin_catalog_id()
+            .and_then(|catalog_id| self.builtin_provider(catalog_id))
+        {
+            return self.render_builtin_provider_page(builtin, theme, cx);
+        }
+        if self.effective_provider_id() != OPENCODE_PROVIDER
+            && let Some(provider) = self.selected_custom_provider()
+        {
+            return self.render_custom_provider_detail(&provider, theme, cx);
         }
         self.render_builtin_provider_detail(theme, cx)
     }
@@ -1153,6 +1254,242 @@ impl Fintwind {
                 ),
         )
     }
+
+    /// An authorized built-in provider's page: identity and endpoint facts
+    /// from the catalog, its model list, and the connectivity test. The
+    /// credential itself never renders — it lives in the OpenCode server's
+    /// own credential store — so the destructive action is the logout, not
+    /// a delete.
+    fn render_builtin_provider_page(
+        &self,
+        provider: &fintwind_client::models_dev::ModelsDevProvider,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let accent = providers_accent(theme);
+        let authorized = self.provider_is_authorized(&provider.id);
+
+        let state = self.providers_builtin_connectivity.as_ref().filter(|_| {
+            self.providers_builtin_probe_id.as_deref() == Some(provider.id.as_str())
+        });
+        let connectivity = self.render_builtin_connectivity_field(state, provider, theme, cx);
+
+        let mut model_rows = div().flex().flex_col();
+        if provider.models.is_empty() {
+            model_rows = model_rows.child(
+                div()
+                    .px(px(10.0))
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(icon("icons/info.svg", 12.0, theme.text_tertiary))
+                    .child(
+                        div()
+                            .text_size(ui_px(10.5))
+                            .line_height(ui_px(15.0))
+                            .text_color(theme.text_tertiary)
+                            .child(tr!("providers.models_empty")),
+                    ),
+            );
+        }
+        for (index, model) in provider.models.iter().enumerate().take(200) {
+            let modality_pill = self.model_modality_pill(
+                theme,
+                &model.id,
+                &[],
+                SharedString::from(format!("builtin-modality-{index}")),
+            );
+            model_rows = model_rows.child(
+                div()
+                    .px(px(10.0))
+                    .h(px(36.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .when(index > 0, |element| {
+                        element.border_t_1().border_color(theme.border)
+                    })
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(ui_px(11.0))
+                            .text_color(theme.text)
+                            .child(
+                                model.name.clone().unwrap_or_else(|| model.id.clone()),
+                            ),
+                    )
+                    .when(model.name.is_some(), |element| {
+                        element.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .font_family(crate::md::render::mono_family())
+                                .text_size(ui_px(9.5))
+                                .text_color(theme.text_tertiary)
+                                .child(SharedString::from(model.id.clone())),
+                        )
+                    })
+                    .when(model.name.is_none(), |element| element.child(div().flex_1()))
+                    .children(modality_pill)
+                    .when_some(model.context_window, |element, window| {
+                        element.child(small_pill(
+                            theme,
+                            custom_providers::format_context_window(window),
+                            None,
+                        ))
+                    }),
+            );
+        }
+        let hidden = provider.models.len().saturating_sub(200);
+        let model_count_note = (hidden > 0).then(|| {
+            SharedString::from(tr!("providers.builtin_models_truncated", count = hidden))
+        });
+
+        let logout_button = div()
+            .id("logout-builtin-provider")
+            .tab_index(0)
+            .focus_visible(|style| style.border_color(theme.danger))
+            .h(px(30.0))
+            .px(px(10.0))
+            .rounded(px(7.0))
+            .border_1()
+            .border_color(theme.border_strong)
+            .flex()
+            .flex_none()
+            .items_center()
+            .gap(px(6.0))
+            .cursor_default()
+            .text_size(ui_px(12.0))
+            .text_color(theme.text_secondary)
+            .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
+            .active(|element| element.bg(theme.overlay_strong).text_color(theme.danger))
+            .child(icon("icons/log-out.svg", 12.5, theme.text_tertiary))
+            .child(tr!("providers.logout"))
+            .on_click(cx.listener({
+                let id = provider.id.clone();
+                move |this, _, _, cx| {
+                    this.logout_builtin_provider(id.clone(), cx);
+                }
+            }))
+            .on_key_down(cx.listener({
+                let id = provider.id.clone();
+                move |this, event: &KeyDownEvent, _, cx| {
+                    if !event.keystroke.modifiers.modified()
+                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    {
+                        this.logout_builtin_provider(id.clone(), cx);
+                        cx.stop_propagation();
+                    }
+                }
+            }));
+
+        self.scrollable_detail(
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(12.0))
+                        .child(provider_tile(theme, provider_icon(&provider.name), authorized))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .child(
+                                    div()
+                                        .text_size(ui_px(15.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text)
+                                        .child(SharedString::from(provider.name.clone())),
+                                )
+                                .child(
+                                    div()
+                                        .mt(px(2.0))
+                                        .min_w_0()
+                                        .truncate()
+                                        .font_family(crate::md::render::mono_family())
+                                        .text_size(ui_px(10.0))
+                                        .text_color(theme.text_tertiary)
+                                        .child(SharedString::from(provider.id.clone())),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .px(px(7.0))
+                                .py(px(2.0))
+                                .rounded_full()
+                                .text_size(ui_px(9.5))
+                                .when(authorized, |element| {
+                                    element.text_color(accent).bg(accent.opacity(0.14))
+                                })
+                                .when(!authorized, |element| {
+                                    element
+                                        .text_color(theme.text_tertiary)
+                                        .bg(theme.overlay)
+                                })
+                                .child(if authorized {
+                                    tr!("providers.authorized_badge")
+                                } else {
+                                    tr!("providers.unauthorized_badge")
+                                }),
+                        )
+                        .child(logout_button),
+                )
+                .when_some(provider.api.clone(), |element, api| {
+                    element.child(
+                        div()
+                            .mt(px(6.0))
+                            .pl(px(50.0))
+                            .min_w_0()
+                            .truncate()
+                            .font_family(crate::md::render::mono_family())
+                            .text_size(ui_px(10.5))
+                            .text_color(theme.text_tertiary)
+                            .child(SharedString::from(api)),
+                    )
+                })
+                .child(
+                    div()
+                        .mt(px(16.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(14.0))
+                        .child(connectivity),
+                )
+                .child(info_note(
+                    theme,
+                    "icons/lock.svg",
+                    tr!("providers.builtin_key_hidden"),
+                ))
+                .child(
+                    div()
+                        .mt(px(18.0))
+                        .child(models_header_with_label(theme, tr!("providers.models_label"))),
+                )
+                .child(
+                    div()
+                        .mt(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .rounded(px(9.0))
+                        .overflow_hidden()
+                        .child(model_rows),
+                )
+                .children(model_count_note.map(|note| {
+                    div()
+                        .mt(px(6.0))
+                        .text_size(ui_px(10.0))
+                        .text_color(theme.text_ghost)
+                        .child(note)
+                })),
+        )
+    }
+
 
     fn render_custom_provider_detail(
         &self,
@@ -1882,7 +2219,389 @@ impl Fintwind {
 
     // ── Add-provider form ──────────────────────────────────────────────────
 
+    fn select_form_builtin(
+        &mut self,
+        provider_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        self.providers_form_stage = match provider_id {
+            Some(id) => ProviderFormStage::Builtin(id),
+            None => ProviderFormStage::Custom,
+        };
+        // A key typed for one provider must not ride along to another choice.
+        self.provider_form_api_key
+            .update(cx, |input, cx| input.set_content(String::new(), cx));
+        self.providers_form_connectivity = None;
+        cx.notify();
+    }
+
     fn render_provider_form(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        match &self.providers_form_stage {
+            ProviderFormStage::Picking => self.render_form_picker(theme, cx),
+            ProviderFormStage::Builtin(provider_id) => {
+                self.render_builtin_form(provider_id, theme, cx)
+            }
+            ProviderFormStage::Custom => self.render_custom_form(theme, cx),
+        }
+    }
+
+    /// The add form's first page: the built-in provider list (searchable,
+    /// Custom pinned first as the explicit "none of these" escape). Picking a
+    /// row moves to that provider's key form or the custom form.
+    fn render_form_picker(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let accent = providers_accent(theme);
+        let query = self
+            .provider_form_builtin_search
+            .read(cx)
+            .content()
+            .trim()
+            .to_lowercase();
+        let matches = |name: &str, id: &str| {
+            query.is_empty()
+                || name.to_lowercase().contains(&query)
+                || id.to_lowercase().contains(&query)
+        };
+        let mut rows = div().flex().flex_col();
+        // Custom stays first even while searching, so the free-endpoint
+        // form is always one click from the top of the picker.
+        rows = rows.child(self.render_form_picker_row(
+            "form-picker-custom",
+            None,
+            tr!("providers.form_custom_label"),
+            "icons/plus.svg",
+            None,
+            false,
+            theme,
+            accent,
+            cx,
+        ));
+        if let Some(roster) = self.providers_builtin.as_deref() {
+            for provider in roster.sorted() {
+                if !matches(&provider.name, &provider.id) {
+                    continue;
+                }
+                let authorized = self.provider_is_authorized(&provider.id);
+                let is_oauth = !self.provider_supports_key(&provider.id);
+                rows = rows.child(self.render_form_picker_row(
+                    SharedString::from(format!("form-picker-{}", provider.id)),
+                    Some(provider.id.clone()),
+                    provider.name.clone(),
+                    provider_icon(&provider.name),
+                    if authorized {
+                        Some(tr!("providers.authorized_badge"))
+                    } else if is_oauth {
+                        Some(tr!("providers.oauth_badge"))
+                    } else {
+                        None
+                    },
+                    true,
+                    theme,
+                    accent,
+                    cx,
+                ));
+            }
+        }
+
+        self.scrollable_detail(
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(ui_px(15.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(tr!("providers.form_title")),
+                )
+                .child(
+                    div()
+                        .mt(px(4.0))
+                        .text_size(ui_px(11.5))
+                        .line_height(ui_px(17.0))
+                        .text_color(theme.text_secondary)
+                        .child(tr!("providers.picker_description")),
+                )
+                .child(
+                    div()
+                        .mt(px(16.0))
+                        .child(
+                            TextField::new(
+                                "provider-form-builtin-search",
+                                self.provider_form_builtin_search.clone(),
+                            )
+                            .icon("icons/search.svg", 13.0),
+                        ),
+                )
+                .child(
+                    div()
+                        .mt(px(8.0))
+                        .border_1()
+                        .border_color(theme.border)
+                        .rounded(px(9.0))
+                        .overflow_hidden()
+                        .child(rows),
+                )
+                .child(
+                    div()
+                        .mt(px(18.0))
+                        .pt(px(14.0))
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .child(div().flex_1())
+                        .child(
+                            outline_button(
+                                "cancel-provider-form",
+                                tr!("common.cancel"),
+                                None,
+                                theme,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.exit_provider_form(cx);
+                            })),
+                        ),
+                ),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_form_picker_row(
+        &self,
+        id: impl Into<ElementId>,
+        provider_id: Option<String>,
+        label: String,
+        icon_path: &'static str,
+        badge: Option<String>,
+        separator: bool,
+        theme: &Theme,
+        accent: Hsla,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let click_provider_id = provider_id.clone();
+        let key_provider_id = provider_id.clone();
+        div()
+            .id(id)
+            .tab_index(0)
+            .focus_visible(|style| style.border_1().border_color(accent))
+            .w_full()
+            .px(px(10.0))
+            .h(px(44.0))
+            .flex()
+            .items_center()
+            .gap(px(9.0))
+            .cursor_default()
+            .when(separator, |element| {
+                element.border_t_1().border_color(theme.border)
+            })
+            .hover(|element| element.bg(theme.overlay))
+            .active(|element| element.bg(theme.overlay_strong))
+            .child(
+                div()
+                    .w(px(24.0))
+                    .h(px(24.0))
+                    .flex_none()
+                    .rounded(px(2.0))
+                    .bg(theme.overlay)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(icon(icon_path, 12.0, theme.text_secondary)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(ui_px(12.5))
+                    .text_color(theme.text)
+                    .child(label),
+            )
+            .children(badge.map(|badge| {
+                div()
+                    .px(px(7.0))
+                    .py(px(2.0))
+                    .rounded_full()
+                    .text_size(ui_px(9.5))
+                    .text_color(accent)
+                    .bg(accent.opacity(0.14))
+                    .child(badge)
+            }))
+            .child(icon("icons/chevron-right.svg", 12.0, theme.text_ghost))
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.select_form_builtin(click_provider_id.clone(), cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if !event.keystroke.modifiers.modified()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    this.select_form_builtin(key_provider_id.clone(), cx);
+                    cx.stop_propagation();
+                }
+            }))
+    }
+
+    /// The add form for a built-in provider: the picker and one key field.
+    /// The submit connects the key through the OpenCode server's connect
+    /// API — the same path the TUI's /connect takes — and selects the
+    /// provider.
+    fn render_builtin_form(
+        &self,
+        provider_id: &str,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let accent = providers_accent(theme);
+        let provider_id = provider_id.to_owned();
+        let provider = self.builtin_provider(&provider_id);
+        let name = provider
+            .map(|provider| provider.name.clone())
+            .unwrap_or_else(|| provider_id.clone());
+        let key = self
+            .provider_form_api_key
+            .read(cx)
+            .content()
+            .trim()
+            .to_owned();
+        let authorized = self.provider_is_authorized(&provider_id);
+        // An OAuth-gated provider has no key to type; the form explains the
+        // CLI flow instead of accepting a credential it cannot store.
+        let is_oauth = !self.provider_supports_key(&provider_id);
+
+        let submit_button = div()
+            .id("submit-builtin-form")
+            .tab_index(0)
+            .focus_visible(|style| style.border_color(accent))
+            .h(px(32.0))
+            .px(px(16.0))
+            .rounded(px(8.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_default()
+            .text_size(ui_px(12.0))
+            .font_weight(FontWeight::MEDIUM)
+            .when(!is_oauth && !key.is_empty(), |element| {
+                element
+                    .bg(accent)
+                    .text_color(on_providers_accent(theme))
+                    .hover(|element| element.bg(accent.opacity(0.85)))
+                    .active(|element| element.bg(accent.opacity(0.72)))
+                    .on_click(cx.listener({
+                        let provider_id = provider_id.clone();
+                        move |this, _, _, cx| {
+                            this.authorize_builtin_provider(provider_id.clone(), cx);
+                        }
+                    }))
+                    .on_key_down(cx.listener({
+                        let provider_id = provider_id.clone();
+                        move |this, event: &KeyDownEvent, _, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.authorize_builtin_provider(provider_id.clone(), cx);
+                                cx.stop_propagation();
+                            }
+                        }
+                    }))
+            })
+            .when(is_oauth || key.is_empty(), |element| {
+                element
+                    .border_1()
+                    .border_color(theme.border_strong)
+                    .text_color(theme.text_ghost)
+            })
+            .child(if authorized {
+                tr!("providers.update_key")
+            } else {
+                tr!("providers.authorize_action")
+            });
+
+        self.scrollable_detail(
+            div()
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .text_size(ui_px(15.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(tr!("providers.form_title")),
+                )
+                .child(
+                    div()
+                        .mt(px(4.0))
+                        .text_size(ui_px(11.5))
+                        .line_height(ui_px(17.0))
+                        .text_color(theme.text_secondary)
+                        .child(tr!("providers.form_description")),
+                )
+                .child(
+                    div()
+                        .mt(px(16.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(14.0))
+                        .child(
+                            small_action_button(
+                                "back-to-form-picker",
+                                "icons/arrow-left.svg",
+                                tr!("providers.back_to_picker"),
+                                theme.text_secondary,
+                                theme,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.providers_form_stage = ProviderFormStage::Picking;
+                                cx.notify();
+                            })),
+                        )
+                        .when(!is_oauth, |element| {
+                            element.child(labeled_field(
+                                theme,
+                                tr!("providers.api_key_label"),
+                                TextField::new(
+                                    "provider-form-api-key-field",
+                                    self.provider_form_api_key.clone(),
+                                )
+                                .w_full(),
+                            ))
+                        })
+                        .when(is_oauth, |element| {
+                            element.child(info_note(
+                                theme,
+                                "icons/info.svg",
+                                tr!("providers.oauth_cli_hint", name = name.clone()),
+                            ))
+                        }),
+                )
+                .child(
+                    div()
+                        .mt(px(18.0))
+                        .pt(px(14.0))
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .flex()
+                        .items_center()
+                        .gap(px(10.0))
+                        .child(div().flex_1())
+                        .child(
+                            outline_button(
+                                "cancel-provider-form",
+                                tr!("common.cancel"),
+                                None,
+                                theme,
+                            )
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.exit_provider_form(cx);
+                            })),
+                        )
+                        .child(submit_button),
+                ),
+        )
+    }
+
+    fn render_custom_form(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let accent = providers_accent(theme);
         let name = self.provider_form_name.read(cx).content().trim().to_owned();
         let base_url = self
@@ -2220,8 +2939,29 @@ impl Fintwind {
 
 // ── Small shared pieces ────────────────────────────────────────────────────
 
-pub(super) fn section_label(theme: &Theme, label: String, first: bool) -> Div {
+/// A Models section header without a button — the built-in page's model
+/// list is read-only, so the label carries the row alone.
+fn models_header_with_label(theme: &Theme, label: String) -> Div {
     div()
+        .flex()
+        .items_center()
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .pt(px(2.0))
+                .pb(px(4.0))
+                .px(px(9.0))
+                .flex()
+                .items_baseline()
+                .text_size(ui_px(9.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(theme.text_tertiary)
+                .child(SharedString::from(label.to_uppercase())),
+        )
+}
+
+pub(super) fn section_label(theme: &Theme, label: String, first: bool) -> Div {    div()
         .w_full()
         .pt(px(if first { 2.0 } else { 16.0 }))
         .pb(px(4.0))

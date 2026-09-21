@@ -1381,6 +1381,32 @@ pub struct Fintwind {
     /// Generation token for the background config load; a newer load
     /// supersedes an older one's result.
     providers_load_generation: usize,
+    /// The models.dev provider roster: the built-in providers the add form's
+    /// picker offers and the built-in pages' model lists. Loaded on page
+    /// open, cached beside the model table.
+    providers_builtin: Option<std::sync::Arc<fintwind_client::models_dev::ModelsDevProviders>>,
+    /// The built-in provider roster's load is in flight.
+    providers_builtin_loading: bool,
+    /// The provider ids with a connected credential on the workspace's
+    /// OpenCode server — the authorized set. The server's connection list,
+    /// not any file, is the source of truth: it counts credentials made
+    /// here, in the CLI, and in the TUI alike.
+    providers_authorized: std::collections::HashSet<String>,
+    /// The integration ids the server offers a plain API-key connect method
+    /// for. Everything else in the roster authorizes through OAuth, an env
+    /// var, or a command — never through this app's key form.
+    providers_key_methods: std::collections::HashSet<String>,
+    /// The integration fetch (authorization set included) is in flight.
+    providers_auth_loading: bool,
+    /// A connectivity probe of the selected built-in provider is in flight.
+    providers_builtin_connectivity:
+        Option<providers_fetch::ProviderConnectivityState>,
+    /// The id of the built-in provider the current connectivity probe names;
+    /// a stale result for a different provider never renders.
+    providers_builtin_probe_id: Option<String>,
+    /// Which provider the add form has picked — the picker page, the custom
+    /// free-endpoint form, or a chosen built-in provider's key form.
+    providers_form_stage: providers_page::ProviderFormStage,
     /// The models.dev metadata table from the latest successful fetch. It
     /// answers the Providers page's fetch-models action while fresh and
     /// serves as the offline fallback; render reads it only for the in-memory
@@ -1444,6 +1470,8 @@ pub struct Fintwind {
     provider_form_name: Entity<ComposerInput>,
     provider_form_base_url: Entity<ComposerInput>,
     provider_form_api_key: Entity<ComposerInput>,
+    /// The add form's search over the built-in provider picker.
+    provider_form_builtin_search: Entity<ComposerInput>,
     /// Scroll positions of the Providers page's panes, tracked so they can
     /// draw scrollbars and reset per selection.
     providers_list_scroll: ScrollHandle,
@@ -2057,6 +2085,11 @@ impl Fintwind {
                 .search_field()
                 .placeholder(tr!("providers.api_key_placeholder"))
         });
+        let provider_form_builtin_search = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("providers.builtin_search_placeholder"))
+        });
         let mcp_search = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
@@ -2634,6 +2667,12 @@ impl Fintwind {
                 })
                 .detach();
             }
+            cx.subscribe(&provider_form_builtin_search, |_: &mut Self, _, event: &ComposerEvent, cx| {
+                if matches!(event, ComposerEvent::Edited) {
+                    cx.notify();
+                }
+            })
+            .detach();
             cx.subscribe(&mcp_search, |_: &mut Self, _, event: &ComposerEvent, cx| {
                 if matches!(event, ComposerEvent::Edited) {
                     cx.notify();
@@ -2997,6 +3036,14 @@ impl Fintwind {
                 providers_commit_generation: 0,
                 providers_store: Vec::new(),
                 providers_load_generation: 0,
+                providers_builtin: None,
+                providers_builtin_loading: false,
+                providers_authorized: HashSet::new(),
+                providers_key_methods: HashSet::new(),
+                providers_auth_loading: false,
+                providers_builtin_connectivity: None,
+                providers_builtin_probe_id: None,
+                providers_form_stage: Default::default(),
                 models_dev_table: None,
                 models_dev_fetching: false,
                 models_dev_loading: false,
@@ -3023,6 +3070,7 @@ impl Fintwind {
                 provider_form_name,
                 provider_form_base_url,
                 provider_form_api_key,
+                provider_form_builtin_search,
                 providers_list_scroll: ScrollHandle::new(),
                 providers_list_scrollbar: ScrollbarState::new(),
                 providers_detail_scroll: ScrollHandle::new(),

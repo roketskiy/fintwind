@@ -85,6 +85,21 @@ pub struct McpServerStatus {
     pub error: Option<String>,
 }
 
+/// One connectable provider integration as the OpenCode server reports it.
+/// The server owns the credential store, so its connection list — not any
+/// file — is the source of truth for whether a provider is authorized.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationSummary {
+    pub id: String,
+    pub name: String,
+    /// Whether the server offers a plain API-key connect method for this
+    /// integration; OAuth- or env-only integrations cannot take a key.
+    pub supports_key: bool,
+    /// Whether at least one credential is connected for it.
+    pub connected: bool,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum McpConnectionState {

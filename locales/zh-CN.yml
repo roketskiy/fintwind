@@ -128,6 +128,24 @@ providers.checked_minutes_ago: "%{count} 分钟前检查过"
 providers.checked_hours_ago: "%{count} 小时前检查过"
 providers.section_builtin: 内置
 providers.section_custom: 自定义供应商
+providers.builtin_search_placeholder: 搜索供应商…
+providers.form_custom_label: 自定义
+providers.back_to_picker: 返回供应商列表
+providers.picker_description: 选择一个供应商进行授权，或选择自定义接入自己的端点。
+providers.oauth_badge: OAuth
+providers.authorize_action: 授权
+providers.update_key: 更新密钥
+providers.authorized_badge: 已授权
+providers.unauthorized_badge: 未授权
+providers.authorized_toast: 供应商已授权
+providers.logged_out_toast: 供应商已登出
+providers.logout: 登出
+providers.builtin_key_hidden: API Key 保存在 OpenCode 自己的凭据库中，由 opencode CLI 管理，此处不会显示。
+providers.builtin_no_endpoint: 该供应商不支持 API Key 登录（走 OAuth、环境变量或 opencode CLI），此处没有可测试的连接。
+providers.builtin_models_truncated: 还有 %{count} 个模型未显示
+providers.oauth_cli_hint: "%{name} 通过 OAuth 登录。请在终端运行 opencode auth login，或在 TUI 中使用 /connect，然后刷新此页面。"
+providers.auth_load_failed: "无法读取 OpenCode 的连接状态：%{error}"
+providers.auth_save_failed: "无法更新 OpenCode 的凭据：%{error}"
 providers.custom_count_zero: 尚无自定义供应商
 providers.custom_count_one: "%{count} 个自定义供应商"
 providers.custom_count_many: "%{count} 个自定义供应商"
@@ -178,7 +196,7 @@ providers.fetch_failed: "无法获取模型列表：%{error}"
 providers.connectivity_label: 连通性
 providers.test_connection: 测试连接
 providers.testing_connection: 测试中…
-providers.connection_tooltip: 向端点发送模型列表请求并测量响应
+providers.connection_tooltip: 向 OpenCode 服务查询该供应商可用的模型数量并测量响应
 providers.connection_ok: "已连通 · %{latency} · %{count} 个模型"
 providers.connection_failed: "连接失败：%{error}"
 providers.error_invalid_url: Base URL 不是 http(s) 地址

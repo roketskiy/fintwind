@@ -50,6 +50,67 @@ pub struct ModelsDevModel {
     pub output_modalities: Vec<String>,
 }
 
+/// One built-in provider of the catalog: the identity and endpoint facts the
+/// Providers page needs to present it — its id (the OpenCode integration id
+/// it authorizes under), display name, API endpoint when the provider
+/// serves one directly (OAuth-gated relays omit it), the SDK package that
+/// names its wire protocol, and its model roster. No credential ever lives
+/// here.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelsDevProvider {
+    pub id: String,
+    pub name: String,
+    pub api: Option<String>,
+    pub npm: Option<String>,
+    pub models: Vec<ModelsDevModel>,
+}
+
+/// The catalog's provider roster, keyed by provider id, plus when it was
+/// fetched. Built alongside [`ModelsDevTable`] from the same download, so
+/// both answer from one network hit and one cache file.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelsDevProviders {
+    pub fetched_at: u64,
+    providers: BTreeMap<String, ModelsDevProvider>,
+    /// Provider ids in display-name order, built at parse time so neither
+    /// render nor the picker ever sorts the roster per frame.
+    #[serde(default)]
+    sorted_ids: Vec<String>,
+}
+
+impl ModelsDevProviders {
+    pub fn age(&self) -> Duration {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|since_epoch| since_epoch.as_millis() as u64)
+            .unwrap_or(self.fetched_at);
+        Duration::from_millis(now.saturating_sub(self.fetched_at))
+    }
+
+    pub fn get(&self, id: &str) -> Option<&ModelsDevProvider> {
+        self.providers.get(id)
+    }
+
+    pub fn len(&self) -> usize {
+        self.providers.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.providers.is_empty()
+    }
+
+    /// The roster in display-name order — the order the built-in picker
+    /// lists them, so "Anthropic" sits near "Amazon Bedrock" rather than in
+    /// map order. The order was fixed at parse time; this only reads it.
+    /// `Custom` is not in here; the form pins it first itself.
+    pub fn sorted(&self) -> Vec<&ModelsDevProvider> {
+        self.sorted_ids
+            .iter()
+            .filter_map(|id| self.providers.get(id))
+            .collect()
+    }
+}
+
 /// The fill-in basics one model id resolves to in the metadata table.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RecordBasics {
@@ -276,11 +337,62 @@ pub fn fetch_catalog_with_fallback(
     }
 }
 
+/// Fetch the provider roster, through the same download and cache as the
+/// model table. `session` is the in-memory copy held across a visit; a fresh
+/// one answers without the network. `Err` means no copy — session, cache, or
+/// network — could be had.
+pub fn fetch_providers_with_fallback(
+    session: Option<&ModelsDevProviders>,
+) -> anyhow::Result<ModelsDevProviders> {
+    if let Some(session) = session.filter(|providers| providers.age() < TABLE_REUSE_WINDOW) {
+        return Ok(session.clone());
+    }
+    match http_get(MODELS_DEV_CATALOG_URL) {
+        Ok((200, body)) if body.len() <= MAX_CATALOG_BYTES => {
+            let providers = parse_providers(&body)
+                .map_err(|error| anyhow!("the response is not a models.dev catalog: {error}"))?;
+            write_cached_providers(&providers);
+            Ok(providers)
+        }
+        Ok((status, _)) => Err(anyhow!("HTTP {status}")),
+        Err(error) => {
+            if let Some(session) = session {
+                return Ok(session.clone());
+            }
+            cached_providers().ok_or_else(|| anyhow!("no cached catalog: {error}"))
+        }
+    }
+}
+
+/// The provider roster cached by the last successful fetch, or `None`. Reads
+/// the filesystem, so call it from the background executor, never from
+/// render.
+pub fn cached_providers() -> Option<ModelsDevProviders> {
+    let contents = std::fs::read(providers_cache_path()).ok()?;
+    serde_json::from_slice(&contents).ok()
+}
+
+/// Best-effort, beside the model-table cache: a failed write only costs the
+/// next launch its head start.
+fn write_cached_providers(providers: &ModelsDevProviders) {
+    let path = providers_cache_path();
+    let Ok(bytes) = serde_json::to_vec(providers) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let temporary = path.with_extension("json.tmp");
+    if std::fs::write(&temporary, bytes).is_ok() {
+        let _ = std::fs::rename(&temporary, &path);
+    }
+}
+
 /// Where the fetched table is cached, following the OpenCode catalog cache:
 /// debug builds keep it in the checkout's gitignored `temp/` beside the debug
 /// database, so development never touches the installed app's cache.
-fn catalog_cache_path() -> PathBuf {
-    let directory = if cfg!(debug_assertions) {
+fn cache_directory() -> PathBuf {
+    if cfg!(debug_assertions) {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("temp")
@@ -290,8 +402,18 @@ fn catalog_cache_path() -> PathBuf {
             .unwrap_or_else(std::env::temp_dir)
             .join(crate::identity::DATA_DIRECTORY_NAME)
             .join("models")
-    };
-    directory.join("models-dev.json")
+    }
+}
+
+/// The model table's cache file. Distinct from the provider roster's — the
+/// two structures are not mutually parseable, and one fetch of either must
+/// never invalidate the other's offline fallback.
+fn catalog_cache_path() -> PathBuf {
+    cache_directory().join("models-dev.json")
+}
+
+fn providers_cache_path() -> PathBuf {
+    cache_directory().join("models-dev-providers.json")
 }
 
 /// The table cached by the last successful fetch, or `None` when no fetch has
@@ -347,6 +469,80 @@ pub fn parse_catalog(body: &str) -> anyhow::Result<ModelsDevTable> {
     Ok(ModelsDevTable {
         fetched_at: now,
         models,
+    })
+}
+
+/// Parse the catalog's provider roster: one [`ModelsDevProvider`] per
+/// catalog entry that carries at least one model, ordered by the parser's
+/// map. The same document [`parse_catalog`] reads; the two answer different
+/// questions (per-model basics vs. the provider list) and are cached
+/// together.
+pub fn parse_providers(body: &str) -> anyhow::Result<ModelsDevProviders> {
+    let document: Value = serde_json::from_str(body).context("the response is not valid JSON")?;
+    let entries = document
+        .as_object()
+        .context("the catalog is not an object of providers")?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|since_epoch| since_epoch.as_millis() as u64)
+        .unwrap_or_default();
+    let mut providers: BTreeMap<String, ModelsDevProvider> = BTreeMap::new();
+    for (key, entry) in entries {
+        let id = entry
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or(key)
+            .to_owned();
+        let Some(models) = entry.get("models").and_then(Value::as_object) else {
+            continue;
+        };
+        let models: Vec<ModelsDevModel> = models
+            .iter()
+            .filter_map(|(model_id, spec)| parse_model(model_id, spec))
+            .collect();
+        if models.is_empty() {
+            continue;
+        }
+        providers.insert(
+            id.clone(),
+            ModelsDevProvider {
+                id: id.clone(),
+                name: entry
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or(&id)
+                    .to_owned(),
+                api: entry
+                    .get("api")
+                    .and_then(Value::as_str)
+                    .filter(|api| !api.is_empty())
+                    .map(str::to_owned),
+                npm: entry
+                    .get("npm")
+                    .and_then(Value::as_str)
+                    .filter(|npm| !npm.is_empty())
+                    .map(str::to_owned),
+                models,
+            },
+        );
+    }
+    let mut sorted_ids: Vec<String> = providers.keys().cloned().collect();
+    sorted_ids.sort_by(|left, right| {
+        let name = |id: &str| {
+            providers
+                .get(id)
+                .map(|provider| provider.name.to_lowercase())
+                .unwrap_or_default()
+        };
+        name(left)
+            .cmp(&name(right))
+            .then_with(|| left.cmp(right))
+    });
+    Ok(ModelsDevProviders {
+        fetched_at: now,
+        sorted_ids,
+        providers,
     })
 }
 
@@ -507,6 +703,40 @@ mod tests {
         let round_tripped: ModelsDevTable =
             serde_json::from_slice(&serde_json::to_vec(&table).unwrap()).unwrap();
         assert_eq!(round_tripped, table);
+    }
+
+    #[test]
+    fn parses_the_provider_roster_with_api_and_models() {
+        let document = r#"{
+            "deepseek": {
+                "id": "deepseek", "name": "DeepSeek",
+                "api": "https://api.deepseek.com",
+                "models": {"deepseek-chat": {"id": "deepseek-chat", "name": "DeepSeek Chat"}}
+            },
+            "github-copilot": {
+                "id": "github-copilot", "name": "GitHub Copilot",
+                "models": {"gpt-5": {"id": "gpt-5"}}
+            },
+            "empty": {"id": "empty", "name": "Empty", "models": {}},
+            "ghost": {"name": "No models key"}
+        }"#;
+        let providers = parse_providers(document).unwrap();
+        assert_eq!(providers.len(), 2);
+        let deepseek = providers.get("deepseek").unwrap();
+        assert_eq!(deepseek.name, "DeepSeek");
+        assert_eq!(deepseek.api.as_deref(), Some("https://api.deepseek.com"));
+        assert_eq!(deepseek.models.len(), 1);
+        // No `api` key: an OAuth-gated relay, present but endpoint-less.
+        assert_eq!(providers.get("github-copilot").unwrap().api, None);
+        // The roster sorts by display name for the picker.
+        assert_eq!(
+            providers
+                .sorted()
+                .iter()
+                .map(|provider| provider.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["deepseek", "github-copilot"]
+        );
     }
 
     #[test]

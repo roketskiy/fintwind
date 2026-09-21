@@ -1316,7 +1316,13 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         }
         DriverEvent::TurnStarted => ("turnStarted", Value::Null),
         DriverEvent::NativeSessionsChanged => ("nativeSessionsChanged", Value::Null),
-        DriverEvent::TextDelta(text) => ("textDelta", Value::String(text)),
+        DriverEvent::TextStarted { part } => ("textStarted", json!({ "part": part })),
+        DriverEvent::TextDelta { part, delta } => {
+            ("textDelta", json!({ "part": part, "delta": delta }))
+        }
+        DriverEvent::TextEnded { part, text } => {
+            ("textEnded", json!({ "part": part, "text": text }))
+        }
         DriverEvent::ReasoningStarted { part } => ("reasoningStarted", json!({ "part": part })),
         DriverEvent::ReasoningDelta { part, delta } => {
             ("reasoningDelta", json!({ "part": part, "delta": delta }))
@@ -1439,7 +1445,32 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "availableCommands" => DriverEvent::AvailableCommands(serde_json::from_value(payload)?),
         "turnStarted" => DriverEvent::TurnStarted,
         "nativeSessionsChanged" => DriverEvent::NativeSessionsChanged,
-        "textDelta" => DriverEvent::TextDelta(serde_json::from_value(payload)?),
+        "textStarted" => DriverEvent::TextStarted {
+            part: reasoning_part_from_wire(&payload),
+        },
+        // A bare string payload is a pre-keying peer: the delta keeps the
+        // phase-based fallback path on an empty part key.
+        "textDelta" => {
+            let (part, delta) = match payload {
+                Value::String(delta) => (String::new(), delta),
+                payload => (
+                    reasoning_part_from_wire(&payload),
+                    payload
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                ),
+            };
+            DriverEvent::TextDelta { part, delta }
+        }
+        "textEnded" => DriverEvent::TextEnded {
+            part: reasoning_part_from_wire(&payload),
+            text: payload
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        },
         // A bare string payload is a pre-keying peer: the delta keeps the
         // phase-based fallback path on an empty part key.
         "reasoningStarted" => DriverEvent::ReasoningStarted {
@@ -1717,11 +1748,21 @@ mod tests {
 
     #[test]
     fn wire_event_round_trip_preserves_ordered_delta_payload() {
-        let wire = event_to_wire(DriverEvent::TextDelta("hello".into())).unwrap();
+        let wire = event_to_wire(DriverEvent::TextDelta {
+            part: "text:msg_1:0".into(),
+            delta: "hello".into(),
+        })
+        .unwrap();
         assert_eq!(wire.kind, "textDelta");
         assert!(matches!(
             event_from_wire(wire).unwrap(),
-            DriverEvent::TextDelta(text) if text == "hello"
+            DriverEvent::TextDelta { part, delta } if part == "text:msg_1:0" && delta == "hello"
+        ));
+
+        let legacy = WireDriverEvent::new("textDelta", Value::String("hello".into()));
+        assert!(matches!(
+            event_from_wire(legacy).unwrap(),
+            DriverEvent::TextDelta { part, delta } if part.is_empty() && delta == "hello"
         ));
     }
 

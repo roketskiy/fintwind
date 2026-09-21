@@ -135,9 +135,7 @@ fn acquire_with_start(
     let slot = {
         let mut pool = pool().lock().unwrap();
         if pool.closed {
-            anyhow::bail!(
-                "the opencode server pool is shut down; refusing to start {key:?}"
-            );
+            anyhow::bail!("the opencode server pool is shut down; refusing to start {key:?}");
         }
         Arc::clone(pool.slots.entry(key).or_default())
     };
@@ -331,8 +329,8 @@ mod tests {
         let workspace_a = TestWorkspace::new();
         let workspace_b = TestWorkspace::new();
 
-        let first =
-            acquire(&binary, workspace_a.path()).expect("the first session should start the server");
+        let first = acquire(&binary, workspace_a.path())
+            .expect("the first session should start the server");
         let port = first.port;
         assert!(port_is_open(port), "the server should be listening");
 

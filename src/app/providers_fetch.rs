@@ -694,12 +694,7 @@ impl Fintwind {
         let directory = self
             .state
             .selected_project
-            .and_then(|id| {
-                self.state
-                    .projects
-                    .iter()
-                    .find(|project| project.id == id)
-            })
+            .and_then(|id| self.state.projects.iter().find(|project| project.id == id))
             .or_else(|| self.state.projects.first())
             .map(|project| project.path.clone())?;
         Some((binary, directory))
@@ -711,7 +706,9 @@ impl Fintwind {
         &self,
         id: &str,
     ) -> Option<&fintwind_client::models_dev::ModelsDevProvider> {
-        self.providers_builtin.as_deref().and_then(|roster| roster.get(id))
+        self.providers_builtin
+            .as_deref()
+            .and_then(|roster| roster.get(id))
     }
 
     /// Connect the key the add form holds for `provider_id` through the
@@ -745,7 +742,12 @@ impl Fintwind {
                     let (binary, directory) = workspace;
                     let store = fintwind_client::persistence::StateStore::remote(daemon);
                     store
-                        .authorize_provider(binary.clone(), directory.clone(), provider_id.clone(), key)
+                        .authorize_provider(
+                            binary.clone(),
+                            directory.clone(),
+                            provider_id.clone(),
+                            key,
+                        )
                         .map(|_| provider_id)
                 })
                 .await;
@@ -762,10 +764,8 @@ impl Fintwind {
                         this.show_success_toast(tr!("providers.authorized_toast"));
                         this.refresh_integrations(cx);
                     }
-                    Err(error) => this.show_toast(tr!(
-                        "providers.auth_save_failed",
-                        error = error.to_string()
-                    )),
+                    Err(error) => this
+                        .show_toast(tr!("providers.auth_save_failed", error = error.to_string())),
                 }
                 cx.notify();
             });
@@ -798,8 +798,7 @@ impl Fintwind {
                 match removed {
                     Ok(provider_id) => {
                         this.providers_authorized.remove(provider_id.as_str());
-                        if this.providers_builtin_probe_id.as_deref()
-                            == Some(provider_id.as_str())
+                        if this.providers_builtin_probe_id.as_deref() == Some(provider_id.as_str())
                         {
                             this.providers_builtin_connectivity = None;
                             this.providers_builtin_probe_id = None;
@@ -807,10 +806,8 @@ impl Fintwind {
                         this.show_success_toast(tr!("providers.logged_out_toast"));
                         this.refresh_integrations(cx);
                     }
-                    Err(error) => this.show_toast(tr!(
-                        "providers.auth_save_failed",
-                        error = error.to_string()
-                    )),
+                    Err(error) => this
+                        .show_toast(tr!("providers.auth_save_failed", error = error.to_string())),
                 }
                 cx.notify();
             });
@@ -887,10 +884,7 @@ impl Fintwind {
                     match probed {
                         Ok((models, latency)) => {
                             if models > 0 {
-                                custom_providers::ConnectivityOutcome::Reachable {
-                                    models,
-                                    latency,
-                                }
+                                custom_providers::ConnectivityOutcome::Reachable { models, latency }
                             } else {
                                 // The server answered but exposes no model
                                 // for the provider: its credential is
@@ -901,9 +895,7 @@ impl Fintwind {
                             }
                         }
                         Err(error) => custom_providers::ConnectivityOutcome::Failed {
-                            error: custom_providers::ApiListError::Unreachable(
-                                error.to_string(),
-                            ),
+                            error: custom_providers::ApiListError::Unreachable(error.to_string()),
                         },
                     }
                 })

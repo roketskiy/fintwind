@@ -1561,7 +1561,28 @@ pub enum DriverEvent {
     /// the server starts a run on its own (opencode `session.execution.started`
     /// after a settled turn — background-task auto-continue).
     TurnStarted,
-    TextDelta(String),
+    /// A provider text part opened (opencode v2 `session.text.started`). The
+    /// message is reserved here, before later tool events, so a batched tail
+    /// can fill the sentence the part already started instead of landing after
+    /// the tool. `part` is empty on transports that predate keying.
+    TextStarted {
+        part: String,
+    },
+    /// A text part's increment. Deltas of one part may arrive after intervening
+    /// tool events — the provider batches and flushes them asynchronously — so
+    /// the app routes them by `part` instead of stream phase. An empty `part`
+    /// keeps the phase-based fallback.
+    TextDelta {
+        part: String,
+        delta: String,
+    },
+    /// The part settled with its authoritative full text (opencode v2
+    /// `session.text.ended`). `Some` replaces whatever the deltas accumulated;
+    /// an empty text retires the message so an empty stored part never renders.
+    TextEnded {
+        part: String,
+        text: Option<String>,
+    },
     /// A provider reasoning fragment opened (opencode v2 `session.reasoning.started`,
     /// a durable event). Deltas that follow belong to this fragment until it
     /// ends, even when tool activity lands in between — the fragment, not the

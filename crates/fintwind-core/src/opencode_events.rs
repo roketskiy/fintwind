@@ -78,12 +78,14 @@ pub(crate) fn subscribe(port: u16) -> anyhow::Result<EventFeed> {
     let hub = hubs()
         .lock()
         .entry(port)
-        .or_insert_with(|| Arc::new(Hub {
-            port,
-            state: Mutex::new(HubState::Idle),
-            changed: Condvar::new(),
-            socket: Mutex::new(None),
-        }))
+        .or_insert_with(|| {
+            Arc::new(Hub {
+                port,
+                state: Mutex::new(HubState::Idle),
+                changed: Condvar::new(),
+                socket: Mutex::new(None),
+            })
+        })
         .clone();
     let (tx, rx) = unbounded();
     let id = next_subscriber_id();
@@ -102,8 +104,9 @@ pub(crate) fn subscribe(port: u16) -> anyhow::Result<EventFeed> {
                     // any subscriber that queued behind the start.
                     *hub.state.lock() = HubState::Idle;
                     hub.changed.notify_all();
-                    return Err(anyhow::Error::new(error)
-                        .context(format!("could not spawn the event hub reader for port {port}")));
+                    return Err(anyhow::Error::new(error).context(format!(
+                        "could not spawn the event hub reader for port {port}"
+                    )));
                 }
                 return Ok(EventFeed {
                     hub,
@@ -145,12 +148,9 @@ impl EventFeed {
     /// read failed, or every feed was dropped. There is no reconnect: the
     /// caller decides what a dead stream means.
     pub(crate) fn recv(&self) -> anyhow::Result<Value> {
-        self.rx.recv().map_err(|_| {
-            anyhow!(
-                "opencode event stream on port {} has ended",
-                self.hub.port
-            )
-        })
+        self.rx
+            .recv()
+            .map_err(|_| anyhow!("opencode event stream on port {} has ended", self.hub.port))
     }
 
     /// Unsubscribes. The last cancellation for a port shuts the SSE socket
@@ -344,8 +344,7 @@ fn open_stream(hub: &Hub) -> anyhow::Result<BufReader<TcpStream>> {
             // A timed-out read keeps its partial bytes buffered; keep polling
             // until the head completes or teardown wins.
             Err(error)
-                if error.kind() == ErrorKind::WouldBlock
-                    || error.kind() == ErrorKind::TimedOut =>
+                if error.kind() == ErrorKind::WouldBlock || error.kind() == ErrorKind::TimedOut =>
             {
                 if hub.is_tearing_down() {
                     let _ = reader.get_ref().shutdown(Shutdown::Both);
@@ -390,8 +389,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let accepted = Arc::new(AtomicUsize::new(0));
         let closed = Arc::new(AtomicUsize::new(0));
-        let events: Arc<Vec<String>> =
-            Arc::new(vec![EVENT_LINE.to_string(); broadcasts]);
+        let events: Arc<Vec<String>> = Arc::new(vec![EVENT_LINE.to_string(); broadcasts]);
         {
             let accepted = Arc::clone(&accepted);
             let closed = Arc::clone(&closed);

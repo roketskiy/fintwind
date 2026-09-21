@@ -47,7 +47,13 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             ("availableCommands", serde_json::to_value(commands)?)
         }
         DriverEvent::TurnStarted => ("turnStarted", Value::Null),
-        DriverEvent::TextDelta(text) => ("textDelta", Value::String(text)),
+        DriverEvent::TextStarted { part } => ("textStarted", json!({ "part": part })),
+        DriverEvent::TextDelta { part, delta } => {
+            ("textDelta", json!({ "part": part, "delta": delta }))
+        }
+        DriverEvent::TextEnded { part, text } => {
+            ("textEnded", json!({ "part": part, "text": text }))
+        }
         DriverEvent::ReasoningStarted { part } => ("reasoningStarted", json!({ "part": part })),
         DriverEvent::ReasoningDelta { part, delta } => {
             ("reasoningDelta", json!({ "part": part, "delta": delta }))
@@ -160,9 +166,32 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "availableCommands" => DriverEvent::AvailableCommands(serde_json::from_value(payload)?),
         "turnStarted" => DriverEvent::TurnStarted,
         "nativeSessionsChanged" => DriverEvent::NativeSessionsChanged,
-        "textDelta" => DriverEvent::TextDelta(serde_json::from_value(payload)?),
+        "textStarted" => DriverEvent::TextStarted {
+            part: reasoning_part_from_wire(&payload),
+        },
         // A bare string payload is a pre-keying daemon: the delta keeps the
         // phase-based fallback path on an empty part key.
+        "textDelta" => {
+            let (part, delta) = match payload {
+                Value::String(delta) => (String::new(), delta),
+                payload => (
+                    reasoning_part_from_wire(&payload),
+                    payload
+                        .get("delta")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                ),
+            };
+            DriverEvent::TextDelta { part, delta }
+        }
+        "textEnded" => DriverEvent::TextEnded {
+            part: reasoning_part_from_wire(&payload),
+            text: payload
+                .get("text")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        },
         "reasoningStarted" => DriverEvent::ReasoningStarted {
             part: reasoning_part_from_wire(&payload),
         },
@@ -366,6 +395,39 @@ mod tests {
         assert_eq!(request_id, "request-1");
         assert_eq!(questions[0].id, "deployment");
         assert_eq!(questions[0].options[0].label, "Preview");
+    }
+
+    #[test]
+    fn keyed_text_deltas_round_trip_and_a_bare_string_stays_unkeyed() {
+        let wire = event_to_wire(DriverEvent::TextDelta {
+            part: "text:msg_1:0".into(),
+            delta: "hello".into(),
+        })
+        .unwrap();
+        assert_eq!(wire.kind, "textDelta");
+        assert!(matches!(
+            event_from_wire(wire).unwrap(),
+            DriverEvent::TextDelta { part, delta }
+                if part == "text:msg_1:0" && delta == "hello"
+        ));
+
+        let legacy =
+            crate::WireDriverEvent::new("textDelta", serde_json::Value::String("hello".into()));
+        assert!(matches!(
+            event_from_wire(legacy).unwrap(),
+            DriverEvent::TextDelta { part, delta } if part.is_empty() && delta == "hello"
+        ));
+
+        let ended = event_to_wire(DriverEvent::TextEnded {
+            part: "text:msg_1:0".into(),
+            text: Some("hello".into()),
+        })
+        .unwrap();
+        assert!(matches!(
+            event_from_wire(ended).unwrap(),
+            DriverEvent::TextEnded { part, text }
+                if part == "text:msg_1:0" && text.as_deref() == Some("hello")
+        ));
     }
 
     #[test]

@@ -29,7 +29,8 @@ use fintwind_protocol::provider_session::{
 };
 
 use crate::model::{
-    ActivityItem, AgentTurn, Message, MessageRole, ReasoningBlock, TurnStats, TurnStatus,
+    ActivityItem, AgentTurn, Message, MessageRole, ReasoningBlock, TranscriptBlock, TurnStats,
+    TurnStatus,
 };
 use crate::opencode_session::{OpenCodeServer, encode_path_segment, request_json_on_port};
 
@@ -349,8 +350,7 @@ pub(crate) fn list_integrations(
     server: &OpenCodeServer,
 ) -> anyhow::Result<Vec<IntegrationSummary>> {
     // connect-key does not wait for plugin activation; this list does.
-    let response =
-        server.request_with_timeout("GET", "/api/integration", None, HTTP_TIMEOUT)?;
+    let response = server.request_with_timeout("GET", "/api/integration", None, HTTP_TIMEOUT)?;
     let rows = integration_rows(&response);
     Ok(rows
         .iter()
@@ -405,11 +405,7 @@ pub(crate) fn authorize_integration(
         "/api/integration/{}/connect/key",
         encode_path_segment(provider_id)
     );
-    server.request(
-        "POST",
-        &path,
-        Some(&serde_json::json!({ "key": key })),
-    )?;
+    server.request("POST", &path, Some(&serde_json::json!({ "key": key })))?;
     Ok(())
 }
 
@@ -418,10 +414,7 @@ pub(crate) fn authorize_integration(
 /// this looks them up there and removes every credential connection; a
 /// provider without one is already logged out and answers Ok, keeping the
 /// action idempotent.
-pub(crate) fn logout_integration(
-    server: &OpenCodeServer,
-    provider_id: &str,
-) -> anyhow::Result<()> {
+pub(crate) fn logout_integration(server: &OpenCodeServer, provider_id: &str) -> anyhow::Result<()> {
     let response = server.request("GET", "/api/integration", None)?;
     let credential_ids: Vec<String> = integration_rows(&response)
         .iter()
@@ -571,24 +564,7 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                 transcript.turns.push(turn);
             }
             Some("assistant") => {
-                let content = row.get("content").and_then(Value::as_array);
-                // Activity parts render as transcript blocks before the
-                // assistant's text, the same order a live stream produces.
-                let mut activities: Vec<ActivityItem> = Vec::new();
-                for part in content.into_iter().flatten() {
-                    match part.get("type").and_then(Value::as_str) {
-                        Some("reasoning") => {
-                            if let Some(item) = reasoning_item(part) {
-                                activities.push(item);
-                            }
-                        }
-                        Some("tool") => {
-                            activities.push(tool_item(part));
-                        }
-                        _ => {}
-                    }
-                }
-                let text = parts_text(row.get("content"));
+                let parts = row.get("content").and_then(Value::as_array);
                 // Every assistant row is one model step of the turn above it,
                 // and the fold happens before the content gate: a row with no
                 // visible text still ran a model step whose tokens and
@@ -606,7 +582,7 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                     stats.output_tokens = stats.output_tokens.saturating_add(step.output_tokens);
                     stats.stream_ms = stats.stream_ms.saturating_add(step.stream_ms);
                 }
-                if activities.is_empty() && text.trim().is_empty() {
+                if !assistant_parts_visible(parts) {
                     continue;
                 }
                 // A settled assistant message carries its completion time;
@@ -639,39 +615,12 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                         id
                     }
                 };
-                if !activities.is_empty() {
-                    let after_message = transcript.messages.len();
-                    // Consecutive activities at the same position merge into
-                    // one block — the same shape `push_transcript_activity`
-                    // produces for a live stream.
-                    match transcript.blocks.last_mut() {
-                        Some(block)
-                            if block.after_message == after_message
-                                && block.turn_id == Some(turn_id) =>
-                        {
-                            block.activities.extend(activities);
-                        }
-                        _ => transcript
-                            .blocks
-                            .push(fintwind_protocol::model::TranscriptBlock {
-                                after_message,
-                                turn_id: Some(turn_id),
-                                activities,
-                            }),
-                    }
-                }
-                if !text.trim().is_empty() {
-                    transcript.messages.push(Message {
-                        id: uuid::Uuid::new_v4(),
-                        turn_id: Some(turn_id),
-                        role: MessageRole::Assistant,
-                        content: text,
-                        display_content: None,
-                        attachments: Vec::new(),
-                        created_at,
-                        streaming: false,
-                    });
-                }
+                // Parts stay in stored order. Text that a tool sits between is
+                // two messages with the tool block between them; consecutive
+                // text parts with nothing between them still join. Hoisting
+                // every tool above every text part is what made a restart hide
+                // a live split instead of reproducing the part order.
+                append_assistant_parts(&mut transcript, parts, turn_id, created_at);
             }
             _ => {}
         }
@@ -723,6 +672,114 @@ fn turn_stats_step(row: &Value) -> Option<TurnStats> {
         output_tokens: output,
         stream_ms,
     })
+}
+
+fn assistant_parts_visible(parts: Option<&Vec<Value>>) -> bool {
+    parts
+        .into_iter()
+        .flatten()
+        .any(|part| match part.get("type").and_then(Value::as_str) {
+            Some("tool") => true,
+            Some("reasoning") => reasoning_item(part).is_some(),
+            Some("text") => part
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.trim().is_empty()),
+            _ => false,
+        })
+}
+
+/// Emit one assistant row's parts in stored order. Activity runs become one
+/// block at the message count where they occur; adjacent text parts join with
+/// a blank line, but a tool or thought between them keeps the texts apart.
+fn append_assistant_parts(
+    transcript: &mut NativeTranscript,
+    parts: Option<&Vec<Value>>,
+    turn_id: uuid::Uuid,
+    created_at: u64,
+) {
+    let mut pending_text: Vec<&str> = Vec::new();
+    let mut pending_activities: Vec<ActivityItem> = Vec::new();
+    for part in parts.into_iter().flatten() {
+        match part.get("type").and_then(Value::as_str) {
+            Some("reasoning") => {
+                // An empty reasoning part is not an activity. Flushing the
+                // text before knowing that would split two text parts that
+                // should stay one message.
+                if let Some(item) = reasoning_item(part) {
+                    flush_assistant_text(transcript, &mut pending_text, turn_id, created_at);
+                    pending_activities.push(item);
+                }
+            }
+            Some("tool") => {
+                flush_assistant_text(transcript, &mut pending_text, turn_id, created_at);
+                pending_activities.push(tool_item(part));
+            }
+            Some("text") => {
+                let Some(text) = part.get("text").and_then(Value::as_str) else {
+                    continue;
+                };
+                if text.trim().is_empty() {
+                    continue;
+                }
+                flush_assistant_activities(transcript, &mut pending_activities, turn_id);
+                pending_text.push(text);
+            }
+            _ => {}
+        }
+    }
+    flush_assistant_activities(transcript, &mut pending_activities, turn_id);
+    flush_assistant_text(transcript, &mut pending_text, turn_id, created_at);
+}
+
+fn flush_assistant_text(
+    transcript: &mut NativeTranscript,
+    pending_text: &mut Vec<&str>,
+    turn_id: uuid::Uuid,
+    created_at: u64,
+) {
+    if pending_text.is_empty() {
+        return;
+    }
+    let text = pending_text.join("\n\n");
+    pending_text.clear();
+    if text.trim().is_empty() {
+        return;
+    }
+    transcript.messages.push(Message {
+        id: uuid::Uuid::new_v4(),
+        turn_id: Some(turn_id),
+        role: MessageRole::Assistant,
+        content: text,
+        display_content: None,
+        attachments: Vec::new(),
+        created_at,
+        streaming: false,
+    });
+}
+
+fn flush_assistant_activities(
+    transcript: &mut NativeTranscript,
+    pending: &mut Vec<ActivityItem>,
+    turn_id: uuid::Uuid,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let activities = std::mem::take(pending);
+    let after_message = transcript.messages.len();
+    // Consecutive activities at the same position merge into one block — the
+    // same shape `push_transcript_activity` produces for a live stream.
+    match transcript.blocks.last_mut() {
+        Some(block) if block.after_message == after_message && block.turn_id == Some(turn_id) => {
+            block.activities.extend(activities);
+        }
+        _ => transcript.blocks.push(TranscriptBlock {
+            after_message,
+            turn_id: Some(turn_id),
+            activities,
+        }),
+    }
 }
 
 /// Concatenated text of a message's text parts.
@@ -927,6 +984,41 @@ mod tests {
                     .any(|turn| Some(turn.id) == message.turn_id)
             );
         }
+    }
+
+    #[test]
+    fn transcript_translation_keeps_a_tool_between_the_text_parts_around_it() {
+        let rows = vec![
+            json!({
+                "id": "msg_1", "type": "user",
+                "time": {"created": 1_000_u64},
+                "text": "看一下"
+            }),
+            json!({
+                "id": "msg_2", "type": "assistant",
+                "time": {"created": 2_000_u64, "completed": 5_000_u64},
+                "content": [
+                    {"type": "text", "text": "了解"},
+                    {"type": "text", "text": ""},
+                    {"type": "tool", "tool": "read", "state": {
+                        "status": "completed", "input": {"filePath": "composer.rs"},
+                        "title": "Read composer.rs", "output": "fn main"
+                    }},
+                    {"type": "text", "text": "结构。"},
+                    {"type": "reasoning", "text": "  "},
+                    {"type": "text", "text": "下一句。"}
+                ]
+            }),
+        ];
+
+        let transcript = translate_rows(&rows);
+        assert_eq!(transcript.messages.len(), 3);
+        assert_eq!(transcript.messages[1].content, "了解");
+        assert_eq!(transcript.messages[2].content, "结构。\n\n下一句。");
+        assert_eq!(transcript.blocks.len(), 1);
+        assert_eq!(transcript.blocks[0].after_message, 2);
+        assert_eq!(transcript.blocks[0].activities.len(), 1);
+        assert_eq!(transcript.blocks[0].activities[0].title, "read");
     }
 
     /// Assistant rows keep the tokens, model, and streaming time the live

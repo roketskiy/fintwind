@@ -20,7 +20,7 @@ use fintwind_protocol::i18n::AppLanguage;
 use fintwind_protocol::identity::DATA_DIRECTORY_NAME;
 use fintwind_protocol::model::{AgentSession, FavoriteModel, OPENCODE_PROVIDER, Project};
 use fintwind_protocol::provider_session::{
-    McpServerStatus, NativeSessionSummary, NativeTranscript, UsageStats,
+    IntegrationSummary, McpServerStatus, NativeSessionSummary, NativeTranscript, UsageStats,
 };
 use fintwind_protocol::theme::ThemePreference;
 
@@ -1003,6 +1003,115 @@ impl StateStore {
                 )
                 .map_err(to_io_error),
         )
+    }
+
+    /// The workspace server's provider integrations with their live
+    /// connection states — the authorization truth. Blocking RPC; call off
+    /// the UI thread — the daemon may need to start the server first.
+    pub fn fetch_integrations(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+    ) -> io::Result<Vec<IntegrationSummary>> {
+        match self
+            .daemon
+            .client()
+            .request_with_timeout(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::FetchIntegrations { binary, directory },
+                Duration::from_secs(90),
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::Integrations { integrations } => Ok(integrations),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an invalid integration list",
+            )),
+        }
+    }
+
+    /// Authorize a catalog provider on the workspace's OpenCode server.
+    /// Blocking RPC; call off the UI thread.
+    pub fn authorize_provider(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        key: String,
+    ) -> io::Result<()> {
+        self.expect_ack(
+            self.daemon
+                .client()
+                .request(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    Command::AuthorizeProvider {
+                        binary,
+                        directory,
+                        provider_id,
+                        key,
+                    },
+                )
+                .map_err(to_io_error),
+        )
+    }
+
+    /// Remove a provider's credential from the OpenCode server — the
+    /// logout. Blocking RPC; call off the UI thread.
+    pub fn logout_provider(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+    ) -> io::Result<()> {
+        self.expect_ack(
+            self.daemon
+                .client()
+                .request(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    Command::LogoutProvider {
+                        binary,
+                        directory,
+                        provider_id,
+                    },
+                )
+                .map_err(to_io_error),
+        )
+    }
+
+    /// Count the models the server exposes for a built-in provider, timed —
+    /// the connectivity probe for authorized catalog providers. Blocking
+    /// RPC; call off the UI thread.
+    pub fn probe_builtin_provider(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+    ) -> io::Result<(usize, Duration)> {
+        match self
+            .daemon
+            .client()
+            .request(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::ProbeBuiltinProvider {
+                    binary,
+                    directory,
+                    provider_id,
+                },
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::BuiltinProviderProbed {
+                models,
+                latency_ms,
+            } => Ok((models, Duration::from_millis(latency_ms))),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an invalid provider probe",
+            )),
+        }
     }
 
     fn expect_ack(&self, response: io::Result<ResponsePayload>) -> io::Result<()> {

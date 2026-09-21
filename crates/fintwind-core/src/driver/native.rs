@@ -24,8 +24,8 @@ use std::time::Duration;
 use serde_json::Value;
 
 use fintwind_protocol::provider_session::{
-    McpConnectionState, McpServerStatus, NativeSessionSummary, NativeTranscript, UsageEntry,
-    UsageStats,
+    IntegrationSummary, McpConnectionState, McpServerStatus, NativeSessionSummary,
+    NativeTranscript, UsageEntry, UsageStats,
 };
 
 use crate::model::{
@@ -330,6 +330,143 @@ pub(crate) fn delete_session(server: &OpenCodeServer, session_id: &str) -> anyho
     let path = format!("/api/session/{}", encode_path_segment(session_id));
     server.request("DELETE", &path, None)?;
     Ok(())
+}
+
+/// List the server's provider integrations: the connectable roster with
+/// each entry's key-method support and live credential connections.
+pub(crate) fn list_integrations(
+    server: &OpenCodeServer,
+) -> anyhow::Result<Vec<IntegrationSummary>> {
+    // connect-key does not wait for plugin activation; this list does.
+    let response =
+        server.request_with_timeout("GET", "/api/integration", None, HTTP_TIMEOUT)?;
+    let rows = integration_rows(&response);
+    Ok(rows
+        .iter()
+        .map(|row| IntegrationSummary {
+            id: row
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            name: row
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            supports_key: row
+                .get("methods")
+                .and_then(Value::as_array)
+                .is_some_and(|methods| {
+                    methods
+                        .iter()
+                        .any(|method| method.get("type").and_then(Value::as_str) == Some("key"))
+                }),
+            connected: row
+                .get("connections")
+                .and_then(Value::as_array)
+                .is_some_and(|connections| !connections.is_empty()),
+        })
+        .collect())
+}
+
+/// Store a key for `provider_id` on the server: its connect-key API. The
+/// running server adopts the credential immediately and persists it in its
+/// own store, so sessions — and the CLI and TUI against this server — can
+/// use it without a restart.
+pub(crate) fn authorize_integration(
+    server: &OpenCodeServer,
+    provider_id: &str,
+    key: &str,
+) -> anyhow::Result<()> {
+    // OpenCode's connect-key handler looks the id up immediately and does
+    // not wait for plugin activation. GET /api/integration does
+    // (`awaitActivation`), so a freshly started server answers /api/info —
+    // then 404s connect — until that list has returned once.
+    let integrations = list_integrations(server)?;
+    if !integrations
+        .iter()
+        .any(|integration| integration.id == provider_id)
+    {
+        anyhow::bail!("OpenCode does not provide the integration `{provider_id}`");
+    }
+    let path = format!(
+        "/api/integration/{}/connect/key",
+        encode_path_segment(provider_id)
+    );
+    server.request(
+        "POST",
+        &path,
+        Some(&serde_json::json!({ "key": key })),
+    )?;
+    Ok(())
+}
+
+/// Remove `provider_id`'s connected credentials from the server — the
+/// logout. The credential ids live in the integration's connection list, so
+/// this looks them up there and removes every credential connection; a
+/// provider without one is already logged out and answers Ok, keeping the
+/// action idempotent.
+pub(crate) fn logout_integration(
+    server: &OpenCodeServer,
+    provider_id: &str,
+) -> anyhow::Result<()> {
+    let response = server.request("GET", "/api/integration", None)?;
+    let credential_ids: Vec<String> = integration_rows(&response)
+        .iter()
+        .filter(|row| row.get("id").and_then(Value::as_str) == Some(provider_id))
+        .flat_map(|row| {
+            row.get("connections")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+                .iter()
+                .filter(|connection| {
+                    connection.get("type").and_then(Value::as_str) == Some("credential")
+                })
+                .filter_map(|connection| connection.get("id").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    for credential_id in credential_ids {
+        let path = format!("/api/credential/{}", encode_path_segment(&credential_id));
+        server.request("DELETE", &path, None)?;
+    }
+    Ok(())
+}
+
+/// Count the models the server currently exposes for `provider_id`, timed.
+/// Models appear only when the server holds a credential it accepts, so the
+/// count doubles as a connectivity verdict for the authorized provider.
+pub(crate) fn probe_provider_models(
+    server: &OpenCodeServer,
+    provider_id: &str,
+) -> anyhow::Result<(usize, u64)> {
+    let started = std::time::Instant::now();
+    let response = server.request("GET", "/api/model", None)?;
+    let models = response
+        .pointer("/data")
+        .or_else(|| response.pointer("/models"))
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row.get("providerID").and_then(Value::as_str) == Some(provider_id))
+                .count()
+        })
+        .unwrap_or_default();
+    Ok((models, started.elapsed().as_millis() as u64))
+}
+
+/// The integration array inside a `/api/integration` response: under
+/// `data` when enveloped, a bare array otherwise.
+fn integration_rows(response: &Value) -> &[Value] {
+    response
+        .pointer("/data")
+        .and_then(Value::as_array)
+        .or_else(|| response.as_array())
+        .map(Vec::as_slice)
+        .unwrap_or(&[])
 }
 
 /// Translate the native message rows (oldest first) into the app's model.

@@ -15,7 +15,10 @@ use fintwind_client::custom_providers::{
     self, ApiListError, CustomProvider, CustomProviderModel, FirstTokenError,
 };
 
-use super::providers_page::{ProviderFormModelDraft, outline_button, small_pill};
+use super::providers_page::{
+    ProviderFormModelDraft, ProviderFormStage, builtin_selection_id, info_note, outline_button,
+    small_pill,
+};
 
 use super::*;
 
@@ -534,6 +537,7 @@ impl Fintwind {
     /// telling the truth about an in-flight request.
     pub(super) fn exit_provider_form(&mut self, cx: &mut Context<Self>) {
         self.providers_adding = false;
+        self.providers_form_stage = ProviderFormStage::Picking;
         self.providers_form_connectivity = None;
         self.providers_form_model_catalog.clear();
         self.providers_form_fetch_generation += 1;
@@ -597,6 +601,387 @@ impl Fintwind {
         self.provider_connectivity.remove(provider_id);
         self.model_latency
             .retain(|(owner, _), _| owner != provider_id);
+    }
+
+    // ── Built-in providers: catalog, auth state, authorize & logout ────────
+
+    /// Make sure the built-in provider roster and the authorized set are
+    /// loaded for the page visit. Both run off the UI thread; render reads
+    /// only what they store and degrades to "unknown" until then.
+    pub(super) fn ensure_builtin_providers(&mut self, cx: &mut Context<Self>) {
+        self.ensure_models_dev_table(cx);
+        if self.providers_builtin.is_none() && !self.providers_builtin_loading {
+            self.providers_builtin_loading = true;
+            let session = self.providers_builtin.clone();
+            cx.spawn(async move |this, cx| {
+                let loaded = cx
+                    .background_executor()
+                    .spawn(async move {
+                        fintwind_client::models_dev::fetch_providers_with_fallback(
+                            session.as_deref(),
+                        )
+                    })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.providers_builtin_loading = false;
+                    if let Ok(providers) = loaded {
+                        this.providers_builtin = Some(std::sync::Arc::new(providers));
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        if !self.providers_auth_loading {
+            self.providers_auth_loading = true;
+            let workspace = self.provider_workspace();
+            let daemon = self.daemon.clone();
+            cx.spawn(async move |this, cx| {
+                let integrations = cx
+                    .background_executor()
+                    .spawn(async move {
+                        workspace
+                            .map(|(binary, directory)| {
+                                fintwind_client::persistence::StateStore::remote(daemon)
+                                    .fetch_integrations(binary, directory)
+                            })
+                            .unwrap_or_else(|| {
+                                Err(std::io::Error::other("no OpenCode server to ask"))
+                            })
+                    })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.providers_auth_loading = false;
+                    match integrations {
+                        Ok(integrations) => this.apply_integrations(integrations),
+                        Err(error) => this.show_toast(tr!(
+                            "providers.auth_load_failed",
+                            error = error.to_string()
+                        )),
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Store one integration fetch: the authorized set and the key-method
+    /// set. A integration row whose id the catalog does not know still
+    /// counts as authorized — the roster must not hide a working credential.
+    fn apply_integrations(
+        &mut self,
+        integrations: Vec<fintwind_protocol::provider_session::IntegrationSummary>,
+    ) {
+        self.providers_authorized = integrations
+            .iter()
+            .filter(|integration| integration.connected)
+            .map(|integration| integration.id.clone())
+            .collect();
+        self.providers_key_methods = integrations
+            .iter()
+            .filter(|integration| integration.supports_key)
+            .map(|integration| integration.id.clone())
+            .collect();
+    }
+
+    /// The workspace the page's server RPCs anchor to: the probed OpenCode
+    /// binary and a project checkout. The credential store is shared by
+    /// every server of the same OpenCode install, so the directory only
+    /// picks which pool entry answers.
+    fn provider_workspace(&self) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+        let binary = self.native_binary_path()?;
+        let directory = self
+            .state
+            .selected_project
+            .and_then(|id| {
+                self.state
+                    .projects
+                    .iter()
+                    .find(|project| project.id == id)
+            })
+            .or_else(|| self.state.projects.first())
+            .map(|project| project.path.clone())?;
+        Some((binary, directory))
+    }
+
+    /// The built-in provider record for `id`, `None` when the catalog has
+    /// not loaded (or does not know the id).
+    pub(super) fn builtin_provider(
+        &self,
+        id: &str,
+    ) -> Option<&fintwind_client::models_dev::ModelsDevProvider> {
+        self.providers_builtin.as_deref().and_then(|roster| roster.get(id))
+    }
+
+    /// Connect the key the add form holds for `provider_id` through the
+    /// workspace server's connect API — the same path the TUI's /connect
+    /// takes. The running server adopts the credential immediately and
+    /// persists it in its own store, so nothing needs a restart. The refresh
+    /// of the authorized set lands when the connect did.
+    pub(super) fn authorize_builtin_provider(
+        &mut self,
+        provider_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        let key = self
+            .provider_form_api_key
+            .read(cx)
+            .content()
+            .trim()
+            .to_owned();
+        if key.is_empty() {
+            return;
+        }
+        let Some(workspace) = self.provider_workspace() else {
+            return;
+        };
+        self.providers_auth_loading = true;
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let (binary, directory) = workspace;
+                    let store = fintwind_client::persistence::StateStore::remote(daemon);
+                    store
+                        .authorize_provider(binary.clone(), directory.clone(), provider_id.clone(), key)
+                        .map(|_| provider_id)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.providers_auth_loading = false;
+                match outcome {
+                    Ok(provider_id) => {
+                        // The server is the truth: re-read its connection
+                        // list instead of assuming the connect took.
+                        this.providers_authorized.insert(provider_id.clone());
+                        this.providers_key_methods.insert(provider_id.clone());
+                        this.exit_provider_form(cx);
+                        this.select_provider(builtin_selection_id(&provider_id), cx);
+                        this.show_success_toast(tr!("providers.authorized_toast"));
+                        this.refresh_integrations(cx);
+                    }
+                    Err(error) => this.show_toast(tr!(
+                        "providers.auth_save_failed",
+                        error = error.to_string()
+                    )),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Remove `provider_id`'s connected credential from the server — the
+    /// logout. The page then shows the provider as unauthorized; its stale
+    /// probe verdict is dropped.
+    pub(super) fn logout_builtin_provider(&mut self, provider_id: String, cx: &mut Context<Self>) {
+        let Some(workspace) = self.provider_workspace() else {
+            return;
+        };
+        self.providers_auth_loading = true;
+        self.providers_delete_arming = None;
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let removed = cx
+                .background_executor()
+                .spawn(async move {
+                    let (binary, directory) = workspace;
+                    fintwind_client::persistence::StateStore::remote(daemon)
+                        .logout_provider(binary, directory, provider_id.clone())
+                        .map(|_| provider_id)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.providers_auth_loading = false;
+                match removed {
+                    Ok(provider_id) => {
+                        this.providers_authorized.remove(provider_id.as_str());
+                        if this.providers_builtin_probe_id.as_deref()
+                            == Some(provider_id.as_str())
+                        {
+                            this.providers_builtin_connectivity = None;
+                            this.providers_builtin_probe_id = None;
+                        }
+                        this.show_success_toast(tr!("providers.logged_out_toast"));
+                        this.refresh_integrations(cx);
+                    }
+                    Err(error) => this.show_toast(tr!(
+                        "providers.auth_save_failed",
+                        error = error.to_string()
+                    )),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Re-fetch the integration list in the background, so the authorized
+    /// set mirrors the server rather than what this action assumed. Failure
+    /// is quiet — the optimistic set from the action stands.
+    fn refresh_integrations(&mut self, cx: &mut Context<Self>) {
+        let Some(workspace) = self.provider_workspace() else {
+            return;
+        };
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let integrations = cx
+                .background_executor()
+                .spawn(async move {
+                    let (binary, directory) = workspace;
+                    fintwind_client::persistence::StateStore::remote(daemon)
+                        .fetch_integrations(binary, directory)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(integrations) = integrations {
+                    this.apply_integrations(integrations);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The selected built-in provider's connectivity probe: how many models
+    /// the workspace server currently exposes for it, timed. The server
+    /// lists a provider's models only when it holds a credential it
+    /// accepts, so the count is the verdict — and the key never leaves the
+    /// server, which no longer holds it in a file the app could read.
+    pub(super) fn probe_builtin_provider_connectivity(&mut self, cx: &mut Context<Self>) {
+        let Some(catalog_id) = self.selected_builtin_catalog_id().map(str::to_owned) else {
+            return;
+        };
+        // Per-provider in-flight guard: a probe running for another provider
+        // must not mute this one's button, and a second click here must not
+        // stack a duplicate request.
+        if matches!(
+            self.providers_builtin_connectivity,
+            Some(ProviderConnectivityState::Testing)
+        ) && self.providers_builtin_probe_id.as_deref() == Some(catalog_id.as_str())
+        {
+            return;
+        }
+        // The probe asks the server about a credential it holds; without one
+        // there is nothing to test.
+        if !self.provider_is_authorized(&catalog_id) {
+            return;
+        }
+        let Some(workspace) = self.provider_workspace() else {
+            return;
+        };
+        self.providers_builtin_connectivity = Some(ProviderConnectivityState::Testing);
+        self.providers_builtin_probe_id = Some(catalog_id.clone());
+        cx.notify();
+        let probe_id = catalog_id.clone();
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let outcome = cx
+                .background_executor()
+                .spawn(async move {
+                    let (binary, directory) = workspace;
+                    let probed = fintwind_client::persistence::StateStore::remote(daemon)
+                        .probe_builtin_provider(binary, directory, probe_id.clone());
+                    match probed {
+                        Ok((models, latency)) => {
+                            if models > 0 {
+                                custom_providers::ConnectivityOutcome::Reachable {
+                                    models,
+                                    latency,
+                                }
+                            } else {
+                                // The server answered but exposes no model
+                                // for the provider: its credential is
+                                // absent or rejected.
+                                custom_providers::ConnectivityOutcome::Failed {
+                                    error: custom_providers::ApiListError::AuthRejected(401),
+                                }
+                            }
+                        }
+                        Err(error) => custom_providers::ConnectivityOutcome::Failed {
+                            error: custom_providers::ApiListError::Unreachable(
+                                error.to_string(),
+                            ),
+                        },
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.providers_builtin_probe_id.as_deref() == Some(catalog_id.as_str()) {
+                    this.providers_builtin_connectivity =
+                        Some(ProviderConnectivityState::Done(outcome));
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
+impl Fintwind {
+    /// The built-in provider page's connectivity row: the test button beside
+    /// its verdict. The probe asks the workspace's OpenCode server how many
+    /// models it exposes for the provider — a credential the server accepts
+    /// is what makes them appear; providers without a key method (OAuth-
+    /// gated) show a note instead of a button.
+    pub(super) fn render_builtin_connectivity_field(
+        &self,
+        state: Option<&ProviderConnectivityState>,
+        provider: &fintwind_client::models_dev::ModelsDevProvider,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let testing = matches!(state, Some(ProviderConnectivityState::Testing));
+        if !self.provider_supports_key(&provider.id) {
+            return info_note(
+                theme,
+                "icons/info.svg",
+                tr!("providers.builtin_no_endpoint"),
+            )
+            .into_any_element();
+        }
+        let mut button = outline_button(
+            "test-builtin-provider-connection",
+            if testing {
+                tr!("providers.testing_connection")
+            } else {
+                tr!("providers.test_connection")
+            },
+            Some(if testing {
+                "icons/loader-circle.svg"
+            } else {
+                "icons/globe.svg"
+            }),
+            theme,
+        )
+        .tooltip(Tooltip::text(tr!("providers.connection_tooltip")));
+        if testing {
+            button = button.opacity(0.6);
+        } else {
+            button = button
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.probe_builtin_provider_connectivity(cx);
+                }))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                    if !event.keystroke.modifiers.modified()
+                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                    {
+                        this.probe_builtin_provider_connectivity(cx);
+                        cx.stop_propagation();
+                    }
+                }));
+        }
+
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .child(button)
+            .children(connectivity_verdict(state, theme))
+            .into_any_element()
     }
 }
 

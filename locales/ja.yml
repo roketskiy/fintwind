@@ -136,6 +136,24 @@ providers.checked_minutes_ago: "%{count} 分前に確認済み"
 providers.checked_hours_ago: "%{count} 時間前に確認済み"
 providers.section_builtin: 内蔵
 providers.section_custom: カスタムプロバイダー
+providers.builtin_search_placeholder: プロバイダーを検索…
+providers.form_custom_label: カスタム
+providers.back_to_picker: プロバイダー一覧に戻る
+providers.picker_description: プロバイダーを選んで認証、またはカスタムで独自エンドポイントを追加します。
+providers.oauth_badge: OAuth
+providers.authorize_action: 認証
+providers.update_key: キーを更新
+providers.authorized_badge: 認証済み
+providers.unauthorized_badge: 未認証
+providers.authorized_toast: プロバイダーを認証しました
+providers.logged_out_toast: プロバイダーからログアウトしました
+providers.logout: ログアウト
+providers.builtin_key_hidden: API Key は OpenCode 独自の認証ストアに保存され、opencode CLI が管理します。ここでは表示されません。
+providers.builtin_no_endpoint: このプロバイダーは API Key でのサインインに対応していません（OAuth・環境変数・opencode CLI を使用）。ここでテストできる接続がありません。
+providers.builtin_models_truncated: 他 %{count} 件のモデルは表示されていません
+providers.oauth_cli_hint: "%{name} は OAuth でサインインします。ターミナルで opencode auth login を実行するか、TUI の /connect を使ってから、このページを更新してください。"
+providers.auth_load_failed: "OpenCode の接続状態を読み取れませんでした：%{error}"
+providers.auth_save_failed: "OpenCode の認証情報を更新できませんでした：%{error}"
 providers.custom_count_zero: カスタムプロバイダーはまだありません
 providers.custom_count_one: "カスタムプロバイダー %{count} 件"
 providers.custom_count_many: "カスタムプロバイダー %{count} 件"
@@ -186,7 +204,7 @@ providers.fetch_failed: "モデル一覧を取得できませんでした：%{er
 providers.connectivity_label: 接続状態
 providers.test_connection: 接続テスト
 providers.testing_connection: テスト中…
-providers.connection_tooltip: エンドポイントにモデル一覧を要求し応答を測定します
+providers.connection_tooltip: OpenCode サーバーにこのプロバイダーの利用可能モデル数を問い合わせ、応答を測定します
 providers.connection_ok: "応答あり · %{latency} · %{count}モデル"
 providers.connection_failed: "接続失敗：%{error}"
 providers.error_invalid_url: Base URL が http(s) アドレスではありません

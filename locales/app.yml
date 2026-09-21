@@ -251,6 +251,42 @@ providers.section_builtin:
   en: Built-in
 providers.section_custom:
   en: Custom providers
+providers.builtin_search_placeholder:
+  en: Search providers…
+providers.form_custom_label:
+  en: Custom
+providers.back_to_picker:
+  en: Back to provider list
+providers.picker_description:
+  en: Pick a provider to authorize, or choose Custom for your own endpoint.
+providers.oauth_badge:
+  en: OAuth
+providers.authorize_action:
+  en: Authorize
+providers.update_key:
+  en: Update key
+providers.authorized_badge:
+  en: Authorized
+providers.unauthorized_badge:
+  en: Not authorized
+providers.authorized_toast:
+  en: Provider authorized
+providers.logged_out_toast:
+  en: Provider logged out
+providers.logout:
+  en: Log out
+providers.builtin_key_hidden:
+  en: The API key is stored in OpenCode's own credential store and managed by the opencode CLI; it is never shown here.
+providers.builtin_no_endpoint:
+  en: This provider has no API-key sign-in (it uses OAuth, an environment variable, or the opencode CLI), so there is no connection to test here.
+providers.builtin_models_truncated:
+  en: "%{count} more models not shown"
+providers.oauth_cli_hint:
+  en: "%{name} signs in through OAuth. Run `opencode auth login` in a terminal or use /connect in the TUI, then refresh this page."
+providers.auth_load_failed:
+  en: "Could not read OpenCode's connection state: %{error}"
+providers.auth_save_failed:
+  en: "Could not update OpenCode's credentials: %{error}"
 providers.custom_count_zero:
   en: No custom providers yet
 providers.custom_count_one:
@@ -351,7 +387,7 @@ providers.test_connection:
 providers.testing_connection:
   en: Testing…
 providers.connection_tooltip:
-  en: Send a model-list request to the endpoint and measure the response
+  en: Ask the OpenCode server how many models it exposes for this provider and measure the response
 providers.connection_ok:
   en: "Reachable · %{latency} · %{count} models"
 providers.connection_failed:

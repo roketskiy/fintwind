@@ -551,7 +551,8 @@ pub struct TurnStats {
     /// it (titlecasing is presentation, done at render time).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
-    /// Output tokens summed across the turn's steps.
+    /// Tokens produced across the turn's steps — each step's output plus
+    /// reasoning tokens, the TUI footer's numerator.
     #[serde(default)]
     pub output_tokens: u64,
     /// Streaming milliseconds summed across the turn's steps — the

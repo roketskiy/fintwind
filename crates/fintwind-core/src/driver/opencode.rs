@@ -1817,6 +1817,19 @@ fn reasoning_part_key(payload: &Value) -> String {
     format!("reasoning:{message}:{ordinal}")
 }
 
+/// The text part identity shared by `session.text.started`, `-delta`, and
+/// `-ended`. The `text:` prefix keeps it out of the reasoning and tool-call
+/// namespaces. A degraded stream that omits the fields still derives one
+/// stable key, matching [`reasoning_part_key`].
+fn text_part_key(payload: &Value) -> String {
+    let message = payload
+        .get("assistantMessageID")
+        .and_then(Value::as_str)
+        .unwrap_or("msg");
+    let ordinal = payload.get("ordinal").and_then(Value::as_u64).unwrap_or(0);
+    format!("text:{message}:{ordinal}")
+}
+
 /// The compaction summary's model, reported by `session.compaction.ended`.
 /// The wire has carried both a bare `provider/id` string and the step
 /// events' `{providerID, id}` object; accept either.
@@ -2452,6 +2465,14 @@ fn handle_event(
         .unwrap_or(&Value::Null);
 
     match kind {
+        "session.text.started" => {
+            // Durable boundary of one persisted text part. The app reserves
+            // the message here so a tool that lands before the batched tail
+            // anchors after the sentence, not in the middle of it.
+            let _ = events.send(DriverEvent::TextStarted {
+                part: text_part_key(payload),
+            });
+        }
         "session.text.delta" => {
             let Some(delta) = payload.get("delta").and_then(Value::as_str) else {
                 return;
@@ -2459,7 +2480,22 @@ fn handle_event(
             if delta.is_empty() {
                 return;
             }
-            let _ = events.send(DriverEvent::TextDelta(delta.to_owned()));
+            let _ = events.send(DriverEvent::TextDelta {
+                part: text_part_key(payload),
+                delta: delta.to_owned(),
+            });
+        }
+        "session.text.ended" => {
+            // `text` is the part's full value — the exact text the stored part
+            // keeps. The live message is rewritten from it, the same way a
+            // reasoning fragment settles.
+            let _ = events.send(DriverEvent::TextEnded {
+                part: text_part_key(payload),
+                text: payload
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            });
         }
         "session.reasoning.started" => {
             // Durable boundary of one persisted reasoning part. Forwarded so
@@ -2869,11 +2905,10 @@ fn handle_event(
                 forms.announced.remove(id);
             }
         }
-        // `session.text.started`/`ended`, `session.step.streamed`,
-        // `session.inbox.*`, `session.instructions.updated`,
-        // `server.connected`, and the heartbeat comment lines are not
-        // transcript content. The reasoning started/ended/delta trio is
-        // handled above.
+        // `session.step.streamed`, `session.inbox.*`,
+        // `session.instructions.updated`, `server.connected`, and the heartbeat
+        // comment lines are not transcript content. The text and reasoning
+        // started/ended/delta trios are handled above.
         _ => {}
     }
 }
@@ -3849,7 +3884,7 @@ mod tests {
         );
         let seen = event_rx.try_iter().collect::<Vec<_>>();
         assert!(seen.iter().any(
-            |event| matches!(event, DriverEvent::TextDelta(text) if text == "compile finished")
+            |event| matches!(event, DriverEvent::TextDelta { delta, .. } if delta == "compile finished")
         ));
         assert!(
             seen.iter()
@@ -5301,7 +5336,7 @@ mod tests {
                 continue;
             };
             match event {
-                DriverEvent::TextDelta(delta) => text.push_str(&delta),
+                DriverEvent::TextDelta { delta, .. } => text.push_str(&delta),
                 DriverEvent::UsageUpdated {
                     context_tokens: tokens,
                     context_window: window,
@@ -5386,7 +5421,7 @@ mod tests {
                 DriverEvent::ProviderRetry {
                     attempt, message, ..
                 } => retries.push((attempt, message)),
-                DriverEvent::TextDelta(delta) => text.push_str(&delta),
+                DriverEvent::TextDelta { delta, .. } => text.push_str(&delta),
                 DriverEvent::TurnFinished { success, .. } => finished = Some(success),
                 DriverEvent::Error(error) => panic!("the server reported: {error}"),
                 _ => {}
@@ -5564,7 +5599,7 @@ mod tests {
                 DriverEvent::SteerRejected { reason, .. } => {
                     panic!("the steer should be accepted, got rejection: {reason}");
                 }
-                DriverEvent::TextDelta(delta) => text.push_str(&delta),
+                DriverEvent::TextDelta { delta, .. } => text.push_str(&delta),
                 DriverEvent::TurnFinished { success, .. } => {
                     assert!(success, "the turn should settle successfully");
                     turns_finished += 1;
@@ -5611,7 +5646,9 @@ mod tests {
         while let Ok(event) = event_rx.try_recv() {
             seen.push(event);
         }
-        assert!(matches!(&seen[0], DriverEvent::TextDelta(text) if text == "OK"));
+        assert!(
+            matches!(&seen[0], DriverEvent::TextDelta { part, delta } if part == "text:msg_1:0" && delta == "OK")
+        );
         assert!(
             matches!(&seen[1], DriverEvent::ReasoningDelta { delta: text, .. } if text == "thinking")
         );
@@ -5810,6 +5847,33 @@ mod tests {
     }
 
     #[test]
+    fn text_part_events_carry_the_stored_part_key() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        let wire = [
+            json!({"type":"session.text.started","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0}}),
+            json!({"type":"session.text.delta","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"delta":"了解"}}),
+            json!({"type":"session.text.ended","data":{"sessionID":"ses_1","assistantMessageID":"msg_1","ordinal":0,"text":"了解结构。"}}),
+        ];
+        for event in wire {
+            handle_event(
+                &event, &events, &commands, &turn, 0, "ses_1", true, &mut state,
+            );
+        }
+        let seen = event_rx.try_iter().collect::<Vec<_>>();
+        assert!(matches!(&seen[0], DriverEvent::TextStarted { part } if part == "text:msg_1:0"));
+        assert!(matches!(
+            &seen[1],
+            DriverEvent::TextDelta { part, delta } if part == "text:msg_1:0" && delta == "了解"
+        ));
+        assert!(matches!(
+            &seen[2],
+            DriverEvent::TextEnded { part, text }
+                if part == "text:msg_1:0" && text.as_deref() == Some("了解结构。")
+        ));
+        assert_eq!(seen.len(), 3);
+    }
+
+    #[test]
     fn v2_reasoning_and_text_flows_classify_by_their_own_events() {
         let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
         // opencode separates the thought and answer streams into their own
@@ -5830,8 +5894,12 @@ mod tests {
         assert!(
             matches!(&seen[0], DriverEvent::ReasoningDelta { delta: text, .. } if text == "thinking")
         );
-        assert!(matches!(&seen[1], DriverEvent::TextDelta(text) if text == "answer"));
-        assert!(matches!(&seen[2], DriverEvent::TextDelta(text) if text == " tail"));
+        assert!(
+            matches!(&seen[1], DriverEvent::TextDelta { part, delta } if part == "text:msg_1:0" && delta == "answer")
+        );
+        assert!(
+            matches!(&seen[2], DriverEvent::TextDelta { part, delta } if part == "text:msg_2:0" && delta == " tail")
+        );
         assert!(matches!(
             &seen[3],
             DriverEvent::TurnFinished { success: true, .. }

@@ -9,15 +9,16 @@ use super::{
     NAVIGATION_RAIL_TICK_HEIGHT, NAVIGATION_RAIL_TURN_HEIGHT, PendingUserInput, SessionNavigation,
     StreamDeltaKind, TranscriptRowKind::*, active_navigation_turn_index,
     append_text_delta_to_session, assistant_response_footer, assistant_response_footer_index,
-    assistant_response_footer_time, bind_keyed_reasoning_delta, changed_files_inline_message_index,
-    compact_driver_error, complete_reasoning_activity_bound, disclosure_leading_space, fenced_code,
-    fitted_file_tree_width, fitted_panel_widths, folded_transcript_row_kinds,
-    folded_transcript_row_kinds_with_retry, format_turn_stats_duration, format_worked_duration,
-    format_working_elapsed, maintain_transcript_anchor, message_opens_turn,
-    message_starts_followup_turn, navigation_preview_snippet, navigation_rail_fade_visibility,
-    navigation_rail_height, navigation_rail_scale, paused_toast_duration, pop_stream_batch,
+    assistant_response_footer_time, bind_keyed_reasoning_delta, bind_keyed_text_delta,
+    changed_files_inline_message_index, compact_driver_error, complete_reasoning_activity_bound,
+    disclosure_leading_space, fenced_code, fitted_file_tree_width, fitted_panel_widths,
+    folded_transcript_row_kinds, folded_transcript_row_kinds_with_retry,
+    format_turn_stats_duration, format_worked_duration, format_working_elapsed,
+    maintain_transcript_anchor, message_opens_turn, message_starts_followup_turn,
+    navigation_preview_snippet, navigation_rail_fade_visibility, navigation_rail_height,
+    navigation_rail_scale, open_keyed_text_part, paused_toast_duration, pop_stream_batch,
     push_transcript_activity, session_is_reapable, settle_keyed_reasoning_fragment,
-    should_refresh_branch_after_activity, should_show_navigation_rail,
+    settle_keyed_text_fragment, should_refresh_branch_after_activity, should_show_navigation_rail,
     should_show_scroll_to_bottom, task_id_from_notification_tag, task_notification_tag,
     transcript_anchor_end_space, transcript_navigation_turns, transcript_rests_at_tail,
     transcript_row_kinds, transcript_row_splice, transcript_rows_fingerprint,
@@ -746,13 +747,19 @@ fn stream_batches_commit_full_adjacent_text_and_preserve_event_order() {
     let runtime_id = Uuid::new_v4();
     let epoch = Uuid::new_v4();
     let mut events = VecDeque::from([
-        DriverEvent::TextDelta("first ".into()),
+        DriverEvent::TextDelta {
+            part: "text:msg_1:0".into(),
+            delta: "first ".into(),
+        },
         DriverEvent::RuntimeEventCursorAdvanced(RuntimeEventCursor {
             runtime_id,
             epoch,
             sequence: 1,
         }),
-        DriverEvent::TextDelta("line\nsecond line".into()),
+        DriverEvent::TextDelta {
+            part: "text:msg_1:0".into(),
+            delta: "line\nsecond line".into(),
+        },
         DriverEvent::RuntimeEventCursorAdvanced(RuntimeEventCursor {
             runtime_id,
             epoch,
@@ -765,12 +772,16 @@ fn stream_batches_commit_full_adjacent_text_and_preserve_event_order() {
             detail: None,
             complete: true,
         },
-        DriverEvent::TextDelta("after tool".into()),
+        DriverEvent::TextDelta {
+            part: "text:msg_1:0".into(),
+            delta: "after tool".into(),
+        },
     ]);
 
     assert!(matches!(
         pop_stream_batch(&mut events, StreamDeltaKind::Text),
-        Some(DriverEvent::TextDelta(text)) if text == "first line\nsecond line"
+        Some(DriverEvent::TextDelta { part, delta })
+            if part == "text:msg_1:0" && delta == "first line\nsecond line"
     ));
     assert!(matches!(
         events.pop_front(),
@@ -779,7 +790,8 @@ fn stream_batches_commit_full_adjacent_text_and_preserve_event_order() {
     assert!(matches!(events.front(), Some(DriverEvent::Activity { .. })));
     assert!(matches!(
         events.get(1),
-        Some(DriverEvent::TextDelta(text)) if text == "after tool"
+        Some(DriverEvent::TextDelta { part, delta })
+            if part == "text:msg_1:0" && delta == "after tool"
     ));
 }
 
@@ -1084,6 +1096,175 @@ fn a_tail_delta_after_its_fragment_settled_opens_nothing() {
         "thought!",
         "the authoritative end text is untouched"
     );
+}
+
+#[test]
+fn stream_batches_keep_adjacent_text_parts_separate() {
+    let mut events = VecDeque::from([
+        DriverEvent::TextDelta {
+            part: "text:msg_1:0".into(),
+            delta: "了解".into(),
+        },
+        DriverEvent::TextDelta {
+            part: "text:msg_1:0".into(),
+            delta: "结构。".into(),
+        },
+        DriverEvent::TextDelta {
+            part: "text:msg_1:1".into(),
+            delta: "下一句".into(),
+        },
+    ]);
+
+    assert!(matches!(
+        pop_stream_batch(&mut events, StreamDeltaKind::Text),
+        Some(DriverEvent::TextDelta { part, delta })
+            if part == "text:msg_1:0" && delta == "了解结构。"
+    ));
+    assert!(matches!(
+        pop_stream_batch(&mut events, StreamDeltaKind::Text),
+        Some(DriverEvent::TextDelta { part, delta })
+            if part == "text:msg_1:1" && delta == "下一句"
+    ));
+    assert!(events.is_empty());
+}
+
+#[test]
+fn a_text_tail_after_a_tool_rejoins_its_part_and_a_new_part_starts_after() {
+    // The provider flushes a text part's batched tail after the next tool's
+    // events have already landed. The part key puts that tail back in the
+    // sentence; a later ordinal is a real new part and stays after the tool.
+    let mut session = AgentSession::new(Uuid::new_v4());
+    session.begin_turn("look");
+    let mut open_text = HashMap::new();
+    let mut settled = HashSet::new();
+    let part = "text:msg_1:0";
+
+    assert!(open_keyed_text_part(
+        &mut session,
+        &mut open_text,
+        &mut settled,
+        part
+    ));
+    assert!(!bind_keyed_text_delta(
+        &mut session,
+        &mut open_text,
+        &settled,
+        part,
+        "了解"
+    ));
+    push_transcript_activity(
+        &mut session,
+        ActivityItem::new(
+            Some("call_1".into()),
+            ActivityKind::FileRead,
+            "read",
+            None,
+            false,
+        ),
+        false,
+    );
+    assert!(
+        !bind_keyed_text_delta(&mut session, &mut open_text, &settled, part, "结构。"),
+        "a late tail must rejoin the text part that started before the tool"
+    );
+
+    let assistant = session
+        .messages
+        .iter()
+        .filter(|message| message.role == MessageRole::Assistant)
+        .collect::<Vec<_>>();
+    assert_eq!(assistant.len(), 1);
+    assert_eq!(assistant[0].content, "了解结构。");
+    assert_eq!(session.transcript_blocks.len(), 1);
+    assert_eq!(session.transcript_blocks[0].after_message, 2);
+
+    let settled_index =
+        settle_keyed_text_fragment(&mut session, &mut open_text, part, Some("了解结构。"));
+    assert!(matches!(
+        settled_index,
+        super::KeyedTextSettle::Rewritten(1)
+    ));
+    assert!(!session.messages[1].streaming);
+    assert!(open_text.is_empty());
+    // The runtime records the key as settled; the free function only unbinds
+    // it. A tail after that record must not open another message.
+    settled.insert(part.to_owned());
+    assert!(
+        !open_keyed_text_part(&mut session, &mut open_text, &mut settled, part),
+        "a started event after the part settled must not open another message"
+    );
+    assert!(!bind_keyed_text_delta(
+        &mut session,
+        &mut open_text,
+        &settled,
+        part,
+        "!"
+    ));
+    assert_eq!(session.messages[1].content, "了解结构。");
+    assert_eq!(
+        session
+            .messages
+            .iter()
+            .filter(|message| message.role == MessageRole::Assistant)
+            .count(),
+        1
+    );
+
+    assert!(open_keyed_text_part(
+        &mut session,
+        &mut open_text,
+        &mut settled,
+        "text:msg_1:1"
+    ));
+    assert_eq!(
+        session
+            .messages
+            .iter()
+            .filter(|message| message.role == MessageRole::Assistant)
+            .count(),
+        2
+    );
+    assert_eq!(session.transcript_blocks[0].after_message, 2);
+}
+
+#[test]
+fn an_empty_text_part_is_removed_and_the_tool_anchor_moves_back() {
+    let mut session = AgentSession::new(Uuid::new_v4());
+    session.begin_turn("look");
+    let mut open_text = HashMap::new();
+    let mut settled = HashSet::new();
+    assert!(open_keyed_text_part(
+        &mut session,
+        &mut open_text,
+        &mut settled,
+        "text:msg_1:0"
+    ));
+    push_transcript_activity(
+        &mut session,
+        ActivityItem::new(
+            Some("call_1".into()),
+            ActivityKind::Tool,
+            "shell",
+            None,
+            true,
+        ),
+        false,
+    );
+    assert_eq!(session.transcript_blocks[0].after_message, 2);
+
+    assert!(matches!(
+        settle_keyed_text_fragment(&mut session, &mut open_text, "text:msg_1:0", Some("")),
+        super::KeyedTextSettle::Removed
+    ));
+    assert_eq!(
+        session
+            .messages
+            .iter()
+            .filter(|message| message.role == MessageRole::Assistant)
+            .count(),
+        0
+    );
+    assert_eq!(session.transcript_blocks[0].after_message, 1);
 }
 
 #[test]

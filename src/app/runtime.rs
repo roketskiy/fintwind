@@ -1723,6 +1723,8 @@ impl Fintwind {
             runtime.stream_phase = None;
             runtime.open_reasoning.clear();
             runtime.settled_reasoning.clear();
+            runtime.open_text.clear();
+            runtime.settled_text.clear();
             runtime.pending_permission = None;
             runtime.pending_user_input = None;
         }
@@ -1948,6 +1950,8 @@ impl Fintwind {
                 stream_remeasure_pending: false,
                 open_reasoning: HashMap::new(),
                 settled_reasoning: HashSet::new(),
+                open_text: HashMap::new(),
+                settled_text: HashSet::new(),
                 provider_phase: None,
                 pending_permission: None,
                 pending_user_input: None,
@@ -2445,6 +2449,8 @@ impl Fintwind {
             runtime.stream_phase = None;
             runtime.open_reasoning.clear();
             runtime.settled_reasoning.clear();
+            runtime.open_text.clear();
+            runtime.settled_text.clear();
             runtime.provider_phase = None;
             // The new submission supersedes any backoff from the previous turn.
             self.provider_retries.remove(&session_id);
@@ -2626,7 +2632,8 @@ impl Fintwind {
                 // second, sailing straight past the 120 ms commit floor.
                 markdown_changed |= matches!(
                     event,
-                    DriverEvent::TextDelta(_)
+                    DriverEvent::TextDelta { .. }
+                        | DriverEvent::TextEnded { .. }
                         | DriverEvent::ReasoningDelta { .. }
                         // The authoritative fragment text rewrites the live
                         // block's markdown in one pass.

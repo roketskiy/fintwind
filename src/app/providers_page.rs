@@ -148,7 +148,8 @@ impl Fintwind {
         if !self.providers_key_methods.is_empty() {
             return self.providers_key_methods.contains(id);
         }
-        self.builtin_provider(id).is_some_and(|provider| provider.api.is_some())
+        self.builtin_provider(id)
+            .is_some_and(|provider| provider.api.is_some())
     }
 
     pub(super) fn select_provider(&mut self, id: String, cx: &mut Context<Self>) {
@@ -184,7 +185,8 @@ impl Fintwind {
             .cloned()
         else {
             return;
-        };        self.provider_base_url_input.update(cx, |input, cx| {
+        };
+        self.provider_base_url_input.update(cx, |input, cx| {
             if input.content() != provider.base_url {
                 input.set_content(provider.base_url.clone(), cx);
             }
@@ -773,10 +775,7 @@ impl Fintwind {
                     continue;
                 }
                 rows = rows.child(self.render_provider_list_row(
-                    SharedString::from(format!(
-                        "provider-row-builtin-{}",
-                        provider.id
-                    )),
+                    SharedString::from(format!("provider-row-builtin-{}", provider.id)),
                     builtin_selection_id(&provider.id),
                     provider.name.clone(),
                     provider_icon(&provider.name),
@@ -1269,9 +1268,10 @@ impl Fintwind {
         let accent = providers_accent(theme);
         let authorized = self.provider_is_authorized(&provider.id);
 
-        let state = self.providers_builtin_connectivity.as_ref().filter(|_| {
-            self.providers_builtin_probe_id.as_deref() == Some(provider.id.as_str())
-        });
+        let state = self
+            .providers_builtin_connectivity
+            .as_ref()
+            .filter(|_| self.providers_builtin_probe_id.as_deref() == Some(provider.id.as_str()));
         let connectivity = self.render_builtin_connectivity_field(state, provider, theme, cx);
 
         let mut model_rows = div().flex().flex_col();
@@ -1316,9 +1316,7 @@ impl Fintwind {
                             .truncate()
                             .text_size(ui_px(11.0))
                             .text_color(theme.text)
-                            .child(
-                                model.name.clone().unwrap_or_else(|| model.id.clone()),
-                            ),
+                            .child(model.name.clone().unwrap_or_else(|| model.id.clone())),
                     )
                     .when(model.name.is_some(), |element| {
                         element.child(
@@ -1332,7 +1330,9 @@ impl Fintwind {
                                 .child(SharedString::from(model.id.clone())),
                         )
                     })
-                    .when(model.name.is_none(), |element| element.child(div().flex_1()))
+                    .when(model.name.is_none(), |element| {
+                        element.child(div().flex_1())
+                    })
                     .children(modality_pill)
                     .when_some(model.context_window, |element, window| {
                         element.child(small_pill(
@@ -1344,9 +1344,8 @@ impl Fintwind {
             );
         }
         let hidden = provider.models.len().saturating_sub(200);
-        let model_count_note = (hidden > 0).then(|| {
-            SharedString::from(tr!("providers.builtin_models_truncated", count = hidden))
-        });
+        let model_count_note = (hidden > 0)
+            .then(|| SharedString::from(tr!("providers.builtin_models_truncated", count = hidden)));
 
         let logout_button = div()
             .id("logout-builtin-provider")
@@ -1395,7 +1394,11 @@ impl Fintwind {
                         .flex()
                         .items_center()
                         .gap(px(12.0))
-                        .child(provider_tile(theme, provider_icon(&provider.name), authorized))
+                        .child(provider_tile(
+                            theme,
+                            provider_icon(&provider.name),
+                            authorized,
+                        ))
                         .child(
                             div()
                                 .flex_1()
@@ -1428,9 +1431,7 @@ impl Fintwind {
                                     element.text_color(accent).bg(accent.opacity(0.14))
                                 })
                                 .when(!authorized, |element| {
-                                    element
-                                        .text_color(theme.text_tertiary)
-                                        .bg(theme.overlay)
+                                    element.text_color(theme.text_tertiary).bg(theme.overlay)
                                 })
                                 .child(if authorized {
                                     tr!("providers.authorized_badge")
@@ -1466,11 +1467,10 @@ impl Fintwind {
                     "icons/lock.svg",
                     tr!("providers.builtin_key_hidden"),
                 ))
-                .child(
-                    div()
-                        .mt(px(18.0))
-                        .child(models_header_with_label(theme, tr!("providers.models_label"))),
-                )
+                .child(div().mt(px(18.0)).child(models_header_with_label(
+                    theme,
+                    tr!("providers.models_label"),
+                )))
                 .child(
                     div()
                         .mt(px(8.0))
@@ -1489,7 +1489,6 @@ impl Fintwind {
                 })),
         )
     }
-
 
     fn render_custom_provider_detail(
         &self,
@@ -2219,11 +2218,7 @@ impl Fintwind {
 
     // ── Add-provider form ──────────────────────────────────────────────────
 
-    fn select_form_builtin(
-        &mut self,
-        provider_id: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
+    fn select_form_builtin(&mut self, provider_id: Option<String>, cx: &mut Context<Self>) {
         self.providers_form_stage = match provider_id {
             Some(id) => ProviderFormStage::Builtin(id),
             None => ProviderFormStage::Custom,
@@ -2322,15 +2317,13 @@ impl Fintwind {
                         .child(tr!("providers.picker_description")),
                 )
                 .child(
-                    div()
-                        .mt(px(16.0))
-                        .child(
-                            TextField::new(
-                                "provider-form-builtin-search",
-                                self.provider_form_builtin_search.clone(),
-                            )
-                            .icon("icons/search.svg", 13.0),
-                        ),
+                    div().mt(px(16.0)).child(
+                        TextField::new(
+                            "provider-form-builtin-search",
+                            self.provider_form_builtin_search.clone(),
+                        )
+                        .icon("icons/search.svg", 13.0),
+                    ),
                 )
                 .child(
                     div()
@@ -2942,26 +2935,24 @@ impl Fintwind {
 /// A Models section header without a button — the built-in page's model
 /// list is read-only, so the label carries the row alone.
 fn models_header_with_label(theme: &Theme, label: String) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .pt(px(2.0))
-                .pb(px(4.0))
-                .px(px(9.0))
-                .flex()
-                .items_baseline()
-                .text_size(ui_px(9.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.text_tertiary)
-                .child(SharedString::from(label.to_uppercase())),
-        )
+    div().flex().items_center().child(
+        div()
+            .flex_1()
+            .min_w_0()
+            .pt(px(2.0))
+            .pb(px(4.0))
+            .px(px(9.0))
+            .flex()
+            .items_baseline()
+            .text_size(ui_px(9.5))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(theme.text_tertiary)
+            .child(SharedString::from(label.to_uppercase())),
+    )
 }
 
-pub(super) fn section_label(theme: &Theme, label: String, first: bool) -> Div {    div()
+pub(super) fn section_label(theme: &Theme, label: String, first: bool) -> Div {
+    div()
         .w_full()
         .pt(px(if first { 2.0 } else { 16.0 }))
         .pb(px(4.0))

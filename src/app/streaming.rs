@@ -27,6 +27,139 @@ impl Fintwind {
         runtime.stream_phase = Some(StreamPhase::Text);
     }
 
+    /// Reserve the assistant message for one text part (`session.text.started`).
+    /// Tools that arrive before the part's batched tail then anchor after this
+    /// message, so the tail fills the sentence instead of opening a new one.
+    /// A redelivered start for a part that is already open is a no-op.
+    fn open_text_fragment(&mut self, session_id: Uuid, runtime: &mut SessionRuntime, part: String) {
+        if part.is_empty()
+            || runtime.open_text.contains_key(&part)
+            || runtime.settled_text.contains(&part)
+        {
+            return;
+        }
+        if runtime.stream_phase == Some(StreamPhase::Reasoning) {
+            self.complete_reasoning_activity(session_id, runtime);
+        }
+        if runtime.stream_phase == Some(StreamPhase::Text) {
+            self.finish_streaming_assistant(session_id);
+        }
+        let created = self.state.session_mut(session_id).is_some_and(|session| {
+            open_keyed_text_part(
+                session,
+                &mut runtime.open_text,
+                &mut runtime.settled_text,
+                &part,
+            )
+        });
+        if created {
+            self.state.mark_session_dirty(session_id);
+            runtime.stream_phase = Some(StreamPhase::Text);
+        }
+    }
+
+    /// Route one text delta. An empty part is the pre-keying fallback and
+    /// follows stream phase. A keyed delta of an open part appends there even
+    /// after tool events, and does not move the phase back to text — the next
+    /// tool must keep grouping with the block already under way.
+    fn append_keyed_text_delta(
+        &mut self,
+        session_id: Uuid,
+        runtime: &mut SessionRuntime,
+        part: String,
+        delta: String,
+    ) {
+        if part.is_empty() {
+            self.append_text_delta(session_id, runtime, delta);
+            return;
+        }
+        if delta.is_empty() || runtime.settled_text.contains(&part) {
+            return;
+        }
+        let already_open = runtime.open_text.contains_key(&part);
+        if !already_open {
+            if runtime.stream_phase == Some(StreamPhase::Reasoning) {
+                self.complete_reasoning_activity(session_id, runtime);
+            }
+            if runtime.stream_phase == Some(StreamPhase::Text) {
+                self.finish_streaming_assistant(session_id);
+            }
+        }
+        let opened = {
+            let Some(session) = self.state.session_mut(session_id) else {
+                return;
+            };
+            bind_keyed_text_delta(
+                session,
+                &mut runtime.open_text,
+                &runtime.settled_text,
+                &part,
+                &delta,
+            )
+        };
+        if opened {
+            runtime.stream_phase = Some(StreamPhase::Text);
+        } else if already_open && self.state.selected_session == Some(session_id) {
+            if let Some(message_id) = runtime.open_text.get(&part).copied()
+                && let Some(index) = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .and_then(|session| {
+                        session
+                            .messages
+                            .iter()
+                            .position(|message| message.id == message_id)
+                    })
+            {
+                self.remeasure_transcript_message(index);
+            }
+        }
+        self.state.mark_session_dirty(session_id);
+    }
+
+    /// Close a text part with its authoritative text (`session.text.ended`).
+    /// An empty text drops the reserved message and pulls later block anchors
+    /// back over the hole. The phase becomes activity, matching a settled
+    /// reasoning fragment, so the next tool does not look like a fresh stretch
+    /// of text.
+    fn complete_text_fragment(
+        &mut self,
+        session_id: Uuid,
+        runtime: &mut SessionRuntime,
+        part: String,
+        text: Option<String>,
+    ) {
+        if part.is_empty() {
+            if runtime.stream_phase == Some(StreamPhase::Text) {
+                self.finish_streaming_assistant(session_id);
+                runtime.stream_phase = Some(StreamPhase::Activity);
+            }
+            return;
+        }
+        // A redelivered end must not open another copy of the sentence after
+        // the tools, and must not move the phase back to text.
+        if runtime.settled_text.contains(&part) {
+            return;
+        }
+        let settled = if let Some(session) = self.state.session_mut(session_id) {
+            let settled =
+                settle_keyed_text_fragment(session, &mut runtime.open_text, &part, text.as_deref());
+            session.updated_at = unix_time();
+            settled
+        } else {
+            return;
+        };
+        runtime.settled_text.insert(part);
+        runtime.stream_phase = Some(StreamPhase::Activity);
+        if self.state.selected_session == Some(session_id)
+            && let KeyedTextSettle::Rewritten(index) = settled
+        {
+            self.remeasure_transcript_message(index);
+        }
+    }
+
     fn complete_reasoning_activity(&mut self, session_id: Uuid, runtime: &SessionRuntime) {
         let bound = runtime.open_reasoning.values().copied().collect::<Vec<_>>();
         let completed_block = self
@@ -295,6 +428,38 @@ impl Fintwind {
         self.rebuild_todo_summary(session_id);
     }
 
+    /// Drop assistant messages this turn reserved for a text part and never
+    /// filled. They are not an answer, and leaving them in place would hide
+    /// the fallback the turn shows when the provider produced no text.
+    pub(super) fn drop_blank_assistant_messages(&mut self, session_id: Uuid) {
+        let Some(turn_id) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(AgentSession::active_turn_id)
+        else {
+            return;
+        };
+        let Some(session) = self.state.session_mut(session_id) else {
+            return;
+        };
+        let blank = session
+            .messages
+            .iter()
+            .enumerate()
+            .filter(|(_, message)| {
+                message.role == MessageRole::Assistant
+                    && message.turn_id == Some(turn_id)
+                    && message.content.trim().is_empty()
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        for index in blank.into_iter().rev() {
+            remove_message_at(session, index);
+        }
+    }
+
     pub(super) fn turn_has_assistant_message(&self, session_id: Uuid) -> bool {
         self.state
             .sessions
@@ -305,7 +470,9 @@ impl Fintwind {
                     return false;
                 };
                 session.messages.iter().any(|message| {
-                    message.role == MessageRole::Assistant && message.turn_id == Some(turn_id)
+                    message.role == MessageRole::Assistant
+                        && message.turn_id == Some(turn_id)
+                        && !message.content.trim().is_empty()
                 })
             })
     }
@@ -442,11 +609,25 @@ impl Fintwind {
                     self.schedule_provider_retry_expiry(session_id, cx);
                 }
             }
-            DriverEvent::TextDelta(delta) => {
+            DriverEvent::TextStarted { part } => {
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
-                    self.append_text_delta(session_id, runtime, delta);
+                    self.open_text_fragment(session_id, runtime, part);
+                }
+            }
+            DriverEvent::TextDelta { part, delta } => {
+                self.provider_retries.remove(&session_id);
+                if self.accepts_turn_output(session_id) {
+                    runtime.provider_phase = None;
+                    self.append_keyed_text_delta(session_id, runtime, part, delta);
+                }
+            }
+            DriverEvent::TextEnded { part, text } => {
+                self.provider_retries.remove(&session_id);
+                if self.accepts_turn_output(session_id) {
+                    runtime.provider_phase = None;
+                    self.complete_text_fragment(session_id, runtime, part, text);
                 }
             }
             DriverEvent::ReasoningStarted { part } => {
@@ -775,7 +956,10 @@ impl Fintwind {
                 runtime.stream_phase = None;
                 runtime.open_reasoning.clear();
                 runtime.settled_reasoning.clear();
+                runtime.open_text.clear();
+                runtime.settled_text.clear();
                 runtime.provider_phase = None;
+                self.drop_blank_assistant_messages(session_id);
                 let needs_fallback = !self.turn_has_assistant_message(session_id);
                 if let Some(session) = self.state.session_mut(session_id) {
                     session.status = if success {
@@ -849,14 +1033,17 @@ impl Fintwind {
                     .find(|session| session.id == session_id)
                     .and_then(AgentSession::active_turn_id)
                     .is_some();
-                let should_append = has_active_turn
-                    && !self.turn_has_assistant_message(session_id)
-                    && self
-                        .state
-                        .sessions
-                        .iter()
-                        .find(|session| session.id == session_id)
-                        .is_some_and(|session| session.status != SessionStatus::Working);
+                let not_working = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .is_some_and(|session| session.status != SessionStatus::Working);
+                if not_working {
+                    self.drop_blank_assistant_messages(session_id);
+                }
+                let should_append =
+                    has_active_turn && not_working && !self.turn_has_assistant_message(session_id);
                 if let Some(session) = self.state.session_mut(session_id)
                     && has_active_turn
                 {
@@ -879,11 +1066,14 @@ impl Fintwind {
                 runtime.stream_phase = None;
                 runtime.open_reasoning.clear();
                 runtime.settled_reasoning.clear();
+                runtime.open_text.clear();
+                runtime.settled_text.clear();
                 runtime.provider_phase = None;
                 // A dead provider process is not retrying.
                 self.provider_retries.remove(&session_id);
                 runtime.pending_permission = None;
                 runtime.pending_user_input = None;
+                self.drop_blank_assistant_messages(session_id);
                 let needs_fallback = !self.turn_has_assistant_message(session_id);
                 let failure_message = runtime
                     .last_driver_error
@@ -1025,6 +1215,128 @@ fn find_activity_mut(
                 .find(|activity| activity.id == activity_id)
                 .map(|activity| (block_index, activity))
         })
+}
+
+/// What [`settle_keyed_text_fragment`] did to the reserved message.
+pub(super) enum KeyedTextSettle {
+    /// No message was bound. An authoritative body was materialized at the
+    /// current end when one was present.
+    Missing,
+    /// The bound message now holds the settled text.
+    Rewritten(usize),
+    /// An empty part was dropped, and later block anchors were pulled back.
+    Removed,
+}
+
+/// Reserve an assistant message for `part` at the current end of the
+/// transcript. A part that is already open is left alone, so a redelivered
+/// `started` does not split the sentence. Returns whether a message was
+/// created.
+pub(super) fn open_keyed_text_part(
+    session: &mut AgentSession,
+    open_text: &mut HashMap<String, Uuid>,
+    settled: &mut HashSet<String>,
+    part: &str,
+) -> bool {
+    if part.is_empty() || open_text.contains_key(part) || settled.contains(part) {
+        return false;
+    }
+    let id = push_streaming_assistant(session, String::new(), true);
+    open_text.insert(part.to_owned(), id);
+    true
+}
+
+/// Append `delta` to the message `part` already owns. Returns whether a new
+/// message had to be opened (the `started` event never arrived). A rejoin
+/// returns false: the caller must not move the stream phase back to text,
+/// or the next tool would break out of the activity block already open.
+pub(super) fn bind_keyed_text_delta(
+    session: &mut AgentSession,
+    open_text: &mut HashMap<String, Uuid>,
+    settled: &HashSet<String>,
+    part: &str,
+    delta: &str,
+) -> bool {
+    if part.is_empty() || delta.is_empty() || settled.contains(part) {
+        return false;
+    }
+    if let Some(message_id) = open_text.get(part).copied()
+        && let Some(message) = session
+            .messages
+            .iter_mut()
+            .find(|message| message.id == message_id)
+    {
+        message.content.push_str(delta);
+        message.streaming = true;
+        session.updated_at = unix_time();
+        return false;
+    }
+    let id = push_streaming_assistant(session, delta.to_owned(), true);
+    open_text.insert(part.to_owned(), id);
+    true
+}
+
+/// Close `part` with the text the stored part keeps. An empty body removes
+/// the reserved message. A part that never opened is materialized from a
+/// non-empty body so the live view still carries it.
+pub(super) fn settle_keyed_text_fragment(
+    session: &mut AgentSession,
+    open_text: &mut HashMap<String, Uuid>,
+    part: &str,
+    text: Option<&str>,
+) -> KeyedTextSettle {
+    let Some(message_id) = open_text.remove(part) else {
+        if let Some(text) = text.map(str::trim).filter(|text| !text.is_empty()) {
+            push_streaming_assistant(session, text.to_owned(), false);
+        }
+        return KeyedTextSettle::Missing;
+    };
+    let Some(index) = session
+        .messages
+        .iter()
+        .position(|message| message.id == message_id)
+    else {
+        return KeyedTextSettle::Missing;
+    };
+    let empty = text.is_some_and(|text| text.trim().is_empty())
+        || (text.is_none() && session.messages[index].content.trim().is_empty());
+    if empty {
+        remove_message_at(session, index);
+        return KeyedTextSettle::Removed;
+    }
+    if let Some(text) = text {
+        session.messages[index].content = text.to_owned();
+    }
+    session.messages[index].streaming = false;
+    session.updated_at = unix_time();
+    KeyedTextSettle::Rewritten(index)
+}
+
+fn push_streaming_assistant(session: &mut AgentSession, content: String, streaming: bool) -> Uuid {
+    let mut message = match session.active_turn_id() {
+        Some(turn_id) => Message::new_for_turn(MessageRole::Assistant, content, turn_id),
+        None => Message::new(MessageRole::Assistant, content),
+    };
+    message.streaming = streaming;
+    let id = message.id;
+    session.messages.push(message);
+    session.updated_at = unix_time();
+    id
+}
+
+/// Drop one message and pull block anchors that sat after it back by one, so
+/// a reserved-then-empty text part does not leave tools pointing past the end.
+fn remove_message_at(session: &mut AgentSession, index: usize) {
+    if index >= session.messages.len() {
+        return;
+    }
+    session.messages.remove(index);
+    for block in &mut session.transcript_blocks {
+        if block.after_message > index {
+            block.after_message -= 1;
+        }
+    }
+    session.updated_at = unix_time();
 }
 
 /// Route one keyed reasoning delta to the fragment's own activity. Deltas of
@@ -1171,7 +1483,7 @@ pub(super) fn push_transcript_activity(
 
 pub(super) fn stream_delta_kind(event: &DriverEvent) -> Option<StreamDeltaKind> {
     match event {
-        DriverEvent::TextDelta(_) => Some(StreamDeltaKind::Text),
+        DriverEvent::TextDelta { .. } => Some(StreamDeltaKind::Text),
         DriverEvent::ReasoningDelta { .. } => Some(StreamDeltaKind::Reasoning),
         _ => None,
     }
@@ -1182,14 +1494,16 @@ pub(super) fn stream_delta_kind(event: &DriverEvent) -> Option<StreamDeltaKind> 
 /// each fragment's chunk is routed to its own block.
 fn stream_delta_part(event: &DriverEvent) -> Option<&str> {
     match event {
-        DriverEvent::ReasoningDelta { part, .. } => Some(part),
+        DriverEvent::TextDelta { part, .. } | DriverEvent::ReasoningDelta { part, .. } => {
+            Some(part)
+        }
         _ => None,
     }
 }
 
 pub(super) fn stream_delta_text(event: &DriverEvent, kind: StreamDeltaKind) -> Option<&str> {
     match (kind, event) {
-        (StreamDeltaKind::Text, DriverEvent::TextDelta(text))
+        (StreamDeltaKind::Text, DriverEvent::TextDelta { delta: text, .. })
         | (StreamDeltaKind::Reasoning, DriverEvent::ReasoningDelta { delta: text, .. }) => {
             Some(text)
         }
@@ -1249,7 +1563,7 @@ pub(super) fn pop_stream_batch(
         };
         part = stream_delta_part(&event).map(str::to_owned);
         match (kind, event) {
-            (StreamDeltaKind::Text, DriverEvent::TextDelta(text))
+            (StreamDeltaKind::Text, DriverEvent::TextDelta { delta: text, .. })
             | (StreamDeltaKind::Reasoning, DriverEvent::ReasoningDelta { delta: text, .. }) => {
                 chunk.push_str(&text);
             }
@@ -1260,7 +1574,10 @@ pub(super) fn pop_stream_batch(
         events.push_front(cursor);
     }
     match kind {
-        StreamDeltaKind::Text => Some(DriverEvent::TextDelta(chunk)),
+        StreamDeltaKind::Text => Some(DriverEvent::TextDelta {
+            part: part.unwrap_or_default(),
+            delta: chunk,
+        }),
         StreamDeltaKind::Reasoning => Some(DriverEvent::ReasoningDelta {
             part: part.unwrap_or_default(),
             delta: chunk,

@@ -873,6 +873,17 @@ struct SessionRuntime {
     /// dropped instead of opening a stray fragment. A fresh `started` reopens
     /// the key. Cleared with `open_reasoning`.
     settled_reasoning: HashSet<String>,
+    /// Open text parts (`text:{message}:{ordinal}`) mapped to the assistant
+    /// message each one streams into. A provider flushes a part's batched tail
+    /// after the next tool's events have already landed; the key routes that
+    /// tail back into its own message instead of opening a new one after the
+    /// tool. Presentation only: it never persists, and it is cleared with the
+    /// phase at turn boundaries.
+    open_text: HashMap<String, Uuid>,
+    /// Text parts that already settled from `session.text.ended`. A tail delta
+    /// after the authoritative text is dropped. A fresh `started` reopens the
+    /// key. Cleared with `open_text`.
+    settled_text: HashSet<String>,
     /// The provider's busy report for the live turn, if any. Runtime
     /// presentation state: it never persists and always dies with the turn.
     provider_phase: Option<ProviderPhase>,
@@ -1383,8 +1394,7 @@ pub struct Fintwind {
     /// The integration fetch (authorization set included) is in flight.
     providers_auth_loading: bool,
     /// A connectivity probe of the selected built-in provider is in flight.
-    providers_builtin_connectivity:
-        Option<providers_fetch::ProviderConnectivityState>,
+    providers_builtin_connectivity: Option<providers_fetch::ProviderConnectivityState>,
     /// The id of the built-in provider the current connectivity probe names;
     /// a stale result for a different provider never renders.
     providers_builtin_probe_id: Option<String>,
@@ -2650,11 +2660,14 @@ impl Fintwind {
                 })
                 .detach();
             }
-            cx.subscribe(&provider_form_builtin_search, |_: &mut Self, _, event: &ComposerEvent, cx| {
-                if matches!(event, ComposerEvent::Edited) {
-                    cx.notify();
-                }
-            })
+            cx.subscribe(
+                &provider_form_builtin_search,
+                |_: &mut Self, _, event: &ComposerEvent, cx| {
+                    if matches!(event, ComposerEvent::Edited) {
+                        cx.notify();
+                    }
+                },
+            )
             .detach();
             cx.subscribe(&mcp_search, |_: &mut Self, _, event: &ComposerEvent, cx| {
                 if matches!(event, ComposerEvent::Edited) {

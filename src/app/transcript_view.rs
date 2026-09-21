@@ -2238,41 +2238,44 @@ impl Fintwind {
                 .as_ref()
                 .filter(|(_, key, ..)| key.kind == BackgroundWorkKind::Subagent)
                 .cloned();
-            let background_badge = background_work.clone().map(|(session_id, key, status, ..)| {
-                let click_key = key.clone();
-                let focus = self.transcript_control_focus(format!("activity-background-{id}"), cx);
-                let color = work_status_color(status, *theme);
-                div()
-                    .id(SharedString::from(format!("activity-background-{id}")))
-                    .track_focus(&focus)
-                    .tab_index(0)
-                    .h(px(24.0))
-                    .px(px(7.0))
-                    .rounded(px(6.0))
-                    .border_1()
-                    .border_color(theme.border_strong)
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .cursor_default()
-                    .text_size(ui_px(10.5))
-                    .text_color(color)
-                    .focus_visible(|style| style.border_color(theme.accent))
-                    .hover(|style| style.bg(theme.overlay_strong))
-                    .active(|style| style.bg(theme.overlay_strong).opacity(0.8))
-                    .child(work_status_label(status))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.open_background_work_surface(session_id, click_key.clone(), cx);
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.open_background_work_surface(session_id, key.clone(), cx);
+            let background_badge = background_work
+                .clone()
+                .map(|(session_id, key, status, ..)| {
+                    let click_key = key.clone();
+                    let focus =
+                        self.transcript_control_focus(format!("activity-background-{id}"), cx);
+                    let color = work_status_color(status, *theme);
+                    div()
+                        .id(SharedString::from(format!("activity-background-{id}")))
+                        .track_focus(&focus)
+                        .tab_index(0)
+                        .h(px(24.0))
+                        .px(px(7.0))
+                        .rounded(px(6.0))
+                        .border_1()
+                        .border_color(theme.border_strong)
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .cursor_default()
+                        .text_size(ui_px(10.5))
+                        .text_color(color)
+                        .focus_visible(|style| style.border_color(theme.accent))
+                        .hover(|style| style.bg(theme.overlay_strong))
+                        .active(|style| style.bg(theme.overlay_strong).opacity(0.8))
+                        .child(work_status_label(status))
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .on_click(cx.listener(move |this, _, _, cx| {
                             cx.stop_propagation();
-                        }
-                    }))
-            });
+                            this.open_background_work_surface(session_id, click_key.clone(), cx);
+                        }))
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                this.open_background_work_surface(session_id, key.clone(), cx);
+                                cx.stop_propagation();
+                            }
+                        }))
+                });
             let reasoning = activity.reasoning.as_ref();
             let reasoning_live = live_reasoning_id == Some(id);
             let sections = if reasoning.is_some() {

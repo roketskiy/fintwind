@@ -1210,11 +1210,14 @@ impl Fintwind {
             runtime.stream_phase = None;
             runtime.open_reasoning.clear();
             runtime.settled_reasoning.clear();
+            runtime.open_text.clear();
+            runtime.settled_text.clear();
             runtime.provider_phase = None;
             runtime.pending_permission = None;
             runtime.pending_user_input = None;
         }
         if has_active_turn {
+            self.drop_blank_assistant_messages(session_id);
             let needs_fallback = !self.turn_has_assistant_message(session_id);
             if let Some(session) = self.state.session_mut(session_id) {
                 session.status = SessionStatus::Idle;

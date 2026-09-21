@@ -882,10 +882,7 @@ impl Fintwind {
     /// The daemon-side triple (native session id, binary, workspace
     /// directory) every undo/redo RPC needs. `None` shows the unavailable
     /// toast when the binary cannot be resolved.
-    fn native_undo_target(
-        &mut self,
-        session_id: Uuid,
-    ) -> Option<(String, PathBuf, PathBuf)> {
+    fn native_undo_target(&mut self, session_id: Uuid) -> Option<(String, PathBuf, PathBuf)> {
         let native_session_id = self
             .state
             .sessions

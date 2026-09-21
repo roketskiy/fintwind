@@ -195,15 +195,29 @@ mod tests {
         let (wake, wakes) = smol::channel::bounded(1);
         let (events, received) = event_channel(wake);
 
-        events.send(DriverEvent::TextDelta("one".into())).unwrap();
-        events.send(DriverEvent::TextDelta("two".into())).unwrap();
+        events
+            .send(DriverEvent::TextDelta {
+                part: String::new(),
+                delta: "one".into(),
+            })
+            .unwrap();
+        events
+            .send(DriverEvent::TextDelta {
+                part: String::new(),
+                delta: "two".into(),
+            })
+            .unwrap();
 
         assert_eq!(wakes.try_recv(), Ok(()));
         assert!(matches!(
             wakes.try_recv(),
             Err(smol::channel::TryRecvError::Empty)
         ));
-        assert!(matches!(received.try_recv(), Ok(DriverEvent::TextDelta(text)) if text == "one"));
-        assert!(matches!(received.try_recv(), Ok(DriverEvent::TextDelta(text)) if text == "two"));
+        assert!(
+            matches!(received.try_recv(), Ok(DriverEvent::TextDelta { delta, .. }) if delta == "one")
+        );
+        assert!(
+            matches!(received.try_recv(), Ok(DriverEvent::TextDelta { delta, .. }) if delta == "two")
+        );
     }
 }

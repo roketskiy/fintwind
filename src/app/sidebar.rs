@@ -410,45 +410,27 @@ impl Fintwind {
                 div().id("sidebar-titlebar-drag-region").h_full().flex_1(),
                 cx,
             ))
-            .child(self.render_sidebar_project_action(cx))
     }
 
-    /// The sidebar titlebar's "add project" button. It sits at the trailing
-    /// edge of the top row so opening a project stays reachable whether or not
-    /// any history exists.
-    fn render_sidebar_project_action(&self, cx: &mut Context<Self>) -> Div {
-        let theme = Theme::current(cx);
-        div().mr(px(10.0)).flex().items_center().child(
-            div()
-                .id("add-project")
-                .track_focus(&self.sidebar_add_project_focus)
-                .tab_index(0)
-                .w(px(28.0))
-                .h(px(28.0))
-                .flex_none()
-                .rounded(px(7.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_default()
-                .tooltip(Tooltip::text(tr_cow!("project.add_project")))
-                .focus_visible(|style| style.border_1().border_color(theme.accent))
-                .hover(|element| element.bg(theme.overlay))
-                .active(|element| element.bg(theme.overlay_strong))
-                .child(icon("icons/folder-new.svg", 15.0, theme.text_tertiary))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(cx.listener(|this, _, _, cx| this.add_project(cx)))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    if !event.keystroke.modifiers.modified()
-                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                    {
-                        this.add_project(cx);
-                        cx.stop_propagation();
-                    }
-                })),
+    /// The sidebar's "add project" row. It keeps opening a project reachable
+    /// whether or not any history exists.
+    fn render_sidebar_add_project(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        self.render_sidebar_action_row(
+            "sidebar-add-project",
+            "icons/folder-new.svg",
+            tr!("project.add_project"),
+            cx,
         )
+        .track_focus(&self.sidebar_add_project_focus)
+        .on_click(cx.listener(|this, _, _, cx| this.add_project(cx)))
+        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+            if !event.keystroke.modifiers.modified()
+                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+            {
+                this.add_project(cx);
+                cx.stop_propagation();
+            }
+        }))
     }
 
     fn render_sidebar_action_row(
@@ -640,6 +622,13 @@ impl Fintwind {
                     .flex_none()
                     .px(px(10.0))
                     .child(self.render_sidebar_new_session(cx)),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .px(px(10.0))
+                    .pb(px(SIDEBAR_SEARCH_BOTTOM_GAP))
+                    .child(self.render_sidebar_add_project(cx)),
             )
             .child(
                 div()

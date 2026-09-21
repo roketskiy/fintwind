@@ -11,6 +11,13 @@
 - 禁止写不必要的的注释，例如用户说过的话，会话内容等。
 - 非必要不写小的测试。
 - 开始写代码前对用户的命令有不理解的地方和要补充的及时提问
+- 
+## development:  
+- Tautological tests considered harmful.  
+- Change-detector tests considered harmful.  
+- Do not create regression tests for bug fixes without a genuine gap in behavior testing.
+
+
 
 ## 代码审查
 - 单论超过三十行的代码修改时，check完成后调用调用一个子代理审查代码，并修复功能性bug和重大漏洞,然后提问用户是否编译release，以及如何编译release。

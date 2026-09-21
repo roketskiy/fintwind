@@ -702,6 +702,14 @@ fn turn_stats_step(row: &Value) -> Option<TurnStats> {
         .pointer("/tokens/output")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    // The TUI's footer numerator is output + reasoning — the tokens the
+    // provider actually produced — so the import path reproduces that exact
+    // sum rather than the text alone.
+    let reasoning = row
+        .pointer("/tokens/reasoning")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output = output.saturating_add(reasoning);
     let stream_ms = match (
         row.pointer("/time/streamed").and_then(Value::as_u64),
         row.pointer("/time/created").and_then(Value::as_u64),
@@ -951,7 +959,7 @@ mod tests {
                 "time": {"created": 6_000_u64, "completed": 9_000_u64},
                 "agent": "explore",
                 "model": {"id": "glm-5.3", "providerID": "glmcoding"},
-                "tokens": {"input": 130, "output": 90, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+                "tokens": {"input": 130, "output": 90, "reasoning": 8, "cache": {"read": 0, "write": 0}},
                 "content": [{"type": "text", "text": "全部通过。"}]
             }),
             // A second turn whose only step lacks `time.streamed`: its
@@ -979,7 +987,9 @@ mod tests {
             Some(TurnStats {
                 model: Some("glmcoding/glm-5.3".into()),
                 agent: Some("explore".into()),
-                output_tokens: 102,
+                // The TUI footer's numerator: output plus reasoning, summed
+                // across the steps — 12 + (90 + 8).
+                output_tokens: 110,
                 stream_ms: 2_600,
             })
         );

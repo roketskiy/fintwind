@@ -818,9 +818,12 @@ pub(super) fn format_turn_stats_duration(ms: u64) -> String {
     }
 }
 
-/// Output tokens per streaming second. `None` when either side is
-/// unmeasurable drops the segment rather than showing a meaningless
-/// "0.0 tok/s".
+/// Tokens per streaming second — the TUI footer's quotient: the turn's
+/// steps' output-plus-reasoning tokens over their summed streaming time.
+/// One divergence stays: the TUI hides the segment when any step lacks its
+/// streamed time, while the driver's wall-clock fallback lets the line
+/// approximate instead. `None` when either side is unmeasurable drops the
+/// segment rather than showing a meaningless "0.0 tok/s".
 pub(super) fn turn_tokens_per_second(output_tokens: u64, stream_ms: u64) -> Option<f64> {
     (output_tokens > 0 && stream_ms > 0)
         .then(|| output_tokens as f64 / (stream_ms as f64 / 1_000.0))

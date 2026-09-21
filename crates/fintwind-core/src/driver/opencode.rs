@@ -3092,21 +3092,32 @@ fn clear_foreground_turn_state(state: &mut OpenCodeStreamState, events: &impl Dr
 /// `session.step.started` armed; a step whose start was never seen
 /// contributes tokens but no time.
 ///
-/// This only accumulates, never flushes: a turn can carry several terminal
-/// `finish` values (a steer or provider retry reopens the model loop, and
-/// `length` continues past it), so an early flush would deliver a segment's
-/// totals and lose whatever the earlier segments had already collected.
-/// The flush happens exactly once, on the turn's terminal paths through
+/// The numerator is the TUI footer's own: `tokens.output + tokens.reasoning`,
+/// the tokens the provider actually produced, reasoning included. It only
+/// accumulates, never flushes: a turn can carry several terminal `finish`
+/// values (a steer or provider retry reopens the model loop, and `length`
+/// continues past it), so an early flush would deliver a segment's totals and
+/// lose whatever the earlier segments had already collected. The flush
+/// happens exactly once, on the turn's terminal paths through
 /// [`clear_foreground_turn_state`].
 fn step_ended_turn_stats(payload: &Value, state: &mut OpenCodeStreamState) {
     let Some(accum) = state.turn_stats.as_mut() else {
         return;
     };
-    let output = payload
-        .pointer("/tokens/output")
+    let tokens = payload.get("tokens");
+    let output = tokens
+        .and_then(|tokens| tokens.get("output"))
         .and_then(Value::as_u64)
         .unwrap_or(0);
-    accum.stats.output_tokens = accum.stats.output_tokens.saturating_add(output);
+    let reasoning = tokens
+        .and_then(|tokens| tokens.get("reasoning"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    accum.stats.output_tokens = accum
+        .stats
+        .output_tokens
+        .saturating_add(output)
+        .saturating_add(reasoning);
     let duration = match (
         payload.pointer("/time/streamed").and_then(Value::as_u64),
         payload.pointer("/time/created").and_then(Value::as_u64),
@@ -6065,7 +6076,7 @@ mod tests {
                     "sessionID": "ses_1",
                     "assistantMessageID": "msg_2",
                     "finish": "stop",
-                    "tokens": {"input": 130, "output": 90, "reasoning": 0, "cache": {"read": 0, "write": 0}}
+                    "tokens": {"input": 130, "output": 90, "reasoning": 8, "cache": {"read": 0, "write": 0}}
                 }
             }),
             &events,
@@ -6110,7 +6121,9 @@ mod tests {
             1,
             "the flush happens once, at the terminal event"
         );
-        assert_eq!(stats[0].output_tokens, 102);
+        // The TUI footer's numerator: output plus reasoning, summed across
+        // the steps — 12 + (90 + 8).
+        assert_eq!(stats[0].output_tokens, 110);
         // 2_500 from the tool step's payload time, plus a wall-clock
         // fallback that only has to be non-negative on the final step.
         assert!(stats[0].stream_ms >= 2_500);

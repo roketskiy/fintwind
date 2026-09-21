@@ -1,117 +1,18 @@
 //! The usage meter under the composer: a circular context-window gauge that
-//! opens a panel with the session's context occupancy, its cumulative token
-//! throughput and cache hit rate, and the account's rate-limit lanes,
-//! mirroring Claude Code's `/usage` rows. Context numbers stream in from the
-//! OpenCode transport; plan lanes come from OpenCode Go's usage endpoint.
-//! Frames read only snapshots stored on the entity.
+//! opens a panel with the session's context occupancy and its cumulative
+//! token throughput and cache hit rate. Context numbers stream in from the
+//! OpenCode transport. Frames read only snapshots stored on the entity.
 
 use crate::theme::ui_px;
 
 use gpui::{PathBuilder, WeakEntity, relative};
 
 use super::*;
-use crate::usage::{PlanUsage, cache_hit_percent, format_percent, format_tokens, reset_label};
+use crate::usage::{cache_hit_percent, format_percent, format_tokens};
 
 const USAGE_METER_MENU_ID: &str = "usage-meter";
 
-/// The provider with an account-level plan fetcher (OpenCode Go over HTTPS).
-pub(super) const PLAN_USAGE_PROVIDER: &str = "opencode";
-
-/// Refresh cadences for the plan snapshot. Quota moves only when turns run,
-/// so idle refreshes stay rare; a settled turn or a just-opened panel asks
-/// sooner.
-const PLAN_USAGE_REFRESH: Duration = Duration::from_secs(300);
-const PLAN_USAGE_REFRESH_STALE: Duration = Duration::from_secs(30);
-const PLAN_USAGE_RETRY: Duration = Duration::from_secs(90);
-
 impl Fintwind {
-    /// Start a background fetch of the plan meter whose snapshot is due.
-    /// The slow maintenance clock and explicit panel-open requests call this;
-    /// a guard keeps it to one in-flight fetch.
-    pub(super) fn maybe_refresh_plan_usage(&mut self, cx: &mut Context<Self>) {
-        let provider = PLAN_USAGE_PROVIDER.to_owned();
-        if self.plan_usage_pending.contains(&provider) {
-            return;
-        }
-        let interval = if self.plan_usage_error.contains_key(&provider) {
-            PLAN_USAGE_RETRY
-        } else if self.plan_usage_stale.contains(&provider) {
-            PLAN_USAGE_REFRESH_STALE
-        } else {
-            PLAN_USAGE_REFRESH
-        };
-        if self
-            .plan_usage_checked_at
-            .get(&provider)
-            .is_some_and(|checked| checked.elapsed() < interval)
-        {
-            return;
-        }
-        self.plan_usage_pending.insert(provider.clone());
-        let tx = self.plan_usage_tx.clone();
-        let event_wake = self.event_wake_tx.clone();
-        let daemon = self.daemon.client();
-        cx.background_executor()
-            .spawn(async move {
-                let result = match daemon.request(
-                    Uuid::nil(),
-                    Uuid::nil(),
-                    fintwind_client::Command::FetchPlanUsage {
-                        binary_override: None,
-                        cli_version: None,
-                    },
-                ) {
-                    Ok(fintwind_client::ResponsePayload::PlanUsage { usage }) => Ok(usage),
-                    Ok(_) => Err(anyhow::anyhow!(
-                        "the daemon returned an invalid plan usage response"
-                    )),
-                    Err(error) => Err(error),
-                };
-                if tx
-                    .send((provider, result.map_err(|error| format!("{error:#}"))))
-                    .is_ok()
-                {
-                    signal_event_pump(&event_wake);
-                }
-            })
-            .detach();
-    }
-
-    pub(super) fn drain_plan_usage_events(&mut self) -> bool {
-        let mut changed = false;
-        while let Ok((provider, result)) = self.plan_usage_events.try_recv() {
-            self.plan_usage_pending.remove(&provider);
-            self.plan_usage_stale.remove(&provider);
-            self.plan_usage_checked_at
-                .insert(provider.clone(), Instant::now());
-            match result {
-                Ok(Some(usage)) => {
-                    changed |= self.plan_usage.get(&provider) != Some(&usage)
-                        || self.plan_usage_error.contains_key(&provider)
-                        || self.plan_usage_unconfigured.contains(&provider);
-                    self.plan_usage.insert(provider.clone(), usage);
-                    self.plan_usage_error.remove(&provider);
-                    self.plan_usage_unconfigured.remove(&provider);
-                }
-                Ok(None) => {
-                    let had_usage = self.plan_usage.remove(&provider).is_some();
-                    let had_error = self.plan_usage_error.remove(&provider).is_some();
-                    let newly_unconfigured = self.plan_usage_unconfigured.insert(provider.clone());
-                    changed |= had_usage || had_error || newly_unconfigured;
-                }
-                Err(error) => {
-                    let was_unconfigured = self.plan_usage_unconfigured.remove(&provider);
-                    changed |=
-                        self.plan_usage_error.get(&provider) != Some(&error) || was_unconfigured;
-                    // Keep any previous snapshot; stale meters with reset
-                    // times still self-correct visually.
-                    self.plan_usage_error.insert(provider, error);
-                }
-            }
-        }
-        changed
-    }
-
     /// Whether the footer shows the gauge. Always true with a session
     /// selected — an empty ring is the honest "nothing measured yet" state,
     /// and hiding it would make the control feel intermittent.
@@ -156,17 +57,10 @@ impl Fintwind {
             return None;
         }
         let session = self.selected_session()?;
-        let provider = PLAN_USAGE_PROVIDER.to_owned();
         let context = session.context_usage;
         let compaction = session.compaction.clone();
         let session_id = session.id;
         let theme = Theme::current(cx);
-        let plan = self.plan_usage.get(&provider).cloned();
-        let error = self.plan_usage_error.get(&provider).cloned();
-        // Fetchable but nothing cached yet: the panel shows a skeleton
-        // whether the fetch is already in flight or lands on the next tick.
-        let plan_loading =
-            plan.is_none() && error.is_none() && !self.plan_usage_unconfigured.contains(&provider);
 
         let weak = cx.entity().downgrade();
         let panel_weak = cx.entity().downgrade();
@@ -174,10 +68,6 @@ impl Fintwind {
             if open {
                 let mut card_focus = None;
                 let _ = weak.update(cx, |this, cx| {
-                    // An opening panel wants fresh numbers; the pump honors
-                    // the stale flag on its next tick once the backoff allows.
-                    this.plan_usage_stale.insert(PLAN_USAGE_PROVIDER.to_owned());
-                    this.maybe_refresh_plan_usage(cx);
                     card_focus = this
                         .menus
                         .borrow()
@@ -212,14 +102,13 @@ impl Fintwind {
             Some(percent) if percent >= 80.0 => theme.warning,
             _ => theme.gauge,
         };
-        let tooltip = match (&error, percent) {
-            (Some(error), _) => SharedString::from(tr!("usage.refresh_failed", error = error)),
-            (None, Some(percent)) => SharedString::from(tr!(
+        let tooltip = match percent {
+            Some(percent) => SharedString::from(tr!(
                 "usage.context_used",
                 percent = format!("{percent:.1}"),
                 shortcut = "Ctrl+U"
             )),
-            (None, None) => SharedString::from(tr!("usage.shortcut", shortcut = "Ctrl+U")),
+            None => SharedString::from(tr!("usage.shortcut", shortcut = "Ctrl+U")),
         };
 
         let trigger = div()
@@ -246,9 +135,6 @@ impl Fintwind {
                     handle,
                     context,
                     compaction.clone(),
-                    plan.clone(),
-                    error.as_deref(),
-                    plan_loading,
                     session_id,
                     panel_weak.clone(),
                     cx,
@@ -343,15 +229,11 @@ fn usage_panel(
     handle: &ContextMenuHandle,
     context: Option<ContextUsage>,
     compaction: Option<CompactionState>,
-    plan: Option<PlanUsage>,
-    error: Option<&str>,
-    plan_loading: bool,
     session_id: Uuid,
     weak: WeakEntity<Fintwind>,
     cx: &App,
 ) -> AnyElement {
     let theme = Theme::current(cx);
-    let now = unix_time() as i64;
     let mut panel = div()
         // Focused on open so the surrounding menu context sees `escape`.
         .track_focus(handle.focus_handle())
@@ -422,87 +304,6 @@ fn usage_panel(
         panel = panel
             .child(div().h(px(1.0)).flex_none().bg(theme.border))
             .child(compaction_row(&theme, state, session_id, weak));
-    }
-    if plan.is_some() || error.is_some() || plan_loading {
-        panel = panel.child(div().h(px(1.0)).flex_none().bg(theme.border));
-    }
-
-    if let Some(plan) = plan {
-        let header = match &plan.plan_label {
-            Some(label) => tr!("usage.plan_limits_named", plan = label),
-            None => tr!("usage.plan_limits"),
-        };
-        let header_row = div().flex().items_center().gap(px(6.0)).child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .truncate()
-                .text_size(ui_px(11.0))
-                .text_color(theme.text_tertiary)
-                .child(SharedString::from(header)),
-        );
-        panel = panel.child(header_row);
-        for window in &plan.windows {
-            panel = panel.child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(7.0))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.0))
-                            .child(
-                                // A long lane label gives way — truncated
-                                // with an ellipsis — rather than pushing the
-                                // reset time and percent past the card edge.
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .truncate()
-                                    .text_color(theme.text)
-                                    .child(SharedString::from(window.label.clone())),
-                            )
-                            .children(window.resets_at.map(|resets_at| {
-                                div()
-                                    .flex_none()
-                                    .text_size(ui_px(11.0))
-                                    .text_color(theme.text_tertiary)
-                                    .child(SharedString::from(reset_label(resets_at, now)))
-                            }))
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_size(ui_px(11.5))
-                                    .text_color(theme.text_secondary)
-                                    .child(SharedString::from(format!("{:.0}%", window.percent))),
-                            ),
-                    )
-                    .child(meter_bar(&theme, window.percent)),
-            );
-        }
-    } else if plan_loading {
-        panel = panel.child(plan_skeleton(&theme));
-    } else if let Some(error) = error {
-        panel = panel.child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .text_size(ui_px(11.0))
-                        .text_color(theme.text_tertiary)
-                        .child(tr!("usage.plan_limits")),
-                )
-                .child(
-                    div()
-                        .text_size(ui_px(11.0))
-                        .text_color(theme.text_secondary)
-                        .child(SharedString::from(tr!("usage.unavailable", error = error))),
-                ),
-        );
     }
 
     panel.into_any_element()
@@ -631,58 +432,8 @@ fn compaction_row(
     }
 }
 
-/// Placeholder for the plan section while its first fetch is in flight:
-/// a header bar and two quota rows, pulsing gently. `with_animation` honors
-/// the system's reduce-motion setting on its own.
-fn plan_skeleton(theme: &Theme) -> AnyElement {
-    let theme = *theme;
-    let bar = move |width: f32| {
-        div()
-            .h(px(9.0))
-            .w(px(width))
-            .flex_none()
-            .rounded(px(4.5))
-            .bg(theme.overlay_strong)
-    };
-    let row = move |label_width: f32, value_width: f32| {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(9.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .child(bar(label_width))
-                    .child(div().flex_1())
-                    .child(bar(value_width)),
-            )
-            .child(
-                div()
-                    .h(px(3.0))
-                    .w_full()
-                    .flex_none()
-                    .rounded_full()
-                    .bg(theme.overlay_strong),
-            )
-    };
-    motion::pulse(Duration::from_millis(1400), move |phase| {
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .child(bar(132.0))
-            .child(row(96.0, 64.0))
-            .child(row(120.0, 64.0))
-            .opacity(pulsating_between(0.45, 0.9)(phase))
-            .into_any_element()
-    })
-    .every(2)
-    .into_any_element()
-}
-
-/// A quota bar: full-width track, fill proportional to `percent`. A lane in
-/// use keeps a visible sliver even under one percent.
+/// A meter bar: full-width track, fill proportional to `percent`. A nonzero
+/// value keeps a visible sliver even under one percent.
 fn meter_bar(theme: &Theme, percent: f64) -> Div {
     let fraction = (percent / 100.0).clamp(0.0, 1.0) as f32;
     let fraction = if fraction > 0.0 {

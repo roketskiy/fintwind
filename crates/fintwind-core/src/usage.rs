@@ -3,8 +3,8 @@
 //! shapes were verified against live responses, not guessed.
 //!
 //! Everything in this module blocks on subprocesses and the network and must
-//! run on the background executor. Render reads only the parsed snapshot the
-//! app entity stores.
+//! run on the background executor. The parsed snapshot only travels the wire
+//! protocol; the desktop front end retired its plan-usage panel.
 
 use anyhow::{Context as _, anyhow};
 use serde_json::Value;

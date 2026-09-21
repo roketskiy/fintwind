@@ -2166,8 +2166,6 @@ usage.filter_projects:
 usage.chart_description:
   en: Daily %{metric} split between Claude Code and Codex.
 
-usage.refresh_failed:
-  en: "Usage refresh failed: %{error}"
 usage.context_used:
   en: Context window %{percent}% used (%{shortcut})
 usage.shortcut:
@@ -2184,14 +2182,8 @@ usage.compaction_failed:
   en: Compaction failed
 usage.compaction_retry:
   en: Retry compaction
-usage.plan_limits:
-  en: Plan usage limits
-usage.plan_limits_named:
-  en: Plan usage limits · %{plan}
 usage.open_account_settings:
   en: Open the account's usage settings
-usage.unavailable:
-  en: Unavailable — %{error}
 usage.usage_limit:
   en: Usage limit
 usage.hour_limit:

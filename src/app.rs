@@ -122,7 +122,6 @@ const IDLE_SESSION_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const IDLE_SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 const BACKGROUND_WORK_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 const BACKGROUND_WORK_TICK_INTERVAL: Duration = Duration::from_secs(1);
-const PLAN_USAGE_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(30);
 const STREAM_SAVE_INTERVAL: Duration = Duration::from_secs(1);
 /// Zed keeps status toasts on screen for ten seconds, pausing the countdown
 /// while the pointer is over the toast so a long message remains readable.
@@ -1085,25 +1084,6 @@ pub struct Fintwind {
     provider_detection_remaining: usize,
     /// When provider detection last completed, for the page's "Checked" label.
     provider_detection_checked_at: Option<Instant>,
-    /// Account rate-limit meters, fetched off-thread (OpenCode Go over HTTPS)
-    /// and refreshed live by OpenCode's own stream. Frames read only this
-    /// snapshot.
-    plan_usage: HashMap<String, crate::usage::PlanUsage>,
-    /// Why the last fetch failed, kept alongside stale data for the meter's
-    /// tooltip. Cleared by the next success.
-    plan_usage_error: HashMap<String, String>,
-    plan_usage_tx: Sender<(String, Result<Option<crate::usage::PlanUsage>, String>)>,
-    plan_usage_events: Receiver<(String, Result<Option<crate::usage::PlanUsage>, String>)>,
-    plan_usage_pending: HashSet<String>,
-    /// Fetchable with no matching account credential. Unlike a request
-    /// failure, this hides the plan section until a later refresh discovers a
-    /// newly configured account.
-    plan_usage_unconfigured: HashSet<String>,
-    /// When the last fetch settled, successful or not — the refresh backoff
-    /// measures from here.
-    plan_usage_checked_at: HashMap<String, Instant>,
-    /// Turns that settled since the last fetch, so the meters have moved.
-    plan_usage_stale: HashSet<String>,
     model_picker_tab: ModelPickerTab,
     /// Keyboard cursor over the model picker's filtered rows. `None` means the
     /// keyboard has not moved yet, so `enter` takes the first row.
@@ -2312,7 +2292,6 @@ impl Fintwind {
         let (provider_probe_tx, provider_probe_events) = unbounded();
         let (provider_version_tx, provider_version_events) = unbounded();
         let (provider_detection_tx, provider_detection_events) = unbounded();
-        let (plan_usage_tx, plan_usage_events) = unbounded();
         let (event_wake_tx, event_wake_events) = smol::channel::bounded(1);
         let (task_state_sync_tx, task_state_sync_events) = unbounded();
         let model_picker_tab = ModelPickerTab::Provider("OpenCode".into());
@@ -2811,21 +2790,6 @@ impl Fintwind {
 
             cx.spawn(async move |this, cx| {
                 loop {
-                    if this
-                        .update(cx, |this, cx| this.maybe_refresh_plan_usage(cx))
-                        .is_err()
-                    {
-                        break;
-                    }
-                    cx.background_executor()
-                        .timer(PLAN_USAGE_MAINTENANCE_INTERVAL)
-                        .await;
-                }
-            })
-            .detach();
-
-            cx.spawn(async move |this, cx| {
-                loop {
                     cx.background_executor()
                         .timer(IDLE_SESSION_SWEEP_INTERVAL)
                         .await;
@@ -2899,14 +2863,6 @@ impl Fintwind {
                 provider_detection_events,
                 provider_detection_remaining: 0,
                 provider_detection_checked_at: None,
-                plan_usage: HashMap::new(),
-                plan_usage_error: HashMap::new(),
-                plan_usage_tx,
-                plan_usage_events,
-                plan_usage_pending: HashSet::new(),
-                plan_usage_unconfigured: HashSet::new(),
-                plan_usage_checked_at: HashMap::new(),
-                plan_usage_stale: HashSet::new(),
                 model_picker_tab,
                 model_picker_highlight: None,
                 model_picker_scroll: ScrollHandle::new(),

@@ -2519,7 +2519,6 @@ impl Fintwind {
             | self.drain_provider_probe_events()
             | self.drain_provider_version_events()
             | detection_changed
-            | self.drain_plan_usage_events()
             | self.drain_task_state_sync_events(cx)
         {
             cx.notify();

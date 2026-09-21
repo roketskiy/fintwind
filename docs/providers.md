@@ -17,7 +17,7 @@ that spans the whole conversation**:
 | --- | --- | --- |
 | Codex app-server (JSON-RPC over stdio) | [src/driver/codex.rs](../src/driver/codex.rs) | Codex CLI |
 | Agent Client Protocol (JSON-RPC over stdio) | [src/driver/acp.rs](../src/driver/acp.rs) | Cursor CLI, Grok Build |
-| OpenCode server (HTTP + server-sent events) | [src/driver/opencode.rs](../src/driver/opencode.rs) | OpenCode |
+| OpenCode server (HTTP + server-sent events) | [crates/fintwind-core/src/driver/opencode.rs](../crates/fintwind-core/src/driver/opencode.rs) | OpenCode |
 | Pi RPC mode (NDJSON request/response over stdio) | [src/driver/pi.rs](../src/driver/pi.rs) | Pi |
 | Claude streaming-input session (NDJSON over stdio) | [src/driver/claude.rs](../src/driver/claude.rs) | Claude Code |
 | Amp streaming-JSON session (NDJSON over stdio) | [src/driver/amp.rs](../src/driver/amp.rs) | Amp |
@@ -429,70 +429,84 @@ re-expands the nested envelope first, so branches of branches stay flat
 ## OpenCode server
 
 **Launch** — `opencode serve --hostname 127.0.0.1 --port <ephemeral>`
-([src/driver/opencode.rs](../src/driver/opencode.rs)). Fintwind already started this
-server to fork a session; it now runs the conversation too.
+([crates/fintwind-core/src/driver/opencode.rs](../crates/fintwind-core/src/driver/opencode.rs)):
+one private global server per opencode binary, never the user-level
+`opencode service`. The process runs in a stable data directory — debug
+builds in the checkout's `temp/opencode-serve`, release builds in the
+per-user Fintwind data directory's `opencode-serve`
+([crates/fintwind-core/src/opencode_pool.rs](../crates/fintwind-core/src/opencode_pool.rs)) —
+and each session's workspace rides along as per-request location data:
+`{location: {directory}}` when the session is created, `x-opencode-directory`
+/ `?directory=` on location-scoped routes.
 
 **Protocol** — OpenCode's own HTTP API plus a server-sent event stream. Routes
-and payloads here were read off a live server's OpenAPI document, not guessed.
+and payloads here were read off a live server's `/api` protocol and event
+stream, not guessed.
 
-**Lifetime** — long-lived: one server per session runtime.
+**Lifetime** — long-lived: the server lives with the daemon and is reclaimed
+by `shutdown_all` after the daemon drops its sessions; dropping the last
+session handle does not stop it.
 
-**Handshake** — `POST /session` for a fresh session (or reuse the resume
-cursor's id), then `POST /session/{id}/agent` to pick `plan` or `build`.
+**Handshake** — `POST /api/session` with `{location: {directory}}` for a fresh
+session (or reuse the resume cursor's id), then `POST /api/session/{id}/agent`
+to pick `plan` or `build`.
 
-**Per turn** — `POST /session/{id}/prompt_async` with
-`{parts: [{type: "text", …}]}`, which acknowledges with `204 No Content` as
+**Per turn** — `POST /api/session/{id}/prompt` with `{text}` (the model stays
+on the session, set through `POST /api/session/{id}/model`), which answers as
 soon as the prompt is accepted; the turn's completion arrives as
-`session.idle` on the event stream. The blocking `message` route holds its
+`session.execution.succeeded` (or `session.execution.failed`) on the event
+stream. The blocking `message` route holds its
 response until the turn ends — longer than any sane read timeout — so it is
-not used for prompting. T3 Code's SDK calls the same route as
-`session.promptAsync`.
+not used for prompting.
 
-**Steer** — the same `prompt_async` post while the session is busy: the
-server folds the message into the running turn and one `session.idle` still
+**Steer** — the same `prompt` post while the session is busy: the
+server folds the message into the running turn and one completion still
 settles everything. OpenCode's own UI labels this "queued", but it is the
-live turn absorbing the message, not a follow-up turn. The `204`
-acknowledgment resolves to `SteerAccepted`; a failed post resolves to
+live turn absorbing the message, not a follow-up turn. An accepted post
+resolves to `SteerAccepted`; a failed post resolves to
 `SteerRejected` and leaves the running turn untouched. Verified against a
-real server by injecting an instruction while a bash `sleep` ran: one idle,
-one reply, honoring both messages.
+real server by injecting an instruction while a bash `sleep` ran: one
+completion, one reply, honoring both messages.
 
-**Inbound stream** — `GET /event`, server-wide. The per-session route exists
-only under `/api`, and since this server is Fintwind's alone, filtering by
-`properties.sessionID` is enough — and necessary, so one task's traffic cannot
-reach another's transcript.
+**Inbound stream** — `GET /api/event`, server-wide, one SSE connection per
+server port fanned out through the `opencode_events` hub
+([crates/fintwind-core/src/opencode_events.rs](../crates/fintwind-core/src/opencode_events.rs)).
+Since this server is Fintwind's alone, filtering each event's
+`data.sessionID` against the driver's session family is enough — and
+necessary, so one task's traffic cannot reach another's transcript.
 
 | Event | Becomes |
 | --- | --- |
-| `message.part.delta`, `field: "text"` on a text or unknown part | `TextDelta` |
-| `message.part.delta`, `field: "reasoning"` / `field: "thinking"`, or `field: "text"` on a native reasoning part | `ReasoningDelta` |
-| `message.part.updated` with a `reasoning` / `thinking` part | records its `partID`, since OpenCode streams the part's content as the generic `text` field |
-| `message.part.updated` with a `tool` part | `RichActivity`, read off `/state/status`, `/state/input`, `/state/output` |
-| `message.updated` with assistant token counters | `UsageUpdated`, paired with `/api/model`'s context limit for the reported provider/model |
-| `session.idle` | `TurnFinished` |
+| `session.text.delta` | `TextDelta` |
+| `session.reasoning.delta` | `ReasoningDelta` |
+| `session.tool.input.started` / `session.tool.called` / `session.tool.progress` | `RichActivity`, read off the events' own `input` and `output` payloads |
+| `session.tool.success` / `session.tool.error` / `session.tool.failed` | `RichActivity` terminal state |
+| `session.usage.updated` | `UsageUpdated`, paired with `/api/model`'s context limit for the reported provider/model |
+| `session.compaction.*` | compaction activity |
+| `session.execution.succeeded` / `session.execution.failed` | `TurnFinished` |
 | `session.error` | `Error` |
-| `permission.*` | `Permission` |
-| `session.created`, `session.updated`, `session.diff`, plugin/catalog chatter | ignored |
+| `permission.*`, `form.*`, `question.*` | `Permission` and the other asks a user answers |
+| `session.created` / `updated` / `deleted` / `renamed`, `session.status`, `session.idle`, `session.step.*`, `session.retry.scheduled` | family bookkeeping and turn coordination, never transcript content |
 
-**Approvals** — `POST /session/{id}/permission/{requestID}/reply` with
+**Approvals** — `POST /api/session/{id}/permission/{requestID}/reply` with
 `{reply: "once" | "always" | "reject"}`. Supervised surfaces the request with the
 permission's own patterns as the title; the auto modes answer `always` so the
 agent stops asking about the same permission.
 
-**Cancel** — `POST /session/{id}/abort`.
+**Cancel** — `POST /api/session/{id}/interrupt`.
 
-**Rewind and branch** — branch is `POST /session/{id}/fork` with
-`{"boundary": {"type": "before", "messageID": ...}}`, which returns a new
+**Rewind and branch** — branch is `POST /api/session/{id}/fork` with
+`{"boundary": {"type": "before", "messageID": ...}}` (or `"through"` the
+newest message to copy the whole transcript), which returns a new
 session. Rewind uses OpenCode's own revert instead
-([src/opencode_session.rs](../src/opencode_session.rs)):
-`POST /session/{id}/revert {messageID}` marks a boundary on the *same* session —
-OpenCode snapshots the worktree, restores the dropped turns' file changes, and
-hides those messages from the next model call; `POST /session/{id}/unrevert`
-clears the marker and restores the snapshot. Nothing is deleted until the next
-`POST /session/{id}/prompt`, whose cleanup physically removes the marked
-messages — so a rewind must be followed by the replacement prompt. A stale
-marker (a previous rewind that never got its prompt) is cleared with unrevert
-before the new boundary is marked. The session id survives, so the stored
+([crates/fintwind-core/src/opencode_session.rs](../crates/fintwind-core/src/opencode_session.rs)):
+`POST /api/session/{id}/revert/stage {messageID}` marks a boundary on the
+*same* session, then `POST /api/session/{id}/revert/commit` snapshots the
+worktree, restores the dropped turns' file changes, and physically removes
+the staged-away messages; `DELETE /api/session/{id}/revert` clears a staged
+marker without deleting anything — the redo primitive, idempotent either way.
+A stale marker (a previous rewind that never committed) is cleared before the
+new boundary is staged. The session id survives, so the stored
 cursor keeps working.
 
 ---

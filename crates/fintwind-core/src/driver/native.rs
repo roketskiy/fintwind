@@ -31,7 +31,7 @@ use fintwind_protocol::provider_session::{
 use crate::model::{
     ActivityItem, AgentTurn, Message, MessageRole, ReasoningBlock, TurnStats, TurnStatus,
 };
-use crate::opencode_session::{OpenCodeServer, encode_path_segment};
+use crate::opencode_session::{OpenCodeServer, encode_path_segment, request_json_on_port};
 
 /// Page size for paged lists; matches the live transcript reader.
 const PAGE_LIMIT: usize = 200;
@@ -179,6 +179,17 @@ pub(crate) fn fetch_transcript(
     server: &OpenCodeServer,
     session_id: &str,
 ) -> anyhow::Result<NativeTranscript> {
+    fetch_transcript_on_port(server.port, session_id)
+}
+
+/// [`fetch_transcript`] against a bare port, for background threads that must
+/// not hold a server handle: a handle would delay the pooled server's
+/// teardown behind this request's timeout. Session-id routes need no
+/// directory.
+pub(crate) fn fetch_transcript_on_port(
+    port: u16,
+    session_id: &str,
+) -> anyhow::Result<NativeTranscript> {
     let mut pages: Vec<Vec<Value>> = Vec::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -190,7 +201,7 @@ pub(crate) fn fetch_transcript(
         if let Some(token) = &cursor {
             path.push_str(&format!("&cursor={}", encode_path_segment(token)));
         }
-        let response = server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT)?;
+        let response = request_json_on_port(port, "GET", &path, None, HTTP_TIMEOUT)?;
         let rows = response
             .pointer("/data")
             .and_then(Value::as_array)
@@ -439,12 +450,21 @@ pub(crate) fn logout_integration(
 /// Count the models the server currently exposes for `provider_id`, timed.
 /// Models appear only when the server holds a credential it accepts, so the
 /// count doubles as a connectivity verdict for the authorized provider.
+/// The catalog is location-scoped: the request names the workspace so a
+/// server shared across directories answers this one's provider list.
 pub(crate) fn probe_provider_models(
     server: &OpenCodeServer,
+    directory: &str,
     provider_id: &str,
 ) -> anyhow::Result<(usize, u64)> {
     let started = std::time::Instant::now();
-    let response = server.request("GET", "/api/model", None)?;
+    let response = server.request_for_directory_with_timeout(
+        directory,
+        "GET",
+        "/api/model",
+        None,
+        HTTP_TIMEOUT,
+    )?;
     let models = response
         .pointer("/data")
         .or_else(|| response.pointer("/models"))

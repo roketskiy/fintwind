@@ -64,15 +64,15 @@ pub fn fork_session_at_turn(
     session_id: &str,
     retained_turns: usize,
 ) -> anyhow::Result<ProviderResumeCursor> {
-    // Shares the workspace's resident server when one is live; a transient
-    // one is started and killed with the handle otherwise.
+    // Goes through Fintwind's private global server for this binary; the
+    // workspace rides along as per-request location data.
     let server = crate::opencode_pool::acquire(binary, cwd)?;
     fork_session_at_turn_on_server(&server, session_id, retained_turns)
 }
 
-/// Forks through the task's resident OpenCode server.
+/// Forks through Fintwind's private global OpenCode server.
 ///
-/// Starting a second `opencode serve` against the same workspace can contend
+/// Starting a second `opencode serve` for the same binary would contend
 /// with the live process for OpenCode's local resources. Rewinds with a live
 /// driver use this path instead, while cold sessions still use the standalone
 /// helper above.
@@ -447,6 +447,21 @@ impl OpenCodeServer {
         request_json_on_port(self.port, method, path, body, timeout)
     }
 
+    /// Requests a location-scoped route against one workspace directory: a
+    /// server hosting several resolves it through the directory header
+    /// instead of its own process working directory. Session-id routes stay
+    /// on [`Self::request`], which needs no directory.
+    pub(crate) fn request_for_directory_with_timeout(
+        &self,
+        directory: &str,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        timeout: Duration,
+    ) -> anyhow::Result<Value> {
+        request_json_on_port_with_directory(self.port, method, path, body, timeout, Some(directory))
+    }
+
     /// Whether the server process is still running. `Child::try_wait` both
     /// observes and reaps an exited child; `kill(pid, 0)` cannot distinguish a
     /// running process from the unreaped zombie owned by this process.
@@ -571,8 +586,31 @@ pub(crate) fn request_json_on_port(
     body: Option<&Value>,
     timeout: Duration,
 ) -> anyhow::Result<Value> {
+    request_json_on_port_with_directory(port, method, path, body, timeout, None)
+}
+
+/// [`request_json_on_port`] naming a workspace directory: location-scoped
+/// routes without a session id (listings, the model catalog) resolve against
+/// the `x-opencode-directory` header instead of the server process's own
+/// working directory.
+pub(crate) fn request_json_on_port_with_directory(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timeout: Duration,
+    directory: Option<&str>,
+) -> anyhow::Result<Value> {
     let body = body.map(serde_json::to_vec).transpose()?;
-    let response = http_request(port, method, path, body.as_deref(), timeout)?;
+    let directory_header = directory.map(directory_header).transpose()?;
+    let response = http_request(
+        port,
+        method,
+        path,
+        body.as_deref(),
+        timeout,
+        directory_header.as_deref(),
+    )?;
     // Some routes answer 204 No Content — `prompt_async` among them — and
     // the status was already checked, so an empty success body is Null.
     if response.iter().all(u8::is_ascii_whitespace) {
@@ -582,12 +620,23 @@ pub(crate) fn request_json_on_port(
         .with_context(|| format!("OpenCode returned invalid JSON for {method} {path}"))
 }
 
+/// The `x-opencode-directory` header line for one request. A directory
+/// carrying CR or LF would smuggle extra headers into the raw request, so it
+/// is refused before any bytes are written.
+fn directory_header(directory: &str) -> anyhow::Result<String> {
+    if directory.contains('\r') || directory.contains('\n') {
+        bail!("a directory containing a line break cannot name an OpenCode request target");
+    }
+    Ok(format!("x-opencode-directory: {directory}\r\n"))
+}
+
 fn http_request(
     port: u16,
     method: &str,
     path: &str,
     body: Option<&[u8]>,
     timeout: Duration,
+    directory_header: Option<&str>,
 ) -> anyhow::Result<Vec<u8>> {
     let mut stream = TcpStream::connect(("127.0.0.1", port))
         .with_context(|| format!("could not connect to OpenCode on local port {port}"))?;
@@ -601,6 +650,9 @@ fn http_request(
     if let Some(authorization) = basic_authorization(port) {
         headers.push_str(&authorization);
         headers.push_str("\r\n");
+    }
+    if let Some(directory) = directory_header {
+        headers.push_str(directory);
     }
     headers.push_str("\r\n");
     write!(stream, "{headers}")?;
@@ -817,6 +869,35 @@ mod tests {
             "type": "assistant",
             "text": "absent"
         })));
+    }
+
+    #[test]
+    fn directory_header_rejects_line_breaks_and_formats_clean_values() {
+        assert_eq!(
+            directory_header("E:\\work\\fintwind").unwrap(),
+            "x-opencode-directory: E:\\work\\fintwind\r\n"
+        );
+        // Either break would end the header line and smuggle a second one
+        // into the raw request, so both must be refused outright.
+        assert!(directory_header("E:\\work\r\nX-Smuggled: 1").is_err());
+        assert!(directory_header("E:\\work\nX-Smuggled: 1").is_err());
+    }
+
+    /// The CR/LF refusal fires before the request is built: the validation
+    /// error proves no bytes — header or connection — were written, where a
+    /// connect failure would mean the smuggled header went out.
+    #[test]
+    fn requests_refuse_to_send_a_directory_with_line_breaks() {
+        let error = request_json_on_port_with_directory(
+            0,
+            "GET",
+            "/api/model",
+            None,
+            Duration::from_millis(200),
+            Some("E:\\work\r\nX-Smuggled: 1"),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("line break"));
     }
 
     #[test]

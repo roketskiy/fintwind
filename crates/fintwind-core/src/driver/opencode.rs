@@ -1,12 +1,15 @@
 //! `opencode serve` is OpenCode's real API: one resident process serves
-//! every session in a workspace, streams server-sent events, and answers
-//! permission requests the user can actually be asked. Fintwind already started
-//! this server for a side-quest — forking a session — while running
-//! conversations through one-shot `opencode run` invocations; this drives
-//! everything through it, pooled per workspace via `opencode_pool` so
-//! sessions share the process instead of starting one each. A prompt posted
-//! into a busy session is folded into the running turn rather than queued
-//! behind it, which is what makes steering a plain post.
+//! every Fintwind session started with the same opencode binary, streams
+//! server-sent events, and answers permission requests the user can
+//! actually be asked. Fintwind runs its own private global server per
+//! binary via `opencode_pool` — never the user-level `opencode service`.
+//! The process runs in a stable data directory, and each session's
+//! workspace rides along as per-request location data (`location.directory`
+//! when creating the session, `x-opencode-directory` / `?directory=` on
+//! location-scoped routes). The server's lifetime is the daemon's:
+//! `shutdown_all` reclaims it after the daemon drops its sessions. A prompt
+//! posted into a busy session is folded into the running turn rather than
+//! queued behind it, which is what makes steering a plain post.
 //!
 //! Routes and payload shapes here were read off a live `opencode` server's
 //! `/api` protocol and event stream, not guessed. The v1 compatibility
@@ -15,17 +18,17 @@
 //! `/api/*` protocol: prompts post `{text}`, forks take
 //! `{boundary:{type:"before"|"through",messageID}}`, messages come back as
 //! `{data:[...],cursor}`, and events arrive as `{type,data}` lines on
-//! `/api/event`.
+//! `/api/event` — one shared connection per server port, delivered through
+//! `opencode_events`, with each driver filtering its own session family.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{BufRead, BufReader, Write};
-use std::net::{Shutdown, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{Context as _, anyhow};
+use anyhow::{Context as _, anyhow, bail};
 use crossbeam_channel::{Sender, unbounded};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -40,9 +43,10 @@ use crate::model::{
     CompactionStatus, DriverEvent, InteractionMode, PermissionOption, ProviderResumeCursor,
     RuntimeMode, TurnStats, UserInputAnswer, UserInputOption, UserInputQuestion, unix_time_millis,
 };
+use crate::opencode_events::EventFeed;
 use crate::opencode_pool::PooledServer;
 use crate::opencode_session::{
-    basic_authorization, encode_path_segment, fork_session_removing_turns_on_server,
+    encode_path_segment, fork_session_removing_turns_on_server, request_json_on_port_with_directory,
 };
 
 /// How often the permission poll scans the server's pending requests. The
@@ -408,18 +412,59 @@ fn form_reply_answer(fields: &[(String, bool)], answers: &[UserInputAnswer]) -> 
         .into()
 }
 
+/// The directory string a request names this task's workspace with. An
+/// absolute cwd passes through untouched; a relative one is canonicalized so
+/// the server sees one stable path regardless of where its process runs, and
+/// a failed canonicalize falls back to the original value.
+fn opencode_location_directory(cwd: &Path) -> String {
+    if cwd.is_absolute() {
+        return cwd.to_string_lossy().into_owned();
+    }
+    std::fs::canonicalize(cwd)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| cwd.to_string_lossy().into_owned())
+}
+
+/// A resume must stay inside the task's own workspace: on a server hosting
+/// every directory, replaying a stale cursor would silently reopen another
+/// project's conversation. Sessions recorded before locations existed carry
+/// none and stay resumable. The recorded directory is compared against the
+/// same normalized form the create call sent, as `Path`s so trailing
+/// separators and separator style do not reject an identical directory.
+fn verify_resume_location(session: &Value, cwd: &Path, session_id: &str) -> anyhow::Result<()> {
+    let info = session.get("data").unwrap_or(session);
+    let Some(recorded) = info
+        .pointer("/location/directory")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|directory| !directory.is_empty())
+    else {
+        return Ok(());
+    };
+    if Path::new(recorded) != Path::new(&opencode_location_directory(cwd)) {
+        bail!(
+            "OpenCode session `{session_id}` lives in `{recorded}`, not this task's directory `{}`",
+            cwd.display()
+        );
+    }
+    Ok(())
+}
+
 pub struct OpenCodeDriver {
     // `Drop` releases this lease before waking the worker, guaranteeing that
     // final process teardown runs on the worker rather than the UI thread.
     server: Option<PooledServer>,
     session_id: String,
+    /// This task's workspace: every location-scoped request names it
+    /// explicitly, since the server can no longer be assumed to run here.
+    cwd: PathBuf,
     events: DriverEventSender,
     background_refresh_generation: Arc<AtomicU64>,
     background_transcript_hydrations: Arc<Mutex<HashSet<String>>>,
     commands: Sender<CommandMessage>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
     forms: Arc<Mutex<OpenCodeFormState>>,
-    event_stream: Arc<OpenCodeEventStreamControl>,
+    event_feed: Arc<EventFeed>,
     mode: RuntimeMode,
     interaction_mode: InteractionMode,
     model: Option<String>,
@@ -453,17 +498,31 @@ impl OpenCodeDriver {
 
         // Reuse the native session when resuming so the conversation, and the
         // cursor already persisted for it, stay the same.
+        let location_directory = opencode_location_directory(&cwd);
         let session_id = match resume_session_id {
             Some(session_id) => {
                 let path = format!("/api/session/{}", encode_path_segment(&session_id));
-                server
+                let existing = server
                     .request("GET", &path, None)
                     .with_context(|| format!("could not resume OpenCode session `{session_id}`"))?;
+                verify_resume_location(&existing, &cwd, &session_id)?;
                 session_id
             }
             None => {
+                // The session records which workspace it belongs to: a server
+                // shared across directories resolves location-scoped routes
+                // through it instead of its own process working directory.
+                // The directory also rides the header, so an instance selected
+                // by it stores the session under the same workspace the body
+                // names.
                 let created = server
-                    .request("POST", "/api/session", Some(&json!({})))
+                    .request_for_directory_with_timeout(
+                        &location_directory,
+                        "POST",
+                        "/api/session",
+                        Some(&json!({ "location": { "directory": &location_directory } })),
+                        Duration::from_secs(10),
+                    )
                     .context("could not open an OpenCode session")?;
                 created
                     .pointer("/data/id")
@@ -582,6 +641,7 @@ impl OpenCodeDriver {
         // The thread holds only the port: a handle would delay the pooled
         // server's teardown behind this request's timeout.
         let metadata_port = server.port;
+        let metadata_directory = location_directory.clone();
         let metadata_events = events.clone();
         let background_usage_metadata = usage_metadata.clone();
         thread::Builder::new()
@@ -594,12 +654,13 @@ impl OpenCodeDriver {
                 let started = std::time::Instant::now();
                 let budget = Duration::from_secs(30);
                 let response = loop {
-                    let request = crate::opencode_session::request_json_on_port(
+                    let request = crate::opencode_session::request_json_on_port_with_directory(
                         metadata_port,
                         "GET",
                         "/api/model",
                         None,
                         Duration::from_secs(30),
+                        Some(&metadata_directory),
                     );
                     let landed = request.as_ref().is_ok_and(|response| {
                         response
@@ -636,7 +697,11 @@ impl OpenCodeDriver {
         let turn_active = Arc::new(Mutex::new(false));
         let permissions = Arc::new(Mutex::new(OpenCodePermissionState::default()));
         let forms = Arc::new(Mutex::new(OpenCodeFormState::default()));
-        let event_stream = Arc::new(OpenCodeEventStreamControl::default());
+        // One shared SSE connection per server port: the hub fans the
+        // server-wide stream out to every driver on it, and this driver
+        // filters its own session family. It returns before the stream is
+        // live; `recv` blocks until the first event or the stream's end.
+        let event_feed = Arc::new(crate::opencode_events::subscribe(server.port)?);
         let session_family = Arc::new(SessionFamily::new(session_id.clone()));
 
         // opencode answers permission requests through a polling endpoint
@@ -653,12 +718,12 @@ impl OpenCodeDriver {
         let permission_commands = commands.clone();
         let permission_state = Arc::clone(&permissions);
         let poll_forms = Arc::clone(&forms);
-        let permission_stream = Arc::clone(&event_stream);
+        let permission_feed = Arc::clone(&event_feed);
         let poll_family = Arc::clone(&session_family);
         thread::Builder::new()
             .name("fintwind-opencode-permissions".into())
             .spawn(move || {
-                while !permission_stream.is_cancelled() {
+                while !permission_feed.is_cancelled() {
                     if let Ok(pending) = crate::opencode_session::request_json_on_port(
                         permission_port,
                         "GET",
@@ -732,9 +797,9 @@ impl OpenCodeDriver {
                 }
             })?;
 
-        // The reader holds only the port, never a server handle: the stream
-        // closes exactly when the process exits, so a handle held here would
-        // keep the pooled server from ever being killed.
+        // The feed holds only the port, never a server handle: the hub's
+        // stream ends exactly when the process exits, so a handle held here
+        // would keep the pooled server from ever being killed.
         let stream_port = server.port;
         let stream_session = session_id.clone();
         let stream_events = events.clone();
@@ -744,7 +809,7 @@ impl OpenCodeDriver {
         let stream_usage_metadata = usage_metadata;
         let stream_permissions = Arc::clone(&permissions);
         let stream_forms = Arc::clone(&forms);
-        let stream_control = Arc::clone(&event_stream);
+        let stream_feed = Arc::clone(&event_feed);
         let stream_family = Arc::clone(&session_family);
         thread::Builder::new()
             .name("fintwind-opencode-events".into())
@@ -755,44 +820,28 @@ impl OpenCodeDriver {
                     forms: stream_forms,
                     ..OpenCodeStreamState::default()
                 };
-                match open_event_stream(stream_port, "/api/event", &stream_control) {
-                    Ok(Some(stream)) => {
-                        for line in BufReader::new(stream).lines().map_while(Result::ok) {
-                            if stream_control.is_cancelled() {
-                                break;
-                            }
-                            let Some(payload) = line.strip_prefix("data:") else {
-                                continue;
-                            };
-                            let Ok(value) = serde_json::from_str::<Value>(payload.trim()) else {
-                                continue;
-                            };
-                            dispatch_server_event(
-                                &value,
-                                &stream_session,
-                                &stream_event_sink,
-                                &stream_commands,
-                                &stream_turn,
-                                stream_port,
-                                auto_approve,
-                                &mut state,
-                                &stream_family,
-                            );
-                        }
+                // The hub delivers parsed JSON already. A stream end is the
+                // server going away — there is no reconnect.
+                loop {
+                    if stream_feed.is_cancelled() {
+                        break;
                     }
-                    Ok(None) => {}
-                    Err(error) => {
-                        if !stream_control.is_cancelled() {
-                            let _ = stream_event_sink.send(DriverEvent::Error(tr!(
-                                "errors.read_provider_event_stream",
-                                provider = "OpenCode",
-                                error = error
-                            )));
-                        }
+                    match stream_feed.recv() {
+                        Ok(value) => dispatch_server_event(
+                            &value,
+                            &stream_session,
+                            &stream_event_sink,
+                            &stream_commands,
+                            &stream_turn,
+                            stream_port,
+                            auto_approve,
+                            &mut state,
+                            &stream_family,
+                        ),
+                        Err(_) => break,
                     }
                 }
-                stream_control.clear();
-                if !stream_control.is_cancelled() {
+                if !stream_feed.is_cancelled() {
                     let _ = stream_event_sink.send(DriverEvent::ProcessExited);
                 }
             })?;
@@ -1026,19 +1075,20 @@ impl OpenCodeDriver {
                 }
             })
             .inspect_err(|_| {
-                event_stream.cancel();
+                event_feed.cancel();
             })?;
 
         Ok(Self {
             server: Some(server),
             session_id,
+            cwd,
             events: stream_events,
             background_refresh_generation: Arc::new(AtomicU64::new(0)),
             background_transcript_hydrations: Arc::new(Mutex::new(HashSet::new())),
             commands,
             permissions,
             forms,
-            event_stream,
+            event_feed,
             mode,
             interaction_mode,
             model,
@@ -1069,26 +1119,35 @@ impl DriverControl for OpenCodeDriver {
         let Some(server) = self.server.as_ref() else {
             return;
         };
-        let server = server.clone();
+        // The thread holds only the port: a handle would delay the pooled
+        // server's teardown behind this request's timeout.
+        let port = server.port;
         let generation = self
             .background_refresh_generation
             .fetch_add(1, Ordering::AcqRel)
             .saturating_add(1);
-        let port = server.port;
         let parent_id = self.session_id.clone();
+        let directory = opencode_location_directory(&self.cwd);
         let events = self.events.clone();
         let generation_guard = Arc::clone(&self.background_refresh_generation);
         let transcript_hydrations = Arc::clone(&self.background_transcript_hydrations);
         let _ = thread::Builder::new()
             .name("fintwind-opencode-subagents-refresh".into())
             .spawn(move || {
-                let path = "/api/session?limit=200";
-                let response = crate::opencode_session::request_json_on_port(
+                // Directory-scoped: a server shared across workspaces also
+                // lists other projects' sessions, and this scan may only see
+                // this task's own children.
+                let path = format!(
+                    "/api/session?directory={}&limit=200",
+                    encode_path_segment(&directory)
+                );
+                let response = request_json_on_port_with_directory(
                     port,
                     "GET",
-                    path,
+                    &path,
                     None,
                     Duration::from_secs(10),
+                    Some(&directory),
                 );
                 if generation_guard.load(Ordering::Acquire) != generation {
                     return;
@@ -1145,7 +1204,7 @@ impl DriverControl for OpenCodeDriver {
                     if !transcript_hydrations.lock().insert(child_id.clone()) {
                         continue;
                     }
-                    match super::native::fetch_transcript(&server, &child_id) {
+                    match super::native::fetch_transcript_on_port(port, &child_id) {
                         Ok(transcript) => {
                             let _ = events.send(DriverEvent::BackgroundWork(
                                 BackgroundWorkEvent::Transcript(
@@ -1260,108 +1319,12 @@ impl DriverControl for OpenCodeDriver {
 
 impl Drop for OpenCodeDriver {
     fn drop(&mut self) {
-        self.event_stream.cancel();
+        self.event_feed.cancel();
         // The worker owns the other server lease. Release the UI-owned lease
         // first, then wake the worker so any final terminate/wait happens there.
         drop(self.server.take());
         let _ = self.commands.send(CommandMessage::Shutdown);
     }
-}
-
-#[derive(Default)]
-struct OpenCodeEventStreamControl {
-    cancelled: AtomicBool,
-    socket: Mutex<Option<TcpStream>>,
-}
-
-impl OpenCodeEventStreamControl {
-    fn attach(&self, stream: &TcpStream) -> std::io::Result<bool> {
-        let socket = stream.try_clone()?;
-        let mut active = self.socket.lock();
-        if self.cancelled.load(Ordering::Acquire) {
-            let _ = socket.shutdown(Shutdown::Both);
-            return Ok(false);
-        }
-        *active = Some(socket);
-        Ok(true)
-    }
-
-    fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-        if let Some(socket) = self.socket.lock().take() {
-            let _ = socket.shutdown(Shutdown::Both);
-        }
-    }
-
-    fn clear(&self) {
-        self.socket.lock().take();
-    }
-
-    fn is_cancelled(&self) -> bool {
-        self.cancelled.load(Ordering::Acquire)
-    }
-}
-
-/// Opens the server-sent event stream and leaves it open.
-///
-/// The shared request helper reads a whole response before returning, which a
-/// stream never finishes doing.
-fn open_event_stream(
-    port: u16,
-    path: &str,
-    control: &OpenCodeEventStreamControl,
-) -> anyhow::Result<Option<TcpStream>> {
-    let mut stream = TcpStream::connect(("127.0.0.1", port))
-        .with_context(|| format!("could not connect to OpenCode on local port {port}"))?;
-    // Register before reading the response head too. If this driver is dropped
-    // while setup is blocked, cancellation can still close the socket and wake
-    // the reader even though another pooled session keeps the server alive.
-    if !control.attach(&stream)? {
-        return Ok(None);
-    }
-    let mut request = format!(
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/event-stream\r\nConnection: keep-alive\r\n"
-    );
-    if let Some(authorization) = basic_authorization(port) {
-        request.push_str(&authorization);
-        request.push_str("\r\n");
-    }
-    request.push_str("\r\n");
-    write!(stream, "{request}")?;
-    stream.flush()?;
-    // Skip the response head; every later line is stream payload. The head
-    // read polls a short timeout instead of blocking forever: on Windows a
-    // WFP/AV layer intercepting loopback can delay shutdown's wake of a
-    // blocked recv indefinitely (observed WSAETIMEDOUT after seconds), and
-    // cancellation must stay responsive regardless of the network stack.
-    stream.set_read_timeout(Some(Duration::from_millis(200)))?;
-    let mut reader = BufReader::new(stream.try_clone()?);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line) {
-            Ok(0) => return Err(anyhow!("OpenCode closed the event stream during setup")),
-            Ok(_) => {}
-            // A timed-out read keeps its partial bytes buffered; keep polling
-            // until the head completes or cancellation wins.
-            Err(error)
-                if error.kind() == std::io::ErrorKind::WouldBlock
-                    || error.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                if control.is_cancelled() {
-                    let _ = stream.shutdown(Shutdown::Both);
-                    return Err(anyhow!("OpenCode event stream was cancelled during setup"));
-                }
-                continue;
-            }
-            Err(error) => return Err(error.into()),
-        }
-        if line.trim().is_empty() {
-            break;
-        }
-    }
-    stream.set_read_timeout(None)?;
-    Ok(Some(stream))
 }
 
 /// A subagent tool call whose child session is not known yet. `target` names
@@ -3537,6 +3500,27 @@ fn permission_responses(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The three resume rules a shared server needs: a cursor pointing at
+    /// another workspace is refused instead of silently moving the session,
+    /// a session recorded before locations existed stays resumable, and a
+    /// trailing-separator difference is not a different workspace.
+    #[test]
+    fn resume_location_rules() {
+        let cwd = Path::new("E:\\work\\fintwind");
+        let recorded = json!({"data": {"location": {"directory": "E:\\work\\fintwind"}}});
+        assert!(verify_resume_location(&recorded, cwd, "ses_1").is_ok());
+        // A trailing separator is the same directory.
+        let trailing = json!({"location": {"directory": "E:\\work\\fintwind\\"}});
+        assert!(verify_resume_location(&trailing, cwd, "ses_1").is_ok());
+        // No recorded location: an old session stays resumable.
+        assert!(verify_resume_location(&json!({"data": {}}), cwd, "ses_1").is_ok());
+        assert!(verify_resume_location(&json!({}), cwd, "ses_1").is_ok());
+        // Another workspace's session must be refused outright.
+        let other = json!({"data": {"location": {"directory": "E:\\work\\other"}}});
+        let error = verify_resume_location(&other, cwd, "ses_1").unwrap_err();
+        assert!(error.to_string().contains("E:\\work\\other"));
+    }
 
     #[test]
     fn model_reference_carries_variant_and_preserves_nested_model_ids() {
@@ -6902,38 +6886,5 @@ mod tests {
         let permissions = permissions.lock();
         assert!(!permissions.pending.contains_key("per_matching"));
         assert!(permissions.pending.contains_key("per_other"));
-    }
-
-    #[test]
-    fn cancelling_event_stream_unblocks_response_setup() {
-        use std::net::TcpListener;
-        use std::sync::mpsc;
-
-        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let control = Arc::new(OpenCodeEventStreamControl::default());
-        let reader_control = Arc::clone(&control);
-        let (done, finished) = mpsc::channel();
-        let reader = thread::spawn(move || {
-            let _ = open_event_stream(port, "/event", &reader_control);
-            done.send(()).unwrap();
-        });
-        let (_peer, _) = listener.accept().unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while control.socket.lock().is_none() && std::time::Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(5));
-        }
-        assert!(control.socket.lock().is_some());
-
-        control.cancel();
-        // The shutdown must end the blocked response-head read. On Windows a
-        // WFP/AV layer intercepting loopback can delay the wake by seconds
-        // (observed WSAETIMEDOUT ~2s), so the deadline is generous.
-        finished
-            .recv_timeout(Duration::from_secs(10))
-            .expect("cancellation should unblock the response-head read");
-        reader.join().unwrap();
-        assert!(control.is_cancelled());
-        assert!(control.socket.lock().is_none());
     }
 }

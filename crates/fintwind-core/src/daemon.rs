@@ -492,9 +492,9 @@ impl Backend for FintwindBackend {
                 })
             }
             Command::ListProviderSessions { binary, directory } => {
-                // Shares the workspace's resident server when one is live;
-                // a transient one is started and killed with the handle
-                // otherwise. Blocking I/O, so this runs on the request thread.
+                // Goes through the binary's private global server; the
+                // directory rides along as per-request location data.
+                // Blocking I/O, so this runs on the request thread.
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
                 let sessions =
                     crate::driver::native::list_sessions(&server, &directory.to_string_lossy())?;
@@ -511,7 +511,7 @@ impl Backend for FintwindBackend {
             }
             Command::FetchUsageStats { binary, directory } => {
                 // One pass over the whole session store; `directory` only
-                // anchors which resident server to ask. Blocking I/O, so
+                // scopes the request's location. Blocking I/O, so
                 // this runs on the request thread like the other
                 // sessionless OpenCode reads.
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
@@ -538,7 +538,7 @@ impl Backend for FintwindBackend {
                 Ok(ResponsePayload::Ack)
             }
             Command::FetchIntegrations { binary, directory } => {
-                // One round trip to the workspace's OpenCode server; the
+                // One round trip to the private global OpenCode server; the
                 // connection list is the authorization truth. Blocking I/O,
                 // so this runs on the request thread like the other
                 // sessionless OpenCode reads.
@@ -571,12 +571,12 @@ impl Backend for FintwindBackend {
                 provider_id,
             } => {
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let (models, latency_ms) =
-                    crate::driver::native::probe_provider_models(&server, &provider_id)?;
-                Ok(ResponsePayload::BuiltinProviderProbed {
-                    models,
-                    latency_ms,
-                })
+                let (models, latency_ms) = crate::driver::native::probe_provider_models(
+                    &server,
+                    &directory.to_string_lossy(),
+                    &provider_id,
+                )?;
+                Ok(ResponsePayload::BuiltinProviderProbed { models, latency_ms })
             }
             Command::AuthenticateMcpServer {
                 binary,
@@ -745,6 +745,7 @@ impl Backend for FintwindBackend {
         drop(sessions);
         let terminals = std::mem::take(&mut *self.terminals.lock());
         drop(terminals);
+        crate::opencode_pool::shutdown_all();
     }
 }
 

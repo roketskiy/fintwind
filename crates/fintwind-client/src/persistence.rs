@@ -915,7 +915,7 @@ impl StateStore {
         )
     }
 
-    /// Run remote MCP OAuth on the workspace's resident OpenCode server.
+    /// Run remote MCP OAuth on Fintwind's private global OpenCode server.
     /// Blocking; the browser flow can take several minutes.
     pub fn authenticate_mcp_server(
         &self,

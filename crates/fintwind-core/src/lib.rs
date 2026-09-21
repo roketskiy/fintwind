@@ -31,6 +31,7 @@ pub mod identity;
 pub mod mcp_auth;
 pub mod model;
 pub mod model_catalog;
+pub mod opencode_events;
 pub mod opencode_pool;
 pub mod opencode_session;
 pub mod persistence;

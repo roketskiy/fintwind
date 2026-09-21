@@ -345,15 +345,33 @@ impl Fintwind {
             )
             .children(progress)
             .child(div().flex_1())
-            .child(icon(
-                if pending.collapsed {
-                    "icons/chevron-down.svg"
-                } else {
-                    "icons/chevron-up.svg"
-                },
-                12.0,
-                theme.text_tertiary,
-            ))
+            .child(
+                // The chevron rides in a fixed hit-area chip so the fold
+                // control reads as a button rather than a stray glyph: quiet
+                // at rest, raised on hover. The row around it stays the click
+                // target — the chip only paints.
+                div()
+                    .id(SharedString::from(format!(
+                        "user-input-{request_id}-toggle-glyph"
+                    )))
+                    .flex_none()
+                    .w(px(20.0))
+                    .h(px(20.0))
+                    .rounded(px(6.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .hover(|style| style.bg(theme.overlay_strong))
+                    .child(icon(
+                        if pending.collapsed {
+                            "icons/chevron-down.svg"
+                        } else {
+                            "icons/chevron-up.svg"
+                        },
+                        12.0,
+                        theme.text_tertiary,
+                    )),
+            )
             .on_click(cx.listener(|this, _, _, cx| this.toggle_user_input_collapsed(cx)))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {

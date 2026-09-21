@@ -2224,13 +2224,21 @@ impl Fintwind {
                 .zip(activity.source_id.as_deref())
                 .and_then(|(session_id, source_id)| {
                     self.background_work_for_activity(session_id, source_id)
-                        .map(|item| (session_id, item.key.clone(), item.status))
+                        .map(|item| {
+                            (
+                                session_id,
+                                item.key.clone(),
+                                item.status,
+                                item.title.clone(),
+                                item.model.clone(),
+                            )
+                        })
                 });
             let subagent_work = background_work
                 .as_ref()
-                .filter(|(_, key, _)| key.kind == BackgroundWorkKind::Subagent)
+                .filter(|(_, key, ..)| key.kind == BackgroundWorkKind::Subagent)
                 .cloned();
-            let background_badge = background_work.clone().map(|(session_id, key, status)| {
+            let background_badge = background_work.clone().map(|(session_id, key, status, ..)| {
                 let click_key = key.clone();
                 let focus = self.transcript_control_focus(format!("activity-background-{id}"), cx);
                 let color = work_status_color(status, *theme);
@@ -2282,6 +2290,12 @@ impl Fintwind {
             if row_detail.trim().is_empty() {
                 row_detail = preview;
             }
+            if let Some((_, _, _, title, _)) = subagent_work.as_ref() {
+                let title = title.trim();
+                if !title.is_empty() {
+                    row_detail = title.to_owned();
+                }
+            }
             let file_change_stats = activity_file_change_stats(activity);
             // One changed file is unambiguous, so the row itself can offer to
             // open it. A change touching several names each file in the diff
@@ -2322,7 +2336,7 @@ impl Fintwind {
                 .bg(activity_surface)
                 .flex()
                 .flex_col()
-                .children(subagent_work.as_ref().and_then(|(_, _, status)| {
+                .children(subagent_work.as_ref().and_then(|(_, _, status, ..)| {
                     status.is_live().then(|| {
                         let accent = theme.accent;
                         motion::pulse(Duration::from_millis(1800), move |phase| {
@@ -2396,6 +2410,25 @@ impl Fintwind {
                                     .child(SharedString::from(format!("-{deletions}"))),
                             )
                         })
+                        .when_some(
+                            subagent_work
+                                .as_ref()
+                                .and_then(|(_, _, _, _, model)| model.as_deref())
+                                .map(str::trim)
+                                .filter(|model| !model.is_empty())
+                                .map(str::to_owned),
+                            |row, model| {
+                                row.child(
+                                    div()
+                                        .flex_none()
+                                        .max_w(px(180.0))
+                                        .truncate()
+                                        .text_size(ui_px(10.5))
+                                        .text_color(theme.text_tertiary)
+                                        .child(SharedString::from(model)),
+                                )
+                            },
+                        )
                         .children(background_badge)
                         .children(open_file_button)
                         .when(has_detail, |element| {
@@ -2421,7 +2454,7 @@ impl Fintwind {
                                 })
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some((session_id, key, _)) = click_subagent_work.as_ref() {
+                            if let Some((session_id, key, ..)) = click_subagent_work.as_ref() {
                                 this.open_background_work_surface(
                                     session_id.to_owned(),
                                     key.clone(),
@@ -2433,7 +2466,7 @@ impl Fintwind {
                         }))
                         .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                             if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                if let Some((session_id, key, _)) = key_subagent_work.as_ref() {
+                                if let Some((session_id, key, ..)) = key_subagent_work.as_ref() {
                                     this.open_background_work_surface(
                                         session_id.to_owned(),
                                         key.clone(),

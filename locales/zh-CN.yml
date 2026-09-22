@@ -1151,7 +1151,7 @@ usage_page.weekday_wed: 三
 usage_page.weekday_fri: 五
 usage_page.legend_less: 少
 usage_page.legend_more: 多
-usage_page.day_tooltip: "%{date} · %{tokens} tokens · %{sessions} 个会话"
+usage_page.day_tooltip: "%{date} · 用量 %{tokens} · 缓存 %{cache} · %{sessions} 个会话"
 usage_page.daily_title: 每日用量（不含缓存）
 usage_page.daily_caption: 近 %{days} 天
 usage_page.models_title: 模型使用排行

@@ -49,6 +49,12 @@ const SESSION_AVATAR_ICON: f32 = 14.0;
 const SIDEBAR_SESSION_ROW_GAP: f32 = 2.0;
 const SIDEBAR_SESSION_ROW_HEIGHT: f32 = SIDEBAR_SESSION_CARD_HEIGHT + SIDEBAR_SESSION_ROW_GAP;
 const SIDEBAR_ACTION_ROW_HEIGHT: f32 = 32.0;
+/// Vertical rhythm between the stacked action rows — new task, add project,
+/// search — so their intervals read as one even column instead of grouping
+/// the first two flush together.
+const SIDEBAR_ACTION_ROW_GAP: f32 = 4.0;
+/// Separation beneath the search row, between the action column and the
+/// project list.
 const SIDEBAR_SEARCH_BOTTOM_GAP: f32 = 10.0;
 /// Project group header: a bordered card that is slightly taller than the
 /// old text-only row so the trailing new-session control has a usable hit area.
@@ -621,13 +627,14 @@ impl Fintwind {
                 div()
                     .flex_none()
                     .px(px(10.0))
+                    .pb(px(SIDEBAR_ACTION_ROW_GAP))
                     .child(self.render_sidebar_new_session(cx)),
             )
             .child(
                 div()
                     .flex_none()
                     .px(px(10.0))
-                    .pb(px(SIDEBAR_SEARCH_BOTTOM_GAP))
+                    .pb(px(SIDEBAR_ACTION_ROW_GAP))
                     .child(self.render_sidebar_add_project(cx)),
             )
             .child(

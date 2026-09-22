@@ -992,7 +992,7 @@ mod tests {
                     runtime_id: self.runtimes.lock().get(&session_id).copied(),
                     supports_steer: true,
                 }),
-                Command::Prompt { prompt } => {
+                Command::Prompt { prompt, files: _ } => {
                     events.send(WireDriverEvent::new("textDelta", json!(prompt)))?;
                     Ok(ResponsePayload::Ack)
                 }
@@ -1380,6 +1380,7 @@ mod tests {
                 runtime_id,
                 Command::Prompt {
                     prompt: "streamed from the first client".into(),
+                    files: Vec::new(),
                 },
             )
             .unwrap();
@@ -1750,6 +1751,7 @@ mod tests {
                 runtime_id: blocked_runtime_id,
                 command: Command::Prompt {
                     prompt: "after start".into(),
+                    files: Vec::new(),
                 },
             },
             second_client_outgoing,

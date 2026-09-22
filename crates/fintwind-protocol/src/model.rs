@@ -1345,10 +1345,11 @@ pub enum MessageRole {
 /// Render paths consume only this cached metadata; they never stat the file.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct MessageAttachment {
-    /// Absolute path on the daemon host, handed to the provider. Clients must
-    /// use `blob_reference` rather than opening this path themselves.
+    /// Absolute path on the daemon host. The OpenCode driver turns this into
+    /// the prompt `files` URI. Clients must use `blob_reference` rather than
+    /// opening this path themselves.
     pub path: PathBuf,
-    /// Provider-facing path text, relative to the workspace when possible.
+    /// Tooltip and icon path. Not sent to the provider.
     pub mention: String,
     pub name: String,
     pub is_dir: bool,

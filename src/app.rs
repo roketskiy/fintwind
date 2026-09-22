@@ -292,7 +292,7 @@ fn paused_toast_duration(remaining: Duration, elapsed: Duration) -> Duration {
 }
 
 /// A file dropped onto the composer, staged as a chip until the next
-/// submission carries it as an `@` mention.
+/// submission sends it on OpenCode's prompt `files` channel.
 #[derive(Clone, Debug)]
 struct ComposerAttachment {
     /// Materialized path on the daemon host. This is the only path sent to a
@@ -301,8 +301,7 @@ struct ComposerAttachment {
     /// Ephemeral decoded client image used only for an immediate preview after
     /// upload. It is never persisted or sent to the daemon.
     client_preview_image: Option<Arc<gpui::Image>>,
-    /// What the submission sends: relative to the project root when the file
-    /// is inside it, absolute otherwise, directories with a trailing slash.
+    /// Tooltip path. Not sent to the provider; the driver uses `path`.
     mention: String,
     /// Basename drawn on the chip.
     name: SharedString,
@@ -321,9 +320,9 @@ enum RemoteImageState {
     Unavailable,
 }
 
-/// One accepted composer submission. `prompt` is the exact provider-facing
-/// text; presentation metadata keeps its appended attachment mentions out of
-/// the user bubble.
+/// One accepted composer submission. `prompt` is the typed text the provider
+/// receives. Attachments stay beside it and leave on the `files` channel;
+/// `display_content` is only set for older rows that hid appended `@` paths.
 #[derive(Clone, Debug)]
 struct ComposerSubmission {
     prompt: String,
@@ -352,9 +351,32 @@ impl ComposerSubmission {
         }
     }
 
+    /// Text posted to OpenCode. New submissions store that text in `prompt`.
+    /// Older queued rows kept the typed text in `display_content` and appended
+    /// `@` paths to `prompt`; those paths must not be sent again now that the
+    /// same chips travel as `files`.
+    fn provider_prompt(&self) -> String {
+        if !self.attachments.is_empty()
+            && let Some(visible) = &self.display_content
+        {
+            return visible.clone();
+        }
+        self.prompt.clone()
+    }
+
+    fn prompt_files(&self) -> Vec<fintwind_client::PromptFile> {
+        self.attachments
+            .iter()
+            .map(|attachment| fintwind_client::PromptFile {
+                path: attachment.path.clone(),
+                name: attachment.name.clone(),
+            })
+            .collect()
+    }
+
     /// Human-facing task text for titles and generated worktree names. An
-    /// attachment-only submission uses basenames instead of its transport
-    /// paths; providers still receive `prompt` unchanged.
+    /// attachment-only submission uses basenames. Providers still receive
+    /// `prompt` unchanged, with attachments on the `files` channel.
     fn human_prompt(&self) -> String {
         let visible = self
             .display_content
@@ -2011,7 +2033,11 @@ impl Fintwind {
         crate::theme::set_ui_font_family(state.ui_font_family.clone());
         crate::theme::set_code_font_family(state.code_font_family.clone());
 
-        let composer = cx.new(|cx| ComposerInput::new(window, cx).padding_x(px(14.0)));
+        let composer = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .padding_x(px(14.0))
+                .submit_empty()
+        });
         let user_input_answer = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()

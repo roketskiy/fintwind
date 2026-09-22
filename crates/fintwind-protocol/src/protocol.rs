@@ -16,7 +16,18 @@ use crate::skills::SkillsCatalog;
 use crate::usage::PlanUsage;
 use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
+
+/// One attachment admitted with an OpenCode prompt. The path is on the daemon
+/// host; the driver turns it into a `file:` URI and does not copy the bytes
+/// onto this socket again.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptFile {
+    pub path: PathBuf,
+    pub name: String,
+}
+
 pub const MAX_WIRE_MESSAGE_BYTES: usize = 48 * 1024 * 1024;
 pub const DAEMON_TOKEN_ENV: &str = "FINTWIND_DAEMON_TOKEN";
 pub const DAEMON_ADDRESS_ENV: &str = "FINTWIND_DAEMON_ADDRESS";
@@ -85,9 +96,15 @@ pub enum Command {
     },
     Prompt {
         prompt: String,
+        /// Daemon-host paths the OpenCode driver sends as prompt `files`.
+        /// Absent on older clients, which sent attachments as `@` text only.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<PromptFile>,
     },
     Steer {
         prompt: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        files: Vec<PromptFile>,
     },
     /// Ask the provider to compact this session's context. Admission is
     /// asynchronous: outcomes arrive as `DriverEvent::CompactionUpdated`,
@@ -576,13 +593,54 @@ mod tests {
     }
 
     #[test]
+    fn prompt_files_round_trip_and_legacy_prompts_have_none() {
+        let plain = serde_json::to_value(Command::Prompt {
+            prompt: "hi".into(),
+            files: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(plain["type"], "prompt");
+        assert_eq!(plain["prompt"], "hi");
+        assert!(plain.get("files").is_none());
+
+        let path = PathBuf::from("E:/attachments/notes.md");
+        let with_files = Command::Prompt {
+            prompt: String::new(),
+            files: vec![PromptFile {
+                path: path.clone(),
+                name: "notes.md".into(),
+            }],
+        };
+        let json = serde_json::to_value(&with_files).unwrap();
+        assert_eq!(json["files"][0]["name"], "notes.md");
+        let Command::Prompt { prompt, files } = serde_json::from_value(json).unwrap() else {
+            panic!("prompt command");
+        };
+        assert!(prompt.is_empty());
+        assert_eq!(
+            files,
+            vec![PromptFile {
+                path,
+                name: "notes.md".into()
+            }]
+        );
+
+        let legacy = serde_json::json!({"type": "prompt", "prompt": "hi"});
+        let Command::Prompt { prompt, files } = serde_json::from_value(legacy).unwrap() else {
+            panic!("legacy prompt");
+        };
+        assert_eq!(prompt, "hi");
+        assert!(files.is_empty());
+    }
+
+    #[test]
     fn response_fork_command_uses_stable_camel_case_fields() {
         let json =
             serde_json::to_value(Command::ForkSessionFromResponse { turn_count: 7 }).unwrap();
 
         assert_eq!(json["type"], "forkSessionFromResponse");
         assert_eq!(json["turnCount"], 7);
-        assert_eq!(PROTOCOL_VERSION, 6);
+        assert_eq!(PROTOCOL_VERSION, 7);
     }
 
     #[test]
@@ -600,7 +658,7 @@ mod tests {
 
         assert_eq!(json["type"], "rewindSessionToMessage");
         assert_eq!(json["turnCount"], 4);
-        assert_eq!(PROTOCOL_VERSION, 6);
+        assert_eq!(PROTOCOL_VERSION, 7);
     }
 
     #[test]

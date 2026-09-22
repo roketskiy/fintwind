@@ -1104,10 +1104,9 @@ impl StateStore {
             )
             .map_err(to_io_error)?
         {
-            ResponsePayload::BuiltinProviderProbed {
-                models,
-                latency_ms,
-            } => Ok((models, Duration::from_millis(latency_ms))),
+            ResponsePayload::BuiltinProviderProbed { models, latency_ms } => {
+                Ok((models, Duration::from_millis(latency_ms)))
+            }
             _ => Err(io::Error::other(
                 "fintwind daemon returned an invalid provider probe",
             )),

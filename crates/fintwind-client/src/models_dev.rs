@@ -535,9 +535,7 @@ pub fn parse_providers(body: &str) -> anyhow::Result<ModelsDevProviders> {
                 .map(|provider| provider.name.to_lowercase())
                 .unwrap_or_default()
         };
-        name(left)
-            .cmp(&name(right))
-            .then_with(|| left.cmp(right))
+        name(left).cmp(&name(right)).then_with(|| left.cmp(right))
     });
     Ok(ModelsDevProviders {
         fetched_at: now,

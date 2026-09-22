@@ -146,16 +146,16 @@ impl RemoteDriverControl {
 }
 
 impl DriverControl for RemoteDriverControl {
-    fn prompt(&self, prompt: String) {
-        self.notify(fintwind_client::Command::Prompt { prompt });
+    fn prompt(&self, prompt: String, files: Vec<fintwind_client::PromptFile>) {
+        self.notify(fintwind_client::Command::Prompt { prompt, files });
     }
 
     fn supports_steer(&self) -> bool {
         self.supports_steer
     }
 
-    fn steer(&self, prompt: String) {
-        self.notify(fintwind_client::Command::Steer { prompt });
+    fn steer(&self, prompt: String, files: Vec<fintwind_client::PromptFile>) {
+        self.notify(fintwind_client::Command::Steer { prompt, files });
     }
 
     fn compact(&self) {

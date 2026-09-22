@@ -1334,10 +1334,9 @@ impl Fintwind {
             .into_any_element()
     }
 
-    /// Stage files dropped onto the composer as attachment chips. The mention
-    /// each chip will submit takes the autocomplete's form: relative to the
-    /// project root when the file is inside it, absolute otherwise,
-    /// directories with a trailing slash.
+    /// Stage files dropped onto the composer as attachment chips. The bytes
+    /// are copied into the daemon attachment store; submit sends that path
+    /// as a prompt `files` URI, not as text.
     pub(super) fn stage_dropped_files(
         &mut self,
         paths: &ExternalPaths,
@@ -1485,6 +1484,9 @@ impl Fintwind {
                         .map(|(index, image)| {
                             let preview_image = Arc::new(image);
                             let bytes = preview_image.bytes.clone();
+                            if bytes.len() as u64 > MAX_PROMPT_FILE_BYTES {
+                                return Err("attachment is larger than 20 MB".into());
+                            }
                             let response = daemon
                                 .client()
                                 .request(
@@ -1545,9 +1547,9 @@ impl Fintwind {
         .detach();
     }
 
-    /// The text and attachment presentation accepted from the composer. The
-    /// exact provider prompt keeps its `@` mentions, while sent-message UI uses
-    /// `display_content` and the retained attachment metadata.
+    /// The text and attachments accepted from the composer. The provider
+    /// receives the typed text unchanged; each chip is a prompt `files` entry
+    /// built from the daemon path, not an `@` mention appended to the text.
     pub(super) fn submission_with_attachments(
         &mut self,
         prompt: &str,
@@ -1568,16 +1570,13 @@ impl Fintwind {
             .drain(..)
             .map(MessageAttachment::from)
             .collect::<Vec<_>>();
-        let mentions = attachments
-            .iter()
-            .map(|attachment| attachment.mention.clone())
-            .collect::<Vec<_>>();
-        let submission = merged_submission(prompt, &mentions)?;
-        let display_content = (!attachments.is_empty()).then(|| prompt.trim().to_owned());
+        let Some(prompt) = submission_text(prompt, attachments.len()) else {
+            return None;
+        };
         self.discard_current_composer_draft(cx);
         Some(ComposerSubmission {
-            prompt: submission,
-            display_content,
+            prompt,
+            display_content: None,
             attachments,
         })
     }
@@ -1631,7 +1630,7 @@ impl Fintwind {
                 .track_focus(menu.trigger_focus_handle())
                 .tab_index(0)
                 .focus_visible(|style| style.border_color(theme.accent))
-                .tooltip(Tooltip::text(format!("@{}", attachment.mention)));
+                .tooltip(Tooltip::text(attachment.mention.clone()));
             let attachment_image = attachment.client_preview_image.clone().or_else(|| {
                 attachment
                     .is_image
@@ -2828,6 +2827,7 @@ pub(super) fn visible_branch_entries(
 // one third of wire overhead. Stay comfortably below tungstenite's default
 // message limit until uploads move to a streaming content endpoint.
 const MAX_ATTACHMENT_BYTES: u64 = fintwind_client::attachments::MAX_ATTACHMENT_BYTES as u64;
+const MAX_PROMPT_FILE_BYTES: u64 = fintwind_client::attachments::MAX_PROMPT_FILE_BYTES as u64;
 
 /// Reads a client-local drop into an upload payload. This is the explicit
 /// client/daemon boundary: none of these source paths are persisted or handed
@@ -2854,8 +2854,8 @@ fn attachment_upload_from_path(
         .ok_or_else(|| anyhow::anyhow!("attachment has no file name: {}", source.display()))?
         .to_owned();
     if metadata.is_file() {
-        if metadata.len() > MAX_ATTACHMENT_BYTES {
-            anyhow::bail!("attachment is larger than 32 MB: {}", source.display());
+        if metadata.len() > MAX_PROMPT_FILE_BYTES {
+            anyhow::bail!("attachment is larger than 20 MB: {}", source.display());
         }
         let bytes = std::fs::read(source)
             .with_context(|| format!("could not read attachment {}", source.display()))?;
@@ -2970,21 +2970,14 @@ fn is_image_attachment_path(path: &Path) -> bool {
         })
 }
 
-/// The prompt a submission sends: the typed text plus one `@` mention per
-/// staged attachment, appended at the end the way T3 Code appends dropped
-/// files. `None` means there is nothing to send.
-pub(super) fn merged_submission(prompt: &str, mentions: &[String]) -> Option<String> {
-    let mentions = mentions
-        .iter()
-        .map(|mention| format!("@{mention}"))
-        .collect::<Vec<_>>()
-        .join(" ");
+/// The text a submission sends. Attachments are not appended; an empty prompt
+/// is still sent when chips are staged, and `None` means there is nothing.
+pub(super) fn submission_text(prompt: &str, attachment_count: usize) -> Option<String> {
     let prompt = prompt.trim();
-    match (prompt.is_empty(), mentions.is_empty()) {
-        (true, true) => None,
-        (false, true) => Some(prompt.to_owned()),
-        (true, false) => Some(mentions),
-        (false, false) => Some(format!("{prompt} {mentions}")),
+    if prompt.is_empty() && attachment_count == 0 {
+        None
+    } else {
+        Some(prompt.to_owned())
     }
 }
 

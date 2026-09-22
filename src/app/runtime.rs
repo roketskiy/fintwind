@@ -1386,7 +1386,11 @@ impl Fintwind {
             return;
         };
 
-        let input = cx.new(|cx| ComposerInput::new(window, cx).padding_x(px(12.0)));
+        let input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .padding_x(px(12.0))
+                .submit_empty()
+        });
         input.update(cx, |input, cx| input.set_content(initial_message, cx));
         cx.subscribe(
             &input,
@@ -1469,19 +1473,13 @@ impl Fintwind {
             cx.notify();
             return;
         }
-        let mentions = edit
-            .attachments
-            .iter()
-            .map(|attachment| attachment.mention.clone())
-            .collect::<Vec<_>>();
-        let provider_prompt = composer::merged_submission(&prompt, &mentions)
+        let provider_prompt = composer::submission_text(&prompt, edit.attachments.len())
             .expect("edited text or retained attachments always form a submission");
-        let display_content = (!edit.attachments.is_empty()).then_some(prompt);
         self.start_message_rewind(
             edit.clone(),
             ComposerSubmission {
                 prompt: provider_prompt,
-                display_content,
+                display_content: None,
                 attachments: edit.attachments,
             },
             cx,
@@ -2072,7 +2070,9 @@ impl Fintwind {
             return;
         }
         if let Some(runtime) = self.runtimes.get_mut(&session.id) {
-            runtime.driver.steer(submission.prompt.clone());
+            runtime
+                .driver
+                .steer(submission.provider_prompt(), submission.prompt_files());
             runtime.pending_steers.push_back(submission);
         } else {
             self.enqueue_follow_up_submission(session.id, submission, cx);
@@ -2087,7 +2087,7 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         submission.prompt = submission.prompt.trim().to_owned();
-        if submission.prompt.is_empty() {
+        if submission.prompt.is_empty() && submission.attachments.is_empty() {
             return;
         }
         if let Some(session) = self.state.session_mut(session_id) {
@@ -2469,7 +2469,8 @@ impl Fintwind {
         // the same echo the CLIs show — while the provider receives the
         // rendered prompt. Claude's commands pass through untouched; its CLI
         // owns their expansion.
-        let prompt = submission.prompt;
+        let files = submission.prompt_files();
+        let prompt = submission.provider_prompt();
         let driver_prompt =
             crate::composer_complete::expanded_submission(&prompt, &self.slash_command_index)
                 .unwrap_or(prompt);
@@ -2480,7 +2481,7 @@ impl Fintwind {
                 // lands, so redo stops being possible from here. A failed
                 // preparation never reaches the server and keeps the marker.
                 self.clear_staged_undo(session_id);
-                driver.prompt(driver_prompt);
+                driver.prompt(driver_prompt, files);
             }
             Err(error) => {
                 failed_to_start = true;

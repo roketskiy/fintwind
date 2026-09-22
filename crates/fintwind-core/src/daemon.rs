@@ -436,6 +436,9 @@ impl Backend for FintwindBackend {
                 Ok(ResponsePayload::Ack)
             }
             Command::StoreBlob { mime_type, bytes } => {
+                if bytes.len() > crate::attachments::MAX_PROMPT_FILE_BYTES {
+                    bail!("attachment is larger than 20 MB");
+                }
                 let reference = self
                     .task_store
                     .blobs()
@@ -1194,8 +1197,8 @@ fn handle_driver_command(
     command: Command,
 ) -> anyhow::Result<ResponsePayload> {
     match command {
-        Command::Prompt { prompt } => driver.prompt(prompt),
-        Command::Steer { prompt } => driver.steer(prompt),
+        Command::Prompt { prompt, files } => driver.prompt(prompt, files),
+        Command::Steer { prompt, files } => driver.steer(prompt, files),
         Command::CompactSession => driver.compact(),
         Command::Cancel => driver.cancel(),
         Command::RefreshBackgroundWork => driver.refresh_background_work(),

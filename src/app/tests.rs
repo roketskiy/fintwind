@@ -1,6 +1,6 @@
 use super::composer::{
-    ComposerSubmitAction, composer_submit_action, dropped_file_mention, merged_submission,
-    next_picker_highlight, visible_branch_entries,
+    ComposerSubmitAction, composer_submit_action, dropped_file_mention, next_picker_highlight,
+    submission_text, visible_branch_entries,
 };
 use super::runtime::merge_remote_session_catalog;
 use super::settings::visible_settings_pages;
@@ -258,20 +258,13 @@ fn dropped_files_mention_project_relative_paths() {
 }
 
 #[test]
-fn submissions_append_attachment_mentions_after_the_prompt() {
-    let mentions = vec!["src/a.rs".to_owned(), "shot.png".to_owned()];
-    assert_eq!(
-        merged_submission("fix this", &mentions).as_deref(),
-        Some("fix this @src/a.rs @shot.png")
-    );
-    // Attachments alone are a valid submission; blank text contributes
-    // nothing but whitespace-trimming.
-    assert_eq!(
-        merged_submission("  ", &mentions).as_deref(),
-        Some("@src/a.rs @shot.png")
-    );
-    assert_eq!(merged_submission(" plain ", &[]).as_deref(), Some("plain"));
-    assert_eq!(merged_submission("   ", &[]), None);
+fn submissions_keep_typed_text_and_allow_attachment_only() {
+    assert_eq!(submission_text("fix this", 2).as_deref(), Some("fix this"));
+    // Chips travel on the files channel. An attachment-only send stays empty
+    // text rather than inventing an `@` path.
+    assert_eq!(submission_text("  ", 2).as_deref(), Some(""));
+    assert_eq!(submission_text(" plain ", 0).as_deref(), Some("plain"));
+    assert_eq!(submission_text("   ", 0), None);
 }
 
 #[test]

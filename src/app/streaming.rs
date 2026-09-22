@@ -737,7 +737,7 @@ impl Fintwind {
                 let submission = runtime
                     .pending_steers
                     .iter()
-                    .position(|submission| submission.prompt == message)
+                    .position(|submission| submission.provider_prompt() == message)
                     .and_then(|index| runtime.pending_steers.remove(index))
                     // Providers normally echo the exact transport text, but a
                     // normalized echo still acknowledges the oldest pending
@@ -760,7 +760,7 @@ impl Fintwind {
                 let submission = runtime
                     .pending_steers
                     .iter()
-                    .position(|submission| submission.prompt == message)
+                    .position(|submission| submission.provider_prompt() == message)
                     .and_then(|index| runtime.pending_steers.remove(index))
                     .or_else(|| runtime.pending_steers.pop_front())
                     .unwrap_or_else(|| ComposerSubmission::plain(message));

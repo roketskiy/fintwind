@@ -77,6 +77,19 @@ mod tests {
             "Step 3.5 Flash 2603"
         );
         assert_eq!(find("step-3.5-flash", None).unwrap().name, "Step 3.5 Flash");
+        let grok = find("rightcode/grok-4.7", Some("Grok 4.7")).unwrap();
+        assert_eq!(grok.name, "Grok 4.7");
+        assert!(
+            grok.thinking_modes
+                .iter()
+                .any(|mode| mode.mode_key == "high" && mode.is_default)
+        );
+        assert!(
+            grok.thinking_modes
+                .iter()
+                .any(|mode| mode.mode_key == "xhigh")
+        );
+        assert_eq!(find("grok-4.6", None).unwrap().name, "Grok 4.6");
         assert!(find("gpt-5.5-unknown", None).is_none());
     }
 }

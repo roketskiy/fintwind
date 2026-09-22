@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 pub use fintwind_protocol::attachments::{
     ATTACHMENT_SCHEME, AttachmentUpload, AttachmentUploadEntry, MAX_ATTACHMENT_BYTES,
-    MAX_ATTACHMENT_FILES, StoredAttachment,
+    MAX_ATTACHMENT_FILES, MAX_PROMPT_FILE_BYTES, StoredAttachment,
 };
 
 pub struct AttachmentStore {
@@ -27,7 +27,7 @@ impl AttachmentStore {
         self.materialize(name, |target| match upload {
             AttachmentUpload::File { data_base64 } => {
                 let bytes = decode(&data_base64)?;
-                ensure_size(bytes.len())?;
+                ensure_prompt_file_size(bytes.len())?;
                 fs::write(target, bytes)?;
                 Ok(false)
             }
@@ -195,17 +195,17 @@ fn copy_source(source: &Path, target: &Path) -> io::Result<bool> {
         ));
     }
     if metadata.is_file() {
-        if metadata.len() > MAX_ATTACHMENT_BYTES as u64 {
+        if metadata.len() > MAX_PROMPT_FILE_BYTES as u64 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "attachment is larger than 32 MB",
+                "attachment is larger than 20 MB",
             ));
         }
         let copied = fs::copy(source, target)?;
-        if copied > MAX_ATTACHMENT_BYTES as u64 {
+        if copied > MAX_PROMPT_FILE_BYTES as u64 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "attachment is larger than 32 MB",
+                "attachment is larger than 20 MB",
             ));
         }
         return Ok(false);
@@ -302,11 +302,22 @@ fn decode(data: &str) -> io::Result<Vec<u8>> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
+fn ensure_prompt_file_size(bytes: usize) -> io::Result<()> {
+    if bytes > MAX_PROMPT_FILE_BYTES {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "attachment is larger than 20 MB",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn ensure_size(bytes: usize) -> io::Result<()> {
     if bytes > MAX_ATTACHMENT_BYTES {
         Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "attachment is larger than 32 MB",
+            "attachment directory is too large",
         ))
     } else {
         Ok(())
@@ -352,6 +363,8 @@ mod tests {
         assert!(safe_relative_path(Path::new("nested/file.txt")).is_ok());
         assert!(safe_name("../secret.txt").is_err());
         assert_eq!(safe_name("secret.txt").unwrap(), "secret.txt");
+        assert!(ensure_prompt_file_size(MAX_PROMPT_FILE_BYTES).is_ok());
+        assert!(ensure_prompt_file_size(MAX_PROMPT_FILE_BYTES + 1).is_err());
         assert!(ensure_size(MAX_ATTACHMENT_BYTES).is_ok());
         assert!(ensure_size(MAX_ATTACHMENT_BYTES + 1).is_err());
     }

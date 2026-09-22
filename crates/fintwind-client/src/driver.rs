@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, SendError, Sender, unbounded};
+use fintwind_protocol::PromptFile;
 use fintwind_protocol::model::{
     BackgroundWorkKey, DriverEvent, InteractionMode, ProviderResumeCursor, RuntimeMode,
     UserInputAnswer,
@@ -40,16 +41,16 @@ impl DriverHandle {
         Self { inner: control }
     }
 
-    pub fn prompt(&self, prompt: String) {
-        self.inner.prompt(prompt);
+    pub fn prompt(&self, prompt: String, files: Vec<PromptFile>) {
+        self.inner.prompt(prompt, files);
     }
 
     pub fn supports_steer(&self) -> bool {
         self.inner.supports_steer()
     }
 
-    pub fn steer(&self, prompt: String) {
-        self.inner.steer(prompt);
+    pub fn steer(&self, prompt: String, files: Vec<PromptFile>) {
+        self.inner.steer(prompt, files);
     }
 
     pub fn compact(&self) {
@@ -90,11 +91,11 @@ impl DriverHandle {
 }
 
 pub trait DriverControl: Send + Sync {
-    fn prompt(&self, prompt: String);
+    fn prompt(&self, prompt: String, files: Vec<PromptFile>);
     fn supports_steer(&self) -> bool {
         false
     }
-    fn steer(&self, _prompt: String) {}
+    fn steer(&self, _prompt: String, _files: Vec<PromptFile>) {}
     /// Ask the provider to compact this session's context. Outcomes arrive
     /// asynchronously as `DriverEvent::CompactionUpdated`.
     fn compact(&self) {}

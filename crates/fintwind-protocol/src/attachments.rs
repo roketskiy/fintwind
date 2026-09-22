@@ -3,6 +3,9 @@ use std::path::PathBuf;
 
 pub const ATTACHMENT_SCHEME: &str = "fintwind-attachment:";
 pub const MAX_ATTACHMENT_BYTES: usize = 32 * 1024 * 1024;
+/// OpenCode rejects one decoded prompt file over 20 MiB. Directory listings
+/// are not inlined, so a directory may still total `MAX_ATTACHMENT_BYTES`.
+pub const MAX_PROMPT_FILE_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_ATTACHMENT_FILES: usize = 4_096;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

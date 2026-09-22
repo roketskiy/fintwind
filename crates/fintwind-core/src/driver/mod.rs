@@ -10,6 +10,8 @@ use std::sync::Arc;
 
 use crossbeam_channel::{Receiver, SendError, Sender, unbounded};
 
+use fintwind_protocol::PromptFile;
+
 use crate::model::{
     BackgroundWorkKey, DriverEvent, InteractionMode, ProviderResumeCursor, RuntimeMode,
     UserInputAnswer,
@@ -73,8 +75,8 @@ impl DriverHandle {
         Self { inner: control }
     }
 
-    pub fn prompt(&self, prompt: String) {
-        self.inner.prompt(prompt);
+    pub fn prompt(&self, prompt: String, files: Vec<PromptFile>) {
+        self.inner.prompt(prompt, files);
     }
 
     /// Whether this transport can inject a user message into the currently
@@ -83,8 +85,8 @@ impl DriverHandle {
         self.inner.supports_steer()
     }
 
-    pub fn steer(&self, prompt: String) {
-        self.inner.steer(prompt);
+    pub fn steer(&self, prompt: String, files: Vec<PromptFile>) {
+        self.inner.steer(prompt, files);
     }
 
     pub fn compact(&self) {
@@ -121,14 +123,14 @@ impl DriverHandle {
 }
 
 pub trait DriverControl: Send + Sync {
-    fn prompt(&self, prompt: String);
+    fn prompt(&self, prompt: String, files: Vec<PromptFile>);
     fn supports_steer(&self) -> bool {
         false
     }
     /// Deliver a steering message to the running turn. Implementations report
     /// the outcome asynchronously through `DriverEvent::SteerAccepted` or
     /// `DriverEvent::SteerRejected`.
-    fn steer(&self, _prompt: String) {}
+    fn steer(&self, _prompt: String, _files: Vec<PromptFile>) {}
     /// Ask the provider to compact this session's context. The provider
     /// admits the request durably — it runs at the next safe step boundary,
     /// or immediately when idle — and reports every outcome asynchronously

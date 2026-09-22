@@ -539,6 +539,10 @@ pub struct ComposerInput {
     /// the scroll viewport — and the overlay scrollbar pinned to its edge —
     /// runs to the card's edge while the text keeps the inset.
     padding_x: Pixels,
+    /// Enter and steer still fire when the field is blank. The main composer
+    /// and message edit use this so an attachment chip with no typed text can
+    /// be sent; other fields keep the empty-submit no-op.
+    submit_empty: bool,
     /// The `(caret, content length, wrap width)` the capped viewport last
     /// followed. Prepaint scrolls the caret back into view only when this
     /// changes, so a manual wheel scroll away from the caret holds until the
@@ -611,6 +615,7 @@ impl ComposerInput {
             scroll_handle: ScrollHandle::new(),
             scrollbar_state: ScrollbarState::new(),
             padding_x: px(0.),
+            submit_empty: false,
             caret_reconciled: None,
             last_layout: None,
             vertical_navigation: None,
@@ -708,6 +713,13 @@ impl ComposerInput {
     /// edge instead of floating next to the text.
     pub fn padding_x(mut self, padding: Pixels) -> Self {
         self.padding_x = padding;
+        self
+    }
+
+    /// Allow Enter and Ctrl+Enter to submit a blank field. Callers that have
+    /// attachments outside the text decide whether that blank prompt is real.
+    pub fn submit_empty(mut self) -> Self {
+        self.submit_empty = true;
         self
     }
 
@@ -1210,7 +1222,7 @@ impl ComposerInput {
             }
             FieldMode::Composer => {
                 let value = self.content.trim().to_owned();
-                if !value.is_empty() {
+                if !value.is_empty() || self.submit_empty {
                     cx.emit(ComposerEvent::Submit(value));
                     self.clear(cx);
                 }
@@ -1235,7 +1247,7 @@ impl ComposerInput {
             return;
         }
         let value = self.content.trim().to_owned();
-        if !value.is_empty() {
+        if !value.is_empty() || self.submit_empty {
             cx.emit(ComposerEvent::SubmitSteer(value));
             self.clear(cx);
         }

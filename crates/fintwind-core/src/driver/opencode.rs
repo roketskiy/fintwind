@@ -15,7 +15,7 @@
 //! `/api` protocol and event stream, not guessed. The v1 compatibility
 //! surface (`/session/...`, `/event` with `properties`) is gone from current
 //! releases — `POST /session` answers 405 — so everything below speaks the
-//! `/api/*` protocol: prompts post `{text}`, forks take
+//! `/api/*` protocol: prompts post `{text, files}`, forks take
 //! `{boundary:{type:"before"|"through",messageID}}`, messages come back as
 //! `{data:[...],cursor}`, and events arrive as `{type,data}` lines on
 //! `/api/event` — one shared connection per server port, delivered through
@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, anyhow, bail};
 use crossbeam_channel::{Sender, unbounded};
+use fintwind_protocol::PromptFile;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -148,8 +149,14 @@ fn apply_opencode_session_permissions(
 }
 
 enum CommandMessage {
-    Prompt(String),
-    Steer(String),
+    Prompt {
+        text: String,
+        files: Vec<PromptFile>,
+    },
+    Steer {
+        text: String,
+        files: Vec<PromptFile>,
+    },
     Compact,
     Cancel,
     Respond {
@@ -380,12 +387,32 @@ fn post_owned_reply(
     }
 }
 
-/// The prompt body both turn starts and steers post; opencode keeps the
-/// model on the session (set through `/api/session/{id}/model`), so prompts
-/// carry only their text. The wire's default delivery (`steer`) folds a
-/// prompt posted into a busy session into the running turn, matching v1.
-fn prompt_body(text: &str) -> Value {
-    json!({"text": text})
+/// The prompt body both turn starts and steers post. OpenCode keeps the model
+/// on the session (set through `/api/session/{id}/model`). Attachment chips
+/// ride `files` as `file:` URIs of the daemon copy; the typed text is not
+/// rewritten with `@` paths. Plain prompts omit `files`. A relative path
+/// cannot be a file URL, and dropping it would send a prompt the model cannot
+/// see, so that fails the post instead.
+fn file_uri(path: &Path) -> anyhow::Result<String> {
+    url::Url::from_file_path(path)
+        .map(|uri| uri.to_string())
+        .map_err(|()| anyhow!("attachment path is not absolute: {}", path.display()))
+}
+
+fn prompt_body(text: &str, files: &[PromptFile]) -> anyhow::Result<Value> {
+    let mut body = json!({"text": text});
+    if files.is_empty() {
+        return Ok(body);
+    }
+    let mut encoded = Vec::with_capacity(files.len());
+    for file in files {
+        encoded.push(json!({
+            "uri": file_uri(&file.path)?,
+            "name": file.name,
+        }));
+    }
+    body["files"] = Value::Array(encoded);
+    Ok(body)
 }
 
 /// The `answer` object a form reply posts: every question's selections keyed
@@ -856,7 +883,7 @@ impl OpenCodeDriver {
             .spawn(move || {
                 while let Ok(message) = command_rx.recv() {
                     match message {
-                        CommandMessage::Prompt(text) => {
+                        CommandMessage::Prompt { text, files } => {
                             *worker_turn.lock() = true;
                             let _ = worker_events.send(DriverEvent::TurnStarted);
                             // `prompt` acknowledges as soon as the prompt
@@ -870,8 +897,9 @@ impl OpenCodeDriver {
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let body = prompt_body(&text);
-                            if let Err(error) = worker_server.request("POST", &path, Some(&body)) {
+                            let posted = prompt_body(&text, &files)
+                                .and_then(|body| worker_server.request("POST", &path, Some(&body)));
+                            if let Err(error) = posted {
                                 let _ = worker_events.send(DriverEvent::Error(tr!(
                                     "errors.provider_rejected_prompt_detail",
                                     provider = "OpenCode",
@@ -891,7 +919,7 @@ impl OpenCodeDriver {
                                 }
                             }
                         }
-                        CommandMessage::Steer(text) => {
+                        CommandMessage::Steer { text, files } => {
                             // A prompt posted into a busy session is a steer:
                             // the server folds it into the running turn and one
                             // `session.execution.succeeded` still settles
@@ -913,8 +941,9 @@ impl OpenCodeDriver {
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let body = prompt_body(&text);
-                            match worker_server.request("POST", &path, Some(&body)) {
+                            let posted = prompt_body(&text, &files)
+                                .and_then(|body| worker_server.request("POST", &path, Some(&body)));
+                            match posted {
                                 Ok(_) => {
                                     let _ = worker_events
                                         .send(DriverEvent::SteerAccepted { message: text });
@@ -1107,8 +1136,11 @@ fn opencode_model_ref(model: &str, variant: Option<&str>) -> Option<Value> {
 }
 
 impl DriverControl for OpenCodeDriver {
-    fn prompt(&self, prompt: String) {
-        let _ = self.commands.send(CommandMessage::Prompt(prompt));
+    fn prompt(&self, prompt: String, files: Vec<PromptFile>) {
+        let _ = self.commands.send(CommandMessage::Prompt {
+            text: prompt,
+            files,
+        });
     }
 
     fn compact(&self) {
@@ -1270,8 +1302,11 @@ impl DriverControl for OpenCodeDriver {
         true
     }
 
-    fn steer(&self, prompt: String) {
-        let _ = self.commands.send(CommandMessage::Steer(prompt));
+    fn steer(&self, prompt: String, files: Vec<PromptFile>) {
+        let _ = self.commands.send(CommandMessage::Steer {
+            text: prompt,
+            files,
+        });
     }
 
     fn cancel(&self) {
@@ -3569,6 +3604,37 @@ mod tests {
     }
 
     #[test]
+    fn prompt_files_are_file_uris_and_plain_prompts_stay_text_only() {
+        let plain = prompt_body("hi", &[]).unwrap();
+        assert_eq!(plain, json!({"text": "hi"}));
+
+        let path = std::env::temp_dir().join("notes.md");
+        let body = prompt_body(
+            "",
+            &[PromptFile {
+                path: path.clone(),
+                name: "notes.md".into(),
+            }],
+        )
+        .unwrap();
+        assert_eq!(body["text"], "");
+        assert_eq!(body["files"][0]["name"], "notes.md");
+        let uri = body["files"][0]["uri"].as_str().unwrap();
+        assert!(uri.starts_with("file:"));
+        assert!(!uri.contains('@'));
+        assert_eq!(url::Url::parse(uri).unwrap().to_file_path().unwrap(), path);
+
+        let relative = prompt_body(
+            "x",
+            &[PromptFile {
+                path: PathBuf::from("relative.md"),
+                name: "relative.md".into(),
+            }],
+        );
+        assert!(relative.is_err());
+    }
+
+    #[test]
     fn model_reference_carries_variant_and_preserves_nested_model_ids() {
         assert_eq!(
             opencode_model_ref("gateway/vendor/model", Some("high")),
@@ -5325,7 +5391,10 @@ mod tests {
             event => panic!("expected an OpenCode cursor, got {event:?}"),
         };
 
-        driver.prompt("Reply with exactly: OK. Do not use any tools.".into());
+        driver.prompt(
+            "Reply with exactly: OK. Do not use any tools.".into(),
+            Vec::new(),
+        );
         let mut text = String::new();
         let mut finished = None;
         let mut context_tokens = None;
@@ -5406,7 +5475,10 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(90))
             .expect("the server should report its session");
 
-        driver.prompt("Reply with exactly: OK. Do not use any tools.".into());
+        driver.prompt(
+            "Reply with exactly: OK. Do not use any tools.".into(),
+            Vec::new(),
+        );
         let mut saw_busy = false;
         let mut retries = Vec::new();
         let mut text = String::new();
@@ -5491,6 +5563,7 @@ mod tests {
             "Use the question tool to ask me exactly one question with three options: \
              what is my favorite color?"
                 .into(),
+            Vec::new(),
         );
         let request = loop {
             let event = event_rx
@@ -5567,6 +5640,7 @@ mod tests {
             "Use the bash tool to run exactly `sleep 6` (nothing else). \
              After the command completes, reply with exactly: FIRST DONE"
                 .into(),
+            Vec::new(),
         );
 
         let mut text = String::new();
@@ -5590,6 +5664,7 @@ mod tests {
                         "ADDITIONAL INSTRUCTION: end your very next reply \
                          with the word BANANA."
                             .into(),
+                        Vec::new(),
                     );
                 }
                 DriverEvent::SteerAccepted { message } => {
@@ -5791,7 +5866,7 @@ mod tests {
                 .unwrap(),
             DriverEvent::Connected { .. }
         ));
-        driver.prompt("Use the write tool to create probe.txt in the current directory with 200 numbered lines, each containing a different short sentence about software testing. Generate the full file in a single tool call. Do not use shell commands or read any other files. Then reply DONE.".into());
+        driver.prompt("Use the write tool to create probe.txt in the current directory with 200 numbered lines, each containing a different short sentence about software testing. Generate the full file in a single tool call. Do not use shell commands or read any other files. Then reply DONE.".into(), Vec::new());
         let began = std::time::Instant::now();
         let mut pending = HashMap::new();
         let mut enriched = HashSet::new();

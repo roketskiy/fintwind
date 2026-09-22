@@ -18,6 +18,20 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.1.8]
+
+- Share one private OpenCode server across the app instead of a per-project pool, so sessions stay in sync with fewer conflicts
+- Rebuild the provider page with login and logout for built-in providers
+- Revert and restore a session through OpenCode's native revert and unrevert, keeping the same session
+- Add a collapse control on the question card, and move where a new project is created
+- Show more detail on subagent cards
+- Smooth the Usage page, and count reasoning tokens in turn token speed the same way the OpenCode TUI does
+- Remove the OpenCode Go plan from the context-usage popover
+- Keep streaming text from being split apart when a tool call arrives
+- Update StepFun model information
+- Raise the frame rate of the session activity halo
+- Remove the web client
+
 ## [0.1.7]
 
 - Show raw OpenCode tool names (read, grep, execute, …) on activity cards, replacing generic icons, and render nested Code Mode tool calls from `toolCalls`

@@ -2320,7 +2320,7 @@ usage_page.legend_less:
 usage_page.legend_more:
   en: More
 usage_page.day_tooltip:
-  en: "%{date} · %{tokens} tokens · %{sessions} sessions"
+  en: "%{date} · %{tokens} used · %{cache} cached · %{sessions} sessions"
 usage_page.daily_title:
   en: Daily usage (excl. cache)
 usage_page.daily_caption:

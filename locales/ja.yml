@@ -1202,7 +1202,7 @@ usage_page.weekday_wed: 水
 usage_page.weekday_fri: 金
 usage_page.legend_less: 少ない
 usage_page.legend_more: 多い
-usage_page.day_tooltip: "%{date} · %{tokens} トークン · %{sessions} セッション"
+usage_page.day_tooltip: "%{date} · 使用 %{tokens} · キャッシュ %{cache} · %{sessions} セッション"
 usage_page.daily_title: 日別使用量（キャッシュ除く）
 usage_page.daily_caption: 直近%{days}日間
 usage_page.models_title: モデル別使用状況

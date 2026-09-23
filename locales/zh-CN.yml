@@ -676,7 +676,7 @@ errors.remote_project_picker: 添加守护进程主机上的项目需要远程�
 session.stopped: 已停止
 session.turn_completed: 本轮已完成
 session.stopped_before_response: 智能体在返回回复前停止了
-session.codex_exited_before_response: Codex app-server 在返回回复前退出了
+session.provider_disconnected: 与提供方的连接在返回回复前中断了
 session.steer_rejected: 无法向智能体补充指示（%{error}）；消息已排队，将作为后续消息发送
 session.steer_rejected_plain: 无法向智能体补充指示；消息已排队，将作为后续消息发送
 session.compaction_requested: 已请求压缩上下文：提供方将在下一个安全节点开始总结
@@ -748,8 +748,6 @@ errors.select_model: "无法选择模型：%{error}"
 errors.read_provider_event_stream: "无法读取 %{provider} 事件流：%{error}"
 errors.answer_provider_permission: "无法响应 %{provider} 的权限请求：%{error}"
 errors.answer_provider_question: "无法回答 %{provider} 的问题：%{error}"
-errors.initialize_codex_app_server: 无法初始化 Codex app-server
-errors.codex_thread_open_incomplete: Codex 未能完成线程打开操作
 errors.provider_receive_prompt: "%{provider} 未能接收消息"
 errors.provider_start_turn: "%{provider} 未能开始本轮"
 errors.provider_rejected_steer: "%{provider} 拒绝了补充指示：%{error}"
@@ -1108,8 +1106,6 @@ usage_error.http_status: 用量接口返回了 HTTP %{status}
 usage_error.invalid_json: 用量接口返回了无效的 JSON
 usage_error.no_home_directory: 找不到用户主目录
 usage_error.read_file: 无法读取 %{path}
-usage_error.codex_auth_invalid: Codex auth.json 不是有效的 JSON
-usage_error.codex_access_token_missing: Codex auth.json 中没有访问令牌；请运行 `codex login`
 usage_error.opencode_go_key_rejected: OpenCode Go API 密钥无法读取用量（HTTP %{status}）；请重新连接 OpenCode Go
 usage_error.no_rate_limit_windows: 用量接口未返回任何速率限制周期
 usage_error.start_grok_probe: 无法启动 `grok agent stdio`

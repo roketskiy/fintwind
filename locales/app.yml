@@ -1339,8 +1339,8 @@ session.turn_completed:
   en: Turn completed
 session.stopped_before_response:
   en: The agent stopped before returning a response
-session.codex_exited_before_response:
-  en: Codex app-server exited before returning a response
+session.provider_disconnected:
+  en: The provider connection was lost before returning a response
 session.steer_rejected:
   en: The agent couldn't be steered (%{error}); the message was queued as a follow-up
 session.steer_rejected_plain:
@@ -1484,10 +1484,6 @@ errors.answer_provider_permission:
   en: "Could not answer %{provider}'s permission request: %{error}"
 errors.answer_provider_question:
   en: "Could not answer %{provider}'s question: %{error}"
-errors.initialize_codex_app_server:
-  en: Failed to initialize Codex app-server
-errors.codex_thread_open_incomplete:
-  en: Codex did not finish opening its thread
 errors.provider_receive_prompt:
   en: "%{provider} could not receive the prompt"
 errors.provider_start_turn:
@@ -2227,10 +2223,6 @@ usage_error.no_home_directory:
   en: No home directory
 usage_error.read_file:
   en: Failed to read %{path}
-usage_error.codex_auth_invalid:
-  en: Codex auth.json is not JSON
-usage_error.codex_access_token_missing:
-  en: Codex auth.json has no access token; run `codex login`
 usage_error.opencode_go_key_rejected:
   en: OpenCode Go API key can't read usage (HTTP %{status}); reconnect OpenCode Go
 usage_error.no_rate_limit_windows:

@@ -710,7 +710,7 @@ errors.remote_project_picker: デーモンホスト上のプロジェクトを�
 session.stopped: 停止しました
 session.turn_completed: ターンが完了しました
 session.stopped_before_response: エージェントは回答を返す前に停止しました
-session.codex_exited_before_response: Codex app-server は回答を返す前に終了しました
+session.provider_disconnected: プロバイダーとの接続が回答を返す前に切断されました
 session.steer_rejected: エージェントに追加の指示を送れませんでした（%{error}）。メッセージはフォローアップとしてキューに追加されました
 session.steer_rejected_plain: エージェントに追加の指示を送れませんでした。メッセージはフォローアップとしてキューに追加されました
 session.compaction_requested: 圧縮を要求しました。プロバイダーは次の安全な区切りで要約を開始します
@@ -783,8 +783,6 @@ errors.select_model: "モデルを選択できませんでした：%{error}"
 errors.read_provider_event_stream: "%{provider} のイベントストリームを読み取れませんでした：%{error}"
 errors.answer_provider_permission: "%{provider} の権限リクエストに回答できませんでした：%{error}"
 errors.answer_provider_question: "%{provider} の質問に回答できませんでした：%{error}"
-errors.initialize_codex_app_server: Codex app-server を初期化できませんでした
-errors.codex_thread_open_incomplete: Codex はスレッドを開く処理を完了しませんでした
 errors.provider_receive_prompt: "%{provider} はプロンプトを受信できませんでした"
 errors.provider_start_turn: "%{provider} はターンを開始できませんでした"
 errors.provider_rejected_steer: "%{provider} が追加の指示を拒否しました：%{error}"
@@ -1159,8 +1157,6 @@ usage_error.http_status: 使用量 API から HTTP %{status} が返されまし�
 usage_error.invalid_json: 使用量 API から無効な JSON が返されました
 usage_error.no_home_directory: ホームディレクトリが見つかりません
 usage_error.read_file: "%{path} を読み込めませんでした"
-usage_error.codex_auth_invalid: Codex の auth.json は有効な JSON ではありません
-usage_error.codex_access_token_missing: Codex の auth.json にアクセストークンがありません。`codex login` を実行してください
 usage_error.opencode_go_key_rejected: OpenCode Go API キーでは使用量を取得できません（HTTP %{status}）。OpenCode Go に再接続してください
 usage_error.no_rate_limit_windows: 使用量 API からレート制限期間が返されませんでした
 usage_error.start_grok_probe: "`grok agent stdio` を起動できませんでした"

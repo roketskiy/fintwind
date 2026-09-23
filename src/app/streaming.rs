@@ -1078,7 +1078,7 @@ impl Fintwind {
                 let failure_message = runtime
                     .last_driver_error
                     .take()
-                    .unwrap_or_else(|| tr!("session.codex_exited_before_response"));
+                    .unwrap_or_else(|| tr!("session.provider_disconnected"));
                 let should_finish_turn = if let Some(session) = self.state.session_mut(session_id)
                     && matches!(
                         session.status,

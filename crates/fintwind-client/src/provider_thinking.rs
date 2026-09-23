@@ -46,6 +46,9 @@ fn mode_options(mode: &ThinkingMode, name: &str, format: ProviderApiFormat) -> V
         key => key,
     };
     if matches!(format, ProviderApiFormat::Anthropic) {
+        if name.starts_with("claude opus 5.5") {
+            return json!({"effort": key});
+        }
         if off {
             return json!({"thinking": {"type": "disabled"}});
         }
@@ -191,5 +194,22 @@ mod tests {
         assert_eq!(spec["variants"]["high"]["reasoningEffort"], "high");
         assert!(spec["variants"].get("medium").is_none());
         assert_eq!(spec["options"]["reasoningEffort"], "high");
+    }
+
+    #[test]
+    fn opus_55_uses_anthropic_effort_without_disabling_adaptive_thinking() {
+        let mut spec = Map::new();
+        fill_model_variants(
+            &mut spec,
+            "claude-opus-5-5",
+            None,
+            ProviderApiFormat::Anthropic,
+        );
+
+        assert_eq!(spec["variants"]["low"]["effort"], "low");
+        assert_eq!(spec["variants"]["medium"]["effort"], "medium");
+        assert_eq!(spec["variants"]["max"]["effort"], "max");
+        assert!(spec["variants"].get("nothinking").is_none());
+        assert_eq!(spec["options"]["effort"], "medium");
     }
 }

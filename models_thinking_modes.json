@@ -50,6 +50,174 @@
     ]
   },
   {
+    "name": "GPT-6 Sol",
+    "thinking_modes": [
+      {
+        "mode_key": "nothinking",
+        "name_zh": "关闭",
+        "name_en": "Off",
+        "mode_type": "toggle",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "xhigh",
+        "name_zh": "极高",
+        "name_en": "Extra-High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "max",
+        "name_zh": "最高",
+        "name_en": "Max",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      }
+    ]
+  },
+  {
+    "name": "GPT-6 Luna",
+    "thinking_modes": [
+      {
+        "mode_key": "nothinking",
+        "name_zh": "关闭",
+        "name_en": "Off",
+        "mode_type": "toggle",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "xhigh",
+        "name_zh": "极高",
+        "name_en": "Extra-High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "max",
+        "name_zh": "最高",
+        "name_en": "Max",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      }
+    ]
+  },
+  {
+    "name": "Claude Opus 5.5",
+    "thinking_modes": [
+      {
+        "mode_key": "low",
+        "name_zh": "低",
+        "name_en": "Low",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "medium",
+        "name_zh": "中",
+        "name_en": "Medium",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": true,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "high",
+        "name_zh": "高",
+        "name_en": "High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "xhigh",
+        "name_zh": "极高",
+        "name_en": "Extra-High",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      },
+      {
+        "mode_key": "max",
+        "name_zh": "最高",
+        "name_en": "Max",
+        "mode_type": "tiered",
+        "thinking_budget_tokens": null,
+        "is_default": false,
+        "vendor_label": null
+      }
+    ]
+  },
+  {
     "name": "Step 5 Preview",
     "thinking_modes": [
       {

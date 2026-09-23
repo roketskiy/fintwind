@@ -20,7 +20,8 @@
 ## 代码审查
 - 单论超过三十行的代码修改时，check完成后调用调用一个子代理审查代码，并修复功能性bug和重大漏洞。
 
-
+## 新模型信息
+- 详见docs/model-info-sources.md
 
 ## Windows release 构建
 

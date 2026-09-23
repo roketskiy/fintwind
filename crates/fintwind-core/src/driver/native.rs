@@ -324,17 +324,36 @@ fn usage_entry_from_row(row: &Value) -> Option<UsageEntry> {
     })
 }
 
-/// Rename a native session on the server. This beta exposes rename as
-/// `POST /api/session/{id}/rename` (a `PATCH /api/session/{id}` answers 404,
-/// verified against 0.0.0-beta-18743).
+/// Rename a native session on the server. The GA endpoint table (verified
+/// against v2.0.11 and v2.0.15) has no `/rename` route: retitle through
+/// `PATCH /api/session/{id}` with `{"title": …}`, which answers 204. Pre-GA
+/// servers answer 404 to that PATCH and only expose rename as its own beta
+/// route, so fall back to it there before failing.
 pub(crate) fn rename_session(
     server: &OpenCodeServer,
     session_id: &str,
     title: &str,
 ) -> anyhow::Result<()> {
-    let path = format!("/api/session/{}/rename", encode_path_segment(session_id));
-    server.request("POST", &path, Some(&serde_json::json!({"title": title})))?;
-    Ok(())
+    let path = format!("/api/session/{}", encode_path_segment(session_id));
+    let body = serde_json::json!({"title": title});
+    match server.request("PATCH", &path, Some(&body)) {
+        Ok(_) => Ok(()),
+        Err(patch_error) if is_missing_route(&patch_error) => {
+            let legacy = format!("{path}/rename");
+            server
+                .request("POST", &legacy, Some(&body))
+                .map(|_| ())
+                .or(Err(patch_error))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether an OpenCode HTTP failure is a 404 — the GA rename lives on the
+/// session route itself, so a pre-GA server reports the PATCH as missing
+/// rather than saying anything about the session.
+fn is_missing_route(error: &anyhow::Error) -> bool {
+    error.to_string().contains("HTTP 404")
 }
 
 /// Delete a native session on the server, transcript and all.

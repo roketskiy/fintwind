@@ -3322,6 +3322,34 @@ pub fn unix_time_millis() -> u64 {
         .unwrap_or_default()
 }
 
+/// The local calendar day a unix second falls on.
+///
+/// Both the daemon's usage scan and the client's aggregation need the same
+/// answer, so it lives here in the shared contract rather than twice: a DST
+/// fix applied to only one of them would make the charts disagree with the
+/// totals they explain.
+///
+/// The gap is resolved with the earlier offset rather than dropped. A spring
+/// forward removes an hour of local time, and `.single()` would return `None`
+/// for it — silently losing that hour's usage from whichever side asked.
+pub fn local_date(unix_seconds: u64) -> Option<chrono::NaiveDate> {
+    chrono::TimeZone::timestamp_opt(&chrono::Local, unix_seconds as i64, 0)
+        .earliest()
+        .map(|time| time.date_naive())
+}
+
+/// `local_date` as a plain day count, for the comparisons the scan makes. Day
+/// identity, not a date: callers only ever ask "same day or not".
+pub fn local_day(unix_seconds: u64) -> i64 {
+    local_date(unix_seconds)
+        .map(|date| {
+            // `num_days_from_ce` comes from `Datelike`, which is not a
+            // free-standing method on `NaiveDate`.
+            chrono::Datelike::num_days_from_ce(&date) as i64
+        })
+        .unwrap_or_default()
+}
+
 pub fn compact_path(path: &Path) -> String {
     let components = path
         .components()

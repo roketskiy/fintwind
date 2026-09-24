@@ -1,12 +1,15 @@
 //! The Usage page: one daemon-side scan over the workspace's OpenCode
 //! sessions feeds token-usage statistics — KPI cards, a GitHub-style
-//! activity heatmap, daily bars, and a per-model ranking. Frames read only
-//! the aggregated views stored on the entity; the raw scan is touched only
-//! when it lands or the range changes.
+//! activity heatmap, daily bars, and per-model, per-provider, and
+//! per-project rankings. Frames read only the aggregated views stored on the
+//! entity; the raw scan is touched only when it lands or the range changes.
 
 use std::collections::HashMap;
 
-use chrono::{Datelike as _, Duration as ChronoDuration, Local, NaiveDate, TimeZone as _};
+use chrono::{Datelike as _, Duration as ChronoDuration, Local, NaiveDate};
+
+#[cfg(test)]
+use chrono::TimeZone as _;
 
 use crate::theme::ui_px;
 use crate::usage::{cache_hit_percent, format_percent, format_tokens};
@@ -15,6 +18,9 @@ use super::*;
 use crate::ui::ActivationExt;
 use fintwind_client::provider_session::{UsageEntry, UsageStats};
 use gpui::relative;
+
+#[cfg(test)]
+use fintwind_client::provider_session::{UsageDayShare, UsageModelLane};
 
 /// Heatmap horizon, in whole weeks ending today.
 pub(super) const HEATMAP_WEEKS: i64 = 26;
@@ -34,7 +40,11 @@ const HEAT_LABEL_GAP_PX: f32 = 4.0;
 const CHART_TOOLTIP_DELAY: Duration = Duration::from_millis(0);
 /// A stored scan older than this is refreshed silently on page open; within
 /// it, reopening the page costs no server traversal.
-const STALE_AFTER: Duration = Duration::from_secs(300);
+const STALE_AFTER: Duration = Duration::from_secs(60);
+/// While the page is open, how often to look for newer sessions. The scan
+/// itself is daemon-side and cached, so a quiet interval is cheap; a session
+/// that is actively streaming lands within half a minute of its next hop.
+const AUTO_REFRESH: Duration = Duration::from_secs(30);
 /// Model rows drawn before the rest collapse into the header's model count.
 const MAX_MODEL_ROWS: usize = 8;
 
@@ -82,6 +92,11 @@ pub(super) struct UsageTotals {
     pub cost: f64,
     /// How many sessions reported a cost at all, for the KPI subtitle.
     pub costed_sessions: u32,
+    /// Sub-agent sessions folded into `sessions`, and the tokens they
+    /// contributed. A sub-agent is its own session whose parent's aggregate
+    /// excludes it, so without this the totals would drop real spend.
+    pub subagent_sessions: u64,
+    pub subagent_tokens: u64,
 }
 
 impl UsageTotals {
@@ -96,6 +111,8 @@ impl UsageTotals {
             self.cost += cost;
             self.costed_sessions += 1;
         }
+        self.subagent_sessions += u64::from(entry.subagent_sessions);
+        self.subagent_tokens = self.subagent_tokens.saturating_add(entry.subagent_tokens);
     }
 
     fn total(&self) -> u64 {
@@ -152,6 +169,19 @@ pub(super) struct UsageProjectRow {
     pub cost: f64,
 }
 
+/// One provider's share of the store, for the provider ranking. Derived from
+/// the model strings the scan already carries — `providerID/modelID` — so it
+/// costs no extra request and no extra protocol field. Sessions are deliberately
+/// absent: a session that switched providers belongs to both, and a session
+/// count that does not add up reads as a bug rather than as attribution.
+#[derive(Clone, Debug)]
+pub(super) struct UsageProviderRow {
+    pub provider: String,
+    pub models: u32,
+    pub total: u64,
+    pub cost: f64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct UsageViews {
     pub totals: UsageTotals,
@@ -163,6 +193,8 @@ pub(super) struct UsageViews {
     pub heatmap_active_days: u32,
     pub models: Vec<UsageModelRow>,
     pub model_count: usize,
+    pub providers: Vec<UsageProviderRow>,
+    pub provider_count: usize,
     pub projects: Vec<UsageProjectRow>,
     pub project_count: usize,
 }
@@ -173,6 +205,11 @@ impl Fintwind {
     /// matters here — only freshness does. One blocking traversal runs on
     /// the background executor; a refresh button call bypasses the
     /// staleness window.
+    ///
+    /// A scan that is already in flight is never started twice, and a stale
+    /// scan is never discarded while it is being replaced: the page keeps
+    /// drawing the previous numbers, so a refresh reads as the page updating
+    /// rather than emptying.
     pub(super) fn ensure_usage_stats(&mut self, force: bool, cx: &mut Context<Self>) {
         if self.usage_stats_pending {
             return;
@@ -225,13 +262,16 @@ impl Fintwind {
                     Ok(stats) => {
                         this.usage_stats_error = None;
                         this.usage_stats_loaded_at = Some(Instant::now());
+                        this.usage_loaded_label = Some(clock_label());
                         this.usage_stats = Some(Rc::new(stats));
                         this.rebuild_usage_views(cx);
                     }
                     Err(error) => {
                         // `loaded_at` stays put, so reopening the page
                         // retries instead of waiting out the staleness
-                        // window on a failed scan.
+                        // window on a failed scan. A cached scan is kept on
+                        // screen: an error is reported, not displayed by
+                        // blanking numbers the user was still reading.
                         this.usage_stats_error = Some(error.to_string());
                         cx.notify();
                     }
@@ -240,6 +280,48 @@ impl Fintwind {
         })
         .detach();
         cx.notify();
+    }
+
+    /// Keep the page current while it is open. The loop ends on its own when
+    /// the page is left or the entity goes away, so nothing has to cancel it.
+    ///
+    /// A loop already running is never joined by a second one: leaving and
+    /// reopening the page quickly would otherwise stack several, each waking
+    /// the daemon on its own schedule.
+    pub(super) fn start_usage_auto_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.usage_refresh_running {
+            return;
+        }
+        self.usage_refresh_running = true;
+        cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor().timer(AUTO_REFRESH).await;
+                let still_open = this
+                    .update(cx, |this, cx| {
+                        if this.settings_page != Some(SettingsPage::Usage) {
+                            // Release the guard from inside: a later visit must
+                            // be able to start a fresh loop.
+                            this.usage_refresh_running = false;
+                            return false;
+                        }
+                        this.ensure_usage_stats(false, cx);
+                        true
+                    })
+                    .unwrap_or(false);
+                if !still_open {
+                    break;
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// The toolbar's freshness reading: the wall-clock time the stored scan
+    /// landed, or nothing before the first one.
+    pub(super) fn usage_freshness_label(&self) -> Option<SharedString> {
+        self.usage_loaded_label
+            .as_deref()
+            .map(|label| SharedString::from(tr!("usage_page.updated_at", time = label)))
     }
 
     pub(super) fn set_usage_range(&mut self, range: UsageRange, cx: &mut Context<Self>) {
@@ -309,12 +391,28 @@ impl Fintwind {
                     tr!("usage_page.empty_body"),
                 ));
             } else {
+                // A scan that ran out of pages covers only the newest
+                // sessions. The numbers below are still correct for what they
+                // cover — say what that is rather than let a quiet-looking
+                // total speak for a store it never saw.
+                if stats.truncated {
+                    column = column.child(usage_notice(
+                        &theme,
+                        "icons/info.svg",
+                        theme.text_tertiary,
+                        tr!(
+                            "usage_page.truncated_notice",
+                            sessions = stats.sessions_scanned
+                        ),
+                    ));
+                }
                 let views = &self.usage_views;
                 column = column
                     .child(self.render_usage_kpis(views, &theme))
                     .child(self.render_usage_heatmap(views, &theme))
                     .child(self.render_usage_daily(views, &theme))
                     .child(self.render_usage_models(views, &theme))
+                    .child(self.render_usage_providers(views, &theme))
                     .child(self.render_usage_projects(views, &theme));
             }
         }
@@ -377,11 +475,22 @@ impl Fintwind {
                 this.ensure_usage_stats(true, cx);
             });
 
+        // The freshness reading doubles as the "a scan ran" signal: nothing
+        // shows before the first one lands.
+        let freshness = self.usage_freshness_label().map(|label| {
+            div()
+                .flex_none()
+                .text_size(ui_px(10.5))
+                .text_color(theme.text_tertiary)
+                .child(label)
+        });
+
         div()
             .flex()
             .items_center()
             .gap(px(8.0))
             .child(div().flex_1().min_w_0())
+            .children(freshness)
             .child(selector)
             .child(refresh)
     }
@@ -430,7 +539,7 @@ impl Fintwind {
                 theme,
                 tr!("usage_page.kpi_sessions"),
                 totals.sessions.to_string(),
-                tr!("usage_page.active_days_value", count = totals.active_days),
+                usage_sessions_subtitle(totals),
             ))
             .child(usage_kpi_card(
                 theme,
@@ -755,312 +864,277 @@ impl Fintwind {
     }
 
     fn render_usage_models(&self, views: &UsageViews, theme: &Theme) -> Div {
-        let max_total = views
+        let rows: Vec<UsageRankRow> = views
             .models
-            .first()
-            .map(|row| row.total)
-            .unwrap_or_default();
-        let mut card = div()
-            .w_full()
-            .px(px(16.0))
-            .py(px(14.0))
-            .rounded(px(13.0))
-            .bg(theme.raised)
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(ui_px(13.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child(tr!("usage_page.models_title")),
-                    )
-                    .child(div().flex_1().min_w_0())
-                    .child(
-                        div()
-                            .text_size(ui_px(10.5))
-                            .text_color(theme.text_tertiary)
-                            .child(tr!("usage_page.models_caption", count = views.model_count)),
-                    ),
-            );
-
-        for (index, row) in views.models.iter().enumerate() {
-            let (display, full, icon_path) = match &row.model {
-                Some(model) => match model.split_once('/') {
-                    Some((provider, id)) => {
-                        (id.to_owned(), model.clone(), model_icon(id, id, provider))
-                    }
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let (display, full, icon_path) = match &row.model {
+                    Some(model) => match model.split_once('/') {
+                        Some((provider, id)) => {
+                            (id.to_owned(), model.clone(), model_icon(id, id, provider))
+                        }
+                        None => (
+                            model.clone(),
+                            model.clone(),
+                            model_icon(model, model, "opencode"),
+                        ),
+                    },
                     None => (
-                        model.clone(),
-                        model.clone(),
-                        model_icon(model, model, "opencode"),
+                        tr!("usage_page.unknown_model").to_owned(),
+                        String::new(),
+                        "icons/bot.svg",
                     ),
-                },
-                None => (
-                    tr!("usage_page.unknown_model").to_owned(),
-                    String::new(),
-                    "icons/bot.svg",
-                ),
-            };
-            let share = if max_total > 0 {
-                (row.total as f32 / max_total as f32).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let mut tooltip = if full.is_empty() {
-                display.clone()
-            } else {
-                full.clone()
-            };
-            if row.cost > 0.0 {
-                tooltip = format!("{} · {}", tooltip, format_cost(row.cost));
-            }
-            card = card.child(
-                div()
-                    .id(SharedString::from(format!("usage-model-{index}")))
-                    .tab_index(0)
-                    .focus_visible(|style| style.border_color(theme.accent))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .py(px(7.0))
-                    .border_b_1()
-                    .when(index + 1 >= views.models.len(), |row| {
-                        row.border_color(gpui::transparent_black())
-                    })
-                    .when(index + 1 < views.models.len(), |row| {
-                        row.border_color(theme.border)
-                    })
-                    .child(icon(icon_path, 14.0, theme.text_tertiary))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .child(
-                                        div()
-                                            .min_w(px(0.0))
-                                            .truncate()
-                                            .text_size(ui_px(12.0))
-                                            .text_color(theme.text)
-                                            .child(SharedString::from(display)),
-                                    )
-                                    .child(div().flex_1().min_w_0())
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .text_size(ui_px(10.0))
-                                            .text_color(theme.text_tertiary)
-                                            .child(tr!(
-                                                "usage_page.model_sessions",
-                                                count = row.sessions
-                                            )),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .h(px(4.0))
-                                    .w_full()
-                                    .rounded_full()
-                                    .bg(theme.overlay_strong)
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(relative(share))
-                                            .rounded_full()
-                                            .bg(theme.gauge),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(64.0))
-                            .flex()
-                            .flex_col()
-                            .items_end()
-                            .gap(px(1.0))
-                            .child(
-                                div()
-                                    .text_size(ui_px(11.5))
-                                    .text_color(theme.text_secondary)
-                                    .child(SharedString::from(format_tokens(row.total))),
-                            )
-                            .when(row.cost > 0.0, |cost| {
-                                cost.child(
-                                    div()
-                                        .text_size(ui_px(9.5))
-                                        .text_color(theme.text_tertiary)
-                                        .child(SharedString::from(format_cost(row.cost))),
-                                )
-                            }),
-                    )
-                    .tooltip(Tooltip::text(SharedString::from(tooltip))),
-            );
-        }
+                };
+                UsageRankRow {
+                    id: format!("usage-model-{index}"),
+                    icon_path,
+                    // Hover shows the whole `provider/model`: two providers can
+                    // serve the same model name, and the bare id cannot tell
+                    // them apart.
+                    tooltip: if full.is_empty() {
+                        display.clone()
+                    } else {
+                        full
+                    },
+                    display,
+                    count_label: tr!("usage_page.model_sessions", count = row.sessions),
+                    total: row.total,
+                    cost: row.cost,
+                }
+            })
+            .collect();
+        usage_ranking_card(
+            tr!("usage_page.models_title"),
+            tr!("usage_page.models_caption", count = views.model_count),
+            rows,
+            theme,
+        )
+    }
 
-        card
+    /// The per-provider ranking: where the store's usage actually went.
+    /// Derived from the model strings the scan already carries, so it costs
+    /// no extra request and no extra protocol field.
+    fn render_usage_providers(&self, views: &UsageViews, theme: &Theme) -> Div {
+        let rows: Vec<UsageRankRow> = views
+            .providers
+            .iter()
+            .enumerate()
+            .map(|(index, row)| UsageRankRow {
+                id: format!("usage-provider-{index}"),
+                icon_path: "icons/globe.svg",
+                tooltip: row.provider.clone(),
+                display: row.provider.clone(),
+                count_label: tr!("usage_page.provider_models", count = row.models),
+                total: row.total,
+                cost: row.cost,
+            })
+            .collect();
+        usage_ranking_card(
+            tr!("usage_page.providers_title"),
+            tr!("usage_page.providers_caption", count = views.provider_count),
+            rows,
+            theme,
+        )
     }
 
     /// The per-project ranking: which working directories the store's
     /// sessions actually ran in, largest share first.
     fn render_usage_projects(&self, views: &UsageViews, theme: &Theme) -> Div {
-        let max_total = views
+        let rows: Vec<UsageRankRow> = views
             .projects
-            .first()
-            .map(|row| row.total)
-            .unwrap_or_default();
-        let mut card = div()
-            .w_full()
-            .px(px(16.0))
-            .py(px(14.0))
-            .rounded(px(13.0))
-            .bg(theme.raised)
-            .flex()
-            .flex_col()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(ui_px(13.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child(tr!("usage_page.projects_title")),
-                    )
-                    .child(div().flex_1().min_w_0())
-                    .child(
-                        div()
-                            .text_size(ui_px(10.5))
-                            .text_color(theme.text_tertiary)
-                            .child(tr!(
-                                "usage_page.projects_caption",
-                                count = views.project_count
-                            )),
-                    ),
-            );
-
-        for (index, row) in views.projects.iter().enumerate() {
-            let share = if max_total > 0 {
-                (row.total as f32 / max_total as f32).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let mut tooltip = row.directory.clone();
-            if row.cost > 0.0 {
-                tooltip = format!("{} · {}", tooltip, format_cost(row.cost));
-            }
-            card = card.child(
-                div()
-                    .id(SharedString::from(format!("usage-project-{index}")))
-                    .tab_index(0)
-                    .focus_visible(|style| style.border_color(theme.accent))
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .py(px(7.0))
-                    .border_b_1()
-                    .when(index + 1 >= views.projects.len(), |row| {
-                        row.border_color(gpui::transparent_black())
-                    })
-                    .when(index + 1 < views.projects.len(), |row| {
-                        row.border_color(theme.border)
-                    })
-                    .child(icon("icons/folder.svg", 14.0, theme.text_tertiary))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w(px(0.0))
-                            .flex()
-                            .flex_col()
-                            .gap(px(3.0))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.0))
-                                    .child(
-                                        div()
-                                            .min_w(px(0.0))
-                                            .truncate()
-                                            .text_size(ui_px(12.0))
-                                            .text_color(theme.text)
-                                            .child(SharedString::from(project_display_name(
-                                                &row.directory,
-                                            ))),
-                                    )
-                                    .child(div().flex_1().min_w_0())
-                                    .child(
-                                        div()
-                                            .flex_none()
-                                            .text_size(ui_px(10.0))
-                                            .text_color(theme.text_tertiary)
-                                            .child(tr!(
-                                                "usage_page.model_sessions",
-                                                count = row.sessions
-                                            )),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .h(px(4.0))
-                                    .w_full()
-                                    .rounded_full()
-                                    .bg(theme.overlay_strong)
-                                    .child(
-                                        div()
-                                            .h_full()
-                                            .w(relative(share))
-                                            .rounded_full()
-                                            .bg(theme.gauge),
-                                    ),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(64.0))
-                            .flex()
-                            .flex_col()
-                            .items_end()
-                            .gap(px(1.0))
-                            .child(
-                                div()
-                                    .text_size(ui_px(11.5))
-                                    .text_color(theme.text_secondary)
-                                    .child(SharedString::from(format_tokens(row.total))),
-                            )
-                            .when(row.cost > 0.0, |cost| {
-                                cost.child(
-                                    div()
-                                        .text_size(ui_px(9.5))
-                                        .text_color(theme.text_tertiary)
-                                        .child(SharedString::from(format_cost(row.cost))),
-                                )
-                            }),
-                    )
-                    .tooltip(Tooltip::text(SharedString::from(tooltip))),
-            );
-        }
-
-        card
+            .iter()
+            .enumerate()
+            .map(|(index, row)| UsageRankRow {
+                id: format!("usage-project-{index}"),
+                icon_path: "icons/folder.svg",
+                tooltip: row.directory.clone(),
+                display: project_display_name(&row.directory),
+                count_label: tr!("usage_page.model_sessions", count = row.sessions),
+                total: row.total,
+                cost: row.cost,
+            })
+            .collect();
+        usage_ranking_card(
+            tr!("usage_page.projects_title"),
+            tr!("usage_page.projects_caption", count = views.project_count),
+            rows,
+            theme,
+        )
     }
+}
+
+/// One row of a usage ranking card. The model, provider, and project rankings
+/// differ only in what fills these fields, so they share one renderer; the
+/// alternative was three copies of the same bar, tooltip, and focus handling.
+struct UsageRankRow {
+    id: String,
+    icon_path: &'static str,
+    /// The label, truncated to fit its column.
+    display: String,
+    /// Hover text, with the cost appended when there is one.
+    tooltip: String,
+    /// The trailing count, already localized — "3 个会话" or "2 个模型".
+    count_label: String,
+    total: u64,
+    cost: f64,
+}
+
+/// A ranking card: a titled list of rows, each a label, a share bar scaled to
+/// the busiest row, and a token total. Rows are keyboard-reachable in the
+/// order they are drawn.
+fn usage_ranking_card(
+    title: String,
+    caption: String,
+    rows: Vec<UsageRankRow>,
+    theme: &Theme,
+) -> Div {
+    let max_total = rows.first().map(|row| row.total).unwrap_or_default();
+    let mut card = div()
+        .w_full()
+        .px(px(16.0))
+        .py(px(14.0))
+        .rounded(px(13.0))
+        .bg(theme.raised)
+        .flex()
+        .flex_col()
+        .gap(px(4.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .text_size(ui_px(13.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(theme.text)
+                        .child(title),
+                )
+                .child(div().flex_1().min_w_0())
+                .child(
+                    div()
+                        .text_size(ui_px(10.5))
+                        .text_color(theme.text_tertiary)
+                        .child(caption),
+                ),
+        );
+
+    for (index, row) in rows.iter().enumerate() {
+        let share = if max_total > 0 {
+            (row.total as f32 / max_total as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let mut tooltip = row.tooltip.clone();
+        if row.cost > 0.0 {
+            tooltip = format!("{} · {}", tooltip, format_cost(row.cost));
+        }
+        let last = index + 1 >= rows.len();
+        card = card.child(
+            div()
+                .id(SharedString::from(row.id.clone()))
+                .tab_index(0)
+                .focus_visible(|style| style.border_color(theme.accent))
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .py(px(7.0))
+                .border_b_1()
+                .when(last, |row| row.border_color(gpui::transparent_black()))
+                .when(!last, |row| row.border_color(theme.border))
+                .child(icon(row.icon_path, 14.0, theme.text_tertiary))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex()
+                        .flex_col()
+                        .gap(px(3.0))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .child(
+                                    div()
+                                        .min_w(px(0.0))
+                                        .truncate()
+                                        .text_size(ui_px(12.0))
+                                        .text_color(theme.text)
+                                        .child(SharedString::from(row.display.clone())),
+                                )
+                                .child(div().flex_1().min_w_0())
+                                .child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(ui_px(10.0))
+                                        .text_color(theme.text_tertiary)
+                                        .child(SharedString::from(row.count_label.clone())),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .h(px(4.0))
+                                .w_full()
+                                .rounded_full()
+                                .bg(theme.overlay_strong)
+                                .child(
+                                    div()
+                                        .h_full()
+                                        .w(relative(share))
+                                        .rounded_full()
+                                        .bg(theme.gauge),
+                                ),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex_none()
+                        .w(px(64.0))
+                        .flex()
+                        .flex_col()
+                        .items_end()
+                        .gap(px(1.0))
+                        .child(
+                            div()
+                                .text_size(ui_px(11.5))
+                                .text_color(theme.text_secondary)
+                                .child(SharedString::from(format_tokens(row.total))),
+                        )
+                        .when(row.cost > 0.0, |cost| {
+                            cost.child(
+                                div()
+                                    .text_size(ui_px(9.5))
+                                    .text_color(theme.text_tertiary)
+                                    .child(SharedString::from(format_cost(row.cost))),
+                            )
+                        }),
+                )
+                .tooltip(Tooltip::text(SharedString::from(tooltip))),
+        );
+    }
+
+    card
+}
+
+/// The session KPI's subtitle: active days, plus the sub-agent sessions whose
+/// usage the totals absorbed. The second half is only appended when there are
+/// any, so an ordinary store keeps the short reading.
+fn usage_sessions_subtitle(totals: &UsageTotals) -> String {
+    let base = tr!("usage_page.active_days_value", count = totals.active_days);
+    if totals.subagent_sessions == 0 {
+        return base;
+    }
+    format!(
+        "{} · {}",
+        base,
+        tr!(
+            "usage_page.subagent_sessions_value",
+            count = totals.subagent_sessions,
+            tokens = format_tokens(totals.subagent_tokens)
+        )
+    )
 }
 
 fn usage_kpi_card(
@@ -1203,11 +1277,122 @@ fn empty_day(date: NaiveDate) -> UsageDay {
     }
 }
 
+/// The local calendar day a unix second falls on. Shared with the daemon's
+/// scan so both sides agree on where a usage bucket sits, DST included.
 fn local_date(timestamp: u64) -> Option<NaiveDate> {
-    Local
-        .timestamp_opt(timestamp as i64, 0)
-        .single()
-        .map(|time| time.date_naive())
+    fintwind_protocol::model::local_date(timestamp)
+}
+
+/// `HH:MM` in the local zone, for the toolbar's freshness reading.
+fn clock_label() -> String {
+    Local::now().format("%H:%M").to_string()
+}
+
+/// One `(timestamp, direct, total)` triple a session contributes to the
+/// timeline. A session the daemon split by message contributes each of its
+/// days; every other session contributes a single triple covering the whole
+/// of it, dated by its last touch. Owned rather than borrowed so both shapes
+/// return the same iterator type.
+///
+/// A split session that absorbed sub-agents gets one extra triple for the
+/// folded amount, dated by the parent's last touch. Without it the split
+/// would cover only the parent's own messages, so the daily bars and heatmap
+/// would sum to less than the KPI printed beside them. The unsplit branch
+/// needs no such triple: its single lane already rides `total_tokens()`,
+/// which the fold already added into.
+fn entry_day_lanes(entry: &UsageEntry) -> Vec<(u64, u64, u64)> {
+    let lanes = match &entry.days {
+        Some(shares) => {
+            let mut lanes: Vec<(u64, u64, u64)> = shares
+                .iter()
+                .map(|share| (share.timestamp, share.direct, share.total))
+                .collect();
+            if entry.subagent_tokens > 0 {
+                lanes.push((
+                    entry.timestamp,
+                    entry.subagent_direct,
+                    entry.subagent_tokens,
+                ));
+            }
+            lanes
+        }
+        None => {
+            let direct = entry
+                .input_tokens
+                .saturating_add(entry.output_tokens)
+                .saturating_add(entry.reasoning_tokens);
+            vec![(entry.timestamp, direct, entry.total_tokens())]
+        }
+    };
+    lanes
+}
+
+/// How one session's usage distributes over models.
+///
+/// A session the daemon split by message spent under each model it used, and
+/// the session-level `model` names only the one it ended on — so the lanes win
+/// whenever they exist. Every share carries a `primary` flag and exactly one
+/// does per session, so the ranking's session counts still add up to the KPI
+/// even when a session used three models.
+struct ModelShare {
+    /// `<providerID>/<modelID>`, or `None` for a session the server never
+    /// named a model for — it folds into the ranking's unknown row.
+    model: Option<String>,
+    total: u64,
+    cost: f64,
+    /// Whether this share represents the session as a whole.
+    primary: bool,
+}
+
+/// A session's per-model shares, largest first so the primary flag lands on
+/// the model the session spent most under.
+///
+/// Two adjustments keep the ranking consistent with the totals above it:
+///
+/// - Sub-agent spend rides the session-level model. The lanes cover only the
+///   parent's own messages, so dropping the folded amount would make every
+///   model row short by exactly the sessions that delegate the most.
+/// - A provider that reported no per-message cost would otherwise show the
+///   model as free while the KPI above it charges for it; the session's own
+///   estimate then lands on its biggest share instead.
+fn entry_model_shares(entry: &UsageEntry) -> Vec<ModelShare> {
+    let mut shares: Vec<(Option<String>, u64, f64)> = if entry.model_lanes.is_empty() {
+        vec![(
+            entry.model.clone(),
+            entry.total_tokens(),
+            entry.cost.unwrap_or_default(),
+        )]
+    } else {
+        let mut lanes: Vec<(Option<String>, u64, f64)> = entry
+            .model_lanes
+            .iter()
+            .map(|lane| (Some(lane.model.clone()), lane.total, lane.cost))
+            .collect();
+        if entry.subagent_tokens > 0 {
+            lanes.push((entry.model.clone(), entry.subagent_tokens, 0.0));
+        }
+        if let Some(cost) = entry
+            .cost
+            .filter(|_| lanes.iter().all(|(_, _, cost)| *cost == 0.0))
+        {
+            if let Some(largest) = lanes.first_mut() {
+                largest.2 = cost;
+            }
+        }
+        lanes
+    };
+
+    shares.sort_by(|a, b| b.1.cmp(&a.1));
+    shares
+        .into_iter()
+        .enumerate()
+        .map(|(index, (model, total, cost))| ModelShare {
+            model,
+            total,
+            cost,
+            primary: index == 0,
+        })
+        .collect()
 }
 
 /// Aggregate the scan into the page's view models for `range`. Pure and
@@ -1238,6 +1423,10 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     // server recorded no model for — it folds into the unknown-model row so
     // the ranking's session counts add up to the KPI.
     let mut models: HashMap<Option<String>, (u32, u64, f64, u64)> = HashMap::new();
+    // Provider rows derive from the model rows above, once those are complete:
+    // a provider is then counted once per model rather than once per session,
+    // and the provider count survives the model ranking being truncated.
+    let mut providers: HashMap<String, (u32, u64, f64)> = HashMap::new();
     // Projects key on a normalized directory (separators + case), so a
     // server that records `E:\work\x` and `e:/work/x` as the same project
     // ranks as one; the first-seen spelling is what gets displayed.
@@ -1245,19 +1434,34 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     let mut range_days: std::collections::HashSet<NaiveDate> = std::collections::HashSet::new();
 
     for entry in &stats.entries {
-        let date = local_date(entry.timestamp);
+        // Totals, rankings, and the active-day count stay gated by the whole
+        // session's last touch, not by where its messages landed: a session
+        // that began before the window and continued into it spent that usage
+        // in the window, and splitting it would need per-message aggregation
+        // the scan deliberately does not do for totals.
         if entry.timestamp >= range_cutoff {
             totals.add(entry);
-            if let Some(date) = date {
+            if let Some(date) = local_date(entry.timestamp) {
                 range_days.insert(date);
             }
-            let row = models
-                .entry(entry.model.clone())
-                .or_insert((0, 0, 0.0, entry.timestamp));
-            row.0 += 1;
-            row.1 = row.1.saturating_add(entry.total_tokens());
-            row.2 += entry.cost.unwrap_or_default();
-            row.3 = row.3.max(entry.timestamp);
+            // A refined session spent under more than one model, and the
+            // session-level `model` names only the last. Attribute its usage
+            // per message when the walk produced the lanes; otherwise the
+            // session-level attribution is all there is.
+            for share in entry_model_shares(entry) {
+                let row = models
+                    .entry(share.model)
+                    .or_insert((0, 0, 0.0, entry.timestamp));
+                // Only the primary share counts a session: a session that used
+                // three models is still one session, and the ranking's session
+                // counts are read against the KPI's.
+                if share.primary {
+                    row.0 += 1;
+                }
+                row.1 = row.1.saturating_add(share.total);
+                row.2 += share.cost;
+                row.3 = row.3.max(entry.timestamp);
+            }
             if let Some(directory) = &entry.directory {
                 let key = directory.replace('\\', "/").to_lowercase();
                 let row = projects
@@ -1268,18 +1472,23 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                 row.3 += entry.cost.unwrap_or_default();
             }
         }
-        let Some(date) = date else {
-            continue;
-        };
-        let day = days.entry(date).or_insert_with(|| empty_day(date));
-        day.total = day.total.saturating_add(entry.total_tokens());
-        day.direct = day.direct.saturating_add(
-            entry
-                .input_tokens
-                .saturating_add(entry.output_tokens)
-                .saturating_add(entry.reasoning_tokens),
-        );
-        day.sessions += 1;
+
+        // The timeline is built from every entry regardless of range, so the
+        // heatmap keeps its fixed window however narrow the selection is. A
+        // refined session contributes its per-message days instead of dumping
+        // everything on the day it was last touched.
+        for lane in entry_day_lanes(entry) {
+            let Some(date) = local_date(lane.0) else {
+                continue;
+            };
+            if lane.0 >= range_cutoff {
+                range_days.insert(date);
+            }
+            let day = days.entry(date).or_insert_with(|| empty_day(date));
+            day.total = day.total.saturating_add(lane.2);
+            day.direct = day.direct.saturating_add(lane.1);
+            day.sessions += 1;
+        }
     }
     totals.active_days = range_days.len() as u32;
 
@@ -1340,6 +1549,22 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         .map(<[Option<UsageHeatCell>]>::to_vec)
         .collect();
 
+    // Providers roll up the model rows, before the ranking is truncated: the
+    // provider's model count and total must stay right even when only the top
+    // N models are shown. Rolling up here rather than while walking sessions
+    // also counts a provider once per model, not once per session — a store
+    // can spend heavily on a single model, and the session count would say
+    // nothing about it.
+    for (model, (_, total, cost, _)) in &models {
+        let Some((provider, _)) = model.as_deref().and_then(|model| model.split_once('/')) else {
+            continue;
+        };
+        let entry = providers.entry(provider.to_owned()).or_insert((0, 0, 0.0));
+        entry.0 += 1;
+        entry.1 = entry.1.saturating_add(*total);
+        entry.2 += cost;
+    }
+
     let mut models: Vec<UsageModelRow> = models
         .into_iter()
         .map(
@@ -1355,6 +1580,19 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     models.sort_by(|a, b| b.total.cmp(&a.total).then(b.last_used.cmp(&a.last_used)));
     let model_count = models.len();
     models.truncate(MAX_MODEL_ROWS);
+
+    let mut provider_rows: Vec<UsageProviderRow> = providers
+        .into_iter()
+        .map(|(provider, (models, total, cost))| UsageProviderRow {
+            provider,
+            models,
+            total,
+            cost,
+        })
+        .collect();
+    provider_rows.sort_by(|a, b| b.total.cmp(&a.total));
+    let provider_count = provider_rows.len();
+    provider_rows.truncate(MAX_MODEL_ROWS);
 
     let mut projects: Vec<UsageProjectRow> = projects
         .into_iter()
@@ -1377,6 +1615,8 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         heatmap_active_days,
         models,
         model_count,
+        providers: provider_rows,
+        provider_count,
         projects,
         project_count,
     }
@@ -1527,6 +1767,11 @@ mod tests {
             reasoning_tokens: 0,
             cache_read_tokens: 0,
             cache_write_tokens: 0,
+            subagent_sessions: 0,
+            subagent_tokens: 0,
+            subagent_direct: 0,
+            days: None,
+            model_lanes: Vec::new(),
         }
     }
 
@@ -1542,6 +1787,8 @@ mod tests {
         mid.directory = Some("E:\\work\\mid".into());
         let stats = UsageStats {
             entries: vec![entry(now - 86_400, "p/m1", 10), mid, old],
+            truncated: false,
+            sessions_scanned: 3,
         };
 
         let all = build_views(Some(&stats), UsageRange::All);
@@ -1581,6 +1828,8 @@ mod tests {
     fn heatmap_grid_is_monday_anchored_and_ends_today() {
         let stats = UsageStats {
             entries: vec![entry(unix_time(), "p/m", 5)],
+            truncated: false,
+            sessions_scanned: 1,
         };
         let views = build_views(Some(&stats), UsageRange::All);
         let last = views.weeks.last().unwrap();
@@ -1657,6 +1906,8 @@ mod tests {
         let views = build_views(
             Some(&UsageStats {
                 entries: Vec::new(),
+                truncated: false,
+                sessions_scanned: 0,
             }),
             UsageRange::All,
         );
@@ -1701,6 +1952,8 @@ mod tests {
         );
         let stats = UsageStats {
             entries: vec![cache_heavy, direct_heavy],
+            truncated: false,
+            sessions_scanned: 2,
         };
         let views = build_views(Some(&stats), UsageRange::All);
         let cache_day = views.daily.iter().find(|day| day.date == today).unwrap();
@@ -1744,6 +1997,207 @@ mod tests {
         assert!((half - DAILY_CHART_PX / 2.0).abs() < 0.01);
         assert_eq!(full, DAILY_CHART_PX);
         assert!(full > half);
+    }
+
+    /// A session that delegates to sub-agents and ran across days must still
+    /// put every token it holds on the timeline. Its split covers only its own
+    /// messages, so the folded amount needs its own lane — otherwise the
+    /// daily bars and the heatmap would sum to less than the KPI printed
+    /// beside them, on exactly the sessions that delegate the most.
+    ///
+    /// The folded lane rides `subagent_direct` for its non-cache share: the
+    /// chart is titled "excludes cache", and pushing the fold's whole total
+    /// through it would silently re-label cache as direct.
+    #[test]
+    fn a_split_session_carries_its_folded_subagent_spend_on_the_timeline() {
+        let today = Local::now().date_naive();
+        let yesterday = today - ChronoDuration::days(1);
+        let noon = |date: NaiveDate| {
+            Local
+                .from_local_datetime(&date.and_hms_opt(12, 0, 0).unwrap())
+                .single()
+                .unwrap()
+                .timestamp() as u64
+        };
+        let mut split = entry(noon(today), "p/m", 30);
+        split.days = Some(vec![
+            UsageDayShare {
+                timestamp: noon(yesterday),
+                direct: 30,
+                total: 40,
+            },
+            UsageDayShare {
+                timestamp: noon(today),
+                direct: 40,
+                total: 60,
+            },
+        ]);
+        // Folded in from a sub-agent: 50 tokens, 20 of them non-cache. The
+        // fold has already merged those into the session's own lanes, which
+        // is what the KPI reads.
+        split.subagent_sessions = 1;
+        split.subagent_tokens = 50;
+        split.subagent_direct = 20;
+        split.input_tokens = 60;
+        split.cache_read_tokens = 60;
+
+        let stats = UsageStats {
+            entries: vec![split],
+            truncated: false,
+            sessions_scanned: 1,
+        };
+        let views = build_views(Some(&stats), UsageRange::All);
+        let day_of = |date: NaiveDate| {
+            views
+                .daily
+                .iter()
+                .find(|day| day.date == date)
+                .unwrap()
+                .clone()
+        };
+
+        // Yesterday keeps only its own share; the fold rides the parent's last
+        // touch, which is today.
+        assert_eq!(day_of(yesterday).direct, 30);
+        assert_eq!(day_of(yesterday).total, 40);
+        let today_day = day_of(today);
+        assert_eq!(today_day.direct, 40 + 20);
+        assert_eq!(today_day.total, 60 + 50);
+        // The KPI reads the entry's lanes, fold included — which is exactly
+        // what makes the assertion below meaningful.
+        assert_eq!(views.totals.generated(), 30);
+        assert_eq!(views.totals.input, 60);
+        assert_eq!(views.totals.cache_read, 60);
+        assert_eq!(views.totals.sessions, 1);
+        // Nothing lands outside the days the session is known to have used,
+        // and the timeline now sums to exactly the KPI's total — the
+        // disagreement the split-without-the-fold produced.
+        let drawn: u64 = views
+            .daily
+            .iter()
+            .filter(|day| day.total > 0)
+            .map(|day| day.total)
+            .sum();
+        assert_eq!(drawn, views.totals.total());
+        assert_eq!(drawn, 150);
+    }
+
+    /// A split session spreads its usage across the days it ran, so one that
+    /// ran from yesterday into today is not drawn as a single spike today.
+    /// Without the split every token lands on the day the session was last
+    /// touched, which is the distortion the split exists to remove.
+    #[test]
+    fn a_split_session_spreads_its_usage_across_the_days_it_ran() {
+        let today = Local::now().date_naive();
+        let yesterday = today - ChronoDuration::days(1);
+        // Noon, so "yesterday" cannot roll back two days near midnight.
+        let noon = |date: NaiveDate| {
+            Local
+                .from_local_datetime(&date.and_hms_opt(12, 0, 0).unwrap())
+                .single()
+                .unwrap()
+                .timestamp() as u64
+        };
+        let mut split = entry(noon(today), "p/m", 30);
+        split.days = Some(vec![
+            UsageDayShare {
+                timestamp: noon(yesterday),
+                direct: 30,
+                total: 40,
+            },
+            UsageDayShare {
+                timestamp: noon(today),
+                direct: 70,
+                total: 90,
+            },
+        ]);
+        let unsplit = entry(noon(today), "p/m", 100);
+
+        let stats = UsageStats {
+            entries: vec![split, unsplit],
+            truncated: false,
+            sessions_scanned: 2,
+        };
+        let views = build_views(Some(&stats), UsageRange::All);
+
+        let day_of = |date: NaiveDate| {
+            views
+                .daily
+                .iter()
+                .find(|day| day.date == date)
+                .unwrap()
+                .clone()
+        };
+        // 30 + 100 from the unsplit session, whose every token still rides its
+        // own single-day bucket.
+        assert_eq!(day_of(yesterday).direct, 30);
+        // 70 split + 100 unsplit.
+        assert_eq!(day_of(today).direct, 170);
+        assert_eq!(views.daily_direct_max, 170);
+        // The session-level totals are untouched by the split: both lanes add
+        // up to the same whole.
+        assert_eq!(views.totals.output, 130);
+        assert_eq!(views.totals.generated(), 130);
+    }
+
+    /// A session that used three models is one session, and a session that
+    /// delegated to a sub-agent spent all of that too. Both properties are
+    /// what keeps the model ranking readable against the KPI above it; losing
+    /// either makes the ranking's counts silently disagree with the headline.
+    #[test]
+    fn model_shares_preserve_the_session_count_and_the_folded_spend() {
+        let mut switched = entry(unix_time(), "p/second", 10);
+        switched.model_lanes = vec![
+            UsageModelLane {
+                model: "p/first".to_owned(),
+                total: 100,
+                cost: 0.0,
+            },
+            UsageModelLane {
+                model: "p/second".to_owned(),
+                total: 40,
+                cost: 0.0,
+            },
+            UsageModelLane {
+                model: "p/third".to_owned(),
+                total: 20,
+                cost: 0.0,
+            },
+        ];
+        // The session spent 160 of its own plus 50 folded in from a sub-agent,
+        // and the slot-level model names the one it ended on.
+        switched.input_tokens = 160;
+        switched.subagent_tokens = 50;
+        switched.subagent_direct = 50;
+        let plain = entry(unix_time(), "p/second", 30);
+
+        let stats = UsageStats {
+            entries: vec![switched, plain],
+            truncated: false,
+            sessions_scanned: 2,
+        };
+        let views = build_views(Some(&stats), UsageRange::All);
+
+        let row = |model: &str| {
+            views
+                .models
+                .iter()
+                .find(|row| row.model.as_deref() == Some(model))
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(row("p/first").total, 100);
+        assert_eq!(row("p/third").total, 20);
+        // The fold has no lane of its own and rides the session-level model,
+        // joining the `plain` session's 30 there too. That makes it the largest
+        // row despite `p/first` being the biggest single lane.
+        assert_eq!(row("p/second").total, 40 + 50 + 30);
+        assert_eq!(views.models[0].model.as_deref(), Some("p/second"));
+        // Three models used across two sessions, but only two sessions were
+        // run: the ranking's session counts still add up to the KPI's.
+        let counted: u32 = views.models.iter().map(|row| row.sessions).sum();
+        assert_eq!(u64::from(counted), views.totals.sessions);
+        assert_eq!(counted, 2);
     }
 
     fn filled_week(monday: NaiveDate) -> Vec<Option<UsageHeatCell>> {

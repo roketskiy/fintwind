@@ -19,13 +19,16 @@
 //!   top-level `text` string with attached files in a `files` array and no
 //!   `content` at all.
 
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use parking_lot::Mutex;
 use serde_json::Value;
 
+use fintwind_protocol::model::unix_time;
 use fintwind_protocol::provider_session::{
     IntegrationSummary, McpConnectionState, McpServerStatus, NativeSessionSummary,
-    NativeTranscript, UsageEntry, UsageStats,
+    NativeTranscript, UsageDayShare, UsageEntry, UsageModelLane, UsageStats,
 };
 
 use crate::model::{
@@ -39,9 +42,22 @@ const PAGE_LIMIT: usize = 200;
 /// Page size for the global session listing, whose rows are small.
 const SESSION_LIST_LIMIT: usize = 500;
 /// Sessions per workspace are bounded in practice; the cap keeps a pathological
-/// store from paging forever. At 500 per page this covers 12 500 sessions.
-const MAX_SESSION_PAGES: usize = 25;
+/// store from paging forever. At 500 per page this covers 25 000 sessions,
+/// and the scan reports when it is hit rather than stopping quietly.
+const MAX_SESSION_PAGES: usize = 50;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
+/// How far back a session's activity may reach and still be worth splitting
+/// per message. The page's charts read at most 26 weeks, so an older session's
+/// day attribution cannot change any mark it draws — only its own total,
+/// which the session row already carries.
+const DAY_SPLIT_HORIZON_DAYS: u64 = 26 * 7;
+/// Refinement cache ceiling. One entry per session seen, so this bounds the
+/// daemon's memory for a store far larger than any real one.
+const USAGE_CACHE_CEILING: usize = 20_000;
+/// Message pages one day split may walk. At 200 messages a page this covers
+/// 10 000 messages, past which a session is treated as unattributable rather
+/// than allowed to spend the whole scan on itself.
+const MAX_MESSAGE_PAGES: usize = 50;
 
 /// List a workspace's native sessions, oldest first, with sub-sessions
 /// (fork/compaction children) left out — the sidebar models one linear
@@ -141,10 +157,51 @@ pub(crate) fn list_mcp_statuses(
     Ok(statuses)
 }
 
-/// Fork/compaction children model the same conversation as their parent, so
-/// the sidebar only lists top-level sessions.
+/// What a session row is, in the only distinction that matters for usage.
+///
+/// `parentID` alone conflates two very different things, and treating them
+/// the same either double-counts or drops real spend:
+///
+/// - a **fork** (`forkSessionID` set) replays the parent's history into a new
+///   session. OpenCode zeroes the cloned `step-finish` parts on fork
+///   (#31136/#31138) precisely so its token row stays its own post-fork
+///   spend, which *is* additive — so a fork counts as its own entry.
+/// - a **sub-agent** (`parentID` set, no fork marker) is a separate session
+///   with its own token accounting, and its parent's aggregate does *not*
+///   include it. Measured on a real store: 103 sub-agent sessions holding
+///   128.8M tokens that a `parentID`-only filter discards — 8.6% of the
+///   store's total.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionKind {
+    TopLevel,
+    Fork,
+    SubAgent,
+}
+
+fn session_kind(row: &Value) -> SessionKind {
+    if row
+        .get("forkSessionID")
+        .or_else(|| row.get("fork_session_id"))
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
+    {
+        return SessionKind::Fork;
+    }
+    if row
+        .get("parentID")
+        .or_else(|| row.get("parent_id"))
+        .and_then(Value::as_str)
+        .is_some_and(|id| !id.is_empty())
+    {
+        return SessionKind::SubAgent;
+    }
+    SessionKind::TopLevel
+}
+
+/// The sidebar models one linear conversation per row: forks and sub-agent
+/// children are both left out of it.
 fn is_child_session(row: &Value) -> bool {
-    row.get("parentID").and_then(Value::as_str).is_some()
+    !matches!(session_kind(row), SessionKind::TopLevel)
 }
 
 fn summary_from_row(row: &Value) -> Option<NativeSessionSummary> {
@@ -230,14 +287,23 @@ pub(crate) fn fetch_transcript_on_port(
 }
 
 /// Walk the whole OpenCode store's session list in one pass and collect
-/// every top-level session's cumulative usage for the usage statistics page.
-/// The list itself is global — no `directory` filter — so sessions from
-/// every project the CLI, TUI, or any client ever used are covered. One
-/// request per page of sessions, nothing per session: the rows already
-/// carry the tokens, cost, model, and timestamps.
+/// every session's cumulative usage for the usage statistics page, including
+/// the sub-agents those sessions spawned. The list itself is global — no
+/// `directory` filter — so sessions from every project the CLI, TUI, or any
+/// client ever used are covered.
+///
+/// Pass one walks the session list: the rows already carry tokens, cost,
+/// model, and timestamps, so the common case costs one request per page.
+/// Pass two is the exception — only the handful of sessions whose activity
+/// provably spans more than one calendar day are opened message by message,
+/// because a session row's `time.updated` would otherwise dump a week's spend
+/// onto its last day.
 pub(crate) fn fetch_usage_stats(server: &OpenCodeServer) -> anyhow::Result<UsageStats> {
     let mut stats = UsageStats::default();
     let mut cursor: Option<String> = None;
+    let mut rows_by_id: HashMap<String, RowFacts> = HashMap::new();
+    let mut seen: HashSet<String> = HashSet::new();
+
     for page in 0..MAX_SESSION_PAGES {
         let mut path = format!("/api/session?limit={SESSION_LIST_LIMIT}");
         if let Some(token) = &cursor {
@@ -250,78 +316,451 @@ pub(crate) fn fetch_usage_stats(server: &OpenCodeServer) -> anyhow::Result<Usage
             .cloned()
             .unwrap_or_default();
         let exhausted = rows.is_empty();
-        for row in &rows {
-            if is_child_session(row) {
-                continue;
-            }
-            if let Some(entry) = usage_entry_from_row(row) {
-                stats.entries.push(entry);
-            }
-        }
-        // The next cursor repeats when the list is exhausted; stop then.
-        match response
+        let has_more = response
             .pointer("/cursor/next")
             .and_then(Value::as_str)
-            .map(str::to_owned)
-        {
-            Some(next) if cursor.as_deref() != Some(next.as_str()) && !exhausted => {
-                cursor = Some(next);
-            }
-            _ => {
-                if !exhausted
-                    && page + 1 == MAX_SESSION_PAGES
-                    && response
-                        .pointer("/cursor/next")
-                        .and_then(Value::as_str)
-                        .is_some()
-                {
-                    eprintln!(
-                        "usage scan hit the {MAX_SESSION_PAGES}-page session cap; \
-                         statistics cover only the newest portion"
-                    );
-                }
-                break;
-            }
+            .is_some_and(|next| Some(next) != cursor.as_deref());
+        stats.sessions_scanned += rows.len();
+        for row in &rows {
+            let Some((id, facts)) = row_facts(row) else {
+                continue;
+            };
+            seen.insert(id.clone());
+            rows_by_id.insert(id, facts);
+        }
+        if exhausted || !has_more {
+            break;
+        }
+        cursor = response
+            .pointer("/cursor/next")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        // Ran out of pages with more still listed. Say so: a silently short
+        // scan is indistinguishable from a quiet month.
+        if page + 1 == MAX_SESSION_PAGES {
+            stats.truncated = true;
+            eprintln!(
+                "usage scan hit the {MAX_SESSION_PAGES}-page session cap; \
+                 statistics cover only the newest portion"
+            );
         }
     }
+
+    let mut entries = Vec::with_capacity(rows_by_id.len());
+    // Parents before children: a sub-agent folds into its parent's entry, and
+    // a HashMap's visit order cannot be relied on to bring them together. The
+    // partition is also what makes the result deterministic — the same store
+    // has to produce the same totals twice.
+    let (subagents, parents): (Vec<_>, Vec<_>) = rows_by_id
+        .into_iter()
+        .partition(|(_, facts)| facts.kind == SessionKind::SubAgent);
+    let mut entry_index: HashMap<String, usize> = HashMap::new();
+    for (id, facts) in parents.into_iter().chain(subagents) {
+        let Some(mut entry) = usage_entry_from_row(&facts) else {
+            continue;
+        };
+        if facts.kind == SessionKind::SubAgent {
+            if let Some(&parent_index) = facts.parent.as_deref().and_then(|p| entry_index.get(p)) {
+                fold_subagent_into(&mut entries[parent_index], &entry);
+                // A sub-agent is not an entry of its own; the parent's model,
+                // directory, and timestamp already describe the work.
+                continue;
+            }
+            // An orphaned sub-agent (its parent was deleted or aged out of the
+            // listing) is still real spend. Keep it rather than drop it.
+        }
+        entry_index.insert(id.clone(), entries.len());
+        let split = split_entry_days(server, &id, &entry, facts.created, facts.updated);
+        if let Some(split) = split {
+            entry.days = Some(split.days);
+            entry.model_lanes = split.models;
+        }
+        entries.push(entry);
+    }
+
+    // Retire entries for sessions the listing no longer shows, so the cache
+    // tracks the store rather than growing forever.
+    usage_day_cache().lock().retain(|id, _| seen.contains(id));
+
+    stats.entries = entries;
     stats.entries.sort_by_key(|entry| entry.timestamp);
     Ok(stats)
+}
+
+/// Fold a sub-agent's usage into its parent.
+///
+/// A sub-agent books its tokens into its own session row and its parent's
+/// aggregate does not include them, so the parent's total is short by exactly
+/// this amount until the fold. Every lane is added, not just the headline
+/// number: folding only `total` would leave the input/output breakdown the
+/// KPI card prints disagreeing with the figures above it.
+///
+/// The cost joins too, and it is merged rather than replaced: a sub-agent's
+/// estimate is additive spend, and throwing it away would make the page's
+/// "cost" KPI quietly low on exactly the sessions that delegate the most.
+fn fold_subagent_into(parent: &mut UsageEntry, child: &UsageEntry) {
+    parent.input_tokens = parent.input_tokens.saturating_add(child.input_tokens);
+    parent.output_tokens = parent.output_tokens.saturating_add(child.output_tokens);
+    parent.reasoning_tokens = parent
+        .reasoning_tokens
+        .saturating_add(child.reasoning_tokens);
+    parent.cache_read_tokens = parent
+        .cache_read_tokens
+        .saturating_add(child.cache_read_tokens);
+    parent.cache_write_tokens = parent
+        .cache_write_tokens
+        .saturating_add(child.cache_write_tokens);
+    parent.cost = match (parent.cost, child.cost) {
+        (Some(parent_cost), Some(child_cost)) => Some(parent_cost + child_cost),
+        (parent_cost, child_cost) => parent_cost.or(child_cost),
+    };
+    parent.subagent_sessions = parent.subagent_sessions.saturating_add(1);
+    parent.subagent_tokens = parent.subagent_tokens.saturating_add(child.total_tokens());
+    parent.subagent_direct = parent.subagent_direct.saturating_add(
+        child
+            .input_tokens
+            .saturating_add(child.output_tokens)
+            .saturating_add(child.reasoning_tokens),
+    );
+}
+
+/// The parts of a session row the scan needs. Only these are kept, so the
+/// scan never holds the session list's JSON alive past one page.
+struct RowFacts {
+    kind: SessionKind,
+    /// `parentID` for a sub-agent; `None` otherwise.
+    parent: Option<String>,
+    /// Unix seconds.
+    created: u64,
+    updated: u64,
+    model: Option<String>,
+    directory: Option<String>,
+    cost: Option<f64>,
+    tokens: [u64; 5],
+}
+
+fn row_facts(row: &Value) -> Option<(String, RowFacts)> {
+    let id = row.get("id").and_then(Value::as_str)?.to_owned();
+    let time = row.get("time")?;
+    let created =
+        ms_to_seconds(time.get("created")).or_else(|| ms_to_seconds(time.get("updated")))?;
+    let updated = ms_to_seconds(time.get("updated")).unwrap_or(created);
+    let kind = session_kind(row);
+    let parent = (kind == SessionKind::SubAgent)
+        .then(|| {
+            row.get("parentID")
+                .or_else(|| row.get("parent_id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .flatten();
+    // Kept exactly as reported, zero included: a provider answering "free"
+    // is not the same as answering nothing, and the page reports how many
+    // sessions carried a cost at all.
+    let cost = row.get("cost").and_then(Value::as_f64);
+    let empty_tokens = Value::Null;
+    let tokens = row.get("tokens").unwrap_or(&empty_tokens);
+    let lane = |pointer: &str| tokens.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
+    Some((
+        id,
+        RowFacts {
+            kind,
+            parent,
+            created,
+            updated,
+            model: row.get("model").and_then(|model| {
+                let provider = model.get("providerID").and_then(Value::as_str)?;
+                let id = model
+                    .get("id")
+                    .or_else(|| model.get("modelID"))
+                    .and_then(Value::as_str)?;
+                Some(format!("{provider}/{id}"))
+            }),
+            directory: row
+                .pointer("/location/directory")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            cost,
+            tokens: [
+                lane("/input"),
+                lane("/output"),
+                lane("/reasoning"),
+                lane("/cache/read"),
+                lane("/cache/write"),
+            ],
+        },
+    ))
 }
 
 /// One session row's contribution to the usage scan. Rows without a usable
 /// timestamp fold out: they cannot land on a day, and the totals the page
 /// draws are all day-bucketed. A row without `tokens` still counts as a
 /// session — it just adds zero tokens.
-fn usage_entry_from_row(row: &Value) -> Option<UsageEntry> {
-    let time = row.get("time")?;
+fn usage_entry_from_row(facts: &RowFacts) -> Option<UsageEntry> {
     // Last activity is when the session's tokens were spent, as far as a
     // day bucket can tell.
-    let timestamp =
-        ms_to_seconds(time.get("updated")).or_else(|| ms_to_seconds(time.get("created")))?;
-    let empty_tokens = Value::Null;
-    let tokens = row.get("tokens").unwrap_or(&empty_tokens);
-    let lane = |pointer: &str| tokens.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
+    let timestamp = facts.updated.max(facts.created);
     Some(UsageEntry {
         timestamp,
-        model: row.get("model").and_then(|model| {
-            let provider = model.get("providerID").and_then(Value::as_str)?;
-            let id = model.get("id").and_then(Value::as_str)?;
-            Some(format!("{provider}/{id}"))
-        }),
-        directory: row
-            .pointer("/location/directory")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        cost: row
-            .get("cost")
-            .and_then(Value::as_f64)
-            .filter(|cost| *cost > 0.0),
-        input_tokens: lane("/input"),
-        output_tokens: lane("/output"),
-        reasoning_tokens: lane("/reasoning"),
-        cache_read_tokens: lane("/cache/read"),
-        cache_write_tokens: lane("/cache/write"),
+        model: facts.model.clone(),
+        directory: facts.directory.clone(),
+        cost: facts.cost,
+        input_tokens: facts.tokens[0],
+        output_tokens: facts.tokens[1],
+        reasoning_tokens: facts.tokens[2],
+        cache_read_tokens: facts.tokens[3],
+        cache_write_tokens: facts.tokens[4],
+        subagent_sessions: 0,
+        subagent_tokens: 0,
+        subagent_direct: 0,
+        days: None,
+        model_lanes: Vec::new(),
     })
+}
+
+/// What one message walk yields for a session: the day split that repairs a
+/// multi-day session's timeline, and the model split that repairs a
+/// model-switching one's ranking. Both come from the same walk, so neither
+/// costs an extra request.
+#[derive(Clone)]
+struct SessionSplit {
+    days: Vec<UsageDayShare>,
+    models: Vec<UsageModelLane>,
+}
+
+/// A session's per-day split, or `None` when every token already belongs to
+/// `entry.timestamp`'s day.
+///
+/// A session row reports one `time.updated`, so a session that ran from Monday
+/// into Wednesday has all of its spend land on Wednesday — a real distortion
+/// on a daily chart, and one a user can see. Splitting by message repairs it,
+/// but only a small minority of sessions need it: on a real store 486 of 494
+/// were opened and last touched on the same day, so the message walk is run
+/// only for the rest.
+///
+/// Two further gates keep the walk narrow. Sessions older than the chart's
+/// horizon cannot move any mark the page draws, and sessions with no tokens
+/// have nothing to attribute. Everything else is `None`: no request, no
+/// payload, no change to the drawing.
+fn split_entry_days(
+    server: &OpenCodeServer,
+    session_id: &str,
+    entry: &UsageEntry,
+    created: u64,
+    updated: u64,
+) -> Option<SessionSplit> {
+    if entry.total_tokens() == 0 {
+        return None;
+    }
+    // Opened and last touched on one day ⇒ nothing to redistribute.
+    if local_day(created) == local_day(updated) {
+        return None;
+    }
+    // Beyond the 26-week heatmap the day split changes no mark, and a session
+    // that ended long ago will not gain activity.
+    let horizon = unix_time().saturating_sub(DAY_SPLIT_HORIZON_DAYS * 86_400);
+    if updated < horizon && created < horizon {
+        return None;
+    }
+
+    // The fingerprint is last-touched seconds: a session that gained activity
+    // re-splits, an untouched one answers from cache without any request.
+    let cached = {
+        let cache = usage_day_cache().lock();
+        cache
+            .get(session_id)
+            .and_then(|(cached_at, split)| (*cached_at == updated).then(|| split.clone()))
+    };
+    if let Some(split) = cached {
+        return split;
+    }
+
+    // A failed walk is deliberately not cached. Caching it would make a
+    // transient server error stick for as long as the session stayed
+    // untouched, and the page would show a stale single-day bucket with
+    // nothing to say why.
+    let split = session_day_split(server, session_id)?;
+    let mut cache = usage_day_cache().lock();
+    if cache.len() >= USAGE_CACHE_CEILING {
+        cache.clear();
+    }
+    cache.insert(session_id.to_owned(), (updated, Some(split.clone())));
+    Some(split)
+}
+
+/// Walk one session's assistant messages, bucketing their tokens by local day
+/// and by model. `None` when the walk fails or yields nothing, which leaves
+/// the session on its single-day, single-model bucket — a degraded but still
+/// honest answer.
+fn session_day_split(server: &OpenCodeServer, session_id: &str) -> Option<SessionSplit> {
+    let mut cursor: Option<String> = None;
+    let mut days: Vec<UsageDayShare> = Vec::new();
+    let mut index_of_day: HashMap<u64, usize> = HashMap::new();
+    let mut models: Vec<UsageModelLane> = Vec::new();
+    let mut index_of_model: HashMap<String, usize> = HashMap::new();
+    for _ in 0..MAX_MESSAGE_PAGES {
+        let mut path = format!(
+            "/api/session/{}/message?limit={PAGE_LIMIT}",
+            encode_path_segment(session_id)
+        );
+        if let Some(token) = &cursor {
+            path.push_str(&format!("&cursor={}", encode_path_segment(token)));
+        }
+        let response = match server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT) {
+            Ok(response) => response,
+            // A session that cannot be read still has its session-level total;
+            // only the attribution is lost.
+            Err(error) => {
+                eprintln!("usage day split failed for {session_id}: {error}");
+                return None;
+            }
+        };
+        let rows = response
+            .pointer("/data")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let has_more = response
+            .pointer("/cursor/next")
+            .and_then(Value::as_str)
+            .is_some_and(|next| Some(next) != cursor.as_deref());
+
+        for row in rows {
+            let Some(usage) = message_usage(row) else {
+                continue;
+            };
+            match index_of_day.get(&usage.timestamp) {
+                Some(&index) => {
+                    let existing = &mut days[index];
+                    existing.direct = existing.direct.saturating_add(usage.direct);
+                    existing.total = existing.total.saturating_add(usage.total);
+                }
+                None => {
+                    index_of_day.insert(usage.timestamp, days.len());
+                    days.push(UsageDayShare {
+                        timestamp: usage.timestamp,
+                        direct: usage.direct,
+                        total: usage.total,
+                    });
+                }
+            }
+            let Some(model) = usage.model else {
+                continue;
+            };
+            match index_of_model.get(&model) {
+                Some(&index) => {
+                    let existing = &mut models[index];
+                    existing.total = existing.total.saturating_add(usage.total);
+                    existing.cost += usage.cost;
+                }
+                None => {
+                    index_of_model.insert(model.clone(), models.len());
+                    models.push(UsageModelLane {
+                        model,
+                        total: usage.total,
+                        cost: usage.cost,
+                    });
+                }
+            }
+        }
+
+        if rows.is_empty() || !has_more {
+            break;
+        }
+        cursor = response
+            .pointer("/cursor/next")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+    }
+
+    days.sort_by_key(|share| share.timestamp);
+    models.sort_by(|a, b| b.total.cmp(&a.total));
+    (!days.is_empty()).then_some(SessionSplit { days, models })
+}
+
+/// The message body inside a `/session/:id/message` row. Newer servers wrap
+/// each message as `{info, parts}`; the beta fintwind's transcript reader was
+/// written against answers flat. Accept both.
+fn message_body(row: &Value) -> &Value {
+    row.get("info").unwrap_or(row)
+}
+
+/// One assistant message's tokens, the model that produced them, and its
+/// reported cost. User messages carry none, and an aborted turn's all-zero
+/// row would otherwise book a day with no spend, so both are filtered here.
+struct MessageUsage {
+    timestamp: u64,
+    direct: u64,
+    total: u64,
+    model: Option<String>,
+    cost: f64,
+}
+
+fn message_usage(row: &Value) -> Option<MessageUsage> {
+    let body = message_body(row);
+    // `type` on the flat shape, `role` inside the info envelope.
+    if body
+        .get("type")
+        .or_else(|| body.get("role"))
+        .and_then(Value::as_str)
+        .is_some_and(|role| role != "assistant")
+    {
+        return None;
+    }
+    let timestamp = ms_to_seconds(body.pointer("/time/created"))?;
+    let empty = Value::Null;
+    let tokens = body.get("tokens").unwrap_or(&empty);
+    let lane = |pointer: &str| tokens.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
+    let (input, output, reasoning) = (lane("/input"), lane("/output"), lane("/reasoning"));
+    let (cache_read, cache_write) = (lane("/cache/read"), lane("/cache/write"));
+    let total = input
+        .saturating_add(output)
+        .saturating_add(reasoning)
+        .saturating_add(cache_read)
+        .saturating_add(cache_write);
+    if total == 0 {
+        return None;
+    }
+    Some(MessageUsage {
+        timestamp,
+        direct: input.saturating_add(output).saturating_add(reasoning),
+        total,
+        // The message's own model, not the session's: a session that switched
+        // models has both in its stream, and the session row names only the
+        // model it ended on.
+        model: message_model(body),
+        cost: body.get("cost").and_then(Value::as_f64).unwrap_or(0.0),
+    })
+}
+
+/// `<providerID>/<modelID>` for one message. The two shapes key the id
+/// differently — the flat row nests it under `model`, the info envelope may
+/// use either spelling — so both are tried before giving up.
+fn message_model(body: &Value) -> Option<String> {
+    let model = body.get("model")?;
+    let provider = model.get("providerID").and_then(Value::as_str)?;
+    let id = model
+        .get("modelID")
+        .or_else(|| model.get("id"))
+        .and_then(Value::as_str)?;
+    Some(format!("{provider}/{id}"))
+}
+
+/// The local calendar day a unix second falls on. Shared with the client so
+/// the scan and the aggregation cannot drift apart on DST.
+fn local_day(unix_seconds: u64) -> i64 {
+    fintwind_protocol::model::local_day(unix_seconds)
+}
+
+/// Session id → (last-touched seconds, its split). Keyed by session id
+/// alone because OpenCode's store is one store: ids are unique across
+/// projects, channels, and builds. Cleared wholesale rather than evicted by
+/// age — a full clear is cheaper than the bookkeeping and only costs one
+/// re-split of the spanning sessions.
+fn usage_day_cache() -> &'static Mutex<HashMap<String, (u64, Option<SessionSplit>)>> {
+    static CACHE: std::sync::OnceLock<Mutex<HashMap<String, (u64, Option<SessionSplit>)>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Rename a native session on the server. The GA endpoint table (verified
@@ -1177,6 +1616,66 @@ mod tests {
         assert!(item.complete);
     }
 
+    /// A sub-agent books its tokens into its own row and the parent's
+    /// aggregate does not include them, so the fold is the only thing that
+    /// makes the parent's total honest. Measured on a real store this was
+    /// worth 8.6% of the whole total.
+    #[test]
+    fn a_subagents_usage_folds_into_its_parent() {
+        let mut parent = UsageEntry {
+            timestamp: 10,
+            model: Some("p/m".to_owned()),
+            directory: None,
+            cost: Some(0.5),
+            input_tokens: 100,
+            output_tokens: 20,
+            reasoning_tokens: 5,
+            cache_read_tokens: 1_000,
+            cache_write_tokens: 50,
+            subagent_sessions: 0,
+            subagent_tokens: 0,
+            subagent_direct: 0,
+            days: None,
+            model_lanes: Vec::new(),
+        };
+        let child = UsageEntry {
+            timestamp: 11,
+            model: Some("p/m".to_owned()),
+            directory: None,
+            cost: Some(0.5),
+            input_tokens: 7,
+            output_tokens: 3,
+            reasoning_tokens: 1,
+            cache_read_tokens: 40,
+            cache_write_tokens: 2,
+            subagent_sessions: 0,
+            subagent_tokens: 0,
+            subagent_direct: 0,
+            days: None,
+            model_lanes: Vec::new(),
+        };
+
+        fold_subagent_into(&mut parent, &child);
+
+        // Every lane moved, so the breakdown agrees with the total.
+        assert_eq!(parent.total_tokens(), 1_175 + 53);
+        assert_eq!(parent.input_tokens, 107);
+        assert_eq!(parent.output_tokens, 23);
+        assert_eq!(parent.cache_read_tokens, 1_040);
+        assert_eq!(parent.cost, Some(1.0));
+        // The subtitle numbers describe the folded-in part only, so the page
+        // can say how much of the total came from sub-agents.
+        assert_eq!(parent.subagent_sessions, 1);
+        assert_eq!(parent.subagent_tokens, 53);
+        // Split the same way the day chart splits it: non-cache first, then
+        // the whole amount, so the timeline cannot push cache through a
+        // channel labelled "excludes cache".
+        assert_eq!(parent.subagent_direct, 11);
+        // The parent keeps its own timestamp and model: the fold moves tokens,
+        // not identity.
+        assert_eq!(parent.timestamp, 10);
+    }
+
     /// The session-row shape the global usage scan reduces: five token
     /// lanes, the model pair, the project directory, and `time.updated` as
     /// the preferred stamp.
@@ -1190,7 +1689,8 @@ mod tests {
             "cost": 1.25,
             "location": {"directory": "E:\\work\\x"}
         });
-        let entry = usage_entry_from_row(&row).unwrap();
+        let (_, facts) = row_facts(&row).unwrap();
+        let entry = usage_entry_from_row(&facts).unwrap();
         assert_eq!(entry.timestamp, 1_788_253_300);
         assert_eq!(entry.model.as_deref(), Some("glmcoding/glm-5.3"));
         assert_eq!(entry.directory.as_deref(), Some("E:\\work\\x"));
@@ -1202,28 +1702,61 @@ mod tests {
         assert_eq!(entry.cache_write_tokens, 10);
         assert_eq!(entry.total_tokens(), 1_237);
 
-        // A zero cost folds out to `None`; a row that only stamped
-        // `time.created` still lands on it.
+        // A reported zero cost stays a reported zero: "the provider chose not
+        // to charge" is an answer, and the page counts how many sessions
+        // answered at all rather than filtering the zero away here.
         let free = json!({
             "id": "ses_2", "time": {"updated": 2_000_u64},
             "tokens": {"input": 5, "output": 1}, "cost": 0
         });
-        let entry = usage_entry_from_row(&free).unwrap();
-        assert_eq!(entry.cost, None);
+        let (_, facts) = row_facts(&free).unwrap();
+        let entry = usage_entry_from_row(&facts).unwrap();
+        assert_eq!(entry.cost, Some(0.0));
         assert_eq!(entry.timestamp, 2);
         assert_eq!(entry.total_tokens(), 6);
 
         // A session that never reported tokens still counts as a session,
         // just with zero tokens.
         let tokenless = json!({"id": "ses_4", "time": {"updated": 3_000_u64}});
-        let entry = usage_entry_from_row(&tokenless).unwrap();
+        let (_, facts) = row_facts(&tokenless).unwrap();
+        let entry = usage_entry_from_row(&facts).unwrap();
         assert_eq!(entry.timestamp, 3);
         assert_eq!(entry.total_tokens(), 0);
 
-        // A child session is skipped by the scan itself; a timeless row
-        // cannot land on a day and folds out here.
+        // A timeless row cannot land on a day and folds out here.
         let timeless = json!({"id": "ses_3", "tokens": {"input": 1}});
-        assert!(usage_entry_from_row(&timeless).is_none());
+        assert!(row_facts(&timeless).is_none());
+    }
+
+    /// A fork inherits the parent's history, so its session row carries the
+    /// parent's tokens *and* `forkSessionID`; a sub-agent's tokens are its own
+    /// and its parent's aggregate does not include them. Reading only
+    /// `parentID` conflates the two: discarding a sub-agent as a fork drops
+    /// real spend.
+    #[test]
+    fn session_kind_tells_a_fork_from_a_subagent() {
+        let parent = json!({"id": "ses_p", "time": {"updated": 1}});
+        let fork = json!({
+            "id": "ses_f", "forkSessionID": "ses_p", "time": {"updated": 2}
+        });
+        let subagent = json!({
+            "id": "ses_c", "parentID": "ses_p", "time": {"updated": 3}
+        });
+
+        assert_eq!(session_kind(&parent), SessionKind::TopLevel);
+        assert_eq!(session_kind(&fork), SessionKind::Fork);
+        assert_eq!(session_kind(&subagent), SessionKind::SubAgent);
+
+        // Both are excluded from the sidebar's linear-conversation list.
+        assert!(is_child_session(&fork));
+        assert!(is_child_session(&subagent));
+        assert!(!is_child_session(&parent));
+
+        // Only a sub-agent folds into a parent: a fork's tokens already
+        // belong to the parent's history, and folding it would count the same
+        // messages twice.
+        assert_eq!(session_kind(&subagent), SessionKind::SubAgent);
+        assert_ne!(session_kind(&fork), SessionKind::SubAgent);
     }
 
     #[test]

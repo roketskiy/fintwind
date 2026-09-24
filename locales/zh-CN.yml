@@ -1155,8 +1155,14 @@ usage_page.models_caption: 共 %{count} 个模型
 usage_page.model_sessions: "%{count} 个会话"
 usage_page.unknown_model: 未知模型
 usage_page.kpi_sessions: 会话数
+usage_page.subagent_sessions_value: 含 %{count} 个子代理会话 · %{tokens}
 usage_page.kpi_cost: 费用
 usage_page.cost_sessions: "%{count} 个会话计费"
 usage_page.cache_hit_short: 命中
 usage_page.projects_title: 项目分布
 usage_page.projects_caption: 共 %{count} 个项目
+usage_page.providers_title: 提供商分布
+usage_page.providers_caption: 共 %{count} 个提供商
+usage_page.provider_models: "%{count} 个模型"
+usage_page.truncated_notice: "已扫描 %{sessions} 个会话就达到了扫描上限，更早的会话未计入下列统计。"
+usage_page.updated_at: "更新于 %{time}"

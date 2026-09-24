@@ -144,8 +144,11 @@ impl Fintwind {
         }
         if page == SettingsPage::Usage {
             // A stored scan inside the staleness window serves immediately;
-            // an expired one refreshes in the background.
+            // an expired one refreshes in the background. While the page
+            // stays open it re-checks on its own, so a session running
+            // elsewhere shows up without a manual refresh.
             self.ensure_usage_stats(false, cx);
+            self.start_usage_auto_refresh(cx);
         }
         cx.notify();
     }

@@ -1564,6 +1564,13 @@ pub struct Fintwind {
     usage_stats_generation: u64,
     usage_stats_pending: bool,
     usage_stats_loaded_at: Option<Instant>,
+    /// Wall-clock reading of when the last successful scan landed, shown in
+    /// the toolbar so a silent refresh is visible as an update rather than a
+    /// page that never changes. `None` before the first scan.
+    usage_loaded_label: Option<String>,
+    /// Guards the page's auto-refresh loop: one at a time, so leaving and
+    /// reopening the page quickly cannot stack several.
+    usage_refresh_running: bool,
     /// What the Usage page's KPIs, daily bars, and model ranking aggregate
     /// over. The heatmap keeps its own fixed week window.
     usage_range: usage_page::UsageRange,
@@ -3112,6 +3119,8 @@ impl Fintwind {
                 usage_stats_generation: 0,
                 usage_stats_pending: false,
                 usage_stats_loaded_at: None,
+                usage_loaded_label: None,
+                usage_refresh_running: false,
                 usage_range: Default::default(),
                 usage_views: Default::default(),
                 settings_scroll: ScrollHandle::new(),

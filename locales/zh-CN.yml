@@ -198,6 +198,11 @@ providers.test_connection: 测试连接
 providers.testing_connection: 测试中…
 providers.connection_tooltip: 向 OpenCode 服务查询该供应商可用的模型数量并测量响应
 providers.connection_ok: "已连通 · %{latency} · %{count} 个模型"
+providers.builtin_catalog_check: 检查模型目录
+providers.builtin_catalog_checking: 正在查询目录…
+providers.builtin_catalog_tooltip: 查询本机 OpenCode 服务中的该供应商模型目录；此操作不会检测供应商 API 的实际连通性
+providers.builtin_catalog_ok: "模型目录可用 · %{count} 个模型"
+providers.builtin_catalog_failed: "模型目录查询失败：%{error}"
 providers.connection_failed: "连接失败：%{error}"
 providers.error_invalid_url: Base URL 不是 http(s) 地址
 providers.error_auth: "端点拒绝了该 API Key（HTTP %{status}）"

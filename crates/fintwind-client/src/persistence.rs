@@ -1090,15 +1090,15 @@ impl StateStore {
         )
     }
 
-    /// Count the models the server exposes for a built-in provider, timed —
-    /// the connectivity probe for authorized catalog providers. Blocking
+    /// Count the models the local OpenCode server exposes for a built-in
+    /// provider. This does not test remote provider connectivity. Blocking
     /// RPC; call off the UI thread.
     pub fn probe_builtin_provider(
         &self,
         binary: PathBuf,
         directory: PathBuf,
         provider_id: String,
-    ) -> io::Result<(usize, Duration)> {
+    ) -> io::Result<usize> {
         match self
             .daemon
             .client()
@@ -1113,9 +1113,7 @@ impl StateStore {
             )
             .map_err(to_io_error)?
         {
-            ResponsePayload::BuiltinProviderProbed { models, latency_ms } => {
-                Ok((models, Duration::from_millis(latency_ms)))
-            }
+            ResponsePayload::BuiltinProviderProbed { models } => Ok(models),
             _ => Err(io::Error::other(
                 "fintwind daemon returned an invalid provider probe",
             )),

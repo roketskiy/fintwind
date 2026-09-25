@@ -2336,11 +2336,7 @@ impl Fintwind {
             let action_label_running = subagent_work
                 .as_ref()
                 .map(|(_, _, status, ..)| status.is_live())
-                .unwrap_or(
-                    !activity.complete
-                        && !activity.failed
-                        && activity.kind != ActivityKind::Reasoning,
-                );
+                .unwrap_or(reasoning_live || (!activity.complete && !activity.failed));
             let mut row_detail = activity_row_detail(activity, reasoning_live);
             if row_detail.trim().is_empty() {
                 row_detail = preview;

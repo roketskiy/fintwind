@@ -7,6 +7,14 @@ const MAX_SETTLED_BACKGROUND_ITEMS: usize = 24;
 const OUTPUT_CACHE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const BACKGROUND_SUMMARY_MENU_ID: &str = "background-work-summary";
 
+fn flowing_background_work_label(text: String, base: Hsla, is_dark: bool) -> AnyElement {
+    motion::pulse(Duration::from_millis(2400), move |phase| {
+        flowing_activity_label(&text, phase, base, is_dark, FontWeight::NORMAL).into_any_element()
+    })
+    .every(2)
+    .into_any_element()
+}
+
 #[derive(Default)]
 pub(super) struct BackgroundWorkRegistry {
     items: HashMap<BackgroundWorkKey, BackgroundWorkItem>,
@@ -2577,7 +2585,17 @@ fn render_background_summary_row(
                 } else {
                     theme.text
                 })
-                .child(item.title.clone()),
+                .child(
+                    if item.key.kind == BackgroundWorkKind::Subagent && item.status.is_live() {
+                        flowing_background_work_label(
+                            item.title.to_string(),
+                            theme.text,
+                            theme.is_dark,
+                        )
+                    } else {
+                        item.title.clone().into_any_element()
+                    },
+                ),
         )
         .children(trailing)
         .on_click(move |_, window, cx| {

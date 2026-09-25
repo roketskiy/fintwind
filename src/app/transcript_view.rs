@@ -2313,6 +2313,14 @@ impl Fintwind {
                 activity_preview(activity)
             };
             let action_label = activity_action_label(activity);
+            let action_label_running = subagent_work
+                .as_ref()
+                .map(|(_, _, status, ..)| status.is_live())
+                .unwrap_or(
+                    !activity.complete
+                        && !activity.failed
+                        && activity.kind != ActivityKind::Reasoning,
+                );
             let mut row_detail = activity_row_detail(activity, reasoning_live);
             if row_detail.trim().is_empty() {
                 row_detail = preview;
@@ -2411,7 +2419,24 @@ impl Fintwind {
                                 .flex_none()
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(theme.text_secondary)
-                                .child(SharedString::from(action_label)),
+                                .child(if action_label_running {
+                                    let base = theme.text_secondary;
+                                    let is_dark = theme.is_dark;
+                                    motion::pulse(Duration::from_millis(2400), move |phase| {
+                                        flowing_activity_label(
+                                            &action_label,
+                                            phase,
+                                            base,
+                                            is_dark,
+                                            FontWeight::SEMIBOLD,
+                                        )
+                                        .into_any_element()
+                                    })
+                                    .every(2)
+                                    .into_any_element()
+                                } else {
+                                    SharedString::from(action_label).into_any_element()
+                                }),
                         )
                         .when(!row_detail.is_empty(), |element| {
                             element.child(

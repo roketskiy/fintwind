@@ -766,6 +766,16 @@ session.revert_to_here:
   en: Revert to here
 session.revert_to_here_title:
   en: Revert to Here
+session.rewind_blocked_not_turn_opening:
+  en: Only the message that opened this turn can revert it
+session.rewind_blocked_not_git:
+  en: This project is not a Git repository, so there is no snapshot to restore
+session.rewind_blocked_checkpoint_error:
+  en: The workspace snapshot failed to capture, so this turn cannot be reverted
+session.rewind_blocked_snapshot_missing:
+  en: No workspace snapshot is available before this turn
+session.rewind_blocked_provider_link:
+  en: This session lost its provider link, so the rewind cannot be driven
 session.reverting_message:
   en: Reverting message…
 session.reverting_message_title:

@@ -841,6 +841,49 @@ struct UserMessageAction {
     turn_count: usize,
 }
 
+/// Why a settled user message cannot offer the rewind affordance. The
+/// transcript keeps the affordance visible in these cases — disabled, with
+/// the reason as its tooltip — so a missing control never reads as a
+/// rendering bug.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RewindUnavailableReason {
+    /// A steer joins an already-opened turn, and only the prompt that opened
+    /// the turn is a rewind boundary.
+    NotTurnOpening,
+    /// The workspace is not a Git repository, so no turn snapshot can exist.
+    NotGitRepository,
+    /// The turn's checkpoint capture failed, leaving no baseline to restore.
+    CheckpointError,
+    /// The baseline snapshot has not landed yet — the capture or the ref
+    /// prefetch is still in flight, and the affordance becomes available
+    /// once the refs settle.
+    SnapshotMissing,
+    /// The local row lost its provider association, so the provider side of
+    /// the rewind cannot be driven.
+    ProviderLinkMissing,
+}
+
+/// What one user message's rewind affordance should render.
+#[derive(Clone, Copy, Debug)]
+enum UserMessageRewind {
+    /// The rewind can start from this message.
+    Ready(UserMessageAction),
+    /// Render the affordance disabled with the reason as its tooltip.
+    Blocked(RewindUnavailableReason),
+    /// Not eligible at all — no affordance rendered.
+    Hidden,
+}
+
+impl UserMessageRewind {
+    /// The action when the rewind can actually start from this message.
+    fn ready(self) -> Option<UserMessageAction> {
+        match self {
+            Self::Ready(action) => Some(action),
+            Self::Blocked(_) | Self::Hidden => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct AssistantMessageAction {
     session_id: Uuid,

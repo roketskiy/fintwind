@@ -1833,7 +1833,7 @@ impl Fintwind {
                     assistant_turn_stats: None,
                     copied: false,
                     assistant_message_action: None,
-                    user_message_action: None,
+                    user_message_rewind: UserMessageRewind::Hidden,
                     user_message_fill_width: true,
                     message_edit_input: None,
                     attachment_menus: Vec::new(),

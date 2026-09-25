@@ -205,7 +205,7 @@ fn render_message_footer(
     group_name: SharedString,
     align_right: bool,
     assistant_message_action: Option<AssistantMessageAction>,
-    user_message_action: Option<UserMessageAction>,
+    user_message_rewind: UserMessageRewind,
     fintwind: gpui::WeakEntity<Fintwind>,
 ) -> AnyElement {
     let theme = *theme;
@@ -314,8 +314,9 @@ fn render_message_footer(
         footer = footer.child(timestamp);
     }
 
-    if let Some(action) = user_message_action {
+    if !matches!(user_message_rewind, UserMessageRewind::Hidden) {
         let edit_fintwind = fintwind;
+        let ready_action = user_message_rewind.ready();
         footer = footer.child(
             div()
                 .id(SharedString::from(format!(
@@ -328,18 +329,51 @@ fn render_message_footer(
                 .items_center()
                 .justify_center()
                 .cursor_default()
-                .hover(|element| element.bg(theme.overlay_strong))
+                .when(ready_action.is_some(), |element| {
+                    element.hover(|element| element.bg(theme.overlay_strong))
+                })
+                .when(ready_action.is_none(), |element| element.opacity(0.45))
                 .child(icon("icons/rewind.svg", 14.0, footer_color))
-                .tooltip(Tooltip::text(tr_cow!("session.revert_to_here")))
-                .on_click(move |_, window, cx| {
-                    let _ = edit_fintwind.update(cx, |this, cx| {
-                        this.begin_message_edit(action, window, cx);
-                    });
+                .tooltip(Tooltip::text(rewind_tooltip_text(user_message_rewind)))
+                .when_some(ready_action, |element, action| {
+                    element.on_click(move |_, window, cx| {
+                        let _ = edit_fintwind.update(cx, |this, cx| {
+                            this.begin_message_edit(action, window, cx);
+                        });
+                    })
                 }),
         );
     }
 
     footer.into_any_element()
+}
+
+/// The rewind affordance's tooltip: the action label when available, or why
+/// it is blocked. Stays on borrowed locale data so the per-frame row builder
+/// does not allocate.
+fn rewind_tooltip_text(rewind: UserMessageRewind) -> std::borrow::Cow<'static, str> {
+    match rewind {
+        UserMessageRewind::Ready(_) | UserMessageRewind::Hidden => {
+            tr_cow!("session.revert_to_here")
+        }
+        UserMessageRewind::Blocked(reason) => match reason {
+            RewindUnavailableReason::NotTurnOpening => {
+                tr_cow!("session.rewind_blocked_not_turn_opening")
+            }
+            RewindUnavailableReason::NotGitRepository => {
+                tr_cow!("session.rewind_blocked_not_git")
+            }
+            RewindUnavailableReason::CheckpointError => {
+                tr_cow!("session.rewind_blocked_checkpoint_error")
+            }
+            RewindUnavailableReason::SnapshotMissing => {
+                tr_cow!("session.rewind_blocked_snapshot_missing")
+            }
+            RewindUnavailableReason::ProviderLinkMissing => {
+                tr_cow!("session.rewind_blocked_provider_link")
+            }
+        },
+    }
 }
 
 /// Everything one transcript message row needs to render itself. Bundled
@@ -356,7 +390,7 @@ pub(super) struct MessageRender<'a> {
     pub(super) assistant_turn_stats: Option<SharedString>,
     pub(super) copied: bool,
     pub(super) assistant_message_action: Option<AssistantMessageAction>,
-    pub(super) user_message_action: Option<UserMessageAction>,
+    pub(super) user_message_rewind: UserMessageRewind,
     pub(super) user_message_fill_width: bool,
     pub(super) message_edit_input: Option<Entity<ComposerInput>>,
     pub(super) attachment_menus: Vec<ContextMenuHandle>,
@@ -559,7 +593,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         assistant_turn_stats,
         copied,
         assistant_message_action,
-        user_message_action,
+        user_message_rewind,
         user_message_fill_width,
         message_edit_input,
         attachment_menus,
@@ -732,7 +766,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                     group_name,
                     true,
                     None,
-                    user_message_action,
+                    user_message_rewind,
                     fintwind.clone(),
                 ));
             }
@@ -775,7 +809,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                     group_name,
                     false,
                     assistant_message_action,
-                    None,
+                    UserMessageRewind::Hidden,
                     fintwind.clone(),
                 ));
             }
@@ -932,7 +966,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
             message_menu_items(
                 &menu_copy_content,
                 role,
-                user_message_action,
+                user_message_rewind,
                 assistant_message_action,
                 &selection,
                 &composer,
@@ -949,7 +983,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
 fn message_menu_items(
     content: &str,
     role: MessageRole,
-    user_message_action: Option<UserMessageAction>,
+    user_message_rewind: UserMessageRewind,
     assistant_message_action: Option<AssistantMessageAction>,
     selection: &TranscriptSelection,
     composer: &Entity<ComposerInput>,
@@ -972,7 +1006,7 @@ fn message_menu_items(
         },
     ));
 
-    if role == MessageRole::User && user_message_action.is_none() {
+    if role == MessageRole::User && user_message_rewind.ready().is_none() {
         let composer = composer.clone();
         let edit_content = content.to_owned();
         items.push(MenuItem::new(
@@ -993,17 +1027,33 @@ fn message_menu_items(
         }));
     }
 
-    if let Some(action) = user_message_action {
-        let fintwind = fintwind.clone();
-        items.push(MenuItem::Separator);
-        items.push(
-            MenuItem::new(tr!("session.revert_to_here_title"), move |window, cx| {
-                let _ = fintwind.update(cx, |this, cx| {
-                    this.begin_message_edit(action, window, cx);
-                });
-            })
-            .icon("icons/rewind.svg"),
-        );
+    match user_message_rewind {
+        UserMessageRewind::Hidden => {}
+        UserMessageRewind::Ready(action) => {
+            let fintwind = fintwind.clone();
+            items.push(MenuItem::Separator);
+            items.push(
+                MenuItem::new(tr!("session.revert_to_here_title"), move |window, cx| {
+                    let _ = fintwind.update(cx, |this, cx| {
+                        this.begin_message_edit(action, window, cx);
+                    });
+                })
+                .icon("icons/rewind.svg"),
+            );
+        }
+        UserMessageRewind::Blocked(_) => {
+            // The menu has no tooltips, so the disabled entry carries the
+            // reason itself as its label.
+            items.push(MenuItem::Separator);
+            items.push(
+                MenuItem::new(
+                    rewind_tooltip_text(user_message_rewind).into_owned(),
+                    |_, _| {},
+                )
+                .icon("icons/rewind.svg")
+                .disabled(true),
+            );
+        }
     }
 
     if let Some(action) = assistant_message_action {

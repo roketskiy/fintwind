@@ -1359,6 +1359,13 @@ impl Fintwind {
                 });
             }
         });
+        // The capsule floats over the transcript, so its hover and pressed
+        // washes have to be composited onto the opaque raised surface first:
+        // assigning the translucent overlay directly would replace the solid
+        // background and let the message behind show through the pill.
+        let rest_surface = theme.raised;
+        let hover_surface = rest_surface.blend(theme.overlay);
+        let active_surface = rest_surface.blend(theme.overlay_strong);
         let trigger = div()
             .id("task-capsule-trigger")
             .h(px(28.0))
@@ -1370,7 +1377,7 @@ impl Fintwind {
             } else {
                 theme.border_strong
             })
-            .bg(theme.raised)
+            .bg(rest_surface)
             .shadow_xs()
             .flex_none()
             .flex()
@@ -1380,8 +1387,8 @@ impl Fintwind {
             .text_size(ui_px(12.0))
             .font_weight(FontWeight::MEDIUM)
             .focus_visible(|style| style.border_color(theme.accent))
-            .hover(|style| style.bg(theme.overlay))
-            .active(|style| style.bg(theme.overlay_strong))
+            .hover(|style| style.bg(hover_surface))
+            .active(|style| style.bg(active_surface))
             .tooltip(Tooltip::text(tooltip))
             .child(icon(
                 "icons/git-branch.svg",

@@ -1140,7 +1140,6 @@ usage.compacting: コンテキストを圧縮中…
 usage.compaction_failed: 圧縮に失敗しました
 usage.compaction_retry: 圧縮を再試行
 usage.panel_title: コンテキスト
-usage.available: 余裕あり
 usage.near_full: 残り少なめ
 usage.full: ほぼ満杯
 usage.unknown: 不明
@@ -1154,13 +1153,11 @@ usage.full_detail: ほぼ満杯です。続行前の圧縮を検討してくだ�
 usage.compact_action: コンテキストを圧縮
 usage.compact_unavailable: 現在このセッションは圧縮できません。
 usage.latest_call: 直近の呼び出し
-usage.latest_detail: セッション合計ではなく、この呼び出しのトークン数です。
 usage.cache_read: キャッシュ読込
 usage.cache_write: キャッシュ書込
 usage.input: 非キャッシュ入力
 usage.reasoning: 推論
 usage.session_total: セッション累計
-usage.session_total_detail: 処理済みトークン数です。現在の占有量ではありません。
 usage.window_section: ウィンドウ
 usage.window_size: サイズ
 usage.compaction_section: 圧縮

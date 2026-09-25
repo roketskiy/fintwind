@@ -2190,8 +2190,6 @@ usage.compaction_retry:
   en: Retry compaction
 usage.panel_title:
   en: Context
-usage.available:
-  en: Available
 usage.near_full:
   en: Getting full
 usage.full:
@@ -2218,8 +2216,6 @@ usage.compact_unavailable:
   en: This session cannot be compacted right now.
 usage.latest_call:
   en: Latest call
-usage.latest_detail:
-  en: This call's tokens, not the session total.
 usage.cache_read:
   en: Cache read
 usage.cache_write:
@@ -2230,8 +2226,6 @@ usage.reasoning:
   en: Reasoning
 usage.session_total:
   en: Session total
-usage.session_total_detail:
-  en: Tokens processed across all calls, not current occupancy.
 usage.window_section:
   en: Window
 usage.window_size:

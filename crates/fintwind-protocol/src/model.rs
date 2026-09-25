@@ -590,6 +590,9 @@ pub struct AgentTurn {
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ContextUsage {
     pub tokens: u64,
+    /// Window metadata may arrive before the first measured model call.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub measured: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<u64>,
     /// Every step's prompt + output summed across the session — the tokens
@@ -607,6 +610,18 @@ pub struct ContextUsage {
     /// and uncached input together; the denominator of the cache hit rate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u64>,
+    /// Breakdown of the latest settled call, not session-wide throughput.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest: Option<LatestCallUsage>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct LatestCallUsage {
+    pub input: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub output: u64,
+    pub reasoning: u64,
 }
 
 /// The lifecycle of one provider-side context compaction. A session has at
@@ -1656,6 +1671,7 @@ pub enum DriverEvent {
         session_total: Option<u64>,
         cache_read: Option<u64>,
         prompt_tokens: Option<u64>,
+        latest: Option<LatestCallUsage>,
     },
     /// Account-level rate-limit meters carried by the provider's own stream
     /// (Codex's `account/rateLimits/updated`). Same shape the OAuth fetcher

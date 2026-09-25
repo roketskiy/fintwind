@@ -1,26 +1,16 @@
-//! The usage meter under the composer: a circular context-window gauge that
-//! opens a panel with the session's context occupancy and its cumulative
-//! token throughput and cache hit rate. Context numbers stream in from the
-//! OpenCode transport. Frames read only snapshots stored on the entity.
-
+//! Session context inspector and the compact footer gauge that opens it.
 use crate::theme::ui_px;
 
-use gpui::{PathBuilder, WeakEntity, relative};
+use gpui::{PathBuilder, relative};
 
 use super::*;
 use crate::usage::{cache_hit_percent, format_percent, format_tokens};
 
-const USAGE_METER_MENU_ID: &str = "usage-meter";
-
 impl Fintwind {
-    /// Whether the footer shows the gauge. Always true with a session
-    /// selected — an empty ring is the honest "nothing measured yet" state,
-    /// and hiding it would make the control feel intermittent.
     pub(super) fn usage_meter_available(&self) -> bool {
         self.selected_session().is_some()
     }
 
-    /// Primary modifier + U: toggle the usage panel as if its footer trigger were clicked.
     pub(super) fn toggle_usage_panel_action(
         &mut self,
         _: &ToggleUsagePanel,
@@ -30,132 +20,572 @@ impl Fintwind {
         if self.settings_page.is_some() || !self.usage_meter_available() {
             return;
         }
-        let menus = self.menus.borrow();
-        let Some(handle) = menus.get(USAGE_METER_MENU_ID).cloned() else {
-            return;
-        };
-        // A keyboard toggle produces no mouse-down for another open menu's
-        // dismiss-on-down-out to see, so close the rest here.
-        let other_open: Vec<_> = menus
-            .iter()
-            .filter(|(id, other)| id.as_ref() != USAGE_METER_MENU_ID && other.is_open())
-            .map(|(_, other)| other.clone())
-            .collect();
-        drop(menus);
-        window.defer(cx, move |window, cx| {
-            for menu in other_open {
-                menu.close(window, cx);
-            }
-            crate::ui::menu::toggle_popover(&handle, MenuAlign::AboveRight, window, cx);
-        });
+        self.toggle_context_panel(window, cx);
     }
 
-    /// The footer's circular context gauge plus its anchored panel. `None`
-    /// while there is nothing to show for the selected session's provider.
-    pub(super) fn render_usage_meter(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if !self.usage_meter_available() {
-            return None;
+    fn toggle_context_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.right_panel_visible
+            && self.active_right_panel_surface() == Some(&RightPanelSurface::Context)
+        {
+            self.close_context_panel(cx);
+            window.focus(&self.composer.read(cx).focus(), cx);
+        } else {
+            self.open_right_panel_surface(RightPanelSurface::Context, cx);
+            window.focus(&self.context_panel_focus, cx);
         }
-        let session = self.selected_session()?;
-        let context = session.context_usage;
-        let compaction = session.compaction.clone();
-        let session_id = session.id;
+    }
+
+    pub(super) fn render_usage_meter(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let usage = self.selected_session()?.context_usage;
         let theme = Theme::current(cx);
-
-        let weak = cx.entity().downgrade();
-        let panel_weak = cx.entity().downgrade();
-        let handle = self.menu_handle_with(USAGE_METER_MENU_ID, cx, move |open, window, cx| {
-            if open {
-                let mut card_focus = None;
-                let _ = weak.update(cx, |this, cx| {
-                    card_focus = this
-                        .menus
-                        .borrow()
-                        .get(USAGE_METER_MENU_ID)
-                        .map(|handle| handle.focus_handle().clone());
-                    cx.notify();
-                });
-                // The card is deferred, so its focus handle joins the
-                // dispatch tree only after the deferred draw — the same
-                // two-frame wait the menus use. Focused, the card's menu
-                // context is what lets `escape` dismiss it.
-                if let Some(focus) = card_focus {
-                    window.on_next_frame(move |window, _| {
-                        window.on_next_frame(move |window, cx| window.focus(&focus, cx));
-                    });
-                }
-            } else {
-                let mut composer_focus = None;
-                let _ = weak.update(cx, |this, cx| {
-                    composer_focus = Some(this.composer.read(cx).focus());
-                    cx.notify();
-                });
-                if let Some(focus) = composer_focus {
-                    window.focus(&focus, cx);
-                }
-            }
-        });
-
-        let percent = context.and_then(context_percent);
+        let percent = usage.and_then(context_percent);
         let fill = match percent {
             Some(percent) if percent >= 95.0 => theme.danger,
             Some(percent) if percent >= 80.0 => theme.warning,
             _ => theme.gauge,
         };
         let tooltip = match percent {
-            Some(percent) => SharedString::from(tr!(
+            Some(percent) => tr!(
                 "usage.context_used",
                 percent = format!("{percent:.1}"),
                 shortcut = "Ctrl+U"
-            )),
-            None => SharedString::from(tr!("usage.shortcut", shortcut = "Ctrl+U")),
+            ),
+            None => tr!("usage.shortcut", shortcut = "Ctrl+U"),
         };
+        let open = self.right_panel_visible
+            && self.active_right_panel_surface() == Some(&RightPanelSurface::Context);
 
-        let trigger = div()
-            .id("usage-meter")
-            .h(px(24.0))
-            .px(px(6.0))
-            .rounded(px(5.0))
-            .flex()
-            .items_center()
-            .flex_none()
-            .cursor_default()
-            .hover(|element| element.bg(theme.overlay))
-            .active(|element| element.bg(theme.overlay_strong))
-            .when(handle.is_open(), |element| element.bg(theme.overlay_strong))
-            .tooltip(Tooltip::text(tooltip))
-            .child(context_gauge(percent, theme.border_strong, fill));
+        Some(
+            div()
+                .id("usage-meter")
+                .track_focus(&self.context_meter_focus)
+                .tab_index(0)
+                .focus_visible(|style| style.border_1().border_color(theme.accent))
+                .h(px(24.0))
+                .px(px(6.0))
+                .rounded(px(5.0))
+                .flex()
+                .items_center()
+                .flex_none()
+                .cursor_default()
+                .hover(|element| element.bg(theme.overlay))
+                .active(|element| element.bg(theme.overlay_strong))
+                .when(open, |element| element.bg(theme.overlay_strong))
+                .tooltip(Tooltip::text(tooltip))
+                .on_click(cx.listener(|this, _, window, cx| this.toggle_context_panel(window, cx)))
+                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                        this.toggle_context_panel(window, cx);
+                        cx.stop_propagation();
+                    }
+                }))
+                .child(context_gauge(percent, theme.border_strong, fill))
+                .into_any_element(),
+        )
+    }
 
-        Some(popover(
-            trigger,
-            &handle,
-            MenuAlign::AboveRight,
-            move |handle, _, cx| {
-                usage_panel(
-                    handle,
-                    context,
-                    compaction.clone(),
-                    session_id,
-                    panel_weak.clone(),
-                    cx,
+    pub(super) fn render_context_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let Some(session) = self.selected_session() else {
+            return div().into_any_element();
+        };
+        let session_id = session.id;
+        let usage = session.context_usage;
+        let compaction = session.compaction.clone();
+        let model_name = session.model.clone();
+        let selected_window = session.context_window.clone();
+        let model = self.model_metadata_for_session(session).cloned();
+        let can_compact = self.runtimes.contains_key(&session_id);
+        let percent = usage.and_then(context_percent);
+        let status = match percent {
+            Some(value) if value >= 95.0 => tr!("usage.full"),
+            Some(value) if value >= 80.0 => tr!("usage.near_full"),
+            Some(_) => tr!("usage.available"),
+            None => tr!("usage.unknown"),
+        };
+        let status_color = match percent {
+            Some(value) if value >= 95.0 => theme.danger,
+            Some(value) if value >= 80.0 => theme.warning,
+            _ => theme.text_secondary,
+        };
+        let (headline, capacity, hint) = match usage {
+            Some(usage)
+                if (usage.measured || usage.tokens > 0)
+                    && usage.window.is_some_and(|window| window > 0) =>
+            {
+                let window = usage.window.unwrap_or(0);
+                (
+                    format_percent(percent.unwrap_or(0.0)),
+                    format!(
+                        "{} / {}",
+                        format_tokens(usage.tokens),
+                        format_tokens(window)
+                    ),
+                    tr!(
+                        "usage.remaining",
+                        count = format_tokens(window.saturating_sub(usage.tokens))
+                    ),
                 )
-            },
-        ))
+            }
+            Some(usage) if usage.measured || usage.tokens > 0 => (
+                format_tokens(usage.tokens),
+                tr!("usage.window_unknown"),
+                tr!("usage.window_unknown_detail"),
+            ),
+            _ => (
+                "—".to_owned(),
+                tr!("usage.not_measured"),
+                tr!("usage.not_measured_detail"),
+            ),
+        };
+        let notice = match percent {
+            Some(value) if value >= 95.0 => tr!("usage.full_detail"),
+            Some(value) if value >= 80.0 => tr!("usage.near_full_detail"),
+            _ => hint,
+        };
+        let running = compaction
+            .as_ref()
+            .is_some_and(|state| state.status == CompactionStatus::Running);
+        let failed = compaction
+            .as_ref()
+            .is_some_and(|state| state.status == CompactionStatus::Failed);
+        let action_label = if running {
+            tr!("usage.compacting")
+        } else if failed {
+            tr!("usage.compaction_retry")
+        } else {
+            tr!("usage.compact_action")
+        };
+        let action_enabled = can_compact && !running;
+        let compact_focus = self.context_compact_focus.clone();
+
+        let mut body = div()
+            .id("context-panel-scroll")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .p(px(16.0))
+            .flex()
+            .flex_col()
+            .gap(px(20.0))
+            .text_size(ui_px(12.0))
+            .text_color(theme.text);
+
+        let hero = div()
+            .flex()
+            .flex_col()
+            .gap(px(9.0))
+            .child(
+                div()
+                    .flex()
+                    .items_baseline()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_size(ui_px(28.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(headline),
+                    )
+                    .child(div().text_color(status_color).child(status)),
+            )
+            .child(div().text_color(theme.text_secondary).child(capacity))
+            .when_some(percent, |element, percent| {
+                element.child(meter_bar(&theme, percent))
+            })
+            .child(div().text_color(theme.text_secondary).child(notice))
+            .when(failed, |element| {
+                element.child(
+                    div().text_color(theme.warning).child(
+                        compaction
+                            .as_ref()
+                            .and_then(|state| state.error.clone())
+                            .unwrap_or_else(|| tr!("usage.compaction_failed")),
+                    ),
+                )
+            })
+            .child(
+                div().flex().justify_end().child(
+                    div()
+                        .id("context-compact-action")
+                        .track_focus(&compact_focus)
+                        .tab_index(0)
+                        .min_h(px(28.0))
+                        .px(px(10.0))
+                        .rounded(px(6.0))
+                        .flex()
+                        .items_center()
+                        .cursor_default()
+                        .bg(theme.overlay)
+                        .border_1()
+                        .border_color(
+                            if action_enabled && percent.is_some_and(|value| value >= 80.0) {
+                                theme.accent
+                            } else {
+                                theme.border
+                            },
+                        )
+                        .text_color(if action_enabled {
+                            theme.text
+                        } else {
+                            theme.text_tertiary
+                        })
+                        .focus_visible(|style| style.border_1().border_color(theme.accent))
+                        .when(action_enabled, |element| {
+                            element
+                                .hover(|style| style.bg(theme.overlay_strong))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.request_context_compaction(session_id, cx)
+                                }))
+                                .on_key_down(cx.listener(
+                                    move |this, event: &KeyDownEvent, _, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            this.request_context_compaction(session_id, cx);
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                ))
+                        })
+                        .child(action_label),
+                ),
+            )
+            .when(!can_compact && !running, |element| {
+                element.child(
+                    div()
+                        .text_color(theme.text_tertiary)
+                        .child(tr!("usage.compact_unavailable")),
+                )
+            });
+        body = body.child(hero);
+
+        if let Some(latest) = usage.and_then(|usage| usage.latest) {
+            // Providers may report `tokens.total` independently of the split.
+            // Percentages in this section describe only the reported split.
+            let total = latest
+                .input
+                .saturating_add(latest.cache_read)
+                .saturating_add(latest.cache_write)
+                .saturating_add(latest.output)
+                .saturating_add(latest.reasoning)
+                .max(1);
+            let rows = [
+                (tr!("usage.cache_read"), latest.cache_read),
+                (tr!("usage.cache_write"), latest.cache_write),
+                (tr!("usage.input"), latest.input),
+                (tr!("usage.output"), latest.output),
+                (tr!("usage.reasoning"), latest.reasoning),
+            ];
+            let segments = rows
+                .iter()
+                .enumerate()
+                .filter(|(_, (_, count))| *count > 0)
+                .map(|(index, (_, count))| {
+                    (index, (*count as f64 / total as f64).clamp(0.0, 1.0) as f32)
+                });
+            let colors = [
+                theme.accent,
+                theme.gauge,
+                theme.text_secondary,
+                theme.border_strong,
+                theme.text_tertiary,
+            ];
+            let mut bar = div()
+                .h(px(6.0))
+                .w_full()
+                .rounded_full()
+                .overflow_hidden()
+                .flex()
+                .bg(theme.overlay);
+            for (index, fraction) in segments {
+                bar = bar.child(div().h_full().w(relative(fraction)).bg(colors[index]));
+            }
+            let mut section =
+                inspector_section(&theme, tr!("usage.latest_call"), tr!("usage.latest_detail"))
+                    .child(bar);
+            for (index, (label, count)) in rows.into_iter().enumerate() {
+                if count > 0 {
+                    section = section.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(
+                                div()
+                                    .size(px(6.0))
+                                    .flex_none()
+                                    .rounded_full()
+                                    .bg(colors[index]),
+                            )
+                            .child(div().text_color(theme.text_secondary).child(label))
+                            .child(div().flex_1())
+                            .child(div().text_color(theme.text).child(format!(
+                                "{}   {}",
+                                format_tokens(count),
+                                format_percent(count as f64 * 100.0 / total as f64)
+                            ))),
+                    );
+                }
+            }
+            body = body.child(section);
+        }
+
+        if let Some(usage) =
+            usage.filter(|usage| usage.total_tokens.is_some() || usage.prompt_tokens.is_some())
+        {
+            let mut section = inspector_section(
+                &theme,
+                tr!("usage.session_total"),
+                tr!("usage.session_total_detail"),
+            );
+            if let Some(total) = usage.total_tokens {
+                section = section.child(inspector_row(
+                    &theme,
+                    tr!("usage.total_tokens"),
+                    format_tokens(total),
+                ));
+            }
+            if let Some(rate) = cache_hit_percent(
+                usage.cache_read.unwrap_or(0),
+                usage.prompt_tokens.unwrap_or(0),
+            ) {
+                section = section.child(inspector_row(
+                    &theme,
+                    tr!("usage.cache_hit_rate"),
+                    format_percent(rate),
+                ));
+            }
+            body = body.child(section);
+        }
+
+        let mut model_section =
+            inspector_section(&theme, tr!("usage.window_section"), String::new());
+        if let Some(name) = model_name {
+            model_section = model_section.child(inspector_row(&theme, tr!("usage.model"), name));
+        }
+        if let Some(model) = model {
+            let selected = selected_window
+                .as_deref()
+                .filter(|selected| {
+                    model
+                        .context_windows
+                        .iter()
+                        .any(|option| option.id == *selected)
+                })
+                .or(model.default_context_window.as_deref())
+                .or_else(|| {
+                    model
+                        .context_windows
+                        .first()
+                        .map(|option| option.id.as_str())
+                });
+            if model.context_windows.len() > 1 {
+                let options = model.context_windows.clone();
+                let selected_id = selected.map(str::to_owned);
+                let selected_label = model
+                    .context_windows
+                    .iter()
+                    .find(|option| Some(option.id.as_str()) == selected)
+                    .map(|option| option.label.clone())
+                    .unwrap_or_default();
+                let weak = cx.entity().downgrade();
+                let handle = self.menu_handle("context-window-options", cx);
+                model_section = model_section.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .child(
+                            div()
+                                .text_color(theme.text_secondary)
+                                .child(tr!("usage.window_size")),
+                        )
+                        .child(div().flex_1())
+                        .child(dropdown_menu(
+                            MenuChip::new("context-window-options")
+                                .label(selected_label)
+                                .selected(handle.is_open()),
+                            "context-window-options-menu",
+                            &handle,
+                            MenuAlign::BelowRight,
+                            move |_| {
+                                options
+                                    .clone()
+                                    .into_iter()
+                                    .map(|option| {
+                                        let weak = weak.clone();
+                                        let selected =
+                                            selected_id.as_deref() == Some(option.id.as_str());
+                                        MenuItem::new(option.label, move |_, cx| {
+                                            let _ = weak.update(cx, |this, cx| {
+                                                this.set_context_window(option.id.clone(), cx)
+                                            });
+                                        })
+                                        .selected(selected)
+                                    })
+                                    .collect()
+                            },
+                        )),
+                );
+            } else if let Some(selected) = selected {
+                let label = model
+                    .context_windows
+                    .first()
+                    .map(|option| option.label.clone())
+                    .unwrap_or_else(|| selected.to_owned());
+                model_section =
+                    model_section.child(inspector_row(&theme, tr!("usage.window_size"), label));
+            } else if let Some(window) = usage.and_then(|usage| usage.window) {
+                model_section = model_section.child(inspector_row(
+                    &theme,
+                    tr!("usage.window_size"),
+                    format_tokens(window),
+                ));
+            }
+        } else if let Some(window) = usage.and_then(|usage| usage.window) {
+            model_section = model_section.child(inspector_row(
+                &theme,
+                tr!("usage.window_size"),
+                format_tokens(window),
+            ));
+        }
+        body = body.child(model_section);
+
+        if let Some(state) = compaction.filter(|state| state.status == CompactionStatus::Completed)
+        {
+            let reason = match state.reason.as_deref() {
+                Some("auto") => tr!("usage.automatic"),
+                Some("manual") => tr!("usage.manual"),
+                _ => tr!("usage.completed"),
+            };
+            let mut section =
+                inspector_section(&theme, tr!("usage.compaction_section"), String::new())
+                    .child(inspector_row(&theme, tr!("usage.last_compaction"), reason));
+            if let Some(message_id) = self.context_summary_ids.get(&session_id).copied().flatten() {
+                let summary_focus = self.context_summary_focus.clone();
+                section = section.child(
+                    div()
+                        .id("context-view-summary")
+                        .track_focus(&summary_focus)
+                        .tab_index(0)
+                        .min_h(px(26.0))
+                        .cursor_default()
+                        .text_color(theme.accent)
+                        .focus_visible(|style| style.border_1().border_color(theme.accent))
+                        .child(tr!("usage.view_summary"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.reveal_compaction_summary(message_id, cx)
+                        }))
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                this.reveal_compaction_summary(message_id, cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                );
+            }
+            body = body.child(section);
+        }
+
+        div()
+            .track_focus(&self.context_panel_focus)
+            .tab_index(0)
+            .tab_group()
+            .h_full()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "escape" {
+                    this.close_context_panel(cx);
+                    window.focus(&this.composer.read(cx).focus(), cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(body)
+            .into_any_element()
+    }
+
+    fn reveal_compaction_summary(&mut self, message_id: Uuid, cx: &mut Context<Self>) {
+        // A click is a one-shot user action. Finding its row must never run in render.
+        let index = self.selected_session().and_then(|session| {
+            session
+                .messages
+                .iter()
+                .position(|message| message.id == message_id)
+        });
+        if let Some(index) = index {
+            if let Some(row) = self
+                .transcript_row_kinds
+                .borrow()
+                .iter()
+                .position(|kind| *kind == TranscriptRowKind::Message(index))
+            {
+                self.active_transcript_rows().scroll_to(ListOffset {
+                    item_ix: row,
+                    offset_in_item: Pixels::ZERO,
+                });
+                self.transcript_anchor_following.set(false);
+                self.transcript_is_scrolled.set(true);
+                cx.notify();
+            }
+        }
+    }
+
+    pub(super) fn refresh_context_summary_id(&mut self, session_id: Uuid) {
+        let id = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| {
+                let summary = session.compaction.as_ref()?.summary.as_deref()?.trim();
+                session
+                    .messages
+                    .iter()
+                    .rev()
+                    .find(|message| {
+                        message.role == MessageRole::Compaction && message.content.trim() == summary
+                    })
+                    .map(|message| message.id)
+            });
+        self.context_summary_ids.insert(session_id, id);
     }
 }
 
+fn inspector_section(theme: &Theme, title: String, subtitle: String) -> Div {
+    div()
+        .pt(px(16.0))
+        .border_t_1()
+        .border_color(theme.border)
+        .flex()
+        .flex_col()
+        .gap(px(9.0))
+        .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+        .when(!subtitle.is_empty(), |element| {
+            element.child(div().text_color(theme.text_tertiary).child(subtitle))
+        })
+}
+
+fn inspector_row(theme: &Theme, label: String, value: String) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .child(div().text_color(theme.text_secondary).child(label))
+        .child(div().flex_1())
+        .child(div().text_color(theme.text).child(value))
+}
+
 fn context_percent(usage: ContextUsage) -> Option<f64> {
+    if !usage.measured && usage.tokens == 0 {
+        return None;
+    }
     usage
         .window
         .filter(|window| *window > 0)
         .map(|window| usage.tokens as f64 * 100.0 / window as f64)
 }
 
-/// The trigger glyph: a ring whose arc fills clockwise from 12 o'clock as the
-/// context window does, over a faint full ring. An unknown fraction draws the
-/// track alone. This is Zed's `CircularProgress` drawing sized for the footer
-/// — `PathBuilder::stroke` arcs, which lyon tessellates correctly where a
-/// hand-built annulus fill does not survive GPUI's fill rule.
+/// The footer ring paints only the track until the provider reports a window.
 fn context_gauge(percent: Option<f64>, track: Hsla, fill: Hsla) -> impl IntoElement {
     const SIZE: f32 = 13.0;
     const STROKE: f32 = 2.5;
@@ -164,9 +594,6 @@ fn context_gauge(percent: Option<f64>, track: Hsla, fill: Hsla) -> impl IntoElem
         move |bounds, _, window, _| {
             let center = bounds.center();
             let radius = px((SIZE - STROKE) / 2.0);
-
-            // A full circle is two 180° arcs; lyon rejects a single
-            // zero-length one.
             let full_circle = |builder: &mut PathBuilder| {
                 builder.move_to(point(center.x + radius, center.y));
                 builder.arc_to(
@@ -185,17 +612,14 @@ fn context_gauge(percent: Option<f64>, track: Hsla, fill: Hsla) -> impl IntoElem
                 );
                 builder.close();
             };
-
             let mut track_builder = PathBuilder::stroke(px(STROKE));
             full_circle(&mut track_builder);
             if let Ok(path) = track_builder.build() {
                 window.paint_path(path, track);
             }
-
             let Some(percent) = percent else {
                 return;
             };
-            // Keep a visible sliver for a nearly-empty context.
             let fraction = ((percent / 100.0) as f32).clamp(0.0, 1.0).max(0.05);
             let mut arc_builder = PathBuilder::stroke(px(STROKE));
             if fraction >= 0.999 {
@@ -225,222 +649,8 @@ fn context_gauge(percent: Option<f64>, track: Hsla, fill: Hsla) -> impl IntoElem
     .flex_none()
 }
 
-fn usage_panel(
-    handle: &ContextMenuHandle,
-    context: Option<ContextUsage>,
-    compaction: Option<CompactionState>,
-    session_id: Uuid,
-    weak: WeakEntity<Fintwind>,
-    cx: &App,
-) -> AnyElement {
-    let theme = Theme::current(cx);
-    let mut panel = div()
-        // Focused on open so the surrounding menu context sees `escape`.
-        .track_focus(handle.focus_handle())
-        .w(px(320.0))
-        .p(px(14.0))
-        .rounded(px(10.0))
-        .border_1()
-        .border_color(theme.border_strong)
-        .bg(theme.raised)
-        .shadow_lg()
-        .flex()
-        .flex_col()
-        .gap(px(12.0))
-        .text_size(ui_px(12.0));
-
-    // The context row always renders; a session with nothing measured yet
-    // reads "0" over an empty track, exactly like the CLI's own panel. The
-    // totals row beneath it only renders once the provider has reported
-    // something — an unknown number stays absent rather than reading zero.
-    let usage = context.unwrap_or_default();
-    let percent = context_percent(usage);
-    let value = match (usage.window, percent) {
-        (Some(window), Some(percent)) => format!(
-            "{} / {} ({})",
-            format_tokens(usage.tokens),
-            format_tokens(window),
-            format_percent(percent)
-        ),
-        // The transport reports occupancy but not the window size.
-        _ => format_tokens(usage.tokens),
-    };
-    let mut context_section = div()
-        .flex()
-        .flex_col()
-        .gap(px(7.0))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_color(theme.text)
-                        .child(tr!("usage.context_window")),
-                )
-                .child(div().flex_1())
-                .child(
-                    div()
-                        .text_size(ui_px(11.0))
-                        .text_color(theme.text_tertiary)
-                        .child(SharedString::from(value)),
-                ),
-        )
-        .child(meter_bar(&theme, percent.unwrap_or(0.0)));
-    if let Some(totals) = usage_totals_row(&theme, usage) {
-        context_section = context_section.child(totals);
-    }
-    panel = panel.child(context_section);
-    // Only a live or failed attempt renders; a completed compaction shows
-    // through the context numbers above, which the provider re-reports
-    // smaller on its next call.
-    if let Some(state) = compaction.as_ref().filter(|state| {
-        matches!(
-            state.status,
-            CompactionStatus::Running | CompactionStatus::Failed
-        )
-    }) {
-        panel = panel
-            .child(div().h(px(1.0)).flex_none().bg(theme.border))
-            .child(compaction_row(&theme, state, session_id, weak));
-    }
-
-    panel.into_any_element()
-}
-
-/// The context section's second row: the session's cumulative token
-/// throughput on the left, the latest call's cache hit rate on the right.
-/// A metric the provider hasn't reported yet renders as a dash so the row
-/// holds still while numbers stream in; a row with neither metric reported
-/// is omitted entirely.
-fn usage_totals_row(theme: &Theme, usage: ContextUsage) -> Option<Div> {
-    let total = usage.total_tokens.map(format_tokens);
-    let hit = cache_hit_percent(
-        usage.cache_read.unwrap_or(0),
-        usage.prompt_tokens.unwrap_or(0),
-    )
-    .map(format_percent);
-    if total.is_none() && hit.is_none() {
-        return None;
-    }
-    let cell = move |label: String, value: Option<String>, theme: &Theme| {
-        div()
-            .flex()
-            .items_center()
-            .gap(px(5.0))
-            .child(
-                div()
-                    .text_size(ui_px(11.0))
-                    .text_color(theme.text_tertiary)
-                    .child(label),
-            )
-            .child(
-                div()
-                    .text_size(ui_px(11.0))
-                    .text_color(theme.text_secondary)
-                    .child(SharedString::from(value.unwrap_or_else(|| "—".into()))),
-            )
-    };
-    Some(
-        div()
-            .flex()
-            .items_center()
-            .gap(px(8.0))
-            .child(cell(tr!("usage.total_tokens"), total, theme))
-            .child(div().flex_1())
-            .child(cell(tr!("usage.cache_hit_rate"), hit, theme)),
-    )
-}
-
-/// The compaction action row: a pulsing progress label while the provider
-/// summarizes, the failure notice with a retry button while the last attempt
-/// failed. The retry re-asks the provider, which coalesces or runs it as
-/// usual; `escape` and the row labels stay readable in both themes.
-fn compaction_row(
-    theme: &Theme,
-    state: &CompactionState,
-    session_id: Uuid,
-    weak: WeakEntity<Fintwind>,
-) -> Div {
-    // The pulse closure outlives the borrow, so the theme rides along owned.
-    let theme = *theme;
-    match state.status {
-        CompactionStatus::Running => {
-            let label = tr!("usage.compacting").to_owned();
-            div()
-                .flex()
-                .items_center()
-                .min_h(px(22.0))
-                .gap(px(8.0))
-                .child(
-                    motion::pulse(Duration::from_millis(1400), move |phase| {
-                        div()
-                            .text_size(ui_px(11.0))
-                            .text_color(theme.text_tertiary)
-                            .child(SharedString::from(label.clone()))
-                            .opacity(pulsating_between(0.5, 1.0)(phase))
-                            .into_any_element()
-                    })
-                    .every(2)
-                    .into_any_element(),
-                )
-        }
-        CompactionStatus::Failed => {
-            let detail = state.error.as_deref().unwrap_or_default();
-            div()
-                .flex()
-                .items_center()
-                .min_h(px(22.0))
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .id("usage-compaction-error")
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .truncate()
-                        .text_size(ui_px(11.0))
-                        .text_color(theme.warning)
-                        .when(!detail.is_empty(), |element| {
-                            element.tooltip(Tooltip::text(detail.to_owned()))
-                        })
-                        .child(tr!("usage.compaction_failed")),
-                )
-                .child(
-                    div()
-                        .id("usage-compaction-retry")
-                        .flex_none()
-                        .h(px(22.0))
-                        .px(px(8.0))
-                        .rounded(px(5.0))
-                        .flex()
-                        .items_center()
-                        .text_size(ui_px(11.0))
-                        .text_color(theme.text)
-                        .cursor_default()
-                        .hover(|element| element.bg(theme.overlay))
-                        .active(|element| element.bg(theme.overlay_strong))
-                        .on_click(move |_, _, cx| {
-                            let _ = weak.update(cx, |this, cx| {
-                                this.request_context_compaction(session_id, cx)
-                            });
-                        })
-                        .child(tr!("usage.compaction_retry")),
-                )
-        }
-        CompactionStatus::Completed | CompactionStatus::Cancelled => div(),
-    }
-}
-
-/// A meter bar: full-width track, fill proportional to `percent`. A nonzero
-/// value keeps a visible sliver even under one percent.
 fn meter_bar(theme: &Theme, percent: f64) -> Div {
     let fraction = (percent / 100.0).clamp(0.0, 1.0) as f32;
-    let fraction = if fraction > 0.0 {
-        fraction.max(0.015)
-    } else {
-        0.0
-    };
     let fill = if percent >= 95.0 {
         theme.danger
     } else if percent >= 80.0 {
@@ -449,10 +659,33 @@ fn meter_bar(theme: &Theme, percent: f64) -> Div {
         theme.gauge
     };
     div()
-        .h(px(3.0))
+        .relative()
+        .h(px(21.0))
         .w_full()
-        .flex_none()
-        .rounded_full()
-        .bg(theme.overlay_strong)
-        .child(div().h_full().w(relative(fraction)).rounded_full().bg(fill))
+        .child(
+            div()
+                .h(px(5.0))
+                .w_full()
+                .rounded_full()
+                .bg(theme.overlay_strong)
+                .child(div().h_full().w(relative(fraction)).rounded_full().bg(fill)),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(relative(0.8))
+                .top(px(6.0))
+                .text_size(ui_px(9.0))
+                .text_color(theme.text_tertiary)
+                .child("80"),
+        )
+        .child(
+            div()
+                .absolute()
+                .left(relative(0.95))
+                .top(px(6.0))
+                .text_size(ui_px(9.0))
+                .text_color(theme.text_tertiary)
+                .child("95"),
+        )
 }

@@ -836,6 +836,7 @@ impl Fintwind {
                 session_total,
                 cache_read,
                 prompt_tokens,
+                latest,
             } => {
                 // Meta about the conversation, not turn output: it applies
                 // even while a rewound or cancelled turn's tail drains. Every
@@ -844,6 +845,7 @@ impl Fintwind {
                     let usage = session.context_usage.get_or_insert(ContextUsage::default());
                     if let Some(tokens) = context_tokens {
                         usage.tokens = tokens;
+                        usage.measured = true;
                     }
                     if let Some(window) = context_window {
                         usage.window = Some(window);
@@ -856,6 +858,9 @@ impl Fintwind {
                     }
                     if let Some(prompt) = prompt_tokens {
                         usage.prompt_tokens = Some(prompt);
+                    }
+                    if let Some(latest) = latest {
+                        usage.latest = Some(latest);
                     }
                     self.state.mark_session_dirty(session_id);
                 }
@@ -890,6 +895,9 @@ impl Fintwind {
                     } else if changed {
                         self.state.mark_session_dirty(session_id);
                     }
+                }
+                if state.status == CompactionStatus::Completed {
+                    self.refresh_context_summary_id(session_id);
                 }
                 if let Some(previous_kinds) = previous_kinds.as_deref() {
                     self.splice_active_transcript_rows_after_visibility_change(previous_kinds);

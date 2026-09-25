@@ -541,6 +541,7 @@ fn fitted_panel_widths(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RightPanelSurface {
+    Context,
     Browser(Uuid),
     Terminal(Uuid),
     BackgroundWork {
@@ -1276,9 +1277,16 @@ pub struct Fintwind {
     fps_counter_visible: bool,
     panel_resize_drag: Option<PanelResizeDrag>,
     right_panel_session_states: HashMap<Uuid, RightPanelSessionState>,
+    context_summary_ids: HashMap<Uuid, Option<Uuid>>,
     right_panel_surfaces: Vec<RightPanelSurface>,
     right_panel_active_surface: Option<usize>,
     right_panel_tabs_scroll_handle: ScrollHandle,
+    context_panel_focus: FocusHandle,
+    context_meter_focus: FocusHandle,
+    context_compact_focus: FocusHandle,
+    context_summary_focus: FocusHandle,
+    context_tab_focus: FocusHandle,
+    context_tab_close_focus: FocusHandle,
     right_panel_files_scroll_handle: ScrollHandle,
     right_panel_files_scrollbar: Rc<ScrollbarState>,
     right_panel_diff_filter: Entity<ComposerInput>,
@@ -2401,6 +2409,12 @@ impl Fintwind {
             let onboarding_add_project_focus = cx.focus_handle();
             let onboarding_projectless_focus = cx.focus_handle();
             let sidebar_add_project_focus = cx.focus_handle();
+            let context_panel_focus = cx.focus_handle();
+            let context_meter_focus = cx.focus_handle();
+            let context_compact_focus = cx.focus_handle();
+            let context_summary_focus = cx.focus_handle();
+            let context_tab_focus = cx.focus_handle();
+            let context_tab_close_focus = cx.focus_handle();
 
             cx.observe_window_appearance(window, |this: &mut Self, window, cx| {
                 if this.state.theme == ThemePreference::System {
@@ -2979,9 +2993,16 @@ impl Fintwind {
                 fps_counter_visible: false,
                 panel_resize_drag: None,
                 right_panel_session_states: HashMap::new(),
+                context_summary_ids: HashMap::new(),
                 right_panel_surfaces: Vec::new(),
                 right_panel_active_surface: None,
                 right_panel_tabs_scroll_handle: ScrollHandle::new(),
+                context_panel_focus,
+                context_meter_focus,
+                context_compact_focus,
+                context_summary_focus,
+                context_tab_focus,
+                context_tab_close_focus,
                 right_panel_files_scroll_handle: ScrollHandle::new(),
                 right_panel_files_scrollbar: ScrollbarState::new(),
                 right_panel_diff_filter,
@@ -3210,6 +3231,12 @@ impl Fintwind {
         entity.update(cx, |this, cx| {
             if let Some(session_id) = this.state.selected_session {
                 this.restore_background_work(session_id);
+                if this
+                    .selected_session()
+                    .is_some_and(|session| session.detail_loaded)
+                {
+                    this.refresh_context_summary_id(session_id);
+                }
             }
             this.restart_task_state_sync();
             for session_id in startup_live_session_ids {

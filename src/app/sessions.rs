@@ -128,6 +128,9 @@ impl Fintwind {
                         let pending = fintwind
                             .pending_session_activation
                             .filter(|pending| pending.session_id == session_id);
+                        if replaced {
+                            fintwind.refresh_context_summary_id(session_id);
+                        }
                         if pending.is_some() {
                             fintwind.pending_session_activation = None;
                         }
@@ -162,6 +165,13 @@ impl Fintwind {
             self.store_selected_right_panel_state();
         }
         self.state.selected_session = Some(session_id);
+        if !self.context_summary_ids.contains_key(&session_id)
+            && self
+                .selected_session()
+                .is_some_and(|session| session.detail_loaded)
+        {
+            self.refresh_context_summary_id(session_id);
+        }
         if session_changed {
             // Folded groups hide the task the user just opened; reveal its
             // project so the selection stays visible in the sidebar.

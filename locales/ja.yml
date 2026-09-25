@@ -1127,13 +1127,43 @@ usage.active_day_many: "アクティブ %{count} 日"
 usage.filter_projects: プロジェクトを絞り込む…
 usage.chart_description: "Claude Code と Codex の日別 %{metric}。"
 usage.context_used: コンテキストウインドウを %{percent}% 使用（%{shortcut}）
-usage.shortcut: 使用状況（%{shortcut}）
+usage.shortcut: コンテキスト（%{shortcut}）
 usage.context_window: コンテキストウインドウ
 usage.total_tokens: 合計トークン
 usage.cache_hit_rate: キャッシュヒット率
 usage.compacting: コンテキストを圧縮中…
 usage.compaction_failed: 圧縮に失敗しました
 usage.compaction_retry: 圧縮を再試行
+usage.panel_title: コンテキスト
+usage.available: 余裕あり
+usage.near_full: 残り少なめ
+usage.full: ほぼ満杯
+usage.unknown: 不明
+usage.remaining: 残り約 %{count}
+usage.window_unknown: ウィンドウサイズ不明
+usage.window_unknown_detail: プロバイダーからサイズがまだ報告されていません。
+usage.not_measured: コンテキストは未計測です
+usage.not_measured_detail: 最初のモデル呼び出し後に表示されます。
+usage.near_full_detail: 次の長い応答で自動圧縮される場合があります。
+usage.full_detail: ほぼ満杯です。続行前の圧縮を検討してください。
+usage.compact_action: コンテキストを圧縮
+usage.compact_unavailable: 現在このセッションは圧縮できません。
+usage.latest_call: 直近の呼び出し
+usage.latest_detail: セッション合計ではなく、この呼び出しのトークン数です。
+usage.cache_read: キャッシュ読込
+usage.cache_write: キャッシュ書込
+usage.input: 非キャッシュ入力
+usage.reasoning: 推論
+usage.session_total: セッション累計
+usage.session_total_detail: 処理済みトークン数です。現在の占有量ではありません。
+usage.window_section: ウィンドウ
+usage.window_size: サイズ
+usage.compaction_section: 圧縮
+usage.last_compaction: 前回の圧縮
+usage.automatic: 自動 · 完了
+usage.manual: 手動 · 完了
+usage.completed: 完了
+usage.view_summary: 会話内の要約を表示
 usage.open_account_settings: アカウントの使用状況設定を開く
 usage.usage_limit: 使用量の上限
 usage.hour_limit: "%{count} 時間の上限"

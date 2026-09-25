@@ -725,6 +725,10 @@ impl Fintwind {
                         tr!("models.favorite_hint")
                     } else if pending_discoveries.contains(OPENCODE_PROVIDER) {
                         tr!("models.loading")
+                    } else if probes.iter().any(|probe| probe.installed)
+                        && probes.iter().all(|probe| probe.models.is_empty())
+                    {
+                        tr!("providers.no_available_models")
                     } else {
                         tr!("models.none_reported")
                     };

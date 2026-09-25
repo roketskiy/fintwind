@@ -73,21 +73,37 @@ pub(crate) fn list_sessions(
 ) -> anyhow::Result<Vec<NativeSessionSummary>> {
     let mut summaries = Vec::new();
     let mut cursor: Option<String> = None;
-    for _ in 0..MAX_SESSION_PAGES {
-        let mut path = format!(
+    // Newer servers can exclude child sessions before paging; old servers
+    // either ignore the parameter (the client still filters) or reject it.
+    let mut server_filters_roots = true;
+    for page in 0..MAX_SESSION_PAGES {
+        let mut base = format!(
             "/api/session?directory={}&limit={}",
             encode_path_segment(directory),
             PAGE_LIMIT
         );
         if let Some(token) = &cursor {
-            path.push_str(&format!("&cursor={}", encode_path_segment(token)));
+            base.push_str(&format!("&cursor={}", encode_path_segment(token)));
         }
-        let response = server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT)?;
+        let mut path = base.clone();
+        if server_filters_roots {
+            path.push_str("&parentID=null");
+        }
+        let response = match server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT) {
+            Err(error) if server_filters_roots && error.to_string().contains("HTTP 400") => {
+                server_filters_roots = false;
+                server.request_with_timeout("GET", &base, None, HTTP_TIMEOUT)?
+            }
+            result => result?,
+        };
         let rows = response
             .pointer("/data")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        if rows.len() == PAGE_LIMIT && response.get("cursor").is_none() {
+            anyhow::bail!("OpenCode session listing returned a full page without a cursor");
+        }
         let empty_after_rows = rows.is_empty();
         for row in rows {
             if is_child_session(&row) {
@@ -104,6 +120,9 @@ pub(crate) fn list_sessions(
             .map(str::to_owned)
         {
             Some(next) if cursor.as_deref() != Some(next.as_str()) && !empty_after_rows => {
+                if page + 1 == MAX_SESSION_PAGES {
+                    anyhow::bail!("OpenCode session listing exceeded {MAX_SESSION_PAGES} pages");
+                }
                 cursor = Some(next);
             }
             _ => break,

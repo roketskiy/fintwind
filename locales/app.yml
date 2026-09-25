@@ -247,6 +247,8 @@ providers.model_count_many:
   en: "%{count} models"
 providers.not_detected_as:
   en: Not detected on PATH as %{command}
+providers.no_available_models:
+  en: No models available. Check provider connections and Console policies.
 providers.detected_as:
   en: Detected as %{command}
 providers.binary_path:

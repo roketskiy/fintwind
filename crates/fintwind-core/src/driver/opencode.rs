@@ -1296,32 +1296,71 @@ impl DriverControl for OpenCodeDriver {
         let _ = thread::Builder::new()
             .name("fintwind-opencode-subagents-refresh".into())
             .spawn(move || {
-                // Directory-scoped: a server shared across workspaces also
-                // lists other projects' sessions, and this scan may only see
-                // this task's own children.
-                let path = format!(
-                    "/api/session?directory={}&limit=200",
-                    encode_path_segment(&directory)
-                );
-                let response = request_json_on_port_with_directory(
-                    port,
-                    "GET",
-                    &path,
-                    None,
-                    Duration::from_secs(10),
-                    Some(&directory),
-                );
+                // A server shared across workspaces must only see this
+                // directory's sessions. New servers filter by parent before
+                // paging; old ones may ignore or reject the parameter. Page
+                // both cases: a 200-row first page is not the whole roster.
+                let sessions = (|| {
+                    let mut sessions = Vec::new();
+                    let mut cursor: Option<String> = None;
+                    let mut filter_parent = true;
+                    for _ in 0..50 {
+                        if generation_guard.load(Ordering::Acquire) != generation {
+                            return None;
+                        }
+                        let mut base = format!(
+                            "/api/session?directory={}&limit=200",
+                            encode_path_segment(&directory)
+                        );
+                        if let Some(token) = &cursor {
+                            base.push_str(&format!("&cursor={}", encode_path_segment(token)));
+                        }
+                        let path = if filter_parent {
+                            format!("{base}&parentID={}", encode_path_segment(&parent_id))
+                        } else {
+                            base.clone()
+                        };
+                        let request = |path: &str| {
+                            request_json_on_port_with_directory(
+                                port,
+                                "GET",
+                                path,
+                                None,
+                                Duration::from_secs(10),
+                                Some(&directory),
+                            )
+                        };
+                        let response = match request(&path) {
+                            Err(error) if filter_parent && is_http_bad_request(&error) => {
+                                filter_parent = false;
+                                request(&base).ok()?
+                            }
+                            result => result.ok()?,
+                        };
+                        let rows = response.get("data")?.as_array()?;
+                        if rows.len() == 200 && response.get("cursor").is_none() {
+                            // Without a cursor, a full page may omit live
+                            // children. Keep the previous roster instead.
+                            return None;
+                        }
+                        let empty = rows.is_empty();
+                        sessions.extend(rows.iter().cloned());
+                        let next = response.pointer("/cursor/next").and_then(Value::as_str);
+                        match next {
+                            Some(next) if !empty && cursor.as_deref() != Some(next) => {
+                                cursor = Some(next.to_owned());
+                            }
+                            _ => return Some(sessions),
+                        }
+                    }
+                    // A partial roster would mark omitted live children Lost.
+                    None
+                })();
                 if generation_guard.load(Ordering::Acquire) != generation {
                     return;
                 }
-                // A failed probe is not evidence that the children are gone:
-                // sending an empty reconcile would mark live subagents Lost
-                // until the next poll. Skip this round and keep the
-                // event-driven state.
-                let Some(sessions) = response
-                    .ok()
-                    .and_then(|value| value.get("data").and_then(Value::as_array).cloned())
-                else {
+                // A failed/partial listing is not evidence of missing children.
+                let Some(sessions) = sessions else {
                     return;
                 };
                 let items = sessions

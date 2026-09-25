@@ -6,6 +6,11 @@ fintwind 是 [OpenCode](https://opencode.ai) 的原生 Windows 桌面应用。�
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 直接在 GPU 上绘制，
 不是 Electron 套壳。项目、会话和对话记录都留在你自己的机器上。
 
+> [!IMPORTANT]
+> OpenCode 2 尚未正式发布，后续仍会有大量破坏性变更。当本机的 OpenCode 2
+> 新于 v2.0.11 时，无法保证 fintwind 能正常运行。**目前 0.2.0 支持 OpenCode
+> v2.0.11 及更早版本。**
+
 54 秒演示：切换模型、进行中的会话，以及滚动一条很长的对话记录。
 
 https://github.com/user-attachments/assets/8ca3cd89-3044-4e90-81cd-ebd9f55818ef
@@ -27,8 +32,9 @@ SmartScreen、数据目录和尚未支持的功能见 [docs/windows.md](docs/win
 ## 环境要求
 
 fintwind 只驱动一个 agent 后端：本机的 [OpenCode](https://opencode.ai) 服务。
-请先安装并登录 `opencode` CLI。fintwind 会拉起它；会话、模型、provider 和
-MCP 服务器都来自这个后端。
+请先安装并登录 `opencode` CLI。本 0.2.0 版本支持 **v2.0.11 及更早版本**。
+fintwind 会拉起它；会话、模型、provider 和 MCP 服务器都来自这个后端。
+比 v2.0.11 更新的 OpenCode 2 无法保证能正常运行。
 
 ## 特点
 

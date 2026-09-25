@@ -98,10 +98,10 @@ impl Fintwind {
         let can_compact = self.runtimes.contains_key(&session_id);
         let percent = usage.and_then(context_percent);
         let status = match percent {
-            Some(value) if value >= 95.0 => tr!("usage.full"),
-            Some(value) if value >= 80.0 => tr!("usage.near_full"),
-            Some(_) => tr!("usage.available"),
-            None => tr!("usage.unknown"),
+            Some(value) if value >= 95.0 => Some(tr!("usage.full")),
+            Some(value) if value >= 80.0 => Some(tr!("usage.near_full")),
+            Some(_) => None,
+            None => Some(tr!("usage.unknown")),
         };
         let status_color = match percent {
             Some(value) if value >= 95.0 => theme.danger,
@@ -186,7 +186,9 @@ impl Fintwind {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(headline),
                     )
-                    .child(div().text_color(status_color).child(status)),
+                    .when_some(status, |element, status| {
+                        element.child(div().text_color(status_color).child(status))
+                    }),
             )
             .child(div().text_color(theme.text_secondary).child(capacity))
             .when_some(percent, |element, percent| {
@@ -299,9 +301,7 @@ impl Fintwind {
             for (index, fraction) in segments {
                 bar = bar.child(div().h_full().w(relative(fraction)).bg(colors[index]));
             }
-            let mut section =
-                inspector_section(&theme, tr!("usage.latest_call"), tr!("usage.latest_detail"))
-                    .child(bar);
+            let mut section = inspector_section(&theme, tr!("usage.latest_call")).child(bar);
             for (index, (label, count)) in rows.into_iter().enumerate() {
                 if count > 0 {
                     section = section.child(
@@ -332,11 +332,7 @@ impl Fintwind {
         if let Some(usage) =
             usage.filter(|usage| usage.total_tokens.is_some() || usage.prompt_tokens.is_some())
         {
-            let mut section = inspector_section(
-                &theme,
-                tr!("usage.session_total"),
-                tr!("usage.session_total_detail"),
-            );
+            let mut section = inspector_section(&theme, tr!("usage.session_total"));
             if let Some(total) = usage.total_tokens {
                 section = section.child(inspector_row(
                     &theme,
@@ -357,8 +353,7 @@ impl Fintwind {
             body = body.child(section);
         }
 
-        let mut model_section =
-            inspector_section(&theme, tr!("usage.window_section"), String::new());
+        let mut model_section = inspector_section(&theme, tr!("usage.window_section"));
         if let Some(name) = model_name {
             model_section = model_section.child(inspector_row(&theme, tr!("usage.model"), name));
         }
@@ -456,9 +451,8 @@ impl Fintwind {
                 Some("manual") => tr!("usage.manual"),
                 _ => tr!("usage.completed"),
             };
-            let mut section =
-                inspector_section(&theme, tr!("usage.compaction_section"), String::new())
-                    .child(inspector_row(&theme, tr!("usage.last_compaction"), reason));
+            let mut section = inspector_section(&theme, tr!("usage.compaction_section"))
+                .child(inspector_row(&theme, tr!("usage.last_compaction"), reason));
             if let Some(message_id) = self.context_summary_ids.get(&session_id).copied().flatten() {
                 let summary_focus = self.context_summary_focus.clone();
                 section = section.child(
@@ -551,7 +545,7 @@ impl Fintwind {
     }
 }
 
-fn inspector_section(theme: &Theme, title: String, subtitle: String) -> Div {
+fn inspector_section(theme: &Theme, title: String) -> Div {
     div()
         .pt(px(16.0))
         .border_t_1()
@@ -560,9 +554,6 @@ fn inspector_section(theme: &Theme, title: String, subtitle: String) -> Div {
         .flex_col()
         .gap(px(9.0))
         .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
-        .when(!subtitle.is_empty(), |element| {
-            element.child(div().text_color(theme.text_tertiary).child(subtitle))
-        })
 }
 
 fn inspector_row(theme: &Theme, label: String, value: String) -> Div {

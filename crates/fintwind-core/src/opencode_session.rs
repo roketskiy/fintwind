@@ -33,6 +33,11 @@ const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(1);
 /// OpenCode 2.0.5 replaced `/api/health` with `/api/status`; 2.0.6 renamed
 /// that to `/api/info`. Probe newest first, keep older paths for earlier CLIs.
 const HEALTH_PROBE_PATHS: [&str; 3] = ["/api/info", "/api/status", "/api/health"];
+/// v2.0.11+ lists pending forms at `GET /api/form`. The `request` suffix was
+/// removed (audit #087); earlier CLIs still answer the old path. Probe newest
+/// first and remember which one this port accepted, so a poll does not 404
+/// the dead path on every tick.
+const FORM_LIST_PATHS: [&str; 2] = ["/api/form", "/api/form/request"];
 /// How many messages one request of the native transcript may return before
 /// the page boundary is hit; the batch keeps going with the cursor.
 const MESSAGE_PAGE_LIMIT: usize = 200;
@@ -56,6 +61,48 @@ pub(crate) fn basic_authorization(port: u16) -> Option<String> {
         let credentials = BASE64.encode(format!("opencode:{password}"));
         format!("Authorization: Basic {credentials}")
     })
+}
+
+fn form_list_paths() -> &'static Mutex<HashMap<u16, &'static str>> {
+    static PATHS: OnceLock<Mutex<HashMap<u16, &'static str>>> = OnceLock::new();
+    PATHS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn release_port(port: u16) {
+    server_passwords().lock().remove(&port);
+    form_list_paths().lock().remove(&port);
+}
+
+fn is_http_not_found(error: &anyhow::Error) -> bool {
+    error.to_string().contains("HTTP 404")
+}
+
+/// Lists pending forms, trying `GET /api/form` before the removed
+/// `/api/form/request`. A path that answers is remembered for this port so
+/// the permission poll does not keep hitting a 404. A later 404 (a reused
+/// port, or a CLI that only has the other path) probes again.
+pub(crate) fn request_form_list(
+    port: u16,
+    mut get: impl FnMut(&str) -> anyhow::Result<Value>,
+) -> anyhow::Result<Value> {
+    let remembered = form_list_paths().lock().get(&port).copied();
+    let order: [&str; 2] = match remembered {
+        Some(path) if path == "/api/form/request" => ["/api/form/request", "/api/form"],
+        _ => FORM_LIST_PATHS,
+    };
+    let mut not_found = None;
+    for path in order {
+        match get(path) {
+            Ok(value) => {
+                form_list_paths().lock().insert(port, path);
+                return Ok(value);
+            }
+            Err(error) if is_http_not_found(&error) => not_found = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    form_list_paths().lock().remove(&port);
+    Err(not_found.unwrap_or_else(|| anyhow!("OpenCode form list was not found")))
 }
 
 pub fn fork_session_at_turn(
@@ -318,26 +365,25 @@ fn fork_session_with_message_ids(
     retained_turns: usize,
 ) -> anyhow::Result<ProviderResumeCursor> {
     let fork_at = fork_message_id(&native.user_ids, retained_turns)?;
-    let body = match fork_at {
-        // opencode forks at an explicit boundary instead of v1's bare
-        // message id: `before` keeps everything up to (not including) the
-        // message, which matches the v1 "keep the retained prefix" semantics.
-        Some(message_id) => json!({"boundary": {"type": "before", "messageID": message_id}}),
-        // Keeping every turn needs a boundary too — `through` the newest
-        // message of the conversation copies the whole transcript.
-        None => match native.last_id.as_deref() {
-            Some(last_id) => json!({"boundary": {"type": "through", "messageID": last_id}}),
-            // An empty conversation has nothing to fork; the original session
-            // already is the full copy.
-            None => {
-                return Ok(ProviderResumeCursor::OpenCode {
-                    session_id: session_id.to_owned(),
-                });
-            }
-        },
-    };
+    // An empty conversation has nothing to fork; the original session already
+    // is the full copy.
+    if fork_at.is_none() && native.last_id.is_none() {
+        return Ok(ProviderResumeCursor::OpenCode {
+            session_id: session_id.to_owned(),
+        });
+    }
+    // v2.0.11+ accepts `{before}` and treats a missing `before` (`{}`) as
+    // "copy the whole transcript". Omitting the body is rejected (`Expected
+    // object`). The previous `{boundary}` shape is silently ignored on those
+    // releases — it copies everything — so it is only a fallback for a CLI
+    // that still requires it and rejects the new field.
+    let (current, legacy) = fork_bodies(fork_at, native.last_id.as_deref());
     let fork_path = format!("/api/session/{}/fork", encode_path_segment(session_id));
-    let fork = server.request_with_timeout("POST", &fork_path, Some(&body), FORK_HTTP_TIMEOUT)?;
+    let fork = post_current_or_legacy(
+        |body| server.request_with_timeout("POST", &fork_path, Some(body), FORK_HTTP_TIMEOUT),
+        &current,
+        legacy.as_ref(),
+    )?;
     let fork_id = fork
         .get("id")
         .and_then(Value::as_str)
@@ -347,6 +393,53 @@ fn fork_session_with_message_ids(
     Ok(ProviderResumeCursor::OpenCode {
         session_id: fork_id.to_owned(),
     })
+}
+
+/// Current fork body, plus the pre-2.0.11 boundary body to retry if the
+/// server rejects the new field names.
+fn fork_bodies(before: Option<&str>, last_id: Option<&str>) -> (Value, Option<Value>) {
+    match before {
+        Some(message_id) => (
+            json!({"before": message_id}),
+            Some(json!({"boundary": {"type": "before", "messageID": message_id}})),
+        ),
+        None => (
+            json!({}),
+            last_id.map(|id| json!({"boundary": {"type": "through", "messageID": id}})),
+        ),
+    }
+}
+
+/// A 400 that means "this body is the wrong shape", not a business rule.
+///
+/// `empty_session` is excluded on purpose: live 2.0.16 accepts a legacy
+/// `boundary` body by ignoring it and copying the whole transcript, so
+/// falling back on a business 400 would undo a truncation.
+fn is_legacy_contract_rejection(error: &anyhow::Error) -> bool {
+    let text = error.to_string();
+    if !text.contains("HTTP 400") || text.contains("empty_session") {
+        return false;
+    }
+    text.contains("Missing key")
+        || text.contains("Unexpected")
+        || text.contains("additionalProperties")
+        || text.contains("unrecognized")
+        || text.contains("Expected object")
+}
+
+fn post_current_or_legacy(
+    mut post: impl FnMut(&Value) -> anyhow::Result<Value>,
+    current: &Value,
+    legacy: Option<&Value>,
+) -> anyhow::Result<Value> {
+    match post(current) {
+        Ok(value) => Ok(value),
+        Err(error) if is_legacy_contract_rejection(&error) => match legacy {
+            Some(legacy) => post(legacy),
+            None => Err(error),
+        },
+        Err(error) => Err(error),
+    }
 }
 
 fn fork_message_id(message_ids: &[String], retained_turns: usize) -> anyhow::Result<Option<&str>> {
@@ -515,7 +608,7 @@ impl OpenCodeServer {
     /// Terminates and reaps the owned child. The timeout is a graceful-exit
     /// budget; a server that ignores TERM is killed afterward.
     pub(crate) fn shutdown(&self, timeout: Duration) {
-        server_passwords().lock().remove(&self.port);
+        release_port(self.port);
         let mut child = self.child.lock();
         if child.try_wait().is_ok_and(|status| status.is_some()) {
             return;
@@ -546,7 +639,7 @@ impl OpenCodeServer {
 
 impl Drop for OpenCodeServer {
     fn drop(&mut self) {
-        server_passwords().lock().remove(&self.port);
+        release_port(self.port);
         let child = self.child.get_mut();
         if child.try_wait().is_ok_and(|status| status.is_some()) {
             return;
@@ -810,6 +903,125 @@ pub(crate) fn encode_path_segment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fork_bodies_use_before_and_an_empty_object_not_the_removed_boundary() {
+        let (current, legacy) = fork_bodies(Some("msg_cut"), Some("msg_last"));
+        assert_eq!(current, json!({"before": "msg_cut"}));
+        assert_eq!(
+            legacy,
+            Some(json!({"boundary": {"type": "before", "messageID": "msg_cut"}}))
+        );
+        let (current, legacy) = fork_bodies(None, Some("msg_last"));
+        assert_eq!(current, json!({}));
+        assert_eq!(
+            legacy,
+            Some(json!({"boundary": {"type": "through", "messageID": "msg_last"}}))
+        );
+    }
+
+    #[test]
+    fn fork_does_not_fall_back_when_the_current_body_is_accepted() {
+        let current = json!({"before": "msg_cut"});
+        let legacy = json!({"boundary": {"type": "before", "messageID": "msg_cut"}});
+        let mut calls = Vec::new();
+        let result = post_current_or_legacy(
+            |body| {
+                calls.push(body.clone());
+                Ok(json!({"data": {"id": "ses_fork"}}))
+            },
+            &current,
+            Some(&legacy),
+        );
+        assert!(result.is_ok());
+        assert_eq!(calls, [current]);
+    }
+
+    #[test]
+    fn fork_does_not_fall_back_on_an_empty_session_business_error() {
+        // Live 2.0.16 ignores `boundary` and copies everything, so a business
+        // 400 must not be retried as the legacy shape.
+        let current = json!({"before": "msg_cut"});
+        let legacy = json!({"boundary": {"type": "before", "messageID": "msg_cut"}});
+        let mut calls = Vec::new();
+        let result = post_current_or_legacy(
+            |body| {
+                calls.push(body.clone());
+                anyhow::bail!(
+                    "OpenCode session request failed with HTTP 400: {{\"kind\":\"empty_session\"}}"
+                );
+            },
+            &current,
+            Some(&legacy),
+        );
+        assert!(result.is_err());
+        assert_eq!(calls, [current]);
+    }
+
+    #[test]
+    fn fork_falls_back_to_boundary_only_when_the_new_shape_is_rejected() {
+        let current = json!({"before": "msg_cut"});
+        let legacy = json!({"boundary": {"type": "before", "messageID": "msg_cut"}});
+        let mut calls = Vec::new();
+        let result = post_current_or_legacy(
+            |body| {
+                calls.push(body.clone());
+                if body.get("before").is_some() {
+                    anyhow::bail!(
+                        "OpenCode session request failed with HTTP 400: {{\"message\":\"Unexpected key\"}}"
+                    );
+                }
+                Ok(json!({"data": {"id": "ses_fork"}}))
+            },
+            &current,
+            Some(&legacy),
+        );
+        assert!(result.is_ok());
+        assert_eq!(calls, [current, legacy]);
+    }
+
+    #[test]
+    fn form_list_prefers_the_current_path_and_remembers_a_legacy_fallback() {
+        let port = 9;
+        form_list_paths().lock().remove(&port);
+        let mut calls = Vec::new();
+        let result = request_form_list(port, |path| {
+            calls.push(path.to_owned());
+            if path == "/api/form" {
+                anyhow::bail!("OpenCode session request failed with HTTP 404: missing");
+            }
+            Ok(json!({"data": []}))
+        });
+        assert!(result.is_ok());
+        assert_eq!(calls, ["/api/form", "/api/form/request"]);
+
+        calls.clear();
+        let again = request_form_list(port, |path| {
+            calls.push(path.to_owned());
+            Ok(json!({"data": []}))
+        });
+        assert!(again.is_ok());
+        assert_eq!(
+            calls,
+            ["/api/form/request"],
+            "a port that only has the old path must not 404 /api/form on every poll"
+        );
+        form_list_paths().lock().remove(&port);
+    }
+
+    #[test]
+    fn form_list_does_not_treat_a_transport_error_as_a_missing_path() {
+        let port = 10;
+        form_list_paths().lock().remove(&port);
+        let mut calls = 0;
+        let result = request_form_list(port, |_path| {
+            calls += 1;
+            anyhow::bail!("could not connect to OpenCode on local port 10");
+        });
+        assert!(result.is_err());
+        assert_eq!(calls, 1);
+        form_list_paths().lock().remove(&port);
+    }
 
     #[test]
     fn selected_fork_message_excludes_the_next_user_turn() {

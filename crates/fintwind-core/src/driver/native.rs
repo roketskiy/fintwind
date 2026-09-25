@@ -226,6 +226,12 @@ fn summary_from_row(row: &Value) -> Option<NativeSessionSummary> {
             let id = model.get("id").and_then(Value::as_str)?;
             Some(format!("{provider}/{id}"))
         }),
+        task: row
+            .pointer("/metadata/task")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|task| !task.is_empty())
+            .map(str::to_owned),
     })
 }
 
@@ -1661,9 +1667,46 @@ mod tests {
             summary.model.as_deref(),
             Some("opencode-go/deepseek-v4-flash")
         );
+        // A session created outside this app carries no task metadata.
+        assert_eq!(summary.task, None);
         // The child carries a parentID; `list_sessions` filters it out.
         assert!(is_child_session(&child_row));
         assert!(!is_child_session(&server_row));
+    }
+
+    #[test]
+    fn sessions_list_reads_the_task_link_from_session_metadata() {
+        // The live create response (2.0.11 and 2.0.16): `metadata` carries
+        // what this app wrote at create time.
+        let app_row = json!({
+            "id": "ses_app",
+            "title": "Fintwind 任务",
+            "time": {"created": 1_000_u64, "updated": 2_000_u64},
+            "metadata": {"source": "fintwind", "task": "11111111-1111-1111-1111-111111111111"}
+        });
+        let summary = summary_from_row(&app_row).unwrap();
+        assert_eq!(
+            summary.task.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+
+        // Sessions without a task link — older builds of this app, the CLI,
+        // the TUI — and blank links stay unclaimed.
+        for row in [
+            json!({"id": "ses_a", "time": {"created": 1_u64, "updated": 1_u64}}),
+            json!({
+                "id": "ses_b",
+                "time": {"created": 1_u64, "updated": 1_u64},
+                "metadata": {"source": "tui"}
+            }),
+            json!({
+                "id": "ses_c",
+                "time": {"created": 1_u64, "updated": 1_u64},
+                "metadata": {"source": "fintwind", "task": "  "}
+            }),
+        ] {
+            assert_eq!(summary_from_row(&row).unwrap().task, None);
+        }
     }
 
     #[test]

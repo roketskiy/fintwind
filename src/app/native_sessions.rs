@@ -87,6 +87,25 @@ fn untracked_twin_row(
         .map(|session| session.id)
 }
 
+/// The local row a session's `metadata.task` names — the authoritative link
+/// every session this app creates carries. It beats the twin heuristics
+/// below, which can only guess from titles and recency, and it repairs the
+/// window where a task's row never recorded its native id (a crash before
+/// `Connected` landed) without importing a twin. Only untracked rows qualify:
+/// a row already pointing at another native session is not this summary's.
+fn task_named_row(sessions: &[AgentSession], project_id: Uuid, summary: &NativeSessionSummary) -> Option<Uuid> {
+    let task = Uuid::parse_str(summary.task.as_deref()?.trim()).ok()?;
+    sessions
+        .iter()
+        .find(|session| {
+            session.id == task
+                && session.project_id == project_id
+                && session.native_session_id.is_none()
+                && session.provider_cursor.is_none()
+        })
+        .map(|session| session.id)
+}
+
 /// Decide what `summary` should do to the roster.
 fn resolve_roster_target(
     sessions: &[AgentSession],
@@ -94,7 +113,8 @@ fn resolve_roster_target(
     summary: &NativeSessionSummary,
 ) -> RosterTarget {
     let tracked = finds_native_row(sessions, &summary.session_id);
-    let claimable = untracked_twin_row(sessions, project_id, summary);
+    let claimable = task_named_row(sessions, project_id, summary)
+        .or_else(|| untracked_twin_row(sessions, project_id, summary));
     match (tracked, claimable) {
         (Some(tracked), Some(claim)) if tracked != claim => {
             // Only a skeleton is droppable: an app-created row that already
@@ -928,6 +948,7 @@ mod tests {
             created_at: updated_at - 60,
             updated_at,
             model: None,
+            task: None,
         }
     }
 
@@ -985,6 +1006,72 @@ mod tests {
         assert_eq!(
             resolve_roster_target(std::slice::from_ref(&local), project, &summary),
             RosterTarget::Claim(local.id)
+        );
+    }
+
+    /// A session this app created names its owning task in `metadata.task`.
+    /// That link is authoritative: it claims the row even where the twin
+    /// heuristics fail — a default title never renamed, and a recency far
+    /// past the twin window (the app was closed for a long time before the
+    /// reconcile ran).
+    #[test]
+    fn a_task_metadata_summary_claims_its_named_row_past_the_twin_window() {
+        let project = Uuid::new_v4();
+        let local = started_session(project, AgentSession::DEFAULT_TITLE, 1_000);
+        let summary = NativeSessionSummary {
+            task: Some(local.id.to_string()),
+            ..native_summary("ses_1", "a server title the row never had", 1_000 + 60 * 60 * 24)
+        };
+
+        assert_eq!(
+            resolve_roster_target(std::slice::from_ref(&local), project, &summary),
+            RosterTarget::Claim(local.id)
+        );
+    }
+
+    /// The task link only ever points an untracked row of the same project
+    /// at the session it names: a row tracking another native session keeps
+    /// its own cursor, a foreign project's row is never claimed across the
+    /// workspace boundary, and a task that is not a row id claims nothing.
+    #[test]
+    fn a_task_metadata_summary_claims_only_untracked_rows_of_its_project() {
+        let project = Uuid::new_v4();
+        let other_project = Uuid::new_v4();
+        let mut tracked_elsewhere = started_session(project, "问候交流", 1_000);
+        tracked_elsewhere.provider_cursor =
+            Some(ProviderResumeCursor::from_session_id("ses_other".to_owned()));
+        let foreign = started_session(other_project, "问候交流", 1_000);
+
+        let tracked_summary = NativeSessionSummary {
+            task: Some(tracked_elsewhere.id.to_string()),
+            ..native_summary("ses_1", "不匹配的标题", 1_030)
+        };
+        assert_eq!(
+            resolve_roster_target(
+                std::slice::from_ref(&tracked_elsewhere),
+                project,
+                &tracked_summary
+            ),
+            RosterTarget::Import
+        );
+
+        let foreign_summary = NativeSessionSummary {
+            task: Some(foreign.id.to_string()),
+            ..native_summary("ses_1", "不匹配的标题", 1_030)
+        };
+        assert_eq!(
+            resolve_roster_target(std::slice::from_ref(&foreign), project, &foreign_summary),
+            RosterTarget::Import
+        );
+
+        let unknown_task = NativeSessionSummary {
+            task: Some("not-a-uuid".to_owned()),
+            ..native_summary("ses_1", "不匹配的标题", 1_030)
+        };
+        let local = started_session(project, "问候交流", 1_000);
+        assert_eq!(
+            resolve_roster_target(std::slice::from_ref(&local), project, &unknown_task),
+            RosterTarget::Import
         );
     }
 

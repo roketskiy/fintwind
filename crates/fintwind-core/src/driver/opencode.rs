@@ -415,32 +415,60 @@ fn post_owned_reply(
     }
 }
 
-/// The prompt body both turn starts and steers post. OpenCode keeps the model
-/// on the session (set through `/api/session/{id}/model`). Attachment chips
-/// ride `files` as `file:` URIs of the daemon copy; the typed text is not
-/// rewritten with `@` paths. Plain prompts omit `files`. A relative path
-/// cannot be a file URL, and dropping it would send a prompt the model cannot
-/// see, so that fails the post instead.
+/// A prompt's attachment as the `files` array wants it: a `file:` URI of the
+/// daemon's copy. A relative path cannot be a file URL, and dropping it would
+/// send a prompt the model cannot see, so that fails the post instead.
 fn file_uri(path: &Path) -> anyhow::Result<String> {
     url::Url::from_file_path(path)
         .map(|uri| uri.to_string())
         .map_err(|()| anyhow!("attachment path is not absolute: {}", path.display()))
 }
 
-fn prompt_body(text: &str, files: &[PromptFile]) -> anyhow::Result<Value> {
-    let mut body = json!({"text": text});
-    if files.is_empty() {
-        return Ok(body);
+/// The metadata a session create and every prompt carry: the app's identity
+/// plus the task UUID that owns this conversation, so any client of the
+/// OpenCode server can trace a session — or a single prompt — back to the
+/// task that created it. `Session.Metadata` is a free-form object, and the
+/// server echoes it on `GET /api/session/{id}` (verified on 2.0.11 and
+/// 2.0.16; the field has been in the contract since 2.0.4).
+fn fintwind_task_metadata(task_id: Option<&str>) -> Option<Value> {
+    let task = task_id.map(str::trim).filter(|task| !task.is_empty())?;
+    Some(json!({ "source": "fintwind", "task": task }))
+}
+
+/// The prompt bodies both turn starts and steers post: the current shape,
+/// plus the pre-2.0 fallback that drops the newer fields. OpenCode keeps the
+/// model on the session (set through `/api/session/{id}/model`). Attachment
+/// chips ride `files` as `file:` URIs of the daemon copy; the typed text is
+/// not rewritten with `@` paths. Plain prompts omit `files`. A relative path
+/// cannot be a file URL, and dropping it would send a prompt the model cannot
+/// see, so that fails the post instead. `metadata` records the owning task,
+/// and `delivery: "steer"` states what every prompt from this app is: folded
+/// into the running turn when there is one, a fresh turn when there is not —
+/// the server's default, now named. Queued delivery stays a server-side
+/// capability for a future inbox UI; the app's own follow-up queue already
+/// covers that product behavior locally.
+fn prompt_bodies(
+    text: &str,
+    files: &[PromptFile],
+    task_id: Option<&str>,
+) -> anyhow::Result<(Value, Value)> {
+    let mut current = json!({"text": text, "delivery": "steer"});
+    if let Some(metadata) = fintwind_task_metadata(task_id) {
+        current["metadata"] = metadata;
     }
-    let mut encoded = Vec::with_capacity(files.len());
-    for file in files {
-        encoded.push(json!({
-            "uri": file_uri(&file.path)?,
-            "name": file.name,
-        }));
+    let mut legacy = json!({"text": text});
+    if !files.is_empty() {
+        let mut encoded = Vec::with_capacity(files.len());
+        for file in files {
+            encoded.push(json!({
+                "uri": file_uri(&file.path)?,
+                "name": file.name,
+            }));
+        }
+        current["files"] = Value::Array(encoded.clone());
+        legacy["files"] = Value::Array(encoded);
     }
-    body["files"] = Value::Array(encoded);
-    Ok(body)
+    Ok((current, legacy))
 }
 
 /// The `answer` object a form reply posts: every question's selections keyed
@@ -539,6 +567,7 @@ impl OpenCodeDriver {
             context_window: _,
             agent_preset: _,
             provider_cursor,
+            task_id,
         } = options;
         let resume_session_id = match provider_cursor {
             Some(ProviderResumeCursor::OpenCode { session_id }) => {
@@ -569,16 +598,45 @@ impl OpenCodeDriver {
                 // through it instead of its own process working directory.
                 // The directory also rides the header, so an instance selected
                 // by it stores the session under the same workspace the body
-                // names.
-                let created = server
-                    .request_for_directory_with_timeout(
-                        &location_directory,
-                        "POST",
-                        "/api/session",
-                        Some(&json!({ "location": { "directory": &location_directory } })),
-                        Duration::from_secs(10),
+                // names. `metadata` ties the session back to the app task
+                // that owns it; a pre-2.0 CLI that rejects the field gets the
+                // plain location body instead (2.0.4+ accepts it — verified
+                // on 2.0.11 and 2.0.16).
+                let location_body = json!({ "location": { "directory": &location_directory } });
+                let body = match fintwind_task_metadata(task_id.as_deref()) {
+                    Some(metadata) => {
+                        let mut body = location_body.clone();
+                        body["metadata"] = metadata;
+                        body
+                    }
+                    None => location_body.clone(),
+                };
+                let created = if body == location_body {
+                    server
+                        .request_for_directory_with_timeout(
+                            &location_directory,
+                            "POST",
+                            "/api/session",
+                            Some(&location_body),
+                            Duration::from_secs(10),
+                        )
+                        .context("could not open an OpenCode session")?
+                } else {
+                    crate::opencode_session::post_current_or_legacy(
+                        |body| {
+                            server.request_for_directory_with_timeout(
+                                &location_directory,
+                                "POST",
+                                "/api/session",
+                                Some(body),
+                                Duration::from_secs(10),
+                            )
+                        },
+                        &body,
+                        Some(&location_body),
                     )
-                    .context("could not open an OpenCode session")?;
+                    .context("could not open an OpenCode session")?
+                };
                 created
                     .pointer("/data/id")
                     .and_then(Value::as_str)
@@ -918,6 +976,7 @@ impl OpenCodeDriver {
 
         let worker_server = server.clone();
         let worker_session = session_id.clone();
+        let worker_task_id = task_id.clone();
         let worker_events = events;
         let worker_turn = turn_active;
         let worker_forms = Arc::clone(&forms);
@@ -940,8 +999,14 @@ impl OpenCodeDriver {
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let posted = prompt_body(&text, &files)
-                                .and_then(|body| worker_server.request("POST", &path, Some(&body)));
+                            let posted = prompt_bodies(&text, &files, worker_task_id.as_deref())
+                                .and_then(|(current, legacy)| {
+                                    crate::opencode_session::post_current_or_legacy(
+                                        |body| worker_server.request("POST", &path, Some(body)),
+                                        &current,
+                                        Some(&legacy),
+                                    )
+                                });
                             if let Err(error) = posted {
                                 let _ = worker_events.send(DriverEvent::Error(tr!(
                                     "errors.provider_rejected_prompt_detail",
@@ -984,8 +1049,14 @@ impl OpenCodeDriver {
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let posted = prompt_body(&text, &files)
-                                .and_then(|body| worker_server.request("POST", &path, Some(&body)));
+                            let posted = prompt_bodies(&text, &files, worker_task_id.as_deref())
+                                .and_then(|(current, legacy)| {
+                                    crate::opencode_session::post_current_or_legacy(
+                                        |body| worker_server.request("POST", &path, Some(body)),
+                                        &current,
+                                        Some(&legacy),
+                                    )
+                                });
                             match posted {
                                 Ok(_) => {
                                     let _ = worker_events
@@ -3696,32 +3767,55 @@ mod tests {
     }
 
     #[test]
-    fn prompt_files_are_file_uris_and_plain_prompts_stay_text_only() {
-        let plain = prompt_body("hi", &[]).unwrap();
-        assert_eq!(plain, json!({"text": "hi"}));
+    fn prompt_bodies_carry_delivery_metadata_and_legacy_fallback() {
+        // The current body names its delivery and records the owning task.
+        let (current, legacy) = prompt_bodies("hi", &[], Some("11111111-1111-1111-1111-111111111111")).unwrap();
+        assert_eq!(
+            current,
+            json!({
+                "text": "hi",
+                "delivery": "steer",
+                "metadata": {"source": "fintwind", "task": "11111111-1111-1111-1111-111111111111"},
+            })
+        );
+        // The legacy body a pre-2.0 CLI gets instead: text only.
+        assert_eq!(legacy, json!({"text": "hi"}));
+
+        // Without a task id there is no metadata to record, and the legacy
+        // body stays identical to the current one apart from delivery.
+        let (current, legacy) = prompt_bodies("hi", &[], None).unwrap();
+        assert_eq!(current, json!({"text": "hi", "delivery": "steer"}));
+        assert_eq!(legacy, json!({"text": "hi"}));
+        // A blank task id is treated as absent.
+        let (current, _) = prompt_bodies("hi", &[], Some("  ")).unwrap();
+        assert!(current.get("metadata").is_none());
 
         let path = std::env::temp_dir().join("notes.md");
-        let body = prompt_body(
+        let (current, legacy) = prompt_bodies(
             "",
             &[PromptFile {
                 path: path.clone(),
                 name: "notes.md".into(),
             }],
+            None,
         )
         .unwrap();
-        assert_eq!(body["text"], "");
-        assert_eq!(body["files"][0]["name"], "notes.md");
-        let uri = body["files"][0]["uri"].as_str().unwrap();
-        assert!(uri.starts_with("file:"));
-        assert!(!uri.contains('@'));
-        assert_eq!(url::Url::parse(uri).unwrap().to_file_path().unwrap(), path);
+        for body in [&current, &legacy] {
+            assert_eq!(body["text"], "");
+            assert_eq!(body["files"][0]["name"], "notes.md");
+            let uri = body["files"][0]["uri"].as_str().unwrap();
+            assert!(uri.starts_with("file:"));
+            assert!(!uri.contains('@'));
+            assert_eq!(url::Url::parse(uri).unwrap().to_file_path().unwrap(), path);
+        }
 
-        let relative = prompt_body(
+        let relative = prompt_bodies(
             "x",
             &[PromptFile {
                 path: PathBuf::from("relative.md"),
                 name: "relative.md".into(),
             }],
+            None,
         );
         assert!(relative.is_err());
     }
@@ -5539,10 +5633,12 @@ mod tests {
     fn opencode_session_against_a_real_server() {
         let binary =
             crate::command_env::find_executable("opencode").expect("opencode is not installed");
+        // The task link this test verifies round-trips through the server.
+        let task_id = uuid::Uuid::new_v4().to_string();
         let (events, event_rx) = crate::driver::test_event_channel();
         let driver = OpenCodeDriver::start(
             DriverStartOptions {
-                binary,
+                binary: binary.clone(),
                 cwd: std::env::temp_dir(),
                 mode: RuntimeMode::FullAccess,
                 interaction_mode: InteractionMode::Build,
@@ -5553,6 +5649,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                task_id: Some(task_id.clone()),
             },
             events,
         )
@@ -5567,6 +5664,30 @@ mod tests {
             } => session_id,
             event => panic!("expected an OpenCode cursor, got {event:?}"),
         };
+
+        // The task id rides the session's `metadata`, so any client of the
+        // server — this app reconciling, the CLI, the TUI — can trace the
+        // session back to the task that owns it.
+        {
+            let server = crate::opencode_pool::acquire(&binary, &std::env::temp_dir())
+                .expect("the resident server should be reachable");
+            let recorded = server
+                .request(
+                    "GET",
+                    &format!("/api/session/{source_session_id}"),
+                    None,
+                )
+                .expect("the session should read back");
+            assert_eq!(
+                recorded.pointer("/data/metadata/task").and_then(Value::as_str),
+                Some(task_id.as_str()),
+                "the session metadata should name the owning task, got {recorded}"
+            );
+            assert_eq!(
+                recorded.pointer("/data/metadata/source").and_then(Value::as_str),
+                Some("fintwind"),
+            );
+        }
 
         driver.prompt(
             "Reply with exactly: OK. Do not use any tools.".into(),
@@ -5644,6 +5765,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                task_id: None,
             },
             events,
         )
@@ -5721,6 +5843,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                task_id: None,
             },
             events,
         )
@@ -5808,6 +5931,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                task_id: None,
             },
             events,
         )
@@ -6033,6 +6157,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                task_id: None,
             },
             events,
         )

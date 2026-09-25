@@ -991,43 +991,66 @@ impl Fintwind {
     /// list can measure it at its true wrap width. Current-turn reasoning and
     /// activity blocks are anchored at the exact boundary between assistant
     /// text segments where their provider events arrived.
-    pub(super) fn user_message_action_for_message(
+    pub(super) fn user_message_rewind_for_message(
         &self,
         message_index: usize,
-    ) -> Option<UserMessageAction> {
-        let session = self.selected_session()?;
-        let message = session.messages.get(message_index)?;
+    ) -> UserMessageRewind {
+        let Some(session) = self.selected_session() else {
+            return UserMessageRewind::Hidden;
+        };
+        let Some(message) = session.messages.get(message_index) else {
+            return UserMessageRewind::Hidden;
+        };
         if message.role != MessageRole::User
             || !matches!(session.status, SessionStatus::Idle | SessionStatus::Failed)
         {
-            return None;
+            return UserMessageRewind::Hidden;
         }
-        let turn_id = message.turn_id?;
-        let turn = session.turns.iter().find(|turn| turn.id == turn_id)?;
+        let Some(turn_id) = message.turn_id else {
+            return UserMessageRewind::Hidden;
+        };
+        let Some(turn) = session.turns.iter().find(|turn| turn.id == turn_id) else {
+            return UserMessageRewind::Hidden;
+        };
         // A steer joins the running turn as another user message. Rewinding
         // restores the turn's checkpoint and resubmits the prompt that opened
         // it, so only that prompt can carry the affordance.
         if !message_opens_turn(&session.messages, message_index) {
-            return None;
+            return UserMessageRewind::Blocked(RewindUnavailableReason::NotTurnOpening);
+        }
+        let checkpoint_status = turn
+            .checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.status);
+        // The turn's own checkpoint records whether this workspace snapshots
+        // at all: `Unavailable` means the directory is not a Git repository,
+        // so waiting for baseline refs to appear would never end.
+        if checkpoint_status == Some(CheckpointStatus::Unavailable) {
+            return UserMessageRewind::Blocked(RewindUnavailableReason::NotGitRepository);
         }
         let retained_turn_count = turn.turn_count.saturating_sub(1);
         // Cache only — the ref lives in git, and this runs for every visible
         // user message on every frame. `prefetch_checkpoint_refs` fills the
         // cache off-thread and notifies.
-        if !self
+        let has_baseline = self
             .checkpoint_ref_cache
             .borrow()
             .get(&(session.id, retained_turn_count))
             .copied()
-            .unwrap_or(false)
-        {
-            return None;
+            .unwrap_or(false);
+        if !has_baseline {
+            // A failed capture names the cause; anything else just has not
+            // settled yet and may still arrive.
+            return UserMessageRewind::Blocked(match checkpoint_status {
+                Some(CheckpointStatus::Error) => RewindUnavailableReason::CheckpointError,
+                _ => RewindUnavailableReason::SnapshotMissing,
+            });
         }
         let rollback_turns = session.provider_turns_after(retained_turn_count);
         if rollback_turns > 0 && session.provider_cursor.is_none() {
-            return None;
+            return UserMessageRewind::Blocked(RewindUnavailableReason::ProviderLinkMissing);
         }
-        Some(UserMessageAction {
+        UserMessageRewind::Ready(UserMessageAction {
             session_id: session.id,
             message_id: message.id,
             turn_count: turn.turn_count,
@@ -1234,8 +1257,9 @@ impl Fintwind {
                         .and_then(|turn_id| self.render_changed_files_row(turn_id, &theme, cx));
                     let assistant_message_action =
                         self.assistant_message_action_for_message(message_index);
-                    let user_message_action = self.user_message_action_for_message(message_index);
-                    let message_edit_input = user_message_action.and_then(|action| {
+                    let user_message_rewind =
+                        self.user_message_rewind_for_message(message_index);
+                    let message_edit_input = user_message_rewind.ready().and_then(|action| {
                         self.message_edit
                             .as_ref()
                             .filter(|edit| {
@@ -1313,7 +1337,7 @@ impl Fintwind {
                             assistant_turn_stats,
                             copied,
                             assistant_message_action,
-                            user_message_action,
+                            user_message_rewind,
                             user_message_fill_width: false,
                             message_edit_input,
                             attachment_menus,

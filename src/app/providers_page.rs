@@ -164,9 +164,9 @@ impl Fintwind {
         // must not show it, and an in-flight one must not land on the new
         // selection.
         let catalog_id = id.strip_prefix(BUILTIN_SELECTION_PREFIX);
-        if self.providers_builtin_probe_id.as_deref() != catalog_id {
-            self.providers_builtin_connectivity = None;
-            self.providers_builtin_probe_id = None;
+        if self.providers_builtin_catalog_check_id.as_deref() != catalog_id {
+            self.providers_builtin_catalog_check = None;
+            self.providers_builtin_catalog_check_id = None;
         }
         self.load_provider_fields(&id, cx);
         self.providers_detail_scroll
@@ -1255,7 +1255,7 @@ impl Fintwind {
     }
 
     /// An authorized built-in provider's page: identity and endpoint facts
-    /// from the catalog, its model list, and the connectivity test. The
+    /// from the catalog and its model list, with a local catalog check. The
     /// credential itself never renders — it lives in the OpenCode server's
     /// own credential store — so the destructive action is the logout, not
     /// a delete.
@@ -1268,11 +1268,10 @@ impl Fintwind {
         let accent = providers_accent(theme);
         let authorized = self.provider_is_authorized(&provider.id);
 
-        let state = self
-            .providers_builtin_connectivity
-            .as_ref()
-            .filter(|_| self.providers_builtin_probe_id.as_deref() == Some(provider.id.as_str()));
-        let connectivity = self.render_builtin_connectivity_field(state, provider, theme, cx);
+        let state = self.providers_builtin_catalog_check.as_ref().filter(|_| {
+            self.providers_builtin_catalog_check_id.as_deref() == Some(provider.id.as_str())
+        });
+        let catalog_check = self.render_builtin_catalog_check(state, provider, theme, cx);
 
         let mut model_rows = div().flex().flex_col();
         if provider.models.is_empty() {
@@ -1460,7 +1459,7 @@ impl Fintwind {
                         .flex()
                         .flex_col()
                         .gap(px(14.0))
-                        .child(connectivity),
+                        .child(catalog_check),
                 )
                 .child(info_note(
                     theme,

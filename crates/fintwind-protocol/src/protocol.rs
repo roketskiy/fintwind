@@ -239,9 +239,9 @@ pub enum Command {
         directory: PathBuf,
         provider_id: String,
     },
-    /// Ask the workspace's OpenCode server how many models it currently
-    /// exposes for `provider_id`, timed. A credential the server accepts is
-    /// what makes models appear, so the count is the connectivity verdict.
+    /// Count the models the workspace's OpenCode server currently exposes for
+    /// `provider_id`. This inspects the local model catalog; it does not test
+    /// remote connectivity or measure provider latency.
     ProbeBuiltinProvider {
         binary: PathBuf,
         directory: PathBuf,
@@ -490,7 +490,6 @@ pub enum ResponsePayload {
     },
     BuiltinProviderProbed {
         models: usize,
-        latency_ms: u64,
     },
     McpServerStatuses {
         statuses: Vec<McpServerStatus>,

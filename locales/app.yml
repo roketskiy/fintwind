@@ -390,6 +390,16 @@ providers.connection_tooltip:
   en: Ask the OpenCode server how many models it exposes for this provider and measure the response
 providers.connection_ok:
   en: "Reachable · %{latency} · %{count} models"
+providers.builtin_catalog_check:
+  en: Check model catalog
+providers.builtin_catalog_checking:
+  en: Checking catalog…
+providers.builtin_catalog_tooltip:
+  en: Check this provider's models in the local OpenCode catalog. This does not test connectivity to the provider's API.
+providers.builtin_catalog_ok:
+  en: "Catalog available · %{count} models"
+providers.builtin_catalog_failed:
+  en: "Catalog query failed: %{error}"
 providers.connection_failed:
   en: "Unreachable: %{error}"
 providers.error_invalid_url:

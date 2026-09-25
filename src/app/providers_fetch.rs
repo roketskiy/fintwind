@@ -31,6 +31,13 @@ pub(super) enum ProviderConnectivityState {
     Done(custom_providers::ConnectivityOutcome),
 }
 
+/// A check of the local OpenCode model catalog for a built-in provider.
+#[derive(Clone, Debug)]
+pub(super) enum BuiltinCatalogState {
+    Testing,
+    Done(Result<usize, String>),
+}
+
 /// A model first-token probe's lifecycle on the page.
 #[derive(Clone, Debug)]
 pub(super) enum ModelLatencyState {
@@ -798,10 +805,11 @@ impl Fintwind {
                 match removed {
                     Ok(provider_id) => {
                         this.providers_authorized.remove(provider_id.as_str());
-                        if this.providers_builtin_probe_id.as_deref() == Some(provider_id.as_str())
+                        if this.providers_builtin_catalog_check_id.as_deref()
+                            == Some(provider_id.as_str())
                         {
-                            this.providers_builtin_connectivity = None;
-                            this.providers_builtin_probe_id = None;
+                            this.providers_builtin_catalog_check = None;
+                            this.providers_builtin_catalog_check_id = None;
                         }
                         this.show_success_toast(tr!("providers.logged_out_toast"));
                         this.refresh_integrations(cx);
@@ -842,12 +850,9 @@ impl Fintwind {
         .detach();
     }
 
-    /// The selected built-in provider's connectivity probe: how many models
-    /// the workspace server currently exposes for it, timed. The server
-    /// lists a provider's models only when it holds a credential it
-    /// accepts, so the count is the verdict — and the key never leaves the
-    /// server, which no longer holds it in a file the app could read.
-    pub(super) fn probe_builtin_provider_connectivity(&mut self, cx: &mut Context<Self>) {
+    /// Check the local OpenCode model catalog for the selected built-in
+    /// provider. This does not make a request to the provider's endpoint.
+    pub(super) fn check_builtin_provider_catalog(&mut self, cx: &mut Context<Self>) {
         let Some(catalog_id) = self.selected_builtin_catalog_id().map(str::to_owned) else {
             return;
         };
@@ -855,22 +860,20 @@ impl Fintwind {
         // must not mute this one's button, and a second click here must not
         // stack a duplicate request.
         if matches!(
-            self.providers_builtin_connectivity,
-            Some(ProviderConnectivityState::Testing)
-        ) && self.providers_builtin_probe_id.as_deref() == Some(catalog_id.as_str())
+            self.providers_builtin_catalog_check,
+            Some(BuiltinCatalogState::Testing)
+        ) && self.providers_builtin_catalog_check_id.as_deref() == Some(catalog_id.as_str())
         {
             return;
         }
-        // The probe asks the server about a credential it holds; without one
-        // there is nothing to test.
         if !self.provider_is_authorized(&catalog_id) {
             return;
         }
         let Some(workspace) = self.provider_workspace() else {
             return;
         };
-        self.providers_builtin_connectivity = Some(ProviderConnectivityState::Testing);
-        self.providers_builtin_probe_id = Some(catalog_id.clone());
+        self.providers_builtin_catalog_check = Some(BuiltinCatalogState::Testing);
+        self.providers_builtin_catalog_check_id = Some(catalog_id.clone());
         cx.notify();
         let probe_id = catalog_id.clone();
         let daemon = self.daemon.clone();
@@ -881,29 +884,12 @@ impl Fintwind {
                     let (binary, directory) = workspace;
                     let probed = fintwind_client::persistence::StateStore::remote(daemon)
                         .probe_builtin_provider(binary, directory, probe_id.clone());
-                    match probed {
-                        Ok((models, latency)) => {
-                            if models > 0 {
-                                custom_providers::ConnectivityOutcome::Reachable { models, latency }
-                            } else {
-                                // The server answered but exposes no model
-                                // for the provider: its credential is
-                                // absent or rejected.
-                                custom_providers::ConnectivityOutcome::Failed {
-                                    error: custom_providers::ApiListError::AuthRejected(401),
-                                }
-                            }
-                        }
-                        Err(error) => custom_providers::ConnectivityOutcome::Failed {
-                            error: custom_providers::ApiListError::Unreachable(error.to_string()),
-                        },
-                    }
+                    probed.map_err(|error| error.to_string())
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
-                if this.providers_builtin_probe_id.as_deref() == Some(catalog_id.as_str()) {
-                    this.providers_builtin_connectivity =
-                        Some(ProviderConnectivityState::Done(outcome));
+                if this.providers_builtin_catalog_check_id.as_deref() == Some(catalog_id.as_str()) {
+                    this.providers_builtin_catalog_check = Some(BuiltinCatalogState::Done(outcome));
                 }
                 cx.notify();
             });
@@ -913,19 +899,16 @@ impl Fintwind {
 }
 
 impl Fintwind {
-    /// The built-in provider page's connectivity row: the test button beside
-    /// its verdict. The probe asks the workspace's OpenCode server how many
-    /// models it exposes for the provider — a credential the server accepts
-    /// is what makes them appear; providers without a key method (OAuth-
-    /// gated) show a note instead of a button.
-    pub(super) fn render_builtin_connectivity_field(
+    /// The built-in provider page's local model-catalog check. Providers
+    /// without a key method (OAuth-gated) show a note instead of a button.
+    pub(super) fn render_builtin_catalog_check(
         &self,
-        state: Option<&ProviderConnectivityState>,
+        state: Option<&BuiltinCatalogState>,
         provider: &fintwind_client::models_dev::ModelsDevProvider,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let testing = matches!(state, Some(ProviderConnectivityState::Testing));
+        let testing = matches!(state, Some(BuiltinCatalogState::Testing));
         if !self.provider_supports_key(&provider.id) {
             return info_note(
                 theme,
@@ -935,32 +918,32 @@ impl Fintwind {
             .into_any_element();
         }
         let mut button = outline_button(
-            "test-builtin-provider-connection",
+            "check-builtin-provider-catalog",
             if testing {
-                tr!("providers.testing_connection")
+                tr!("providers.builtin_catalog_checking")
             } else {
-                tr!("providers.test_connection")
+                tr!("providers.builtin_catalog_check")
             },
             Some(if testing {
                 "icons/loader-circle.svg"
             } else {
-                "icons/globe.svg"
+                "icons/list.svg"
             }),
             theme,
         )
-        .tooltip(Tooltip::text(tr!("providers.connection_tooltip")));
+        .tooltip(Tooltip::text(tr!("providers.builtin_catalog_tooltip")));
         if testing {
             button = button.opacity(0.6);
         } else {
             button = button
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.probe_builtin_provider_connectivity(cx);
+                    this.check_builtin_provider_catalog(cx);
                 }))
                 .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                     if !event.keystroke.modifiers.modified()
                         && matches!(event.keystroke.key.as_str(), "enter" | "space")
                     {
-                        this.probe_builtin_provider_connectivity(cx);
+                        this.check_builtin_provider_catalog(cx);
                         cx.stop_propagation();
                     }
                 }));
@@ -972,7 +955,7 @@ impl Fintwind {
             .items_center()
             .gap(px(10.0))
             .child(button)
-            .children(connectivity_verdict(state, theme))
+            .children(builtin_catalog_verdict(state, theme))
             .into_any_element()
     }
 }
@@ -1232,6 +1215,59 @@ fn connectivity_verdict(
                     .into_any_element(),
             )
         }
+    }
+}
+
+/// The built-in provider probe only reads the local OpenCode model catalog;
+/// its result must not be presented as remote connectivity or latency.
+fn builtin_catalog_verdict(
+    state: Option<&BuiltinCatalogState>,
+    theme: &Theme,
+) -> Option<AnyElement> {
+    match state? {
+        BuiltinCatalogState::Testing => None,
+        BuiltinCatalogState::Done(Ok(models)) => Some(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .min_w_0()
+                .child(icon("icons/check.svg", 12.0, theme.success))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(ui_px(10.5))
+                        .text_color(theme.success)
+                        .child(SharedString::from(tr!(
+                            "providers.builtin_catalog_ok",
+                            count = *models
+                        ))),
+                )
+                .into_any_element(),
+        ),
+        BuiltinCatalogState::Done(Err(detail)) => Some(
+            div()
+                .id("builtin-catalog-verdict")
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .min_w_0()
+                .tooltip(Tooltip::text(detail.clone()))
+                .child(icon("icons/alert.svg", 12.0, theme.danger))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(ui_px(10.5))
+                        .text_color(theme.danger)
+                        .child(SharedString::from(tr!(
+                            "providers.builtin_catalog_failed",
+                            error = detail
+                        ))),
+                )
+                .into_any_element(),
+        ),
     }
 }
 

@@ -1467,10 +1467,10 @@ pub struct Fintwind {
     /// The integration fetch (authorization set included) is in flight.
     providers_auth_loading: bool,
     /// A connectivity probe of the selected built-in provider is in flight.
-    providers_builtin_connectivity: Option<providers_fetch::ProviderConnectivityState>,
+    providers_builtin_catalog_check: Option<providers_fetch::BuiltinCatalogState>,
     /// The id of the built-in provider the current connectivity probe names;
     /// a stale result for a different provider never renders.
-    providers_builtin_probe_id: Option<String>,
+    providers_builtin_catalog_check_id: Option<String>,
     /// Which provider the add form has picked — the picker page, the custom
     /// free-endpoint form, or a chosen built-in provider's key form.
     providers_form_stage: providers_page::ProviderFormStage,
@@ -3113,8 +3113,8 @@ impl Fintwind {
                 providers_authorized: HashSet::new(),
                 providers_key_methods: HashSet::new(),
                 providers_auth_loading: false,
-                providers_builtin_connectivity: None,
-                providers_builtin_probe_id: None,
+                providers_builtin_catalog_check: None,
+                providers_builtin_catalog_check_id: None,
                 providers_form_stage: Default::default(),
                 models_dev_table: None,
                 models_dev_fetching: false,

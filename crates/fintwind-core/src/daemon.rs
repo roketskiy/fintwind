@@ -578,12 +578,12 @@ impl Backend for FintwindBackend {
                 provider_id,
             } => {
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let (models, latency_ms) = crate::driver::native::probe_provider_models(
+                let models = crate::driver::native::probe_provider_models(
                     &server,
                     &directory.to_string_lossy(),
                     &provider_id,
                 )?;
-                Ok(ResponsePayload::BuiltinProviderProbed { models, latency_ms })
+                Ok(ResponsePayload::BuiltinProviderProbed { models })
             }
             Command::AuthenticateMcpServer {
                 binary,

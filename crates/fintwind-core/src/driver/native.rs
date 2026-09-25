@@ -1100,17 +1100,16 @@ pub(crate) fn logout_integration(server: &OpenCodeServer, provider_id: &str) -> 
     Ok(())
 }
 
-/// Count the models the server currently exposes for `provider_id`, timed.
-/// Models appear only when the server holds a credential it accepts, so the
-/// count doubles as a connectivity verdict for the authorized provider.
-/// The catalog is location-scoped: the request names the workspace so a
-/// server shared across directories answers this one's provider list.
+/// Count the models the local OpenCode server currently exposes for
+/// `provider_id`. This reads the server's model catalog; it does not
+/// test connectivity to the provider's remote endpoint. The catalog is
+/// location-scoped: the request names the workspace so a server shared across
+/// directories answers this one's provider list.
 pub(crate) fn probe_provider_models(
     server: &OpenCodeServer,
     directory: &str,
     provider_id: &str,
-) -> anyhow::Result<(usize, u64)> {
-    let started = std::time::Instant::now();
+) -> anyhow::Result<usize> {
     let response = server.request_for_directory_with_timeout(
         directory,
         "GET",
@@ -1128,7 +1127,7 @@ pub(crate) fn probe_provider_models(
                 .count()
         })
         .unwrap_or_default();
-    Ok((models, started.elapsed().as_millis() as u64))
+    Ok(models)
 }
 
 /// The integration array inside a `/api/integration` response: under

@@ -206,6 +206,11 @@ providers.test_connection: 接続テスト
 providers.testing_connection: テスト中…
 providers.connection_tooltip: OpenCode サーバーにこのプロバイダーの利用可能モデル数を問い合わせ、応答を測定します
 providers.connection_ok: "応答あり · %{latency} · %{count}モデル"
+providers.builtin_catalog_check: モデルカタログを確認
+providers.builtin_catalog_checking: カタログを確認中…
+providers.builtin_catalog_tooltip: ローカルの OpenCode サーバーにあるこのプロバイダーのモデルカタログを確認します。プロバイダー API への接続はテストしません
+providers.builtin_catalog_ok: "モデルカタログを確認済み · %{count}モデル"
+providers.builtin_catalog_failed: "モデルカタログの照会に失敗：%{error}"
 providers.connection_failed: "接続失敗：%{error}"
 providers.error_invalid_url: Base URL が http(s) アドレスではありません
 providers.error_auth: "エンドポイントがAPI Keyを拒否しました（HTTP %{status}）"

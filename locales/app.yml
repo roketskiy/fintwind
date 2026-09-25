@@ -2165,7 +2165,7 @@ usage.chart_description:
 usage.context_used:
   en: Context window %{percent}% used (%{shortcut})
 usage.shortcut:
-  en: Usage (%{shortcut})
+  en: Context (%{shortcut})
 usage.context_window:
   en: Context window
 usage.total_tokens:
@@ -2178,6 +2178,66 @@ usage.compaction_failed:
   en: Compaction failed
 usage.compaction_retry:
   en: Retry compaction
+usage.panel_title:
+  en: Context
+usage.available:
+  en: Available
+usage.near_full:
+  en: Getting full
+usage.full:
+  en: Nearly full
+usage.unknown:
+  en: Unknown
+usage.remaining:
+  en: About %{count} remaining
+usage.window_unknown:
+  en: Window size unknown
+usage.window_unknown_detail:
+  en: The provider has not reported the window size yet.
+usage.not_measured:
+  en: No context measured yet
+usage.not_measured_detail:
+  en: Usage will appear after the first model call.
+usage.near_full_detail:
+  en: The next long response may trigger automatic compaction.
+usage.full_detail:
+  en: Context is nearly full. Consider compacting before continuing.
+usage.compact_action:
+  en: Compact context
+usage.compact_unavailable:
+  en: This session cannot be compacted right now.
+usage.latest_call:
+  en: Latest call
+usage.latest_detail:
+  en: This call's tokens, not the session total.
+usage.cache_read:
+  en: Cache read
+usage.cache_write:
+  en: Cache write
+usage.input:
+  en: Uncached input
+usage.reasoning:
+  en: Reasoning
+usage.session_total:
+  en: Session total
+usage.session_total_detail:
+  en: Tokens processed across all calls, not current occupancy.
+usage.window_section:
+  en: Window
+usage.window_size:
+  en: Size
+usage.compaction_section:
+  en: Compaction
+usage.last_compaction:
+  en: Last compaction
+usage.automatic:
+  en: Automatic · completed
+usage.manual:
+  en: Manual · completed
+usage.completed:
+  en: Completed
+usage.view_summary:
+  en: View summary in conversation
 usage.open_account_settings:
   en: Open the account's usage settings
 usage.usage_limit:

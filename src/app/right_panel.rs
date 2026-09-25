@@ -892,6 +892,7 @@ impl RightPanelSurface {
 
     fn label(&self) -> String {
         match self {
+            Self::Context => tr!("usage.panel_title"),
             Self::Browser(_) => tr!("right_panel.browser"),
             Self::Terminal(_) => tr!("right_panel.terminal"),
             Self::BackgroundWork { key, title } => {
@@ -913,6 +914,7 @@ impl RightPanelSurface {
 
     fn icon_path(&self) -> &'static str {
         match self {
+            Self::Context => "icons/chart-column.svg",
             Self::Browser(_) => "icons/globe.svg",
             Self::Terminal(_) => "icons/terminal.svg",
             Self::BackgroundWork { key, .. } => work_kind_icon(key.kind),
@@ -956,7 +958,7 @@ fn reusable_surface_index(
         RightPanelSurface::BackgroundWork { key, .. } => surfaces.iter().position(|surface| {
             matches!(surface, RightPanelSurface::BackgroundWork { key: candidate, .. } if candidate == key)
         }),
-        RightPanelSurface::Files | RightPanelSurface::Diff | RightPanelSurface::File(_) => {
+        RightPanelSurface::Context | RightPanelSurface::Files | RightPanelSurface::Diff | RightPanelSurface::File(_) => {
             surfaces.iter().position(|surface| surface == requested)
         }
     }
@@ -1787,6 +1789,7 @@ impl Fintwind {
     }
 
     pub(super) fn remove_right_panel_session_state(&mut self, session_id: Uuid) {
+        self.context_summary_ids.remove(&session_id);
         let state = if self.state.selected_session == Some(session_id) {
             let state = self.take_active_right_panel_state();
             self.replace_active_right_panel_state(RightPanelSessionState::empty(false));
@@ -1860,7 +1863,7 @@ impl Fintwind {
         self.right_panel_tabs_scroll_handle.scroll_to_item(index);
     }
 
-    fn active_right_panel_surface(&self) -> Option<&RightPanelSurface> {
+    pub(super) fn active_right_panel_surface(&self) -> Option<&RightPanelSurface> {
         self.right_panel_active_surface
             .and_then(|index| self.right_panel_surfaces.get(index))
     }
@@ -2067,6 +2070,14 @@ impl Fintwind {
         cx.notify();
     }
 
+    pub(super) fn close_context_panel(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) =
+            reusable_surface_index(&self.right_panel_surfaces, &RightPanelSurface::Context)
+        {
+            self.close_right_panel_surface(index, cx);
+        }
+    }
+
     pub(super) fn close_window_or_right_panel_tab_action(
         &mut self,
         _: &CloseWindow,
@@ -2074,8 +2085,10 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         if let Some(active) = self.right_panel_active_surface {
+            let was_context =
+                self.active_right_panel_surface() == Some(&RightPanelSurface::Context);
             self.close_right_panel_surface(active, cx);
-            if self.right_panel_surfaces.is_empty() {
+            if was_context || self.right_panel_surfaces.is_empty() {
                 let focus_handle = self.composer_focus(cx);
                 window.focus(&focus_handle, cx);
             }
@@ -2129,6 +2142,7 @@ impl Fintwind {
         }
         let body = match self.active_right_panel_surface().cloned() {
             None => self.render_right_panel_chooser(cx).into_any_element(),
+            Some(RightPanelSurface::Context) => self.render_context_panel(cx),
             Some(RightPanelSurface::BackgroundWork { key, .. }) => self
                 .render_background_work_surface(&key, cx)
                 .into_any_element(),
@@ -2359,6 +2373,7 @@ impl Fintwind {
                     && self.right_panel_files_selected_path.is_some();
             let activate_weak = cx.entity().downgrade();
             let close_weak = cx.entity().downgrade();
+            let context_tab = surface == RightPanelSurface::Context;
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(format!("right-panel-tab-{index}")))
@@ -2372,6 +2387,12 @@ impl Fintwind {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_default()
+                    .when(context_tab, |element| {
+                        element
+                            .track_focus(&self.context_tab_focus)
+                            .tab_index(0)
+                            .focus_visible(|style| style.border_1().border_color(theme.accent))
+                    })
                     .on_mouse_down(MouseButton::Left, |_, _, cx| {
                         cx.stop_propagation();
                     })
@@ -2428,20 +2449,64 @@ impl Fintwind {
                             .hover(|element| element.bg(theme.overlay_strong))
                             .active(|element| element.opacity(0.7))
                             .child(icon("icons/x.svg", 10.0, theme.text_tertiary))
-                            .on_click(move |_, _, cx| {
+                            .when(context_tab, |element| {
+                                element
+                                    .track_focus(&self.context_tab_close_focus)
+                                    .tab_index(0)
+                                    .focus_visible(|style| {
+                                        style.border_1().border_color(theme.accent)
+                                    })
+                            })
+                            .on_click(move |_, window, cx| {
                                 cx.stop_propagation();
                                 let _ = close_weak.update(cx, |this, cx| {
+                                    let was_active = this.right_panel_active_surface == Some(index);
                                     this.close_right_panel_surface(index, cx);
+                                    if context_tab && was_active {
+                                        window.focus(&this.composer.read(cx).focus(), cx);
+                                    }
                                 });
+                            })
+                            .when(context_tab, |element| {
+                                element.on_key_down(cx.listener(
+                                    move |this, event: &KeyDownEvent, window, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            let was_active =
+                                                this.right_panel_active_surface == Some(index);
+                                            this.close_right_panel_surface(index, cx);
+                                            if was_active {
+                                                window.focus(&this.composer.read(cx).focus(), cx);
+                                            }
+                                            cx.stop_propagation();
+                                        }
+                                    },
+                                ))
                             }),
                     )
-                    .on_click(move |_, _, cx| {
+                    .on_click(move |_, window, cx| {
                         let _ = activate_weak.update(cx, |this, cx| {
                             this.right_panel_active_surface = Some(index);
                             this.reveal_right_panel_tab(index);
                             this.request_active_terminal_focus();
+                            if context_tab {
+                                window.focus(&this.context_panel_focus, cx);
+                            }
                             cx.notify();
                         });
+                    })
+                    .when(context_tab, |element| {
+                        element.on_key_down(cx.listener(
+                            move |this, event: &KeyDownEvent, window, cx| {
+                                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    this.right_panel_active_surface = Some(index);
+                                    this.reveal_right_panel_tab(index);
+                                    window.focus(&this.context_panel_focus, cx);
+                                    cx.notify();
+                                    cx.stop_propagation();
+                                }
+                            },
+                        ))
                     }),
             );
         }

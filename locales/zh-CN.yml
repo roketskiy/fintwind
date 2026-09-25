@@ -1077,13 +1077,43 @@ usage.active_day_many: "%{count} 个活跃日"
 usage.filter_projects: 筛选项目…
 usage.chart_description: Claude Code 与 Codex 的每日%{metric}分布。
 usage.context_used: 上下文窗口已使用 %{percent}%（%{shortcut}）
-usage.shortcut: 用量（%{shortcut}）
+usage.shortcut: 上下文（%{shortcut}）
 usage.context_window: 上下文窗口
 usage.total_tokens: 总 Token
 usage.cache_hit_rate: 缓存命中率
 usage.compacting: 正在压缩上下文…
 usage.compaction_failed: 压缩失败
 usage.compaction_retry: 重试压缩
+usage.panel_title: 上下文
+usage.available: 充裕
+usage.near_full: 偏满
+usage.full: 将满
+usage.unknown: 未知
+usage.remaining: 剩余约 %{count}
+usage.window_unknown: 窗口大小未知
+usage.window_unknown_detail: 提供商尚未报告窗口大小。
+usage.not_measured: 还没有测量到上下文
+usage.not_measured_detail: 首次调用模型后将显示用量。
+usage.near_full_detail: 下一轮长回复可能触发自动压缩。
+usage.full_detail: 上下文即将用满，建议继续前先压缩。
+usage.compact_action: 压缩上下文
+usage.compact_unavailable: 当前会话还不能压缩。
+usage.latest_call: 最近一次调用
+usage.latest_detail: 这次调用的 Token，不是整场累计。
+usage.cache_read: 缓存读取
+usage.cache_write: 缓存写入
+usage.input: 未缓存输入
+usage.reasoning: 推理
+usage.session_total: 会话累计
+usage.session_total_detail: 整场会话处理过的量，不是当前窗口占用。
+usage.window_section: 窗口
+usage.window_size: 档位
+usage.compaction_section: 压缩
+usage.last_compaction: 上次压缩
+usage.automatic: 自动 · 已完成
+usage.manual: 手动 · 已完成
+usage.completed: 已完成
+usage.view_summary: 在对话中查看摘要
 usage.open_account_settings: 打开账户用量设置
 usage.usage_limit: 用量限额
 usage.hour_limit: "%{count} 小时限额"

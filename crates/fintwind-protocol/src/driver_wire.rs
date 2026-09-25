@@ -114,6 +114,7 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             session_total,
             cache_read,
             prompt_tokens,
+            latest,
         } => (
             "usageUpdated",
             json!({
@@ -122,6 +123,7 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
                 "sessionTotal": session_total,
                 "cacheRead": cache_read,
                 "promptTokens": prompt_tokens,
+                "latest": latest,
             }),
         ),
         DriverEvent::PlanUsageUpdated(usage) => ("planUsageUpdated", serde_json::to_value(usage)?),
@@ -265,6 +267,7 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
                 session_total: usage.session_total,
                 cache_read: usage.cache_read,
                 prompt_tokens: usage.prompt_tokens,
+                latest: usage.latest,
             }
         }
         "planUsageUpdated" => DriverEvent::PlanUsageUpdated(serde_json::from_value(payload)?),
@@ -341,6 +344,8 @@ struct UsageWire {
     cache_read: Option<u64>,
     #[serde(default)]
     prompt_tokens: Option<u64>,
+    #[serde(default)]
+    latest: Option<crate::model::LatestCallUsage>,
 }
 
 #[derive(Deserialize)]

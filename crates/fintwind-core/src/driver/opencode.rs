@@ -641,6 +641,7 @@ impl OpenCodeDriver {
             let (cache_read, prompt_tokens) = usage_metadata.session_cache();
             let _ = events.send(DriverEvent::UsageUpdated {
                 context_tokens: seeds.newest.map(|usage| usage.context),
+                latest: seeds.newest.map(|usage| usage.latest),
                 context_window: None,
                 session_total: (seeds.total > 0).then_some(seeds.total),
                 cache_read,
@@ -711,6 +712,7 @@ impl OpenCodeDriver {
                 if window.is_some() || total > 0 || prompt_tokens.is_some() {
                     let _ = metadata_events.send(DriverEvent::UsageUpdated {
                         context_tokens: None,
+                        latest: None,
                         context_window: window,
                         session_total: (total > 0).then_some(total),
                         cache_read,
@@ -1724,6 +1726,7 @@ struct UsageBreakdown {
     context: u64,
     prompt: u64,
     cache_read: u64,
+    latest: crate::model::LatestCallUsage,
 }
 
 /// The normalized usage shape carried by an assistant message and by
@@ -1753,6 +1756,13 @@ fn opencode_normalized_usage(message: &Value) -> Option<UsageBreakdown> {
         context,
         prompt,
         cache_read,
+        latest: crate::model::LatestCallUsage {
+            input,
+            cache_read,
+            cache_write,
+            output,
+            reasoning,
+        },
     })
 }
 
@@ -2629,6 +2639,7 @@ fn handle_event(
             let (cache_read, prompt_tokens) = state.usage_metadata.session_cache();
             let _ = events.send(DriverEvent::UsageUpdated {
                 context_tokens: None,
+                latest: None,
                 context_window: window,
                 session_total: (row.total > 0).then_some(row.total),
                 cache_read,
@@ -2663,6 +2674,7 @@ fn handle_event(
                 let (cache_read, prompt_tokens) = state.usage_metadata.session_cache();
                 let _ = events.send(DriverEvent::UsageUpdated {
                     context_tokens: Some(usage.context),
+                    latest: Some(usage.latest),
                     context_window: window,
                     session_total: (total > 0).then_some(total),
                     cache_read,
@@ -6040,7 +6052,8 @@ mod tests {
                 context_window: Some(200_000),
                 session_total: Some(15_201),
                 cache_read: Some(1_792),
-                prompt_tokens: Some(15_191)
+                prompt_tokens: Some(15_191),
+                latest: None
             }
         ));
 
@@ -6074,7 +6087,8 @@ mod tests {
                 context_window: Some(200_000),
                 session_total: Some(15_201),
                 cache_read: Some(1_792),
-                prompt_tokens: Some(15_191)
+                prompt_tokens: Some(15_191),
+                latest: Some(_)
             }
         ));
         assert!(event_rx.try_recv().is_err());

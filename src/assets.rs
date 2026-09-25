@@ -31,6 +31,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "changes",
     "cloud-upload",
     "chevron-down",
+    "chevron-left",
     "chevron-right",
     "chevron-up",
     "chevrons-up-down",

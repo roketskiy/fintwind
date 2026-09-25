@@ -2331,6 +2331,12 @@ usage_page.range_30d:
   en: 30 days
 usage_page.range_7d:
   en: 7 days
+usage_page.range_day:
+  en: Single day
+usage_page.previous_day:
+  en: Previous day
+usage_page.next_day:
+  en: Next day
 usage_page.refresh:
   en: Refresh
 usage_page.loading:
@@ -2378,9 +2384,27 @@ usage_page.legend_more:
 usage_page.day_tooltip:
   en: "%{date} · %{tokens} used · %{cache} cached · %{sessions} sessions"
 usage_page.daily_title:
-  en: Daily usage (excl. cache)
+  en: Daily usage
 usage_page.daily_caption:
   en: Last %{days} days
+usage_page.hourly_title:
+  en: Hourly usage
+usage_page.hourly_caption:
+  en: By hour (local time)
+usage_page.hourly_loading:
+  en: Gathering hourly usage…
+usage_page.hourly_estimated:
+  en: Some sessions have no message-level usage; their totals are placed at the last active hour.
+usage_page.plot_input:
+  en: Input
+usage_page.plot_output:
+  en: Output
+usage_page.plot_cache_write:
+  en: Cache write
+usage_page.plot_cache_read:
+  en: Cache hit
+usage_page.plot_cost:
+  en: Cost
 usage_page.models_title:
   en: Model usage
 usage_page.models_caption:

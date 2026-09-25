@@ -1157,6 +1157,9 @@ usage_error.curl_failed: "curl 失败：%{error}"
 usage_page.range_all: 全部
 usage_page.range_30d: 近 30 天
 usage_page.range_7d: 近 7 天
+usage_page.range_day: 单日
+usage_page.previous_day: 前一天
+usage_page.next_day: 后一天
 usage_page.refresh: 刷新
 usage_page.loading: 正在统计用量…
 usage_page.load_failed: "用量统计失败：%{error}"
@@ -1180,8 +1183,17 @@ usage_page.weekday_fri: 五
 usage_page.legend_less: 少
 usage_page.legend_more: 多
 usage_page.day_tooltip: "%{date} · 用量 %{tokens} · 缓存 %{cache} · %{sessions} 个会话"
-usage_page.daily_title: 每日用量（不含缓存）
+usage_page.daily_title: 每日用量
 usage_page.daily_caption: 近 %{days} 天
+usage_page.hourly_title: 时段用量
+usage_page.hourly_caption: 按小时（本地时间）
+usage_page.hourly_loading: 正在统计时段用量…
+usage_page.hourly_estimated: 部分会话没有逐条用量记录，已按最后活跃时段估算归属。
+usage_page.plot_input: 输入
+usage_page.plot_output: 输出
+usage_page.plot_cache_write: 缓存创建
+usage_page.plot_cache_read: 缓存命中
+usage_page.plot_cost: 成本
 usage_page.models_title: 模型使用排行
 usage_page.models_caption: 共 %{count} 个模型
 usage_page.model_sessions: "%{count} 个会话"

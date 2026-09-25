@@ -1615,6 +1615,8 @@ pub struct Fintwind {
     usage_stats_generation: u64,
     usage_stats_pending: bool,
     usage_stats_loaded_at: Option<Instant>,
+    /// Calendar day with full hourly attribution in the last scan.
+    usage_detail_day: Option<chrono::NaiveDate>,
     /// Wall-clock reading of when the last successful scan landed, shown in
     /// the toolbar so a silent refresh is visible as an update rather than a
     /// page that never changes. `None` before the first scan.
@@ -3183,6 +3185,7 @@ impl Fintwind {
                 usage_stats_generation: 0,
                 usage_stats_pending: false,
                 usage_stats_loaded_at: None,
+                usage_detail_day: None,
                 usage_loaded_label: None,
                 usage_refresh_running: false,
                 usage_range: Default::default(),

@@ -194,6 +194,9 @@ pub enum Command {
     FetchUsageStats {
         binary: PathBuf,
         directory: PathBuf,
+        /// Only this local day needs message-level hourly attribution.
+        #[serde(default)]
+        detailed_day: Option<i64>,
     },
     /// Rename a native session on the OpenCode server, so the title matches
     /// what the CLI and TUI show.

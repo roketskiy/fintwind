@@ -1,12 +1,12 @@
 //! The Usage page: one daemon-side scan over the workspace's OpenCode
 //! sessions feeds token-usage statistics — KPI cards, a GitHub-style
-//! activity heatmap, daily bars, and per-model, per-provider, and
+//! activity heatmap, daily/hourly timelines, and per-model, per-provider, and
 //! per-project rankings. Frames read only the aggregated views stored on the
 //! entity; the raw scan is touched only when it lands or the range changes.
 
 use std::collections::HashMap;
 
-use chrono::{Datelike as _, Duration as ChronoDuration, Local, NaiveDate};
+use chrono::{Datelike as _, Duration as ChronoDuration, Local, NaiveDate, Timelike as _};
 
 #[cfg(test)]
 use chrono::TimeZone as _;
@@ -16,21 +16,19 @@ use crate::usage::{cache_hit_percent, format_percent, format_tokens};
 
 use super::*;
 use crate::ui::ActivationExt;
-use fintwind_client::provider_session::{UsageEntry, UsageStats};
+use fintwind_client::provider_session::{UsageDayShare, UsageEntry, UsageStats};
+use gpui::PathBuilder;
 use gpui::relative;
 
 #[cfg(test)]
-use fintwind_client::provider_session::{UsageDayShare, UsageModelLane};
+use fintwind_client::provider_session::UsageModelLane;
 
 /// Heatmap horizon, in whole weeks ending today.
 pub(super) const HEATMAP_WEEKS: i64 = 26;
-/// Daily-bar horizon for the unbounded range.
+/// Timeline horizon for the unbounded range.
 const BAR_HORIZON_DAYS: i64 = 30;
-/// Plot height of the daily chart. Bar pixels are this times the day's share
-/// of the tallest day, so height tracks non-cache usage linearly. A percentage
-/// height inside the flex column is not used: it resolves against whatever
-/// the parent flex pass decides, which is not the plot.
 const DAILY_CHART_PX: f32 = 96.0;
+const DAY_WINDOW: i64 = 30;
 const HEAT_CELL_PX: f32 = 12.0;
 const HEAT_GAP_PX: f32 = 3.0;
 const HEAT_LABEL_PX: f32 = 14.0;
@@ -48,7 +46,7 @@ const AUTO_REFRESH: Duration = Duration::from_secs(30);
 /// Model rows drawn before the rest collapse into the header's model count.
 const MAX_MODEL_ROWS: usize = 8;
 
-/// What the KPI cards, daily bars, and model ranking aggregate over. The
+/// What the KPI cards, timelines, and model ranking aggregate over. The
 /// heatmap keeps its own fixed week window, like GitHub's, so a short range
 /// does not gut it.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -57,16 +55,18 @@ pub(super) enum UsageRange {
     All,
     Days30,
     Days7,
+    Day(u8),
 }
 
 impl UsageRange {
-    pub(super) const ALL: [Self; 3] = [Self::All, Self::Days30, Self::Days7];
+    pub(super) const ALL: [Self; 4] = [Self::All, Self::Days30, Self::Days7, Self::Day(0)];
 
     fn label(self) -> String {
         tr!(match self {
             Self::All => "usage_page.range_all",
             Self::Days30 => "usage_page.range_30d",
             Self::Days7 => "usage_page.range_7d",
+            Self::Day(_) => "usage_page.range_day",
         })
     }
 
@@ -75,6 +75,7 @@ impl UsageRange {
             Self::All => None,
             Self::Days30 => Some(30),
             Self::Days7 => Some(7),
+            Self::Day(_) => Some(1),
         }
     }
 }
@@ -135,9 +136,24 @@ pub(super) struct UsageDay {
     pub date: NaiveDate,
     /// All lanes, for the tooltip's honest total.
     pub total: u64,
-    /// Input + output + reasoning, the height the bar draws.
+    /// Input + output + reasoning, for heatmap intensity.
     pub direct: u64,
     pub sessions: u32,
+    pub input: u64,
+    pub output: u64,
+    pub cache_write: u64,
+    pub cache_read: u64,
+    pub cost: f64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct UsageHour {
+    pub hour: u32,
+    pub input: u64,
+    pub output: u64,
+    pub cache_write: u64,
+    pub cache_read: u64,
+    pub cost: f64,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -185,9 +201,10 @@ pub(super) struct UsageProviderRow {
 #[derive(Clone, Debug, Default)]
 pub(super) struct UsageViews {
     pub totals: UsageTotals,
-    /// Contiguous days ending today, oldest first.
+    /// Contiguous days ending today (or the selected day), oldest first.
     pub daily: Vec<UsageDay>,
-    pub daily_direct_max: u64,
+    pub hourly: Vec<UsageHour>,
+    pub hourly_estimated: bool,
     /// Week columns of seven cells, Monday first; `None` past today.
     pub weeks: Vec<Vec<Option<UsageHeatCell>>>,
     pub heatmap_active_days: u32,
@@ -231,8 +248,15 @@ impl Fintwind {
         else {
             return;
         };
+        let detailed_date = match self.usage_range {
+            UsageRange::Day(offset) => {
+                Some(Local::now().date_naive() - ChronoDuration::days(i64::from(offset)))
+            }
+            _ => None,
+        };
         if !force
             && self.usage_stats.is_some()
+            && detailed_date.map_or(true, |date| self.usage_detail_day == Some(date))
             && self
                 .usage_stats_loaded_at
                 .is_some_and(|loaded_at| loaded_at.elapsed() < STALE_AFTER)
@@ -244,12 +268,16 @@ impl Fintwind {
         self.usage_stats_generation += 1;
         let generation = self.usage_stats_generation;
         let daemon = self.daemon.clone();
+        let detailed_day = detailed_date.map(|date| i64::from(date.num_days_from_ce()));
         cx.spawn(async move |this, cx| {
             let scanned = cx
                 .background_executor()
                 .spawn(async move {
-                    fintwind_client::persistence::StateStore::remote(daemon)
-                        .fetch_usage_stats(binary, directory)
+                    fintwind_client::persistence::StateStore::remote(daemon).fetch_usage_stats(
+                        binary,
+                        directory,
+                        detailed_day,
+                    )
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -262,9 +290,13 @@ impl Fintwind {
                     Ok(stats) => {
                         this.usage_stats_error = None;
                         this.usage_stats_loaded_at = Some(Instant::now());
+                        this.usage_detail_day = detailed_date;
                         this.usage_loaded_label = Some(clock_label());
                         this.usage_stats = Some(Rc::new(stats));
                         this.rebuild_usage_views(cx);
+                        if matches!(this.usage_range, UsageRange::Day(_)) {
+                            this.ensure_usage_stats(false, cx);
+                        }
                     }
                     Err(error) => {
                         // `loaded_at` stays put, so reopening the page
@@ -273,6 +305,13 @@ impl Fintwind {
                         // screen: an error is reported, not displayed by
                         // blanking numbers the user was still reading.
                         this.usage_stats_error = Some(error.to_string());
+                        if let UsageRange::Day(offset) = this.usage_range {
+                            let wanted =
+                                Local::now().date_naive() - ChronoDuration::days(i64::from(offset));
+                            if Some(wanted) != detailed_date {
+                                this.ensure_usage_stats(false, cx);
+                            }
+                        }
                         cx.notify();
                     }
                 }
@@ -330,6 +369,16 @@ impl Fintwind {
         }
         self.usage_range = range;
         self.rebuild_usage_views(cx);
+        if matches!(range, UsageRange::Day(_)) {
+            self.ensure_usage_stats(false, cx);
+        }
+    }
+
+    fn shift_usage_day(&mut self, delta: i64, cx: &mut Context<Self>) {
+        if let UsageRange::Day(offset) = self.usage_range {
+            let next = (i64::from(offset) + delta).clamp(0, DAY_WINDOW - 1) as u8;
+            self.set_usage_range(UsageRange::Day(next), cx);
+        }
     }
 
     fn rebuild_usage_views(&mut self, cx: &mut Context<Self>) {
@@ -407,10 +456,31 @@ impl Fintwind {
                     ));
                 }
                 let views = &self.usage_views;
+                let needs_hourly = match self.usage_range {
+                    UsageRange::Day(offset) => {
+                        self.usage_detail_day
+                            != Some(
+                                Local::now().date_naive() - ChronoDuration::days(i64::from(offset)),
+                            )
+                    }
+                    _ => false,
+                };
+                column = column.child(self.render_usage_kpis(views, &theme));
+                if !matches!(self.usage_range, UsageRange::Day(_)) {
+                    column = column.child(self.render_usage_heatmap(views, &theme));
+                }
                 column = column
-                    .child(self.render_usage_kpis(views, &theme))
-                    .child(self.render_usage_heatmap(views, &theme))
-                    .child(self.render_usage_daily(views, &theme))
+                    .child(if needs_hourly {
+                        usage_notice(
+                            &theme,
+                            "icons/loader-circle.svg",
+                            theme.text_secondary,
+                            tr!("usage_page.hourly_loading"),
+                        )
+                        .into_any_element()
+                    } else {
+                        self.render_usage_daily(views, &theme).into_any_element()
+                    })
                     .child(self.render_usage_models(views, &theme))
                     .child(self.render_usage_providers(views, &theme))
                     .child(self.render_usage_projects(views, &theme));
@@ -423,7 +493,10 @@ impl Fintwind {
     fn render_usage_toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
         let mut range_buttons = Vec::new();
         for (index, range) in UsageRange::ALL.into_iter().enumerate() {
-            let selected = self.usage_range == range;
+            let selected = match range {
+                UsageRange::Day(_) => matches!(self.usage_range, UsageRange::Day(_)),
+                _ => self.usage_range == range,
+            };
             let mut button = div()
                 .id(SharedString::from(format!("usage-range-{index}")))
                 .tab_index(0)
@@ -485,12 +558,49 @@ impl Fintwind {
                 .child(label)
         });
 
+        let day_navigation = if let UsageRange::Day(offset) = self.usage_range {
+            let date = Local::now().date_naive() - ChronoDuration::days(i64::from(offset));
+            Some(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(usage_day_button(
+                        "usage-day-previous",
+                        "icons/chevron-left.svg",
+                        offset < (DAY_WINDOW - 1) as u8,
+                        1,
+                        theme,
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .min_w(px(88.0))
+                            .text_center()
+                            .text_size(ui_px(11.0))
+                            .text_color(theme.text_secondary)
+                            .child(date.format("%Y-%m-%d").to_string()),
+                    )
+                    .child(usage_day_button(
+                        "usage-day-next",
+                        "icons/chevron-right.svg",
+                        offset > 0,
+                        -1,
+                        theme,
+                        cx,
+                    )),
+            )
+        } else {
+            None
+        };
         div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap(px(8.0))
             .child(div().flex_1().min_w_0())
             .children(freshness)
+            .children(day_navigation)
             .child(selector)
             .child(refresh)
     }
@@ -749,85 +859,58 @@ impl Fintwind {
     }
 
     fn render_usage_daily(&self, views: &UsageViews, theme: &Theme) -> Div {
-        let horizon = views.daily.len() as i64;
-        let label_step = if horizon > 14 {
-            7
-        } else if horizon > 7 {
-            5
+        let single_day = matches!(self.usage_range, UsageRange::Day(_));
+        let points: Vec<UsagePlotPoint> = if single_day {
+            views
+                .hourly
+                .iter()
+                .map(|hour| UsagePlotPoint {
+                    label: format!("{:02}:00", hour.hour),
+                    input: hour.input,
+                    output: hour.output,
+                    cache_write: hour.cache_write,
+                    cache_read: hour.cache_read,
+                    cost: hour.cost,
+                })
+                .collect()
         } else {
-            3
+            views
+                .daily
+                .iter()
+                .map(|day| UsagePlotPoint {
+                    label: format_day_label(day.date),
+                    input: day.input,
+                    output: day.output,
+                    cache_write: day.cache_write,
+                    cache_read: day.cache_read,
+                    cost: day.cost,
+                })
+                .collect()
         };
-        // Padding instead of a flex gap, so the pointer never leaves a bar
-        // while scrubbing — a gap restarted the tooltip between columns.
-        let chart = div().h(px(DAILY_CHART_PX)).flex().items_end().children(
-            views.daily.iter().enumerate().map(|(index, day)| {
-                let id = SharedString::from(format!("usage-bar-{index}"));
-                let height = daily_bar_height(day.direct, views.daily_direct_max);
-                div()
-                    .id(id.clone())
-                    // The whole column is the hit target. Hovering only the
-                    // bar left the space above a short bar dead, and each bar
-                    // restarted the 500ms tooltip delay.
-                    .group(id.clone())
-                    .tab_index(0)
-                    .border_1()
-                    .border_color(gpui::transparent_black())
-                    .focus_visible(|style| style.border_color(theme.accent))
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .h_full()
-                    .px(px(2.0))
-                    .flex()
-                    .flex_col()
-                    .justify_end()
-                    .rounded(px(3.0))
-                    .hover(|column| column.bg(theme.overlay))
-                    .tooltip(Tooltip::text(usage_day_tooltip(
-                        day.date,
-                        day.direct,
-                        day.total,
-                        day.sessions,
-                    )))
-                    .tooltip_show_delay(CHART_TOOLTIP_DELAY)
-                    .child(
-                        div()
-                            .w_full()
-                            .h(px(height))
-                            .rounded(px(3.0))
-                            .flex_none()
-                            .bg(if day.direct > 0 {
-                                theme.accent
-                            } else {
-                                theme.overlay_strong
-                            })
-                            .group_hover(id, |bar| bar.bg(theme.text_tertiary)),
-                    )
-            }),
-        );
-        let today = views.daily.last().map(|day| day.date);
+        let horizon = points.len() as i64;
+        let chart = usage_line_chart(&points, theme);
+        let label_step = if single_day {
+            4
+        } else if horizon > 14 {
+            7
+        } else {
+            2
+        };
         let axis = div()
             .flex()
             .mt(px(6.0))
-            .children(views.daily.iter().enumerate().map(|(index, day)| {
+            .children(points.iter().enumerate().map(|(index, point)| {
                 div()
                     .flex_1()
-                    .min_w(px(0.0))
-                    .px(px(2.0))
-                    .border_1()
-                    .border_color(gpui::transparent_black())
+                    .min_w_0()
                     .whitespace_nowrap()
-                    .line_height(ui_px(12.0))
                     .text_size(ui_px(9.0))
-                    .text_color(if Some(day.date) == today {
-                        theme.text_secondary
+                    .text_color(theme.text_tertiary)
+                    .child(if index % label_step == 0 {
+                        point.label.clone()
                     } else {
-                        theme.text_ghost
+                        String::new()
                     })
-                    .child(SharedString::from(
-                        (index % label_step == 0)
-                            .then(|| format_day_label(day.date))
-                            .unwrap_or_default(),
-                    ))
             }));
 
         div()
@@ -849,18 +932,35 @@ impl Fintwind {
                             .text_size(ui_px(13.0))
                             .font_weight(FontWeight::MEDIUM)
                             .text_color(theme.text)
-                            .child(tr!("usage_page.daily_title")),
+                            .child(if single_day {
+                                tr!("usage_page.hourly_title")
+                            } else {
+                                tr!("usage_page.daily_title")
+                            }),
                     )
                     .child(div().flex_1().min_w_0())
                     .child(
                         div()
                             .text_size(ui_px(10.5))
                             .text_color(theme.text_tertiary)
-                            .child(tr!("usage_page.daily_caption", days = horizon)),
+                            .child(if single_day {
+                                tr!("usage_page.hourly_caption")
+                            } else {
+                                tr!("usage_page.daily_caption", days = horizon)
+                            }),
                     ),
             )
             .child(chart)
             .child(axis)
+            .child(usage_chart_legend(theme))
+            .when(single_day && views.hourly_estimated, |card| {
+                card.child(
+                    div()
+                        .text_size(ui_px(10.5))
+                        .text_color(theme.text_tertiary)
+                        .child(tr!("usage_page.hourly_estimated")),
+                )
+            })
     }
 
     fn render_usage_models(&self, views: &UsageViews, theme: &Theme) -> Div {
@@ -962,6 +1062,284 @@ impl Fintwind {
             theme,
         )
     }
+}
+
+fn usage_day_button(
+    id: &'static str,
+    icon_path: &'static str,
+    enabled: bool,
+    delta: i64,
+    theme: &Theme,
+    cx: &mut Context<Fintwind>,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .tab_index(0)
+        .tab_stop(enabled)
+        .size(px(24.0))
+        .rounded(px(5.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .focus_visible(|style| style.border_color(theme.accent))
+        .when(enabled, |button| {
+            button.hover(|style| style.bg(theme.overlay))
+        })
+        .when(!enabled, |button| button.opacity(0.35))
+        .child(icon(icon_path, 12.0, theme.text_secondary))
+        .tooltip(Tooltip::text(tr!(match delta {
+            1 => "usage_page.previous_day",
+            _ => "usage_page.next_day",
+        })))
+        .on_activation(cx, move |this, _, cx| {
+            if enabled {
+                this.shift_usage_day(delta, cx);
+            }
+        })
+}
+
+#[derive(Clone)]
+struct UsagePlotPoint {
+    label: String,
+    input: u64,
+    output: u64,
+    cache_write: u64,
+    cache_read: u64,
+    cost: f64,
+}
+
+fn plot_colors(theme: &Theme) -> [Hsla; 5] {
+    let colors = if theme.is_dark {
+        [0x60a5fa, 0x4ade80, 0xfb923c, 0xc084fc, 0xfb7185]
+    } else {
+        [0x1d4ed8, 0x15803d, 0xc2410c, 0x7e22ce, 0xbe123c]
+    };
+    colors.map(|color| rgb(color).into())
+}
+
+fn plot_values(point: &UsagePlotPoint) -> [f64; 5] {
+    [
+        point.input as f64,
+        point.output as f64,
+        point.cache_write as f64,
+        point.cache_read as f64,
+        point.cost,
+    ]
+}
+
+fn usage_line_chart(points: &[UsagePlotPoint], theme: &Theme) -> Div {
+    let colors = plot_colors(theme);
+    let values: Vec<_> = points.iter().map(plot_values).collect();
+    let token_max = values
+        .iter()
+        .flat_map(|v| v[..4].iter())
+        .copied()
+        .fold(1.0_f64, f64::max);
+    let cost_max = values.iter().map(|v| v[4]).fold(0.0_f64, f64::max);
+    let count = points.len();
+    let plot = canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            if count == 0 {
+                return;
+            }
+            let width = f32::from(bounds.size.width);
+            let height = f32::from(bounds.size.height);
+            // A subtle area under cache hits mirrors the reference chart
+            // without hiding the other four independent traces.
+            let mut area = PathBuilder::fill();
+            area.move_to(point(
+                bounds.origin.x + px(width / (2.0 * count as f32)),
+                bounds.origin.y + px(height),
+            ));
+            for (index, datum) in values.iter().enumerate() {
+                let x = (index as f32 + 0.5) * width / count as f32;
+                let y = height - (datum[3] / token_max) as f32 * (height - 5.0) - 2.0;
+                area.line_to(point(bounds.origin.x + px(x), bounds.origin.y + px(y)));
+            }
+            area.line_to(point(
+                bounds.origin.x + px(width - width / (2.0 * count as f32)),
+                bounds.origin.y + px(height),
+            ));
+            area.close();
+            if let Ok(area) = area.build() {
+                window.paint_path(area, colors[3].opacity(0.10));
+            }
+            for series in 0..5 {
+                let max = if series == 4 { cost_max } else { token_max };
+                let mut path = PathBuilder::stroke(px(2.0));
+                for (index, datum) in values.iter().enumerate() {
+                    let x = (index as f32 + 0.5) * width / count as f32;
+                    let y = height - (datum[series] / max.max(1e-12)) as f32 * (height - 5.0) - 2.0;
+                    let position = point(bounds.origin.x + px(x), bounds.origin.y + px(y));
+                    if index == 0 {
+                        path.move_to(position);
+                    } else {
+                        path.line_to(position);
+                    }
+                }
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, colors[series]);
+                }
+            }
+        },
+    );
+    div()
+        .h(px(DAILY_CHART_PX + 44.0))
+        .relative()
+        .child(plot.absolute().inset_0())
+        .child(
+            div()
+                .absolute()
+                .inset_0()
+                .flex()
+                .children(points.iter().enumerate().map(|(index, datum)| {
+                    let id = SharedString::from(format!("usage-plot-{index}"));
+                    let datum = datum.clone();
+                    let values = plot_values(&datum);
+                    div()
+                        .id(id.clone())
+                        .group(id.clone())
+                        .tab_index(0)
+                        .relative()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .border_1()
+                        .border_color(gpui::transparent_black())
+                        .focus_visible(|style| style.border_color(theme.accent))
+                        .child(
+                            div()
+                                .absolute()
+                                .left(gpui::relative(0.5))
+                                .top_0()
+                                .h_full()
+                                .w(px(1.0))
+                                .bg(gpui::transparent_black())
+                                .group_hover(id.clone(), |line| line.bg(theme.border_strong)),
+                        )
+                        .children((0..5).map(|series| {
+                            let max = if series == 4 { cost_max } else { token_max };
+                            let bottom = (values[series] / max.max(1e-12)) as f32
+                                * (DAILY_CHART_PX + 39.0)
+                                - 1.5;
+                            div()
+                                .absolute()
+                                .left(gpui::relative(0.5))
+                                .ml(px(-3.5))
+                                .bottom(px(bottom))
+                                .size(px(7.0))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(theme.raised)
+                                .bg(colors[series])
+                                .opacity(0.0)
+                                .group_hover(id.clone(), |dot| dot.opacity(1.0))
+                        }))
+                        .tooltip(move |_, cx| {
+                            cx.new(|_| UsagePlotTooltip {
+                                point: datum.clone(),
+                            })
+                            .into()
+                        })
+                        .tooltip_show_delay(CHART_TOOLTIP_DELAY)
+                })),
+        )
+}
+
+struct UsagePlotTooltip {
+    point: UsagePlotPoint,
+}
+
+impl Render for UsagePlotTooltip {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
+        let values = plot_values(&self.point);
+        let labels = [
+            tr!("usage_page.plot_input"),
+            tr!("usage_page.plot_output"),
+            tr!("usage_page.plot_cache_write"),
+            tr!("usage_page.plot_cache_read"),
+            tr!("usage_page.plot_cost"),
+        ];
+        let colors = plot_colors(&theme);
+        div().pt(px(4.0)).child(
+            div()
+                .px(px(13.0))
+                .py(px(10.0))
+                .rounded(px(10.0))
+                .border_1()
+                .border_color(theme.border_strong)
+                .bg(theme.raised)
+                .shadow_md()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .mb(px(3.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(self.point.label.clone()),
+                )
+                .children((0..5).map(|index| {
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(px(7.0))
+                        .text_size(ui_px(11.0))
+                        .text_color(colors[index])
+                        .child(div().size(px(7.0)).rounded_full().bg(colors[index]))
+                        .child(format!(
+                            "{}: {}",
+                            labels[index],
+                            if index == 4 {
+                                format!("${:.6}", values[index])
+                            } else {
+                                format_grouped_tokens(values[index] as u64)
+                            }
+                        ))
+                })),
+        )
+    }
+}
+
+fn format_grouped_tokens(tokens: u64) -> String {
+    tokens
+        .to_string()
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|group| std::str::from_utf8(group).unwrap_or_default())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn usage_chart_legend(theme: &Theme) -> Div {
+    let labels = [
+        tr!("usage_page.plot_input"),
+        tr!("usage_page.plot_output"),
+        tr!("usage_page.plot_cache_write"),
+        tr!("usage_page.plot_cache_read"),
+        tr!("usage_page.plot_cost"),
+    ];
+    let colors = plot_colors(theme);
+    div()
+        .flex()
+        .flex_wrap()
+        .gap(px(12.0))
+        .children((0..5).map(|index| {
+            div()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .text_size(ui_px(10.0))
+                .text_color(theme.text_secondary)
+                .child(div().size(px(7.0)).rounded_full().bg(colors[index]))
+                .child(labels[index].clone())
+        }))
 }
 
 /// One row of a usage ranking card. The model, provider, and project rankings
@@ -1274,6 +1652,11 @@ fn empty_day(date: NaiveDate) -> UsageDay {
         total: 0,
         direct: 0,
         sessions: 0,
+        input: 0,
+        output: 0,
+        cache_write: 0,
+        cache_read: 0,
+        cost: 0.0,
     }
 }
 
@@ -1288,31 +1671,65 @@ fn clock_label() -> String {
     Local::now().format("%H:%M").to_string()
 }
 
-/// One `(timestamp, direct, total)` triple a session contributes to the
-/// timeline. A session the daemon split by message contributes each of its
-/// days; every other session contributes a single triple covering the whole
-/// of it, dated by its last touch. Owned rather than borrowed so both shapes
-/// return the same iterator type.
-///
-/// A split session that absorbed sub-agents gets one extra triple for the
-/// folded amount, dated by the parent's last touch. Without it the split
-/// would cover only the parent's own messages, so the daily bars and heatmap
-/// would sum to less than the KPI printed beside them. The unsplit branch
-/// needs no such triple: its single lane already rides `total_tokens()`,
-/// which the fold already added into.
-fn entry_day_lanes(entry: &UsageEntry) -> Vec<(u64, u64, u64)> {
+/// Session message-day shares, or one last-touched share when unsplit.
+/// Older scans lacking sub-agent day shares receive only their unallocated
+/// remainder here; current scans place child usage on the child's date.
+fn entry_day_lanes(entry: &UsageEntry) -> Vec<UsageDayShare> {
     let lanes = match &entry.days {
         Some(shares) => {
-            let mut lanes: Vec<(u64, u64, u64)> = shares
-                .iter()
-                .map(|share| (share.timestamp, share.direct, share.total))
-                .collect();
-            if entry.subagent_tokens > 0 {
-                lanes.push((
-                    entry.timestamp,
-                    entry.subagent_direct,
-                    entry.subagent_tokens,
-                ));
+            let mut lanes = shares.clone();
+            let remainder = entry
+                .total_tokens()
+                .saturating_sub(shares.iter().map(|s| s.total).sum());
+            if remainder > 0 {
+                lanes.push(UsageDayShare {
+                    timestamp: entry.timestamp,
+                    subagent: entry.subagent_tokens > 0,
+                    direct: entry
+                        .input_tokens
+                        .saturating_add(entry.output_tokens)
+                        .saturating_add(entry.reasoning_tokens)
+                        .saturating_sub(shares.iter().map(|s| s.direct).sum()),
+                    total: remainder,
+                    input: entry
+                        .input_tokens
+                        .saturating_sub(shares.iter().map(|s| s.input).sum()),
+                    output: entry
+                        .output_tokens
+                        .saturating_add(entry.reasoning_tokens)
+                        .saturating_sub(shares.iter().map(|s| s.output).sum()),
+                    cache_read: entry
+                        .cache_read_tokens
+                        .saturating_sub(shares.iter().map(|s| s.cache_read).sum()),
+                    cache_write: entry
+                        .cache_write_tokens
+                        .saturating_sub(shares.iter().map(|s| s.cache_write).sum()),
+                    cost: (entry.cost.unwrap_or_default()
+                        - shares.iter().map(|s| s.cost).sum::<f64>())
+                    .max(0.0),
+                });
+            } else {
+                // Some providers report more cost at session level than the
+                // sum of their messages. Keep the difference on last activity.
+                let gap = (entry.cost.unwrap_or_default()
+                    - shares.iter().map(|s| s.cost).sum::<f64>())
+                .max(0.0);
+                if gap > 0.0 {
+                    let entry_date = local_date(entry.timestamp);
+                    if let Some(last) = lanes
+                        .iter_mut()
+                        .filter(|lane| local_date(lane.timestamp) == entry_date)
+                        .max_by_key(|lane| lane.timestamp)
+                    {
+                        last.cost += gap;
+                    } else {
+                        lanes.push(UsageDayShare {
+                            timestamp: entry.timestamp,
+                            cost: gap,
+                            ..Default::default()
+                        });
+                    }
+                }
             }
             lanes
         }
@@ -1321,10 +1738,59 @@ fn entry_day_lanes(entry: &UsageEntry) -> Vec<(u64, u64, u64)> {
                 .input_tokens
                 .saturating_add(entry.output_tokens)
                 .saturating_add(entry.reasoning_tokens);
-            vec![(entry.timestamp, direct, entry.total_tokens())]
+            vec![UsageDayShare {
+                timestamp: entry.timestamp,
+                subagent: entry.subagent_tokens > 0,
+                direct,
+                total: entry.total_tokens(),
+                input: entry.input_tokens,
+                output: entry.output_tokens.saturating_add(entry.reasoning_tokens),
+                cache_read: entry.cache_read_tokens,
+                cache_write: entry.cache_write_tokens,
+                cost: entry.cost.unwrap_or_default(),
+            }]
         }
     };
     lanes
+}
+
+/// Select only the spend on a local calendar day. Session-level totals cannot
+/// answer this for a conversation crossing midnight; its message buckets can.
+fn entry_on_day(entry: &UsageEntry, date: NaiveDate) -> Option<UsageEntry> {
+    let lanes: Vec<_> = entry_day_lanes(entry)
+        .into_iter()
+        .filter(|lane| local_date(lane.timestamp) == Some(date))
+        .collect();
+    let last = lanes.iter().max_by_key(|lane| lane.timestamp)?;
+    let child_days: Vec<_> = lanes.iter().filter(|lane| lane.subagent).collect();
+    // Model shares span the whole session; scaling them to this day's spend
+    // would invent per-model timestamps the scan does not have. Construct the
+    // day's entry without cloning message/hour vectors on the UI thread.
+    Some(UsageEntry {
+        timestamp: last.timestamp,
+        model: entry.model.clone(),
+        directory: entry.directory.clone(),
+        cost: entry.cost.map(|_| lanes.iter().map(|lane| lane.cost).sum()),
+        input_tokens: lanes.iter().map(|lane| lane.input).sum(),
+        output_tokens: lanes.iter().map(|lane| lane.output).sum(),
+        reasoning_tokens: 0, // included in the output series
+        cache_read_tokens: lanes.iter().map(|lane| lane.cache_read).sum(),
+        cache_write_tokens: lanes.iter().map(|lane| lane.cache_write).sum(),
+        subagent_sessions: if entry.days.is_some() {
+            child_days.len() as u32
+        } else {
+            entry.subagent_sessions
+        },
+        subagent_tokens: if entry.days.is_some() {
+            child_days.iter().map(|lane| lane.total).sum()
+        } else {
+            entry.subagent_tokens
+        },
+        subagent_direct: 0,
+        days: None,
+        hours: Vec::new(),
+        model_lanes: Vec::new(),
+    })
 }
 
 /// How one session's usage distributes over models.
@@ -1371,12 +1837,23 @@ fn entry_model_shares(entry: &UsageEntry) -> Vec<ModelShare> {
         if entry.subagent_tokens > 0 {
             lanes.push((entry.model.clone(), entry.subagent_tokens, 0.0));
         }
-        if let Some(cost) = entry
-            .cost
-            .filter(|_| lanes.iter().all(|(_, _, cost)| *cost == 0.0))
-        {
-            if let Some(largest) = lanes.first_mut() {
-                largest.2 = cost;
+        if let Some(cost) = entry.cost {
+            let remainder = (cost - lanes.iter().map(|lane| lane.2).sum::<f64>()).max(0.0);
+            if remainder > 0.0 {
+                // A folded sub-agent has no model-level cost lane; book its
+                // remaining charge to the parent's named model when possible.
+                let recipient = entry
+                    .model
+                    .as_deref()
+                    .and_then(|model| {
+                        lanes
+                            .iter()
+                            .position(|lane| lane.0.as_deref() == Some(model))
+                    })
+                    .unwrap_or(0);
+                if let Some(lane) = lanes.get_mut(recipient) {
+                    lane.2 += remainder;
+                }
             }
         }
         lanes
@@ -1404,11 +1881,15 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     };
     let today = Local::now().date_naive();
     let now = unix_time();
+    let selected_day = match range {
+        UsageRange::Day(offset) => Some(today - ChronoDuration::days(i64::from(offset))),
+        _ => None,
+    };
     let bar_horizon = range
         .days()
         .unwrap_or(BAR_HORIZON_DAYS)
         .min(BAR_HORIZON_DAYS);
-    let bar_start = today - ChronoDuration::days(bar_horizon - 1);
+    let bar_start = selected_day.unwrap_or(today - ChronoDuration::days(bar_horizon - 1));
     let range_cutoff = range
         .days()
         .map(|days| now.saturating_sub(days as u64 * 86_400))
@@ -1419,6 +1900,13 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     // 26-week window however narrow the selected range is. The range only
     // gates what the totals, daily bars, and rankings count.
     let mut days: HashMap<NaiveDate, UsageDay> = HashMap::new();
+    let mut hourly = (0..24)
+        .map(|hour| UsageHour {
+            hour,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    let mut hourly_estimated = false;
     // Model rows key on the raw `provider/id` string, except a session the
     // server recorded no model for — it folds into the unknown-model row so
     // the ranking's session counts add up to the KPI.
@@ -1439,19 +1927,25 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         // that began before the window and continued into it spent that usage
         // in the window, and splitting it would need per-message aggregation
         // the scan deliberately does not do for totals.
-        if entry.timestamp >= range_cutoff {
-            totals.add(entry);
-            if let Some(date) = local_date(entry.timestamp) {
+        let day_entry = selected_day.and_then(|date| entry_on_day(entry, date));
+        let in_range = match selected_day {
+            Some(_) => day_entry.as_ref(),
+            None if entry.timestamp >= range_cutoff => Some(entry),
+            None => None,
+        };
+        if let Some(in_range) = in_range {
+            totals.add(in_range);
+            if let Some(date) = local_date(in_range.timestamp) {
                 range_days.insert(date);
             }
             // A refined session spent under more than one model, and the
             // session-level `model` names only the last. Attribute its usage
             // per message when the walk produced the lanes; otherwise the
             // session-level attribution is all there is.
-            for share in entry_model_shares(entry) {
+            for share in entry_model_shares(in_range) {
                 let row = models
                     .entry(share.model)
-                    .or_insert((0, 0, 0.0, entry.timestamp));
+                    .or_insert((0, 0, 0.0, in_range.timestamp));
                 // Only the primary share counts a session: a session that used
                 // three models is still one session, and the ranking's session
                 // counts are read against the KPI's.
@@ -1460,7 +1954,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                 }
                 row.1 = row.1.saturating_add(share.total);
                 row.2 += share.cost;
-                row.3 = row.3.max(entry.timestamp);
+                row.3 = row.3.max(in_range.timestamp);
             }
             if let Some(directory) = &entry.directory {
                 let key = directory.replace('\\', "/").to_lowercase();
@@ -1468,8 +1962,8 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                     .entry(key)
                     .or_insert_with(|| (directory.clone(), 0, 0, 0.0));
                 row.1 += 1;
-                row.2 = row.2.saturating_add(entry.total_tokens());
-                row.3 += entry.cost.unwrap_or_default();
+                row.2 = row.2.saturating_add(in_range.total_tokens());
+                row.3 += in_range.cost.unwrap_or_default();
             }
         }
 
@@ -1478,27 +1972,92 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         // refined session contributes its per-message days instead of dumping
         // everything on the day it was last touched.
         for lane in entry_day_lanes(entry) {
-            let Some(date) = local_date(lane.0) else {
+            let Some(date) = local_date(lane.timestamp) else {
                 continue;
             };
-            if lane.0 >= range_cutoff {
+            if selected_day.map_or(lane.timestamp >= range_cutoff, |selected| date == selected) {
                 range_days.insert(date);
             }
             let day = days.entry(date).or_insert_with(|| empty_day(date));
-            day.total = day.total.saturating_add(lane.2);
-            day.direct = day.direct.saturating_add(lane.1);
+            day.total = day.total.saturating_add(lane.total);
+            day.direct = day.direct.saturating_add(lane.direct);
+            day.input = day.input.saturating_add(lane.input);
+            day.output = day.output.saturating_add(lane.output);
+            day.cache_read = day.cache_read.saturating_add(lane.cache_read);
+            day.cache_write = day.cache_write.saturating_add(lane.cache_write);
+            day.cost += lane.cost;
             day.sessions += 1;
+        }
+        if let Some(selected) = selected_day {
+            if entry.hours.is_empty() {
+                if entry.total_tokens() > 0 && local_date(entry.timestamp) == Some(selected) {
+                    hourly_estimated = true;
+                    let hour = local_hour(entry.timestamp) as usize;
+                    let bucket = &mut hourly[hour];
+                    bucket.input = bucket.input.saturating_add(entry.input_tokens);
+                    bucket.output = bucket
+                        .output
+                        .saturating_add(entry.output_tokens.saturating_add(entry.reasoning_tokens));
+                    bucket.cache_read = bucket.cache_read.saturating_add(entry.cache_read_tokens);
+                    bucket.cache_write =
+                        bucket.cache_write.saturating_add(entry.cache_write_tokens);
+                    bucket.cost += entry.cost.unwrap_or_default();
+                }
+            } else {
+                for share in &entry.hours {
+                    if local_date(share.timestamp) != Some(selected) {
+                        continue;
+                    }
+                    hourly_estimated |= share.estimated;
+                    let bucket = &mut hourly[local_hour(share.timestamp) as usize];
+                    bucket.input = bucket.input.saturating_add(share.input);
+                    bucket.output = bucket.output.saturating_add(share.output);
+                    bucket.cache_read = bucket.cache_read.saturating_add(share.cache_read);
+                    bucket.cache_write = bucket.cache_write.saturating_add(share.cache_write);
+                    bucket.cost += share.cost;
+                }
+                // A session summary can contain tokens absent from its
+                // message walk (including folded sub-agents). Attribute the
+                // unlocated remainder to last activity and label the estimate.
+                if local_date(entry.timestamp) == Some(selected) {
+                    let missing_input = entry
+                        .input_tokens
+                        .saturating_sub(entry.hours.iter().map(|h| h.input).sum());
+                    let missing_output = entry
+                        .output_tokens
+                        .saturating_add(entry.reasoning_tokens)
+                        .saturating_sub(entry.hours.iter().map(|h| h.output).sum());
+                    let missing_read = entry
+                        .cache_read_tokens
+                        .saturating_sub(entry.hours.iter().map(|h| h.cache_read).sum());
+                    let missing_write = entry
+                        .cache_write_tokens
+                        .saturating_sub(entry.hours.iter().map(|h| h.cache_write).sum());
+                    let missing_cost = (entry.cost.unwrap_or_default()
+                        - entry.hours.iter().map(|h| h.cost).sum::<f64>())
+                    .max(0.0);
+                    hourly_estimated |= missing_input > 0
+                        || missing_output > 0
+                        || missing_read > 0
+                        || missing_write > 0
+                        || missing_cost > 0.0;
+                    let bucket = &mut hourly[local_hour(entry.timestamp) as usize];
+                    bucket.input = bucket.input.saturating_add(missing_input);
+                    bucket.output = bucket.output.saturating_add(missing_output);
+                    bucket.cache_read = bucket.cache_read.saturating_add(missing_read);
+                    bucket.cache_write = bucket.cache_write.saturating_add(missing_write);
+                    bucket.cost += missing_cost;
+                }
+            }
         }
     }
     totals.active_days = range_days.len() as u32;
 
     let mut daily = Vec::with_capacity(bar_horizon as usize);
-    let mut daily_direct_max = 0u64;
     for offset in 0..bar_horizon {
         let date = bar_start + ChronoDuration::days(offset);
         // The map stays intact: the heatmap below reads the same days.
         let day = days.get(&date).cloned().unwrap_or_else(|| empty_day(date));
-        daily_direct_max = daily_direct_max.max(day.direct);
         daily.push(day);
     }
 
@@ -1610,7 +2169,8 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     UsageViews {
         totals,
         daily,
-        daily_direct_max,
+        hourly,
+        hourly_estimated,
         weeks,
         heatmap_active_days,
         models,
@@ -1622,16 +2182,10 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     }
 }
 
-/// Pixel height of one daily bar. Zero days stay a 2px baseline; any real
-/// day is at least that tall, then linear in `direct` up to the plot height.
-/// Cache is not part of `direct` — the chart title excludes it, and folding
-/// it in made a cache-heavy day look shorter than a busier one.
-fn daily_bar_height(direct: u64, max_direct: u64) -> f32 {
-    if direct == 0 || max_direct == 0 {
-        return 2.0;
-    }
-    let fraction = ((direct as f64 / max_direct as f64) as f32).clamp(0.0, 1.0);
-    (fraction * DAILY_CHART_PX).max(2.0)
+fn local_hour(timestamp: u64) -> u32 {
+    chrono::DateTime::from_timestamp(timestamp as i64, 0)
+        .map(|instant| instant.with_timezone(&Local).hour())
+        .unwrap_or(0)
 }
 
 fn heat_grid_px() -> f32 {
@@ -1771,6 +2325,7 @@ mod tests {
             subagent_tokens: 0,
             subagent_direct: 0,
             days: None,
+            hours: Vec::new(),
             model_lanes: Vec::new(),
         }
     }
@@ -1935,11 +2490,10 @@ mod tests {
         );
     }
 
-    /// Bar pixels follow non-cache tokens. A day whose raw total is larger
-    /// only because of cache must stay shorter than a day with more direct
-    /// usage, and the busiest direct day reaches the top heatmap swatch.
+    /// The busiest direct day reaches the top heatmap swatch even when a
+    /// quieter day has more cached tokens.
     #[test]
-    fn bar_height_follows_non_cache_usage_not_cache_inflated_total() {
+    fn heatmap_intensity_excludes_cache() {
         let now = Local::now();
         let today = now.date_naive();
         let yesterday = today - ChronoDuration::days(1);
@@ -1964,15 +2518,6 @@ mod tests {
             .unwrap();
         assert!(cache_day.total > direct_day.total);
         assert!(cache_day.direct < direct_day.direct);
-        assert_eq!(views.daily_direct_max, direct_day.direct);
-        assert!(
-            daily_bar_height(direct_day.direct, views.daily_direct_max)
-                > daily_bar_height(cache_day.direct, views.daily_direct_max)
-        );
-        assert_eq!(
-            daily_bar_height(direct_day.direct, views.daily_direct_max),
-            DAILY_CHART_PX
-        );
 
         let level = |date: NaiveDate| {
             views
@@ -1986,17 +2531,6 @@ mod tests {
         };
         assert_eq!(level(yesterday), 4);
         assert!(level(today) < level(yesterday));
-    }
-
-    #[test]
-    fn daily_bar_height_grows_with_usage_and_floors_quiet_days() {
-        assert_eq!(daily_bar_height(0, 100), 2.0);
-        assert_eq!(daily_bar_height(100, 0), 2.0);
-        let half = daily_bar_height(50, 100);
-        let full = daily_bar_height(100, 100);
-        assert!((half - DAILY_CHART_PX / 2.0).abs() < 0.01);
-        assert_eq!(full, DAILY_CHART_PX);
-        assert!(full > half);
     }
 
     /// A session that delegates to sub-agents and ran across days must still
@@ -2025,11 +2559,13 @@ mod tests {
                 timestamp: noon(yesterday),
                 direct: 30,
                 total: 40,
+                ..Default::default()
             },
             UsageDayShare {
                 timestamp: noon(today),
                 direct: 40,
                 total: 60,
+                ..Default::default()
             },
         ]);
         // Folded in from a sub-agent: 50 tokens, 20 of them non-cache. The
@@ -2104,11 +2640,13 @@ mod tests {
                 timestamp: noon(yesterday),
                 direct: 30,
                 total: 40,
+                ..Default::default()
             },
             UsageDayShare {
                 timestamp: noon(today),
                 direct: 70,
                 total: 90,
+                ..Default::default()
             },
         ]);
         let unsplit = entry(noon(today), "p/m", 100);
@@ -2133,7 +2671,6 @@ mod tests {
         assert_eq!(day_of(yesterday).direct, 30);
         // 70 split + 100 unsplit.
         assert_eq!(day_of(today).direct, 170);
-        assert_eq!(views.daily_direct_max, 170);
         // The session-level totals are untouched by the split: both lanes add
         // up to the same whole.
         assert_eq!(views.totals.output, 130);

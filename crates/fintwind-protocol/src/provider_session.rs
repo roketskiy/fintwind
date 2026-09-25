@@ -158,18 +158,17 @@ pub struct UsageEntry {
     /// Tokens contributed by those sub-agents, for the page's subtitle.
     #[serde(default)]
     pub subagent_tokens: u64,
-    /// The non-cache part of `subagent_tokens`. The day chart plots non-cache
-    /// usage only, so a folded amount needs to be split the same way rather
-    /// than pushing its whole total through a channel labelled "excludes
-    /// cache".
+    /// The non-cache part of `subagent_tokens`, used in heatmap intensity.
     #[serde(default)]
     pub subagent_direct: u64,
-    /// Per-message day split, present only when the session's activity
-    /// provably spans more than one calendar day. `None` means the session
-    /// was never refined and every token belongs to `timestamp`'s day, which
-    /// is the case for the overwhelming majority of sessions.
+    /// Per-message day split, present for multi-day sessions and sessions
+    /// refined for a selected day's hourly detail. `None` puts all usage on
+    /// the session's last activity date.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub days: Option<Vec<UsageDayShare>>,
+    /// Per-hour message usage for the recent single-day chart.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hours: Vec<UsageHourShare>,
     /// Per-model split, present only for the same refined sessions. A
     /// session's own `model` is whichever model it ended on, so a session
     /// that switched models mid-way would otherwise attribute all of its
@@ -181,14 +180,42 @@ pub struct UsageEntry {
 /// One local day's share of a session's usage. `timestamp` is the unix second
 /// of a message that landed on that day, so the consumer maps it back through
 /// the same local-calendar helper it already uses for whole sessions.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageDayShare {
     pub timestamp: u64,
-    /// Input + output + reasoning — what the daily chart encodes.
+    /// A folded sub-agent's own day, distinct from the parent's messages.
+    #[serde(default)]
+    pub subagent: bool,
+    /// Input + output + reasoning — used for heatmap intensity.
     pub direct: u64,
     /// Both cache lanes included, for the tooltip's honest total.
     pub total: u64,
+    #[serde(default)]
+    pub input: u64,
+    #[serde(default)]
+    pub output: u64,
+    #[serde(default)]
+    pub cache_read: u64,
+    #[serde(default)]
+    pub cache_write: u64,
+    #[serde(default)]
+    pub cost: f64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageHourShare {
+    pub timestamp: u64,
+    /// True when this hour is inferred from a session-level total because
+    /// the server did not expose usable message token records.
+    #[serde(default)]
+    pub estimated: bool,
+    pub input: u64,
+    pub output: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+    pub cost: f64,
 }
 
 /// One model's share of a refined session. Only produced when the session's

@@ -512,13 +512,17 @@ impl Backend for FintwindBackend {
                 let transcript = crate::driver::native::fetch_transcript(&server, &session_id)?;
                 Ok(ResponsePayload::NativeTranscript { transcript })
             }
-            Command::FetchUsageStats { binary, directory } => {
+            Command::FetchUsageStats {
+                binary,
+                directory,
+                detailed_day,
+            } => {
                 // One pass over the whole session store; `directory` only
                 // scopes the request's location. Blocking I/O, so
                 // this runs on the request thread like the other
                 // sessionless OpenCode reads.
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let stats = crate::driver::native::fetch_usage_stats(&server)?;
+                let stats = crate::driver::native::fetch_usage_stats(&server, detailed_day)?;
                 Ok(ResponsePayload::UsageStats { stats })
             }
             Command::RenameProviderSession {

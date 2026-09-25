@@ -1208,6 +1208,9 @@ usage_error.curl_failed: "curl に失敗しました：%{error}"
 usage_page.range_all: 全期間
 usage_page.range_30d: 直近30日
 usage_page.range_7d: 直近7日
+usage_page.range_day: 1日
+usage_page.previous_day: 前日
+usage_page.next_day: 翌日
 usage_page.refresh: 更新
 usage_page.loading: 使用状況を集計中…
 usage_page.load_failed: "使用状況の取得に失敗しました：%{error}"
@@ -1231,8 +1234,17 @@ usage_page.weekday_fri: 金
 usage_page.legend_less: 少ない
 usage_page.legend_more: 多い
 usage_page.day_tooltip: "%{date} · 使用 %{tokens} · キャッシュ %{cache} · %{sessions} セッション"
-usage_page.daily_title: 日別使用量（キャッシュ除く）
+usage_page.daily_title: 日別使用量
 usage_page.daily_caption: 直近%{days}日間
+usage_page.hourly_title: 時間別使用量
+usage_page.hourly_caption: 現地時刻・時間別
+usage_page.hourly_loading: 時間別使用量を集計中…
+usage_page.hourly_estimated: 一部のセッションにメッセージ別の使用量がないため、最終利用時間帯にまとめて表示しています。
+usage_page.plot_input: 入力
+usage_page.plot_output: 出力
+usage_page.plot_cache_write: キャッシュ作成
+usage_page.plot_cache_read: キャッシュヒット
+usage_page.plot_cost: コスト
 usage_page.models_title: モデル別使用状況
 usage_page.models_caption: 全%{count}モデル
 usage_page.model_sessions: "%{count} セッション"

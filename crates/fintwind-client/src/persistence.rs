@@ -872,14 +872,23 @@ impl StateStore {
     /// session, collected in a single daemon-side pass over the session
     /// list. `directory` only anchors which resident server to ask. Blocking
     /// RPC; call off the UI thread.
-    pub fn fetch_usage_stats(&self, binary: PathBuf, directory: PathBuf) -> io::Result<UsageStats> {
+    pub fn fetch_usage_stats(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        detailed_day: Option<i64>,
+    ) -> io::Result<UsageStats> {
         match self
             .daemon
             .client()
             .request(
                 Uuid::nil(),
                 Uuid::nil(),
-                Command::FetchUsageStats { binary, directory },
+                Command::FetchUsageStats {
+                    binary,
+                    directory,
+                    detailed_day,
+                },
             )
             .map_err(to_io_error)?
         {

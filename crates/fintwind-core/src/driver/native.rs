@@ -298,7 +298,10 @@ pub(crate) fn fetch_transcript_on_port(
 /// provably spans more than one calendar day are opened message by message,
 /// because a session row's `time.updated` would otherwise dump a week's spend
 /// onto its last day.
-pub(crate) fn fetch_usage_stats(server: &OpenCodeServer) -> anyhow::Result<UsageStats> {
+pub(crate) fn fetch_usage_stats(
+    server: &OpenCodeServer,
+    detailed_day: Option<i64>,
+) -> anyhow::Result<UsageStats> {
     let mut stats = UsageStats::default();
     let mut cursor: Option<String> = None;
     let mut rows_by_id: HashMap<String, RowFacts> = HashMap::new();
@@ -354,13 +357,75 @@ pub(crate) fn fetch_usage_stats(server: &OpenCodeServer) -> anyhow::Result<Usage
     let (subagents, parents): (Vec<_>, Vec<_>) = rows_by_id
         .into_iter()
         .partition(|(_, facts)| facts.kind == SessionKind::SubAgent);
+    let rows: Vec<_> = parents.into_iter().chain(subagents).collect();
+    // Fetch the selected day's independent sessions in a bounded batch so
+    // their HTTP latencies do not add up serially against the RPC deadline.
+    let detailed_splits = detailed_day
+        .map(|day| {
+            std::thread::scope(|scope| -> anyhow::Result<Vec<Option<SessionSplit>>> {
+                const WORKERS: usize = 8;
+                let handles: Vec<_> = (0..WORKERS)
+                    .map(|worker| {
+                        let rows = &rows;
+                        scope.spawn(move || {
+                            (worker..rows.len())
+                                .step_by(WORKERS)
+                                .map(|index| {
+                                    let (id, facts) = &rows[index];
+                                    let split = usage_entry_from_row(facts)
+                                        .map(|entry| {
+                                            split_entry_days(
+                                                server,
+                                                id,
+                                                &entry,
+                                                facts.created,
+                                                facts.updated,
+                                                facts.updated_millis,
+                                                Some(day),
+                                            )
+                                        })
+                                        .transpose()
+                                        .map(Option::flatten);
+                                    (index, split)
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                let mut splits = vec![None; rows.len()];
+                for handle in handles {
+                    for (index, split) in handle.join().expect("usage detail worker panicked") {
+                        splits[index] = split?;
+                    }
+                }
+                Ok(splits)
+            })
+        })
+        .transpose()?;
     let mut entry_index: HashMap<String, usize> = HashMap::new();
-    for (id, facts) in parents.into_iter().chain(subagents) {
+    for (row_index, (id, facts)) in rows.into_iter().enumerate() {
         let Some(mut entry) = usage_entry_from_row(&facts) else {
             continue;
         };
+        let split = if let Some(splits) = &detailed_splits {
+            splits[row_index].clone()
+        } else {
+            split_entry_days(
+                server,
+                &id,
+                &entry,
+                facts.created,
+                facts.updated,
+                facts.updated_millis,
+                detailed_day,
+            )?
+        };
         if facts.kind == SessionKind::SubAgent {
             if let Some(&parent_index) = facts.parent.as_deref().and_then(|p| entry_index.get(p)) {
+                if let Some(split) = split {
+                    entry.days = Some(split.days);
+                    entry.hours = split.hours;
+                }
                 fold_subagent_into(&mut entries[parent_index], &entry);
                 // A sub-agent is not an entry of its own; the parent's model,
                 // directory, and timestamp already describe the work.
@@ -370,9 +435,9 @@ pub(crate) fn fetch_usage_stats(server: &OpenCodeServer) -> anyhow::Result<Usage
             // listing) is still real spend. Keep it rather than drop it.
         }
         entry_index.insert(id.clone(), entries.len());
-        let split = split_entry_days(server, &id, &entry, facts.created, facts.updated);
         if let Some(split) = split {
             entry.days = Some(split.days);
+            entry.hours = split.hours;
             entry.model_lanes = split.models;
         }
         entries.push(entry);
@@ -399,6 +464,30 @@ pub(crate) fn fetch_usage_stats(server: &OpenCodeServer) -> anyhow::Result<Usage
 /// estimate is additive spend, and throwing it away would make the page's
 /// "cost" KPI quietly low on exactly the sessions that delegate the most.
 fn fold_subagent_into(parent: &mut UsageEntry, child: &UsageEntry) {
+    // Preserve the child's date (and hour when available) before merging its
+    // cumulative totals. The parent's last touch is not when the child spent.
+    if parent.days.is_none() {
+        parent.days = Some(vec![entry_whole_day(parent)]);
+    }
+    if parent.hours.is_empty() {
+        parent.hours.push(entry_whole_hour(parent));
+    }
+    parent.days.as_mut().unwrap().extend(
+        child
+            .days
+            .clone()
+            .unwrap_or_else(|| vec![entry_whole_day(child)])
+            .into_iter()
+            .map(|mut share| {
+                share.subagent = true;
+                share
+            }),
+    );
+    if child.hours.is_empty() {
+        parent.hours.push(entry_whole_hour(child));
+    } else {
+        parent.hours.extend(child.hours.iter().copied());
+    }
     parent.input_tokens = parent.input_tokens.saturating_add(child.input_tokens);
     parent.output_tokens = parent.output_tokens.saturating_add(child.output_tokens);
     parent.reasoning_tokens = parent
@@ -424,6 +513,35 @@ fn fold_subagent_into(parent: &mut UsageEntry, child: &UsageEntry) {
     );
 }
 
+fn entry_whole_day(entry: &UsageEntry) -> UsageDayShare {
+    UsageDayShare {
+        timestamp: entry.timestamp,
+        subagent: false,
+        direct: entry
+            .input_tokens
+            .saturating_add(entry.output_tokens)
+            .saturating_add(entry.reasoning_tokens),
+        total: entry.total_tokens(),
+        input: entry.input_tokens,
+        output: entry.output_tokens.saturating_add(entry.reasoning_tokens),
+        cache_read: entry.cache_read_tokens,
+        cache_write: entry.cache_write_tokens,
+        cost: entry.cost.unwrap_or_default(),
+    }
+}
+
+fn entry_whole_hour(entry: &UsageEntry) -> fintwind_protocol::provider_session::UsageHourShare {
+    fintwind_protocol::provider_session::UsageHourShare {
+        timestamp: entry.timestamp,
+        estimated: true,
+        input: entry.input_tokens,
+        output: entry.output_tokens.saturating_add(entry.reasoning_tokens),
+        cache_read: entry.cache_read_tokens,
+        cache_write: entry.cache_write_tokens,
+        cost: entry.cost.unwrap_or_default(),
+    }
+}
+
 /// The parts of a session row the scan needs. Only these are kept, so the
 /// scan never holds the session list's JSON alive past one page.
 struct RowFacts {
@@ -433,6 +551,8 @@ struct RowFacts {
     /// Unix seconds.
     created: u64,
     updated: u64,
+    /// Millisecond-resolution fingerprint; second truncation misses quick updates.
+    updated_millis: u64,
     model: Option<String>,
     directory: Option<String>,
     cost: Option<f64>,
@@ -445,6 +565,10 @@ fn row_facts(row: &Value) -> Option<(String, RowFacts)> {
     let created =
         ms_to_seconds(time.get("created")).or_else(|| ms_to_seconds(time.get("updated")))?;
     let updated = ms_to_seconds(time.get("updated")).unwrap_or(created);
+    let updated_millis = time
+        .get("updated")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| updated.saturating_mul(1_000));
     let kind = session_kind(row);
     let parent = (kind == SessionKind::SubAgent)
         .then(|| {
@@ -468,6 +592,7 @@ fn row_facts(row: &Value) -> Option<(String, RowFacts)> {
             parent,
             created,
             updated,
+            updated_millis,
             model: row.get("model").and_then(|model| {
                 let provider = model.get("providerID").and_then(Value::as_str)?;
                 let id = model
@@ -514,6 +639,7 @@ fn usage_entry_from_row(facts: &RowFacts) -> Option<UsageEntry> {
         subagent_tokens: 0,
         subagent_direct: 0,
         days: None,
+        hours: Vec::new(),
         model_lanes: Vec::new(),
     })
 }
@@ -525,6 +651,7 @@ fn usage_entry_from_row(facts: &RowFacts) -> Option<UsageEntry> {
 #[derive(Clone)]
 struct SessionSplit {
     days: Vec<UsageDayShare>,
+    hours: Vec<fintwind_protocol::provider_session::UsageHourShare>,
     models: Vec<UsageModelLane>,
 }
 
@@ -548,57 +675,84 @@ fn split_entry_days(
     entry: &UsageEntry,
     created: u64,
     updated: u64,
-) -> Option<SessionSplit> {
+    updated_millis: u64,
+    detailed_day: Option<i64>,
+) -> anyhow::Result<Option<SessionSplit>> {
     if entry.total_tokens() == 0 {
-        return None;
+        return Ok(None);
     }
-    // Opened and last touched on one day ⇒ nothing to redistribute.
-    if local_day(created) == local_day(updated) {
-        return None;
-    }
+    let spans_days = local_day(created) != local_day(updated);
     // Beyond the 26-week heatmap the day split changes no mark, and a session
     // that ended long ago will not gain activity.
     let horizon = unix_time().saturating_sub(DAY_SPLIT_HORIZON_DAYS * 86_400);
     if updated < horizon && created < horizon {
-        return None;
+        return Ok(None);
+    }
+    // A same-day session needs message timestamps for the hourly plot only
+    // while it overlaps the selectable 30-day window.
+    if !spans_days && detailed_day != Some(local_day(updated)) {
+        return Ok(None);
     }
 
-    // The fingerprint is last-touched seconds: a session that gained activity
-    // re-splits, an untouched one answers from cache without any request.
+    // Preserve milliseconds and row usage: a message can land inside the same
+    // second, and a provider may amend token/cost accounting without moving
+    // the session timestamp.
+    let fingerprint = (
+        updated_millis,
+        entry.total_tokens(),
+        entry.cost.map(f64::to_bits).unwrap_or(0),
+    );
     let cached = {
         let cache = usage_day_cache().lock();
         cache
             .get(session_id)
-            .and_then(|(cached_at, split)| (*cached_at == updated).then(|| split.clone()))
+            .and_then(|(cached_at, split)| (*cached_at == fingerprint).then(|| split.clone()))
     };
     if let Some(split) = cached {
-        return split;
+        return Ok(split);
     }
 
-    // A failed walk is deliberately not cached. Caching it would make a
-    // transient server error stick for as long as the session stayed
-    // untouched, and the page would show a stale single-day bucket with
-    // nothing to say why.
-    let split = session_day_split(server, session_id)?;
+    // Do not cache a failed or empty walk. The message store can catch up to
+    // the session summary without changing its timestamp or token total.
+    let split = match session_day_split(server, session_id) {
+        Ok(split) => split,
+        Err(error)
+            if detailed_day
+                .is_some_and(|day| day >= local_day(created) && day <= local_day(updated)) =>
+        {
+            return Err(error);
+        }
+        Err(error) => {
+            eprintln!("usage day split failed for {session_id}: {error}");
+            return Ok(None);
+        }
+    };
+    let Some(split) = split else {
+        return Ok(None);
+    };
     let mut cache = usage_day_cache().lock();
     if cache.len() >= USAGE_CACHE_CEILING {
         cache.clear();
     }
-    cache.insert(session_id.to_owned(), (updated, Some(split.clone())));
-    Some(split)
+    cache.insert(session_id.to_owned(), (fingerprint, Some(split.clone())));
+    Ok(Some(split))
 }
 
 /// Walk one session's assistant messages, bucketing their tokens by local day
-/// and by model. `None` when the walk fails or yields nothing, which leaves
-/// the session on its single-day, single-model bucket — a degraded but still
-/// honest answer.
-fn session_day_split(server: &OpenCodeServer, session_id: &str) -> Option<SessionSplit> {
+/// and by model. A failed detail walk is reported to the caller so the page
+/// cannot claim its hourly series is complete when one session was missed.
+fn session_day_split(
+    server: &OpenCodeServer,
+    session_id: &str,
+) -> anyhow::Result<Option<SessionSplit>> {
     let mut cursor: Option<String> = None;
     let mut days: Vec<UsageDayShare> = Vec::new();
     let mut index_of_day: HashMap<u64, usize> = HashMap::new();
+    let mut hours: Vec<fintwind_protocol::provider_session::UsageHourShare> = Vec::new();
+    let mut index_of_hour: HashMap<u64, usize> = HashMap::new();
     let mut models: Vec<UsageModelLane> = Vec::new();
     let mut index_of_model: HashMap<String, usize> = HashMap::new();
-    for _ in 0..MAX_MESSAGE_PAGES {
+    for page in 0..MAX_MESSAGE_PAGES {
         let mut path = format!(
             "/api/session/{}/message?limit={PAGE_LIMIT}",
             encode_path_segment(session_id)
@@ -606,15 +760,9 @@ fn session_day_split(server: &OpenCodeServer, session_id: &str) -> Option<Sessio
         if let Some(token) = &cursor {
             path.push_str(&format!("&cursor={}", encode_path_segment(token)));
         }
-        let response = match server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT) {
-            Ok(response) => response,
-            // A session that cannot be read still has its session-level total;
-            // only the attribution is lost.
-            Err(error) => {
-                eprintln!("usage day split failed for {session_id}: {error}");
-                return None;
-            }
-        };
+        let response = server
+            .request_with_timeout("GET", &path, None, HTTP_TIMEOUT)
+            .map_err(|error| anyhow::anyhow!("usage day split failed for {session_id}: {error}"))?;
         let rows = response
             .pointer("/data")
             .and_then(Value::as_array)
@@ -629,18 +777,53 @@ fn session_day_split(server: &OpenCodeServer, session_id: &str) -> Option<Sessio
             let Some(usage) = message_usage(row) else {
                 continue;
             };
-            match index_of_day.get(&usage.timestamp) {
+            let day = local_day(usage.timestamp) as u64;
+            match index_of_day.get(&day) {
                 Some(&index) => {
                     let existing = &mut days[index];
                     existing.direct = existing.direct.saturating_add(usage.direct);
                     existing.total = existing.total.saturating_add(usage.total);
+                    existing.input = existing.input.saturating_add(usage.input);
+                    existing.output = existing.output.saturating_add(usage.output);
+                    existing.cache_read = existing.cache_read.saturating_add(usage.cache_read);
+                    existing.cache_write = existing.cache_write.saturating_add(usage.cache_write);
+                    existing.cost += usage.cost;
                 }
                 None => {
-                    index_of_day.insert(usage.timestamp, days.len());
+                    index_of_day.insert(day, days.len());
                     days.push(UsageDayShare {
                         timestamp: usage.timestamp,
+                        subagent: false,
                         direct: usage.direct,
                         total: usage.total,
+                        input: usage.input,
+                        output: usage.output,
+                        cache_read: usage.cache_read,
+                        cache_write: usage.cache_write,
+                        cost: usage.cost,
+                    });
+                }
+            }
+            let hour = usage.timestamp / 3600;
+            match index_of_hour.get(&hour) {
+                Some(&index) => {
+                    let existing = &mut hours[index];
+                    existing.input = existing.input.saturating_add(usage.input);
+                    existing.output = existing.output.saturating_add(usage.output);
+                    existing.cache_read = existing.cache_read.saturating_add(usage.cache_read);
+                    existing.cache_write = existing.cache_write.saturating_add(usage.cache_write);
+                    existing.cost += usage.cost;
+                }
+                None => {
+                    index_of_hour.insert(hour, hours.len());
+                    hours.push(fintwind_protocol::provider_session::UsageHourShare {
+                        timestamp: usage.timestamp,
+                        estimated: false,
+                        input: usage.input,
+                        output: usage.output,
+                        cache_read: usage.cache_read,
+                        cache_write: usage.cache_write,
+                        cost: usage.cost,
                     });
                 }
             }
@@ -667,6 +850,11 @@ fn session_day_split(server: &OpenCodeServer, session_id: &str) -> Option<Sessio
         if rows.is_empty() || !has_more {
             break;
         }
+        if page + 1 == MAX_MESSAGE_PAGES {
+            return Err(anyhow::anyhow!(
+                "usage detail reached the message page limit for {session_id}"
+            ));
+        }
         cursor = response
             .pointer("/cursor/next")
             .and_then(Value::as_str)
@@ -674,8 +862,13 @@ fn session_day_split(server: &OpenCodeServer, session_id: &str) -> Option<Sessio
     }
 
     days.sort_by_key(|share| share.timestamp);
+    hours.sort_by_key(|share| share.timestamp);
     models.sort_by(|a, b| b.total.cmp(&a.total));
-    (!days.is_empty()).then_some(SessionSplit { days, models })
+    Ok((!days.is_empty()).then_some(SessionSplit {
+        days,
+        hours,
+        models,
+    }))
 }
 
 /// The message body inside a `/session/:id/message` row. Newer servers wrap
@@ -692,6 +885,10 @@ struct MessageUsage {
     timestamp: u64,
     direct: u64,
     total: u64,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    cache_write: u64,
     model: Option<String>,
     cost: f64,
 }
@@ -725,6 +922,10 @@ fn message_usage(row: &Value) -> Option<MessageUsage> {
         timestamp,
         direct: input.saturating_add(output).saturating_add(reasoning),
         total,
+        input,
+        output: output.saturating_add(reasoning),
+        cache_read,
+        cache_write,
         // The message's own model, not the session's: a session that switched
         // models has both in its stream, and the session row names only the
         // model it ended on.
@@ -752,14 +953,15 @@ fn local_day(unix_seconds: u64) -> i64 {
     fintwind_protocol::model::local_day(unix_seconds)
 }
 
-/// Session id → (last-touched seconds, its split). Keyed by session id
+/// Session id → ((last-touched milliseconds, token total, cost bits), split). Keyed by session id
 /// alone because OpenCode's store is one store: ids are unique across
 /// projects, channels, and builds. Cleared wholesale rather than evicted by
 /// age — a full clear is cheaper than the bookkeeping and only costs one
 /// re-split of the spanning sessions.
-fn usage_day_cache() -> &'static Mutex<HashMap<String, (u64, Option<SessionSplit>)>> {
-    static CACHE: std::sync::OnceLock<Mutex<HashMap<String, (u64, Option<SessionSplit>)>>> =
-        std::sync::OnceLock::new();
+fn usage_day_cache() -> &'static Mutex<HashMap<String, ((u64, u64, u64), Option<SessionSplit>)>> {
+    static CACHE: std::sync::OnceLock<
+        Mutex<HashMap<String, ((u64, u64, u64), Option<SessionSplit>)>>,
+    > = std::sync::OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -1636,6 +1838,7 @@ mod tests {
             subagent_tokens: 0,
             subagent_direct: 0,
             days: None,
+            hours: Vec::new(),
             model_lanes: Vec::new(),
         };
         let child = UsageEntry {
@@ -1652,6 +1855,7 @@ mod tests {
             subagent_tokens: 0,
             subagent_direct: 0,
             days: None,
+            hours: Vec::new(),
             model_lanes: Vec::new(),
         };
 

@@ -427,7 +427,7 @@ fn is_legacy_contract_rejection(error: &anyhow::Error) -> bool {
         || text.contains("Expected object")
 }
 
-fn post_current_or_legacy(
+pub(crate) fn post_current_or_legacy(
     mut post: impl FnMut(&Value) -> anyhow::Result<Value>,
     current: &Value,
     legacy: Option<&Value>,

@@ -693,6 +693,10 @@ impl Backend for FintwindBackend {
                         .map(serde_json::from_value)
                         .transpose()
                         .context("daemon received an invalid provider cursor")?,
+                    // The daemon keys runtimes by the task's own UUID, so the
+                    // session metadata can record it without the wire
+                    // carrying a field the UI would only copy through.
+                    task_id: Some(session_id.to_string()),
                 };
                 let (wake, _wake_events) = smol::channel::bounded(1);
                 let (event_sender, event_receiver) = driver::event_channel(wake);

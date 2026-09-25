@@ -163,6 +163,10 @@ pub struct DriverStartOptions {
     pub context_window: Option<String>,
     pub agent_preset: Option<String>,
     pub provider_cursor: Option<ProviderResumeCursor>,
+    /// The app-side task (session) UUID this runtime serves. It rides the
+    /// OpenCode session's `metadata` so a native session can be traced back
+    /// to the task that created it, from this app or any other client.
+    pub task_id: Option<String>,
 }
 
 /// The subset of `DriverStartOptions` a user can change without starting a new

@@ -70,6 +70,11 @@ pub struct NativeSessionSummary {
     /// `<providerID>/<modelID>` when the server recorded one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// The app-side task UUID this session was created for, from the
+    /// session's `metadata.task`. Only sessions created by this app carry
+    /// it; CLI/TUI ones and pre-metadata sessions do not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
 }
 
 /// One MCP server's live connection status as the OpenCode server reports

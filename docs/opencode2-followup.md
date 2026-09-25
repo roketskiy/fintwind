@@ -74,13 +74,13 @@ OpenAPI 的请求体均为 `additionalProperties: false`，旧字段会被服务
 | # | 变化 | 证据 | fintwind 影响 |
 |---|---|---|---|
 | 4 | **prompt body 大幅扩展**：`{text, files, agents, skills, metadata, delivery, resume}` | openapi `session.prompt` | fintwind 只发 `{text}`，附件走自有 daemon 通道。至少把 `metadata`（fintwind 任务 ID、来源）写入 prompt / session create，打通「任务 ↔ opencode 会话」双向追溯；`delivery` 可显式化 steer/queue（迁移遗留 C5） |
-| 5 | **interrupt 的 `continue` → `resume`** | 审计 #067 | 核对 fintwind interrupt 调用是否带该参数，需实测 |
-| 6 | **Console-managed policies**（v2.0.13，PR #49729） | commit 日志 | 策略拒绝是新的错误形态：模型在目录中但被策略禁用。`providers_page` / composer 的不可用态要接住这类错误 |
-| 7 | **MCP Code Mode 默认开启**（v2.0.16，#51029）+ **MCP 资源成为 codemode 工具**（#50680） | commit 日志 | 工具活动卡片将更频繁出现 `tools.` 命名空间与资源读取；结合 #50195（工具执行上下文命名）优化卡片标题 |
-| 8 | **MCP OAuth 不再强制 consent**（#50519） | commit 日志 | `mcp_page` 的 OAuth 登录流程预期行为更新 |
-| 9 | **read 工具长度/截断上报**（#51011） | commit 日志 | 工具卡片可展示「读了多少、截断了什么」 |
-| 10 | **`session.list` 增强**：`search` / `parentID` / `project` / `subpath` / `cursor` / `order` | openapi `session.list` | `native_sessions.rs` 的全量对账可改为服务端过滤 + 游标分页 |
-| 11 | **websocket idle timeout 放宽并遵循 chunkTimeout**（#50914） | commit 日志 | SSE 长连接行为列入实测清单 |
+| 5 | **interrupt 的 `continue` → `resume`** | 审计 #067 | fintwind 的停止调用不带该参数，保持原样即可 |
+| 6 | **Console-managed policies**（v2.0.13，PR #49729） | 上游 PR | 禁用的 provider 会从模型目录消失；旧目录缓存不得让被禁用模型重新可选 |
+| 7 | **MCP Code Mode 默认值调整**（#51029）+ **MCP 资源成为 codemode 工具**（#50680） | 上游 PR | #51029 仅针对 PostHog / Executor 做默认值适配；#50195 是内部变量重命名，不新增工具事件字段 |
+| 8 | **MCP OAuth 不再强制 consent**（#50519） | 上游 PR | 服务端的 OAuth URL 生成修复，客户端继续按授权 URL 登录 |
+| 9 | **read 工具长度/截断处理**（#51011） | 上游 PR | 越界错误附文件行数，超额 limit 截为 2000 行，长行截为 2000 字符；没有新增结构化上报字段 |
+| 10 | **`session.list` 增强**：`search` / `parentID` / `project` / `subpath` / `cursor` / `order` | openapi `session.list` | 主会话对账早已游标分页；可在服务端过滤根会话，并修复子会话刷新只取首 200 条的问题 |
+| 11 | **WebSocket idle timeout 放宽并遵循 chunkTimeout**（#50914） | 上游 PR | 仅影响服务端到模型提供方的 Responses WebSocket，**不影响**客户端 `/api/event` SSE |
 
 ### 2.1 修正一项上轮调研的推测
 
@@ -97,19 +97,20 @@ HTTP API 面**：v2.0.16 的 113 条 openapi 路径中没有任何 media 路由�
 
 ### 3.1 近期（1–2 个迭代）
 
-- **真·排队队列 UI** —— inbox 三件套：
-  `GET /api/session/{id}/inbox`、`PATCH inbox/{inboxID}`（`delivery: steer|queue`，
-  审计 #085）、`DELETE inbox/{inboxID}`（取消，#084）。
-  fintwind 现在 busy 时 steer 被拒即报错（`SteerRejected`）；可升级为
-  「入队 → 查看 → 转换 → 取消」的待发送面板。`session.inbox.enqueued/delivered`
-  事件已存在（驱动测试 wire 已有样本）。
-- **会话级权限规则** —— `PATCH /api/session/{id}` 支持
-  `{title, metadata, permissions}`（审计 #056，permissions 变更发
-  `session.permissions` 事件）。fintwind 的 Ask / Auto-accept / Full access
-  三档 access mode 可从「约定」升级为**服务端强制**；配合
+- **已有本地排队 UI；可选对接服务端 inbox** —— busy 时 Enter 会将消息
+  加入本地 `queued_messages`，面板支持查看、编辑、steer、取消，当前轮次
+  结束后自动发送下一条；`SteerRejected` 也会把消息退回队列。
+  `GET /api/session/{id}/inbox`、`PATCH inbox/{inboxID}`（转换
+  `delivery: steer|queue`）、`DELETE inbox/{inboxID}`（取消）只在需要
+  跨客户端共享/恢复待发送队列时才有增量价值。对接前须先验证
+  `session.inbox.enqueued/delivered` 的实际载荷与避免双重投递的方案。
+- **已有会话级权限规则；可选补齐管理和反馈** —— Fintwind 已按
+  Ask / Auto-accept / Full access 模式通过
+  `PATCH /api/session/{id}` 写入服务端 `permissions`，不是仅由 UI
+  自行约定。当前写入错误被忽略，也未消费 `session.permissions` 事件；
+  后续可明确处理写入失败/跨客户端变更，并用
   `GET /api/permission/saved` + `DELETE /api/permission/saved/{id}`
-  （#095/#096）做「已放行规则管理」页。直接回应迁移遗留 C2
-  （默认配置无审批的产品落差）。
+  做「已放行规则管理」页。Console/配置策略的硬性拒绝仍优先于这些规则。
 - **usage 统计换官方源** —— `GET /api/experimental/session/stats`
   （`from/to/project/timezone/tools=none|summary|detail`，#049）。
   `usage_page` 的热力图 / 日柱 / 模型排行不再本地全量解析历史，
@@ -173,9 +174,10 @@ HTTP API 面**：v2.0.16 的 113 条 openapi 路径中没有任何 media 路由�
 
 1. **P0 三项**（§1.1–1.3）：改动集中在 `driver/opencode.rs` 与
    `opencode_session.rs`；对 2.0.11–2.0.16 做一次兼容矩阵实测。
-2. **PATCH permissions + permission.saved**（§3.1）：补 Supervised 语义的
-   产品短板。
-3. **inbox 队列 UI + session.list 服务端分页**（§3.1 / §2#10）。
+2. **权限写入失败反馈 + permission.saved 管理**（§3.1）：已有会话级
+   `PATCH permissions`，补齐可靠性与已放行规则管理。
+3. **评估本地队列与服务端 inbox 的同步价值；session.list 服务端过滤/
+   分页**（§3.1 / §2#10）：本地队列 UI 已具备，无须重复开发。
 4. **stats 端点替换本地聚合**（§3.1）：纯性能收益。
 5. **integration/credential + MCP 运行时控制**（§3.2）。
 6. **远程桥（fs/pty/vcs/shell）**（§3.3）：立项评估。
@@ -206,15 +208,55 @@ HTTP API 面**：v2.0.16 的 113 条 openapi 路径中没有任何 media 路由�
    `revert/stage` 与 `revert/commit` 契约未变；`DELETE /api/session/{id}/revert`
    清除暂存已在现码中。
 
-以下仍属 P1，本次未改：
+以下为另行规划的功能/实测项（与本次 #5–#11 的兼容复核不同）：
 
 4. `session.prompt`：`metadata` / `delivery:"queue"` / `resume` 的实际行为；
    `session.inbox.*` 事件与 inbox 端点的联动。
 5. `PATCH /api/session/{id}` 的 `permissions`：写入后对运行中会话的生效时机，
    以及 `session.permissions` 事件的 payload。
 6. `experimental/session/stats`：聚合口径与 fintwind 本地统计的差异。
-7. SSE 长连接：idle timeout / chunkTimeout 放宽后（#50914）对
-   fintwind 事件流重连策略的影响。
+7. SSE 长连接：服务端真正断流后的恢复策略需单独验证；#50914
+   针对的是提供方 WebSocket，与 SSE 无关。
+
+### 5.1 P1 #5–#11 复核（2026-09-26）
+
+- **#5 不改**：`opencode.rs` 前台 Cancel 和子代理 Stop 均 POST `/interrupt`
+  且不带查询参数；新版 `resume` 是可选项。不用替换不存在的 `continue`。
+- **#6 已修**：PR #49729 表明受策略禁止的提供方不再出现在模型列表。
+  `model_catalog.rs` 已过滤 `enabled:false`，但此前把**成功的空目录**当成
+  查询失败，回退到旧缓存；现在区分成功空目录与失败。空目录写入缓存文件，
+  启动时仍按原有规则不读取空缓存，以免未连接服务被当作可用目录。
+  `providers_page.rs` 对已安装但无可用模型显示连接/Console 策略提示。
+  老版本 API 请求失败时仍可退回 CLI 目录与最后成功缓存。隔离的
+  v2.0.16 `serve` 实测对照：不带策略的目录有 9 个模型，
+  `provider.use deny *` 的目录 `/api/model` 返回 0 个模型。
+- **#7 暂不改**：#51029 并非全局首次启用 Code Mode；它对已开启的
+  Code Mode 调整 PostHog/Executor 的默认配置。#50195 仅将插件内部参数
+  `tool` 改名 `context`，不改变事件 payload。现有 `execute` 卡片已能从
+  `toolCalls` metadata 提取嵌套工具名，未知工具保留其完整名称；没有可靠的
+  新标题字段可接入。MCP 资源调用在真实载荷出现后再验证标题细化。
+- **#8 不改**：#50519 在 OpenCode 的 MCP OAuth 客户端去掉 URL 上自动加的
+  `prompt=consent`，并保留 `offline_access`。fintwind 由 daemon 执行
+  `opencode mcp auth`、打开 CLI 给出的 URL，未自行添加 consent 参数。
+- **#9 不改**：#51011 只改 read 的结果文字、越界报错和长行截断，不提供
+  机器可读的读取行数/截断元数据。卡片已有输出展示与本地长度限制，不能
+  从这次变更推断出一个稳定的“读了多少”字段。
+- **#10 已修**：主会话列表在 `driver/native.rs` 原本就带 cursor 翻页并
+  本地剔除子会话；现优先请求 `parentID=null`，旧版拒绝查询时退回原路径，
+  旧版忽略参数时仍本地过滤。子代理后台刷新之前只取前 200 条，现按
+  cursor 翻页并优先服务端按 `parentID` 过滤；失败、满页无游标或超过分页上限时不把
+  不完整结果作为“子代理已消失”的证据。隔离 v2.0.16 实测
+  `limit=1&parentID=null` 的三页可找全三个根会话、按 parentID
+  查询不返回根会话；复现脚本与结果位于 gitignored 的
+  `temp/p1-session-list-smoke.ps1` / `.json`。
+- **#11 不改**：#50914 修改的是服务端模型 WebSocket 默认 5→30 分钟和
+  provider `chunkTimeout`，与 Fintwind 的 SSE 读循环不是一条连接；不应
+  因此修改 SSE 重连策略。服务端断流的独立恢复问题须另立项验证。
+
+上游证据：`https://github.com/anomalyco/opencode/pull/49729`、
+`/pull/51029`、`/pull/50680`、`/pull/50195`、`/pull/50519`、
+`/pull/51011`、`/pull/50914`，以及 v2.0.16 OpenAPI `session.list`、
+`session.interrupt`、`SessionsResponse`。
 
 ## 6. 参考
 

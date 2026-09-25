@@ -131,6 +131,7 @@ providers.disabled_for_new_tasks: 新規タスクでは無効
 providers.model_count_one: "%{count} 個のモデル"
 providers.model_count_many: "%{count} 個のモデル"
 providers.not_detected_as: PATH 上に %{command} が見つかりません
+providers.no_available_models: 利用可能なモデルがありません。プロバイダーの接続と Console ポリシーを確認してください
 providers.using_override: PATH の自動検出ではなく %{path} を使用しています
 providers.invalid_override: このパスには実行可能なファイルがありません。空欄にすると PATH から自動検出します
 providers.detected_at: "%{path} で検出されました"

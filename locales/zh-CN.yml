@@ -123,6 +123,7 @@ providers.disabled_for_new_tasks: 新建任务时不可用
 providers.model_count_one: "%{count} 个模型"
 providers.model_count_many: "%{count} 个模型"
 providers.not_detected_as: 未在 PATH 中找到 %{command}
+providers.no_available_models: 暂无可用模型，请检查提供方连接和 Console 策略
 providers.using_override: 正在使用 %{path}，不再从 PATH 自动检测
 providers.invalid_override: 此路径下没有可执行文件。清空后可恢复从 PATH 自动检测
 providers.detected_at: 已在 %{path} 检测到

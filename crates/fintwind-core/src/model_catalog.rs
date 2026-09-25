@@ -17,14 +17,15 @@ pub fn fallback_agent_presets() -> Vec<ProviderAgentPreset> {
 /// Discovers models from the installed OpenCode CLI (`opencode models`).
 pub fn discover_catalog(binary: &Path) -> (Vec<ProviderModel>, Vec<ProviderAgentPreset>) {
     let discovered = discover_opencode_models(binary);
-    let models = if discovered.is_empty() {
-        // A failed or empty probe keeps the last successful discovery over
-        // the hardcoded catalog, so one bad CLI run can't shrink the picker.
-        cached_models().unwrap_or_else(fallback_models)
-    } else {
+    let models = if let Some(discovered) = discovered {
+        // An empty live catalog is authoritative: a Console policy may deny
+        // every model. Replaying the previous cache would make them selectable.
         let models = deduplicate(discovered);
         write_cached_models(&models);
         models
+    } else {
+        // Only a failed probe keeps the last successful catalog.
+        cached_models().unwrap_or_else(fallback_models)
     };
     (models, Vec::new())
 }
@@ -77,7 +78,7 @@ fn write_models_file(path: &Path, models: &[ProviderModel]) -> std::io::Result<(
     std::fs::rename(temporary, path)
 }
 
-fn discover_opencode_models(binary: &Path) -> Vec<ProviderModel> {
+fn discover_opencode_models(binary: &Path) -> Option<Vec<ProviderModel>> {
     // The plain `models` listing discards variants. Query the V2 catalog
     // through the CLI so discovery shares its authentication/service context.
     let query = std::env::current_dir()
@@ -99,28 +100,34 @@ fn discover_opencode_models(binary: &Path) -> Vec<ProviderModel> {
     catalog_command.args(["api", "get", &format!("/api/model?{query}")]);
     if let Ok(output) = crate::command_env::output(&mut catalog_command)
         && output.status.success()
-        && let Ok(value) = serde_json::from_slice(&output.stdout)
+        && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+        && value
+            .get("data")
+            .and_then(serde_json::Value::as_array)
+            .is_some()
     {
-        let models = parse_opencode_catalog(&value);
-        if !models.is_empty() {
-            return models;
-        }
+        return Some(parse_opencode_catalog(&value));
     }
     let mut command = crate::command_env::command(binary);
     command.arg("models");
     let Ok(output) = crate::command_env::output(&mut command) else {
-        return Vec::new();
+        return None;
     };
     let models = parse_opencode_models(&String::from_utf8_lossy(&output.stdout));
+    if !output.status.success() || models.is_empty() {
+        return None;
+    }
     let cached: std::collections::HashMap<_, _> = cached_models()
         .unwrap_or_default()
         .into_iter()
         .map(|model| (model.id.clone(), model))
         .collect();
-    models
-        .into_iter()
-        .map(|model| cached.get(&model.id).cloned().unwrap_or(model))
-        .collect()
+    Some(
+        models
+            .into_iter()
+            .map(|model| cached.get(&model.id).cloned().unwrap_or(model))
+            .collect(),
+    )
 }
 
 fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {

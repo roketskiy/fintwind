@@ -1133,7 +1133,11 @@ impl Fintwind {
                             .text_size(ui_px(10.5))
                             .line_height(ui_px(15.0))
                             .text_color(theme.text_tertiary)
-                            .child(tr!("providers.not_detected_as", command = "opencode")),
+                            .child(if installed {
+                                tr!("providers.no_available_models")
+                            } else {
+                                tr!("providers.not_detected_as", command = "opencode")
+                            }),
                     ),
             );
         }

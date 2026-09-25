@@ -18,6 +18,20 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.2.0]
+
+- Send image and text attachments through OpenCode's files channel instead of splicing `@path` into the message, and drop files from the desktop onto the transcript or composer to attach them
+- Show images that were already saved in a session's history
+- Add a context-window panel with clearer usage stats
+- When a message cannot be reverted, show a disabled button and the reason instead of hiding the control
+- Add an in-app update card when a newer release is available
+- On the Usage page, open a single day to see hourly charts and a usage breakdown
+- Shimmer running tool names, and keep that treatment on subagent cards
+- Rename native sessions through OpenCode's stable PATCH endpoint so the title syncs to the server
+- Add catalog support for GPT-6, Claude Opus 5.5, and MiMo V2.6
+- Say when a built-in provider check is reading the local model catalog, not testing the provider API
+- Fix the info capsule turning transparent on hover, and even out sidebar shortcut spacing
+
 ## [0.1.8]
 
 - Share one private OpenCode server across the app instead of a per-project pool, so sessions stay in sync with fewer conflicts

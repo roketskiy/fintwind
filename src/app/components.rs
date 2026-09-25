@@ -3,6 +3,7 @@ use crate::theme::ui_px;
 use super::*;
 
 use chrono::{Datelike, Days};
+use gpui::StyledText;
 use std::path::Path;
 
 pub(super) fn pulse_dot(size: f32, color: Hsla) -> AnyElement {
@@ -19,6 +20,45 @@ pub(super) fn pulse_dot(size: f32, color: Hsla) -> AnyElement {
     // Mounted for whole activities; its pane must not tick at full rate.
     .every(2)
     .into_any_element()
+}
+
+/// A grayscale highlight travels through a single shaped text element. Keep
+/// the run font identical to the static label so status changes do not reflow.
+pub(super) fn flowing_activity_label(
+    text: &str,
+    phase: f32,
+    base: Hsla,
+    is_dark: bool,
+    weight: FontWeight,
+) -> StyledText {
+    let highlight: Hsla = if is_dark {
+        rgb(0xffffff).into()
+    } else {
+        rgb(0x050505).into()
+    };
+    let last = text.chars().count().saturating_sub(1).max(1) as f32;
+    let mut label_font = font(crate::theme::ui_font_family());
+    label_font.weight = weight;
+    let runs = text
+        .chars()
+        .enumerate()
+        .map(|(index, ch)| {
+            let position = index as f32 / last;
+            let center = phase * 1.6 - 0.3;
+            // The plateau keeps a complete glyph visibly highlighted.
+            let glow = ((0.34 - (position - center).abs()) / 0.22).clamp(0.0, 1.0);
+            let glow = glow * glow * (3.0 - 2.0 * glow);
+            TextRun {
+                len: ch.len_utf8(),
+                font: label_font.clone(),
+                color: base.blend(highlight.opacity(glow)),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            }
+        })
+        .collect();
+    StyledText::new(text).with_runs(runs)
 }
 
 /// Three dots chasing a brightness wave, the transcript's "still working"

@@ -3,7 +3,6 @@ use crate::theme::{code_px, ui_px};
 use super::right_panel::{DiffRowStyle, render_diff_code_row};
 use super::*;
 use base64::Engine as _;
-use gpui::StyledText;
 
 const CHANGED_FILES_PREVIEW_LIMIT: usize = 3;
 /// Keep one virtualized transcript row bounded even when a generator touches
@@ -21,32 +20,6 @@ const ACTIVITY_DETAIL_MAX_HEIGHT: f32 = 800.0;
 /// Aligns a hunk separator with the line numbers in the rows below it; see
 /// `DiffRowStyle::ACTIVITY`.
 const ACTIVITY_DIFF_GUTTER_WIDTH: f32 = 52.0;
-
-fn flowing_activity_label(text: &str, phase: f32, base: Hsla, highlight: Hsla) -> StyledText {
-    let character_count = text.chars().count();
-    let last = character_count.saturating_sub(1).max(1) as f32;
-    let mut label_font = font(crate::theme::ui_font_family());
-    label_font.weight = FontWeight::SEMIBOLD;
-    let runs = text
-        .chars()
-        .enumerate()
-        .map(|(index, ch)| {
-            let position = index as f32 / last;
-            let center = phase * 1.6 - 0.3;
-            let glow = (1.0 - ((position - center) / 0.28).abs()).max(0.0);
-            let glow = glow * glow * (3.0 - 2.0 * glow);
-            TextRun {
-                len: ch.len_utf8(),
-                font: label_font.clone(),
-                color: base.blend(highlight.opacity(glow)),
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }
-        })
-        .collect();
-    StyledText::new(text).with_runs(runs)
-}
 
 #[derive(Clone, Debug)]
 struct ConversationNavigationRailSnapshot {
@@ -2340,8 +2313,14 @@ impl Fintwind {
                 activity_preview(activity)
             };
             let action_label = activity_action_label(activity);
-            let action_label_running =
-                !activity.complete && !activity.failed && activity.kind != ActivityKind::Reasoning;
+            let action_label_running = subagent_work
+                .as_ref()
+                .map(|(_, _, status, ..)| status.is_live())
+                .unwrap_or(
+                    !activity.complete
+                        && !activity.failed
+                        && activity.kind != ActivityKind::Reasoning,
+                );
             let mut row_detail = activity_row_detail(activity, reasoning_live);
             if row_detail.trim().is_empty() {
                 row_detail = preview;
@@ -2442,13 +2421,14 @@ impl Fintwind {
                                 .text_color(theme.text_secondary)
                                 .child(if action_label_running {
                                     let base = theme.text_secondary;
-                                    let highlight = theme.text;
+                                    let is_dark = theme.is_dark;
                                     motion::pulse(Duration::from_millis(2400), move |phase| {
                                         flowing_activity_label(
                                             &action_label,
                                             phase,
                                             base,
-                                            highlight,
+                                            is_dark,
+                                            FontWeight::SEMIBOLD,
                                         )
                                         .into_any_element()
                                     })

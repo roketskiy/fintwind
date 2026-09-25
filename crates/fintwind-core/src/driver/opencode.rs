@@ -643,6 +643,9 @@ impl OpenCodeDriver {
                 context_tokens: seeds.newest.map(|usage| usage.context),
                 latest: seeds.newest.map(|usage| usage.latest),
                 context_window: None,
+                // The catalog has not been read yet. None here means "not
+                // carried", not "this model has no window".
+                context_window_resolved: false,
                 session_total: (seeds.total > 0).then_some(seeds.total),
                 cache_read,
                 prompt_tokens,
@@ -706,14 +709,18 @@ impl OpenCodeDriver {
                 };
                 let windows = opencode_model_context_windows(&response);
                 *background_usage_metadata.model_context_windows.lock() = windows;
-                let window = background_usage_metadata.current_context_window();
+                let (context_window, context_window_resolved) =
+                    background_usage_metadata.resolved_context_window();
                 let (cache_read, prompt_tokens) = background_usage_metadata.session_cache();
                 let total = *background_usage_metadata.session_total.lock();
-                if window.is_some() || total > 0 || prompt_tokens.is_some() {
+                // A resolved miss must still be published: it is how a cached
+                // window from another provider's copy of the same id is cleared.
+                if context_window_resolved || total > 0 || prompt_tokens.is_some() {
                     let _ = metadata_events.send(DriverEvent::UsageUpdated {
                         context_tokens: None,
                         latest: None,
-                        context_window: window,
+                        context_window,
+                        context_window_resolved,
                         session_total: (total > 0).then_some(total),
                         cache_read,
                         prompt_tokens,
@@ -1627,10 +1634,18 @@ fn opencode_wildcard_matches(input: &str, pattern: &str) -> bool {
 }
 
 impl OpenCodeUsageMetadata {
-    fn current_context_window(&self) -> Option<u64> {
-        let model = self.last_model.lock().clone()?;
+    /// `None` means the catalog or the live model is not known yet, so a
+    /// stored window must be left alone. `Some` means the catalog answered:
+    /// the inner `None` is an unambiguous miss and must clear a cached size.
+    fn resolved_context_window(&self) -> (Option<u64>, bool) {
+        let Some(model) = self.last_model.lock().clone() else {
+            return (None, false);
+        };
         let windows = self.model_context_windows.lock();
-        opencode_lookup_context_window(&windows, &model)
+        if windows.is_empty() {
+            return (None, false);
+        }
+        (opencode_lookup_context_window(&windows, &model), true)
     }
 
     fn session_cache(&self) -> (Option<u64>, Option<u64>) {
@@ -1663,25 +1678,36 @@ fn opencode_model_context_windows(response: &Value) -> HashMap<String, u64> {
         .collect()
 }
 
-/// Match a live `provider/id` key against the catalog, including the
-/// case-insensitive and id-only fallbacks a custom provider's catalog
-/// often needs — OpenCode's `/api/model` keys are not always identical
-/// to the session's `providerID/id` casing.
+/// Match a live `provider/id` key against the catalog.
+///
+/// Casing may differ from the session key. An id-only fallback is safe only
+/// when one catalog entry has that id: `fushengyunsuan/gpt-6-sol` and
+/// `opencode/gpt-6-sol` are different windows, and guessing by id reports the
+/// official 1.05M limit instead of the limit the user recorded on the custom
+/// provider.
 fn opencode_lookup_context_window(windows: &HashMap<String, u64>, model: &str) -> Option<u64> {
     if let Some(window) = windows.get(model).copied() {
         return Some(window);
     }
-    let needle = model.to_ascii_lowercase();
-    if let Some(window) = windows.iter().find_map(|(key, window)| {
-        (key.eq_ignore_ascii_case(model) || key.to_ascii_lowercase() == needle).then_some(*window)
-    }) {
+    if let Some(window) = windows
+        .iter()
+        .find_map(|(key, window)| key.eq_ignore_ascii_case(model).then_some(*window))
+    {
         return Some(window);
     }
     let id = model.rsplit_once('/').map(|(_, id)| id).unwrap_or(model);
-    windows.iter().find_map(|(key, window)| {
-        let catalog_id = key.rsplit_once('/').map(|(_, id)| id).unwrap_or(key);
-        catalog_id.eq_ignore_ascii_case(id).then_some(*window)
-    })
+    let mut found = None;
+    for (key, window) in windows {
+        let catalog_id = key.rsplit_once('/').map(|(_, id)| id).unwrap_or(key.as_str());
+        if !catalog_id.eq_ignore_ascii_case(id) {
+            continue;
+        }
+        if found.is_some() {
+            return None;
+        }
+        found = Some(*window);
+    }
+    found
 }
 
 /// The session-level token row carried by `session.usage.updated` — the same
@@ -2635,12 +2661,14 @@ fn handle_event(
                 *prompt = row.prompt;
             }
             *state.usage_metadata.authoritative_totals.lock() = true;
-            let window = state.usage_metadata.current_context_window();
+            let (context_window, context_window_resolved) =
+                state.usage_metadata.resolved_context_window();
             let (cache_read, prompt_tokens) = state.usage_metadata.session_cache();
             let _ = events.send(DriverEvent::UsageUpdated {
                 context_tokens: None,
                 latest: None,
-                context_window: window,
+                context_window,
+                context_window_resolved,
                 session_total: (row.total > 0).then_some(row.total),
                 cache_read,
                 prompt_tokens,
@@ -2652,7 +2680,8 @@ fn handle_event(
             // has already delivered the authoritative cumulative row, which
             // includes this very step.
             if let Some(usage) = opencode_normalized_usage(payload) {
-                let window = state.usage_metadata.current_context_window();
+                let (context_window, context_window_resolved) =
+                    state.usage_metadata.resolved_context_window();
                 let authoritative = *state.usage_metadata.authoritative_totals.lock();
                 let total = if authoritative {
                     *state.usage_metadata.session_total.lock()
@@ -2675,7 +2704,8 @@ fn handle_event(
                 let _ = events.send(DriverEvent::UsageUpdated {
                     context_tokens: Some(usage.context),
                     latest: Some(usage.latest),
-                    context_window: window,
+                    context_window,
+                    context_window_resolved,
                     session_total: (total > 0).then_some(total),
                     cache_read,
                     prompt_tokens,
@@ -6050,6 +6080,7 @@ mod tests {
             DriverEvent::UsageUpdated {
                 context_tokens: None,
                 context_window: Some(200_000),
+                context_window_resolved: true,
                 session_total: Some(15_201),
                 cache_read: Some(1_792),
                 prompt_tokens: Some(15_191),
@@ -6085,6 +6116,7 @@ mod tests {
             DriverEvent::UsageUpdated {
                 context_tokens: Some(13_409),
                 context_window: Some(200_000),
+                context_window_resolved: true,
                 session_total: Some(15_201),
                 cache_read: Some(1_792),
                 prompt_tokens: Some(15_191),
@@ -6811,6 +6843,33 @@ mod tests {
             opencode_lookup_context_window(&windows, "other/grok-4.6"),
             Some(500_000)
         );
+
+        // Two providers serving the same id must not lend each other a window.
+        // HashMap order would otherwise make the hit depend on which entry is
+        // visited first.
+        let windows = opencode_model_context_windows(&json!({
+            "data": [
+                {
+                    "providerID": "opencode",
+                    "id": "gpt-6-sol",
+                    "limit": {"context": 1_050_000}
+                },
+                {
+                    "providerID": "fushengyunsuan",
+                    "id": "gpt-6-sol",
+                    "limit": {"context": 250_000}
+                }
+            ]
+        }));
+        assert_eq!(
+            opencode_lookup_context_window(&windows, "fushengyunsuan/gpt-6-sol"),
+            Some(250_000)
+        );
+        assert_eq!(
+            opencode_lookup_context_window(&windows, "Fushengyunsuan/GPT-6-sol"),
+            Some(250_000)
+        );
+        assert_eq!(opencode_lookup_context_window(&windows, "gpt-6-sol"), None);
     }
 
     #[test]

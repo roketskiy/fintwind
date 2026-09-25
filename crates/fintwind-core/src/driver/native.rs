@@ -22,6 +22,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use base64::Engine as _;
 use parking_lot::Mutex;
 use serde_json::Value;
 
@@ -31,9 +32,10 @@ use fintwind_protocol::provider_session::{
     NativeTranscript, UsageDayShare, UsageEntry, UsageModelLane, UsageStats,
 };
 
+use crate::blob_store::BlobStore;
 use crate::model::{
-    ActivityItem, AgentTurn, Message, MessageRole, ReasoningBlock, TranscriptBlock, TurnStats,
-    TurnStatus,
+    ActivityItem, AgentTurn, Message, MessageAttachment, MessageRole, ReasoningBlock,
+    TranscriptBlock, TurnStats, TurnStatus,
 };
 use crate::opencode_session::{OpenCodeServer, encode_path_segment, request_json_on_port};
 
@@ -58,6 +60,9 @@ const USAGE_CACHE_CEILING: usize = 20_000;
 /// 10 000 messages, past which a session is treated as unattributable rather
 /// than allowed to spend the whole scan on itself.
 const MAX_MESSAGE_PAGES: usize = 50;
+/// Bound the work and disk writes of opening a remote transcript. Attachments
+/// beyond the limit still appear as unavailable image tiles.
+const MAX_TRANSCRIPT_IMAGE_BYTES: usize = 128 * 1024 * 1024;
 
 /// List a workspace's native sessions, oldest first, with sub-sessions
 /// (fork/compaction children) left out — the sidebar models one linear
@@ -236,8 +241,9 @@ fn ms_to_seconds(value: Option<&Value>) -> Option<u64> {
 pub(crate) fn fetch_transcript(
     server: &OpenCodeServer,
     session_id: &str,
+    blobs: &BlobStore,
 ) -> anyhow::Result<NativeTranscript> {
-    fetch_transcript_on_port(server.port, session_id)
+    fetch_transcript_from_port(server.port, session_id, Some(blobs))
 }
 
 /// [`fetch_transcript`] against a bare port, for background threads that must
@@ -247,6 +253,14 @@ pub(crate) fn fetch_transcript(
 pub(crate) fn fetch_transcript_on_port(
     port: u16,
     session_id: &str,
+) -> anyhow::Result<NativeTranscript> {
+    fetch_transcript_from_port(port, session_id, None)
+}
+
+fn fetch_transcript_from_port(
+    port: u16,
+    session_id: &str,
+    blobs: Option<&BlobStore>,
 ) -> anyhow::Result<NativeTranscript> {
     let mut pages: Vec<Vec<Value>> = Vec::new();
     let mut cursor: Option<String> = None;
@@ -283,7 +297,7 @@ pub(crate) fn fetch_transcript_on_port(
     }
     let mut rows = pages.into_iter().flatten().collect::<Vec<_>>();
     rows.reverse();
-    Ok(translate_rows(&rows))
+    Ok(translate_rows_with_blobs(&rows, blobs))
 }
 
 /// Walk the whole OpenCode store's session list in one pass and collect
@@ -1142,12 +1156,13 @@ fn integration_rows(response: &Value) -> &[Value] {
 }
 
 /// Translate the native message rows (oldest first) into the app's model.
-fn translate_rows(rows: &[Value]) -> NativeTranscript {
+fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> NativeTranscript {
     let mut transcript = NativeTranscript {
         messages: Vec::new(),
         blocks: Vec::new(),
         turns: Vec::new(),
     };
+    let mut image_bytes_left = MAX_TRANSCRIPT_IMAGE_BYTES;
 
     for row in rows {
         let created_at =
@@ -1184,8 +1199,8 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                 // Verified against 0.0.0-beta-18743: a user row carries its
                 // prompt as a top-level `text` string and has no `content`
                 // parts at all — unlike assistant rows. Attached files ride
-                // in a separate `files` array (inline base64 blobs, no
-                // daemon blob reference yet), so nothing to translate there.
+                // in a separate `files` array. Materialize image bytes in
+                // daemon-owned storage before the history replaces live rows.
                 // Parts are still accepted so a shifted shape degrades to a
                 // fallback rather than a lost prompt.
                 let mut text = row
@@ -1196,7 +1211,14 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                 if text.trim().is_empty() {
                     text = parts_text(row.get("content"));
                 }
-                if text.trim().is_empty() {
+                let attachments = row
+                    .get("files")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|file| native_image_attachment(file, blobs, &mut image_bytes_left))
+                    .collect::<Vec<_>>();
+                if text.trim().is_empty() && attachments.is_empty() {
                     continue;
                 }
                 let turn = AgentTurn {
@@ -1216,7 +1238,7 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
                     role: MessageRole::User,
                     content: text,
                     display_content: None,
-                    attachments: Vec::new(),
+                    attachments,
                     created_at,
                     streaming: false,
                 });
@@ -1286,6 +1308,74 @@ fn translate_rows(rows: &[Value]) -> NativeTranscript {
     }
 
     transcript
+}
+
+/// OpenCode stores user images as base64 in `files`, even when the input came
+/// from a file URI. Keep only the compact reference in Fintwind's transcript.
+fn native_image_attachment(
+    file: &Value,
+    blobs: Option<&BlobStore>,
+    image_bytes_left: &mut usize,
+) -> Option<MessageAttachment> {
+    let mime = file.get("mime")?.as_str()?;
+    let extension = crate::blob_store::extension_for_mime(mime);
+    if extension == "bin" {
+        return None;
+    }
+    let name = file
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| {
+            std::path::Path::new(name)
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|suffix| {
+                    suffix.eq_ignore_ascii_case(extension)
+                        || (extension == "jpg" && suffix.eq_ignore_ascii_case("jpeg"))
+                        || (extension == "tiff" && suffix.eq_ignore_ascii_case("tif"))
+                })
+        })
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("image.{extension}"));
+    let stored = (|| {
+        let blobs = blobs?;
+        let data = file.get("data")?.as_str()?;
+        // Provider data is untrusted; bound both individual decodes and the
+        // whole transcript before allocating or writing image bytes.
+        let max_bytes = fintwind_protocol::attachments::MAX_PROMPT_FILE_BYTES as usize;
+        if data.len() > max_bytes.div_ceil(3) * 4
+            || data.len().div_ceil(4).saturating_mul(3).saturating_sub(2) > *image_bytes_left
+        {
+            return None;
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .ok()?;
+        if bytes.is_empty() || bytes.len() > max_bytes || bytes.len() > *image_bytes_left {
+            return None;
+        }
+        let reference = blobs.store_image_bytes(mime, &bytes).ok()?;
+        let path = blobs.path_for(&reference)?;
+        *image_bytes_left -= bytes.len();
+        Some((path, reference))
+    })();
+    let (path, reference) = match stored {
+        Some((path, reference)) => (path, Some(reference)),
+        None => (Default::default(), None),
+    };
+    Some(MessageAttachment {
+        mention: path.to_string_lossy().into_owned(),
+        path,
+        name,
+        is_dir: false,
+        is_image: true,
+        blob_reference: reference,
+    })
+}
+
+#[cfg(test)]
+fn translate_rows(rows: &[Value]) -> NativeTranscript {
+    translate_rows_with_blobs(rows, None)
 }
 
 /// One assistant row's contribution to its turn's footer statistics. The

@@ -833,6 +833,7 @@ impl Fintwind {
             DriverEvent::UsageUpdated {
                 context_tokens,
                 context_window,
+                context_window_resolved,
                 session_total,
                 cache_read,
                 prompt_tokens,
@@ -841,14 +842,16 @@ impl Fintwind {
                 // Meta about the conversation, not turn output: it applies
                 // even while a rewound or cancelled turn's tail drains. Every
                 // value is absolute, so re-delivery merges idempotently.
+                // A hand-set provider limit is applied at render, not stored
+                // here: writing it would stick after the user cleared it.
                 if let Some(session) = self.state.session_mut(session_id) {
                     let usage = session.context_usage.get_or_insert(ContextUsage::default());
                     if let Some(tokens) = context_tokens {
                         usage.tokens = tokens;
                         usage.measured = true;
                     }
-                    if let Some(window) = context_window {
-                        usage.window = Some(window);
+                    if context_window_resolved || context_window.is_some() {
+                        usage.window = context_window;
                     }
                     if let Some(total) = session_total {
                         usage.total_tokens = Some(total);

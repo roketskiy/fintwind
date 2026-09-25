@@ -1665,9 +1665,15 @@ pub enum DriverEvent {
     /// merges them into [`ContextUsage`]. The tail mirrors [`ContextUsage`]'s
     /// optional fields; every value is absolute, so late or repeated delivery
     /// merges idempotently.
+    ///
+    /// `context_window: None` alone means this event does not carry a window.
+    /// `context_window_resolved` distinguishes that from a catalog that has
+    /// answered and found no unambiguous window: the app must clear a cached
+    /// size, which may belong to another provider's copy of the same model id.
     UsageUpdated {
         context_tokens: Option<u64>,
         context_window: Option<u64>,
+        context_window_resolved: bool,
         session_total: Option<u64>,
         cache_read: Option<u64>,
         prompt_tokens: Option<u64>,

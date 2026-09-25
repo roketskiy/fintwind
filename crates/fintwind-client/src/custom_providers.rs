@@ -52,8 +52,9 @@ pub const INPUT_MODALITIES: [&str; 5] = ["text", "image", "audio", "video", "pdf
 #[serde(default)]
 pub struct CustomProviderModel {
     pub id: String,
-    /// Context window in tokens, when the user recorded one. Purely
-    /// informational in the UI; stored on the model as `limit.context`.
+    /// Context window in tokens, when the user recorded one. The context
+    /// meter prefers this over a catalog window from another provider's copy
+    /// of the same model id. Stored on the model as `limit.context`.
     pub context_window: Option<u64>,
     /// Display name, typically filled from the models.dev catalog. Stored on
     /// the model as `name`; `None` keeps whatever the entry already carries.

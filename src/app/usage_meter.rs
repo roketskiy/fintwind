@@ -35,8 +35,40 @@ impl Fintwind {
         }
     }
 
+    /// The context window the user recorded for this `provider/id` on the
+    /// Providers page. That value is what they expect the meter to use; the
+    /// live catalog can also contain another provider's copy of the same id
+    /// with a different limit.
+    pub(super) fn configured_context_window(&self, model: Option<&str>) -> Option<u64> {
+        let (provider_id, model_id) = model?.split_once('/')?;
+        self.providers_store
+            .iter()
+            .find(|provider| {
+                provider.slug.eq_ignore_ascii_case(provider_id)
+                    || provider.id.eq_ignore_ascii_case(provider_id)
+            })?
+            .models
+            .iter()
+            .find(|entry| entry.id.eq_ignore_ascii_case(model_id))?
+            .context_window
+            .filter(|window| *window > 0)
+    }
+
+    /// Session usage with the recorded context window applied, so the gauge
+    /// and the context page agree with the Providers page even when the
+    /// driver cached another provider's limit.
+    fn effective_context_usage(&self, session: &AgentSession) -> Option<ContextUsage> {
+        let configured = self.configured_context_window(session.model.as_deref());
+        let mut usage = session.context_usage;
+        if let Some(window) = configured {
+            usage.get_or_insert(ContextUsage::default()).window = Some(window);
+        }
+        usage
+    }
+
     pub(super) fn render_usage_meter(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let usage = self.selected_session()?.context_usage;
+        let session = self.selected_session()?;
+        let usage = self.effective_context_usage(session);
         let theme = Theme::current(cx);
         let percent = usage.and_then(context_percent);
         let fill = match percent {
@@ -90,7 +122,7 @@ impl Fintwind {
             return div().into_any_element();
         };
         let session_id = session.id;
-        let usage = session.context_usage;
+        let usage = self.effective_context_usage(session);
         let compaction = session.compaction.clone();
         let model_name = session.model.clone();
         let selected_window = session.context_window.clone();

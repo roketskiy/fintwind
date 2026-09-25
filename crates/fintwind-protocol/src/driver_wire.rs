@@ -111,6 +111,7 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         DriverEvent::UsageUpdated {
             context_tokens,
             context_window,
+            context_window_resolved,
             session_total,
             cache_read,
             prompt_tokens,
@@ -120,6 +121,7 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             json!({
                 "contextTokens": context_tokens,
                 "contextWindow": context_window,
+                "contextWindowResolved": context_window_resolved,
                 "sessionTotal": session_total,
                 "cacheRead": cache_read,
                 "promptTokens": prompt_tokens,
@@ -264,6 +266,7 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
             DriverEvent::UsageUpdated {
                 context_tokens: usage.context_tokens,
                 context_window: usage.context_window,
+                context_window_resolved: usage.context_window_resolved,
                 session_total: usage.session_total,
                 cache_read: usage.cache_read,
                 prompt_tokens: usage.prompt_tokens,
@@ -338,6 +341,9 @@ struct RejectedSteerWire {
 struct UsageWire {
     context_tokens: Option<u64>,
     context_window: Option<u64>,
+    /// Absent on older daemons: treat as "this event does not carry a window".
+    #[serde(default)]
+    context_window_resolved: bool,
     #[serde(default)]
     session_total: Option<u64>,
     #[serde(default)]

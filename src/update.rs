@@ -6,12 +6,23 @@ pub const RELEASES_LATEST_URL: &str = "https://github.com/roketskiy/fintwind/rel
 
 const LATEST_RELEASE_API: &str = "https://api.github.com/repos/roketskiy/fintwind/releases/latest";
 
+#[derive(Clone, Debug)]
+pub struct ReleaseInfo {
+    pub version: String,
+    pub notes: String,
+    pub url: String,
+}
+
 #[derive(Deserialize)]
 struct LatestRelease {
     tag_name: String,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    html_url: Option<String>,
 }
 
-pub fn fetch_newer_release() -> Option<String> {
+pub fn fetch_newer_release() -> Option<ReleaseInfo> {
     let headers = [
         format!("User-Agent: fintwind/{APP_VERSION}"),
         "Accept: application/vnd.github+json".to_string(),
@@ -21,11 +32,19 @@ pub fn fetch_newer_release() -> Option<String> {
     if status != 200 {
         return None;
     }
-    let remote = serde_json::from_str::<LatestRelease>(&body).ok()?.tag_name;
-    if remote.is_empty() || !is_newer(&remote, APP_VERSION) {
+    let release = serde_json::from_str::<LatestRelease>(&body).ok()?;
+    if release.tag_name.is_empty() || !is_newer(&release.tag_name, APP_VERSION) {
         return None;
     }
-    Some(remote.trim_start_matches(['v', 'V']).to_string())
+
+    Some(ReleaseInfo {
+        version: release.tag_name.trim_start_matches(['v', 'V']).to_string(),
+        notes: release.body.unwrap_or_default(),
+        url: release
+            .html_url
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or_else(|| RELEASES_LATEST_URL.to_string()),
+    })
 }
 
 fn is_newer(remote: &str, local: &str) -> bool {

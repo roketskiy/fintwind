@@ -416,6 +416,15 @@ impl Fintwind {
                     .selected_text()
             })
             .flatten()
+            // The update card floats above everything else; while it is open
+            // its own selection wins before any covered surface's.
+            .or_else(|| {
+                let card = self
+                    .update_card_visible()
+                    .then(|| self.latest_available.as_ref())
+                    .flatten();
+                card.and_then(|card| card.selected_text())
+            })
             .or_else(|| {
                 reviewing_background_work
                     .then(|| {
@@ -438,7 +447,13 @@ impl Fintwind {
     /// A zero-size canvas that installs the frame's selection mouse listeners.
     /// One set for the whole transcript: the registry already knows every
     /// painted element's geometry, so per-element listeners would be redundant.
-    fn transcript_selection_input(&self) -> impl IntoElement {
+    /// While the update card is open the listeners stay uninstalled: the
+    /// window-level dispatch cannot see the card's occlusion, and a drag on
+    /// the card must not also select the transcript beneath it.
+    fn transcript_selection_input(&self) -> AnyElement {
+        if self.update_card_visible() {
+            return div().into_any_element();
+        }
         let selection = self.transcript_selection.clone();
         canvas(
             |_, _, _| (),
@@ -447,9 +462,13 @@ impl Fintwind {
         .absolute()
         .w(px(0.0))
         .h(px(0.0))
+        .into_any_element()
     }
 
-    pub(super) fn toast_selection_input(&self) -> impl IntoElement {
+    pub(super) fn toast_selection_input(&self) -> AnyElement {
+        if self.update_card_visible() {
+            return div().into_any_element();
+        }
         let selection = self.toast_selection.clone();
         canvas(
             |_, _, _| (),
@@ -458,6 +477,7 @@ impl Fintwind {
         .absolute()
         .w(px(0.0))
         .h(px(0.0))
+        .into_any_element()
     }
 }
 

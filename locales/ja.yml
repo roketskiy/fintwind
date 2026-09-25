@@ -108,6 +108,13 @@ common.reset: リセット
 common.revoke: 許可を解除
 common.retry: 再試行
 common.creating: 作成中…
+update.title: 新しいバージョンが利用可能です
+update.current_version: 現在のバージョン %{version}
+update.latest_version: 最新バージョン %{version}
+update.release_notes: リリースノート
+update.no_release_notes: このバージョンにはリリースノートがありません。
+update.download: Release ページでダウンロード
+update.dismiss: 更新通知を閉じる
 
 settings.local_by_default: デフォルトでローカルに保存
 settings.local_by_default_description: プロジェクト、会話、設定はこの Mac に保存されます

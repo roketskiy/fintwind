@@ -1135,7 +1135,8 @@ pub struct Fintwind {
     model_search: Entity<ComposerInput>,
     settings_search: Entity<ComposerInput>,
     settings_focus: FocusHandle,
-    latest_available: Option<String>,
+    latest_available: Option<update_card::UpdateCard>,
+    update_button_focus: FocusHandle,
     onboarding_add_project_focus: FocusHandle,
     onboarding_projectless_focus: FocusHandle,
     sidebar_add_project_focus: FocusHandle,
@@ -1813,6 +1814,7 @@ mod skills_page;
 mod streaming;
 mod transcript;
 mod transcript_view;
+mod update_card;
 mod usage_meter;
 mod usage_page;
 mod window_chrome;
@@ -1825,6 +1827,7 @@ pub use command_palette::init as init_command_palette;
 pub use commit_dialog::init as init_commit_dialog_keys;
 use components::*;
 pub use image_preview::init as init_image_preview_keys;
+pub use update_card::init as init_update_card_keys;
 pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
 pub use sidebar::init as init_sidebar_keys;
@@ -1942,11 +1945,11 @@ impl Fintwind {
                 .background_executor()
                 .spawn(async { crate::update::fetch_newer_release() })
                 .await;
-            let Some(version) = latest else {
+            let Some(release) = latest else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.latest_available = Some(version);
+                this.latest_available = Some(update_card::UpdateCard::new(release, cx));
                 cx.notify();
             });
         })
@@ -2952,6 +2955,7 @@ impl Fintwind {
                 settings_search,
                 settings_focus,
                 latest_available: None,
+                update_button_focus: cx.focus_handle(),
                 onboarding_add_project_focus,
                 onboarding_projectless_focus,
                 sidebar_add_project_focus,

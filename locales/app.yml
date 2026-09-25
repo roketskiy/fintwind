@@ -205,6 +205,21 @@ common.retry:
 common.creating:
   en: Creating…
 
+update.title:
+  en: New version available
+update.current_version:
+  en: Current version %{version}
+update.latest_version:
+  en: Latest version %{version}
+update.release_notes:
+  en: Release notes
+update.no_release_notes:
+  en: No release notes were provided for this version.
+update.download:
+  en: Go to Release to download
+update.dismiss:
+  en: Dismiss update notice
+
 settings.local_by_default:
   en: Local by default
 settings.local_by_default_description:

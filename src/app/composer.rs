@@ -1334,7 +1334,7 @@ impl Fintwind {
             .into_any_element()
     }
 
-    /// Stage files dropped onto the composer as attachment chips. The bytes
+    /// Stage files dropped onto the chat column as composer attachment chips. The bytes
     /// are copied into the daemon attachment store; submit sends that path
     /// as a prompt `files` URI, not as text.
     pub(super) fn stage_dropped_files(
@@ -2008,10 +2008,10 @@ impl Fintwind {
             || !self.composer_attachments.is_empty();
         let autocomplete = self.render_composer_autocomplete(window, cx);
         let autocomplete_open = autocomplete.is_some();
-        // Files dragged in from the OS light the card up as a drop target and
-        // stage as attachment chips. The wash arrives pre-blended because a
-        // drag-over refinement replaces the card's fill rather than
-        // compositing over it.
+        // Files dragged over the card still highlight it; the chat column
+        // handles the drop and stages attachment chips. The wash arrives
+        // pre-blended because a drag-over refinement replaces the card's
+        // fill rather than compositing over it.
         let drop_wash = theme.composer.blend(theme.overlay_strong);
         let drop_ring = theme.accent.opacity(0.7);
         div().flex_none().px(px(20.0)).child(
@@ -2030,9 +2030,6 @@ impl Fintwind {
                 .drag_over::<ExternalPaths>(move |style, _, _, _| {
                     style.bg(drop_wash).border_color(drop_ring)
                 })
-                .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                    this.stage_dropped_files(paths, window, cx);
-                }))
                 // Anchor for the bounds probe the autocomplete popup aligns to.
                 .relative()
                 .child(super::autocomplete::composer_card_bounds_probe(

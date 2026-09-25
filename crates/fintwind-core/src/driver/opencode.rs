@@ -15,9 +15,10 @@
 //! `/api` protocol and event stream, not guessed. The v1 compatibility
 //! surface (`/session/...`, `/event` with `properties`) is gone from current
 //! releases — `POST /session` answers 405 — so everything below speaks the
-//! `/api/*` protocol: prompts post `{text, files}`, forks take
-//! `{boundary:{type:"before"|"through",messageID}}`, messages come back as
-//! `{data:[...],cursor}`, and events arrive as `{type,data}` lines on
+//! `/api/*` protocol: prompts post `{text, files}`, forks take `{before}`
+//! (an empty object copies the whole transcript; the older `boundary`
+//! shape is only a fallback), messages come back as `{data:[...],cursor}`,
+//! and events arrive as `{type,data}` lines on
 //! `/api/event` — one shared connection per server port, delivered through
 //! `opencode_events`, with each driver filtering its own session family.
 
@@ -276,6 +277,33 @@ fn reject_chain(rejected: &Mutex<HashSet<String>>, root: &str, chain: &[String])
 
 fn is_http_not_found(error: &anyhow::Error) -> bool {
     error.to_string().contains("HTTP 404")
+}
+
+fn is_http_bad_request(error: &anyhow::Error) -> bool {
+    error.to_string().contains("HTTP 400")
+}
+
+/// Posts a permission decision in the v2.0.11+ shape, then the previous
+/// `reply` field if that body is rejected.
+///
+/// Live 2.0.11 and 2.0.16 require `decision` (`once` / `always` / `reject`)
+/// and answer `{"reply": ...}` with HTTP 400. A 404 from the legacy body is
+/// returned as-is so [`post_owned_reply`] can still retarget the owning
+/// session; any other legacy failure keeps the current-contract error, so a
+/// real validation failure is not replaced by "missing decision".
+fn post_permission_decision(
+    mut post: impl FnMut(&Value) -> anyhow::Result<Value>,
+    decision: &str,
+) -> anyhow::Result<Value> {
+    match post(&json!({"decision": decision})) {
+        Ok(value) => Ok(value),
+        Err(error) if is_http_bad_request(&error) => match post(&json!({"reply": decision})) {
+            Ok(value) => Ok(value),
+            Err(legacy) if is_http_not_found(&legacy) => Err(legacy),
+            Err(_) => Err(error),
+        },
+        Err(error) => Err(error),
+    }
 }
 
 fn permission_reply_path(session_id: &str, request_id: &str) -> String {
@@ -802,13 +830,19 @@ impl OpenCodeDriver {
                     // not emitted, so the poll is the safety net for a form
                     // the event stream dropped (or that predates this
                     // driver). The event path dedups through the same
-                    // `announced` set.
-                    if let Ok(pending) = crate::opencode_session::request_json_on_port(
+                    // `announced` set. v2.0.11+ lists forms at `/api/form`
+                    // (`{location, data}`); earlier CLIs used `/api/form/request`.
+                    if let Ok(pending) = crate::opencode_session::request_form_list(
                         permission_port,
-                        "GET",
-                        "/api/form/request",
-                        None,
-                        Duration::from_secs(2),
+                        |path| {
+                            crate::opencode_session::request_json_on_port(
+                                permission_port,
+                                "GET",
+                                path,
+                                None,
+                                Duration::from_secs(2),
+                            )
+                        },
                     ) {
                         for form in pending
                             .get("data")
@@ -1024,12 +1058,20 @@ impl OpenCodeDriver {
                             let target = session_id
                                 .filter(|id| !id.is_empty())
                                 .unwrap_or_else(|| worker_session.clone());
-                            let body = json!({"reply": option_id});
-                            let reject_body = json!({"reply": "reject"});
                             if let Err(error) = post_owned_reply(
-                                |path| worker_server.request("POST", path, Some(&body)),
+                                |path| {
+                                    post_permission_decision(
+                                        |body| worker_server.request("POST", path, Some(body)),
+                                        &option_id,
+                                    )
+                                },
                                 |path| worker_server.request("GET", path, None),
-                                |path| worker_server.request("POST", path, Some(&reject_body)),
+                                |path| {
+                                    post_permission_decision(
+                                        |body| worker_server.request("POST", path, Some(body)),
+                                        "reject",
+                                    )
+                                },
                                 |session| permission_reply_path(session, &request_id),
                                 &target,
                                 &request_id,
@@ -1066,12 +1108,20 @@ impl OpenCodeDriver {
                                 let body = json!({"answer": form_reply_answer(&fields, &answers)});
                                 match post_owned_reply(
                                     |path| worker_server.request("POST", path, Some(&body)),
-                                    |path| worker_server.request("GET", path, None),
+                                    // The list path is probed inside the
+                                    // closure: v2.0.11+ answers `/api/form`,
+                                    // earlier CLIs still use `/api/form/request`.
+                                    |_path| {
+                                        crate::opencode_session::request_form_list(
+                                            worker_server.port,
+                                            |path| worker_server.request("GET", path, None),
+                                        )
+                                    },
                                     |_| Ok(Value::Null),
                                     |session| form_reply_path(session, &request_id),
                                     &target,
                                     &request_id,
-                                    "/api/form/request",
+                                    "/api/form",
                                 ) {
                                     Ok(_) => {
                                         let mut forms = worker_forms.lock();
@@ -4916,6 +4966,91 @@ mod tests {
         assert_eq!(
             opencode_session_permissions(RuntimeMode::FullAccess, InteractionMode::Plan),
             json!([{ "action": "shell", "resource": "*", "effect": "allow" }])
+        );
+    }
+
+    #[test]
+    fn permission_decision_is_sent_before_the_legacy_reply_field() {
+        let mut bodies = Vec::new();
+        let result = post_permission_decision(
+            |body| {
+                bodies.push(body.clone());
+                Ok(Value::Null)
+            },
+            "once",
+        );
+        assert!(result.is_ok());
+        assert_eq!(bodies, [json!({"decision": "once"})]);
+    }
+
+    #[test]
+    fn permission_decision_falls_back_to_reply_only_on_400() {
+        let mut bodies = Vec::new();
+        let result = post_permission_decision(
+            |body| {
+                bodies.push(body.clone());
+                if body.get("decision").is_some() {
+                    anyhow::bail!(
+                        "OpenCode session request failed with HTTP 400: {{\"kind\":\"Payload\",\"message\":\"Missing key\"}}"
+                    );
+                }
+                Ok(Value::Null)
+            },
+            "always",
+        );
+        assert!(result.is_ok());
+        assert_eq!(
+            bodies,
+            [json!({"decision": "always"}), json!({"reply": "always"})]
+        );
+
+        let mut bodies = Vec::new();
+        let missed = post_permission_decision(
+            |body| {
+                bodies.push(body.clone());
+                anyhow::bail!("OpenCode session request failed with HTTP 404: not found");
+            },
+            "once",
+        );
+        assert!(missed.is_err());
+        assert_eq!(
+            bodies,
+            [json!({"decision": "once"})],
+            "a missing request is not a shape rejection"
+        );
+    }
+
+    #[test]
+    fn permission_shape_400_keeps_the_decision_error_when_reply_also_fails() {
+        let result = post_permission_decision(
+            |_body| {
+                anyhow::bail!(
+                    "OpenCode session request failed with HTTP 400: {{\"message\":\"Expected Permission.Reply\"}}"
+                );
+            },
+            "nope",
+        );
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("Expected Permission.Reply"),
+            "the current-contract error must survive a failed legacy retry, got {error}"
+        );
+    }
+
+    #[test]
+    fn permission_reply_404_still_surfaces_so_ownership_can_retry() {
+        let result = post_permission_decision(
+            |body| {
+                if body.get("decision").is_some() {
+                    anyhow::bail!("OpenCode session request failed with HTTP 400: Missing key");
+                }
+                anyhow::bail!("OpenCode session request failed with HTTP 404: not found");
+            },
+            "once",
+        );
+        assert!(
+            result.unwrap_err().to_string().contains("HTTP 404"),
+            "a legacy 404 must stay a 404 so the owning session can be retried"
         );
     }
 

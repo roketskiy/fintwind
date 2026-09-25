@@ -509,7 +509,11 @@ impl Backend for FintwindBackend {
                 session_id,
             } => {
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let transcript = crate::driver::native::fetch_transcript(&server, &session_id)?;
+                let transcript = crate::driver::native::fetch_transcript(
+                    &server,
+                    &session_id,
+                    &self.task_store.blobs(),
+                )?;
                 Ok(ResponsePayload::NativeTranscript { transcript })
             }
             Command::FetchUsageStats {

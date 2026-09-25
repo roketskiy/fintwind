@@ -33,6 +33,7 @@ pub(super) struct ImagePreviewState {
 }
 
 pub(super) fn attachment_menu_items(path: PathBuf, can_reveal: bool) -> Vec<MenuItem> {
+    let can_reveal = can_reveal && !path.as_os_str().is_empty();
     vec![
         MenuItem::new(tr!("common.reveal_in_finder"), move |_, cx| {
             crate::platform::reveal_in_file_manager(&path, cx);

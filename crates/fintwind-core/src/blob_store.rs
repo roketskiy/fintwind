@@ -33,7 +33,7 @@ fn fingerprint(bytes: &[u8]) -> u64 {
     hash ^ (bytes.len() as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
 }
 
-fn extension_for_mime(mime_type: &str) -> &'static str {
+pub(crate) fn extension_for_mime(mime_type: &str) -> &'static str {
     match mime_type {
         "image/png" => "png",
         "image/jpeg" | "image/jpg" => "jpg",
@@ -42,7 +42,7 @@ fn extension_for_mime(mime_type: &str) -> &'static str {
         "image/bmp" => "bmp",
         "image/svg+xml" => "svg",
         "image/tiff" | "image/tif" => "tiff",
-        "image/ico" => "ico",
+        "image/ico" | "image/x-icon" | "image/vnd.microsoft.icon" => "ico",
         "image/x-portable-anymap" => "pnm",
         _ => "bin",
     }

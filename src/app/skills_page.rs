@@ -1143,7 +1143,9 @@ impl Fintwind {
                 )
                 .into_any_element()
         });
-        let selection_input = {
+        // Same reasoning as the transcript's selection input: while the update
+        // card is open, its own registry owns the drag gesture.
+        let selection_input = (!self.update_card_visible()).then(|| {
             let selection = self.skills_selection.clone();
             canvas(
                 |_, _, _| (),
@@ -1152,7 +1154,7 @@ impl Fintwind {
             .absolute()
             .w(px(0.0))
             .h(px(0.0))
-        };
+        });
 
         let content = div()
             .id("skill-detail-scroll")
@@ -1278,7 +1280,7 @@ impl Fintwind {
                     .child(delete_button),
             )
             .children(document)
-            .child(selection_input);
+            .children(selection_input);
 
         div()
             .flex_1()

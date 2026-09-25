@@ -556,10 +556,11 @@ impl Fintwind {
                         this.open_settings_action(&OpenSettings, window, cx);
                     })),
             )
-            .when_some(self.latest_available.clone(), |footer, version| {
+            .when_some(self.latest_available.as_ref(), |footer, update| {
                 footer.child(
                     div()
                         .id("open-update")
+                        .track_focus(&self.update_button_focus)
                         .tab_index(0)
                         .focus_visible(|style| style.border_1().border_color(theme.accent))
                         .h(px(32.0))
@@ -576,16 +577,18 @@ impl Fintwind {
                         .active(|element| element.bg(theme.overlay_strong))
                         .tooltip(Tooltip::text(tr!(
                             "sidebar.update_tooltip",
-                            version = version
+                            version = update.release.version
                         )))
                         .child(icon("icons/download.svg", 15.0, theme.text_tertiary))
                         .child(tr_cow!("sidebar.update"))
-                        .on_click(cx.listener(|_, _, _, cx| {
-                            cx.open_url(crate::update::RELEASES_LATEST_URL);
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.open_update_card(window, cx);
                         }))
-                        .on_key_down(cx.listener(|_, event: &KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                cx.open_url(crate::update::RELEASES_LATEST_URL);
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.open_update_card(window, cx);
                                 cx.stop_propagation();
                             }
                         })),

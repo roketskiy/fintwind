@@ -753,6 +753,14 @@ impl BackgroundWorkRegistry {
             .collect()
     }
 
+    /// Drops the panel's text selection state. The update card calls this when
+    /// it opens above this surface, so no stale highlight or registered
+    /// geometry survives underneath a floating layer that owns the gesture.
+    pub(super) fn clear_selection(&mut self) {
+        self.selection.selection.borrow_mut().clear();
+        self.selection.registry.borrow_mut().clear();
+    }
+
     pub(super) fn selected_text(&self) -> Option<String> {
         self.selection.selection.borrow().selected_text()
     }
@@ -1986,7 +1994,12 @@ impl Fintwind {
                 content = content.child(render_message_row(message, cx));
             }
         }
-        content.child(background_work_selection_input(selection))
+        // While the update card is open, its own registry owns the drag
+        // gesture; this surface's window-level listeners stay uninstalled.
+        if !self.update_card_visible() {
+            content = content.child(background_work_selection_input(selection));
+        }
+        content
     }
 }
 

@@ -3933,8 +3933,13 @@ impl Fintwind {
     }
 
     /// One listener set covers every selectable code line registered while
-    /// the virtualized Review list paints this frame.
-    fn right_panel_diff_selection_input(&self) -> impl IntoElement {
+    /// the virtualized Review list paints this frame. Skipped while the
+    /// update card is open: the window-level dispatch cannot see the card's
+    /// occlusion, and on a narrow window the card can overlap this panel.
+    fn right_panel_diff_selection_input(&self) -> AnyElement {
+        if self.update_card_visible() {
+            return div().into_any_element();
+        }
         let selection = self.right_panel_diff_selection.clone();
         canvas(
             |_, _, _| (),
@@ -3943,6 +3948,7 @@ impl Fintwind {
         .absolute()
         .w(px(0.0))
         .h(px(0.0))
+        .into_any_element()
     }
 
     fn render_right_panel_diff_tree(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {

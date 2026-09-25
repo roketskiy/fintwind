@@ -315,6 +315,7 @@ pub struct ReasoningView {
     link_handler: LinkHandler,
     row_id: String,
     initial_scroll: Option<gpui::Pixels>,
+    height: gpui::Length,
 }
 
 impl ReasoningView {
@@ -350,7 +351,15 @@ impl ReasoningView {
             link_handler,
             row_id,
             initial_scroll,
+            height: px(400.0).into(),
         }
+    }
+
+    /// Fit another Markdown surface, such as the release-notes card, while
+    /// retaining the reasoning history's default viewport for existing callers.
+    pub fn with_height(mut self, height: impl Into<gpui::Length>) -> Self {
+        self.height = height.into();
+        self
     }
 
     pub fn set_source(
@@ -454,7 +463,7 @@ impl Render for ReasoningView {
             .track_focus(&self.focus)
             .tab_index(0)
             .w_full()
-            .h(px(400.0))
+            .h(self.height)
             .min_w_0()
             .relative()
             .overflow_hidden()

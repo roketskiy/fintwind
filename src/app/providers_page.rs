@@ -359,6 +359,8 @@ impl Fintwind {
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
         self.providers_api_key_revealed = false;
+        self.provider_form_api_key
+            .update(cx, |input, cx| input.set_obscured(true, cx));
         self.providers_form_format = ProviderApiFormat::default();
         self.providers_form_models.clear();
         // A fresh blank form: an in-flight fetch or probe from a previous
@@ -2227,8 +2229,10 @@ impl Fintwind {
             None => ProviderFormStage::Custom,
         };
         // A key typed for one provider must not ride along to another choice.
-        self.provider_form_api_key
-            .update(cx, |input, cx| input.set_content(String::new(), cx));
+        self.provider_form_api_key.update(cx, |input, cx| {
+            input.set_content(String::new(), cx);
+            input.set_obscured(true, cx);
+        });
         self.providers_form_connectivity = None;
         cx.notify();
     }
@@ -2241,6 +2245,44 @@ impl Fintwind {
             }
             ProviderFormStage::Custom => self.render_custom_form(theme, cx),
         }
+    }
+
+    fn render_form_api_key_field(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
+        let obscured = self.provider_form_api_key.read(cx).is_obscured();
+        div()
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .child(
+                TextField::new(
+                    "provider-form-api-key-field",
+                    self.provider_form_api_key.clone(),
+                )
+                .flex_1()
+                .min_w_0(),
+            )
+            .child(
+                icon_button(
+                    "toggle-form-provider-key-reveal",
+                    if obscured {
+                        "icons/eye.svg"
+                    } else {
+                        "icons/eye-off.svg"
+                    },
+                    *theme,
+                )
+                .tooltip(Tooltip::text(if obscured {
+                    tr!("daemon.reveal_token")
+                } else {
+                    tr!("daemon.hide_token")
+                }))
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.provider_form_api_key
+                        .update(cx, |input, cx| input.toggle_obscured(cx));
+                })),
+            )
+            .into_any_element()
     }
 
     /// The add form's first page: the built-in provider list (searchable,
@@ -2556,11 +2598,7 @@ impl Fintwind {
                             element.child(labeled_field(
                                 theme,
                                 tr!("providers.api_key_label"),
-                                TextField::new(
-                                    "provider-form-api-key-field",
-                                    self.provider_form_api_key.clone(),
-                                )
-                                .w_full(),
+                                self.render_form_api_key_field(theme, cx),
                             ))
                         })
                         .when(is_oauth, |element| {
@@ -2818,11 +2856,7 @@ impl Fintwind {
                         .child(labeled_field(
                             theme,
                             tr!("providers.api_key_label"),
-                            TextField::new(
-                                "provider-form-api-key-field",
-                                self.provider_form_api_key.clone(),
-                            )
-                            .w_full(),
+                            self.render_form_api_key_field(theme, cx),
                         ))
                         .child(labeled_field(
                             theme,

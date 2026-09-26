@@ -2166,6 +2166,7 @@ impl Fintwind {
         let provider_form_api_key = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
+                .obscured()
                 .placeholder(tr!("providers.api_key_placeholder"))
         });
         let provider_form_builtin_search = cx.new(|cx| {

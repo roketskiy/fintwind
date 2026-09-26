@@ -503,6 +503,8 @@ pub struct ComposerInput {
     focus_handle: FocusHandle,
     mode: FieldMode,
     read_only: bool,
+    /// Obscure rendered text without changing the value, selection or IME offsets.
+    obscured: bool,
     /// The focusing click selects the whole content on release, the way a
     /// browser address bar arms its URL for retyping.
     select_all_on_focus_click: bool,
@@ -600,6 +602,7 @@ impl ComposerInput {
             focus_handle,
             mode: FieldMode::Composer,
             read_only: false,
+            obscured: false,
             select_all_on_focus_click: false,
             focus_click_select_all: false,
             language: None,
@@ -736,6 +739,27 @@ impl ComposerInput {
     pub fn search_field(mut self) -> Self {
         self.mode = FieldMode::Search;
         self
+    }
+
+    pub fn obscured(mut self) -> Self {
+        self.obscured = true;
+        self
+    }
+
+    pub fn toggle_obscured(&mut self, cx: &mut Context<Self>) {
+        self.obscured = !self.obscured;
+        cx.notify();
+    }
+
+    pub fn set_obscured(&mut self, obscured: bool, cx: &mut Context<Self>) {
+        if self.obscured != obscured {
+            self.obscured = obscured;
+            cx.notify();
+        }
+    }
+
+    pub fn is_obscured(&self) -> bool {
+        self.obscured
     }
 
     /// Make the focusing click select the whole content on release, the way a
@@ -2098,7 +2122,23 @@ impl Element for InputElement {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         let input = self.input.read(cx);
-        let content = input.content.clone();
+        // Keep each character's UTF-8 width so the selection and caret byte
+        // offsets still refer to the same boundaries in the displayed text.
+        let content = if input.obscured {
+            input
+                .content
+                .chars()
+                .map(|ch| match ch.len_utf8() {
+                    1 => "*",
+                    2 => "¢",
+                    3 => "•",
+                    _ => "🔒",
+                })
+                .collect::<String>()
+                .into()
+        } else {
+            input.content.clone()
+        };
         let style = window.text_style();
         let theme = Theme::current(cx);
         let content_is_empty = content.is_empty();

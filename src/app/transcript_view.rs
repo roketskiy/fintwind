@@ -2437,13 +2437,17 @@ impl Fintwind {
                                 .text_color(theme.text_secondary)
                                 .child(if action_label_running {
                                     let base = theme.text_secondary;
-                                    let is_dark = theme.is_dark;
+                                    // The accent reads as "active" — the same
+                                    // hue as the running badge — and survives
+                                    // both themes far better than a grayscale
+                                    // blend on gray text.
+                                    let highlight = theme.accent;
                                     motion::pulse(Duration::from_millis(2400), move |phase| {
                                         flowing_activity_label(
                                             &action_label,
                                             phase,
                                             base,
-                                            is_dark,
+                                            highlight,
                                             FontWeight::SEMIBOLD,
                                         )
                                         .into_any_element()

@@ -18,6 +18,14 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.2.1]
+
+- Attach images and PDFs inline as data URLs so the model sees them directly instead of re-reading the files
+- Follow OpenCode 2.0.11+ contract changes, keep session listing working on v2, and trace sessions back to their owning task
+- Refresh the activity card UI, with the shimmer highlight now using the theme accent color on activity and thinking cards
+- Merge content that trails a turn into its closing message
+- Add a show/hide toggle to API key inputs
+
 ## [0.2.0]
 
 - Send image and text attachments through OpenCode's files channel instead of splicing `@path` into the message, and drop files from the desktop onto the transcript or composer to attach them

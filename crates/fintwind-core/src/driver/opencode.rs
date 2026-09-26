@@ -1858,7 +1858,10 @@ fn opencode_lookup_context_window(windows: &HashMap<String, u64>, model: &str) -
     let id = model.rsplit_once('/').map(|(_, id)| id).unwrap_or(model);
     let mut found = None;
     for (key, window) in windows {
-        let catalog_id = key.rsplit_once('/').map(|(_, id)| id).unwrap_or(key.as_str());
+        let catalog_id = key
+            .rsplit_once('/')
+            .map(|(_, id)| id)
+            .unwrap_or(key.as_str());
         if !catalog_id.eq_ignore_ascii_case(id) {
             continue;
         }
@@ -3808,7 +3811,8 @@ mod tests {
     #[test]
     fn prompt_bodies_carry_delivery_metadata_and_legacy_fallback() {
         // The current body names its delivery and records the owning task.
-        let (current, legacy) = prompt_bodies("hi", &[], Some("11111111-1111-1111-1111-111111111111")).unwrap();
+        let (current, legacy) =
+            prompt_bodies("hi", &[], Some("11111111-1111-1111-1111-111111111111")).unwrap();
         assert_eq!(
             current,
             json!({
@@ -5711,19 +5715,19 @@ mod tests {
             let server = crate::opencode_pool::acquire(&binary, &std::env::temp_dir())
                 .expect("the resident server should be reachable");
             let recorded = server
-                .request(
-                    "GET",
-                    &format!("/api/session/{source_session_id}"),
-                    None,
-                )
+                .request("GET", &format!("/api/session/{source_session_id}"), None)
                 .expect("the session should read back");
             assert_eq!(
-                recorded.pointer("/data/metadata/task").and_then(Value::as_str),
+                recorded
+                    .pointer("/data/metadata/task")
+                    .and_then(Value::as_str),
                 Some(task_id.as_str()),
                 "the session metadata should name the owning task, got {recorded}"
             );
             assert_eq!(
-                recorded.pointer("/data/metadata/source").and_then(Value::as_str),
+                recorded
+                    .pointer("/data/metadata/source")
+                    .and_then(Value::as_str),
                 Some("fintwind"),
             );
         }

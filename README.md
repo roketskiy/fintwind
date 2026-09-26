@@ -9,8 +9,9 @@ transcripts stay on your machine.
 
 > [!IMPORTANT]
 > OpenCode 2 has not been officially released, and breaking changes are still
-> common. If your OpenCode 2 is newer than v2.0.11, fintwind is not guaranteed
-> to work. **fintwind 0.2.0 supports OpenCode v2.0.11 and earlier.**
+> common. If your OpenCode 2 is newer than v2.0.16, fintwind is not guaranteed
+> to work. **fintwind 0.2.1 supports OpenCode v2.0.16 and earlier;**
+> **fintwind 0.2.0 supports OpenCode v2.0.11 and earlier.**
 
 54 seconds: switching models, a session in progress, and scrolling a long transcript.
 
@@ -37,10 +38,10 @@ fintwind does not download or install the update itself.
 ## Requirements
 
 fintwind drives one agent backend: a local [OpenCode](https://opencode.ai)
-server. Install and authenticate the `opencode` CLI first. This 0.2.0 release
-supports OpenCode **v2.0.11 and earlier**. fintwind starts it, and sessions,
-models, providers, and MCP servers all come from that backend. A newer
-OpenCode 2 is not guaranteed to work.
+server. Install and authenticate the `opencode` CLI first. This 0.2.1 release
+supports OpenCode **v2.0.16 and earlier** (0.2.0 supports **v2.0.11 and
+earlier**). fintwind starts it, and sessions, models, providers, and MCP
+servers all come from that backend. A newer OpenCode 2 is not guaranteed to work.
 
 ## Highlights
 

@@ -7,9 +7,9 @@ const MAX_SETTLED_BACKGROUND_ITEMS: usize = 24;
 const OUTPUT_CACHE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const BACKGROUND_SUMMARY_MENU_ID: &str = "background-work-summary";
 
-fn flowing_background_work_label(text: String, base: Hsla, is_dark: bool) -> AnyElement {
+fn flowing_background_work_label(text: String, base: Hsla, highlight: Hsla) -> AnyElement {
     motion::pulse(Duration::from_millis(2400), move |phase| {
-        flowing_activity_label(&text, phase, base, is_dark, FontWeight::NORMAL).into_any_element()
+        flowing_activity_label(&text, phase, base, highlight, FontWeight::NORMAL).into_any_element()
     })
     .every(2)
     .into_any_element()
@@ -2610,7 +2610,7 @@ fn render_background_summary_row(
                         flowing_background_work_label(
                             item.title.to_string(),
                             theme.text,
-                            theme.is_dark,
+                            theme.accent,
                         )
                     } else {
                         item.title.clone().into_any_element()

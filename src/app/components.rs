@@ -22,20 +22,16 @@ pub(super) fn pulse_dot(size: f32, color: Hsla) -> AnyElement {
     .into_any_element()
 }
 
-/// A grayscale highlight travels through a single shaped text element. Keep
-/// the run font identical to the static label so status changes do not reflow.
+/// A highlight of a different hue than the label travels through a single
+/// shaped text element. Keep the run font identical to the static label so
+/// status changes do not reflow.
 pub(super) fn flowing_activity_label(
     text: &str,
     phase: f32,
     base: Hsla,
-    is_dark: bool,
+    highlight: Hsla,
     weight: FontWeight,
 ) -> StyledText {
-    let highlight: Hsla = if is_dark {
-        rgb(0xffffff).into()
-    } else {
-        rgb(0x050505).into()
-    };
     let last = text.chars().count().saturating_sub(1).max(1) as f32;
     let mut label_font = font(crate::theme::ui_font_family());
     label_font.weight = weight;
@@ -839,6 +835,11 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                         .when_some(assistant_turn_stats, |row, stats| {
                             row.child(
                                 div()
+                                    // `.tooltip` is a `StatefulInteractiveElement`
+                                    // method, so this row must be stateful.
+                                    .id(SharedString::from(format!(
+                                        "assistant-turn-stats-{message_id}"
+                                    )))
                                     .min_w_0()
                                     .flex_1()
                                     .text_ellipsis()

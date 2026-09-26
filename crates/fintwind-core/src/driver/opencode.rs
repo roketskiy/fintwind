@@ -30,6 +30,7 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{Context as _, anyhow, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crossbeam_channel::{Sender, unbounded};
 use fintwind_protocol::PromptFile;
 use parking_lot::Mutex;
@@ -415,6 +416,41 @@ fn post_owned_reply(
     }
 }
 
+/// A prompt's attachment as the `files` array wants it. Images and PDFs ride
+/// as `data:` URLs so the server materializes them as *inline* attachments: a
+/// `file:` URI makes OpenCode prepend the daemon-local store path as
+/// `Attached file: …` text before the media part, which reliably prompts
+/// agentic models to re-read the picture with the read tool instead of
+/// looking at the bytes already in context — an inline attachment never
+/// surfaces a path at all. Everything else keeps its `file:` URI:
+/// directories cannot ride a data URL, and for text files the store path is
+/// information the model may act on. An unreadable payload degrades to the
+/// `file:` URI rather than dropping the prompt; the server then owns the
+/// attachment error.
+fn attachment_uri(path: &Path) -> anyhow::Result<String> {
+    let Some(mime) = inline_mime(path) else {
+        return file_uri(path);
+    };
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes))),
+        Err(_) => file_uri(path),
+    }
+}
+
+/// The payload types OpenCode turns into a media part: exactly its
+/// `imageMimes` set plus PDFs. Anything else would arrive as a bare text
+/// attachment or not at all, so it stays on the `file:` URI channel.
+fn inline_mime(path: &Path) -> Option<&'static str> {
+    Some(match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        _ => return None,
+    })
+}
+
 /// A prompt's attachment as the `files` array wants it: a `file:` URI of the
 /// daemon's copy. A relative path cannot be a file URL, and dropping it would
 /// send a prompt the model cannot see, so that fails the post instead.
@@ -438,11 +474,12 @@ fn fintwind_task_metadata(task_id: Option<&str>) -> Option<Value> {
 /// The prompt bodies both turn starts and steers post: the current shape,
 /// plus the pre-2.0 fallback that drops the newer fields. OpenCode keeps the
 /// model on the session (set through `/api/session/{id}/model`). Attachment
-/// chips ride `files` as `file:` URIs of the daemon copy; the typed text is
-/// not rewritten with `@` paths. Plain prompts omit `files`. A relative path
-/// cannot be a file URL, and dropping it would send a prompt the model cannot
-/// see, so that fails the post instead. `metadata` records the owning task,
-/// and `delivery: "steer"` states what every prompt from this app is: folded
+/// chips ride `files` — images and PDFs as inline data URLs, everything else
+/// as `file:` URIs of the daemon copy — and the typed text is not rewritten
+/// with `@` paths. Plain prompts omit `files`. A relative path cannot be a
+/// file URL, and dropping it would send a prompt the model cannot see, so
+/// that fails the post instead. `metadata` records the owning task, and
+/// `delivery: "steer"` states what every prompt from this app is: folded
 /// into the running turn when there is one, a fresh turn when there is not —
 /// the server's default, now named. Queued delivery stays a server-side
 /// capability for a future inbox UI; the app's own follow-up queue already
@@ -461,7 +498,7 @@ fn prompt_bodies(
         let mut encoded = Vec::with_capacity(files.len());
         for file in files {
             encoded.push(json!({
-                "uri": file_uri(&file.path)?,
+                "uri": attachment_uri(&file.path)?,
                 "name": file.name,
             }));
         }
@@ -3861,6 +3898,53 @@ mod tests {
             None,
         );
         assert!(relative.is_err());
+    }
+
+    #[test]
+    fn image_attachments_ride_data_urls_and_degrade_to_file_uris() {
+        let directory =
+            std::env::temp_dir().join(format!("fintwind-inline-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        // The extension decides the channel; case must not matter. The bytes
+        // round-trip through the base64 payload untouched, so the server
+        // decodes exactly what the composer staged.
+        let image = directory.join("shot.PNG");
+        let bytes = b"\x89PNG\r\n\x1a\nfake image payload";
+        std::fs::write(&image, bytes).unwrap();
+        let (current, legacy) = prompt_bodies(
+            "",
+            &[PromptFile {
+                path: image.clone(),
+                name: "shot.PNG".into(),
+            }],
+            None,
+        )
+        .unwrap();
+        for body in [&current, &legacy] {
+            let uri = body["files"][0]["uri"].as_str().unwrap();
+            let payload = uri
+                .strip_prefix("data:image/png;base64,")
+                .unwrap_or_else(|| panic!("inline uri expected, got {uri}"));
+            assert_eq!(STANDARD.decode(payload).unwrap(), bytes);
+        }
+
+        // An unreadable image falls back to the file URI — the prompt still
+        // posts and the server reports the missing file as its own error.
+        let missing = directory.join("missing.png");
+        let (current, _) = prompt_bodies(
+            "",
+            &[PromptFile {
+                path: missing.clone(),
+                name: "missing.png".into(),
+            }],
+            None,
+        )
+        .unwrap();
+        let uri = current["files"][0]["uri"].as_str().unwrap();
+        assert!(uri.starts_with("file:"));
+        assert_eq!(url::Url::parse(uri).unwrap().to_file_path().unwrap(), missing);
+
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

@@ -1038,10 +1038,7 @@ impl Fintwind {
         if !message_opens_turn(&session.messages, message_index) {
             return UserMessageRewind::Blocked(RewindUnavailableReason::NotTurnOpening);
         }
-        let checkpoint_status = turn
-            .checkpoint
-            .as_ref()
-            .map(|checkpoint| checkpoint.status);
+        let checkpoint_status = turn.checkpoint.as_ref().map(|checkpoint| checkpoint.status);
         // The turn's own checkpoint records whether this workspace snapshots
         // at all: `Unavailable` means the directory is not a Git repository,
         // so waiting for baseline refs to appear would never end.
@@ -1277,8 +1274,7 @@ impl Fintwind {
                         .and_then(|turn_id| self.render_changed_files_row(turn_id, &theme, cx));
                     let assistant_message_action =
                         self.assistant_message_action_for_message(message_index);
-                    let user_message_rewind =
-                        self.user_message_rewind_for_message(message_index);
+                    let user_message_rewind = self.user_message_rewind_for_message(message_index);
                     let message_edit_input = user_message_rewind.ready().and_then(|action| {
                         self.message_edit
                             .as_ref()
@@ -2245,10 +2241,11 @@ impl Fintwind {
         if !expanded {
             return cluster.into_any_element();
         }
-        // `Theme::overlay` is 5% alpha and GPUI's `opacity` multiplies it.
-        let activity_surface = theme.surface.blend(theme.overlay.opacity(0.7));
-        let activity_hover_surface = theme.surface.blend(theme.overlay);
-        let activity_active_surface = theme.surface.blend(theme.overlay_strong.opacity(0.72));
+        // A flat panel. The only chrome is the left rail, so the fill has to
+        // read on its own against the transcript canvas.
+        let activity_surface = theme.raised;
+        let activity_hover_surface = theme.raised.blend(theme.overlay);
+        let activity_active_surface = theme.raised.blend(theme.overlay_strong);
         let mut items = div()
             .w_full()
             .min_w_0()
@@ -2376,49 +2373,32 @@ impl Fintwind {
             let item_focus = self.transcript_control_focus(format!("activity-item-{id}"), cx);
             let click_subagent_work = subagent_work.clone();
             let key_subagent_work = subagent_work.clone();
+            // The rail is the card's own left border, not a header ornament,
+            // so it lengthens with the expanded body. Accent only while this
+            // activity is still running; settled work recedes to gray.
+            let rail = if action_label_running {
+                theme.accent
+            } else {
+                theme.text_tertiary
+            };
             let mut item = div()
                 .w_full()
                 .min_w_0()
                 .relative()
                 .overflow_hidden()
-                .rounded(px(9.0))
-                .border_1()
-                .border_color(theme.border_strong)
+                .border_l(px(3.0))
+                .border_color(rail)
                 .bg(activity_surface)
                 .flex()
                 .flex_col()
-                .children(subagent_work.as_ref().and_then(|(_, _, status, ..)| {
-                    status.is_live().then(|| {
-                        let accent = theme.accent;
-                        motion::pulse(Duration::from_millis(1800), move |phase| {
-                            let opacity =
-                                0.35 + 0.65 * (((phase * std::f32::consts::TAU).sin() + 1.0) / 2.0);
-                            div()
-                                .absolute()
-                                .inset_0()
-                                .rounded(px(9.0))
-                                .border_1()
-                                .border_color(accent.opacity(opacity))
-                                .into_any_element()
-                        })
-                        .every(2)
-                    })
-                }))
                 .child(
                     div()
                         .id(SharedString::from(format!("activity-item-{id}")))
-                        // The parent owns a 1px border on each edge, so a
-                        // 32px row makes the visible activity header 34px.
                         .h(px(32.0))
-                        .px(px(8.0))
+                        .px(px(12.0))
                         .flex()
                         .items_center()
                         .gap(px(8.0))
-                        .rounded_tl(px(8.0))
-                        .rounded_tr(px(8.0))
-                        .when(!item_expanded, |element| {
-                            element.rounded_bl(px(8.0)).rounded_br(px(8.0))
-                        })
                         .text_size(ui_px(12.5))
                         .line_height(ui_px(17.0))
                         .when(has_detail || subagent_work.is_some(), |element| {

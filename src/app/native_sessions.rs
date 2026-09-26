@@ -93,7 +93,11 @@ fn untracked_twin_row(
 /// window where a task's row never recorded its native id (a crash before
 /// `Connected` landed) without importing a twin. Only untracked rows qualify:
 /// a row already pointing at another native session is not this summary's.
-fn task_named_row(sessions: &[AgentSession], project_id: Uuid, summary: &NativeSessionSummary) -> Option<Uuid> {
+fn task_named_row(
+    sessions: &[AgentSession],
+    project_id: Uuid,
+    summary: &NativeSessionSummary,
+) -> Option<Uuid> {
     let task = Uuid::parse_str(summary.task.as_deref()?.trim()).ok()?;
     sessions
         .iter()
@@ -1020,7 +1024,11 @@ mod tests {
         let local = started_session(project, AgentSession::DEFAULT_TITLE, 1_000);
         let summary = NativeSessionSummary {
             task: Some(local.id.to_string()),
-            ..native_summary("ses_1", "a server title the row never had", 1_000 + 60 * 60 * 24)
+            ..native_summary(
+                "ses_1",
+                "a server title the row never had",
+                1_000 + 60 * 60 * 24,
+            )
         };
 
         assert_eq!(
@@ -1038,8 +1046,9 @@ mod tests {
         let project = Uuid::new_v4();
         let other_project = Uuid::new_v4();
         let mut tracked_elsewhere = started_session(project, "问候交流", 1_000);
-        tracked_elsewhere.provider_cursor =
-            Some(ProviderResumeCursor::from_session_id("ses_other".to_owned()));
+        tracked_elsewhere.provider_cursor = Some(ProviderResumeCursor::from_session_id(
+            "ses_other".to_owned(),
+        ));
         let foreign = started_session(other_project, "问候交流", 1_000);
 
         let tracked_summary = NativeSessionSummary {

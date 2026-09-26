@@ -1827,7 +1827,6 @@ pub use command_palette::init as init_command_palette;
 pub use commit_dialog::init as init_commit_dialog_keys;
 use components::*;
 pub use image_preview::init as init_image_preview_keys;
-pub use update_card::init as init_update_card_keys;
 pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
 pub use sidebar::init as init_sidebar_keys;
@@ -1836,6 +1835,7 @@ pub use skills_page::init as init_skills_keys;
 use streaming::*;
 use transcript::*;
 use transcript_view::ConversationNavigationRail;
+pub use update_card::init as init_update_card_keys;
 
 /// Seconds until any session's time label next changes value, or `None` when
 /// no label is on the clock at all. A running turn's elapsed counter moves

@@ -296,7 +296,8 @@ fn render_message_footer(
             });
         });
     let mut footer = div()
-        .w_full()
+        .when(align_right, |element| element.w_full())
+        .when(!align_right, |element| element.flex_none())
         .h(px(27.0))
         .flex()
         .items_center()
@@ -827,31 +828,42 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
             if let Some(before_footer) = assistant_before_footer {
                 column = column.child(div().w_full().mt(px(12.0)).mb(px(3.0)).child(before_footer));
             }
-            // Always visible — unlike the hover footer below — and only on
-            // the turn's terminal message, which the cached line already
-            // resolved; streaming turns and interim parts pass `None`.
-            if let Some(stats) = assistant_turn_stats {
+            if assistant_turn_stats.is_some() || assistant_footer_copy_content.is_some() {
                 column = column.child(
                     div()
-                        .text_size(ui_px(11.5))
-                        .line_height(ui_px(16.0))
-                        .text_color(theme.text_tertiary)
-                        .child(stats),
+                        .w_full()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(8.0))
+                        .when_some(assistant_turn_stats, |row, stats| {
+                            row.child(
+                                div()
+                                    .min_w_0()
+                                    .flex_1()
+                                    .text_ellipsis()
+                                    .text_size(ui_px(11.5))
+                                    .line_height(ui_px(16.0))
+                                    .text_color(theme.text_tertiary)
+                                    .tooltip(Tooltip::text(stats.clone()))
+                                    .child(stats),
+                            )
+                        })
+                        .when_some(assistant_footer_copy_content, |row, copy_content| {
+                            row.child(render_message_footer(
+                                theme,
+                                message,
+                                assistant_footer_time.unwrap_or(message.created_at),
+                                copy_content,
+                                copied,
+                                group_name,
+                                false,
+                                assistant_message_action,
+                                UserMessageRewind::Hidden,
+                                fintwind.clone(),
+                            ))
+                        }),
                 );
-            }
-            if let Some(copy_content) = assistant_footer_copy_content {
-                column = column.child(render_message_footer(
-                    theme,
-                    message,
-                    assistant_footer_time.unwrap_or(message.created_at),
-                    copy_content,
-                    copied,
-                    group_name,
-                    false,
-                    assistant_message_action,
-                    UserMessageRewind::Hidden,
-                    fintwind.clone(),
-                ));
             }
             column
         }

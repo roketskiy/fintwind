@@ -332,12 +332,17 @@ impl Render for Fintwind {
                     .bg(theme.surface)
                     // External-path drops bubble from descendants, so handle
                     // them once on the chat column rather than also on the
-                    // composer card. Keep the receiver absent when there is
-                    // no project/composer to own the resulting attachments.
+                    // composer card. The same column is the drop group the
+                    // card highlights against, so a drag over the transcript
+                    // lights the composer before the pointer reaches it.
+                    // Keep the receiver absent when there is no project or
+                    // composer to own the resulting attachments.
                     .when(self.selected_project().is_some(), |element| {
-                        element.on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                            this.stage_dropped_files(paths, window, cx);
-                        }))
+                        element
+                            .group(super::composer::CHAT_FILE_DROP_GROUP)
+                            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                                this.stage_dropped_files(paths, window, cx);
+                            }))
                     })
                     .when(panels.sidebar > 0.0, |element| {
                         element.border_l_1().border_color(theme.sidebar_border)

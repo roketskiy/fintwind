@@ -25,6 +25,11 @@ pub(super) fn composer_submit_action(
     }
 }
 
+/// Chat-column group for an external file drag. The column accepts the drop;
+/// the composer card watches the group so the drop ring shows while the
+/// pointer is still over the transcript, not only once it reaches the card.
+pub(super) const CHAT_FILE_DROP_GROUP: &str = "chat-file-drop";
+
 impl Fintwind {
     // ── Permission ─────────────────────────────────────────────────────────
 
@@ -2012,10 +2017,12 @@ impl Fintwind {
             || !self.composer_attachments.is_empty();
         let autocomplete = self.render_composer_autocomplete(window, cx);
         let autocomplete_open = autocomplete.is_some();
-        // Files dragged over the card still highlight it; the chat column
-        // handles the drop and stages attachment chips. The wash arrives
-        // pre-blended because a drag-over refinement replaces the card's
-        // fill rather than compositing over it.
+        // The chat column accepts the drop and stages attachment chips. The
+        // card highlights both under the pointer and while the pointer is
+        // anywhere else in that column, so a drag over the transcript reads
+        // as the same target. The wash arrives pre-blended because a
+        // drag-over refinement replaces the card's fill rather than
+        // compositing over it.
         let drop_wash = theme.composer.blend(theme.overlay_strong);
         let drop_ring = theme.accent.opacity(0.7);
         div().flex_none().px(px(20.0)).child(
@@ -2032,6 +2039,9 @@ impl Fintwind {
                 // so the field's overlay scrollbar can hug the card's edge.
                 .py(px(10.0))
                 .drag_over::<ExternalPaths>(move |style, _, _, _| {
+                    style.bg(drop_wash).border_color(drop_ring)
+                })
+                .group_drag_over::<ExternalPaths>(CHAT_FILE_DROP_GROUP, move |style| {
                     style.bg(drop_wash).border_color(drop_ring)
                 })
                 // Anchor for the bounds probe the autocomplete popup aligns to.

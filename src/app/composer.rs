@@ -30,6 +30,331 @@ pub(super) fn composer_submit_action(
 /// pointer is still over the transcript, not only once it reaches the card.
 pub(super) const CHAT_FILE_DROP_GROUP: &str = "chat-file-drop";
 
+// ── Control-row width budget ─────────────────────────────────────────────
+//
+// The row is model · traits · access · mode · … · send. Every label in it
+// gives way before any control does: a demoted chip keeps its icon and its
+// hit area and moves its label into a tooltip, so a narrow column costs
+// legibility and never reachability. The send button is the one control
+// that is never demoted, because a composer whose submit button is missing
+// is a composer that cannot be used.
+//
+// The order is what the demotion walks. The traits chip refines a model the
+// row already names, so it goes first. The mode's icon already differs
+// between build and plan. The permission level is what tells the reader
+// what the agent may do unattended, so it outlasts the mode. The model name
+// is last: it is the longest label, but it is also the one that says which
+// model is answering, and the logo beside it only names the company.
+
+/// Gap between two adjacent row children.
+const ROW_GAP: f32 = 4.0;
+/// The card's own border and the row's horizontal padding. Neither is
+/// available to a chip.
+const CARD_BORDER: f32 = 1.0;
+const ROW_INSET_X: f32 = 10.0;
+/// Padding between the chat column and the card, which the row's width is
+/// measured inside of.
+const CARD_GUTTER_X: f32 = 20.0;
+/// The chat column's left border, drawn whenever the sidebar is visible.
+/// It comes out of the same width the chips draw in.
+const CHAT_COLUMN_BORDER: f32 = 1.0;
+/// The send button, plus the queue button that stands in beside it while a
+/// turn is running with a draft waiting.
+const SEND_BUTTON: f32 = 30.0;
+const SEND_PAIR_GAP: f32 = 6.0;
+/// The widest the model name ever asks for. Past it the name ellipsizes:
+/// a longer name would only push the other chips out, and the logo plus a
+/// tooltip still name the model.
+const MODEL_CHIP_MAX_LABEL: f32 = 210.0;
+
+/// What the row's chips measure at the labels the session currently shows.
+///
+/// Every field is in pixels on the row's own content box, so the caller
+/// resolves the row's insets, the card's border and the width cap once and
+/// the arithmetic below stays about the chips alone.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct ComposerRowWidths {
+    /// Label widths of the demotable chips, absent where the chip itself
+    /// is absent. The model chip is always present, so its logo is always
+    /// charged for.
+    pub model: Option<f32>,
+    pub traits: Option<f32>,
+    pub interaction: Option<f32>,
+    pub access: Option<f32>,
+    /// Width the row spends before any chip: its insets, the card's
+    /// border, and the send button or the pair of them.
+    pub fixed: f32,
+}
+
+impl ComposerRowWidths {
+    /// What the row wants with every label showing.
+    fn total(&self) -> f32 {
+        let chips = self
+            .model
+            .into_iter()
+            .chain(self.traits)
+            .chain(self.interaction)
+            .chain(self.access)
+            .map(|label| chip_width(Some(label)))
+            .sum::<f32>();
+        // The row is model · traits · access · mode · spacer · send, so it
+        // has five gaps between six children — four when the traits chip is
+        // absent. Counting one gap per demotable chip comes to four, which
+        // under-counts and lets the row overflow the card, so the full count
+        // is charged here. The one-gap margin when the traits chip is absent
+        // is deliberate: it makes the budget slightly conservative, demoting
+        // a label a hair early rather than risking an overflow.
+        self.fixed + chips + 5.0 * ROW_GAP
+    }
+}
+
+/// The traits a model offers, resolved against what the session has picked.
+///
+/// Split out of the chip's builder because the row's width budget needs the
+/// label before the chip exists, and two resolutions of the same choice
+/// could disagree about what the chip says. It borrows the model so the
+/// menu can read its option lists without a second lookup.
+struct ModelTraits<'a> {
+    model: &'a ProviderModel,
+    effort: Option<String>,
+    tier: String,
+    window: Option<String>,
+    /// The chip's label: the effort, or the tier when the model offers no
+    /// efforts, plus a non-default context window — which changes what the
+    /// session costs and how much it can hold, so it reads on the chip
+    /// rather than only inside the menu.
+    label: String,
+    /// The `fast` tier, which the chip marks with a zap.
+    fast: bool,
+}
+
+impl<'a> ModelTraits<'a> {
+    /// `None` when the model offers nothing to choose here, which is also
+    /// when the chip does not render.
+    fn resolve(session: &AgentSession, model: &'a ProviderModel) -> Option<Self> {
+        if model.reasoning_efforts.is_empty()
+            && model.service_tiers.is_empty()
+            && model.context_windows.is_empty()
+        {
+            return None;
+        }
+        let effort = session
+            .reasoning_effort
+            .as_deref()
+            .filter(|selected| {
+                model
+                    .reasoning_efforts
+                    .iter()
+                    .any(|option| option.id == *selected)
+            })
+            .or(model.default_reasoning_effort.as_deref())
+            .or_else(|| {
+                model
+                    .reasoning_efforts
+                    .first()
+                    .map(|option| option.id.as_str())
+            })
+            .map(str::to_owned);
+        let effort_label = effort.as_deref().and_then(|selected| {
+            model
+                .reasoning_efforts
+                .iter()
+                .find(|option| option.id == selected)
+                .map(|option| option.label.clone())
+        });
+
+        let tier = session
+            .service_tier
+            .as_deref()
+            .filter(|selected| {
+                *selected == "default"
+                    || model
+                        .service_tiers
+                        .iter()
+                        .any(|option| option.id == *selected)
+            })
+            .or(model.default_service_tier.as_deref())
+            .unwrap_or("default")
+            .to_owned();
+        let tier_label = if tier == "default" {
+            tr!("models.standard")
+        } else {
+            model
+                .service_tiers
+                .iter()
+                .find(|option| option.id == tier)
+                .map(|option| option.label.clone())
+                .unwrap_or_else(|| tier.clone())
+        };
+
+        let window = session
+            .context_window
+            .as_deref()
+            .filter(|selected| {
+                model
+                    .context_windows
+                    .iter()
+                    .any(|option| option.id == *selected)
+            })
+            .or(model.default_context_window.as_deref())
+            .or_else(|| {
+                model
+                    .context_windows
+                    .first()
+                    .map(|option| option.id.as_str())
+            })
+            .map(str::to_owned);
+        let window_label = window
+            .as_deref()
+            .filter(|selected| model.default_context_window.as_deref() != Some(selected))
+            .and_then(|selected| {
+                model
+                    .context_windows
+                    .iter()
+                    .find(|option| option.id == selected)
+                    .map(|option| option.label.clone())
+            });
+
+        let label = match (
+            effort_label.unwrap_or_else(|| tier_label.clone()),
+            window_label,
+        ) {
+            (label, Some(window)) => format!("{label} · {window}"),
+            (label, None) => label,
+        };
+        let fast = tier == "fast" || tier_label.eq_ignore_ascii_case("fast");
+        Some(Self {
+            model,
+            effort,
+            tier,
+            window,
+            label,
+            fast,
+        })
+    }
+}
+
+/// A chip label and the width it measures at, kept so the row's budget is
+/// not re-shaped every frame.
+///
+/// The row is rebuilt on every frame the window draws, but its labels only
+/// change when the session's model, tier or permission mode does. The
+/// measurement is therefore taken once per label and reused, and dropped
+/// wholesale when the UI font or text scale changes — a stale width from a
+/// different font is worse than no cache at all.
+struct ChipLabelWidth {
+    text: SharedString,
+    width: f32,
+}
+
+#[derive(Default)]
+pub(super) struct ComposerRowCache {
+    /// Font and scale the measurements below were taken at.
+    metrics: Option<(u64, f32)>,
+    model: Option<ChipLabelWidth>,
+    traits: Option<ChipLabelWidth>,
+    interaction: Option<ChipLabelWidth>,
+    access: Option<ChipLabelWidth>,
+}
+
+impl ComposerRowCache {
+    /// Drop every measurement when the text metrics move.
+    fn sync_metrics(&mut self) {
+        let metrics = (
+            crate::theme::font_generation(),
+            crate::theme::ui_text_scale(),
+        );
+        if self.metrics != Some(metrics) {
+            self.metrics = Some(metrics);
+            self.model = None;
+            self.traits = None;
+            self.interaction = None;
+            self.access = None;
+        }
+    }
+
+    fn width(slot: &mut Option<ChipLabelWidth>, text: &str, window: &Window) -> f32 {
+        if let Some(measured) = slot.as_ref() {
+            if measured.text.as_ref() == text {
+                return measured.width;
+            }
+        }
+        let width = measure_chip_label(text, window);
+        *slot = Some(ChipLabelWidth {
+            text: text.into(),
+            width,
+        });
+        width
+    }
+}
+
+/// Shape one chip label at the size the chips draw, in the UI font they
+/// inherit. Measured rather than guessed so a long model name or a
+/// translated permission label costs the row exactly what it will paint.
+fn measure_chip_label(text: &str, window: &Window) -> f32 {
+    let text = SharedString::from(text);
+    let run = TextRun {
+        len: text.len(),
+        font: font(crate::theme::ui_font_family()),
+        ..Default::default()
+    };
+    f32::from(
+        window
+            .text_system()
+            .shape_line(text, ui_px(crate::ui::CHIP_TEXT_SIZE), &[run], None)
+            .width,
+    )
+}
+
+/// Which of the row's demotable chips still show their labels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct ComposerRowPlan {
+    pub model_label: bool,
+    pub traits_label: bool,
+    pub interaction_label: bool,
+    pub access_label: bool,
+}
+
+impl ComposerRowPlan {
+    fn labelled() -> Self {
+        Self {
+            model_label: true,
+            traits_label: true,
+            interaction_label: true,
+            access_label: true,
+        }
+    }
+}
+
+/// The richest plan `available` pixels pay for.
+///
+/// The model's share is measured before this runs, so a long name is charged
+/// for in full up front and the walk below decides what gives way to it.
+/// Each demotion is one label plus the gap that separated it from the icon,
+/// and the walk stops as soon as the row fits — a chip that survives because
+/// the row happened to have room keeps its label, rather than being demoted
+/// on a fixed schedule.
+pub(super) fn composer_row_plan(available: f32, widths: ComposerRowWidths) -> ComposerRowPlan {
+    let mut plan = ComposerRowPlan::labelled();
+    let mut over = widths.total() - available;
+    for (label, demote) in [
+        (widths.traits, &mut plan.traits_label),
+        (widths.interaction, &mut plan.interaction_label),
+        (widths.access, &mut plan.access_label),
+        (widths.model, &mut plan.model_label),
+    ] {
+        if over <= 0.0 {
+            break;
+        }
+        let Some(label) = label else { continue };
+        *demote = false;
+        // What the chip stops costing: the label and the gap that separated
+        // it from the icon.
+        over -= chip_width(Some(label)) - chip_width(None);
+    }
+    plan
+}
+
 impl Fintwind {
     // ── Permission ─────────────────────────────────────────────────────────
 
@@ -466,7 +791,11 @@ impl Fintwind {
 
     // ── Composer ───────────────────────────────────────────────────────────
 
-    pub(super) fn render_provider_model_control(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_provider_model_control(
+        &self,
+        label: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Theme::current(cx);
         let session = self.selected_session();
         let provider = self.selected_model_provider_label();
@@ -482,24 +811,34 @@ impl Fintwind {
         let picker_enabled = session.is_some_and(|session| session.can_choose_model());
 
         if !picker_enabled {
+            // A session that cannot change its model draws the name as
+            // plain text rather than as a chip, so the demoted state is
+            // built here too: the logo alone, with the name on hover.
+            // The id is what makes the div interactive, and a tooltip needs
+            // that to attach.
+            let tooltip = (!label).then(|| Tooltip::text(selected_model_name.clone()));
             return div()
+                .id("composer-provider-model-static")
                 .h(px(24.0))
                 .px(px(7.0))
                 .flex()
                 .items_center()
-                .gap(px(6.0))
+                .gap(px(if label { 6.0 } else { 0.0 }))
                 .child(icon(
                     model_icon,
                     10.5,
                     provider_color(&theme, &provider).opacity(0.9),
                 ))
-                .child(
-                    div()
-                        .max_w(px(210.0))
-                        .truncate()
-                        .text_color(theme.text_secondary)
-                        .child(SharedString::from(selected_model_name)),
-                )
+                .when(label, |element| {
+                    element.child(
+                        div()
+                            .max_w(px(MODEL_CHIP_MAX_LABEL))
+                            .truncate()
+                            .text_color(theme.text_secondary)
+                            .child(SharedString::from(selected_model_name.clone())),
+                    )
+                })
+                .when_some(tooltip, |element, tooltip| element.tooltip(tooltip))
                 .into_any_element();
         }
 
@@ -574,12 +913,23 @@ impl Fintwind {
         let scroll = self.model_picker_scroll.clone();
         let scrollbar_state = self.model_picker_scrollbar.clone();
 
+        // A provider's display name is not bounded, and the row's budget
+        // caps what it is willing to pay for this chip at the same width.
+        // Without the cap here the budget would read a long name as
+        // affordable and then let it push the chips beside it off the row.
+        // A demoted chip is the company logo alone, which names the company
+        // but not the model — so the name moves into a tooltip.
+        let tooltip = (!label).then(|| selected_model_name.clone());
+        let chip = MenuChip::new("composer-provider-model")
+            .icon(model_icon, provider_color(&theme, &provider).opacity(0.9))
+            .label(selected_model_name)
+            .caret(false)
+            .max_label_width(MODEL_CHIP_MAX_LABEL)
+            .icon_only(!label)
+            .when_some(tooltip, |chip, label| chip.tooltip(label))
+            .selected(handle.is_open());
         popover(
-            MenuChip::new("composer-provider-model")
-                .icon(model_icon, provider_color(&theme, &provider).opacity(0.9))
-                .label(selected_model_name)
-                .caret(false)
-                .selected(handle.is_open()),
+            chip,
             &handle,
             MenuAlign::AboveLeft,
             move |popover, _window, _cx| {
@@ -1014,103 +1364,32 @@ impl Fintwind {
         self.choose_model(model_id, cx);
     }
 
-    pub(super) fn render_model_traits_control(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let theme = Theme::current(cx);
+    /// The traits the selected session's model offers.
+    ///
+    /// Resolved once per frame and handed to both the width budget and the
+    /// chip, so the two cannot read the same session as offering different
+    /// things — and so the answer is not computed twice to reach the same
+    /// conclusion.
+    fn model_traits_for_session(&self) -> Option<ModelTraits<'_>> {
         let session = self.selected_session()?;
         let model = self.model_metadata_for_session(session)?;
-        if model.reasoning_efforts.is_empty()
-            && model.service_tiers.is_empty()
-            && model.context_windows.is_empty()
-        {
-            return None;
-        }
+        ModelTraits::resolve(session, model)
+    }
 
-        let selected_effort = session
-            .reasoning_effort
-            .as_deref()
-            .filter(|selected| {
-                model
-                    .reasoning_efforts
-                    .iter()
-                    .any(|option| option.id == *selected)
-            })
-            .or(model.default_reasoning_effort.as_deref())
-            .or_else(|| {
-                model
-                    .reasoning_efforts
-                    .first()
-                    .map(|option| option.id.as_str())
-            })
-            .map(str::to_owned);
-        let effort_label = selected_effort.as_deref().and_then(|selected| {
-            model
-                .reasoning_efforts
-                .iter()
-                .find(|option| option.id == selected)
-                .map(|option| option.label.clone())
-        });
-
-        let selected_tier = session
-            .service_tier
-            .as_deref()
-            .filter(|selected| {
-                *selected == "default"
-                    || model
-                        .service_tiers
-                        .iter()
-                        .any(|option| option.id == *selected)
-            })
-            .or(model.default_service_tier.as_deref())
-            .unwrap_or("default")
-            .to_owned();
-        let tier_label = if selected_tier == "default" {
-            tr!("models.standard")
-        } else {
-            model
-                .service_tiers
-                .iter()
-                .find(|option| option.id == selected_tier)
-                .map(|option| option.label.clone())
-                .unwrap_or_else(|| selected_tier.clone())
-        };
-        let selected_window = session
-            .context_window
-            .as_deref()
-            .filter(|selected| {
-                model
-                    .context_windows
-                    .iter()
-                    .any(|option| option.id == *selected)
-            })
-            .or(model.default_context_window.as_deref())
-            .or_else(|| {
-                model
-                    .context_windows
-                    .first()
-                    .map(|option| option.id.as_str())
-            })
-            .map(str::to_owned);
-        // A non-default window changes what the session costs and how much it
-        // can hold, so it reads on the chip rather than only inside the menu.
-        let window_label = selected_window
-            .as_deref()
-            .filter(|selected| model.default_context_window.as_deref() != Some(selected))
-            .and_then(|selected| {
-                model
-                    .context_windows
-                    .iter()
-                    .find(|option| option.id == selected)
-                    .map(|option| option.label.clone())
-            });
-
-        let fast = selected_tier == "fast" || tier_label.eq_ignore_ascii_case("fast");
-        let trigger_label = match (
-            effort_label.unwrap_or_else(|| tier_label.clone()),
-            window_label,
-        ) {
-            (label, Some(window)) => format!("{label} · {window}"),
-            (label, None) => label,
-        };
+    fn render_model_traits_control(
+        &self,
+        traits: Option<&ModelTraits<'_>>,
+        label: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let theme = Theme::current(cx);
+        let traits = traits?;
+        let selected_effort = traits.effort.clone();
+        let selected_tier = traits.tier.clone();
+        let selected_window = traits.window.clone();
+        let fast = traits.fast;
+        let trigger_label = traits.label.clone();
+        let model = traits.model;
         let reasoning_efforts = model.reasoning_efforts.clone();
         let default_effort = model.default_reasoning_effort.clone();
         let service_tiers = model.service_tiers.clone();
@@ -1122,14 +1401,20 @@ impl Fintwind {
             .unwrap_or_else(|| "default".to_owned());
         let weak = cx.entity().downgrade();
         let handle = self.menu_handle("model-traits", cx);
+        // The demoted chip is the zap alone, and a zap does not say which
+        // effort it stands for — so the label moves into a tooltip.
+        let tooltip = (!label).then(|| trigger_label.clone());
+        let chip = MenuChip::new("model-traits")
+            .when(fast, |trigger| {
+                trigger.icon("icons/zap.svg", theme.text_secondary)
+            })
+            .label(trigger_label)
+            .caret(false)
+            .icon_only(!label)
+            .when_some(tooltip, |chip, label| chip.tooltip(label))
+            .selected(handle.is_open());
         Some(dropdown_menu(
-            MenuChip::new("model-traits")
-                .when(fast, |trigger| {
-                    trigger.icon("icons/zap.svg", theme.text_secondary)
-                })
-                .label(trigger_label)
-                .caret(false)
-                .selected(handle.is_open()),
+            chip,
             "model-traits-menu",
             &handle,
             MenuAlign::AboveLeft,
@@ -1214,7 +1499,7 @@ impl Fintwind {
         ))
     }
 
-    pub(super) fn render_access_control(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_access_control(&self, label: bool, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let selected_mode = self
             .selected_session()
@@ -1222,12 +1507,20 @@ impl Fintwind {
             .unwrap_or_default();
         let weak = cx.entity().downgrade();
         let handle = self.menu_handle("runtime-mode", cx);
+        let mode_label = selected_mode.label();
+        // The demoted chip shows only its lock, and a lock does not say
+        // which of the three levels is in force — so the label moves into a
+        // tooltip rather than off the row.
+        let tooltip = (!label).then(|| mode_label.clone());
+        let chip = MenuChip::new("runtime-mode")
+            .icon(selected_mode.icon(), theme.text_tertiary)
+            .label(mode_label)
+            .caret(false)
+            .icon_only(!label)
+            .when_some(tooltip, |chip, label| chip.tooltip(label))
+            .selected(handle.is_open());
         dropdown_menu(
-            MenuChip::new("runtime-mode")
-                .icon(selected_mode.icon(), theme.text_tertiary)
-                .label(selected_mode.label())
-                .caret(false)
-                .selected(handle.is_open()),
+            chip,
             "runtime-mode-menu",
             &handle,
             MenuAlign::AboveLeft,
@@ -1291,7 +1584,11 @@ impl Fintwind {
         )
     }
 
-    pub(super) fn render_interaction_mode_control(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_interaction_mode_control(
+        &self,
+        label: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Theme::current(cx);
         let mode = self
             .selected_session()
@@ -1303,6 +1600,12 @@ impl Fintwind {
             InteractionMode::Plan
         };
         let weak = cx.entity().downgrade();
+        let plan = mode == InteractionMode::Plan;
+        let mode_label = mode.label();
+        // A demoted chip is a list or a wrench alone, and neither says
+        // whether the agent is about to plan or build — so the label moves
+        // into a tooltip rather than off the row.
+        let tooltip = (!label).then(|| Tooltip::text(mode_label.clone()));
         div()
             .id("interaction-mode")
             .h(px(28.0))
@@ -1310,29 +1613,32 @@ impl Fintwind {
             .rounded(px(7.0))
             .flex()
             .items_center()
-            .gap(px(7.0))
+            // Matches the chip geometry `chip_width` prices, so a demoted
+            // control costs the budget exactly what it paints.
+            .gap(px(if label { 7.0 } else { 0.0 }))
             .cursor_default()
             .text_size(ui_px(12.5))
             .line_height(ui_px(16.0))
-            .text_color(if mode == InteractionMode::Plan {
+            .text_color(if plan {
                 theme.accent
             } else {
                 theme.text_secondary
             })
             .child(icon(
-                if mode == InteractionMode::Plan {
+                if plan {
                     "icons/list.svg"
                 } else {
                     "icons/wrench.svg"
                 },
                 12.0,
-                if mode == InteractionMode::Plan {
+                if plan {
                     theme.accent
                 } else {
                     theme.text_tertiary
                 },
             ))
-            .child(mode.label())
+            .when(label, |element| element.child(mode_label))
+            .when_some(tooltip, |element, tooltip| element.tooltip(tooltip))
             .hover(|element| element.bg(theme.overlay))
             .active(|element| element.bg(theme.overlay_strong))
             .on_click(move |_, _, cx| {
@@ -2000,6 +2306,69 @@ impl Fintwind {
         )
     }
 
+    /// What the control row can afford at the width it is being drawn at.
+    ///
+    /// The row's own content box is arithmetic, not measurement: the chat
+    /// column's width is already known from the panel widths, and the card
+    /// insets and cap are constants. Only the labels are measured, and only
+    /// when they change.
+    fn composer_row_plan(
+        &self,
+        window: &Window,
+        traits: Option<&ModelTraits<'_>>,
+        paired_send: bool,
+    ) -> ComposerRowPlan {
+        let session = self.selected_session();
+        let interaction = session
+            .map(|session| session.interaction_mode)
+            .unwrap_or_default();
+        let access = session
+            .map(|session| session.runtime_mode.access())
+            .unwrap_or_default();
+
+        let mut cache = self.composer_row_cache.borrow_mut();
+        cache.sync_metrics();
+        let traits_label =
+            traits.map(|traits| ComposerRowCache::width(&mut cache.traits, &traits.label, window));
+        let interaction_label =
+            ComposerRowCache::width(&mut cache.interaction, &interaction.label(), window);
+        let access_label = ComposerRowCache::width(&mut cache.access, &access.label(), window);
+
+        // The model name is capped at the same width the chip is drawn with,
+        // so a name the budget calls affordable is one the row can actually
+        // paint. Past the cap it ellipsizes, which costs the reader the tail
+        // of the name but keeps it in the row.
+        let model_name =
+            self.model_display_name(session.and_then(|session| self.model_for_session(session)));
+        let model_label = ComposerRowCache::width(&mut cache.model, &model_name, window)
+            .min(MODEL_CHIP_MAX_LABEL);
+        let send = if paired_send {
+            SEND_BUTTON * 2.0 + SEND_PAIR_GAP
+        } else {
+            SEND_BUTTON
+        };
+        // Insets the row cannot spend on a chip: the card's border, the
+        // row's own horizontal padding, and the send button.
+        let fixed = 2.0 * (CARD_BORDER + ROW_INSET_X) + send;
+        let widths = ComposerRowWidths {
+            model: Some(model_label),
+            traits: traits_label,
+            interaction: Some(interaction_label),
+            access: Some(access_label),
+            fixed,
+        };
+        // The column's width less the gutters around it, capped the same
+        // way the card is, so the budget is measured on the same box the
+        // row is painted into. The column's own left border is charged to
+        // the budget too: it comes out of the same width the chips draw in,
+        // and leaving it out would let the row overrun it by a pixel.
+        let available =
+            (self.chat_viewport_width(window) - 2.0 * CARD_GUTTER_X - CHAT_COLUMN_BORDER)
+                .min(CONTENT_MAX_WIDTH)
+                - fixed;
+        composer_row_plan(available, widths)
+    }
+
     pub(super) fn render_composer(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let session = self.selected_session();
@@ -2015,6 +2384,11 @@ impl Fintwind {
         });
         let has_draft = !self.composer.read(cx).content().trim().is_empty()
             || !self.composer_attachments.is_empty();
+        // Stop stands in for send, and with a draft waiting it is a pair of
+        // buttons — the row's budget has to pay for whichever it draws.
+        let paired_send = matches!(submit_action, ComposerSubmitAction::Stop) && has_draft;
+        let traits = self.model_traits_for_session();
+        let plan = self.composer_row_plan(window, traits.as_ref(), paired_send);
         let autocomplete = self.render_composer_autocomplete(window, cx);
         let autocomplete_open = autocomplete.is_some();
         // The chat column accepts the drop and stages attachment chips. The
@@ -2079,13 +2453,23 @@ impl Fintwind {
                         .px(px(10.0))
                         .flex()
                         .items_center()
-                        .gap(px(4.0))
+                        .gap(px(ROW_GAP))
                         .text_size(ui_px(11.5))
                         .line_height(ui_px(14.0))
-                        .child(self.render_provider_model_control(cx))
-                        .children(self.render_model_traits_control(cx))
-                        .child(self.render_access_control(cx))
-                        .child(self.render_interaction_mode_control(cx))
+                        // The budget above has already decided how much
+                        // room each chip gets, so the row is drawn at those
+                        // widths and only the slack is left to flex. This
+                        // is the backstop for a label that measured wider
+                        // than it painted: the chips shrink rather than
+                        // the row running past the card.
+                        .child(self.render_provider_model_control(plan.model_label, cx))
+                        .children(self.render_model_traits_control(
+                            traits.as_ref(),
+                            plan.traits_label,
+                            cx,
+                        ))
+                        .child(self.render_access_control(plan.access_label, cx))
+                        .child(self.render_interaction_mode_control(plan.interaction_label, cx))
                         .child(div().flex_1())
                         .child(match submit_action {
                             ComposerSubmitAction::Preparing => div()

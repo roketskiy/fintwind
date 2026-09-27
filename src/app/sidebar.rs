@@ -1545,34 +1545,46 @@ impl Fintwind {
                             ),
                     )
             })
-            .child(
-                self.window_drag_region(
-                    div()
-                        .id("header-title-drag-region")
-                        .h_full()
-                        .min_w_0()
-                        .flex_shrink(1.0)
-                        .flex()
-                        .items_center()
-                        .gap(px(7.0))
-                        .child(
+            .when(!self.open_tabs.is_empty(), |element| {
+                // The tab strip is a cached island of its own, so the working
+                // spinners inside it never price a pulse tick at the window.
+                element.child(
+                    self.session_tabs_pane.clone().cached(
+                        StyleRefinement::default().flex_1().min_w(px(0.0)).h_full(),
+                    ),
+                )
+            })
+            .when(self.open_tabs.is_empty(), |element| {
+                element
+                    .child(
+                        self.window_drag_region(
                             div()
+                                .id("header-title-drag-region")
+                                .h_full()
                                 .min_w_0()
-                                .truncate()
-                                .text_size(ui_px(13.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text)
-                                .child(SharedString::from(title)),
+                                .flex_shrink(1.0)
+                                .flex()
+                                .items_center()
+                                .gap(px(7.0))
+                                .child(
+                                    div()
+                                        .min_w_0()
+                                        .truncate()
+                                        .text_size(ui_px(13.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text)
+                                        .child(SharedString::from(title)),
+                                ),
+                            cx,
                         ),
-                    cx,
-                ),
-            )
-            .child(
-                self.window_drag_region(
-                    div().id("header-center-drag-region").h_full().flex_1(),
-                    cx,
-                ),
-            )
+                    )
+                    .child(
+                        self.window_drag_region(
+                            div().id("header-center-drag-region").h_full().flex_1(),
+                            cx,
+                        ),
+                    )
+            })
             .children(self.render_reveal_project_button(cx))
             .when(!self.right_panel_visible, |element| {
                 element
@@ -1823,7 +1835,7 @@ fn session_model_avatar(
         .into_any_element()
 }
 
-fn localized_session_title(session: &AgentSession) -> String {
+pub(super) fn localized_session_title(session: &AgentSession) -> String {
     let title = session.display_title();
     if title == AgentSession::DEFAULT_TITLE {
         tr!("session.new_task")

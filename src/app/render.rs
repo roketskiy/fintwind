@@ -269,6 +269,10 @@ impl Render for Fintwind {
         let content = div()
             .key_context("Fintwind")
             .on_action(cx.listener(Self::close_window_or_right_panel_tab_action))
+            .on_action(cx.listener(Self::close_active_session_tab_action))
+            .on_action(cx.listener(Self::next_session_tab_action))
+            .on_action(cx.listener(Self::previous_session_tab_action))
+            .on_action(cx.listener(Self::select_session_tab_action))
             .on_action(cx.listener(Self::new_session_action))
             .on_action(cx.listener(Self::new_project_action))
             .on_action(cx.listener(Self::open_settings_action))
@@ -295,6 +299,11 @@ impl Render for Fintwind {
             .on_action(cx.listener(Self::replace_all_matches_action))
             .capture_any_mouse_down(cx.listener(Self::navigation_mouse_down))
             .on_mouse_move(cx.listener(Self::resize_panel_mouse_move))
+            .on_mouse_move(cx.listener(Self::session_tab_drag_mouse_move))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(Self::session_tab_drag_mouse_up),
+            )
             .capture_any_mouse_up(cx.listener(Self::finish_panel_resize))
             .size_full()
             .relative()

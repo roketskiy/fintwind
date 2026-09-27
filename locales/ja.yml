@@ -1267,3 +1267,7 @@ usage_page.providers_caption: 全%{count}プロバイダー
 usage_page.provider_models: "%{count} モデル"
 usage_page.truncated_notice: "%{sessions} 件のセッションをスキャンした時点で上限に達しました。それより古いセッションは以下の集計に含まれていません。"
 usage_page.updated_at: "%{time} 更新"
+tabs.new_session: 新規セッションタブ
+tabs.close: タブを閉じる
+tabs.waiting: 入力を待っています
+tabs.unread: 新しいアクティビティ

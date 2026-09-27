@@ -1216,3 +1216,7 @@ usage_page.providers_caption: 共 %{count} 个提供商
 usage_page.provider_models: "%{count} 个模型"
 usage_page.truncated_notice: "已扫描 %{sessions} 个会话就达到了扫描上限，更早的会话未计入下列统计。"
 usage_page.updated_at: "更新于 %{time}"
+tabs.new_session: 新建会话标签
+tabs.close: 关闭标签
+tabs.waiting: 等待你的输入
+tabs.unread: 有新动态

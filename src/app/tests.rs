@@ -2036,6 +2036,7 @@ fn transcript_fingerprint_covers_turn_stats_appearance() {
         agent: Some("build".into()),
         output_tokens: 645,
         stream_ms: 10_000,
+        ..TurnStats::default()
     });
     let with = transcript_rows_fingerprint(&session, &HashSet::new());
     assert_ne!(without, with);

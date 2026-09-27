@@ -626,6 +626,65 @@ impl Fintwind {
         .detach();
     }
 
+    /// Reconcile only the settled turn's provider steps, without fetching its
+    /// full transcript or blocking the UI. A newer turn cannot receive this
+    /// result because the immutable turn ID is checked again on completion.
+    pub(super) fn reconcile_native_turn_stats(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        let Some((turn_id, step_ids, native_id, binary, directory)) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(|session| {
+                let turn = session.turns.last()?;
+                let ids = turn.stats.as_ref()?.step_ids.clone();
+                if ids.is_empty() {
+                    return None;
+                }
+                Some((
+                    turn.id,
+                    ids,
+                    session.native_session_id.clone()?,
+                    self.native_binary_path()?,
+                    self.native_session_directory(session_id)?,
+                ))
+            })
+        else {
+            return;
+        };
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let resolved = cx
+                .background_executor()
+                .spawn(async move {
+                    fintwind_client::persistence::StateStore::remote(daemon)
+                        .fetch_native_turn_stats(binary, directory, native_id, step_ids)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Ok(Some(stats)) = resolved
+                    && let Some(session) = this.state.session_mut(session_id)
+                    && let Some(turn) = session.turns.iter_mut().find(|turn| turn.id == turn_id)
+                    && let Some(current) = turn.stats.as_mut()
+                    && !current.step_ids.is_empty()
+                {
+                    // Keep the step IDs and the final-step model/agent if an
+                    // older server omitted that metadata in stored rows.
+                    current.model = stats.model.or(current.model.take());
+                    current.agent = stats.agent.or(current.agent.take());
+                    current.output_tokens = stats.output_tokens;
+                    current.stream_ms = stats.stream_ms;
+                    current.stream_verified = stats.stream_verified;
+                    current.step_ids.clear();
+                    this.state.mark_session_dirty(session_id);
+                    this.save();
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Carry a title edit to the OpenCode server when the session is backed
     /// by a native session. Best-effort: a failure leaves the local title.
     pub(super) fn rename_native_session(

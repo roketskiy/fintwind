@@ -764,8 +764,9 @@ fn assistant_turn_stats(
                 .saturating_mul(1_000)
         })
     });
-    let (output_tokens, stream_ms) =
-        stats.map_or((0, 0), |stats| (stats.output_tokens, stats.stream_ms));
+    let (output_tokens, stream_ms) = stats
+        .filter(|stats| stats.stream_verified)
+        .map_or((0, 0), |stats| (stats.output_tokens, stats.stream_ms));
     turn_stats_line(
         Some(agent.as_str()),
         model_display.as_deref(),
@@ -820,9 +821,9 @@ pub(super) fn format_turn_stats_duration(ms: u64) -> String {
 
 /// Tokens per streaming second — the TUI footer's quotient: the turn's
 /// steps' output-plus-reasoning tokens over their summed streaming time.
-/// One divergence stays: the TUI hides the segment when any step lacks its
-/// streamed time, while the driver's wall-clock fallback lets the line
-/// approximate instead. `None` when either side is unmeasurable drops the
+/// The caller admits only server-verified statistics. Missing stream
+/// boundaries hide the segment instead of substituting wall-clock estimates.
+/// `None` when either side is unmeasurable drops the
 /// segment rather than showing a meaningless "0.0 tok/s".
 pub(super) fn turn_tokens_per_second(output_tokens: u64, stream_ms: u64) -> Option<f64> {
     (output_tokens > 0 && stream_ms > 0)
@@ -1094,6 +1095,11 @@ pub(super) fn transcript_rows_fingerprint_with_retry(
         // while the turn runs (which flips the status above), so presence is
         // the whole story.
         hash = mix(hash, turn.stats.is_some() as u64);
+        if let Some(stats) = &turn.stats {
+            hash = mix(hash, stats.stream_verified as u64);
+            hash = mix(hash, stats.output_tokens);
+            hash = mix(hash, stats.stream_ms);
+        }
         hash = mix(
             hash,
             turn.checkpoint.as_ref().is_some_and(|checkpoint| {

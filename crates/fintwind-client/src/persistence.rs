@@ -868,6 +868,37 @@ impl StateStore {
         }
     }
 
+    /// Resolve a settled turn's throughput from durable assistant message rows.
+    /// Blocking RPC; call off the UI thread.
+    pub fn fetch_native_turn_stats(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        session_id: String,
+        step_ids: Vec<String>,
+    ) -> io::Result<Option<fintwind_protocol::model::TurnStats>> {
+        match self
+            .daemon
+            .client()
+            .request(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::FetchNativeTurnStats {
+                    binary,
+                    directory,
+                    session_id,
+                    step_ids,
+                },
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::NativeTurnStats { stats } => Ok(stats),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned invalid turn statistics",
+            )),
+        }
+    }
+
     /// The whole OpenCode store's usage scan: one entry per top-level
     /// session, collected in a single daemon-side pass over the session
     /// list. `directory` only anchors which resident server to ask. Blocking

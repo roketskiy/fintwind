@@ -441,14 +441,16 @@ fn attachment_uri(path: &Path) -> anyhow::Result<String> {
 /// `imageMimes` set plus PDFs. Anything else would arrive as a bare text
 /// attachment or not at all, so it stays on the `file:` URI channel.
 fn inline_mime(path: &Path) -> Option<&'static str> {
-    Some(match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "pdf" => "application/pdf",
-        _ => return None,
-    })
+    Some(
+        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "gif" => "image/gif",
+            "webp" => "image/webp",
+            "pdf" => "application/pdf",
+            _ => return None,
+        },
+    )
 }
 
 /// A prompt's attachment as the `files` array wants it: a `file:` URI of the
@@ -1596,18 +1598,14 @@ struct OpenCodeStreamState {
     turn_stats: Option<OpenCodeTurnStats>,
 }
 
-/// The live accumulator behind [`TurnStats`]. The step events carry no
-/// provider-side streaming time (verified against the v2 event schema: only
-/// a publication `timestamp`), so each step's duration falls back to the
-/// driver's own wall clock between `session.step.started` and the step's
-/// settlement event — the same wall the app's own turn timing reads, so the
-/// two stay comparable.
+/// Collect durable step IDs and metadata; throughput is resolved from stored
+/// assistant rows in the background after settlement, never from local time.
 #[derive(Default)]
 struct OpenCodeTurnStats {
     stats: TurnStats,
-    /// Wall-clock (ms) of the in-flight step's `session.step.started`, or
-    /// `None` when the step began before this driver attached.
-    step_started_at: Option<u64>,
+    /// The assistant row's durable ID, used for settled reconciliation.
+    step_id: Option<String>,
+    incomplete: bool,
 }
 
 /// One resume call the parent bound to a child, awaiting the child's own
@@ -2827,13 +2825,20 @@ fn handle_event(
                 (Some(existing), false) => existing,
                 _ => OpenCodeTurnStats::default(),
             };
+            if stats.step_id.is_some() {
+                stats.incomplete = true;
+                stats.stats.step_ids.clear();
+            }
             if model.is_some() {
                 stats.stats.model = model;
             }
             if agent.is_some() {
                 stats.stats.agent = agent;
             }
-            stats.step_started_at = Some(unix_time_millis());
+            stats.step_id = payload
+                .get("assistantMessageID")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             state.turn_stats = Some(stats);
         }
         "session.usage.updated" => {
@@ -3396,13 +3401,8 @@ fn clear_foreground_turn_state(state: &mut OpenCodeStreamState, events: &impl Dr
     disarm_child_resumes(state);
 }
 
-/// Fold one settled step into the turn's footer statistics. The step events
-/// carry no `time` object — the stored message rows have one, but they are
-/// only visible on the message endpoint — so the step's streaming duration
-/// prefers a payload that does grow `time.streamed`/`time.created` (a newer
-/// server or a fork) and otherwise falls back to the wall clock its
-/// `session.step.started` armed; a step whose start was never seen
-/// contributes tokens but no time.
+/// Record the model step's ID for post-turn reconciliation. Event timestamps
+/// are not the durable provider stream boundary and must not enter TPS.
 ///
 /// The numerator is the TUI footer's own: `tokens.output + tokens.reasoning`,
 /// the tokens the provider actually produced, reasoning included. It only
@@ -3412,40 +3412,33 @@ fn clear_foreground_turn_state(state: &mut OpenCodeStreamState, events: &impl Dr
 /// lose whatever the earlier segments had already collected. The flush
 /// happens exactly once, on the turn's terminal paths through
 /// [`clear_foreground_turn_state`].
-fn step_ended_turn_stats(payload: &Value, state: &mut OpenCodeStreamState) {
+fn step_ended_turn_stats(_payload: &Value, state: &mut OpenCodeStreamState) {
+    if state.turn_stats.is_none() {
+        state.turn_stats = Some(OpenCodeTurnStats {
+            incomplete: true,
+            ..OpenCodeTurnStats::default()
+        });
+    }
     let Some(accum) = state.turn_stats.as_mut() else {
         return;
     };
-    let tokens = payload.get("tokens");
-    let output = tokens
-        .and_then(|tokens| tokens.get("output"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let reasoning = tokens
-        .and_then(|tokens| tokens.get("reasoning"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    accum.stats.output_tokens = accum
-        .stats
-        .output_tokens
-        .saturating_add(output)
-        .saturating_add(reasoning);
-    let duration = match (
-        payload.pointer("/time/streamed").and_then(Value::as_u64),
-        payload.pointer("/time/created").and_then(Value::as_u64),
-    ) {
-        (Some(streamed), Some(created)) => streamed.saturating_sub(created),
-        _ => accum
-            .step_started_at
-            .map_or(0, |started| unix_time_millis().saturating_sub(started)),
-    };
-    accum.stats.stream_ms = accum.stats.stream_ms.saturating_add(duration);
-    accum.step_started_at = None;
+    if let Some(id) = accum.step_id.take()
+        && !accum.incomplete
+    {
+        accum.stats.step_ids.push(id);
+    } else {
+        // An unobserved step makes the entire turn's measurement incomplete.
+        accum.incomplete = true;
+        accum.stats.step_ids.clear();
+    }
 }
 
 /// Send the accumulated turn statistics, if any, and retire the accumulator.
 fn flush_turn_stats(state: &mut OpenCodeStreamState, events: &impl DriverEventSink) {
-    if let Some(accum) = state.turn_stats.take() {
+    if let Some(mut accum) = state.turn_stats.take() {
+        if accum.step_id.is_some() {
+            accum.stats.step_ids.clear();
+        }
         let _ = events.send(DriverEvent::TurnStatsUpdated(accum.stats));
     }
 }
@@ -3942,7 +3935,10 @@ mod tests {
         .unwrap();
         let uri = current["files"][0]["uri"].as_str().unwrap();
         assert!(uri.starts_with("file:"));
-        assert_eq!(url::Url::parse(uri).unwrap().to_file_path().unwrap(), missing);
+        assert_eq!(
+            url::Url::parse(uri).unwrap().to_file_path().unwrap(),
+            missing
+        );
 
         std::fs::remove_dir_all(directory).unwrap();
     }
@@ -6697,12 +6693,10 @@ mod tests {
             1,
             "the flush happens once, at the terminal event"
         );
-        // The TUI footer's numerator: output plus reasoning, summed across
-        // the steps — 12 + (90 + 8).
-        assert_eq!(stats[0].output_tokens, 110);
-        // 2_500 from the tool step's payload time, plus a wall-clock
-        // fallback that only has to be non-negative on the final step.
-        assert!(stats[0].stream_ms >= 2_500);
+        assert_eq!(stats[0].step_ids, ["msg_1", "msg_2"]);
+        assert_eq!(stats[0].output_tokens, 0);
+        assert_eq!(stats[0].stream_ms, 0);
+        assert!(!stats[0].stream_verified);
         assert_eq!(stats[0].model.as_deref(), Some("glmcoding/glm-5.3"));
         assert_eq!(stats[0].agent.as_deref(), Some("explore"));
         assert!(finished, "the turn still settles normally");
@@ -6810,8 +6804,9 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(stats.len(), 1, "both terminal finishes leave as one event");
-        assert_eq!(stats[0].output_tokens, 80, "the segments sum, not replace");
-        assert_eq!(stats[0].stream_ms, 3_500);
+        assert_eq!(stats[0].step_ids, ["msg_1", "msg_2"]);
+        assert_eq!(stats[0].output_tokens, 0);
+        assert_eq!(stats[0].stream_ms, 0);
         assert_eq!(
             stats[0].model.as_deref(),
             Some("glmcoding/glm-5.3"),
@@ -6883,7 +6878,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(stats.len(), 1);
-        assert_eq!(stats[0].output_tokens, 7);
+        assert_eq!(stats[0].output_tokens, 0);
+        assert!(!stats[0].stream_verified);
         assert_eq!(stats[0].agent.as_deref(), Some("plan"));
     }
 

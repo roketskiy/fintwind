@@ -516,6 +516,17 @@ impl Backend for FintwindBackend {
                 )?;
                 Ok(ResponsePayload::NativeTranscript { transcript })
             }
+            Command::FetchNativeTurnStats {
+                binary,
+                directory,
+                session_id,
+                step_ids,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let stats =
+                    crate::driver::native::fetch_turn_stats(&server, &session_id, &step_ids)?;
+                Ok(ResponsePayload::NativeTurnStats { stats })
+            }
             Command::FetchUsageStats {
                 binary,
                 directory,
@@ -1273,6 +1284,7 @@ fn handle_driver_command(
         | Command::ForkProviderSession { .. }
         | Command::ListProviderSessions { .. }
         | Command::FetchNativeTranscript { .. }
+        | Command::FetchNativeTurnStats { .. }
         | Command::FetchUsageStats { .. }
         | Command::RenameProviderSession { .. }
         | Command::DeleteProviderSession { .. }

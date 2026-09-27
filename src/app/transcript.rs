@@ -225,6 +225,39 @@ impl Fintwind {
         self.anchored_transcript_rows.reset(count);
     }
 
+    /// Bring a restored tab's lists back in step with its session.
+    ///
+    /// A tab that streamed in the background grew; appends preserve the
+    /// restored scroll position and tail pinning, so growth never resets. A
+    /// session rewound in another client shrank, and only a reset expresses
+    /// that — the same contract `sync_transcript_rows` applies to live
+    /// appends, applied to both lists because neither is the active one yet.
+    pub(super) fn reconcile_transcript_lists(&self) {
+        let count = self.refresh_transcript_row_kinds();
+        let grew_only = Self::reconcile_transcript_list(&self.transcript_rows, count)
+            && Self::reconcile_transcript_list(&self.anchored_transcript_rows, count);
+        if !grew_only {
+            // A reset happened: the document was replaced underneath the
+            // reader, so restored scroll semantics no longer describe it.
+            self.transcript_is_scrolled.set(false);
+        }
+    }
+
+    /// Returns whether the list kept its measurements (append or no-op);
+    /// `false` means it was reset.
+    fn reconcile_transcript_list(list: &ListState, count: usize) -> bool {
+        let current = list.item_count();
+        if count > current {
+            list.splice(current..current, count - current);
+            true
+        } else if count < current {
+            list.reset(count);
+            false
+        } else {
+            true
+        }
+    }
+
     /// Apply a local disclosure change without replacing unchanged transcript
     /// rows.
     pub(super) fn splice_transcript_rows_after_visibility_change(

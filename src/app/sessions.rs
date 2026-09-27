@@ -11,7 +11,196 @@ impl Fintwind {
     }
 
     pub(super) fn select_session(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        self.open_session_tab(session_id);
         self.request_session_activation(session_id, SessionActivationTransition::Visit, cx);
+    }
+
+    /// Ensure the session's tab exists in the working set. Every path that
+    /// shows a session funnels through here, so a sidebar click, a history
+    /// jump, or a notification all land on the same tab semantics: an open
+    /// session focuses its tab, a closed one opens it.
+    pub(super) fn open_session_tab(&mut self, session_id: Uuid) {
+        if !self.open_tabs.contains(&session_id)
+            && self
+                .state
+                .sessions
+                .iter()
+                .any(|session| session.id == session_id)
+        {
+            self.open_tabs.push(session_id);
+        }
+    }
+
+    /// Close one tab. The session itself is untouched — a generating turn
+    /// keeps running on its provider, and the session can be reopened from
+    /// the sidebar or the start page at any time.
+    /// Drop a session's tab bookkeeping without any selection follow-up; the
+    /// caller decides what is shown next. Used when the session itself is
+    /// being removed.
+    pub(super) fn forget_session_tab(&mut self, session_id: Uuid) {
+        self.open_tabs.retain(|tab| *tab != session_id);
+        self.tab_unread.remove(&session_id);
+        self.transcript_view_states.remove(&session_id);
+        self.tab_focuses.borrow_mut().remove(&session_id);
+        if self.session_tab_drag.is_some_and(|drag| drag.session_id == session_id) {
+            self.session_tab_drag = None;
+        }
+    }
+
+    pub(super) fn close_session_tab(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        let Some(index) = self.open_tabs.iter().position(|tab| *tab == session_id) else {
+            return;
+        };
+        self.open_tabs.remove(index);
+        self.tab_unread.remove(&session_id);
+        self.transcript_view_states.remove(&session_id);
+        self.tab_focuses.borrow_mut().remove(&session_id);
+        self.pending_session_tab_reveal = None;
+        if self.session_tab_drag.is_some_and(|drag| drag.session_id == session_id) {
+            self.session_tab_drag = None;
+        }
+        if self
+            .pending_session_activation
+            .is_some_and(|pending| pending.session_id == session_id)
+        {
+            self.pending_session_activation = None;
+        }
+        // Release the provider runtime right away when nothing is running in
+        // it. A session mid-turn keeps its runtime — its provider process is
+        // the turn — and the idle sweep releases it once the turn settles and
+        // the session goes quiet, exactly as it does for a session left via
+        // the sidebar today.
+        let idle_for = self
+            .runtimes
+            .get(&session_id)
+            .map(|runtime| runtime.last_active_at.elapsed());
+        let reapable = idle_for.is_some_and(|idle_for| {
+            session_is_reapable(
+                self.state.sessions.iter().find(|s| s.id == session_id),
+                idle_for,
+                self.session_has_live_background_work(session_id),
+            )
+        });
+        if reapable {
+            self.reset_session_runtime(session_id);
+        }
+        if self.state.selected_session == Some(session_id) {
+            // Prefer the tab that takes this one's place, else the previous.
+            let next = super::tabs::tab_neighbor_after_close(&self.open_tabs, index);
+            match next {
+                Some(next) => self.select_session(next, cx),
+                None => self.close_last_session_tab(cx),
+            }
+        } else {
+            self.save();
+            cx.notify();
+        }
+    }
+
+    /// The last tab is gone; a fresh session tab takes its place — a window
+    /// never sits without a tab, the way a browser behaves.
+    fn close_last_session_tab(&mut self, cx: &mut Context<Self>) {
+        self.pending_session_tab_reveal = None;
+        self.open_new_session_tab(cx);
+    }
+
+    /// Open a new session as a tab — the tab strip's "+" semantics, shared by
+    /// the NewSession action and the last-tab-closed follow-through.
+    pub(super) fn open_new_session_tab(&mut self, cx: &mut Context<Self>) {
+        self.settings_page = None;
+        if let Some(session_id) = self
+            .session_navigation
+            .remembered_new_task(&self.state.sessions)
+        {
+            self.select_session(session_id, cx);
+        } else if self.selected_project().is_some_and(Project::is_projectless) {
+            self.create_projectless_session(cx);
+        } else if let Some(project_id) = self.state.selected_project {
+            self.create_session_for(project_id, cx);
+        } else {
+            self.create_projectless_session(cx);
+        }
+    }
+
+    pub(super) fn new_session_action(
+        &mut self,
+        _: &NewSession,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_new_session_tab(cx);
+        let focus_handle = self.composer_focus(cx);
+        window.focus(&focus_handle, cx);
+    }
+
+    pub(super) fn close_active_session_tab_action(
+        &mut self,
+        _: &CloseSessionTab,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session_id) = self.state.selected_session else {
+            return;
+        };
+        self.close_session_tab(session_id, cx);
+    }
+
+    pub(super) fn next_session_tab_action(
+        &mut self,
+        _: &NextSessionTab,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_neighbor_session_tab(1, cx);
+    }
+
+    pub(super) fn previous_session_tab_action(
+        &mut self,
+        _: &PreviousSessionTab,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_neighbor_session_tab(-1, cx);
+    }
+
+    pub(super) fn select_neighbor_session_tab(&mut self, delta: isize, cx: &mut Context<Self>) {
+        let count = self.open_tabs.len();
+        if count < 2 {
+            return;
+        }
+        let Some(current) = self.state.selected_session else {
+            return;
+        };
+        let current_index = self
+            .open_tabs
+            .iter()
+            .position(|tab| *tab == current)
+            .unwrap_or(count - 1);
+        let next_index = (current_index as isize + delta).rem_euclid(count as isize) as usize;
+        let next = self.open_tabs[next_index];
+        self.select_session(next, cx);
+    }
+
+    // Ctrl+1..=8 address their tab directly; out-of-range numbers do
+    // nothing, like a browser. Ctrl+9 always means the last tab.
+    pub(super) fn select_session_tab_action(
+        &mut self,
+        action: &SelectSessionTab,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let index = if action.0 >= 8 {
+            self.open_tabs.len().saturating_sub(1)
+        } else {
+            if action.0 >= self.open_tabs.len() {
+                return;
+            }
+            action.0
+        };
+        let Some(session_id) = self.open_tabs.get(index).copied() else {
+            return;
+        };
+        self.select_session(session_id, cx);
     }
 
     fn request_session_activation(
@@ -156,12 +345,24 @@ impl Fintwind {
     }
 
     fn activate_session(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
-        let session_changed = self.state.selected_session != Some(session_id);
+        let previous_session = self.state.selected_session;
+        let session_changed = previous_session != Some(session_id);
         if session_changed {
             self.capture_and_save_current_composer_draft(cx);
             self.store_selected_right_panel_state();
+            if let Some(previous_session) = previous_session {
+                // Park the tab's transcript view (scroll position, folds,
+                // reasoning parses) with its session — unless the session has
+                // no tab anymore (its tab was just closed), whose view state
+                // is meant to die here.
+                if self.open_tabs.contains(&previous_session) {
+                    let view_state = SessionTabState::take_live(self);
+                    self.transcript_view_states.insert(previous_session, view_state);
+                }
+            }
         }
         self.state.selected_session = Some(session_id);
+        self.tab_unread.remove(&session_id);
         if !self.context_summary_ids.contains_key(&session_id)
             && self
                 .selected_session()
@@ -205,19 +406,42 @@ impl Fintwind {
         } else {
             self.ensure_right_panel_terminals(cx);
         }
-        self.reset_visible_state();
         if session_changed {
+            if let Some(view_state) = self.transcript_view_states.remove(&session_id) {
+                view_state.install_live(self);
+            } else {
+                // First activation: fresh view state, streaming baselines
+                // seeded below for a turn that started in the background.
+                let fresh = SessionTabState::new();
+                fresh.install_live(self);
+            }
+            self.reset_transient_transcript_chrome();
+            self.seed_live_transcript_state();
             // Each materialized worktree has its own cache entry. A task that
             // finished while another session was selected could otherwise
             // retain the clean snapshot captured before its agent made edits.
             self.refresh_selected_branch_snapshot(cx);
+        } else {
+            // Re-activating the session already on screen: today's full reset,
+            // scroll position included.
+            self.reset_visible_state();
         }
         // A session tracking a native OpenCode one — imported, or created
         // here and continued in the TUI or CLI — pulls the server's
         // transcript whenever the local copy may be behind it.
         self.ensure_native_transcript(session_id, cx);
         self.refresh_composer_sources(cx);
-        self.reset_transcript_rows(self.transcript_row_count());
+        if session_changed {
+            // The tab may have streamed (or been rewound elsewhere) while in
+            // the background; appends keep the restored scroll position.
+            self.reconcile_transcript_lists();
+        } else {
+            self.reset_transcript_rows(self.transcript_row_count());
+        }
+        self.pending_session_tab_reveal = self
+            .open_tabs
+            .iter()
+            .position(|tab| *tab == session_id);
         self.save();
         if self
             .selected_session()
@@ -310,6 +534,7 @@ impl Fintwind {
         self.staged_undos.remove(&session_id);
         self.undo_redo_preparations.remove(&session_id);
         self.reset_session_runtime(session_id);
+        self.forget_session_tab(session_id);
         self.background_work.remove(&session_id);
         self.provider_retries.remove(&session_id);
         self.expanded_provider_retries.remove(&session_id);
@@ -499,6 +724,7 @@ impl Fintwind {
         self.reset_session_runtime(session_id);
         self.runtime_attach_pending.remove(&session_id);
         self.runtime_attach_misses.remove(&session_id);
+        self.forget_session_tab(session_id);
         self.background_work.remove(&session_id);
         self.provider_retries.remove(&session_id);
         self.expanded_provider_retries.remove(&session_id);
@@ -512,29 +738,6 @@ impl Fintwind {
             self.pending_session_activation = None;
         }
         self.session_navigation.remove(session_id);
-    }
-
-    pub(super) fn new_session_action(
-        &mut self,
-        _: &NewSession,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.settings_page = None;
-        if let Some(session_id) = self
-            .session_navigation
-            .remembered_new_task(&self.state.sessions)
-        {
-            self.select_session(session_id, cx);
-        } else if self.selected_project().is_some_and(Project::is_projectless) {
-            self.create_projectless_session(cx);
-        } else if let Some(project_id) = self.state.selected_project {
-            self.create_session_for(project_id, cx);
-        } else {
-            self.create_projectless_session(cx);
-        }
-        let focus_handle = self.composer_focus(cx);
-        window.focus(&focus_handle, cx);
     }
 
     pub(super) fn new_project_action(
@@ -790,6 +993,8 @@ impl Fintwind {
         };
         if let Some(target) = self.session_navigation.back_target() {
             self.settings_page = None;
+            // History jumps land on tabs like every other entry point.
+            self.open_session_tab(target);
             self.request_session_activation(
                 target,
                 SessionActivationTransition::Back { from: current },
@@ -813,6 +1018,8 @@ impl Fintwind {
         };
         if let Some(target) = self.session_navigation.forward_target() {
             self.settings_page = None;
+            // History jumps land on tabs like every other entry point.
+            self.open_session_tab(target);
             self.request_session_activation(
                 target,
                 SessionActivationTransition::Forward { from: current },
@@ -898,16 +1105,58 @@ impl Fintwind {
     }
 
     pub(super) fn reset_visible_state(&mut self) {
+        self.reset_session_view_state();
+        self.reset_transient_transcript_chrome();
+        self.seed_live_transcript_state();
+    }
+
+    /// Drop the live session's transcript presentation state: disclosures,
+    /// per-activity markdown and viewports, and the scroll/anchor machinery.
+    /// The message-markdown cache is deliberately not touched — it is keyed by
+    /// message id, which is unique across sessions (and bounded separately).
+    pub(super) fn reset_session_view_state(&mut self) {
         self.activities_expanded.clear();
         self.expanded_activity_items.clear();
         self.expanded_turns.clear();
         self.expanded_changed_files.clear();
         self.expanded_compactions.clear();
         self.expanded_provider_retries.clear();
-        self.transcript_control_focuses.borrow_mut().clear();
+        self.activity_markdown.borrow_mut().clear();
+        self.reasoning_views.borrow_mut().clear();
+        self.activity_scroll_viewports.borrow_mut().clear();
+        self.activity_section_viewports.borrow_mut().clear();
+        self.activity_detail_viewports.borrow_mut().clear();
+        self.activity_diffs.borrow_mut().clear();
+        self.activity_diff_viewports.borrow_mut().clear();
+        self.transcript_anchor.set(None);
+        self.transcript_anchor_end_space.set(Pixels::ZERO);
+        self.transcript_anchor_following.set(false);
+        self.transcript_tail_recheck.set(false);
+        self.transcript_is_scrolled.set(false);
+        self.transcript_scroll_to_bottom_visible.set(false);
+        self.transcript_scrollbar_dragging.set(false);
+    }
+
+    /// The chrome that belongs to no session: transcript selection, focused
+    /// row controls, open menus, the message editor, the toast, and the
+    /// navigation rail's derived turn list.
+    pub(super) fn reset_transient_transcript_chrome(&mut self) {
         // Selection belongs to the session being left.
         self.transcript_selection.selection.borrow_mut().clear();
         self.transcript_selection.registry.borrow_mut().clear();
+        self.transcript_control_focuses.borrow_mut().clear();
+        self.menus.borrow_mut().clear();
+        self.message_edit = None;
+        self.hide_toast();
+        self.navigation_rail_reset_generation
+            .set(self.navigation_rail_reset_generation.get().wrapping_add(1));
+    }
+
+    /// Seed parse state for the live session's in-flight output, so streaming
+    /// text and reasoning that started while the session was in the
+    /// background continue from their existing markdown instead of resetting
+    /// it. Entries that already exist (a tab's own bundle) are left alone.
+    pub(super) fn seed_live_transcript_state(&mut self) {
         let (streaming_messages, live_reasoning) = self.selected_session().map_or_else(
             || (Vec::new(), Vec::new()),
             |session| {
@@ -946,26 +1195,10 @@ impl Fintwind {
                 .seed_streaming_baseline();
         }
         drop(message_markdown);
-        // Block parses are keyed by position within the session, so they would
-        // be read as another session's blocks.
         let mut activity_markdown = self.activity_markdown.borrow_mut();
-        activity_markdown.clear();
         for id in live_reasoning {
-            activity_markdown.insert(id, MarkdownView::seeded());
+            activity_markdown.entry(id).or_insert_with(MarkdownView::seeded);
         }
-        drop(activity_markdown);
-        self.reasoning_views.borrow_mut().clear();
-        self.activity_scroll_viewports.borrow_mut().clear();
-        self.activity_section_viewports.borrow_mut().clear();
-        self.activity_detail_viewports.borrow_mut().clear();
-        self.menus.borrow_mut().clear();
-        self.message_edit = None;
-        self.hide_toast();
-        self.navigation_rail_reset_generation
-            .set(self.navigation_rail_reset_generation.get().wrapping_add(1));
-        self.transcript_anchor.set(None);
-        self.transcript_anchor_end_space.set(Pixels::ZERO);
-        self.transcript_anchor_following.set(false);
     }
 
     pub(super) fn reset_session_runtime(&mut self, session_id: Uuid) {

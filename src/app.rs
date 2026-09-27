@@ -66,9 +66,10 @@ use crate::ui::{
     toggle_switch,
 };
 use crate::{
-    CancelTurn, CloseFind, CloseWindow, CopySelection, FindNext, FindPrevious, FocusComposer,
-    NavigateBack, NavigateForward, NewProject, NewSession, OpenFind, OpenFindReplace, OpenSettings,
-    ReplaceAllMatches, SaveFile, ToggleCommandPalette, ToggleFindCaseSensitive, ToggleFindRegex,
+    CancelTurn, CloseFind, CloseSessionTab, CloseWindow, CopySelection, FindNext, FindPrevious,
+    FocusComposer, NavigateBack, NavigateForward, NewProject, NewSession, NextSessionTab,
+    OpenFind, OpenFindReplace, OpenSettings, PreviousSessionTab, ReplaceAllMatches, SaveFile,
+    SelectSessionTab, ToggleCommandPalette, ToggleFindCaseSensitive, ToggleFindRegex,
     ToggleFindWholeWord, ToggleFpsCounter, ToggleModelPicker, ToggleRightPanel, ToggleSidebar,
     ToggleUsagePanel,
 };
@@ -703,7 +704,7 @@ impl FintwindPane {
         cx.observe(fintwind, |_, fintwind, cx| {
             // A panel slide notifies the root at display rate for its 200ms,
             // and this fan-out would price every one of those ticks at a
-            // three-island rebuild. Skipping it hands the decision to the
+            // four-island rebuild. Skipping it hands the decision to the
             // cached-view keys: the sliding panel (its clip moves) and the
             // transcript (its bounds move) miss their caches and re-render
             // with fresh state anyway, while the island nothing is moving
@@ -1109,6 +1110,191 @@ impl Default for ActivityScrollViewport {
     }
 }
 
+/// The transcript presentation state of one open session tab.
+///
+/// The frame path reads these through the live fields on [`Fintwind`]; the tab
+/// switcher swaps whole bundles in and out at activation, so every reader of
+/// `self.transcript_rows` and friends keeps working untouched. Bundles are
+/// keyed by session id and dropped when the tab closes — a background tab
+/// keeps its scroll position, disclosures, and reasoning parses while its
+/// session streams in the dark, and a reopened session starts fresh.
+struct SessionTabState {
+    transcript_rows: ListState,
+    anchored_transcript_rows: ListState,
+    transcript_anchor: Cell<Option<TranscriptAnchor>>,
+    transcript_anchor_end_space: Rc<Cell<Pixels>>,
+    transcript_anchor_following: Rc<Cell<bool>>,
+    transcript_tail_recheck: Rc<Cell<bool>>,
+    transcript_is_scrolled: Rc<Cell<bool>>,
+    transcript_scroll_to_bottom_visible: Cell<bool>,
+    transcript_scrollbar_dragging: Cell<bool>,
+    /// See [`Fintwind::activities_expanded`] and the fields below: disclosure
+    /// state is session-scoped, and the position-keyed entries must never be
+    /// read against another session's transcript.
+    activities_expanded: HashMap<usize, bool>,
+    expanded_activity_items: HashMap<Uuid, bool>,
+    expanded_turns: HashSet<Uuid>,
+    expanded_changed_files: HashSet<Uuid>,
+    expanded_compactions: HashSet<Uuid>,
+    expanded_provider_retries: HashSet<Uuid>,
+    activity_markdown: RefCell<HashMap<Uuid, MarkdownView>>,
+    reasoning_views: RefCell<HashMap<Uuid, Entity<md::virtualized::ReasoningView>>>,
+    activity_scroll_viewports: RefCell<HashMap<Uuid, ActivityScrollViewport>>,
+    activity_diffs: RefCell<HashMap<Uuid, Rc<activity_diff::Diff>>>,
+    activity_diff_viewports: RefCell<HashMap<Uuid, ActivityScrollViewport>>,
+    activity_section_viewports:
+        RefCell<HashMap<(Uuid, ActivityDisclosureSectionKind), ActivityScrollViewport>>,
+    activity_detail_viewports: RefCell<HashMap<Uuid, ActivityScrollViewport>>,
+}
+
+impl Default for SessionTabState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionTabState {
+    fn new() -> Self {
+        // Measure visible rows only, with a generous overdraw — the same shape
+        // Zed's own agent chat uses. `measure_all` lays out every row in the
+        // session on the first frame and again after any structural splice,
+        // which a long transcript cannot afford.
+        let transcript_rows = ListState::new(0, ListAlignment::Bottom, px(2048.0));
+        let anchored_transcript_rows = ListState::new(0, ListAlignment::Top, px(2048.0));
+        let transcript_is_scrolled = Rc::new(Cell::new(false));
+        let transcript_anchor_following = Rc::new(Cell::new(false));
+        let transcript_tail_recheck = Rc::new(Cell::new(false));
+        // A wheel scroll drops tail following and asks the next measured frame
+        // whether it landed back on the tail. GPUI re-engages its own tail pin
+        // when a bottom-aligned list reaches the end — it represents that end as
+        // no logical offset — but a turn renders through the top-aligned
+        // anchored list, whose end is an ordinary offset, so only this can.
+        transcript_rows.set_scroll_handler({
+            let transcript_is_scrolled = transcript_is_scrolled.clone();
+            let transcript_anchor_following = transcript_anchor_following.clone();
+            let transcript_tail_recheck = transcript_tail_recheck.clone();
+            move |event, window, _| {
+                transcript_is_scrolled.set(event.is_scrolled);
+                transcript_anchor_following.set(false);
+                transcript_tail_recheck.set(true);
+                window.refresh();
+            }
+        });
+        anchored_transcript_rows.set_scroll_handler({
+            let transcript_is_scrolled = transcript_is_scrolled.clone();
+            let transcript_anchor_following = transcript_anchor_following.clone();
+            let transcript_tail_recheck = transcript_tail_recheck.clone();
+            move |event, window, _| {
+                transcript_is_scrolled.set(event.is_scrolled);
+                transcript_anchor_following.set(false);
+                transcript_tail_recheck.set(true);
+                window.refresh();
+            }
+        });
+        Self {
+            transcript_rows,
+            anchored_transcript_rows,
+            transcript_anchor: Cell::new(None),
+            transcript_anchor_end_space: Rc::new(Cell::new(Pixels::ZERO)),
+            transcript_anchor_following,
+            transcript_tail_recheck,
+            transcript_is_scrolled,
+            transcript_scroll_to_bottom_visible: Cell::new(false),
+            transcript_scrollbar_dragging: Cell::new(false),
+            activities_expanded: HashMap::new(),
+            expanded_activity_items: HashMap::new(),
+            expanded_turns: HashSet::new(),
+            expanded_changed_files: HashSet::new(),
+            expanded_compactions: HashSet::new(),
+            expanded_provider_retries: HashSet::new(),
+            activity_markdown: RefCell::new(HashMap::new()),
+            reasoning_views: RefCell::new(HashMap::new()),
+            activity_scroll_viewports: RefCell::new(HashMap::new()),
+            activity_diffs: RefCell::new(HashMap::new()),
+            activity_diff_viewports: RefCell::new(HashMap::new()),
+            activity_section_viewports: RefCell::new(HashMap::new()),
+            activity_detail_viewports: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Move the live transcript view fields out of [`Fintwind`], leaving
+    /// throwaway empties behind — the next `install_live` overwrites them.
+    fn take_live(fintwind: &mut Fintwind) -> Self {
+        Self {
+            transcript_rows: std::mem::replace(
+                &mut fintwind.transcript_rows,
+                ListState::new(0, ListAlignment::Bottom, px(0.0)),
+            ),
+            anchored_transcript_rows: std::mem::replace(
+                &mut fintwind.anchored_transcript_rows,
+                ListState::new(0, ListAlignment::Top, px(0.0)),
+            ),
+            transcript_anchor: std::mem::take(&mut fintwind.transcript_anchor),
+            transcript_anchor_end_space: std::mem::replace(
+                &mut fintwind.transcript_anchor_end_space,
+                Rc::new(Cell::new(Pixels::ZERO)),
+            ),
+            transcript_anchor_following: std::mem::replace(
+                &mut fintwind.transcript_anchor_following,
+                Rc::new(Cell::new(false)),
+            ),
+            transcript_tail_recheck: std::mem::replace(
+                &mut fintwind.transcript_tail_recheck,
+                Rc::new(Cell::new(false)),
+            ),
+            transcript_is_scrolled: std::mem::replace(
+                &mut fintwind.transcript_is_scrolled,
+                Rc::new(Cell::new(false)),
+            ),
+            transcript_scroll_to_bottom_visible: std::mem::take(
+                &mut fintwind.transcript_scroll_to_bottom_visible,
+            ),
+            transcript_scrollbar_dragging: std::mem::take(
+                &mut fintwind.transcript_scrollbar_dragging,
+            ),
+            activities_expanded: std::mem::take(&mut fintwind.activities_expanded),
+            expanded_activity_items: std::mem::take(&mut fintwind.expanded_activity_items),
+            expanded_turns: std::mem::take(&mut fintwind.expanded_turns),
+            expanded_changed_files: std::mem::take(&mut fintwind.expanded_changed_files),
+            expanded_compactions: std::mem::take(&mut fintwind.expanded_compactions),
+            expanded_provider_retries: std::mem::take(&mut fintwind.expanded_provider_retries),
+            activity_markdown: std::mem::take(&mut fintwind.activity_markdown),
+            reasoning_views: std::mem::take(&mut fintwind.reasoning_views),
+            activity_scroll_viewports: std::mem::take(&mut fintwind.activity_scroll_viewports),
+            activity_diffs: std::mem::take(&mut fintwind.activity_diffs),
+            activity_diff_viewports: std::mem::take(&mut fintwind.activity_diff_viewports),
+            activity_section_viewports: std::mem::take(&mut fintwind.activity_section_viewports),
+            activity_detail_viewports: std::mem::take(&mut fintwind.activity_detail_viewports),
+        }
+    }
+
+    /// Install this bundle as the live transcript view fields.
+    fn install_live(self, fintwind: &mut Fintwind) {
+        fintwind.transcript_rows = self.transcript_rows;
+        fintwind.anchored_transcript_rows = self.anchored_transcript_rows;
+        fintwind.transcript_anchor = self.transcript_anchor;
+        fintwind.transcript_anchor_end_space = self.transcript_anchor_end_space;
+        fintwind.transcript_anchor_following = self.transcript_anchor_following;
+        fintwind.transcript_tail_recheck = self.transcript_tail_recheck;
+        fintwind.transcript_is_scrolled = self.transcript_is_scrolled;
+        fintwind.transcript_scroll_to_bottom_visible = self.transcript_scroll_to_bottom_visible;
+        fintwind.transcript_scrollbar_dragging = self.transcript_scrollbar_dragging;
+        fintwind.activities_expanded = self.activities_expanded;
+        fintwind.expanded_activity_items = self.expanded_activity_items;
+        fintwind.expanded_turns = self.expanded_turns;
+        fintwind.expanded_changed_files = self.expanded_changed_files;
+        fintwind.expanded_compactions = self.expanded_compactions;
+        fintwind.expanded_provider_retries = self.expanded_provider_retries;
+        fintwind.activity_markdown = self.activity_markdown;
+        fintwind.reasoning_views = self.reasoning_views;
+        fintwind.activity_scroll_viewports = self.activity_scroll_viewports;
+        fintwind.activity_diffs = self.activity_diffs;
+        fintwind.activity_diff_viewports = self.activity_diff_viewports;
+        fintwind.activity_section_viewports = self.activity_section_viewports;
+        fintwind.activity_detail_viewports = self.activity_detail_viewports;
+    }
+}
+
 pub struct Fintwind {
     /// Owns the headless provider process for exactly as long as the desktop
     /// app entity. Debug builds can replace it independently after a rebuild;
@@ -1289,6 +1475,28 @@ pub struct Fintwind {
     /// focus whenever GPUI re-renders the list.
     transcript_control_focuses: RefCell<HashMap<String, FocusHandle>>,
     session_navigation: SessionNavigation,
+    /// Ordered working set of open session tabs. The active tab is exactly
+    /// `state.selected_session`; every path that shows a session (sidebar,
+    /// history, notifications) opens its tab first through
+    /// [`Fintwind::select_session`].
+    open_tabs: Vec<Uuid>,
+    /// Tabs whose session changed while in the background. Cleared when the
+    /// tab activates; drawn as the unread dot beside the title.
+    tab_unread: HashSet<Uuid>,
+    /// Per-tab transcript presentation state, swapped into the live fields at
+    /// activation. See [`SessionTabState`].
+    transcript_view_states: HashMap<Uuid, SessionTabState>,
+    /// Live tab-strip drag: which tab the press landed on, where it started,
+    /// and whether the pointer has moved far enough to reorder.
+    session_tab_drag: Option<SessionTabDrag>,
+    /// Horizontal scroll of the header tab strip, for overflow and reveal.
+    session_tabs_scroll_handle: ScrollHandle,
+    /// The tab the next strip render must scroll into view.
+    pending_session_tab_reveal: Option<usize>,
+    /// Stable focus handles for tabs, so keyboard focus survives re-renders.
+    tab_focuses: RefCell<HashMap<Uuid, FocusHandle>>,
+    /// Focus handle of the tab strip's new-tab button.
+    new_tab_focus: FocusHandle,
     /// Sidebar task currently showing its inline rename field.
     session_rename: Option<Uuid>,
     /// One stable field reused across sidebar rows so virtualization never
@@ -1776,6 +1984,10 @@ pub struct Fintwind {
     sidebar_pane: Entity<FintwindPane>,
     transcript_pane: Entity<FintwindPane>,
     right_panel_pane: Entity<FintwindPane>,
+    /// The header tab strip. Its own island so the working spinners it hosts
+    /// lease the strip's view, not the root: a pulse tick rebuilds only the
+    /// strip, never the whole window.
+    session_tabs_pane: Entity<FintwindPane>,
     /// The unix second the pending time-label wake-up targets, or `None` when
     /// none is armed. See `schedule_time_label_wake`.
     time_label_wake: Cell<Option<u64>>,
@@ -1811,6 +2023,7 @@ mod settings;
 mod sidebar;
 mod skills_page;
 mod streaming;
+mod tabs;
 mod transcript;
 mod transcript_view;
 mod update_card;
@@ -1830,6 +2043,7 @@ pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
 pub use sidebar::init as init_sidebar_keys;
 use sidebar::{SidebarGroupScroll, SidebarRow};
+use tabs::SessionTabDrag;
 pub use skills_page::init as init_skills_keys;
 use streaming::*;
 use transcript::*;
@@ -2244,6 +2458,7 @@ impl Fintwind {
         let sidebar_pane = FintwindPane::new(Fintwind::sidebar_pane_content, cx);
         let transcript_pane = FintwindPane::new(Fintwind::transcript_pane_content, cx);
         let right_panel_pane = FintwindPane::new(Fintwind::right_panel_pane_content, cx);
+        let session_tabs_pane = FintwindPane::new(Fintwind::session_tabs_pane_content, cx);
         let workspace_client = fintwind_client::WorkspaceClient::new(daemon.client());
         let (projectless_migrated, projectless_migration_error) =
             migrate_legacy_projectless_projects(&mut state, &workspace_client);
@@ -2403,44 +2618,11 @@ impl Fintwind {
         }) {
             session_navigation.remember_new_task(session_id);
         }
-        // Measure visible rows only, with a generous overdraw — the same shape
-        // Zed's own agent chat uses. `measure_all` lays out every row in the
-        // session on the first frame and again after any structural splice,
-        // which a long transcript cannot afford.
-        let transcript_rows = ListState::new(0, ListAlignment::Bottom, px(2048.0));
-        let anchored_transcript_rows = ListState::new(0, ListAlignment::Top, px(2048.0));
+        // The live transcript view starts as the first tab's bundle; later
+        // activations swap bundles in and out through `transcript_view_states`.
+        let transcript_view = SessionTabState::new();
         let sidebar_list_state = ListState::new(0, ListAlignment::Top, px(256.0));
         let branch_picker_list_state = ListState::new(0, ListAlignment::Top, px(152.0));
-        let transcript_is_scrolled = Rc::new(Cell::new(false));
-        let transcript_anchor_following = Rc::new(Cell::new(false));
-        let transcript_tail_recheck = Rc::new(Cell::new(false));
-        // A wheel scroll drops tail following and asks the next measured frame
-        // whether it landed back on the tail. GPUI re-engages its own tail pin
-        // when a bottom-aligned list reaches the end — it represents that end as
-        // no logical offset — but a turn renders through the top-aligned
-        // anchored list, whose end is an ordinary offset, so only this can.
-        transcript_rows.set_scroll_handler({
-            let transcript_is_scrolled = transcript_is_scrolled.clone();
-            let transcript_anchor_following = transcript_anchor_following.clone();
-            let transcript_tail_recheck = transcript_tail_recheck.clone();
-            move |event, window, _| {
-                transcript_is_scrolled.set(event.is_scrolled);
-                transcript_anchor_following.set(false);
-                transcript_tail_recheck.set(true);
-                window.refresh();
-            }
-        });
-        anchored_transcript_rows.set_scroll_handler({
-            let transcript_is_scrolled = transcript_is_scrolled.clone();
-            let transcript_anchor_following = transcript_anchor_following.clone();
-            let transcript_tail_recheck = transcript_tail_recheck.clone();
-            move |event, window, _| {
-                transcript_is_scrolled.set(event.is_scrolled);
-                transcript_anchor_following.set(false);
-                transcript_tail_recheck.set(true);
-                window.refresh();
-            }
-        });
         // Enable GPUI's experimental overlay plane so deferred draws (menus,
         // tooltips, popovers) composite above native content — without it the
         // browser surface would cover them.
@@ -2936,6 +3118,9 @@ impl Fintwind {
                 })
                 .into_iter()
                 .collect::<HashSet<Uuid>>();
+            // The persisted selection resumes as the single open tab — the
+            // tab group itself is never restored.
+            let open_tabs = state.selected_session.into_iter().collect::<Vec<Uuid>>();
 
             Self {
                 daemon,
@@ -3023,8 +3208,6 @@ impl Fintwind {
                 provider_retries: HashMap::new(),
                 transcript_control_focuses: RefCell::new(HashMap::new()),
                 session_navigation,
-                session_rename: None,
-                session_rename_input,
                 sidebar_expanded_groups,
                 sidebar_visible,
                 sidebar_width,
@@ -3213,8 +3396,8 @@ impl Fintwind {
                 copied_activity_feedback: HashMap::new(),
                 copied_activity_generation: 0,
                 message_edit: None,
-                transcript_rows,
-                anchored_transcript_rows,
+                transcript_rows: transcript_view.transcript_rows,
+                anchored_transcript_rows: transcript_view.anchored_transcript_rows,
                 sidebar_list_state,
                 sidebar_scrollbar: ScrollbarState::new(),
                 sidebar_row_cache: RefCell::new(Vec::new()),
@@ -3235,13 +3418,14 @@ impl Fintwind {
                 pending_checkpoint_captures: interrupted_turn_checkpoints,
                 checkpoint_captures_in_flight: HashSet::new(),
                 last_idle_session_sweep: Instant::now(),
-                transcript_anchor: Cell::new(None),
-                transcript_anchor_end_space: Rc::new(Cell::new(Pixels::ZERO)),
-                transcript_anchor_following,
-                transcript_tail_recheck,
-                transcript_is_scrolled,
-                transcript_scroll_to_bottom_visible: Cell::new(false),
-                transcript_scrollbar_dragging: Cell::new(false),
+                transcript_anchor: transcript_view.transcript_anchor,
+                transcript_anchor_end_space: transcript_view.transcript_anchor_end_space,
+                transcript_anchor_following: transcript_view.transcript_anchor_following,
+                transcript_tail_recheck: transcript_view.transcript_tail_recheck,
+                transcript_is_scrolled: transcript_view.transcript_is_scrolled,
+                transcript_scroll_to_bottom_visible: transcript_view
+                    .transcript_scroll_to_bottom_visible,
+                transcript_scrollbar_dragging: transcript_view.transcript_scrollbar_dragging,
                 transcript_layout_width: Cell::new(Pixels::ZERO),
                 message_markdown: RefCell::new(HashMap::new()),
                 activity_markdown: RefCell::new(HashMap::new()),
@@ -3259,9 +3443,20 @@ impl Fintwind {
                 composer_row_cache: RefCell::new(composer::ComposerRowCache::default()),
                 navigation_rail: navigation_rail.clone(),
                 navigation_rail_reset_generation: Cell::new(0),
+                open_tabs,
+                tab_unread: HashSet::new(),
+                transcript_view_states: HashMap::new(),
+                session_tab_drag: None,
+                session_tabs_scroll_handle: ScrollHandle::new(),
+                pending_session_tab_reveal: None,
+                tab_focuses: RefCell::new(HashMap::new()),
+                new_tab_focus: cx.focus_handle(),
+                session_rename: None,
+                session_rename_input,
                 sidebar_pane: sidebar_pane.clone(),
                 transcript_pane: transcript_pane.clone(),
                 right_panel_pane: right_panel_pane.clone(),
+                session_tabs_pane: session_tabs_pane.clone(),
                 time_label_wake: Cell::new(None),
                 time_label_wake_generation: Cell::new(0),
                 fps_last_frame: Instant::now(),
@@ -3270,7 +3465,7 @@ impl Fintwind {
             }
         });
         navigation_rail.update(cx, |rail, _| rail.set_fintwind(entity.downgrade()));
-        for pane in [&sidebar_pane, &transcript_pane, &right_panel_pane] {
+        for pane in [&sidebar_pane, &transcript_pane, &right_panel_pane, &session_tabs_pane] {
             pane.update(cx, |pane, cx| pane.bind(&entity, cx));
         }
         let initial_row_count = entity.read(cx).transcript_row_count();
@@ -3286,6 +3481,17 @@ impl Fintwind {
                     .is_some_and(|session| session.detail_loaded)
                 {
                     this.refresh_context_summary_id(session_id);
+                }
+            }
+            // A window never sits without a tab. With nothing persisted, the
+            // project's own draft — or a fresh session — takes its place;
+            // a first run with no projects at all keeps the onboarding.
+            if this.open_tabs.is_empty() {
+                let project_id = this.state.selected_project.or_else(|| {
+                    this.state.projects.first().map(|project| project.id)
+                });
+                if let Some(project_id) = project_id {
+                    this.create_session_for(project_id, cx);
                 }
             }
             this.restart_task_state_sync();

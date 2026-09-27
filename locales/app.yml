@@ -2436,3 +2436,11 @@ usage_page.projects_title:
   en: Projects
 usage_page.projects_caption:
   en: "%{count} projects"
+tabs.new_session:
+  en: New session tab
+tabs.close:
+  en: Close tab
+tabs.waiting:
+  en: Waiting for your input
+tabs.unread:
+  en: New activity

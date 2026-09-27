@@ -70,6 +70,9 @@ actions!(
         ToggleFpsCounter,
         NavigateBack,
         NavigateForward,
+        CloseSessionTab,
+        NextSessionTab,
+        PreviousSessionTab,
         FocusComposer,
         ToggleModelPicker,
         ToggleUsagePanel,
@@ -99,6 +102,12 @@ actions!(
         WebviewSelectAll
     ]
 );
+
+/// Jump to the Nth session tab via `Ctrl+1..=9`; index 8 means "last tab",
+/// so the binding count stays fixed as tabs open and close.
+#[derive(Clone, Debug, PartialEq, serde::Deserialize, gpui::Action)]
+#[action(namespace = fintwind, no_json)]
+pub struct SelectSessionTab(pub usize);
 
 const DEFAULT_WINDOW_WIDTH: f32 = 1380.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 880.0;
@@ -209,7 +218,23 @@ pub fn run() {
             cx.bind_keys([
                 // `secondary` is Control on Windows.
                 KeyBinding::new("secondary-q", Quit, None),
-                KeyBinding::new("secondary-w", CloseWindow, None),
+                // Browser-conventional session tabs: Ctrl+W closes the active
+                // tab and the window close moves to Ctrl+Shift+W (Alt+F4 is
+                // unaffected). Ctrl+T opens a new session tab.
+                KeyBinding::new("secondary-shift-w", CloseWindow, None),
+                KeyBinding::new("secondary-w", CloseSessionTab, Some("Fintwind")),
+                KeyBinding::new("secondary-t", NewSession, None),
+                KeyBinding::new("secondary-tab", NextSessionTab, Some("Fintwind")),
+                KeyBinding::new("secondary-shift-tab", PreviousSessionTab, Some("Fintwind")),
+                KeyBinding::new("secondary-1", SelectSessionTab(0), Some("Fintwind")),
+                KeyBinding::new("secondary-2", SelectSessionTab(1), Some("Fintwind")),
+                KeyBinding::new("secondary-3", SelectSessionTab(2), Some("Fintwind")),
+                KeyBinding::new("secondary-4", SelectSessionTab(3), Some("Fintwind")),
+                KeyBinding::new("secondary-5", SelectSessionTab(4), Some("Fintwind")),
+                KeyBinding::new("secondary-6", SelectSessionTab(5), Some("Fintwind")),
+                KeyBinding::new("secondary-7", SelectSessionTab(6), Some("Fintwind")),
+                KeyBinding::new("secondary-8", SelectSessionTab(7), Some("Fintwind")),
+                KeyBinding::new("secondary-9", SelectSessionTab(8), Some("Fintwind")),
                 KeyBinding::new("secondary-n", NewSession, None),
                 KeyBinding::new("secondary-o", NewProject, None),
                 KeyBinding::new("secondary-,", OpenSettings, None),

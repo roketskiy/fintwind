@@ -577,8 +577,14 @@ impl Fintwind {
                     self.state.sessions[index] = session;
                     self.install_prepared_driver(session_id, prepared);
                     if self.state.selected_session == Some(session_id) {
-                        self.reset_visible_state();
-                        self.reset_transcript_rows(self.transcript_row_count());
+                        // The authoritative session replaced the local row.
+                        // Disclosures and scroll machinery reset (their
+                        // positions may have moved), but the restored tab
+                        // keeps its scroll position when the document only
+                        // grew while no runtime was attached.
+                        self.reset_session_view_state();
+                        self.seed_live_transcript_state();
+                        self.reconcile_transcript_lists();
                     }
                     cx.notify();
                 }
@@ -1829,16 +1835,22 @@ impl Fintwind {
             .runtimes
             .iter()
             .filter(|(session_id, runtime)| {
-                let session = self
-                    .state
-                    .sessions
-                    .iter()
-                    .find(|session| session.id == **session_id);
-                session_is_reapable(
-                    session,
-                    runtime.last_active_at.elapsed(),
-                    self.session_has_live_background_work(**session_id),
-                )
+                // An open tab holds its provider resident on purpose: that is
+                // what keeps switching back instant and its working state
+                // live. Only a closed tab's runtime ages out here.
+                !self.open_tabs.contains(session_id)
+                    && {
+                        let session = self
+                            .state
+                            .sessions
+                            .iter()
+                            .find(|session| session.id == **session_id);
+                        session_is_reapable(
+                            session,
+                            runtime.last_active_at.elapsed(),
+                            self.session_has_live_background_work(**session_id),
+                        )
+                    }
             })
             .map(|(session_id, _)| *session_id)
             .collect::<Vec<_>>();
@@ -2658,9 +2670,19 @@ impl Fintwind {
             if keep_runtime {
                 self.runtimes.insert(session_id, runtime);
             }
-            changed |= runtime_changed || background_changed;
+            let session_updated = runtime_changed || background_changed;
+            changed |= session_updated;
             persisted_state_changed |= runtime_changed || background_persisted;
             force_save |= background_persisted;
+            // A background tab's session just changed — new output, tool work,
+            // or a permission ask. The tab shows an unread dot until the user
+            // opens it.
+            if session_updated
+                && self.state.selected_session != Some(session_id)
+                && self.open_tabs.contains(&session_id)
+            {
+                self.tab_unread.insert(session_id);
+            }
             if self.state.selected_session == Some(session_id)
                 && (runtime_changed || follow_up_remeasure)
             {

@@ -366,6 +366,20 @@ impl Fintwind {
                     // conversation open on the surviving row.
                     if self.state.selected_session == Some(remove) {
                         self.state.selected_session = Some(claim);
+                        // The twin's tab follows the surviving row — unless
+                        // the survivor already has its own tab, in which case
+                        // the twin's tab just closes rather than duplicating.
+                        match self.open_tabs.iter().position(|tab| *tab == remove) {
+                            Some(index) if !self.open_tabs.contains(&claim) => {
+                                self.open_tabs[index] = claim;
+                            }
+                            Some(index) => {
+                                self.open_tabs.remove(index);
+                            }
+                            None => self.open_session_tab(claim),
+                        }
+                        self.transcript_view_states.remove(&remove);
+                        self.tab_unread.remove(&claim);
                         self.reveal_sidebar_session_project(claim, cx);
                     }
                     self.drop_roster_row(remove);
@@ -518,6 +532,7 @@ impl Fintwind {
         self.native_transcript_fetched.remove(&session_id);
         self.staged_undos.remove(&session_id);
         self.undo_redo_preparations.remove(&session_id);
+        self.forget_session_tab(session_id);
         self.state.selected_session = self
             .state
             .selected_session

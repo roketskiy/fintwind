@@ -450,7 +450,6 @@ activity.action_edit: 編集
 activity.action_read: 読み込み
 activity.action_search: 検索
 activity.action_list: 一覧
-activity.action_plan: 計画
 activity.action_use: 使用
 activity.ask_questions: 質問する
 activity.arguments: 引数
@@ -853,12 +852,6 @@ environment.commit_or_push: コミットまたはプッシュ
 environment.compare_branch: ブランチを比較
 capsule.tasks: セッションツール
 capsule.git_tools: Git ツール
-capsule.todo: Todo
-capsule.todo_empty: Todo 項目はありません
-todo.status.pending: 保留中
-todo.status.in_progress: 進行中
-todo.status.completed: 完了
-todo.status.failed: 失敗
 
 commit.message_placeholder: コミットメッセージ（空欄の場合は自動生成）…
 commit.message: コミットメッセージ

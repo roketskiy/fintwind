@@ -122,9 +122,6 @@ impl Fintwind {
                         } else {
                             false
                         };
-                        // The hydrated transcript may carry plan activities
-                        // the stale model never saw.
-                        fintwind.rebuild_todo_summary(session_id);
                         let pending = fintwind
                             .pending_session_activation
                             .filter(|pending| pending.session_id == session_id);

@@ -608,9 +608,6 @@ impl Fintwind {
                                 unix_time().max(session.last_reply_at.unwrap_or(0)),
                             );
                             this.state.mark_session_dirty(session_id);
-                            // The pulled blocks may carry plan activities the
-                            // replaced state never saw.
-                            this.rebuild_todo_summary(session_id);
                             if this.state.selected_session == Some(session_id) {
                                 this.reset_visible_state();
                                 this.reset_transcript_rows(this.transcript_row_count());

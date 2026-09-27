@@ -66,184 +66,6 @@ struct EnvironmentSummary {
     compare_focus: FocusHandle,
 }
 
-/// Progress of one entry of the latest plan activity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TodoEntryState {
-    Pending,
-    InProgress,
-    Completed,
-    Failed,
-}
-
-impl TodoEntryState {
-    /// Providers spell plan statuses many ways; map the known families and
-    /// leave anything else pending.
-    fn from_status(status: &str) -> Self {
-        match status
-            .trim()
-            .to_ascii_lowercase()
-            .replace(['-', ' '], "_")
-            .as_str()
-        {
-            "completed" | "complete" | "done" | "finished" | "success" | "succeeded" | "ok" => {
-                Self::Completed
-            }
-            "in_progress" | "inprogress" | "active" | "running" | "current" | "started"
-            | "working" => Self::InProgress,
-            "failed" | "error" | "errored" | "aborted" | "cancelled" | "canceled" => Self::Failed,
-            _ => Self::Pending,
-        }
-    }
-
-    fn label(self) -> String {
-        match self {
-            Self::Pending => tr!("todo.status.pending"),
-            Self::InProgress => tr!("todo.status.in_progress"),
-            Self::Completed => tr!("todo.status.completed"),
-            Self::Failed => tr!("todo.status.failed"),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct TodoEntry {
-    pub label: String,
-    pub state: TodoEntryState,
-}
-
-/// Read-only display model for the capsule's Todo section: the newest
-/// `ActivityKind::Plan` activity in the transcript. Built off the render
-/// path — see [`Fintwind::rebuild_todo_summary`].
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(super) struct TodoSummary {
-    pub entries: Vec<TodoEntry>,
-    pub updating: bool,
-    pub failed: bool,
-}
-
-/// Extracts the display model from a session's transcript blocks. Pure, so
-/// callers can invoke it on plan updates, hydration, and selection changes
-/// without ever walking blocks from a row builder.
-pub(super) fn todo_summary_from_blocks(blocks: &[crate::model::TranscriptBlock]) -> TodoSummary {
-    blocks
-        .iter()
-        .rev()
-        .flat_map(|block| block.activities.iter().rev())
-        .find(|activity| activity.kind == crate::model::ActivityKind::Plan)
-        .map(todo_summary_from_activity)
-        .unwrap_or_default()
-}
-
-fn todo_summary_from_activity(activity: &crate::model::ActivityItem) -> TodoSummary {
-    let mut entries = todo_entries_from_json(activity.arguments.as_deref());
-    if entries.is_empty() {
-        entries = todo_entries_from_json(activity.output.as_deref());
-    }
-    if entries.is_empty() {
-        let state = match (activity.failed, activity.complete) {
-            (true, _) => TodoEntryState::Failed,
-            (false, false) => TodoEntryState::InProgress,
-            (false, true) => TodoEntryState::Completed,
-        };
-        entries.push(TodoEntry {
-            label: fallback_todo_label(activity),
-            state,
-        });
-    }
-    TodoSummary {
-        entries,
-        updating: !activity.complete,
-        failed: activity.failed,
-    }
-}
-
-fn fallback_todo_label(activity: &crate::model::ActivityItem) -> String {
-    if !crate::model::is_generic_activity_title(activity.kind, &activity.title) {
-        return activity.title.clone();
-    }
-    if let Some(detail) = activity
-        .detail
-        .as_deref()
-        .map(str::trim)
-        .filter(|detail| !detail.is_empty())
-    {
-        return detail.to_owned();
-    }
-    tr!("activity.action_plan")
-}
-
-fn todo_entries_from_json(json: Option<&str>) -> Vec<TodoEntry> {
-    let Some(text) = json
-        .map(str::trim)
-        .filter(|text| text.starts_with('[') || text.starts_with('{'))
-    else {
-        return Vec::new();
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
-        return Vec::new();
-    };
-    todo_entries_from_value(&value)
-}
-
-fn todo_entries_from_value(value: &serde_json::Value) -> Vec<TodoEntry> {
-    for key in ["todos", "todo", "plan", "items", "steps"] {
-        if let Some(items) = value.get(key).and_then(|items| items.as_array()) {
-            let entries = items
-                .iter()
-                .filter_map(todo_entry_from_item)
-                .collect::<Vec<_>>();
-            if !entries.is_empty() {
-                return entries;
-            }
-        }
-    }
-    value
-        .as_array()
-        .map(|items| items.iter().filter_map(todo_entry_from_item).collect())
-        .unwrap_or_default()
-}
-
-fn todo_entry_from_item(item: &serde_json::Value) -> Option<TodoEntry> {
-    match item {
-        serde_json::Value::String(text) => {
-            let label = text.trim();
-            (!label.is_empty()).then(|| TodoEntry {
-                label: label.to_owned(),
-                state: TodoEntryState::Pending,
-            })
-        }
-        serde_json::Value::Object(map) => {
-            let label = [
-                "content",
-                "text",
-                "title",
-                "description",
-                "step",
-                "label",
-                "name",
-            ]
-            .iter()
-            .find_map(|key| map.get(*key).and_then(|value| value.as_str()))
-            .map(str::trim)
-            .filter(|label| !label.is_empty())?;
-            let state = ["status", "state"]
-                .iter()
-                .find_map(|key| map.get(*key).and_then(|value| value.as_str()))
-                .map(TodoEntryState::from_status)
-                .or_else(|| match map.get("completed") {
-                    Some(serde_json::Value::Bool(true)) => Some(TodoEntryState::Completed),
-                    _ => None,
-                })
-                .unwrap_or(TodoEntryState::Pending);
-            Some(TodoEntry {
-                label: label.to_owned(),
-                state,
-            })
-        }
-        _ => None,
-    }
-}
-
 impl BackgroundWorkRegistry {
     fn from_snapshots(snapshots: &[BackgroundWorkSnapshot]) -> Self {
         let mut registry = Self::default();
@@ -1256,34 +1078,8 @@ impl Fintwind {
         self.open_right_panel_surface(RightPanelSurface::BackgroundWork { key, title }, cx);
     }
 
-    pub(super) fn todo_summary(&self, session_id: Option<Uuid>) -> Rc<TodoSummary> {
-        session_id
-            .and_then(|session_id| self.todo_summaries.borrow().get(&session_id).cloned())
-            .unwrap_or_default()
-    }
-
-    /// Rebuilds the session's todo display model from its transcript blocks.
-    /// Returns whether anything changed so event handlers can decide to
-    /// repaint. Render must call [`Self::todo_summary`] instead — this walks
-    /// the whole session.
-    pub(super) fn rebuild_todo_summary(&mut self, session_id: Uuid) -> bool {
-        let summary = Rc::new(
-            self.state
-                .session_mut(session_id)
-                .map(|session| todo_summary_from_blocks(&session.transcript_blocks))
-                .unwrap_or_default(),
-        );
-        let changed = self
-            .todo_summaries
-            .borrow()
-            .get(&session_id)
-            .is_none_or(|previous| **previous != *summary);
-        self.todo_summaries.borrow_mut().insert(session_id, summary);
-        changed
-    }
-
     /// Floating tool capsule over the session pane: collapsed it shows the
-    /// git change totals; expanded it lists Git tools, todos, subagents, and
+    /// git change totals; expanded it lists Git tools, subagents, and
     /// background work for the selected session.
     pub(super) fn render_task_capsule(&self, cx: &mut Context<Self>) -> AnyElement {
         let session = self.selected_session();
@@ -1325,7 +1121,6 @@ impl Fintwind {
                 .filter(|(snapshot_path, _)| snapshot_path == path)
                 .map(|(_, snapshot)| snapshot)
         });
-        let todo = self.todo_summary(session_id);
         let (additions, deletions) = snapshot
             .map(|snapshot| (snapshot.additions, snapshot.deletions))
             .unwrap_or_default();
@@ -1436,7 +1231,6 @@ impl Fintwind {
                         handle,
                         session_id.unwrap_or_else(Uuid::nil),
                         environment.clone(),
-                        todo.clone(),
                         entries.clone(),
                         weak.clone(),
                         cx,
@@ -2036,7 +1830,6 @@ fn render_task_capsule_card(
     handle: &ContextMenuHandle,
     session_id: Uuid,
     environment: Option<EnvironmentSummary>,
-    todo: Rc<TodoSummary>,
     entries: Rc<Vec<BackgroundSummaryEntry>>,
     weak: WeakEntity<Fintwind>,
     cx: &mut App,
@@ -2077,8 +1870,6 @@ fn render_task_capsule_card(
         .flex_col()
         .gap(px(6.0))
         .child(git_tools)
-        .child(separator())
-        .child(render_todo_section(&todo, &theme))
         .child(separator())
         .child(render_background_summary_section(
             tr!("background.agents"),
@@ -2267,105 +2058,6 @@ fn render_capsule_info_row(
                 .text_color(theme.text_secondary)
                 .child(label),
         )
-}
-
-fn render_todo_section(todo: &TodoSummary, theme: &Theme) -> Div {
-    let mut rows = div().w_full().flex().flex_col().gap(px(1.0));
-    if todo.entries.is_empty() {
-        rows = rows.child(
-            div()
-                .px(px(8.0))
-                .py(px(6.0))
-                .text_size(ui_px(12.0))
-                .text_color(theme.text_tertiary)
-                .child(tr!("capsule.todo_empty")),
-        );
-    } else {
-        for (index, entry) in todo.entries.iter().enumerate() {
-            rows = rows.child(render_todo_row(index, entry, theme));
-        }
-    }
-    div()
-        .w_full()
-        .flex()
-        .flex_col()
-        .gap(px(5.0))
-        .child(
-            div()
-                .id("task-capsule-todo-header")
-                .h(px(26.0))
-                .px(px(8.0))
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .text_size(ui_px(12.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_tertiary)
-                        .child(tr!("capsule.todo")),
-                )
-                .children(todo.updating.then(|| {
-                    motion::spin_slow(icon("icons/loader-circle.svg", 10.0, theme.text_tertiary))
-                })),
-        )
-        .child(rows)
-}
-
-fn render_todo_row(index: usize, entry: &TodoEntry, theme: &Theme) -> Stateful<Div> {
-    let (marker, label_color) = match entry.state {
-        TodoEntryState::Pending => (
-            div()
-                .size(px(10.0))
-                .rounded_full()
-                .border_1()
-                .border_color(theme.border_strong)
-                .into_any_element(),
-            theme.text_secondary,
-        ),
-        TodoEntryState::InProgress => (
-            motion::spin_slow(icon("icons/loader-circle.svg", 12.0, theme.accent)),
-            theme.text,
-        ),
-        TodoEntryState::Completed => (
-            icon("icons/check.svg", 12.0, theme.success).into_any_element(),
-            theme.text_tertiary,
-        ),
-        TodoEntryState::Failed => (
-            icon("icons/x.svg", 12.0, theme.danger).into_any_element(),
-            theme.text_tertiary,
-        ),
-    };
-    div()
-        .id(SharedString::from(format!("task-capsule-todo-row-{index}")))
-        .min_h(px(26.0))
-        .w_full()
-        .px(px(8.0))
-        .py(px(3.0))
-        .rounded(px(6.0))
-        .flex()
-        .items_center()
-        .gap(px(9.0))
-        .child(
-            div()
-                .size(px(12.0))
-                .flex_none()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(marker),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .flex_1()
-                .line_clamp(1)
-                .text_ellipsis()
-                .text_size(ui_px(12.5))
-                .text_color(label_color)
-                .child(entry.label.clone()),
-        )
-        .tooltip(Tooltip::text(entry.state.label()))
 }
 
 fn render_environment_action_row(
@@ -3122,171 +2814,4 @@ mod tests {
         );
     }
 
-    fn plan_activity(
-        title: &str,
-        arguments: Option<String>,
-        complete: bool,
-        failed: bool,
-    ) -> crate::model::ActivityItem {
-        let mut activity = crate::model::ActivityItem::new(
-            Some("plan-source".to_owned()),
-            crate::model::ActivityKind::Plan,
-            title,
-            None,
-            complete,
-        );
-        activity.failed = failed;
-        activity.arguments = arguments;
-        activity
-    }
-
-    fn block(activities: Vec<crate::model::ActivityItem>) -> crate::model::TranscriptBlock {
-        crate::model::TranscriptBlock {
-            after_message: 0,
-            turn_id: None,
-            activities,
-        }
-    }
-
-    #[test]
-    fn todo_summary_prefers_the_newest_plan_activity() {
-        let older = plan_activity(
-            "Plan",
-            Some(r#"{"todos":[{"content":"old task","status":"pending"}]}"#.to_owned()),
-            true,
-            false,
-        );
-        let newer = plan_activity(
-            "Plan",
-            Some(r#"{"todos":[{"content":"new task","status":"in_progress"}]}"#.to_owned()),
-            false,
-            false,
-        );
-        let blocks = vec![
-            block(vec![older]),
-            block(vec![crate::model::ActivityItem::new(
-                None,
-                crate::model::ActivityKind::Command,
-                "ls",
-                None,
-                true,
-            )]),
-            block(vec![newer]),
-        ];
-        let summary = todo_summary_from_blocks(&blocks);
-        assert_eq!(summary.entries.len(), 1);
-        assert_eq!(summary.entries[0].label, "new task");
-        assert_eq!(summary.entries[0].state, TodoEntryState::InProgress);
-        assert!(summary.updating);
-    }
-
-    #[test]
-    fn todo_summary_without_plan_activities_is_empty() {
-        let blocks = vec![block(vec![crate::model::ActivityItem::new(
-            None,
-            crate::model::ActivityKind::Command,
-            "ls",
-            None,
-            true,
-        )])];
-        assert_eq!(todo_summary_from_blocks(&blocks), TodoSummary::default());
-    }
-
-    #[test]
-    fn todo_summary_parses_todo_and_plan_payloads() {
-        let claude = plan_activity(
-            "Plan",
-            Some(
-                r#"{"todos":[
-                    {"content":"done task","status":"completed"},
-                    {"content":"running task","status":"in_progress"},
-                    {"content":"queued task"}
-                ]}"#
-                .to_owned(),
-            ),
-            true,
-            false,
-        );
-        let summary = todo_summary_from_activity(&claude);
-        assert_eq!(
-            summary
-                .entries
-                .iter()
-                .map(|entry| entry.state)
-                .collect::<Vec<_>>(),
-            vec![
-                TodoEntryState::Completed,
-                TodoEntryState::InProgress,
-                TodoEntryState::Pending
-            ]
-        );
-        assert!(!summary.updating);
-
-        let steps = plan_activity(
-            "Plan",
-            Some(r#"{"plan":[{"step":"write tests","status":"done"}]}"#.to_owned()),
-            true,
-            false,
-        );
-        let summary = todo_summary_from_activity(&steps);
-        assert_eq!(summary.entries[0].label, "write tests");
-        assert_eq!(summary.entries[0].state, TodoEntryState::Completed);
-
-        let bare = plan_activity("Plan", None, true, false);
-        let mut bare = bare;
-        bare.output = Some(r#"["first", "second"]"#.to_owned());
-        let summary = todo_summary_from_activity(&bare);
-        assert_eq!(
-            summary
-                .entries
-                .iter()
-                .map(|entry| entry.label.as_str())
-                .collect::<Vec<_>>(),
-            vec!["first", "second"]
-        );
-        assert!(
-            summary
-                .entries
-                .iter()
-                .all(|entry| entry.state == TodoEntryState::Pending)
-        );
-    }
-
-    #[test]
-    fn todo_summary_falls_back_to_one_entry_without_parseable_payload() {
-        let live = plan_activity("Ship the release", None, false, false);
-        let summary = todo_summary_from_activity(&live);
-        assert_eq!(summary.entries.len(), 1);
-        assert_eq!(summary.entries[0].label, "Ship the release");
-        assert_eq!(summary.entries[0].state, TodoEntryState::InProgress);
-
-        let failed = plan_activity("Plan", Some("not json".to_owned()), true, true);
-        let summary = todo_summary_from_activity(&failed);
-        assert_eq!(summary.entries[0].state, TodoEntryState::Failed);
-        assert!(summary.failed);
-    }
-
-    #[test]
-    fn todo_status_normalizes_provider_spellings() {
-        assert_eq!(
-            TodoEntryState::from_status("Done"),
-            TodoEntryState::Completed
-        );
-        assert_eq!(
-            TodoEntryState::from_status("In-Progress"),
-            TodoEntryState::InProgress
-        );
-        assert_eq!(
-            TodoEntryState::from_status("cancelled"),
-            TodoEntryState::Failed
-        );
-        assert_eq!(
-            TodoEntryState::from_status("pending"),
-            TodoEntryState::Pending
-        );
-        assert_eq!(
-            TodoEntryState::from_status("some future status"),
-            TodoEntryState::Pending
-        );
-    }
 }

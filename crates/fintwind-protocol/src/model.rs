@@ -559,6 +559,13 @@ pub struct TurnStats {
     /// denominator of the tokens-per-second segment.
     #[serde(default)]
     pub stream_ms: u64,
+    /// Old persisted wall-clock estimates must not be presented as measured TPS.
+    #[serde(default)]
+    pub stream_verified: bool,
+    /// Native assistant message IDs for a live turn. Used only to reconcile
+    /// settled throughput against the server's durable stream boundaries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub step_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -3421,6 +3428,7 @@ mod tests {
                 agent: Some("build".to_owned()),
                 output_tokens: 645,
                 stream_ms: 10_000,
+                ..TurnStats::default()
             }),
             ..turn.clone()
         };

@@ -991,6 +991,7 @@ impl Fintwind {
                         TurnStatus::Failed
                     },
                 );
+                self.reconcile_native_turn_stats(session_id, cx);
                 runtime.pending_permission = None;
                 runtime.pending_user_input = None;
                 // The agent may have edited files or switched branches, so the

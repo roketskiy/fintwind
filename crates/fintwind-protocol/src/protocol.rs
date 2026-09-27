@@ -185,6 +185,12 @@ pub enum Command {
         directory: PathBuf,
         session_id: String,
     },
+    FetchNativeTurnStats {
+        binary: PathBuf,
+        directory: PathBuf,
+        session_id: String,
+        step_ids: Vec<String>,
+    },
     /// Walk the OpenCode store's whole session list in one pass and collect
     /// every top-level session's cumulative usage, for the usage statistics
     /// page. `directory` only anchors which resident server to ask — the
@@ -496,6 +502,9 @@ pub enum ResponsePayload {
     },
     NativeTranscript {
         transcript: NativeTranscript,
+    },
+    NativeTurnStats {
+        stats: Option<crate::model::TurnStats>,
     },
     UsageStats {
         stats: UsageStats,

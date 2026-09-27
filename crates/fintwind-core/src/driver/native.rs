@@ -325,6 +325,88 @@ fn fetch_transcript_from_port(
     Ok(translate_rows_with_blobs(&rows, blobs))
 }
 
+/// Read only the durable assistant steps of a settled turn. Never substitute
+/// step-end or local wall-clock time for a missing provider stream boundary.
+pub(crate) fn fetch_turn_stats(
+    server: &OpenCodeServer,
+    session_id: &str,
+    step_ids: &[String],
+) -> anyhow::Result<Option<TurnStats>> {
+    if step_ids.is_empty() || step_ids.len() > 256 {
+        return Ok(None);
+    }
+    let mut remaining: std::collections::HashSet<&str> =
+        step_ids.iter().map(String::as_str).collect();
+    if remaining.len() != step_ids.len() {
+        return Ok(None);
+    }
+    let mut found = std::collections::HashMap::new();
+    let mut cursor: Option<String> = None;
+    // Reconciliation is best-effort; never scan an unbounded historical store
+    // for a step that the server has not persisted yet.
+    for _ in 0..10 {
+        let mut path = format!(
+            "/api/session/{}/message?limit={PAGE_LIMIT}",
+            encode_path_segment(session_id)
+        );
+        if let Some(token) = &cursor {
+            path.push_str(&format!("&cursor={}", encode_path_segment(token)));
+        }
+        let response = server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT)?;
+        let rows = response.pointer("/data").and_then(Value::as_array);
+        let Some(rows) = rows else { return Ok(None) };
+        for row in rows {
+            if let Some(id) = row.get("id").and_then(Value::as_str)
+                && remaining.remove(id)
+            {
+                found.insert(id.to_owned(), row.clone());
+            }
+        }
+        if remaining.is_empty() {
+            break;
+        }
+        let next = response.pointer("/cursor/next").and_then(Value::as_str);
+        match next {
+            Some(next) if !rows.is_empty() && cursor.as_deref() != Some(next) => {
+                cursor = Some(next.to_owned())
+            }
+            _ => break,
+        }
+    }
+    if !remaining.is_empty() {
+        return Ok(None);
+    }
+    let mut stats = TurnStats::default();
+    for id in step_ids {
+        let row = &found[id];
+        if row.get("type").and_then(Value::as_str) != Some("assistant")
+            || row
+                .pointer("/time/created")
+                .and_then(Value::as_u64)
+                .is_none()
+            || row
+                .pointer("/time/streamed")
+                .and_then(Value::as_u64)
+                .is_none()
+        {
+            return Ok(None);
+        }
+        let Some(step) = turn_stats_step(row) else {
+            return Ok(None);
+        };
+        if step.model.is_some() {
+            stats.model = step.model;
+        }
+        if step.agent.is_some() {
+            stats.agent = step.agent;
+        }
+        stats.output_tokens = stats.output_tokens.saturating_add(step.output_tokens);
+        stats.stream_ms = stats.stream_ms.saturating_add(step.stream_ms);
+    }
+    stats.stream_verified = true;
+    Ok(Some(stats))
+}
+
 /// Walk the whole OpenCode store's session list in one pass and collect
 /// every session's cumulative usage for the usage statistics page, including
 /// the sub-agents those sessions spawned. The list itself is global — no
@@ -1188,6 +1270,7 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
         turns: Vec::new(),
     };
     let mut image_bytes_left = MAX_TRANSCRIPT_IMAGE_BYTES;
+    let mut unmeasured_turns = std::collections::HashSet::new();
 
     for row in rows {
         let created_at =
@@ -1271,6 +1354,18 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
             }
             Some("assistant") => {
                 let parts = row.get("content").and_then(Value::as_array);
+                if (row
+                    .pointer("/time/created")
+                    .and_then(Value::as_u64)
+                    .is_none()
+                    || row
+                        .pointer("/time/streamed")
+                        .and_then(Value::as_u64)
+                        .is_none())
+                    && let Some(turn) = transcript.turns.last()
+                {
+                    unmeasured_turns.insert(turn.id);
+                }
                 // Every assistant row is one model step of the turn above it,
                 // and the fold happens before the content gate: a row with no
                 // visible text still ran a model step whose tokens and
@@ -1287,6 +1382,19 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
                     }
                     stats.output_tokens = stats.output_tokens.saturating_add(step.output_tokens);
                     stats.stream_ms = stats.stream_ms.saturating_add(step.stream_ms);
+                    if row
+                        .pointer("/time/created")
+                        .and_then(Value::as_u64)
+                        .is_none()
+                        || row
+                            .pointer("/time/streamed")
+                            .and_then(Value::as_u64)
+                            .is_none()
+                    {
+                        unmeasured_turns.insert(turn.id);
+                    } else {
+                        stats.stream_verified = true;
+                    }
                 }
                 if !assistant_parts_visible(parts) {
                     continue;
@@ -1332,6 +1440,13 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
         }
     }
 
+    for turn in &mut transcript.turns {
+        if unmeasured_turns.contains(&turn.id) {
+            if let Some(stats) = turn.stats.as_mut() {
+                stats.stream_verified = false;
+            }
+        }
+    }
     transcript
 }
 
@@ -1445,6 +1560,7 @@ fn turn_stats_step(row: &Value) -> Option<TurnStats> {
         agent,
         output_tokens: output,
         stream_ms,
+        ..TurnStats::default()
     })
 }
 
@@ -1894,6 +2010,8 @@ mod tests {
                 // across the steps — 12 + (90 + 8).
                 output_tokens: 110,
                 stream_ms: 2_600,
+                stream_verified: true,
+                ..TurnStats::default()
             })
         );
         // The second turn's step streamed no measurable time, so its stats
@@ -1905,6 +2023,7 @@ mod tests {
                 agent: None,
                 output_tokens: 3,
                 stream_ms: 0,
+                ..TurnStats::default()
             })
         );
     }

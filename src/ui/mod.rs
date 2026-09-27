@@ -462,6 +462,28 @@ pub fn activity_noun(kind: ActivityKind) -> (String, String) {
     }
 }
 
+/// A chip's own geometry. The composer budgets its control row against
+/// these numbers through [`chip_width`] and [`CHIP_TEXT_SIZE`], so a chip
+/// that changes one of them changes what the row believes it costs. These
+/// are the values a non-outlined chip draws with.
+pub const CHIP_TEXT_SIZE: f32 = 12.5;
+const CHIP_ICON: f32 = 12.0;
+const CHIP_GAP: f32 = 7.0;
+const CHIP_INSET_X: f32 = 9.0;
+const CHIP_HEIGHT: f32 = 28.0;
+
+/// What a chip occupies: its insets and its icon, plus — when it shows one
+/// — the gap and the label. `None` is a chip demoted to its icon alone,
+/// which is what a row too narrow for the text falls back to. The hit area
+/// survives that demotion, so a chip-only row costs no reachability.
+pub fn chip_width(label: Option<f32>) -> f32 {
+    let mut width = CHIP_INSET_X * 2.0 + CHIP_ICON;
+    if let Some(label) = label {
+        width += CHIP_GAP + label;
+    }
+    width
+}
+
 /// A compact chip used as a dropdown-menu trigger. `selected` is driven by the
 /// menu's open state and renders as a soft fill.
 #[derive(IntoElement)]
@@ -475,6 +497,9 @@ pub struct MenuChip {
     disabled: bool,
     height: Option<Pixels>,
     background: Option<Hsla>,
+    icon_only: bool,
+    tooltip: Option<SharedString>,
+    max_label_width: Option<f32>,
 }
 
 impl MenuChip {
@@ -489,6 +514,9 @@ impl MenuChip {
             disabled: false,
             height: None,
             background: None,
+            icon_only: false,
+            tooltip: None,
+            max_label_width: None,
         }
     }
 
@@ -537,6 +565,35 @@ impl MenuChip {
         self.selected = selected;
         self
     }
+
+    /// Drop the label and keep the icon alone, for a row too narrow for the
+    /// text. The chip keeps its icon, its insets and its hit area, so
+    /// [`chip_width`] prices this at the icon-only width; a caller that
+    /// demotes a chip owes it a tooltip, because the label was what named
+    /// it.
+    pub fn icon_only(mut self, icon_only: bool) -> Self {
+        self.icon_only = icon_only;
+        self
+    }
+
+    /// Name the chip on hover. A demoted chip has no visible label, so this
+    /// is what keeps a pointer user able to tell the icons apart.
+    ///
+    /// Hover only — a keyboard user reaches the chip's own menu, which
+    /// names every choice in full, so the demoted label is not the only
+    /// route to what the chip means.
+    pub fn tooltip(mut self, label: impl Into<SharedString>) -> Self {
+        self.tooltip = Some(label.into());
+        self
+    }
+
+    /// Cap the label, for a chip whose text has no natural bound and whose
+    /// owner budgets the space around it. The label ellipsizes past the
+    /// cap rather than the row overflowing.
+    pub fn max_label_width(mut self, width: f32) -> Self {
+        self.max_label_width = Some(width);
+        self
+    }
 }
 
 impl Styled for MenuChip {
@@ -560,16 +617,27 @@ impl ParentElement for MenuChip {
 impl RenderOnce for MenuChip {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = Theme::current(cx);
+        let tooltip = self.tooltip;
+        // A chip demoted to its icon has one child instead of two, so the
+        // gap that would have separated them is dropped with the label —
+        // the row's width budget prices exactly this geometry.
+        let gap = if self.icon_only { 0.0 } else { CHIP_GAP };
         self.base
-            .h(self
-                .height
-                .unwrap_or(if self.outlined { px(32.0) } else { px(28.0) }))
-            .px(if self.outlined { px(11.0) } else { px(9.0) })
+            .h(self.height.unwrap_or(if self.outlined {
+                px(32.0)
+            } else {
+                px(CHIP_HEIGHT)
+            }))
+            .px(if self.outlined {
+                px(11.0)
+            } else {
+                px(CHIP_INSET_X)
+            })
             .rounded(if self.outlined { px(8.0) } else { px(7.0) })
             .flex()
             .items_center()
-            .gap(px(7.0))
-            .text_size(ui_px(12.5))
+            .gap(px(gap))
+            .text_size(ui_px(CHIP_TEXT_SIZE))
             .line_height(ui_px(16.0))
             .cursor_default()
             .focus_visible(|style| style.border_1().border_color(theme.accent))
@@ -587,17 +655,23 @@ impl RenderOnce for MenuChip {
             })
             .when(self.disabled, |element| element.opacity(0.7))
             .when_some(self.icon, |element, (path, color)| {
-                element.child(icon(path, 12.0, color))
+                element.child(icon(path, CHIP_ICON, color))
             })
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .text_color(theme.text_secondary)
-                    .child(self.label),
-            )
-            .when(self.caret, |element| {
+            .when(!self.icon_only, |element| {
+                let label = div().min_w_0().truncate().text_color(theme.text_secondary);
+                let label = match self.max_label_width {
+                    Some(width) => label.max_w(px(width)),
+                    None => label,
+                };
+                element.child(label.child(self.label))
+            })
+            // A caret belongs to the label it points at, so it goes when
+            // the label does.
+            .when(self.caret && !self.icon_only, |element| {
                 element.child(icon("icons/chevron-down.svg", 10.0, theme.text_ghost))
+            })
+            .when_some(tooltip, |element, label| {
+                element.tooltip(crate::ui::tooltip::Tooltip::text(label))
             })
     }
 }

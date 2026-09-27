@@ -1,6 +1,6 @@
 use super::composer::{
-    ComposerSubmitAction, composer_submit_action, dropped_file_mention, next_picker_highlight,
-    submission_text, visible_branch_entries,
+    ComposerRowWidths, ComposerSubmitAction, composer_row_plan, composer_submit_action,
+    dropped_file_mention, next_picker_highlight, submission_text, visible_branch_entries,
 };
 use super::runtime::merge_remote_session_catalog;
 use super::settings::visible_settings_pages;
@@ -33,6 +33,7 @@ use crate::model::{
     RuntimeEventCursor, SessionStatus, TranscriptBlock, TurnStats, TurnStatus, UserInputOption,
     UserInputQuestion,
 };
+use crate::ui::chip_width;
 
 #[test]
 fn structured_user_input_preserves_question_order_and_custom_answer_precedence() {
@@ -154,6 +155,97 @@ fn composer_only_offers_stop_after_submission_preparation() {
         composer_submit_action(Some(SessionStatus::Failed), false),
         ComposerSubmitAction::Send
     );
+}
+
+#[test]
+fn composer_row_demotes_labels_in_priority_order_as_it_narrows() {
+    // Widths in the range a real session produces: a long model name, a
+    // short effort, and a translated permission label.
+    let widths = ComposerRowWidths {
+        model: Some(180.0),
+        traits: Some(20.0),
+        interaction: Some(25.0),
+        access: Some(50.0),
+        fixed: 2.0 * (1.0 + 10.0) + 30.0,
+    };
+    let all_labelled = widths.fixed
+        + chip_width(Some(180.0))
+        + chip_width(Some(20.0))
+        + chip_width(Some(25.0))
+        + chip_width(Some(50.0))
+        + 5.0 * 4.0;
+
+    // Exactly wide enough keeps every label — the budget must not demote
+    // on a schedule rather than on the width it is actually given.
+    let roomy = composer_row_plan(all_labelled, widths);
+    assert_eq!(roomy.model_label, true);
+    assert_eq!(roomy.traits_label, true);
+    assert_eq!(roomy.interaction_label, true);
+    assert_eq!(roomy.access_label, true);
+
+    // One chip's label short of fitting demotes exactly that chip, and the
+    // cheapest one first.
+    let short_by_traits = composer_row_plan(all_labelled - 1.0, widths);
+    assert_eq!(short_by_traits.traits_label, false);
+    assert_eq!(short_by_traits.interaction_label, true);
+    assert_eq!(short_by_traits.access_label, true);
+    assert_eq!(short_by_traits.model_label, true);
+
+    // Short by more than the traits label costs: the next chip follows.
+    let short_by_two = composer_row_plan(all_labelled - chip_width(Some(20.0)) - 1.0, widths);
+    assert_eq!(short_by_two.traits_label, false);
+    assert_eq!(short_by_two.interaction_label, false);
+    assert_eq!(short_by_two.access_label, true);
+    assert_eq!(short_by_two.model_label, true);
+
+    // The model name goes only after every other label, and only once they
+    // are all spent: it is the longest, but it is also the one that says
+    // which model is answering.
+    let only_model_left = composer_row_plan(
+        all_labelled
+            - chip_width(Some(20.0))
+            - chip_width(Some(25.0))
+            - chip_width(Some(50.0))
+            - 1.0,
+        widths,
+    );
+    assert_eq!(only_model_left.traits_label, false);
+    assert_eq!(only_model_left.interaction_label, false);
+    assert_eq!(only_model_left.access_label, false);
+    assert_eq!(only_model_left.model_label, true);
+
+    // A width nothing fits demotes every label, leaving the logos.
+    let narrow = composer_row_plan(0.0, widths);
+    assert_eq!(narrow.model_label, false);
+    assert_eq!(narrow.traits_label, false);
+    assert_eq!(narrow.interaction_label, false);
+    assert_eq!(narrow.access_label, false);
+}
+
+#[test]
+fn composer_row_skips_a_demotion_for_a_chip_it_does_not_draw() {
+    // A model with no traits draws no traits chip, so the space the plan
+    // would have freed there is not available to pay for the others.
+    let widths = ComposerRowWidths {
+        model: Some(180.0),
+        traits: None,
+        interaction: Some(25.0),
+        access: Some(50.0),
+        fixed: 2.0 * (1.0 + 10.0) + 30.0,
+    };
+    let all_labelled = widths.fixed
+        + chip_width(Some(180.0))
+        + chip_width(Some(25.0))
+        + chip_width(Some(50.0))
+        + 5.0 * 4.0;
+
+    // Room for everything the row actually draws, plus a few pixels' worth
+    // of the absent chip: nothing may be demoted, because the absent chip
+    // was never going to spend it.
+    let plan = composer_row_plan(all_labelled + 30.0, widths);
+    assert_eq!(plan.model_label, true);
+    assert_eq!(plan.interaction_label, true);
+    assert_eq!(plan.access_label, true);
 }
 
 #[test]

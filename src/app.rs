@@ -61,8 +61,9 @@ use crate::terminal::TerminalView;
 use crate::theme::{TextSizePreset, Theme, ThemePreference};
 use crate::ui::text_field::TextField;
 use crate::ui::{
-    MenuChip, ProjectNameSelector, activity_noun, contain_scroll, file_icon, icon, icon_button,
-    model_icon, motion, provider_color, provider_icon, spin_halo, status_color, toggle_switch,
+    MenuChip, ProjectNameSelector, activity_noun, chip_width, contain_scroll, file_icon, icon,
+    icon_button, model_icon, motion, provider_color, provider_icon, spin_halo, status_color,
+    toggle_switch,
 };
 use crate::{
     CancelTurn, CloseFind, CloseWindow, CopySelection, FindNext, FindPrevious, FocusComposer,
@@ -1766,6 +1767,9 @@ pub struct Fintwind {
     /// Every menu site in the app, keyed by a stable id. Handles are created on
     /// first use and live as long as the window.
     menus: RefCell<HashMap<SharedString, ContextMenuHandle>>,
+    /// Measured widths for the composer's control-row labels, reused across
+    /// frames so a redraw that changes no label shapes no text.
+    composer_row_cache: RefCell<composer::ComposerRowCache>,
     navigation_rail: Entity<ConversationNavigationRail>,
     navigation_rail_reset_generation: Cell<u64>,
     /// Cached islands of the root view; see [`FintwindPane`].
@@ -3252,6 +3256,7 @@ impl Fintwind {
                 toast_selection: TranscriptSelection::default(),
                 transcript_scrollbar: ScrollbarState::new(),
                 menus: RefCell::new(HashMap::new()),
+                composer_row_cache: RefCell::new(composer::ComposerRowCache::default()),
                 navigation_rail: navigation_rail.clone(),
                 navigation_rail_reset_generation: Cell::new(0),
                 sidebar_pane: sidebar_pane.clone(),

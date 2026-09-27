@@ -21,7 +21,6 @@ use gpui::{
 };
 use uuid::Uuid;
 
-use crate::app::background_work::TodoSummary;
 use crate::checkpoint;
 use crate::composer_complete::{FileEntry, SlashCommand};
 use crate::driver::{self, DriverHandle, DriverStartOptions, SessionOptions};
@@ -1235,10 +1234,6 @@ pub struct Fintwind {
     /// Runtime-only by design: providers reconcile their authoritative state
     /// when the resident transport reconnects.
     background_work: HashMap<Uuid, BackgroundWorkRegistry>,
-    /// Latest plan (todo) display model per session, rebuilt off the render
-    /// path when plan activities arrive, a session hydrates, or the selection
-    /// changes. Render only reads this store.
-    todo_summaries: RefCell<HashMap<Uuid, Rc<TodoSummary>>>,
     last_background_work_tick: Instant,
     /// Accepted submissions still creating their workspace/checkpoint, or an
     /// edited past message still rewinding its workspace and provider. The
@@ -3008,7 +3003,6 @@ impl Fintwind {
                 runtime_attach_pending: HashSet::new(),
                 runtime_attach_misses: HashMap::new(),
                 background_work: HashMap::new(),
-                todo_summaries: RefCell::new(HashMap::new()),
                 last_background_work_tick: Instant::now(),
                 submission_preparations: HashSet::new(),
                 escape_stop_confirmation: EscapeStopConfirmation::default(),

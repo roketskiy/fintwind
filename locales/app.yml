@@ -865,8 +865,6 @@ activity.action_search:
   en: Search
 activity.action_list:
   en: List
-activity.action_plan:
-  en: Plan
 activity.action_use:
   en: Use
 activity.ask_questions:
@@ -1623,20 +1621,6 @@ capsule.tasks:
   en: Session tools
 capsule.git_tools:
   en: Git tools
-capsule.todo:
-  en: Todo
-capsule.todo_empty:
-  en: No todo items
-
-todo.status.pending:
-  en: Pending
-todo.status.in_progress:
-  en: In progress
-todo.status.completed:
-  en: Completed
-todo.status.failed:
-  en: Failed
-
 commit.message_placeholder:
   en: Commit message (leave blank to generate)…
 commit.message:

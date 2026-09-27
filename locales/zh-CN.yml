@@ -432,7 +432,6 @@ activity.action_edit: 编辑
 activity.action_read: 读取
 activity.action_search: 搜索
 activity.action_list: 列出
-activity.action_plan: 计划
 activity.action_use: 使用
 activity.ask_questions: 提问
 activity.arguments: 参数
@@ -815,12 +814,6 @@ environment.commit_or_push: 提交或推送
 environment.compare_branch: 比较分支
 capsule.tasks: 会话工具
 capsule.git_tools: Git 工具
-capsule.todo: Todo
-capsule.todo_empty: 暂无待办事项
-todo.status.pending: 待处理
-todo.status.in_progress: 进行中
-todo.status.completed: 已完成
-todo.status.failed: 失败
 commit.message_placeholder: 提交信息（留空以自动生成）…
 commit.message: 提交信息
 commit.include_unstaged: 包含未暂存的更改

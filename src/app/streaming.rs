@@ -425,7 +425,6 @@ impl Fintwind {
                 }
             }
         }
-        self.rebuild_todo_summary(session_id);
     }
 
     /// Drop assistant messages this turn reserved for a text part and never
@@ -666,9 +665,6 @@ impl Fintwind {
                     self.observe_foreground_command_activity(session_id, &item);
                     runtime.provider_phase = None;
                     self.update_activity(session_id, runtime, item);
-                    if kind == ActivityKind::Plan {
-                        self.rebuild_todo_summary(session_id);
-                    }
                     if refresh_branch {
                         self.refresh_selected_branch_snapshot(cx);
                     }
@@ -682,11 +678,7 @@ impl Fintwind {
                             && self.state.selected_session == Some(session_id);
                     self.observe_foreground_command_activity(session_id, &item);
                     runtime.provider_phase = None;
-                    let plan_activity = item.kind == ActivityKind::Plan;
                     self.update_activity(session_id, runtime, item);
-                    if plan_activity {
-                        self.rebuild_todo_summary(session_id);
-                    }
                     if refresh_branch {
                         self.refresh_selected_branch_snapshot(cx);
                     }

@@ -25,6 +25,10 @@ pub mod git_branch {
     pub use fintwind_protocol::git::{BranchEntry, BranchSnapshot};
 }
 
+pub mod git_history {
+    pub use fintwind_protocol::git::CommitEntry;
+}
+
 pub mod git_commit {
     pub use fintwind_protocol::git::AgentInvocation;
     pub use fintwind_protocol::git::CommitSnapshot as Snapshot;

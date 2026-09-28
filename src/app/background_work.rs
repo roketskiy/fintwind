@@ -64,6 +64,7 @@ struct EnvironmentSummary {
     changes_focus: FocusHandle,
     commit_focus: FocusHandle,
     compare_focus: FocusHandle,
+    history_focus: FocusHandle,
 }
 
 impl BackgroundWorkRegistry {
@@ -1172,6 +1173,7 @@ impl Fintwind {
             changes_focus: self.transcript_control_focus("environment-summary-changes", cx),
             commit_focus: self.transcript_control_focus("environment-summary-commit", cx),
             compare_focus: self.transcript_control_focus("environment-summary-compare", cx),
+            history_focus: self.transcript_control_focus("environment-summary-history", cx),
         });
         let (processes, agents) = session_id
             .map(|session_id| self.background_work_counts(session_id))
@@ -2009,6 +2011,26 @@ fn render_git_tools_section(
         theme,
     );
 
+    let history_handle = handle.clone();
+    let history_weak = weak.clone();
+    let history = render_environment_action_row(
+        "environment-summary-history",
+        &environment.history_focus,
+        "icons/history.svg",
+        tr!("environment.history"),
+        true,
+        false,
+        None,
+        theme,
+        move |window, cx| {
+            history_handle.close(window, cx);
+            window.refresh();
+            let _ = history_weak.update(cx, |this, cx| {
+                this.open_right_panel_surface(RightPanelSurface::History, cx);
+            });
+        },
+    );
+
     let commit_handle = handle.clone();
     let commit_weak = weak.clone();
     let commit_pending = environment.commit_status.is_some();
@@ -2064,6 +2086,7 @@ fn render_git_tools_section(
         ))
         .child(changes)
         .child(branch)
+        .child(history)
         .child(commit)
         .child(compare)
 }

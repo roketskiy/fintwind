@@ -795,6 +795,7 @@ right_panel.browser: 浏览器
 right_panel.terminal: 终端
 right_panel.files: 文件
 right_panel.diff: 审阅
+right_panel.history: 历史
 right_panel.toggle: 显示或隐藏右侧面板
 right_panel.open_surface: 打开一个面板
 right_panel.choose_surface: 选择要在右侧面板中显示的内容
@@ -816,6 +817,17 @@ environment.commit_or_push: 提交或推送
 environment.compare_branch: 比较分支
 capsule.tasks: 会话工具
 capsule.git_tools: Git 工具
+environment.history: 历史
+git_history.head: HEAD(当前)
+git_history.loading: 正在加载历史…
+git_history.loading_description: 正在读取此工作区的提交历史
+git_history.not_a_repository: 不是 Git 仓库
+git_history.not_a_repository_description: 在 Git 仓库内打开工作区后即可浏览其历史
+git_history.error: 无法读取历史
+git_history.empty: 暂无提交
+git_history.empty_description: 此分支没有可显示的提交
+git_history.hash_copied: 已复制 %{hash}
+git_history.refresh: 刷新历史
 commit.message_placeholder: 提交信息（留空以自动生成）…
 commit.message: 提交信息
 commit.include_unstaged: 包含未暂存的更改

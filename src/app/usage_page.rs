@@ -5,6 +5,7 @@
 //! entity; the raw scan is touched only when it lands or the range changes.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::{Datelike as _, Duration as ChronoDuration, Local, NaiveDate, Timelike as _};
 
@@ -13,6 +14,7 @@ use chrono::TimeZone as _;
 
 use crate::theme::ui_px;
 use crate::usage::{cache_hit_percent, format_percent, format_tokens};
+use fintwind_client::models_dev::{self, ModelsDevTable};
 
 use super::*;
 use crate::ui::ActivationExt;
@@ -269,25 +271,38 @@ impl Fintwind {
         let generation = self.usage_stats_generation;
         let daemon = self.daemon.clone();
         let detailed_day = detailed_date.map(|date| i64::from(date.num_days_from_ce()));
+        let cached_table = self.usage_price_table.clone();
         cx.spawn(async move |this, cx| {
-            let scanned = cx
-                .background_executor()
-                .spawn(async move {
-                    fintwind_client::persistence::StateStore::remote(daemon).fetch_usage_stats(
-                        binary,
-                        directory,
-                        detailed_day,
-                    )
-                })
-                .await;
+            let (scanned, table) =
+                {
+                    let executor = cx.background_executor().clone();
+                    let scan =
+                        executor.spawn(async move {
+                            fintwind_client::persistence::StateStore::remote(daemon)
+                                .fetch_usage_stats(binary, directory, detailed_day)
+                        });
+                    // The catalog runs beside the scan: a first visit pays one
+                    // download, a later one reads the disk cache, and either is
+                    // hidden under the scan's own session traversal.
+                    let pricing = executor.spawn(async move { pricing_table(cached_table) });
+                    (scan.await, pricing.await)
+                };
+            let mut priced = scanned;
+            if let (Ok(stats), table) = (&mut priced, table.as_deref()) {
+                price_usage_stats(stats, table);
+            }
             let _ = this.update(cx, |this, cx| {
                 // A newer scan superseded this one.
                 if this.usage_stats_generation != generation {
                     return;
                 }
                 this.usage_stats_pending = false;
-                match scanned {
+                match priced {
                     Ok(stats) => {
+                        // The table and the stats land together, so the
+                        // cost KPI's claim of "priced" is always true of
+                        // the numbers above it.
+                        this.usage_price_table = table;
                         this.usage_stats_error = None;
                         this.usage_stats_loaded_at = Some(Instant::now());
                         this.usage_detail_day = detailed_date;
@@ -605,6 +620,26 @@ impl Fintwind {
             .child(refresh)
     }
 
+    /// The cost KPI's value. A scan priced without a catalog shows a dash —
+    /// a $0.00 there would read as a free month when it is really a missing
+    /// price list.
+    fn usage_cost_value(&self, cost: f64) -> String {
+        if self.usage_price_table.is_some() {
+            format_cost(cost)
+        } else {
+            "—".to_owned()
+        }
+    }
+
+    /// The cost KPI's subtitle: how many sessions the catalog could price.
+    fn usage_cost_subtitle(&self, totals: &UsageTotals) -> String {
+        if self.usage_price_table.is_some() {
+            tr!("usage_page.cost_sessions", count = totals.costed_sessions)
+        } else {
+            tr!("usage_page.cost_unavailable")
+        }
+    }
+
     fn render_usage_kpis(&self, views: &UsageViews, theme: &Theme) -> Div {
         let totals = &views.totals;
         let hit = cache_hit_percent(
@@ -654,8 +689,8 @@ impl Fintwind {
             .child(usage_kpi_card(
                 theme,
                 tr!("usage_page.kpi_cost"),
-                format_cost(totals.cost),
-                tr!("usage_page.cost_sessions", count = totals.costed_sessions),
+                self.usage_cost_value(totals.cost),
+                self.usage_cost_subtitle(totals),
             ))
     }
 
@@ -1872,6 +1907,113 @@ fn entry_model_shares(entry: &UsageEntry) -> Vec<ModelShare> {
         .collect()
 }
 
+/// How long a disk-cached catalog answers before one refresh is worth a
+/// download. Prices move slowly, and the page rescans itself every half
+/// minute — a per-scan download would be abuse; a day-old official price
+/// is still far closer to the truth than the server's own numbers.
+const PRICE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The price table for the pricing pass, or `None` when no catalog could be
+/// had — the pass then prices nothing, so no server-side number leaks
+/// through as an official-API estimate. The session copy inside its reuse
+/// window answers without I/O; then a disk cache that states any price,
+/// fresh enough not to need a download; then one network fetch, with the
+/// stale disk cache still answering when it fails. Blocking; background
+/// executor only.
+fn pricing_table(cached: Option<Arc<ModelsDevTable>>) -> Option<Arc<ModelsDevTable>> {
+    if let Some(table) = cached.filter(|table| table.age() < models_dev::TABLE_REUSE_WINDOW) {
+        return Some(table);
+    }
+    let disk = models_dev::cached_catalog().filter(|table| table.has_any_cost());
+    match disk {
+        Some(table) if table.age() < PRICE_TTL => Some(Arc::new(table)),
+        disk => models_dev::fetch_catalog()
+            .ok()
+            .map(Arc::new)
+            .or_else(|| disk.map(Arc::new)),
+    }
+}
+
+/// Rewrite every cost the scan carries into official-API estimates.
+///
+/// The server's own cost numbers carry whatever semantics the provider
+/// chose — subscription relays answer with numbers far under list price,
+/// some providers answer nothing — so the page prices each session's tokens
+/// from the models.dev catalog instead. A session whose model the catalog
+/// does not price — or every session, when no catalog could be had — loses
+/// its cost entirely: it reads as unpriced through the `None` rather than
+/// as free, and no server number survives anywhere on the page.
+///
+/// The day, hour, and model splits are re-derived from the session's single
+/// price by token share, so every view on the page conserves the same
+/// total; the split-repair logic downstream of here sees zero gaps. Pure
+/// and allocation-light — it runs on the background executor between the
+/// scan and the views, never in render.
+pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDevTable>) {
+    for entry in &mut stats.entries {
+        let cost = entry
+            .model
+            .as_deref()
+            .and_then(model_id_part)
+            .and_then(|id| table.and_then(|table| table.resolve_model_cost(id)))
+            .map(|rate| {
+                rate.charge(entry.input_tokens, rate.input)
+                    + rate.charge(
+                        entry.output_tokens.saturating_add(entry.reasoning_tokens),
+                        rate.output,
+                    )
+                    + rate.charge(entry.cache_read_tokens, rate.cache_read)
+                    + rate.charge(entry.cache_write_tokens, rate.cache_write)
+            });
+        let Some(cost) = cost else {
+            entry.cost = None;
+            if let Some(days) = &mut entry.days {
+                for share in days {
+                    share.cost = 0.0;
+                }
+            }
+            for hour in &mut entry.hours {
+                hour.cost = 0.0;
+            }
+            for lane in &mut entry.model_lanes {
+                lane.cost = 0.0;
+            }
+            continue;
+        };
+        let total = entry.total_tokens();
+        let share = |tokens: u64| {
+            if total == 0 {
+                0.0
+            } else {
+                cost * tokens as f64 / total as f64
+            }
+        };
+        entry.cost = Some(cost);
+        if let Some(days) = &mut entry.days {
+            for day in days {
+                day.cost = share(day.total);
+            }
+        }
+        for hour in &mut entry.hours {
+            hour.cost = share(hour.input + hour.output + hour.cache_read + hour.cache_write);
+        }
+        for lane in &mut entry.model_lanes {
+            lane.cost = share(lane.total);
+        }
+    }
+}
+
+/// The model part of the `<providerID>/<modelID>` string the server
+/// records. A string without a slash is all model; a trailing slash names
+/// nothing.
+fn model_id_part(model: &str) -> Option<&str> {
+    let id = match model.split_once('/') {
+        Some((_provider, id)) => id,
+        None => model,
+    };
+    (!id.is_empty()).then_some(id)
+}
+
 /// Aggregate the scan into the page's view models for `range`. Pure and
 /// allocation-light: it runs on the UI thread when a scan lands or the range
 /// changes, never per frame.
@@ -2036,11 +2178,15 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                     let missing_cost = (entry.cost.unwrap_or_default()
                         - entry.hours.iter().map(|h| h.cost).sum::<f64>())
                     .max(0.0);
+                    // The pricing pass re-derives each hour's cost by token
+                    // share, so what is left here is normally f64 dust; only
+                    // a real remainder — half a cent or more — means hours
+                    // the scan could not place.
                     hourly_estimated |= missing_input > 0
                         || missing_output > 0
                         || missing_read > 0
                         || missing_write > 0
-                        || missing_cost > 0.0;
+                        || missing_cost > 0.005;
                     let bucket = &mut hourly[local_hour(entry.timestamp) as usize];
                     bucket.input = bucket.input.saturating_add(missing_input);
                     bucket.output = bucket.output.saturating_add(missing_output);
@@ -2328,6 +2474,130 @@ mod tests {
             hours: Vec::new(),
             model_lanes: Vec::new(),
         }
+    }
+
+    /// The pricing pass replaces the server's cost with the catalog's
+    /// official-API estimate and re-derives every split from it, so each
+    /// view conserves the session's one total; a model the catalog does not
+    /// price reads as unpriced, not free.
+    #[test]
+    fn pricing_prices_from_the_catalog_and_conserves_the_splits() {
+        use fintwind_client::models_dev::{ModelsDevCost, parse_catalog};
+        let table = parse_catalog(
+            r#"{"prov": {"id": "prov", "models": {
+                "m1": {"id": "m1", "cost": {"input": 3.0, "output": 15.0}},
+                "bare": {"id": "bare", "cost": {"input": 1.0, "output": 1.0}}
+            }}}"#,
+        )
+        .unwrap();
+
+        let mut priced = entry(1_800_000, "prov/m1", 100_000);
+        priced.input_tokens = 1_000_000;
+        priced.reasoning_tokens = 900_000;
+        priced.cost = Some(999.0); // the server's number must not survive
+        priced.days = Some(vec![
+            // 1M of the session's 2M tokens on each of two days.
+            fintwind_client::provider_session::UsageDayShare {
+                timestamp: 1_700_000,
+                subagent: false,
+                direct: 500_000,
+                total: 1_000_000,
+                input: 500_000,
+                output: 500_000,
+                cache_read: 0,
+                cache_write: 0,
+                cost: 123.0,
+            },
+            fintwind_client::provider_session::UsageDayShare {
+                timestamp: 1_800_000,
+                subagent: false,
+                direct: 500_000,
+                total: 1_000_000,
+                input: 500_000,
+                output: 500_000,
+                cache_read: 0,
+                cache_write: 0,
+                cost: 456.0,
+            },
+        ]);
+        priced.hours = vec![fintwind_client::provider_session::UsageHourShare {
+            timestamp: 1_800_000,
+            estimated: false,
+            input: 200_000,
+            output: 300_000,
+            cache_read: 0,
+            cache_write: 0,
+            cost: 789.0,
+        }];
+        priced.model_lanes = vec![fintwind_client::provider_session::UsageModelLane {
+            model: "prov/m1".into(),
+            total: 500_000,
+            cost: 321.0,
+        }];
+
+        let mut unpriced = entry(1_800_000, "prov/other", 10);
+        unpriced.cost = Some(5.0);
+        unpriced.days = Some(vec![fintwind_client::provider_session::UsageDayShare {
+            timestamp: 1_800_000,
+            subagent: false,
+            direct: 10,
+            total: 10,
+            input: 10,
+            output: 0,
+            cache_read: 0,
+            cache_write: 0,
+            cost: 5.0,
+        }]);
+
+        let mut stats = UsageStats {
+            entries: vec![priced, unpriced],
+            truncated: false,
+            sessions_scanned: 2,
+        };
+        price_usage_stats(&mut stats, Some(&table));
+
+        // Input at $3/M plus 1M generated at $15/M.
+        let priced = &stats.entries[0];
+        assert_eq!(priced.cost, Some(18.0));
+        // Each day carried half the session's tokens, so each carries half
+        // the session's price; the old server numbers are gone.
+        let days = priced.days.as_deref().unwrap();
+        assert_eq!(days.len(), 2);
+        for day in days {
+            assert!((day.cost - 9.0).abs() < 1e-9, "day cost {}", day.cost);
+        }
+        // The hour's 500k of 2M tokens prices at a quarter of the session.
+        assert!((priced.hours[0].cost - 4.5).abs() < 1e-9);
+        // The model lane's 500k likewise.
+        assert!((priced.model_lanes[0].cost - 4.5).abs() < 1e-9);
+
+        // A model the catalog does not price loses its cost entirely.
+        let unpriced = &stats.entries[1];
+        assert_eq!(unpriced.cost, None);
+        assert_eq!(unpriced.days.as_deref().unwrap()[0].cost, 0.0);
+    }
+
+    /// Without a catalog nothing is priced at all: every cost the scan
+    /// carried reads as absent, so no server-side number can leak through
+    /// any view dressed as an official-API estimate.
+    #[test]
+    fn pricing_without_a_catalog_prices_nothing() {
+        let mut stats = UsageStats {
+            entries: vec![entry(1_800_000, "prov/m1", 10)],
+            truncated: false,
+            sessions_scanned: 1,
+        };
+        stats.entries[0].cost = Some(2.5);
+        price_usage_stats(&mut stats, None);
+        assert_eq!(stats.entries[0].cost, None);
+    }
+
+    #[test]
+    fn model_id_part_splits_the_provider_prefix() {
+        assert_eq!(model_id_part("anthropic/claude-4-5"), Some("claude-4-5"));
+        assert_eq!(model_id_part("bare"), Some("bare"));
+        assert_eq!(model_id_part("prov/"), None);
+        assert_eq!(model_id_part(""), None);
     }
 
     /// The timestamp cutoff decides what a range keeps, and the daily window

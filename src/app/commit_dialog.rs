@@ -481,6 +481,9 @@ impl Fintwind {
                     fintwind.invalidate_workspace_queries(cx);
                 } else {
                     fintwind.branch_snapshots.invalidate(&workspace);
+                    // The commit/push targeted another workspace; its
+                    // history moved even though no panel is watching it.
+                    fintwind.commit_log.clear();
                 }
                 let focus = match result {
                     Ok(()) => {

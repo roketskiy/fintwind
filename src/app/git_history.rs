@@ -1,0 +1,478 @@
+use crate::theme::{code_px, ui_px};
+
+use std::path::Path as StdPath;
+
+use super::sidebar::format_time_ago;
+use super::*;
+
+const HISTORY_ROW_HEIGHT: f32 = 48.0;
+/// How many commits one history read asks the daemon for.
+const HISTORY_COMMIT_LIMIT: usize = 500;
+
+/// What the history panel has to draw for the selected workspace: either the
+/// synced row cache (the commit list) or one of the empty states that must
+/// stay distinguishable (not a repository / daemon error / fetch in flight).
+/// `Ready` carries no payload on purpose: the cache owns the whole
+/// `Result<Option<Vec<_>>, String>` behind one `Arc`, which cannot hand out an
+/// `Arc<Vec<_>>` without deep-copying, so the rows are read back from
+/// [`Fintwind::history_row_cache`] instead — the same source the keyboard and
+/// click handlers use.
+enum HistoryFetch {
+    Ready,
+    NotRepository,
+    Error(String),
+    Loading,
+}
+
+impl Fintwind {
+    pub(super) fn sync_history_rows(&self, rows: &[crate::git_history::CommitEntry]) {
+        let mut cached = self.history_row_cache.borrow_mut();
+        if cached.as_slice() == rows {
+            return;
+        }
+        *cached = rows.to_vec();
+        self.history_list_state
+            .reset_with_uniform_height(rows.len(), px(HISTORY_ROW_HEIGHT));
+    }
+
+    /// Read the selected workspace's cached Git commit history under the
+    /// current branch filter, starting one background fetch on a miss. Render
+    /// only reads the in-memory cache; a miss claims a token so a second
+    /// reader never starts duplicate work.
+    fn commit_log_for_workspace(
+        &mut self,
+        workspace_path: &StdPath,
+        cx: &mut Context<Self>,
+    ) -> HistoryFetch {
+        let key = (workspace_path.to_path_buf(), self.history_branch.clone());
+        match self.commit_log.read(&key) {
+            Query::Ready(result) => match result.as_ref() {
+                Ok(Some(commits)) => {
+                    self.sync_history_rows(commits);
+                    HistoryFetch::Ready
+                }
+                Ok(None) => HistoryFetch::NotRepository,
+                Err(error) => HistoryFetch::Error(error.clone()),
+            },
+            Query::Pending => HistoryFetch::Loading,
+            Query::Missing(token) => {
+                let fetch_path = workspace_path.to_path_buf();
+                let fetch_branch = self.history_branch.clone();
+                let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
+                cx.spawn(async move |fintwind, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn({
+                            let fetch_path = fetch_path.clone();
+                            let fetch_branch = fetch_branch.clone();
+                            async move {
+                                match workspace.request(
+                                    fintwind_client::WorkspaceOperation::ListCommits {
+                                        cwd: fetch_path,
+                                        limit: HISTORY_COMMIT_LIMIT,
+                                        branch: fetch_branch,
+                                    },
+                                ) {
+                                    Ok(fintwind_client::WorkspaceResult::Commits { commits }) => {
+                                        Ok(commits)
+                                    }
+                                    Ok(_) => Err("the daemon returned an invalid history response"
+                                        .to_owned()),
+                                    Err(error) => Err(error.to_string()),
+                                }
+                            }
+                        })
+                        .await;
+                    let _ = fintwind.update(cx, |fintwind, cx| {
+                        if !fintwind.commit_log.fulfill(token, result) {
+                            return;
+                        }
+                        // Only the visible panel rebuilds; an answer for
+                        // another workspace or filter waits until shown.
+                        let selected = fintwind
+                            .selected_workspace_path()
+                            .is_some_and(|path| path == fetch_path)
+                            && fintwind.history_branch == fetch_branch;
+                        if selected {
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                HistoryFetch::Loading
+            }
+        }
+    }
+
+    pub(super) fn refresh_history_panel(&mut self, cx: &mut Context<Self>) {
+        // Only the visible (workspace, branch) answer is stale; other cached
+        // histories keep serving until their own panel asks again.
+        if let Some(path) = self.selected_workspace_path().map(StdPath::to_path_buf) {
+            self.commit_log
+                .invalidate(&(path, self.history_branch.clone()));
+        }
+        cx.notify();
+    }
+
+    pub(super) fn set_history_branch_filter(
+        &mut self,
+        branch: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.history_branch == branch {
+            return;
+        }
+        self.history_branch = branch;
+        self.history_highlight = None;
+        self.commit_log.clear();
+        cx.notify();
+    }
+
+    fn move_history_highlight(&mut self, key: &str, cx: &mut Context<Self>) {
+        let rows = self.history_row_cache.borrow().len();
+        if rows == 0 {
+            return;
+        }
+        let current = self.history_highlight.filter(|index| *index < rows);
+        let next = match (key, current) {
+            ("up", Some(0)) => rows - 1,
+            ("up", Some(index)) => index - 1,
+            ("up", None) => rows - 1,
+            (_, Some(index)) => (index + 1) % rows,
+            (_, None) => 0,
+        };
+        self.history_highlight = Some(next);
+        self.history_list_state.scroll_to_reveal_item(next);
+        cx.notify();
+    }
+
+    /// Copies one row's full hash and confirms with a toast. Both the mouse
+    /// click and the keyboard path land here, reading the synced row cache so
+    /// neither path needs to carry the list around.
+    fn copy_history_hash(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(commit) = self.history_row_cache.borrow().get(index).cloned() else {
+            return;
+        };
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(commit.hash.clone()));
+        self.show_success_toast(tr!(
+            "git_history.hash_copied",
+            hash = commit.short_hash.clone()
+        ));
+        cx.notify();
+    }
+
+    pub(super) fn render_right_panel_history(&mut self, cx: &mut Context<Self>) -> Div {
+        let theme = Theme::current(cx);
+        let workspace_path = self.selected_workspace_path().map(StdPath::to_path_buf);
+        let branches: Vec<(String, bool)> = workspace_path
+            .as_deref()
+            .and_then(|path| {
+                self.visible_branch_snapshot
+                    .as_ref()
+                    .filter(|(snapshot_path, _)| snapshot_path == path)
+                    .map(|(_, snapshot)| snapshot)
+            })
+            .map(|snapshot| {
+                snapshot
+                    .branches
+                    .iter()
+                    .map(|branch| (branch.name.clone(), branch.checked_out_elsewhere))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let branch_filter = self.history_branch.clone();
+        let weak = cx.entity().downgrade();
+        let handle = self.menu_handle("history-branch-filter", cx);
+        let filter_label = branch_filter
+            .clone()
+            .unwrap_or_else(|| tr!("git_history.head"));
+        let menu_weak = weak.clone();
+        let filter = dropdown_menu(
+            MenuChip::new("history-branch-filter")
+                .label(filter_label)
+                .icon("icons/git-branch.svg", theme.text_tertiary)
+                .height(px(28.0))
+                .background(theme.surface)
+                .selected(handle.is_open()),
+            "history-branch-filter-menu",
+            &handle,
+            MenuAlign::BelowLeft,
+            move |_| {
+                let mut items = Vec::new();
+                let head_weak = menu_weak.clone();
+                items.push(
+                    MenuItem::new(tr!("git_history.head"), move |_, cx| {
+                        let _ = head_weak.update(cx, |this, cx| {
+                            this.set_history_branch_filter(None, cx);
+                        });
+                    })
+                    .selected(branch_filter.is_none()),
+                );
+                items.push(MenuItem::Separator);
+                // Reading another worktree's branch history needs no
+                // checkout, so every branch stays selectable here.
+                for (name, _checked_out_elsewhere) in branches.iter() {
+                    let choice_weak = menu_weak.clone();
+                    let choice = Some(name.clone());
+                    items.push(
+                        MenuItem::new(name.clone(), move |_, cx| {
+                            let _ = choice_weak.update(cx, |this, cx| {
+                                this.set_history_branch_filter(choice.clone(), cx);
+                            });
+                        })
+                        .selected(branch_filter.as_deref() == Some(name.as_str())),
+                    );
+                }
+                items
+            },
+        );
+
+        let refresh_focus = self.transcript_control_focus("history-refresh", cx);
+        let refresh = div()
+            .id("history-refresh")
+            .track_focus(&refresh_focus)
+            .tab_index(0)
+            .w(px(28.0))
+            .h(px(28.0))
+            .flex_none()
+            .rounded(px(7.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_default()
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .hover(|style| style.bg(theme.overlay))
+            .active(|style| style.bg(theme.overlay_strong))
+            .child(icon("icons/rotate-cw.svg", 14.0, theme.text_secondary))
+            .tooltip(Tooltip::text(tr!("git_history.refresh")))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(|this, _, _, cx| this.refresh_history_panel(cx)));
+
+        let toolbar = div()
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(8.0))
+            .px(px(10.0))
+            .py(px(8.0))
+            .child(filter)
+            .child(div().flex_1())
+            .child(refresh);
+
+        let fetch = match workspace_path.as_deref() {
+            Some(path) => self.commit_log_for_workspace(path, cx),
+            None => HistoryFetch::NotRepository,
+        };
+        let highlight = self
+            .history_highlight
+            .filter(|index| *index < self.history_row_cache.borrow().len());
+
+        let content = match fetch {
+            HistoryFetch::Ready if self.history_row_cache.borrow().is_empty() => self
+                .render_right_panel_empty_message(
+                    tr!("git_history.empty"),
+                    tr!("git_history.empty_description"),
+                    cx,
+                )
+                .into_any_element(),
+            HistoryFetch::Ready => {
+                let list_weak = weak;
+                let list_highlight = highlight;
+                let now = unix_time();
+                div()
+                    .id("history-list")
+                    .track_focus(&self.transcript_control_focus("history-list", cx))
+                    .tab_index(0)
+                    .key_context("GitHistoryList")
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .focus_visible(|style| style.border_1().border_color(theme.accent))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        match event.keystroke.key.as_str() {
+                            "up" | "down" => {
+                                this.move_history_highlight(event.keystroke.key.as_str(), cx);
+                                cx.stop_propagation();
+                            }
+                            "enter" | "space" => {
+                                if let Some(index) = this.history_highlight {
+                                    this.copy_history_hash(index, cx);
+                                }
+                                cx.stop_propagation();
+                            }
+                            _ => {}
+                        }
+                    }))
+                    .child(
+                        list(
+                            self.history_list_state.clone(),
+                            move |index, _window, cx| {
+                                let Some(fintwind) = list_weak.upgrade() else {
+                                    return div().into_any_element();
+                                };
+                                let Some(commit) = fintwind
+                                    .read(cx)
+                                    .history_row_cache
+                                    .borrow()
+                                    .get(index)
+                                    .cloned()
+                                else {
+                                    return div().into_any_element();
+                                };
+                                let selected = list_highlight == Some(index);
+                                let hash_color = if commit.is_head {
+                                    theme.accent
+                                } else {
+                                    theme.text_secondary
+                                };
+                                let mut headline =
+                                    div().flex().items_center().gap(px(8.0)).min_w_0().child(
+                                        div()
+                                            .flex_none()
+                                            .text_size(code_px(11.5))
+                                            .font_family(crate::theme::code_font_family())
+                                            .text_color(hash_color)
+                                            .child(SharedString::from(commit.short_hash)),
+                                    );
+                                // At most two ref chips carry their names; the
+                                // rest collapse into a trailing "+n" chip.
+                                let refs_shown = commit.refs.len().min(2);
+                                let overflow = commit.refs.len() - refs_shown;
+                                for ref_name in commit.refs.iter().take(refs_shown) {
+                                    let color =
+                                        if ref_name == "HEAD" || ref_name.starts_with("HEAD ->") {
+                                            theme.accent
+                                        } else {
+                                            theme.text_tertiary
+                                        };
+                                    headline =
+                                        headline.child(ref_chip(ref_name.clone(), color, &theme));
+                                }
+                                if overflow > 0 {
+                                    headline = headline.child(ref_chip(
+                                        format!("+{overflow}"),
+                                        theme.text_tertiary,
+                                        &theme,
+                                    ));
+                                }
+                                let headline = headline.child(div().flex_1()).child(
+                                    div()
+                                        .flex_none()
+                                        .text_size(ui_px(10.5))
+                                        .text_color(theme.text_tertiary)
+                                        .child(format_time_ago(
+                                            now.saturating_sub(commit.timestamp),
+                                        )),
+                                );
+                                let detail = div()
+                                    .flex()
+                                    .items_baseline()
+                                    .gap(px(8.0))
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .min_w_0()
+                                            .flex_1()
+                                            .truncate()
+                                            .text_size(ui_px(12.5))
+                                            .text_color(theme.text)
+                                            .child(SharedString::from(commit.subject)),
+                                    )
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .max_w(px(120.0))
+                                            .truncate()
+                                            .text_size(ui_px(10.5))
+                                            .text_color(theme.text_tertiary)
+                                            .child(SharedString::from(commit.author)),
+                                    );
+                                div()
+                                    .id(SharedString::from(format!("history-row-{index}")))
+                                    .min_h(px(HISTORY_ROW_HEIGHT))
+                                    .w_full()
+                                    .px(px(12.0))
+                                    .py(px(6.0))
+                                    .flex()
+                                    .flex_col()
+                                    .justify_center()
+                                    .gap(px(3.0))
+                                    .cursor_default()
+                                    .when(selected, |row| row.bg(theme.overlay))
+                                    .when(!selected, |row| {
+                                        row.hover(|style| style.bg(theme.overlay))
+                                    })
+                                    .child(headline)
+                                    .child(detail)
+                                    .on_click({
+                                        let weak = list_weak.clone();
+                                        move |_, _, cx| {
+                                            cx.stop_propagation();
+                                            let _ = weak.update(cx, |this, cx| {
+                                                // The clicked row becomes the
+                                                // keyboard cursor, so mouse and
+                                                // arrow-key selection share one
+                                                // state.
+                                                this.history_highlight = Some(index);
+                                                this.copy_history_hash(index, cx)
+                                            });
+                                        }
+                                    })
+                                    .into_any_element()
+                            },
+                        )
+                        .flex_1()
+                        .min_h_0()
+                        .w_full(),
+                    )
+                    .into_any_element()
+            }
+            HistoryFetch::NotRepository => self
+                .render_right_panel_empty_message(
+                    tr!("git_history.not_a_repository"),
+                    tr!("git_history.not_a_repository_description"),
+                    cx,
+                )
+                .into_any_element(),
+            HistoryFetch::Error(error) => self
+                .render_right_panel_empty_message(tr!("git_history.error"), error, cx)
+                .into_any_element(),
+            HistoryFetch::Loading => self
+                .render_right_panel_empty_message(
+                    tr!("git_history.loading"),
+                    tr!("git_history.loading_description"),
+                    cx,
+                )
+                .into_any_element(),
+        };
+
+        div()
+            .flex_1()
+            .min_h_0()
+            .min_w_0()
+            .flex()
+            .flex_col()
+            .child(toolbar)
+            .child(content)
+    }
+}
+
+/// A small rounded label next to a commit's short hash: a ref decoration
+/// (`HEAD -> main`, `origin/main`) or the "+n" overflow marker.
+fn ref_chip(label: String, color: Hsla, theme: &Theme) -> Div {
+    div()
+        .flex_none()
+        .px(px(5.0))
+        .h(px(15.0))
+        .rounded(px(4.0))
+        .flex()
+        .items_center()
+        .text_size(ui_px(10.0))
+        .text_color(color)
+        .bg(theme.overlay)
+        .child(SharedString::from(label))
+}

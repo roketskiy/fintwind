@@ -551,6 +551,7 @@ enum RightPanelSurface {
     },
     Files,
     Diff,
+    History,
     File(String),
 }
 
@@ -1374,6 +1375,20 @@ pub struct Fintwind {
     /// Stale-while-revalidate value for the selected path, avoiding label
     /// flicker when app activation invalidates the query.
     visible_branch_snapshot: Option<(PathBuf, BranchSnapshot)>,
+    /// Git commit history per (workspace path, branch filter). Render only
+    /// reads this in-memory cache; misses are fulfilled on the background
+    /// executor. `Err` is cached as well so a broken path is not retried every
+    /// frame.
+    commit_log: QueryCache<
+        (PathBuf, Option<String>),
+        Result<Option<Vec<crate::git_history::CommitEntry>>, String>,
+    >,
+    /// The history panel's branch filter; `None` follows HEAD.
+    history_branch: Option<String>,
+    history_list_state: ListState,
+    history_row_cache: RefCell<Vec<crate::git_history::CommitEntry>>,
+    /// Keyboard cursor over the history list; `None` means no row selected.
+    history_highlight: Option<usize>,
     branch_operation_pending: bool,
     /// Window-modal Git commit/push UI. Its repository snapshot is filled
     /// off-thread; frames only read this in-memory value.
@@ -2014,6 +2029,7 @@ mod components;
 mod composer;
 mod drafts;
 mod file_search;
+mod git_history;
 mod image_preview;
 mod mcp_market_page;
 mod mcp_page;
@@ -3178,6 +3194,11 @@ impl Fintwind {
                 branch_snapshots: QueryCache::new(MAX_CACHED_WORKSPACES),
                 sidebar_branches: QueryCache::new(4 * MAX_CACHED_WORKSPACES),
                 visible_branch_snapshot: None,
+                commit_log: QueryCache::new(MAX_CACHED_WORKSPACES),
+                history_branch: None,
+                history_list_state: ListState::new(0, ListAlignment::Top, px(96.0)),
+                history_row_cache: RefCell::new(Vec::new()),
+                history_highlight: None,
                 branch_operation_pending: false,
                 commit_dialog: None,
                 commit_operation: None,

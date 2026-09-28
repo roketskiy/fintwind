@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::composer::{FileEntry, SlashCommand};
-use crate::git::{AgentInvocation, BranchSnapshot, CommitSnapshot, CreatedWorktree};
+use crate::git::{AgentInvocation, BranchSnapshot, CommitEntry, CommitSnapshot, CreatedWorktree};
 use crate::model::Checkpoint;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -76,6 +76,13 @@ pub enum WorkspaceOperation {
     },
     InspectBranches {
         cwd: PathBuf,
+    },
+    /// The commit history of a workspace, newest first. `branch` `None` reads
+    /// `HEAD`; `Some` names a branch or any revision Git accepts.
+    ListCommits {
+        cwd: PathBuf,
+        limit: usize,
+        branch: Option<String>,
     },
     /// The currently checked-out branch of a workspace. Far cheaper than
     /// [`Self::InspectBranches`], which enumerates refs and measures the
@@ -192,6 +199,10 @@ pub enum WorkspaceResult {
     },
     Branches {
         snapshot: Option<BranchSnapshot>,
+    },
+    Commits {
+        /// `None` means `cwd` is not inside a Git repository.
+        commits: Option<Vec<CommitEntry>>,
     },
     CurrentBranch {
         branch: Option<String>,

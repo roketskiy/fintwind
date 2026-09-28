@@ -25,6 +25,22 @@ impl BranchSnapshot {
     }
 }
 
+/// One entry in a workspace's commit history, as drawn by the Git history
+/// panel. `refs` are Git's `%D` decorations split into separate labels, e.g.
+/// `["HEAD -> main", "origin/main", "tag: v1.2.0"]`; `is_head` marks the
+/// commit `HEAD` points at, including a detached HEAD.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CommitEntry {
+    pub hash: String,
+    pub short_hash: String,
+    pub subject: String,
+    pub author: String,
+    /// Author date, in Unix seconds.
+    pub timestamp: u64,
+    pub refs: Vec<String>,
+    pub is_head: bool,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommitSnapshot {
     pub branch: String,

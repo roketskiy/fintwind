@@ -908,6 +908,7 @@ impl RightPanelSurface {
             }
             Self::Files => tr!("right_panel.files"),
             Self::Diff => tr!("right_panel.diff"),
+            Self::History => tr!("right_panel.history"),
             Self::File(path) => path.rsplit('/').next().unwrap_or(path).to_owned(),
         }
     }
@@ -920,6 +921,7 @@ impl RightPanelSurface {
             Self::BackgroundWork { key, .. } => work_kind_icon(key.kind),
             Self::Files => "icons/folder.svg",
             Self::Diff => "icons/file-diff.svg",
+            Self::History => "icons/history.svg",
             Self::File(path) => file_icon_for_path(path),
         }
     }
@@ -958,7 +960,11 @@ fn reusable_surface_index(
         RightPanelSurface::BackgroundWork { key, .. } => surfaces.iter().position(|surface| {
             matches!(surface, RightPanelSurface::BackgroundWork { key: candidate, .. } if candidate == key)
         }),
-        RightPanelSurface::Context | RightPanelSurface::Files | RightPanelSurface::Diff | RightPanelSurface::File(_) => {
+        RightPanelSurface::Context
+        | RightPanelSurface::Files
+        | RightPanelSurface::Diff
+        | RightPanelSurface::History
+        | RightPanelSurface::File(_) => {
             surfaces.iter().position(|surface| surface == requested)
         }
     }
@@ -1335,7 +1341,7 @@ mod tests {
             .expect("review render fn");
         let body = &source[start + 1..];
         let end = body
-            .find("\n    fn render_right_panel_empty_message(")
+            .find("\n    pub(super) fn render_right_panel_empty_message(")
             .expect("review render end");
         let body = &body[..end];
 
@@ -1933,6 +1939,10 @@ impl Fintwind {
             }
             self.refresh_right_panel_diff(cx);
         }
+        if surface == RightPanelSurface::History {
+            self.history_highlight = None;
+            self.refresh_history_panel(cx);
+        }
         if matches!(
             surface,
             RightPanelSurface::Files | RightPanelSurface::File(_)
@@ -2152,6 +2162,9 @@ impl Fintwind {
             Some(RightPanelSurface::Diff) => self
                 .render_right_panel_diff(width, window, cx)
                 .into_any_element(),
+            Some(RightPanelSurface::History) => {
+                self.render_right_panel_history(cx).into_any_element()
+            }
             Some(RightPanelSurface::Terminal(terminal_id)) => self
                 .right_panel_terminals
                 .get(&terminal_id)
@@ -4177,7 +4190,7 @@ impl Fintwind {
         }
     }
 
-    fn render_right_panel_empty_message(
+    pub(super) fn render_right_panel_empty_message(
         &self,
         title: String,
         description: String,
@@ -4215,6 +4228,7 @@ impl Fintwind {
     pub(super) fn refresh_workspace_surfaces(&mut self, cx: &mut Context<Self>) {
         match self.active_right_panel_surface() {
             Some(RightPanelSurface::Diff) => self.refresh_right_panel_diff(cx),
+            Some(RightPanelSurface::History) => self.refresh_history_panel(cx),
             Some(RightPanelSurface::Files | RightPanelSurface::File(_)) => {
                 self.refresh_right_panel_working_tree(cx)
             }

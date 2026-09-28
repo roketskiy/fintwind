@@ -171,6 +171,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "globe",
     "github",
     "hexagon",
+    "history",
     "info",
     "laptop",
     "letters/a",

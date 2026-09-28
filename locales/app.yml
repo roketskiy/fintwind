@@ -1581,6 +1581,8 @@ right_panel.files:
   en: Files
 right_panel.diff:
   en: Review
+right_panel.history:
+  en: History
 right_panel.toggle:
   en: Toggle right panel
 right_panel.open_surface:
@@ -1625,6 +1627,28 @@ capsule.tasks:
   en: Session tools
 capsule.git_tools:
   en: Git tools
+environment.history:
+  en: History
+git_history.head:
+  en: HEAD (current)
+git_history.loading:
+  en: Loading history…
+git_history.loading_description:
+  en: Reading this workspace's commit history
+git_history.not_a_repository:
+  en: Not a Git repository
+git_history.not_a_repository_description:
+  en: Open a workspace inside a Git repository to browse its history
+git_history.error:
+  en: Could not read history
+git_history.empty:
+  en: No commits yet
+git_history.empty_description:
+  en: This branch has no commits to show
+git_history.hash_copied:
+  en: "Copied %{hash}"
+git_history.refresh:
+  en: Refresh history
 commit.message_placeholder:
   en: Commit message (leave blank to generate)…
 commit.message:

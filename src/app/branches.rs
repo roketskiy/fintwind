@@ -378,6 +378,9 @@ impl Fintwind {
                         fintwind.visible_branch_snapshot = Some((path.clone(), snapshot));
                         fintwind.branch_snapshots.invalidate(&path);
                         fintwind.sidebar_branches.invalidate(&path);
+                        // Switching branches swaps the whole history out
+                        // from under the panel.
+                        fintwind.commit_log.clear();
                         let selected_path = fintwind
                             .selected_workspace_path()
                             .map(std::path::Path::to_path_buf);

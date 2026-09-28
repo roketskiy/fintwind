@@ -471,6 +471,9 @@ impl Fintwind {
         };
         self.branch_snapshots.invalidate(&workspace_path);
         self.sidebar_branches.invalidate(&workspace_path);
+        // The commit log moves with the working tree too, so the history
+        // panel re-asks the daemon instead of drawing stale commits.
+        self.commit_log.clear();
         self.refresh_workspace_surfaces(cx);
         self.invalidate_composer_sources(cx);
     }

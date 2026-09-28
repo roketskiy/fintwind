@@ -18,7 +18,9 @@ pub(super) struct SessionTabDrag {
 const SESSION_TAB_DRAG_THRESHOLD: f32 = 4.0;
 const SESSION_TAB_HEIGHT: f32 = 30.0;
 const SESSION_TAB_MAX_WIDTH: f32 = 190.0;
-const SESSION_TAB_MIN_WIDTH: f32 = 44.0;
+// Leave room for a short title even when the tab also shows its busy/unread
+// indicator and the fixed-width close button.
+const SESSION_TAB_MIN_WIDTH: f32 = 84.0;
 const SESSION_TAB_FADE_WIDTH: f32 = 16.0;
 
 /// Which tab a drag lands on, given every tab's `(left, right)` span in the

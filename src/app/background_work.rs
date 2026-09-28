@@ -976,6 +976,42 @@ impl Fintwind {
             .is_some_and(BackgroundWorkRegistry::has_live)
     }
 
+    pub(super) fn background_work_upsert_is_unread(
+        &self,
+        session_id: Uuid,
+        incoming: &BackgroundWorkItem,
+    ) -> bool {
+        self.background_work
+            .get(&session_id)
+            .and_then(|registry| registry.items.get(&incoming.key))
+            .is_some_and(|current| current.status.is_live() && !incoming.status.is_live())
+    }
+
+    pub(super) fn background_work_reconcile_is_unread(
+        &self,
+        session_id: Uuid,
+        items: &[BackgroundWorkItem],
+        processes_only: bool,
+    ) -> bool {
+        self.background_work
+            .get(&session_id)
+            .is_some_and(|registry| {
+                registry.items.values().any(|item| {
+                    item.background
+                        && item.status.is_live()
+                        && (!processes_only
+                            || matches!(
+                                item.key.kind,
+                                BackgroundWorkKind::Process | BackgroundWorkKind::Monitor
+                            ))
+                        && items
+                            .iter()
+                            .find(|incoming| incoming.key == item.key)
+                            .is_none_or(|incoming| !incoming.status.is_live())
+                })
+            })
+    }
+
     pub(super) fn background_work_counts(&self, session_id: Uuid) -> (usize, usize) {
         self.background_work
             .get(&session_id)

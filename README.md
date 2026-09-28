@@ -19,7 +19,7 @@ Website and downloads: <https://fintwind.xyz>
 
 Session demo: switching models, a session in progress, and scrolling a long transcript.
 
-![fintwind session demo](docs/session-demo.mp4)
+![fintwind session demo](https://github.com/user-attachments/assets/183372cb-085f-471a-b8b6-f42bddb9fdaf)
 
 ## Install
 

@@ -16,7 +16,7 @@ fintwind 是 [OpenCode 2](https://opencode.ai/v2/docs)——[OpenCode](https://o
 
 会话演示：切换模型、进行中的会话，以及滚动一条很长的对话记录。
 
-![fintwind 会话演示](https://github.com/user-attachments/assets/183372cb-085f-471a-b8b6-f42bddb9fdaf)
+https://github.com/roketskiy/fintwind/releases/download/v0.2.2/session-demo.mp4
 
 ## 安装
 

@@ -67,8 +67,8 @@ use crate::ui::{
 };
 use crate::{
     CancelTurn, CloseFind, CloseSessionTab, CloseWindow, CopySelection, FindNext, FindPrevious,
-    FocusComposer, NavigateBack, NavigateForward, NewProject, NewSession, NextSessionTab,
-    OpenFind, OpenFindReplace, OpenSettings, PreviousSessionTab, ReplaceAllMatches, SaveFile,
+    FocusComposer, NavigateBack, NavigateForward, NewProject, NewSession, NextSessionTab, OpenFind,
+    OpenFindReplace, OpenSettings, PreviousSessionTab, ReplaceAllMatches, SaveFile,
     SelectSessionTab, ToggleCommandPalette, ToggleFindCaseSensitive, ToggleFindRegex,
     ToggleFindWholeWord, ToggleFpsCounter, ToggleModelPicker, ToggleRightPanel, ToggleSidebar,
     ToggleUsagePanel,
@@ -1814,6 +1814,11 @@ pub struct Fintwind {
     /// The Usage page's scan snapshot, fetched off the UI thread. `None`
     /// until the first scan lands; frames never touch the entries inside.
     usage_stats: Option<Rc<fintwind_client::provider_session::UsageStats>>,
+    /// The models.dev price table the last scan priced against, shared with
+    /// the pricing pass so a scan inside the table's reuse window answers
+    /// without touching the disk. `None` until one catalog lands; a page
+    /// scanning without one marks its costs unavailable instead of free.
+    usage_price_table: Option<std::sync::Arc<fintwind_client::models_dev::ModelsDevTable>>,
     /// The last scan's failure, when the page has nothing cached to show.
     usage_stats_error: Option<String>,
     /// Bumped per scan; a result from a superseded scan is discarded.
@@ -2043,9 +2048,9 @@ pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
 pub use sidebar::init as init_sidebar_keys;
 use sidebar::{SidebarGroupScroll, SidebarRow};
-use tabs::SessionTabDrag;
 pub use skills_page::init as init_skills_keys;
 use streaming::*;
+use tabs::SessionTabDrag;
 use transcript::*;
 use transcript_view::ConversationNavigationRail;
 pub use update_card::init as init_update_card_keys;
@@ -3372,6 +3377,7 @@ impl Fintwind {
                 mcp_market_category: Default::default(),
                 mcp_market_selected: None,
                 usage_stats: None,
+                usage_price_table: None,
                 usage_stats_error: None,
                 usage_stats_generation: 0,
                 usage_stats_pending: false,
@@ -3470,7 +3476,12 @@ impl Fintwind {
             }
         });
         navigation_rail.update(cx, |rail, _| rail.set_fintwind(entity.downgrade()));
-        for pane in [&sidebar_pane, &transcript_pane, &right_panel_pane, &session_tabs_pane] {
+        for pane in [
+            &sidebar_pane,
+            &transcript_pane,
+            &right_panel_pane,
+            &session_tabs_pane,
+        ] {
             pane.update(cx, |pane, cx| pane.bind(&entity, cx));
         }
         let initial_row_count = entity.read(cx).transcript_row_count();
@@ -3492,9 +3503,10 @@ impl Fintwind {
             // project's own draft — or a fresh session — takes its place;
             // a first run with no projects at all keeps the onboarding.
             if this.open_tabs.is_empty() {
-                let project_id = this.state.selected_project.or_else(|| {
-                    this.state.projects.first().map(|project| project.id)
-                });
+                let project_id = this
+                    .state
+                    .selected_project
+                    .or_else(|| this.state.projects.first().map(|project| project.id));
                 if let Some(project_id) = project_id {
                     this.create_session_for(project_id, cx);
                 }

@@ -2433,7 +2433,9 @@ usage_page.kpi_sessions:
 usage_page.kpi_cost:
   en: Cost
 usage_page.cost_sessions:
-  en: "%{count} billed sessions"
+  en: "%{count} sessions at API price"
+usage_page.cost_unavailable:
+  en: Price catalog unavailable
 usage_page.cache_hit_short:
   en: hit
 usage_page.projects_title:

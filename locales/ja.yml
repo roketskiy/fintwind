@@ -1260,7 +1260,8 @@ usage_page.unknown_model: 不明なモデル
 usage_page.kpi_sessions: セッション数
 usage_page.subagent_sessions_value: "サブエージェント%{count}件 · %{tokens} を含む"
 usage_page.kpi_cost: コスト
-usage_page.cost_sessions: "課金セッション %{count}件"
+usage_page.cost_sessions: "API 価格で%{count}件"
+usage_page.cost_unavailable: 価格カタログを取得できません
 usage_page.cache_hit_short: ヒット
 usage_page.projects_title: プロジェクト別
 usage_page.projects_caption: 全%{count}プロジェクト

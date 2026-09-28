@@ -32,10 +32,10 @@ pub const TABLE_REUSE_WINDOW: Duration = Duration::from_secs(600);
 const MAX_CATALOG_BYTES: usize = 64 * 1024 * 1024;
 
 /// One record of the catalog. The catalog describes models with far more
-/// (costs, dates, flags); these fields are the ones anything reads, so only
+/// (dates, flags); these fields are the ones anything reads, so only
 /// these are kept — the cache stays small, and a future reader adds its field
 /// back as one serde-default line.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelsDevModel {
     pub id: String,
     pub name: Option<String>,
@@ -48,6 +48,46 @@ pub struct ModelsDevModel {
     /// The modalities the model emits. Empty when the catalog does not say.
     #[serde(default)]
     pub output_modalities: Vec<String>,
+    /// The model's official API prices, USD per million tokens, when the
+    /// catalog states them. `None` on the copies that say nothing — the
+    /// majority vote in [`ModelsDevTable::resolve_model_cost`] skips them.
+    #[serde(default)]
+    pub cost: Option<ModelsDevCost>,
+}
+
+/// A model's official API prices, USD per million tokens, exactly as the
+/// catalog states them. A rate the catalog omits is `None` and prices
+/// nothing, which is not the same as the whole record being absent: most
+/// catalogs state input and output only.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelsDevCost {
+    #[serde(default)]
+    pub input: Option<f64>,
+    #[serde(default)]
+    pub output: Option<f64>,
+    #[serde(default)]
+    pub cache_read: Option<f64>,
+    #[serde(default)]
+    pub cache_write: Option<f64>,
+}
+
+impl ModelsDevCost {
+    /// The price of `tokens` under this rate. `None` prices as free: the
+    /// catalog not stating a rate is a gap in the catalog, not a charge.
+    pub fn charge(self, tokens: u64, rate: Option<f64>) -> f64 {
+        // f64::EPSILON of precision is irrelevant next to a per-million
+        // multiplier; the multiply is exact enough for a statistics page.
+        rate.map_or(0.0, |rate| rate * tokens as f64 / 1_000_000.0)
+    }
+
+    /// Whether any rate is stated at all. A record whose every field is
+    /// `None` prices nothing and reads as absent.
+    pub fn is_empty(self) -> bool {
+        self.input.is_none()
+            && self.output.is_none()
+            && self.cache_read.is_none()
+            && self.cache_write.is_none()
+    }
 }
 
 /// One built-in provider of the catalog: the identity and endpoint facts the
@@ -56,7 +96,7 @@ pub struct ModelsDevModel {
 /// serves one directly (OAuth-gated relays omit it), the SDK package that
 /// names its wire protocol, and its model roster. No credential ever lives
 /// here.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelsDevProvider {
     pub id: String,
     pub name: String,
@@ -141,6 +181,34 @@ impl ModelsDevTable {
             .map(|since_epoch| since_epoch.as_millis() as u64)
             .unwrap_or(self.fetched_at);
         Duration::from_millis(now.saturating_sub(self.fetched_at))
+    }
+
+    /// Whether any model in the table states a price. A catalog cached by an
+    /// older build parsed none, so this tells a cached table worth reading
+    /// from one that would price everything as free. An empty `cost` object
+    /// states nothing and counts as absent, matching what the resolver
+    /// answers for it.
+    pub fn has_any_cost(&self) -> bool {
+        self.models
+            .values()
+            .flatten()
+            .any(|model| model.cost.is_some_and(|cost| !cost.is_empty()))
+    }
+
+    /// The official API price one model id resolves to: exact ids first,
+    /// then separator-insensitive ones, each field the majority value across
+    /// the matches — copies that state no price do not vote, the way
+    /// modalities resolve. `None` when no match states any rate.
+    pub fn resolve_model_cost(&self, id: &str) -> Option<ModelsDevCost> {
+        let group = self.models.get(&normalize_model_id(id))?;
+        let exact: Vec<&ModelsDevModel> = group.iter().filter(|model| model.id == id).collect();
+        let matches: Vec<&ModelsDevModel> = if exact.is_empty() {
+            group.iter().collect()
+        } else {
+            exact
+        };
+        let cost = mode(matches.iter().map(|model| model.cost))?;
+        (!cost.is_empty()).then_some(cost)
     }
 
     /// The input modalities one model id resolves to, same matching as
@@ -563,6 +631,15 @@ fn parse_model(id: &str, spec: &Value) -> Option<ModelsDevModel> {
             })
             .unwrap_or_default()
     };
+    let cost = spec.get("cost").and_then(Value::as_object).map(|cost| {
+        let rate = |key: &str| cost.get(key).and_then(Value::as_f64);
+        ModelsDevCost {
+            input: rate("input"),
+            output: rate("output"),
+            cache_read: rate("cache_read"),
+            cache_write: rate("cache_write"),
+        }
+    });
     Some(ModelsDevModel {
         id: spec
             .get("id")
@@ -574,6 +651,7 @@ fn parse_model(id: &str, spec: &Value) -> Option<ModelsDevModel> {
         output_limit: limit("output"),
         input_modalities: modalities("input"),
         output_modalities: modalities("output"),
+        cost,
     })
 }
 
@@ -755,6 +833,71 @@ mod tests {
             table.resolve_input_modalities("other"),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn resolves_model_cost_from_the_catalog() {
+        let document = r#"{
+            "a": {"id": "a", "models": {
+                "m": {"id": "m", "cost": {"input": 3.0, "output": 15.0, "cache_read": 0.3}}
+            }},
+            "b": {"id": "b", "models": {
+                "m": {"id": "m"}
+            }},
+            "no-price": {"id": "no-price", "models": {
+                "n": {"id": "n", "limit": {"context": 1000}}
+            }}
+        }"#;
+        let table = parse_catalog(document).unwrap();
+        // The price is stated by only one copy of the id: the silent copy
+        // does not vote the price down to nothing.
+        assert_eq!(
+            table.resolve_model_cost("m"),
+            Some(ModelsDevCost {
+                input: Some(3.0),
+                output: Some(15.0),
+                cache_read: Some(0.3),
+                cache_write: None,
+            })
+        );
+        // Nothing anywhere states a price: `None`, not a record of zeros.
+        assert_eq!(table.resolve_model_cost("n"), None);
+        // Unknown ids price as absent.
+        assert_eq!(table.resolve_model_cost("other"), None);
+        assert!(table.has_any_cost());
+        // The sample's reasoner states no price anywhere.
+        assert_eq!(
+            parse_catalog(sample_catalog())
+                .unwrap()
+                .resolve_model_cost("deepseek-reasoner"),
+            None
+        );
+        // A cached table from an older build carried no prices at all.
+        let priceless =
+            parse_catalog(r#"{"a": {"id": "a", "models": {"m": {"id": "m"}}}}"#).unwrap();
+        assert!(!priceless.has_any_cost());
+        // An empty `cost` object states nothing either — it must not count
+        // as a priced catalog.
+        let hollow =
+            parse_catalog(r#"{"a": {"id": "a", "models": {"m": {"id": "m", "cost": {}}}}}"#)
+                .unwrap();
+        assert_eq!(hollow.resolve_model_cost("m"), None);
+        assert!(!hollow.has_any_cost());
+    }
+
+    #[test]
+    fn cost_charge_prices_per_million_and_treats_missing_rates_as_free() {
+        let cost = ModelsDevCost {
+            input: Some(3.0),
+            output: Some(15.0),
+            cache_read: Some(0.3),
+            cache_write: None,
+        };
+        assert_eq!(cost.charge(1_000_000, cost.input), 3.0);
+        assert_eq!(cost.charge(500_000, cost.output), 7.5);
+        assert_eq!(cost.charge(2_000_000, cost.cache_read), 0.6);
+        // A rate the catalog omits prices nothing rather than panicking.
+        assert_eq!(cost.charge(1_000_000, cost.cache_write), 0.0);
     }
 
     #[test]

@@ -2,7 +2,9 @@
 
 English | [简体中文](README.zh-CN.md)
 
-fintwind is a native Windows desktop for [OpenCode](https://opencode.ai). Rust and
+fintwind is a native Windows desktop client for
+[OpenCode 2](https://opencode.ai/v2/docs) — the v2 line of the
+[OpenCode](https://opencode.ai) coding agent. Rust and
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) draw the
 interface on the GPU — it is not an Electron shell. Projects, sessions, and
 transcripts stay on your machine.
@@ -37,8 +39,8 @@ fintwind does not download or install the update itself.
 
 ## Requirements
 
-fintwind drives one agent backend: a local [OpenCode](https://opencode.ai)
-server. Install and authenticate the `opencode` CLI first. This 0.2.1 release
+fintwind drives one agent backend: a local **OpenCode 2** server. Install and
+authenticate the `opencode` CLI first. This 0.2.1 release
 supports OpenCode **v2.0.16 and earlier** (0.2.0 supports **v2.0.11 and
 earlier**). fintwind starts it, and sessions, models, providers, and MCP
 servers all come from that backend. A newer OpenCode 2 is not guaranteed to work.
@@ -67,7 +69,7 @@ servers all come from that backend. A newer OpenCode 2 is not guaranteed to work
 - **Tool activity you can read.** Thinking, tool calls, and nested Code Mode
   calls stay in order, with the raw OpenCode tool name on the card.
 - **Usage from your own history.** Token and cost stats read from local
-  OpenCode sessions: an activity heatmap, daily bars, and a per-model ranking.
+  OpenCode 2 sessions: an activity heatmap, daily bars, and a per-model ranking.
 - **MCP marketplace.** Browse and add remote MCP servers, including OAuth
   login, and see whether they are connected.
 - **Math as math.** Inline and display formulas are typeset natively,
@@ -85,11 +87,11 @@ One Task Manager reading with the window open. The desktop process is at
 
 fintwind is a [GPL-3.0](LICENSE) fork of [waku](https://github.com/egoist/waku)
 by [EGOIST](https://github.com/egoist). This fork keeps a single backend —
-local OpenCode — and ships Windows only. Multi-provider, macOS, and Linux
+local OpenCode 2 — and ships Windows only. Multi-provider, macOS, and Linux
 stay on the upstream project.
 
 It is not the official OpenCode desktop. It is a Windows client for people who
-already run OpenCode and want the transcript in a native window.
+already run OpenCode 2 and want the transcript in a native window.
 
 ## Architecture
 

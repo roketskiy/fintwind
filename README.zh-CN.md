@@ -2,7 +2,8 @@
 
 [English](README.md) | 简体中文
 
-fintwind 是 [OpenCode](https://opencode.ai) 的原生 Windows 桌面应用。界面由 Rust 和
+fintwind 是 [OpenCode 2](https://opencode.ai/v2/docs)——[OpenCode](https://opencode.ai)
+编码 agent 的 v2 系列——的原生 Windows 桌面客户端。界面由 Rust 和
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 直接在 GPU 上绘制，
 不是 Electron 套壳。项目、会话和对话记录都留在你自己的机器上。
 
@@ -31,7 +32,7 @@ SmartScreen、数据目录和尚未支持的功能见 [docs/windows.md](docs/win
 
 ## 环境要求
 
-fintwind 只驱动一个 agent 后端：本机的 [OpenCode](https://opencode.ai) 服务。
+fintwind 只驱动一个 agent 后端：本机的 **OpenCode 2** 服务。
 请先安装并登录 `opencode` CLI。本 0.2.1 版本支持 **v2.0.16 及更早版本**
 （0.2.0 支持 **v2.0.11 及更早版本**）。
 fintwind 会拉起它；会话、模型、provider 和 MCP 服务器都来自这个后端。
@@ -54,7 +55,7 @@ fintwind 会拉起它；会话、模型、provider 和 MCP 服务器都来自这
   会话保持同一个。
 - **工具过程读得清。** 思考、工具调用和嵌套的 Code Mode 调用按原顺序留在对话里，
   卡片上是 OpenCode 的原始工具名。
-- **用量来自你自己的记录。** 从本机 OpenCode 会话统计 token 和费用：活动热力图、
+- **用量来自你自己的记录。** 从本机 OpenCode 2 会话统计 token 和费用：活动热力图、
   按日柱状图、按模型排名。
 - **MCP 市场。** 浏览并添加远程 MCP 服务器，支持 OAuth 登录，并能看到连接状态。
 - **公式按公式排版。** 行内和独立公式原生排版，包括模型更常输出的 `\[…\]` 和 `\(…\)`，
@@ -70,10 +71,10 @@ fintwind 会拉起它；会话、模型、provider 和 MCP 服务器都来自这
 ## 范围
 
 fintwind 是 [EGOIST](https://github.com/egoist) 的 [waku](https://github.com/egoist/waku)
-的 fork，同样采用 [GPL-3.0](LICENSE)。这个 fork 只保留一个后端——本机 OpenCode——并且只发布
+的 fork，同样采用 [GPL-3.0](LICENSE)。这个 fork 只保留一个后端——本机 OpenCode 2——并且只发布
 Windows。多 provider、macOS 和 Linux 请用上游项目。
 
-它不是 OpenCode 官方桌面端，而是给已经在用 OpenCode、希望对话记录跑在原生窗口里的
+它不是 OpenCode 官方桌面端，而是给已经在用 OpenCode 2、希望对话记录跑在原生窗口里的
 Windows 用户。
 
 ## 架构

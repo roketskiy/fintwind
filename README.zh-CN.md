@@ -14,9 +14,9 @@ fintwind 是 [OpenCode 2](https://opencode.ai/v2/docs)——[OpenCode](https://o
 > 新于 v2.0.16 时，无法保证 fintwind 能正常运行。**目前 0.2.2 支持 OpenCode
 > v2.0.16 及更早版本；0.2.0 支持 v2.0.11 及更早版本。**
 
-54 秒演示：切换模型、进行中的会话，以及滚动一条很长的对话记录。
+会话演示：切换模型、进行中的会话，以及滚动一条很长的对话记录。
 
-https://github.com/user-attachments/assets/8ca3cd89-3044-4e90-81cd-ebd9f55818ef
+![fintwind 会话演示](docs/session-demo.mp4)
 
 ## 安装
 

@@ -17,9 +17,9 @@ Website and downloads: <https://fintwind.xyz>
 > to work. **fintwind 0.2.2 supports OpenCode v2.0.16 and earlier;**
 > **fintwind 0.2.0 supports OpenCode v2.0.11 and earlier.**
 
-54 seconds: switching models, a session in progress, and scrolling a long transcript.
+Session demo: switching models, a session in progress, and scrolling a long transcript.
 
-https://github.com/user-attachments/assets/8ca3cd89-3044-4e90-81cd-ebd9f55818ef
+![fintwind session demo](docs/session-demo.mp4)
 
 ## Install
 

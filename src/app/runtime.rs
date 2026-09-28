@@ -1838,19 +1838,18 @@ impl Fintwind {
                 // An open tab holds its provider resident on purpose: that is
                 // what keeps switching back instant and its working state
                 // live. Only a closed tab's runtime ages out here.
-                !self.open_tabs.contains(session_id)
-                    && {
-                        let session = self
-                            .state
-                            .sessions
-                            .iter()
-                            .find(|session| session.id == **session_id);
-                        session_is_reapable(
-                            session,
-                            runtime.last_active_at.elapsed(),
-                            self.session_has_live_background_work(**session_id),
-                        )
-                    }
+                !self.open_tabs.contains(session_id) && {
+                    let session = self
+                        .state
+                        .sessions
+                        .iter()
+                        .find(|session| session.id == **session_id);
+                    session_is_reapable(
+                        session,
+                        runtime.last_active_at.elapsed(),
+                        self.session_has_live_background_work(**session_id),
+                    )
+                }
             })
             .map(|(session_id, _)| *session_id)
             .collect::<Vec<_>>();

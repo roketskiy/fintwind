@@ -42,7 +42,10 @@ impl Fintwind {
         self.tab_unread.remove(&session_id);
         self.transcript_view_states.remove(&session_id);
         self.tab_focuses.borrow_mut().remove(&session_id);
-        if self.session_tab_drag.is_some_and(|drag| drag.session_id == session_id) {
+        if self
+            .session_tab_drag
+            .is_some_and(|drag| drag.session_id == session_id)
+        {
             self.session_tab_drag = None;
         }
     }
@@ -56,7 +59,10 @@ impl Fintwind {
         self.transcript_view_states.remove(&session_id);
         self.tab_focuses.borrow_mut().remove(&session_id);
         self.pending_session_tab_reveal = None;
-        if self.session_tab_drag.is_some_and(|drag| drag.session_id == session_id) {
+        if self
+            .session_tab_drag
+            .is_some_and(|drag| drag.session_id == session_id)
+        {
             self.session_tab_drag = None;
         }
         if self
@@ -357,7 +363,8 @@ impl Fintwind {
                 // is meant to die here.
                 if self.open_tabs.contains(&previous_session) {
                     let view_state = SessionTabState::take_live(self);
-                    self.transcript_view_states.insert(previous_session, view_state);
+                    self.transcript_view_states
+                        .insert(previous_session, view_state);
                 }
             }
         }
@@ -438,10 +445,7 @@ impl Fintwind {
         } else {
             self.reset_transcript_rows(self.transcript_row_count());
         }
-        self.pending_session_tab_reveal = self
-            .open_tabs
-            .iter()
-            .position(|tab| *tab == session_id);
+        self.pending_session_tab_reveal = self.open_tabs.iter().position(|tab| *tab == session_id);
         self.save();
         if self
             .selected_session()
@@ -1197,7 +1201,9 @@ impl Fintwind {
         drop(message_markdown);
         let mut activity_markdown = self.activity_markdown.borrow_mut();
         for id in live_reasoning {
-            activity_markdown.entry(id).or_insert_with(MarkdownView::seeded);
+            activity_markdown
+                .entry(id)
+                .or_insert_with(MarkdownView::seeded);
         }
     }
 

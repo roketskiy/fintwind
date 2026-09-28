@@ -2849,5 +2849,4 @@ mod tests {
             BackgroundWorkStatus::Running
         );
     }
-
 }

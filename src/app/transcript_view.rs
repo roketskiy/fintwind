@@ -1616,12 +1616,12 @@ impl Fintwind {
                                     .line_height(ui_px(14.0))
                                     .child(
                                         div()
-                                            .text_color(theme.success)
+                                            .text_color(theme.success_text)
                                             .child(format!("+{additions}")),
                                     )
                                     .child(
                                         div()
-                                            .text_color(theme.danger)
+                                            .text_color(theme.danger_text)
                                             .child(format!("-{deletions}")),
                                     ),
                             ),
@@ -1662,14 +1662,14 @@ impl Fintwind {
                         div()
                             .flex_none()
                             .text_size(ui_px(10.5))
-                            .text_color(theme.success)
+                            .text_color(theme.success_text)
                             .child(format!("+{}", file.additions)),
                     )
                     .child(
                         div()
                             .flex_none()
                             .text_size(ui_px(10.5))
-                            .text_color(theme.danger)
+                            .text_color(theme.danger_text)
                             .child(format!("-{}", file.deletions)),
                     ),
             );
@@ -1715,7 +1715,7 @@ impl Fintwind {
                                 .min_w_0()
                                 .truncate()
                                 .font_weight(FontWeight::NORMAL)
-                                .text_color(theme.text_ghost)
+                                .text_color(theme.text_muted)
                                 .child(tr!(
                                     "transcript.showing_first_files",
                                     count = CHANGED_FILES_EXPANDED_LIMIT,
@@ -1787,7 +1787,7 @@ impl Fintwind {
                     .text_color(theme.text_tertiary)
                     .focus_visible(|style| style.text_color(theme.text))
                     .hover(|style| style.text_color(theme.text))
-                    .active(|style| style.text_color(theme.text_ghost))
+                    .active(|style| style.text_color(theme.text_muted))
                     .child(SharedString::from(label))
                     .child(icon(
                         if expanded {
@@ -1989,7 +1989,7 @@ impl Fintwind {
             .children(countdown.map(|countdown| {
                 div()
                     .flex_none()
-                    .text_color(theme.warning)
+                    .text_color(theme.warning_text)
                     .child(SharedString::from(countdown))
             }))
             .child(icon(
@@ -2028,7 +2028,7 @@ impl Fintwind {
                     .line_height(ui_px(17.0))
                     .focus_visible(|style| style.text_color(theme.text))
                     .hover(|style| style.text_color(theme.text))
-                    .active(|style| style.text_color(theme.text_ghost))
+                    .active(|style| style.text_color(theme.text_muted))
                     .child(header)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.toggle_provider_retry(session_id, expanded, cx);
@@ -2095,12 +2095,12 @@ impl Fintwind {
                             .track_focus(&link_focus)
                             .tab_index(0)
                             .flex_none()
-                            .text_color(theme.warning)
+                            .text_color(theme.warning_text)
                             .underline()
                             .cursor_pointer()
                             .focus_visible(|style| style.text_color(theme.text))
                             .hover(|style| style.text_color(theme.text))
-                            .active(|style| style.text_color(theme.text_ghost))
+                            .active(|style| style.text_color(theme.text_muted))
                             .child(SharedString::from(label))
                             .on_click({
                                 let link = link.clone();
@@ -2210,7 +2210,7 @@ impl Fintwind {
                     .cursor_default()
                     .focus_visible(|style| style.text_color(theme.text))
                     .hover(|style| style.text_color(theme.text))
-                    .active(|style| style.text_color(theme.text_ghost))
+                    .active(|style| style.text_color(theme.text_muted))
                     .child(
                         div()
                             .min_w_0()
@@ -2452,13 +2452,13 @@ impl Fintwind {
                             row.child(
                                 div()
                                     .flex_none()
-                                    .text_color(theme.success)
+                                    .text_color(theme.success_text)
                                     .child(SharedString::from(format!("+{additions}"))),
                             )
                             .child(
                                 div()
                                     .flex_none()
-                                    .text_color(theme.danger)
+                                    .text_color(theme.danger_text)
                                     .child(SharedString::from(format!("-{deletions}"))),
                             )
                         })
@@ -3112,14 +3112,14 @@ impl Fintwind {
                         div()
                             .flex_none()
                             .font_weight(FontWeight::NORMAL)
-                            .text_color(theme.success)
+                            .text_color(theme.success_text)
                             .child(SharedString::from(format!("+{}", file.additions))),
                     )
                     .child(
                         div()
                             .flex_none()
                             .font_weight(FontWeight::NORMAL)
-                            .text_color(theme.danger)
+                            .text_color(theme.danger_text)
                             .child(SharedString::from(format!("-{}", file.deletions))),
                     )
                     .child(self.render_activity_open_file_button(
@@ -3211,7 +3211,7 @@ fn activity_diff_break_row(label: Option<String>, theme: &Theme) -> AnyElement {
         .font_family(md::render::mono_family())
         .text_size(code_px(10.5))
         .bg(theme.overlay)
-        .text_color(theme.text_ghost)
+        .text_color(theme.text_muted)
         .child(
             div()
                 .w(px(ACTIVITY_DIFF_GUTTER_WIDTH))

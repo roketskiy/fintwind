@@ -521,7 +521,7 @@ impl Fintwind {
                     .items_center()
                     .justify_center()
                     .text_size(ui_px(9.5))
-                    .text_color(theme.text_ghost)
+                    .text_color(theme.text_muted)
                     .child(SharedString::from(footer)),
             )
     }
@@ -724,7 +724,7 @@ impl Fintwind {
                     .child(
                         div()
                             .text_size(ui_px(9.5))
-                            .text_color(theme.text_ghost)
+                            .text_color(theme.text_muted)
                             .child(SharedString::from(count.to_string())),
                     )
                     .into_any_element()
@@ -828,7 +828,7 @@ impl Fintwind {
                                             div()
                                                 .flex_none()
                                                 .text_size(ui_px(9.5))
-                                                .text_color(theme.warning)
+                                                .text_color(theme.warning_text)
                                                 .child(tr!("skills.disabled_badge")),
                                         )
                                     }),
@@ -1068,11 +1068,11 @@ impl Fintwind {
             } else {
                 theme.text_secondary
             })
-            .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
+            .hover(|element| element.bg(theme.overlay).text_color(theme.danger_text))
             .active(|element| {
                 element
                     .bg(theme.danger.opacity(0.18))
-                    .text_color(theme.danger)
+                    .text_color(theme.danger_text)
             })
             .child(icon(
                 "icons/trash.svg",
@@ -1132,7 +1132,7 @@ impl Fintwind {
                     div()
                         .font_family(crate::md::render::mono_family())
                         .text_size(ui_px(9.5))
-                        .text_color(theme.text_ghost)
+                        .text_color(theme.text_muted)
                         .child("SKILL.md"),
                 )
                 .child(
@@ -1217,7 +1217,7 @@ impl Fintwind {
                                             div()
                                                 .flex_none()
                                                 .text_size(ui_px(9.5))
-                                                .text_color(theme.warning)
+                                                .text_color(theme.warning_text)
                                                 .child(tr!("skills.disabled_badge")),
                                         )
                                     }),
@@ -1257,7 +1257,7 @@ impl Fintwind {
                         .child(
                             div()
                                 .text_size(ui_px(10.0))
-                                .text_color(theme.warning)
+                                .text_color(theme.warning_text)
                                 .child(SharedString::from(if skill.duplicates == 1 {
                                     tr!("skills.duplicate_one")
                                 } else {
@@ -1346,7 +1346,7 @@ fn skills_detail_placeholder(theme: &Theme) -> Div {
         .child(
             div()
                 .text_size(ui_px(11.0))
-                .text_color(theme.text_ghost)
+                .text_color(theme.text_muted)
                 .child(tr!("skills.select_placeholder")),
         )
 }

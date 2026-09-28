@@ -16,6 +16,8 @@ menu.select_all: 全选
 menu.view: 显示
 menu.command_palette: 命令面板…
 menu.toggle_sidebar: 显示或隐藏侧边栏
+common.navigate_back: 后退
+common.navigate_forward: 前进
 menu.toggle_right_panel: 显示或隐藏右侧面板
 menu.focus_composer: 将焦点移到输入框
 menu.toggle_model_picker: 打开或关闭模型选择器
@@ -110,7 +112,7 @@ update.no_release_notes: 此版本未提供更新日志。
 update.download: 前往 Release 下载
 update.dismiss: 关闭更新提示
 settings.local_by_default: 默认存储在本地
-settings.local_by_default_description: 项目、对话和设置均存储在这台 Mac 上
+settings.local_by_default_description: 项目、对话和设置均存储在这台电脑上
 settings.app_version: fintwind %{version}
 providers.coding_agents: 编程智能体
 providers.description: fintwind 调用安装在本机上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新
@@ -375,7 +377,7 @@ project.without_a_project: 不使用项目
 project.your_project: 你的项目
 project.remove: 从应用中移除
 onboarding.open_project_to_begin: 打开一个项目即可开始
-onboarding.description: fintwind 会在你选择的文件夹中运行编程智能体。代码、任务和历史记录都保留在这台 Mac 上
+onboarding.description: fintwind 会在你选择的文件夹中运行编程智能体。代码、任务和历史记录都保留在这台电脑上
 onboarding.web_description: 请选择守护进程主机上的路径，或在不使用项目的情况下开始。
 onboarding.open_project_folder: 打开项目文件夹…
 onboarding.what_should_we_build: 想构建什么？

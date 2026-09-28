@@ -170,7 +170,7 @@ impl Fintwind {
             .tab_index(0)
             .size(px(30.0))
             .flex_none()
-            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
             .tooltip(Tooltip::text(tr!("update.dismiss")))
             .on_activation(cx, Self::dismiss_update_card);
 
@@ -184,7 +184,7 @@ impl Fintwind {
             .rounded(px(7.0))
             .bg(theme.overlay)
             .cursor_pointer()
-            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
             .hover(|style| style.bg(theme.overlay_strong))
             .tooltip(Tooltip::text(card.release.url.clone()))
             .child(
@@ -192,9 +192,9 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .gap(px(7.0))
-                    .text_color(theme.accent)
+                    .text_color(theme.link)
                     .font_weight(FontWeight::MEDIUM)
-                    .child(icon("icons/download.svg", 14.0, theme.accent))
+                    .child(icon("icons/download.svg", 14.0, theme.link))
                     .child(tr!("update.download")),
             )
             .child(

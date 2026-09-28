@@ -26,27 +26,13 @@ use fintwind_client::custom_providers::{
 
 use super::*;
 
-/// #D97757 — this page's selection and accent color. The dark appearance
-/// uses it as authored; light darkens it, the way `Theme::accent` is tuned
-/// per appearance, so fills, dots, and badge text keep their contrast on
-/// light surfaces.
+/// Accent used by this page's selection, fills, dots, and badges.
 fn providers_accent(theme: &Theme) -> Hsla {
-    if theme.is_dark {
-        rgb(0xD97757).into()
-    } else {
-        rgb(0xB25A39).into()
-    }
+    theme.accent_text
 }
 
-/// Glyph color on an accent fill. The dark appearance's #D97757 is a
-/// mid-tone, so near-black glyphs out-read white ones there; the light
-/// appearance darkens the fill instead and takes white.
 fn on_providers_accent(theme: &Theme) -> Hsla {
-    if theme.is_dark {
-        rgb(0x201814).into()
-    } else {
-        rgb(0xFFFFFF).into()
-    }
+    theme.on_accent
 }
 
 const PROVIDERS_LIST_WIDTH: f32 = 264.0;
@@ -853,7 +839,7 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .text_size(ui_px(9.5))
-                    .text_color(theme.text_ghost)
+                    .text_color(theme.text_muted)
                     .child(self.providers_footer_caption()),
             )
     }
@@ -1368,8 +1354,12 @@ impl Fintwind {
             .cursor_default()
             .text_size(ui_px(12.0))
             .text_color(theme.text_secondary)
-            .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
-            .active(|element| element.bg(theme.overlay_strong).text_color(theme.danger))
+            .hover(|element| element.bg(theme.overlay).text_color(theme.danger_text))
+            .active(|element| {
+                element
+                    .bg(theme.overlay_strong)
+                    .text_color(theme.danger_text)
+            })
             .child(icon("icons/log-out.svg", 12.5, theme.text_tertiary))
             .child(tr!("providers.logout"))
             .on_click(cx.listener({
@@ -1489,7 +1479,7 @@ impl Fintwind {
                     div()
                         .mt(px(6.0))
                         .text_size(ui_px(10.0))
-                        .text_color(theme.text_ghost)
+                        .text_color(theme.text_muted)
                         .child(note)
                 })),
         )
@@ -1626,11 +1616,11 @@ impl Fintwind {
             } else {
                 theme.text_secondary
             })
-            .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
+            .hover(|element| element.bg(theme.overlay).text_color(theme.danger_text))
             .active(|element| {
                 element
                     .bg(theme.danger.opacity(0.18))
-                    .text_color(theme.danger)
+                    .text_color(theme.danger_text)
             })
             .child(icon(
                 "icons/trash.svg",
@@ -2125,7 +2115,7 @@ impl Fintwind {
                                 element
                                     .border_1()
                                     .border_color(theme.border_strong)
-                                    .text_color(theme.text_ghost)
+                                    .text_color(theme.text_muted)
                             })
                             .child(icon(
                                 "icons/check.svg",
@@ -2214,7 +2204,7 @@ impl Fintwind {
                 div()
                     .ml(px(2.0))
                     .text_size(ui_px(10.0))
-                    .text_color(theme.text_ghost)
+                    .text_color(theme.text_muted)
                     .child(tr!("providers.input_modalities_hint")),
             );
         }
@@ -2548,7 +2538,7 @@ impl Fintwind {
                 element
                     .border_1()
                     .border_color(theme.border_strong)
-                    .text_color(theme.text_ghost)
+                    .text_color(theme.text_muted)
             })
             .child(if authorized {
                 tr!("providers.update_key")
@@ -2794,7 +2784,7 @@ impl Fintwind {
                 element
                     .border_1()
                     .border_color(theme.border_strong)
-                    .text_color(theme.text_ghost)
+                    .text_color(theme.text_muted)
             })
             .child(tr!("providers.add_provider"));
 

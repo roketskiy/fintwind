@@ -1179,7 +1179,7 @@ fn connectivity_verdict(
                         .min_w_0()
                         .truncate()
                         .text_size(ui_px(10.5))
-                        .text_color(theme.success)
+                        .text_color(theme.success_text)
                         .child(SharedString::from(tr!(
                             "providers.connection_ok",
                             latency = format_probe_latency(*latency),
@@ -1206,7 +1206,7 @@ fn connectivity_verdict(
                             .min_w_0()
                             .truncate()
                             .text_size(ui_px(10.5))
-                            .text_color(theme.danger)
+                            .text_color(theme.danger_text)
                             .child(SharedString::from(tr!(
                                 "providers.connection_failed",
                                 error = text
@@ -1238,7 +1238,7 @@ fn builtin_catalog_verdict(
                         .min_w_0()
                         .truncate()
                         .text_size(ui_px(10.5))
-                        .text_color(theme.success)
+                        .text_color(theme.success_text)
                         .child(SharedString::from(tr!(
                             "providers.builtin_catalog_ok",
                             count = *models
@@ -1260,7 +1260,7 @@ fn builtin_catalog_verdict(
                         .min_w_0()
                         .truncate()
                         .text_size(ui_px(10.5))
-                        .text_color(theme.danger)
+                        .text_color(theme.danger_text)
                         .child(SharedString::from(tr!(
                             "providers.builtin_catalog_failed",
                             error = detail

@@ -16,6 +16,8 @@ menu.select_all: すべてを選択
 menu.view: 表示
 menu.command_palette: コマンドパレット…
 menu.toggle_sidebar: サイドバーの表示を切り替える
+common.navigate_back: 戻る
+common.navigate_forward: 進む
 menu.toggle_right_panel: 右パネルの表示を切り替える
 menu.focus_composer: 入力欄にフォーカスを移動
 menu.toggle_model_picker: モデル選択の表示を切り替える
@@ -117,7 +119,7 @@ update.download: Release ページでダウンロード
 update.dismiss: 更新通知を閉じる
 
 settings.local_by_default: デフォルトでローカルに保存
-settings.local_by_default_description: プロジェクト、会話、設定はこの Mac に保存されます
+settings.local_by_default_description: プロジェクト、会話、設定はこのコンピューターに保存されます
 settings.app_version: fintwind %{version}
 
 providers.coding_agents: コーディングエージェント
@@ -389,7 +391,7 @@ project.your_project: あなたのプロジェクト
 project.remove: アプリから外す
 
 onboarding.open_project_to_begin: プロジェクトを開いて始めましょう
-onboarding.description: fintwind は選択したフォルダでコーディングエージェントを実行します。コード、タスク、履歴はこの Mac に保存されます
+onboarding.description: fintwind は選択したフォルダでコーディングエージェントを実行します。コード、タスク、履歴はこのコンピューターに保存されます
 onboarding.web_description: デーモンホスト上のパスを選ぶか、プロジェクトなしで開始してください。
 onboarding.open_project_folder: プロジェクトフォルダを開く…
 onboarding.what_should_we_build: 何を作りましょうか？

@@ -252,6 +252,8 @@ impl Fintwind {
         let theme = Theme::current(cx);
         div()
             .id("toggle-sidebar")
+            .tab_index(0)
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
             .w(px(28.0))
             .h(px(28.0))
             .flex_none()
@@ -263,12 +265,21 @@ impl Fintwind {
             .hover(|element| element.bg(theme.overlay))
             .active(|element| element.bg(theme.overlay_strong))
             .child(icon("icons/panel-left.svg", 15.0, theme.text_tertiary))
+            .tooltip(Tooltip::text(tr!("menu.toggle_sidebar")))
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
             })
             .on_click(cx.listener(|this, _, _, cx| {
                 cx.stop_propagation();
                 this.set_sidebar_visible(!this.sidebar_visible, cx);
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if !event.keystroke.modifiers.modified()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    this.set_sidebar_visible(!this.sidebar_visible, cx);
+                    cx.stop_propagation();
+                }
             }))
     }
 
@@ -283,6 +294,8 @@ impl Fintwind {
         let theme = Theme::current(cx);
         div()
             .id(id)
+            .when(enabled, |element| element.tab_index(0))
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
             .w(px(28.0))
             .h(px(28.0))
             .flex_none()
@@ -292,6 +305,11 @@ impl Fintwind {
             .justify_center()
             .cursor_default()
             .when(!enabled, |element| element.opacity(0.35))
+            .tooltip(Tooltip::text(if navigate_back {
+                tr!("common.navigate_back")
+            } else {
+                tr!("common.navigate_forward")
+            }))
             .when(enabled, |element| {
                 element
                     .hover(|element| element.bg(theme.overlay))
@@ -305,6 +323,18 @@ impl Fintwind {
                             this.navigate_back_action(&NavigateBack, window, cx);
                         } else {
                             this.navigate_forward_action(&NavigateForward, window, cx);
+                        }
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        if !event.keystroke.modifiers.modified()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            if navigate_back {
+                                this.navigate_back_action(&NavigateBack, window, cx);
+                            } else {
+                                this.navigate_forward_action(&NavigateForward, window, cx);
+                            }
+                            cx.stop_propagation();
                         }
                     }))
             })
@@ -1314,7 +1344,7 @@ impl Fintwind {
                 .text_color(if status.is_busy() {
                     theme.text_tertiary
                 } else {
-                    theme.text_ghost
+                    theme.text_muted
                 })
                 .child(SharedString::from(label))
         });
@@ -1352,7 +1382,7 @@ impl Fintwind {
                                 .min_w_0()
                                 .truncate()
                                 .text_size(ui_px(11.0))
-                                .text_color(theme.text_ghost)
+                                .text_color(theme.text_muted)
                                 .child(SharedString::from(branch)),
                         ),
                 )

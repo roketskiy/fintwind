@@ -7,7 +7,7 @@ pub use fintwind_client::persistence::{
     DEFAULT_CODE_FONT_FAMILY, DEFAULT_CODE_TEXT_SCALE, DEFAULT_UI_FONT_FAMILY,
     DEFAULT_UI_TEXT_SCALE,
 };
-pub use fintwind_client::theme::ThemePreference;
+pub use fintwind_client::theme::{ThemePreference, ThemeScheme};
 
 /// The user's UI text scale, stored as raw f32 bits. Atomics rather than a
 /// GPUI global because line builders deep inside element trees read these on
@@ -205,10 +205,22 @@ pub struct Theme {
     pub text: Hsla,
     pub text_secondary: Hsla,
     pub text_tertiary: Hsla,
+    /// Low-emphasis text that still needs to remain readable on raised surfaces.
+    pub text_muted: Hsla,
     pub text_ghost: Hsla,
 
     /// Brand coral. Logo, caret, live-activity pulses — nothing structural.
     pub accent: Hsla,
+    /// Accent used as text on neutral surfaces.
+    pub accent_text: Hsla,
+    /// Accent used for fills and tinted surfaces.
+    pub accent_fill: Hsla,
+    /// Accent used for focus indicators and other interaction chrome.
+    pub accent_focus: Hsla,
+    /// Foreground for content painted on `accent_fill`.
+    pub on_accent: Hsla,
+    /// Link text and underline color.
+    pub link: Hsla,
     pub resize_handle: Hsla,
     /// Meter fills in the usage panel. Quota-meter blue by convention;
     /// warning/danger take over as a lane fills.
@@ -227,9 +239,12 @@ pub struct Theme {
     pub on_inverse: Hsla,
 
     pub warning: Hsla,
+    pub warning_text: Hsla,
     pub success: Hsla,
+    pub success_text: Hsla,
     pub favorite: Hsla,
     pub danger: Hsla,
+    pub danger_text: Hsla,
     pub danger_soft: Hsla,
 }
 
@@ -263,10 +278,16 @@ impl Theme {
 
             text: rgb(0xE2E2E2).into(),
             text_secondary: rgb(0xA3A3A3).into(),
-            text_tertiary: rgb(0x7D7D7D).into(),
+            text_tertiary: rgb(0x929292).into(),
+            text_muted: rgb(0x8B8B8B).into(),
             text_ghost: rgb(0x575757).into(),
 
             accent: rgb(0xD97757).into(),
+            accent_text: rgb(0xD97757).into(),
+            accent_fill: rgb(0xD97757).into(),
+            accent_focus: rgb(0xD97757).into(),
+            on_accent: rgb(0x201814).into(),
+            link: rgb(0x8ACFF8).into(),
             resize_handle: rgb(0x3B82F6).into(),
             gauge: rgb(0x3B82F6).into(),
 
@@ -278,9 +299,12 @@ impl Theme {
             on_inverse: rgb(0x17181C).into(),
 
             warning: rgb(0xE0B36A).into(),
+            warning_text: rgb(0xE0B36A).into(),
             success: rgb(0x62C987).into(),
+            success_text: rgb(0x62C987).into(),
             favorite: rgb(0xEAB308).into(),
             danger: rgb(0xE2726A).into(),
+            danger_text: rgb(0xE2726A).into(),
             danger_soft: hsla(4.0 / 360.0, 0.55, 0.63, 0.10),
         }
     }
@@ -306,10 +330,16 @@ impl Theme {
 
             text: rgb(0x141414).into(),
             text_secondary: rgb(0x5C5C5C).into(),
-            text_tertiary: rgb(0x8A8A8A).into(),
+            text_tertiary: rgb(0x707070).into(),
+            text_muted: rgb(0x6B6B6B).into(),
             text_ghost: rgb(0xA3A3A3).into(),
 
-            accent: rgb(0xD97757).into(),
+            accent: rgb(0xB25A39).into(),
+            accent_text: rgb(0xA75030).into(),
+            accent_fill: rgb(0xB25A39).into(),
+            accent_focus: rgb(0xB25A39).into(),
+            on_accent: rgb(0xFFFFFF).into(),
+            link: rgb(0x1769AA).into(),
             resize_handle: rgb(0x2563EB).into(),
             gauge: rgb(0x2563EB).into(),
 
@@ -321,10 +351,30 @@ impl Theme {
             on_inverse: rgb(0xF8F8F9).into(),
 
             warning: rgb(0xA66B20).into(),
+            warning_text: rgb(0x8A5A00).into(),
             success: rgb(0x2F8F52).into(),
+            success_text: rgb(0x236B3C).into(),
             favorite: rgb(0xCA8A04).into(),
             danger: rgb(0xC64A42).into(),
+            danger_text: rgb(0xB43A34).into(),
             danger_soft: hsla(4.0 / 360.0, 0.55, 0.52, 0.10),
+        }
+    }
+
+    /// Resolve a palette family against the current light/dark appearance.
+    ///
+    /// The default scheme is intentionally the only member today. New schemes
+    /// should add a branch here and keep the semantic fields stable so views do
+    /// not need to know how a palette is authored.
+    pub fn for_scheme(scheme: ThemeScheme, is_dark: bool) -> Self {
+        match scheme {
+            ThemeScheme::Default => {
+                if is_dark {
+                    Self::dark()
+                } else {
+                    Self::light()
+                }
+            }
         }
     }
 }
@@ -351,17 +401,15 @@ pub fn init(cx: &mut App) {
     set_active_theme(theme, cx);
 }
 
-pub fn apply_theme_preference(preference: ThemePreference, window: &mut Window, cx: &mut App) {
+pub fn apply_theme_preference(
+    preference: ThemePreference,
+    scheme: ThemeScheme,
+    window: &mut Window,
+    cx: &mut App,
+) {
     crate::platform::set_window_appearance(window, native_override(preference));
     let is_dark = resolves_to_dark(preference, cx.window_appearance());
-    set_active_theme(
-        if is_dark {
-            Theme::dark()
-        } else {
-            Theme::light()
-        },
-        cx,
-    );
+    set_active_theme(Theme::for_scheme(scheme, is_dark), cx);
     crate::platform::configure_sidebar_material(window, is_dark);
     window.refresh();
 }

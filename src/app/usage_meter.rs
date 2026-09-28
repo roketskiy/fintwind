@@ -136,8 +136,8 @@ impl Fintwind {
             None => Some(tr!("usage.unknown")),
         };
         let status_color = match percent {
-            Some(value) if value >= 95.0 => theme.danger,
-            Some(value) if value >= 80.0 => theme.warning,
+            Some(value) if value >= 95.0 => theme.danger_text,
+            Some(value) if value >= 80.0 => theme.warning_text,
             _ => theme.text_secondary,
         };
         let (headline, capacity, hint) = match usage {
@@ -229,7 +229,7 @@ impl Fintwind {
             .child(div().text_color(theme.text_secondary).child(notice))
             .when(failed, |element| {
                 element.child(
-                    div().text_color(theme.warning).child(
+                    div().text_color(theme.warning_text).child(
                         compaction
                             .as_ref()
                             .and_then(|state| state.error.clone())
@@ -263,7 +263,7 @@ impl Fintwind {
                         } else {
                             theme.text_tertiary
                         })
-                        .focus_visible(|style| style.border_1().border_color(theme.accent))
+                        .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
                         .when(action_enabled, |element| {
                             element
                                 .hover(|style| style.bg(theme.overlay_strong))
@@ -494,7 +494,7 @@ impl Fintwind {
                         .tab_index(0)
                         .min_h(px(26.0))
                         .cursor_default()
-                        .text_color(theme.accent)
+                        .text_color(theme.link)
                         .focus_visible(|style| style.border_1().border_color(theme.accent))
                         .child(tr!("usage.view_summary"))
                         .on_click(cx.listener(move |this, _, _, cx| {

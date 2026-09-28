@@ -11,6 +11,22 @@ pub enum ThemePreference {
     Dark,
 }
 
+/// The color palette layered on top of the light/dark appearance.
+///
+/// Appearance answers "light or dark?" while this answers "which palette?".
+/// Keeping the two preferences separate lets new palettes arrive without
+/// changing the system-theme behavior or overloading `ThemePreference`.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ThemeScheme {
+    #[default]
+    Default,
+}
+
+impl ThemeScheme {
+    pub const ALL: [Self; 1] = [Self::Default];
+}
+
 impl ThemePreference {
     pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
 

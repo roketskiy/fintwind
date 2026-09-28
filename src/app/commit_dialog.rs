@@ -613,12 +613,12 @@ impl Fintwind {
                         .font_weight(FontWeight::MEDIUM)
                         .child(
                             div()
-                                .text_color(theme.success)
+                                .text_color(theme.success_text)
                                 .child(format!("+{}", grouped_number(additions))),
                         )
                         .child(
                             div()
-                                .text_color(theme.danger)
+                                .text_color(theme.danger_text)
                                 .child(format!("-{}", grouped_number(deletions))),
                         ),
                 )
@@ -758,7 +758,7 @@ impl Fintwind {
                         .pb(px(10.0))
                         .text_size(ui_px(11.5))
                         .line_height(ui_px(16.0))
-                        .text_color(theme.danger)
+                        .text_color(theme.danger_text)
                         .child(error),
                 )
             })

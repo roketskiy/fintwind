@@ -1094,7 +1094,7 @@ impl Fintwind {
                             .items_center()
                             .justify_center()
                             .text_size(ui_px(11.5))
-                            .text_color(theme.text_ghost)
+                            .text_color(theme.text_muted)
                             .child(label),
                     );
                 }
@@ -2770,7 +2770,7 @@ impl Fintwind {
                             .items_center()
                             .justify_center()
                             .text_size(ui_px(11.5))
-                            .text_color(theme.text_ghost)
+                            .text_color(theme.text_muted)
                             .child(tr!("branches.none_found"))
                             .into_any_element()
                     } else {

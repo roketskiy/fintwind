@@ -502,7 +502,7 @@ impl Fintwind {
                             div()
                                 .flex_none()
                                 .text_size(ui_px(11.0))
-                                .text_color(theme.text_ghost)
+                                .text_color(theme.text_muted)
                                 .child(hint),
                         )
                     })

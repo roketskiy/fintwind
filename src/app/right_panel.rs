@@ -3568,21 +3568,21 @@ impl Fintwind {
                 div()
                     .text_size(ui_px(11.5))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.success)
+                    .text_color(theme.success_text)
                     .child(format!("+{additions}")),
             )
             .child(
                 div()
                     .text_size(ui_px(11.5))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.danger)
+                    .text_color(theme.danger_text)
                     .child(format!("-{deletions}")),
             )
             .when(truncated, |row| {
                 row.child(
                     div()
                         .text_size(ui_px(10.5))
-                        .text_color(theme.warning)
+                        .text_color(theme.warning_text)
                         .child(tr!("diff.truncated")),
                 )
             })
@@ -3675,13 +3675,13 @@ impl Fintwind {
                 .child(
                     div()
                         .text_size(ui_px(10.5))
-                        .text_color(theme.success)
+                        .text_color(theme.success_text)
                         .child(format!("+{}", file.additions)),
                 )
                 .child(
                     div()
                         .text_size(ui_px(10.5))
-                        .text_color(theme.danger)
+                        .text_color(theme.danger_text)
                         .child(format!("-{}", file.deletions)),
                 )
                 .into_any_element(),

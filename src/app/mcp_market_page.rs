@@ -282,11 +282,7 @@ fn activate_key(event: &KeyDownEvent) -> bool {
 }
 
 fn market_accent(theme: &Theme) -> Hsla {
-    if theme.is_dark {
-        rgb(0xD97757).into()
-    } else {
-        rgb(0xB25A39).into()
-    }
+    theme.accent_text
 }
 
 fn catalog_entry(id: &str) -> Option<&'static McpMarketEntry> {
@@ -572,7 +568,7 @@ impl Fintwind {
                     .items_center()
                     .justify_center()
                     .text_size(ui_px(9.5))
-                    .text_color(theme.text_ghost)
+                    .text_color(theme.text_muted)
                     .child(self.market_footer_caption(cx)),
             )
     }
@@ -610,7 +606,9 @@ impl Fintwind {
                     .cursor_default()
                     .text_size(ui_px(10.5))
                     .when(selected, |element| {
-                        element.text_color(accent).bg(accent.opacity(0.14))
+                        element
+                            .text_color(theme.accent_text)
+                            .bg(theme.accent_fill.opacity(0.14))
                     })
                     .when(!selected, |element| {
                         element
@@ -897,8 +895,8 @@ impl Fintwind {
                                                 .text_size(ui_px(9.5))
                                                 .when(installed, |element| {
                                                     element
-                                                        .text_color(accent)
-                                                        .bg(accent.opacity(0.14))
+                                                        .text_color(theme.accent_text)
+                                                        .bg(theme.accent_fill.opacity(0.14))
                                                         .child(tr!("mcp_market.installed"))
                                                 })
                                                 .when(!installed, |element| {

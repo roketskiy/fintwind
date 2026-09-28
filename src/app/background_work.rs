@@ -1241,14 +1241,14 @@ impl Fintwind {
             .when(additions > 0, |trigger| {
                 trigger.child(
                     div()
-                        .text_color(theme.success)
+                        .text_color(theme.success_text)
                         .child(format!("+{additions}")),
                 )
             })
             .when(deletions > 0, |trigger| {
                 trigger.child(
                     div()
-                        .text_color(theme.danger)
+                        .text_color(theme.danger_text)
                         .child(format!("-{deletions}")),
                 )
             });
@@ -1970,14 +1970,14 @@ fn render_git_tools_section(
             .when(environment.additions > 0, |counts| {
                 counts.child(
                     div()
-                        .text_color(theme.success)
+                        .text_color(theme.success_text)
                         .child(format!("+{}", environment.additions)),
                 )
             })
             .when(environment.deletions > 0, |counts| {
                 counts.child(
                     div()
-                        .text_color(theme.danger)
+                        .text_color(theme.danger_text)
                         .child(format!("-{}", environment.deletions)),
                 )
             })

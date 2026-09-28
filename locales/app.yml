@@ -32,6 +32,10 @@ menu.command_palette:
   en: Command Palette…
 menu.toggle_sidebar:
   en: Toggle Sidebar
+common.navigate_back:
+  en: Go back
+common.navigate_forward:
+  en: Go forward
 menu.toggle_right_panel:
   en: Toggle Right Panel
 menu.focus_composer:
@@ -223,7 +227,7 @@ update.dismiss:
 settings.local_by_default:
   en: Local by default
 settings.local_by_default_description:
-  en: Projects, conversations, and settings are stored on this Mac
+  en: Projects, conversations, and settings are stored on this computer
 settings.app_version:
   en: fintwind %{version}
 
@@ -750,7 +754,7 @@ project.remove:
 onboarding.open_project_to_begin:
   en: Open a project to begin
 onboarding.description:
-  en: fintwind runs coding agents in folders you choose. Your code, sessions, and history stay on this Mac
+  en: fintwind runs coding agents in folders you choose. Your code, sessions, and history stay on this computer
 onboarding.web_description:
   en: Choose a path on the daemon host, or start without a project.
 onboarding.open_project_folder:

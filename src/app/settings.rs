@@ -196,6 +196,8 @@ impl Fintwind {
                         "settings-tab-{}",
                         label.to_lowercase()
                     )))
+                    .tab_index(0)
+                    .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
                     .h(px(38.0))
                     .px(px(11.0))
                     .rounded(px(8.0))
@@ -226,6 +228,14 @@ impl Fintwind {
                     .child(label)
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.open_settings_page(page, cx);
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if !event.keystroke.modifiers.modified()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            this.open_settings_page(page, cx);
+                            cx.stop_propagation();
+                        }
                     })),
             );
         }
@@ -258,6 +268,8 @@ impl Fintwind {
                 div().px(px(12.0)).child(
                     div()
                         .id("settings-back")
+                        .tab_index(0)
+                        .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
                         .h(px(36.0))
                         .px(px(9.0))
                         .rounded(px(8.0))
@@ -276,6 +288,17 @@ impl Fintwind {
                             let focus_handle = this.composer_focus(cx);
                             window.focus(&focus_handle, cx);
                             cx.notify();
+                        }))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.settings_page = None;
+                                let focus_handle = this.composer_focus(cx);
+                                window.focus(&focus_handle, cx);
+                                cx.notify();
+                                cx.stop_propagation();
+                            }
                         })),
                 ),
             )
@@ -1021,7 +1044,7 @@ impl Fintwind {
             return;
         }
         self.state.theme = preference;
-        crate::theme::apply_theme_preference(preference, window, cx);
+        crate::theme::apply_theme_preference(preference, self.state.theme_scheme, window, cx);
         self.save();
         cx.notify();
     }

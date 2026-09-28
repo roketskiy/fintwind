@@ -30,27 +30,13 @@ use super::providers_page::{
 
 use super::*;
 
-/// #D97757 — this page's selection and accent color. The dark appearance
-/// uses it as authored; light darkens it, the way `Theme::accent` is tuned
-/// per appearance, so fills, dots, and badge text keep their contrast on
-/// light surfaces.
+/// Accent used by this page's selection, fills, dots, and badges.
 fn mcp_accent(theme: &Theme) -> Hsla {
-    if theme.is_dark {
-        rgb(0xD97757).into()
-    } else {
-        rgb(0xB25A39).into()
-    }
+    theme.accent_text
 }
 
-/// Glyph color on an accent fill. The dark appearance's #D97757 is a
-/// mid-tone, so near-black glyphs out-read white ones there; the light
-/// appearance darkens the fill instead and takes white.
 fn on_mcp_accent(theme: &Theme) -> Hsla {
-    if theme.is_dark {
-        rgb(0x201814).into()
-    } else {
-        rgb(0xFFFFFF).into()
-    }
+    theme.on_accent
 }
 
 const MCP_LIST_WIDTH: f32 = 264.0;
@@ -991,7 +977,7 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .text_size(ui_px(9.5))
-                    .text_color(theme.text_ghost)
+                    .text_color(theme.text_muted)
                     .child(self.mcp_footer_caption()),
             )
     }
@@ -1356,11 +1342,11 @@ impl Fintwind {
             } else {
                 theme.text_secondary
             })
-            .hover(|element| element.bg(theme.overlay).text_color(theme.danger))
+            .hover(|element| element.bg(theme.overlay).text_color(theme.danger_text))
             .active(|element| {
                 element
                     .bg(theme.danger.opacity(0.18))
-                    .text_color(theme.danger)
+                    .text_color(theme.danger_text)
             })
             .child(icon(
                 "icons/trash.svg",
@@ -1945,7 +1931,7 @@ impl Fintwind {
                         element
                             .border_1()
                             .border_color(theme.border_strong)
-                            .text_color(theme.text_ghost)
+                            .text_color(theme.text_muted)
                     })
                     .child(icon(
                         "icons/check.svg",
@@ -2123,7 +2109,7 @@ impl Fintwind {
                 element
                     .border_1()
                     .border_color(theme.border_strong)
-                    .text_color(theme.text_ghost)
+                    .text_color(theme.text_muted)
             })
             .child(tr!("mcp.add_server"));
 

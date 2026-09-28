@@ -2143,7 +2143,7 @@ impl Element for InputElement {
         let theme = Theme::current(cx);
         let content_is_empty = content.is_empty();
         let (display_text, text_color, selected_range, marked_range) = if content_is_empty {
-            (input.placeholder.clone(), theme.text_ghost, None, None)
+            (input.placeholder.clone(), theme.text_muted, None, None)
         } else {
             (
                 content,

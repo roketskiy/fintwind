@@ -223,8 +223,7 @@ pub struct Palette {
     pub code_wash: Hsla,
     pub selection: Hsla,
     pub accent: Hsla,
-    /// Link text (and its underline). A single fixed blue on both themes —
-    /// the user-specified #8ACFF8 — so a URL reads as a URL at a glance.
+    /// Link text (and its underline), resolved for the active appearance.
     pub link: Hsla,
     pub added: Hsla,
     pub removed: Hsla,
@@ -237,7 +236,7 @@ impl Palette {
             text: theme.text,
             secondary: theme.text_secondary,
             tertiary: theme.text_tertiary,
-            ghost: theme.text_ghost,
+            ghost: theme.text_muted,
             border: theme.border,
             inset: theme.inset,
             overlay: theme.overlay,
@@ -245,9 +244,9 @@ impl Palette {
             code_wash: theme.code_wash,
             selection: theme.selection,
             accent: theme.accent,
-            link: gpui::rgb(0x8ACFF8).into(),
-            added: theme.success,
-            removed: theme.danger,
+            link: theme.link,
+            added: theme.success_text,
+            removed: theme.danger_text,
             is_dark: theme.is_dark,
         }
     }

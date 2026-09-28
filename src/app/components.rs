@@ -247,11 +247,7 @@ fn render_message_footer(
     let theme = *theme;
     let message_id = message.id;
     let copy_fintwind = fintwind.clone();
-    let footer_color = if theme.is_dark {
-        gpui::hsla(126.93 / 360.0, 0.000_000_1, 0.543_95, 1.0)
-    } else {
-        theme.text_ghost
-    };
+    let footer_color = theme.text_muted;
     let timestamp = div()
         .h(px(27.0))
         .px(px(4.0))
@@ -969,7 +965,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                             .line_height(ui_px(17.0))
                             .focus_visible(|style| style.text_color(theme.text))
                             .hover(|style| style.text_color(theme.text))
-                            .active(|style| style.text_color(theme.text_ghost))
+                            .active(|style| style.text_color(theme.text_muted))
                             .child(header)
                             .on_click(move |_, _, cx| {
                                 let _ = click_fintwind.update(cx, |this, cx| {

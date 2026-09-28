@@ -22,7 +22,7 @@ use fintwind_protocol::model::{AgentSession, FavoriteModel, OPENCODE_PROVIDER, P
 use fintwind_protocol::provider_session::{
     IntegrationSummary, McpServerStatus, NativeSessionSummary, NativeTranscript, UsageStats,
 };
-use fintwind_protocol::theme::ThemePreference;
+use fintwind_protocol::theme::{ThemePreference, ThemeScheme};
 
 pub use fintwind_protocol::persistence::{
     ComposerDraft, ComposerDraftAttachment, ComposerDraftChange, ComposerDraftKey,
@@ -233,6 +233,8 @@ pub struct PersistedWindowState {
 pub struct AppSettings {
     pub favorite_models: Vec<FavoriteModel>,
     pub theme: ThemePreference,
+    #[serde(default)]
+    pub theme_scheme: ThemeScheme,
     pub language: AppLanguage,
     pub ui_text_scale: f32,
     pub code_text_scale: f32,
@@ -245,6 +247,7 @@ impl Default for AppSettings {
         Self {
             favorite_models: Vec::new(),
             theme: ThemePreference::System,
+            theme_scheme: ThemeScheme::Default,
             language: AppLanguage::default(),
             ui_text_scale: DEFAULT_UI_TEXT_SCALE,
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
@@ -308,6 +311,8 @@ pub struct PersistedState {
     #[serde(default)]
     pub theme: ThemePreference,
     #[serde(default)]
+    pub theme_scheme: ThemeScheme,
+    #[serde(default)]
     pub language: AppLanguage,
     #[serde(default = "default_ui_text_scale")]
     pub ui_text_scale: f32,
@@ -364,6 +369,7 @@ impl PersistedState {
             remembered_model_traits: Vec::new(),
             favorite_models: Vec::new(),
             theme: ThemePreference::System,
+            theme_scheme: ThemeScheme::Default,
             language: AppLanguage::default(),
             ui_text_scale: DEFAULT_UI_TEXT_SCALE,
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
@@ -465,6 +471,7 @@ impl PersistedState {
         AppSettings {
             favorite_models: self.favorite_models.clone(),
             theme: self.theme,
+            theme_scheme: self.theme_scheme,
             language: self.language,
             ui_text_scale: self.ui_text_scale,
             code_text_scale: self.code_text_scale,
@@ -495,6 +502,7 @@ impl PersistedState {
     fn apply_app_settings(&mut self, settings: AppSettings) {
         self.favorite_models = settings.favorite_models;
         self.theme = settings.theme;
+        self.theme_scheme = settings.theme_scheme;
         self.language = settings.language;
         self.ui_text_scale = settings.ui_text_scale;
         self.code_text_scale = settings.code_text_scale;

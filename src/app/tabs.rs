@@ -46,7 +46,11 @@ fn drag_target_index(tab_spans: &[(f32, f32)], from: usize, pointer_x: f32) -> O
 pub(super) fn tab_neighbor_after_close(remaining: &[Uuid], removed_index: usize) -> Option<Uuid> {
     remaining
         .get(removed_index)
-        .or_else(|| removed_index.checked_sub(1).and_then(|index| remaining.get(index)))
+        .or_else(|| {
+            removed_index
+                .checked_sub(1)
+                .and_then(|index| remaining.get(index))
+        })
         .copied()
 }
 
@@ -65,18 +69,11 @@ fn tab_fade_visible(offset_x: Pixels, max_offset: Pixels, side: TabFadeSide) -> 
     }
 }
 
-fn tab_fade(
-    scroll_handle: ScrollHandle,
-    side: TabFadeSide,
-    surface: Hsla,
-) -> impl IntoElement {
+fn tab_fade(scroll_handle: ScrollHandle, side: TabFadeSide, surface: Hsla) -> impl IntoElement {
     canvas(
         move |bounds, _, _| {
-            let visible = tab_fade_visible(
-                scroll_handle.offset().x,
-                scroll_handle.max_offset().x,
-                side,
-            );
+            let visible =
+                tab_fade_visible(scroll_handle.offset().x, scroll_handle.max_offset().x, side);
             visible.then(|| {
                 let transparent = surface.opacity(0.0);
                 let background = match side {
@@ -103,8 +100,12 @@ fn tab_fade(
     .absolute()
     .top_0()
     .bottom_0()
-    .when(matches!(side, TabFadeSide::Left), |element| element.left_0())
-    .when(matches!(side, TabFadeSide::Right), |element| element.right_0())
+    .when(matches!(side, TabFadeSide::Left), |element| {
+        element.left_0()
+    })
+    .when(matches!(side, TabFadeSide::Right), |element| {
+        element.right_0()
+    })
     .w(px(SESSION_TAB_FADE_WIDTH))
 }
 
@@ -155,7 +156,9 @@ impl Fintwind {
 
         // A session awaiting activation reads as selected immediately, the
         // same contract the sidebar rows follow.
-        let pending_activation = self.pending_session_activation.map(|pending| pending.session_id);
+        let pending_activation = self
+            .pending_session_activation
+            .map(|pending| pending.session_id);
         let active_tab = pending_activation.or(self.state.selected_session);
         let mut strip = div()
             .id("session-tab-strip")
@@ -311,10 +314,13 @@ impl Fintwind {
                     this.select_session(session_id, cx);
                 }),
             )
-            .on_mouse_down(MouseButton::Middle, cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                this.close_session_tab(session_id, cx);
-            }))
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.close_session_tab(session_id, cx);
+                }),
+            )
             .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                 match event.keystroke.key.as_str() {
                     "enter" | "space" => {
@@ -340,15 +346,11 @@ impl Fintwind {
                 // A live turn in this session — foreground or background. The
                 // spinner rides the pulse clock inside this island, so its
                 // ticks never rebuild the rest of the window.
-                element.child(
-                    div()
-                        .flex_none()
-                        .child(motion::spin(icon(
-                            "icons/loader-circle.svg",
-                            12.0,
-                            theme.accent,
-                        ))),
-                )
+                element.child(div().flex_none().child(motion::spin(icon(
+                    "icons/loader-circle.svg",
+                    12.0,
+                    theme.accent,
+                ))))
             })
             .when(!busy && waiting, |element| {
                 element.child(
@@ -374,7 +376,9 @@ impl Fintwind {
             })
             .child(
                 div()
-                    .id(SharedString::from(format!("session-tab-title-{session_id}")))
+                    .id(SharedString::from(format!(
+                        "session-tab-title-{session_id}"
+                    )))
                     .min_w_0()
                     .flex_1()
                     .truncate()
@@ -389,7 +393,9 @@ impl Fintwind {
             )
             .child(
                 div()
-                    .id(SharedString::from(format!("close-session-tab-{session_id}")))
+                    .id(SharedString::from(format!(
+                        "close-session-tab-{session_id}"
+                    )))
                     .w(px(18.0))
                     .h(px(18.0))
                     .mx(px(-2.0))

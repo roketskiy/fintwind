@@ -1579,9 +1579,9 @@ impl Fintwind {
                 // The tab strip is a cached island of its own, so the working
                 // spinners inside it never price a pulse tick at the window.
                 element.child(
-                    self.session_tabs_pane.clone().cached(
-                        StyleRefinement::default().flex_1().min_w(px(0.0)).h_full(),
-                    ),
+                    self.session_tabs_pane
+                        .clone()
+                        .cached(StyleRefinement::default().flex_1().min_w(px(0.0)).h_full()),
                 )
             })
             .when(self.open_tabs.is_empty(), |element| {
@@ -1608,12 +1608,10 @@ impl Fintwind {
                             cx,
                         ),
                     )
-                    .child(
-                        self.window_drag_region(
-                            div().id("header-center-drag-region").h_full().flex_1(),
-                            cx,
-                        ),
-                    )
+                    .child(self.window_drag_region(
+                        div().id("header-center-drag-region").h_full().flex_1(),
+                        cx,
+                    ))
             })
             .children(self.render_reveal_project_button(cx))
             .when(!self.right_panel_visible, |element| {

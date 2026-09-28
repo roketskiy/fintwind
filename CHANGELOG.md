@@ -18,6 +18,13 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.2.2]
+
+- Open multiple sessions in tabs within one window, with more stable unread indicators
+- Improve theme contrast and keyboard accessibility across the interface
+- Refine token-speed display, file-drop attachment handling, and session activity presentation
+- Remove the obsolete Todo section from session cards to match the OpenCode 2 protocol
+
 ## [0.2.1]
 
 - Attach images and PDFs inline as data URLs so the model sees them directly instead of re-reading the files

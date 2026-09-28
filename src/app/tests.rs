@@ -200,13 +200,14 @@ fn composer_row_demotes_labels_in_priority_order_as_it_narrows() {
 
     // The model name goes only after every other label, and only once they
     // are all spent: it is the longest, but it is also the one that says
-    // which model is answering.
+    // which model is answering. Each demotion frees the label and its gap,
+    // not the chip whole — a demoted chip keeps its icon — so the budget
+    // here is the three labels' own cost, and the model's name stands.
     let only_model_left = composer_row_plan(
         all_labelled
-            - chip_width(Some(20.0))
-            - chip_width(Some(25.0))
-            - chip_width(Some(50.0))
-            - 1.0,
+            - (chip_width(Some(20.0)) - chip_width(None))
+            - (chip_width(Some(25.0)) - chip_width(None))
+            - (chip_width(Some(50.0)) - chip_width(None)),
         widths,
     );
     assert_eq!(only_model_left.traits_label, false);

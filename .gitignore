@@ -22,5 +22,8 @@ skills-lock.json
 # Local search index data
 .zvec-grep/
 
+# ZCode workspace search config, generated per machine
+.zcodeignore
+
 # Generated architecture diagram (archify), local only
 docs/architecture*

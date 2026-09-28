@@ -1270,7 +1270,6 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
         turns: Vec::new(),
     };
     let mut image_bytes_left = MAX_TRANSCRIPT_IMAGE_BYTES;
-    let mut unmeasured_turns = std::collections::HashSet::new();
 
     for row in rows {
         let created_at =
@@ -1354,18 +1353,6 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
             }
             Some("assistant") => {
                 let parts = row.get("content").and_then(Value::as_array);
-                if (row
-                    .pointer("/time/created")
-                    .and_then(Value::as_u64)
-                    .is_none()
-                    || row
-                        .pointer("/time/streamed")
-                        .and_then(Value::as_u64)
-                        .is_none())
-                    && let Some(turn) = transcript.turns.last()
-                {
-                    unmeasured_turns.insert(turn.id);
-                }
                 // Every assistant row is one model step of the turn above it,
                 // and the fold happens before the content gate: a row with no
                 // visible text still ran a model step whose tokens and
@@ -1382,17 +1369,22 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
                     }
                     stats.output_tokens = stats.output_tokens.saturating_add(step.output_tokens);
                     stats.stream_ms = stats.stream_ms.saturating_add(step.stream_ms);
+                    // One step carrying both timestamps measures the turn's
+                    // streaming duration, so a later step that never streams
+                    // must not withdraw what an earlier one established —
+                    // the turn's stats fold every step, not just the last.
+                    // The `as_u64` gate keeps this in step with where the
+                    // duration itself is read (`turn_stats_step`): a
+                    // non-numeric timestamp would measure nothing.
                     if row
                         .pointer("/time/created")
                         .and_then(Value::as_u64)
-                        .is_none()
-                        || row
+                        .is_some()
+                        && row
                             .pointer("/time/streamed")
                             .and_then(Value::as_u64)
-                            .is_none()
+                            .is_some()
                     {
-                        unmeasured_turns.insert(turn.id);
-                    } else {
                         stats.stream_verified = true;
                     }
                 }
@@ -1440,13 +1432,6 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
         }
     }
 
-    for turn in &mut transcript.turns {
-        if unmeasured_turns.contains(&turn.id) {
-            if let Some(stats) = turn.stats.as_mut() {
-                stats.stream_verified = false;
-            }
-        }
-    }
     transcript
 }
 

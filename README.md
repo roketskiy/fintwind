@@ -19,7 +19,9 @@ Website and downloads: <https://fintwind.xyz>
 
 Session demo: switching models, a session in progress, and scrolling a long transcript.
 
-https://github.com/roketskiy/fintwind/releases/download/v0.2.2/session-demo.mp4
+<video src="https://github.com/roketskiy/fintwind/releases/download/v0.2.2/session-demo.mp4" controls muted loop playsinline>
+  <a href="https://github.com/roketskiy/fintwind/releases/download/v0.2.2/session-demo.mp4">Download the session demo (mp4)</a>
+</video>
 
 ## Install
 

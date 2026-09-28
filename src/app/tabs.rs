@@ -17,10 +17,7 @@ pub(super) struct SessionTabDrag {
 /// never shuffles the strip.
 const SESSION_TAB_DRAG_THRESHOLD: f32 = 4.0;
 const SESSION_TAB_HEIGHT: f32 = 30.0;
-const SESSION_TAB_MAX_WIDTH: f32 = 190.0;
-// Leave room for a short title even when the tab also shows its busy/unread
-// indicator and the fixed-width close button.
-const SESSION_TAB_MIN_WIDTH: f32 = 84.0;
+const SESSION_TAB_WIDTH: f32 = 190.0;
 const SESSION_TAB_FADE_WIDTH: f32 = 16.0;
 
 /// Which tab a drag lands on, given every tab's `(left, right)` span in the
@@ -283,8 +280,7 @@ impl Fintwind {
         let tab = div()
             .id(SharedString::from(format!("session-tab-{session_id}")))
             .h(px(SESSION_TAB_HEIGHT))
-            .min_w(px(SESSION_TAB_MIN_WIDTH))
-            .max_w(px(SESSION_TAB_MAX_WIDTH))
+            .w(px(SESSION_TAB_WIDTH))
             .px(px(8.0))
             .rounded(px(7.0))
             .flex_none()
@@ -378,9 +374,11 @@ impl Fintwind {
             })
             .child(
                 div()
+                    .id(SharedString::from(format!("session-tab-title-{session_id}")))
                     .min_w_0()
                     .flex_1()
                     .truncate()
+                    .tooltip(Tooltip::text(title.clone()))
                     .text_size(ui_px(12.0))
                     .text_color(if active {
                         theme.text

@@ -359,7 +359,11 @@ impl TerminalSession {
             // individual bits, so testing them with `intersects` would also
             // match plain bold or italic cells.
             if cell.flags.contains(Flags::DIM) {
-                if theme.is_dark {
+                if foreground.s < 0.05 {
+                    // PowerShell uses neutral DIM text for inline predictions.
+                    // Keep that low-emphasis text readable on either surface.
+                    foreground = theme.text_muted;
+                } else if theme.is_dark {
                     foreground.l *= 0.7;
                 } else {
                     foreground.l = 1.0 - (1.0 - foreground.l) * 0.7;

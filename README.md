@@ -9,6 +9,8 @@ fintwind is a native Windows desktop client for
 interface on the GPU — it is not an Electron shell. Projects, sessions, and
 transcripts stay on your machine.
 
+Website and downloads: <https://fintwind.xyz>
+
 > [!IMPORTANT]
 > OpenCode 2 has not been officially released, and breaking changes are still
 > common. If your OpenCode 2 is newer than v2.0.16, fintwind is not guaranteed

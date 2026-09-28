@@ -7,6 +7,8 @@ fintwind 是 [OpenCode 2](https://opencode.ai/v2/docs)——[OpenCode](https://o
 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 直接在 GPU 上绘制，
 不是 Electron 套壳。项目、会话和对话记录都留在你自己的机器上。
 
+官网与下载：<https://fintwind.xyz>
+
 > [!IMPORTANT]
 > OpenCode 2 尚未正式发布，后续仍会有大量破坏性变更。当本机的 OpenCode 2
 > 新于 v2.0.16 时，无法保证 fintwind 能正常运行。**目前 0.2.1 支持 OpenCode

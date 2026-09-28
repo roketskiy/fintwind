@@ -2602,6 +2602,7 @@ impl Fintwind {
             let mut background_changed = false;
             let mut background_persisted = false;
             let mut markdown_changed = false;
+            let mut tab_unread_event = false;
             let mut keep_runtime = true;
             while let Some(event) = runtime.pending_events.front() {
                 let kind = stream_delta_kind(event);
@@ -2613,6 +2614,7 @@ impl Fintwind {
                 let Some(event) = event else {
                     break;
                 };
+                tab_unread_event |= self.should_mark_tab_unread(session_id, &event);
                 let background_event = matches!(event, DriverEvent::BackgroundWork(_));
                 let background_output_delta = matches!(
                     event,
@@ -2674,10 +2676,11 @@ impl Fintwind {
             changed |= session_updated;
             persisted_state_changed |= runtime_changed || background_persisted;
             force_save |= background_persisted;
-            // A background tab's session just changed — new output, tool work,
-            // or a permission ask. The tab shows an unread dot until the user
-            // opens it.
-            if session_updated
+            // Only visible session content or an actionable outcome makes a
+            // background tab unread. Provider state synchronisation, usage
+            // meters, and stream bookkeeping must not resurrect the dot after
+            // the user has opened the tab.
+            if tab_unread_event
                 && self.state.selected_session != Some(session_id)
                 && self.open_tabs.contains(&session_id)
             {
@@ -2714,6 +2717,74 @@ impl Fintwind {
             self.save();
         }
         changed || selected_changed
+    }
+
+    fn should_mark_tab_unread(&self, session_id: Uuid, event: &DriverEvent) -> bool {
+        let active_turn = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .is_some_and(|session| session.active_turn_id().is_some());
+        let accepts_turn_output = self.accepts_turn_output(session_id);
+
+        match event {
+            DriverEvent::TextStarted { .. }
+            | DriverEvent::TextDelta { .. }
+            | DriverEvent::TextEnded { .. }
+            | DriverEvent::ReasoningStarted { .. }
+            | DriverEvent::ReasoningDelta { .. }
+            | DriverEvent::ReasoningEnded { .. }
+            | DriverEvent::Activity { .. }
+            | DriverEvent::RichActivity(_)
+            | DriverEvent::Permission { .. } => accepts_turn_output,
+            DriverEvent::UserInputRequested { questions, .. } => {
+                accepts_turn_output && !questions.is_empty()
+            }
+            DriverEvent::TurnFinished { .. } | DriverEvent::Error(_) => active_turn,
+            DriverEvent::ProcessExited => {
+                active_turn || self.session_has_live_background_work(session_id)
+            }
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)) => {
+                self.background_work_upsert_is_unread(session_id, item)
+            }
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::ReconcileProcesses { items }) => {
+                self.background_work_reconcile_is_unread(session_id, items, true)
+            }
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::ReconcileLive { items }) => {
+                self.background_work_reconcile_is_unread(session_id, items, false)
+            }
+            DriverEvent::BackgroundWork(event) => {
+                self.session_has_live_background_work(session_id)
+                    && matches!(
+                        event,
+                        BackgroundWorkEvent::OutputDelta { .. }
+                            | BackgroundWorkEvent::Transcript(
+                                BackgroundWorkTranscriptEvent::Started { .. }
+                                    | BackgroundWorkTranscriptEvent::TextDelta { .. }
+                                    | BackgroundWorkTranscriptEvent::ReasoningDelta { .. }
+                                    | BackgroundWorkTranscriptEvent::Activity { .. }
+                                    | BackgroundWorkTranscriptEvent::Finished { .. }
+                            )
+                            | BackgroundWorkEvent::StopFailed { .. }
+                    )
+            }
+            DriverEvent::RuntimeEventCursorAdvanced(_)
+            | DriverEvent::Connected { .. }
+            | DriverEvent::AgentPresetSelected(_)
+            | DriverEvent::AutoTitleUpdated(_)
+            | DriverEvent::AvailableCommands(_)
+            | DriverEvent::TurnStarted
+            | DriverEvent::SteerAccepted { .. }
+            | DriverEvent::SteerRejected { .. }
+            | DriverEvent::UsageUpdated { .. }
+            | DriverEvent::PlanUsageUpdated(_)
+            | DriverEvent::TurnStatsUpdated(_)
+            | DriverEvent::CompactionUpdated(_)
+            | DriverEvent::ProviderBusy
+            | DriverEvent::ProviderRetry { .. }
+            | DriverEvent::NativeSessionsChanged => false,
+        }
     }
 }
 

@@ -2112,7 +2112,7 @@ impl Fintwind {
             None => self.render_right_panel_chooser(cx).into_any_element(),
             Some(RightPanelSurface::Context) => self.render_context_panel(cx),
             Some(RightPanelSurface::BackgroundWork { key, .. }) => self
-                .render_background_work_surface(&key, cx)
+                .render_background_work_surface(&key, window, cx)
                 .into_any_element(),
             Some(RightPanelSurface::Files) => self.render_right_panel_files(cx).into_any_element(),
             Some(RightPanelSurface::Diff) => self

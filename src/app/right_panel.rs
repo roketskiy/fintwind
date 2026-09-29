@@ -927,30 +927,6 @@ impl RightPanelSurface {
     }
 }
 
-fn right_panel_tab_label(surface: &RightPanelSurface, files_selected_path: Option<&str>) -> String {
-    match surface {
-        RightPanelSurface::Files => files_selected_path
-            .and_then(|path| Path::new(path).file_name())
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .map(str::to_owned)
-            .unwrap_or_else(|| tr!("right_panel.files")),
-        _ => surface.label(),
-    }
-}
-
-fn right_panel_tab_icon(
-    surface: &RightPanelSurface,
-    files_selected_path: Option<&str>,
-) -> &'static str {
-    match surface {
-        RightPanelSurface::Files => files_selected_path
-            .map(file_icon_for_path)
-            .unwrap_or_else(|| surface.icon_path()),
-        _ => surface.icon_path(),
-    }
-}
-
 fn reusable_surface_index(
     surfaces: &[RightPanelSurface],
     requested: &RightPanelSurface,
@@ -1578,27 +1554,6 @@ mod tests {
     }
 
     #[test]
-    fn files_tab_uses_the_selected_file_name_and_icon() {
-        let files = RightPanelSurface::Files;
-        assert_eq!(right_panel_tab_label(&files, None), "Files");
-        assert_eq!(
-            right_panel_tab_label(&files, Some("packages/desktop/bun.lock")),
-            "bun.lock"
-        );
-        assert_eq!(
-            right_panel_tab_icon(&files, Some("packages/desktop/bun.lock")),
-            "icons/file-types/bun.svg"
-        );
-
-        let file = RightPanelSurface::File("src/main.rs".into());
-        assert_eq!(right_panel_tab_label(&file, None), "main.rs");
-        assert_eq!(
-            right_panel_tab_icon(&file, None),
-            "icons/file-types/rust.svg"
-        );
-    }
-
-    #[test]
     fn only_reuses_single_instance_surface_tabs() {
         let browser = RightPanelSurface::new_browser();
         let terminal = RightPanelSurface::new_terminal();
@@ -1722,7 +1677,6 @@ impl Fintwind {
     pub(super) fn open_transcript_link(&mut self, target: &str, cx: &mut Context<Self>) -> bool {
         match transcript_link_route(target, self.selected_workspace_path()) {
             TranscriptLinkRoute::ProjectFile(relative_path) => {
-                self.open_right_panel_surface(RightPanelSurface::Files, cx);
                 self.open_right_panel_file(relative_path, cx);
             }
             TranscriptLinkRoute::Finder(path) => self.reveal_host_path(&path, cx),
@@ -1826,7 +1780,6 @@ impl Fintwind {
             ),
             pending_tab_reveal: self.right_panel_pending_tab_reveal.take(),
             expanded_paths: std::mem::take(&mut self.right_panel_expanded_paths),
-            files_selected_path: self.right_panel_files_selected_path.take(),
             file_tree_width: self.right_panel_file_tree_width,
             file_editors: std::mem::take(&mut self.right_panel_file_editors),
             diff_source: self.right_panel_diff_source,
@@ -1843,7 +1796,6 @@ impl Fintwind {
         self.right_panel_tabs_scroll_handle = state.tabs_scroll_handle;
         self.right_panel_pending_tab_reveal = state.pending_tab_reveal;
         self.right_panel_expanded_paths = state.expanded_paths;
-        self.right_panel_files_selected_path = state.files_selected_path;
         self.right_panel_file_tree_width = state.file_tree_width;
         self.right_panel_file_editors = state.file_editors;
         self.right_panel_diff_generation = self.right_panel_diff_generation.wrapping_add(1);
@@ -1869,6 +1821,21 @@ impl Fintwind {
         self.right_panel_tabs_scroll_handle.scroll_to_item(index);
     }
 
+    fn right_panel_tab_focus(&self, surface: &RightPanelSurface, cx: &mut App) -> FocusHandle {
+        if *surface == RightPanelSurface::Context {
+            self.context_tab_focus.clone()
+        } else {
+            self.transcript_control_focus(format!("right-panel-tab-{surface:?}"), cx)
+        }
+    }
+
+    fn focus_active_right_panel_tab(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(surface) = self.active_right_panel_surface() {
+            let focus = self.right_panel_tab_focus(surface, cx);
+            window.focus(&focus, cx);
+        }
+    }
+
     pub(super) fn active_right_panel_surface(&self) -> Option<&RightPanelSurface> {
         self.right_panel_active_surface
             .and_then(|index| self.right_panel_surfaces.get(index))
@@ -1886,13 +1853,10 @@ impl Fintwind {
             .and_then(RightPanelSurface::browser_id);
     }
 
-    /// The file the active editor surface is showing, whether via a File tab
-    /// or the Files browser's selection — regardless of whether the panel is
-    /// currently visible, which is a per-caller decision: save works on a
-    /// hidden panel, find does not.
+    /// The file the active editor tab is showing, regardless of whether the
+    /// panel is visible: save works on a hidden panel, find does not.
     pub(super) fn visible_right_panel_file_path(&self) -> Option<String> {
         match self.active_right_panel_surface() {
-            Some(RightPanelSurface::Files) => self.right_panel_files_selected_path.clone(),
             Some(RightPanelSurface::File(path)) => Some(path.clone()),
             _ => None,
         }
@@ -1906,10 +1870,6 @@ impl Fintwind {
 
     fn right_panel_surface_is_dirty(&self, surface: &RightPanelSurface) -> bool {
         match surface {
-            RightPanelSurface::Files => self
-                .right_panel_files_selected_path
-                .as_deref()
-                .is_some_and(|path| self.right_panel_file_is_dirty(path)),
             RightPanelSurface::File(path) => self.right_panel_file_is_dirty(path),
             _ => false,
         }
@@ -1991,58 +1951,22 @@ impl Fintwind {
     }
 
     fn open_right_panel_file(&mut self, relative_path: String, cx: &mut Context<Self>) {
-        self.ensure_initial_right_panel_file_editor_width();
-        let Some(active) = self.right_panel_active_surface else {
-            self.open_right_panel_surface(RightPanelSurface::File(relative_path), cx);
-            return;
-        };
-        match self.right_panel_surfaces.get(active).cloned() {
-            Some(RightPanelSurface::Files) => {
-                let dirty_file_would_be_replaced = self
-                    .right_panel_files_selected_path
-                    .as_deref()
-                    .is_some_and(|current_path| {
-                        current_path != relative_path
-                            && self.right_panel_file_is_dirty(current_path)
-                    });
-                if dirty_file_would_be_replaced {
-                    self.open_right_panel_surface(RightPanelSurface::File(relative_path), cx);
-                    return;
-                }
-
-                self.right_panel_files_selected_path = Some(relative_path);
-                self.set_right_panel_visible(true, cx);
-                cx.notify();
-            }
-            Some(RightPanelSurface::File(current_path)) => {
-                if current_path == relative_path {
-                    return;
-                }
-                if self.right_panel_file_is_dirty(&current_path) {
-                    self.open_right_panel_surface(RightPanelSurface::File(relative_path), cx);
-                    return;
-                }
-
-                let requested = RightPanelSurface::File(relative_path);
-                if let Some(existing) =
-                    reusable_surface_index(&self.right_panel_surfaces, &requested)
-                {
-                    self.right_panel_surfaces.remove(active);
-                    let existing = if existing > active {
-                        existing - 1
-                    } else {
-                        existing
-                    };
-                    self.right_panel_active_surface = Some(existing);
-                    self.reveal_right_panel_tab(existing);
-                } else {
-                    self.right_panel_surfaces[active] = requested;
-                    self.reveal_right_panel_tab(active);
-                }
-                self.set_right_panel_visible(true, cx);
-                cx.notify();
-            }
-            _ => self.open_right_panel_surface(RightPanelSurface::File(relative_path), cx),
+        let requested = RightPanelSurface::File(relative_path);
+        if reusable_surface_index(&self.right_panel_surfaces, &requested).is_some() {
+            self.open_right_panel_surface(requested, cx);
+        } else if let Some(index) = self.right_panel_active_surface.filter(|&index| {
+            self.right_panel_surfaces.get(index) == Some(&RightPanelSurface::Files)
+        }) {
+            // The initial file replaces the tree tab; the tree remains available
+            // beside the editor and returns when the last file tab closes.
+            self.ensure_initial_right_panel_file_editor_width();
+            self.right_panel_surfaces[index] = requested;
+            self.refresh_right_panel_working_tree(cx);
+            self.reveal_right_panel_tab(index);
+            self.set_right_panel_visible(true, cx);
+            cx.notify();
+        } else {
+            self.open_right_panel_surface(requested, cx);
         }
     }
 
@@ -2050,6 +1974,8 @@ impl Fintwind {
         if index >= self.right_panel_surfaces.len() {
             return;
         }
+        let closed_file = matches!(self.right_panel_surfaces[index], RightPanelSurface::File(_));
+        let was_active = self.right_panel_active_surface == Some(index);
         if let Some(terminal_id) = self.right_panel_surfaces[index].terminal_id() {
             self.right_panel_terminals.remove(&terminal_id);
         }
@@ -2067,6 +1993,38 @@ impl Fintwind {
                 None => 0,
             })
         };
+        if closed_file {
+            if let Some(next_file) = self
+                .right_panel_surfaces
+                .iter()
+                .enumerate()
+                .filter(|(_, surface)| matches!(surface, RightPanelSurface::File(_)))
+                .min_by_key(|(candidate, _)| candidate.abs_diff(index))
+                .map(|(candidate, _)| candidate)
+            {
+                if was_active {
+                    self.right_panel_active_surface = Some(next_file);
+                }
+            } else {
+                let files_index =
+                    reusable_surface_index(&self.right_panel_surfaces, &RightPanelSurface::Files)
+                        .unwrap_or_else(|| {
+                            let insert_at = index.min(self.right_panel_surfaces.len());
+                            self.right_panel_surfaces
+                                .insert(insert_at, RightPanelSurface::Files);
+                            if let Some(active) = self.right_panel_active_surface.as_mut()
+                                && *active >= insert_at
+                            {
+                                *active += 1;
+                            }
+                            insert_at
+                        });
+                if was_active {
+                    self.right_panel_active_surface = Some(files_index);
+                }
+                self.refresh_right_panel_working_tree(cx);
+            }
+        }
         if let Some(active) = self.right_panel_active_surface {
             self.reveal_right_panel_tab(active);
             self.request_active_terminal_focus();
@@ -2156,9 +2114,7 @@ impl Fintwind {
             Some(RightPanelSurface::BackgroundWork { key, .. }) => self
                 .render_background_work_surface(&key, cx)
                 .into_any_element(),
-            Some(RightPanelSurface::Files) => self
-                .render_right_panel_files(width, window, cx)
-                .into_any_element(),
+            Some(RightPanelSurface::Files) => self.render_right_panel_files(cx).into_any_element(),
             Some(RightPanelSurface::Diff) => self
                 .render_right_panel_diff(width, window, cx)
                 .into_any_element(),
@@ -2375,18 +2331,26 @@ impl Fintwind {
                     .get(browser_id)
                     .and_then(|browser| browser.read(cx).tab_label())
                     .unwrap_or_else(|| surface.label()),
-                _ => {
-                    right_panel_tab_label(&surface, self.right_panel_files_selected_path.as_deref())
-                }
+                _ => surface.label(),
             });
-            let icon_path =
-                right_panel_tab_icon(&surface, self.right_panel_files_selected_path.as_deref());
-            let uses_file_icon = matches!(&surface, RightPanelSurface::File(_))
-                || matches!(&surface, RightPanelSurface::Files)
-                    && self.right_panel_files_selected_path.is_some();
+            let icon_path = surface.icon_path();
+            let uses_file_icon = matches!(&surface, RightPanelSurface::File(_));
             let activate_weak = cx.entity().downgrade();
             let close_weak = cx.entity().downgrade();
             let context_tab = surface == RightPanelSurface::Context;
+            let focusable_tab = context_tab
+                || matches!(
+                    surface,
+                    RightPanelSurface::Files | RightPanelSurface::File(_)
+                );
+            let tab_focus = focusable_tab.then(|| self.right_panel_tab_focus(&surface, cx));
+            let close_focus = focusable_tab.then(|| {
+                if context_tab {
+                    self.context_tab_close_focus.clone()
+                } else {
+                    self.transcript_control_focus(format!("right-panel-close-{surface:?}"), cx)
+                }
+            });
             tabs = tabs.child(
                 div()
                     .id(SharedString::from(format!("right-panel-tab-{index}")))
@@ -2400,9 +2364,9 @@ impl Fintwind {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_default()
-                    .when(context_tab, |element| {
+                    .when_some(tab_focus, |element, focus| {
                         element
-                            .track_focus(&self.context_tab_focus)
+                            .track_focus(&focus)
                             .tab_index(0)
                             .focus_visible(|style| style.border_1().border_color(theme.accent))
                     })
@@ -2462,9 +2426,9 @@ impl Fintwind {
                             .hover(|element| element.bg(theme.overlay_strong))
                             .active(|element| element.opacity(0.7))
                             .child(icon("icons/x.svg", 10.0, theme.text_tertiary))
-                            .when(context_tab, |element| {
+                            .when_some(close_focus, |element, focus| {
                                 element
-                                    .track_focus(&self.context_tab_close_focus)
+                                    .track_focus(&focus)
                                     .tab_index(0)
                                     .focus_visible(|style| {
                                         style.border_1().border_color(theme.accent)
@@ -2477,10 +2441,14 @@ impl Fintwind {
                                     this.close_right_panel_surface(index, cx);
                                     if context_tab && was_active {
                                         window.focus(&this.composer.read(cx).focus(), cx);
+                                    } else if was_active
+                                        && matches!(surface, RightPanelSurface::File(_))
+                                    {
+                                        this.focus_active_right_panel_tab(window, cx);
                                     }
                                 });
                             })
-                            .when(context_tab, |element| {
+                            .when(focusable_tab, |element| {
                                 element.on_key_down(cx.listener(
                                     move |this, event: &KeyDownEvent, window, cx| {
                                         if matches!(event.keystroke.key.as_str(), "enter" | "space")
@@ -2488,8 +2456,10 @@ impl Fintwind {
                                             let was_active =
                                                 this.right_panel_active_surface == Some(index);
                                             this.close_right_panel_surface(index, cx);
-                                            if was_active {
+                                            if context_tab && was_active {
                                                 window.focus(&this.composer.read(cx).focus(), cx);
+                                            } else {
+                                                this.focus_active_right_panel_tab(window, cx);
                                             }
                                             cx.stop_propagation();
                                         }
@@ -2508,13 +2478,15 @@ impl Fintwind {
                             cx.notify();
                         });
                     })
-                    .when(context_tab, |element| {
+                    .when(focusable_tab, |element| {
                         element.on_key_down(cx.listener(
                             move |this, event: &KeyDownEvent, window, cx| {
                                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                                     this.right_panel_active_surface = Some(index);
                                     this.reveal_right_panel_tab(index);
-                                    window.focus(&this.context_panel_focus, cx);
+                                    if context_tab {
+                                        window.focus(&this.context_panel_focus, cx);
+                                    }
                                     cx.notify();
                                     cx.stop_propagation();
                                 }
@@ -2741,17 +2713,16 @@ impl Fintwind {
             }))
     }
 
-    fn render_right_panel_files(
-        &mut self,
-        panel_width: f32,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
-        if let Some(relative_path) = self.right_panel_files_selected_path.clone() {
-            self.render_right_panel_file(relative_path, panel_width, window, cx)
-        } else {
-            self.render_right_panel_working_tree(None, cx)
+    fn render_right_panel_files(&self, cx: &mut Context<Self>) -> Div {
+        self.render_right_panel_working_tree(None, cx)
+    }
+
+    fn toggle_right_panel_directory(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if !self.right_panel_expanded_paths.remove(path) {
+            self.right_panel_expanded_paths.insert(path.to_path_buf());
         }
+        self.refresh_right_panel_working_tree(cx);
+        cx.notify();
     }
 
     fn render_right_panel_working_tree(
@@ -2772,16 +2743,29 @@ impl Fintwind {
         // `refresh_right_panel_working_tree`, never in a frame.
         let entries = self.right_panel_working_tree.clone();
 
-        let mut list = div().flex().flex_col().py(px(6.0));
-        for entry in entries {
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .py(px(6.0))
+            .tab_index(0)
+            .tab_group()
+            .tab_stop(false);
+        for (row_index, entry) in entries.into_iter().enumerate() {
             let relative_path = entry.relative_path.clone();
             let absolute_path = entry.absolute_path.clone();
             let is_dir = entry.is_dir;
             let selected = selected_path == Some(relative_path.as_str());
+            let focus =
+                self.transcript_control_focus(format!("right-panel-tree-{relative_path}"), cx);
+            let key_path = relative_path.clone();
+            let key_absolute_path = absolute_path.clone();
             let row = div()
                 .id(SharedString::from(format!(
                     "right-panel-file-{relative_path}"
                 )))
+                .track_focus(&focus)
+                .tab_index(0)
+                .focus_visible(|style| style.border_1().border_color(theme.accent))
                 .h(px(30.0))
                 .mx(px(8.0))
                 .pl(px(8.0 + entry.depth as f32 * 16.0))
@@ -2819,15 +2803,38 @@ impl Fintwind {
                         .text_size(ui_px(11.5))
                         .text_color(theme.text_secondary)
                         .child(entry.name),
-                );
+                )
+                .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                    match event.keystroke.key.as_str() {
+                        "enter" | "space" => {
+                            if is_dir {
+                                this.toggle_right_panel_directory(&key_absolute_path, cx);
+                            } else {
+                                this.open_right_panel_file(key_path.clone(), cx);
+                            }
+                        }
+                        "up" | "down" | "home" | "end" => {
+                            let target = match event.keystroke.key.as_str() {
+                                "up" => row_index.saturating_sub(1),
+                                "down" => row_index + 1,
+                                "home" => 0,
+                                _ => this.right_panel_working_tree.len().saturating_sub(1),
+                            };
+                            if let Some(entry) = this.right_panel_working_tree.get(target) {
+                                let focus = this.transcript_control_focus(
+                                    format!("right-panel-tree-{}", entry.relative_path),
+                                    cx,
+                                );
+                                window.focus(&focus, cx);
+                            }
+                        }
+                        _ => return,
+                    }
+                    cx.stop_propagation();
+                }));
             list = if is_dir {
                 list.child(row.on_click(cx.listener(move |this, _, _, cx| {
-                    if !this.right_panel_expanded_paths.remove(&absolute_path) {
-                        this.right_panel_expanded_paths
-                            .insert(absolute_path.clone());
-                    }
-                    this.refresh_right_panel_working_tree(cx);
-                    cx.notify();
+                    this.toggle_right_panel_directory(&absolute_path, cx);
                 })))
             } else {
                 list.child(row.on_click(cx.listener(move |this, _, _, cx| {

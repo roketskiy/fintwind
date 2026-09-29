@@ -50,19 +50,20 @@ data — see the next section.
 
 Unpacking a new release over the old directory leaves all of it untouched.
 
-## Agent CLIs
+## The OpenCode CLI
 
-fintwind detects the provider CLIs on `PATH` and, because a fresh `PATH` may
-predate an install, also looks in the usual per-user prefixes:
-`%APPDATA%\npm`, `%USERPROFILE%\.bun\bin`, `%USERPROFILE%\.cargo\bin`,
-`%USERPROFILE%\scoop\shims`, and `%LOCALAPPDATA%\Microsoft\WindowsApps`.
+fintwind drives one agent backend: the `opencode` CLI. It detects the binary on
+`PATH` and, because a fresh `PATH` may predate an install, also looks in the
+usual per-user prefixes: `%APPDATA%\npm`, `%USERPROFILE%\.bun\bin`,
+`%USERPROFILE%\.cargo\bin`, `%USERPROFILE%\scoop\shims`, and
+`%LOCALAPPDATA%\Microsoft\WindowsApps`.
 
-Bare names resolve through `PATHEXT`, so the `claude.cmd` shim npm installs is
-found the same way `claude` would be in a shell. Nothing is spawned with a
+Bare names resolve through `PATHEXT`, so the `opencode.cmd` shim npm installs
+is found the same way `opencode` would be in a shell. Nothing is spawned with a
 console window attached.
 
-If a CLI is installed but not detected, set its path explicitly in
-**Settings → Providers**.
+If the CLI is installed but not detected, make sure `opencode --version` works
+in a new PowerShell window.
 
 ## Terminal
 
@@ -100,10 +101,10 @@ Differences worth knowing:
 **The window opens black, or the app exits at startup.** fintwind needs a working
 Direct3D 11 device. Update the GPU driver; in a VM, enable 3D acceleration.
 
-**A provider is listed as not installed.** Open a new PowerShell window and run
-the CLI by name. If the shell cannot find it either, the install did not put a
-shim on `PATH`. If the shell finds it but fintwind does not, set the binary path in
-**Settings → Providers** and file an issue with the install method.
+**OpenCode is listed as not installed.** Open a new PowerShell window and run
+`opencode --version`. If the shell cannot find it either, the install did not
+put a shim on `PATH`. If the shell finds it but fintwind does not, file an
+issue with the install method.
 
 **Git-backed features do nothing.** fintwind shells out to `git`. Install Git for
 Windows and make sure `git --version` works in a new terminal.

@@ -38,7 +38,7 @@ packages unsigned binaries and SmartScreen will warn.
 ## Cutting a release
 
 1. On `main`, bump `version` in the root `Cargo.toml` (next unused Fintwind
-   number — currently the line is `0.1.x`).
+   number — currently the line is `0.2.x`).
 2. Rename `## [unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) to
    `## [<version>]` and add a fresh empty `## [unreleased]` above it.
 3. Commit, for example `chore: release <version>`.

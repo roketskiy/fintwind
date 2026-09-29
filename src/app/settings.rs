@@ -102,6 +102,72 @@ fn available_font_families(cx: &App, keep: &[&str]) -> Vec<String> {
     names
 }
 
+/// One dot of a scheme preview, ringed by readable menu text so even a
+/// near-white or near-black surface stays visible against the card.
+fn scheme_swatch_dot(color: Hsla, ring: Hsla) -> Div {
+    div()
+        .size(px(10.0))
+        .flex_none()
+        .rounded_full()
+        .bg(color)
+        .border_1()
+        .border_color(ring)
+}
+
+/// One row of the scheme menu. A plain entry can only name a palette, and a
+/// dozen names alone ask the user to remember colors; the swatch shows the
+/// palette resolved against the appearance currently in force — exactly what
+/// choosing it would apply — and the trailing check mirrors the plain entries
+/// around it.
+fn scheme_choice(
+    scheme: ThemeScheme,
+    selected_scheme: ThemeScheme,
+    is_dark: bool,
+    theme: Theme,
+) -> MenuItem {
+    let palette = Theme::for_scheme(scheme, is_dark);
+    let selected = scheme == selected_scheme;
+    MenuItem::custom(move |_, _| {
+        div()
+            .w(px(228.0))
+            .py(px(2.0))
+            .flex()
+            .items_center()
+            .gap(px(10.0))
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(3.0))
+                    .child(scheme_swatch_dot(palette.canvas, theme.text_secondary))
+                    .child(scheme_swatch_dot(palette.raised, theme.text_secondary))
+                    .child(scheme_swatch_dot(palette.accent, theme.text_secondary)),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_color(if selected {
+                        theme.text
+                    } else {
+                        theme.text_secondary
+                    })
+                    .font_weight(if selected {
+                        FontWeight::MEDIUM
+                    } else {
+                        FontWeight::NORMAL
+                    })
+                    .child(scheme.label()),
+            )
+            .when(selected, |element| {
+                element.child(icon("icons/check.svg", 12.0, theme.text_tertiary))
+            })
+            .into_any_element()
+    })
+}
+
 /// The sidebar rows the query leaves visible, in display order. `query` must
 /// already be trimmed and lowercased; when it is empty every page matches.
 pub(super) fn visible_settings_pages(
@@ -576,12 +642,14 @@ impl Fintwind {
 
         let weak = cx.entity().downgrade();
         let scheme_handle = self.menu_handle("scheme-selector", cx);
+        // A dozen schemes outgrow the 160px the other chips use: the wider chip
+        // keeps a long palette name on one line before it ellipsizes.
         let scheme_selector = dropdown_menu(
             MenuChip::new("scheme-selector")
                 .label(selected_scheme.label())
                 .outlined()
                 .selected(scheme_handle.is_open())
-                .w(px(160.0))
+                .w(px(200.0))
                 .justify_between(),
             "scheme-selector-menu",
             &scheme_handle,
@@ -591,12 +659,12 @@ impl Fintwind {
                     .into_iter()
                     .map(|scheme| {
                         let weak = weak.clone();
-                        MenuItem::new(scheme.label(), move |window, cx| {
+                        let choice = scheme_choice(scheme, selected_scheme, theme.is_dark, theme);
+                        choice.on_click(move |window, cx| {
                             let _ = weak.update(cx, |this, cx| {
                                 this.set_theme_scheme(scheme, window, cx);
                             });
                         })
-                        .selected(scheme == selected_scheme)
                     })
                     .collect()
             },

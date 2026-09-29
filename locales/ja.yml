@@ -81,6 +81,15 @@ settings.scheme_default: Fintwind
 settings.scheme_vscode: VS Code Modern
 settings.scheme_codex: Codex
 settings.scheme_nord: Nord
+settings.scheme_linear: Linear
+settings.scheme_notion: Notion
+settings.scheme_one: One
+settings.scheme_proof: Proof
+settings.scheme_raycast: Raycast
+settings.scheme_rose_pine: Rose Pine
+settings.scheme_solarized: Solarized
+settings.scheme_vercel: Vercel
+settings.scheme_vs_code_plus: VS Code Plus
 settings.ui_text_size: インターフェースの文字サイズ
 settings.ui_text_size_description: アプリのインターフェース文字のサイズを調整します。変更はすぐに反映されます。
 settings.code_text_size: コードの文字サイズ

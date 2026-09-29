@@ -212,7 +212,6 @@ fn heading_metrics(level: u8, metrics: &Metrics) -> (f32, f32, FontWeight) {
 /// Colors for markdown paint, resolved once per render from the theme.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
-    scheme: crate::theme::ThemeScheme,
     pub text: Hsla,
     pub secondary: Hsla,
     pub tertiary: Hsla,
@@ -228,13 +227,20 @@ pub struct Palette {
     pub link: Hsla,
     pub added: Hsla,
     pub removed: Hsla,
-    is_dark: bool,
+    /// Syntax-highlight colors, one per token class the lexer emits. Every
+    /// theme defines its own six, so the hardcoded per-scheme palettes that
+    /// used to live here are gone.
+    pub code_keyword: Hsla,
+    pub code_literal: Hsla,
+    pub code_string: Hsla,
+    pub code_number: Hsla,
+    pub code_type: Hsla,
+    pub code_function: Hsla,
 }
 
 impl Palette {
     pub fn from_theme(theme: &Theme) -> Self {
         Self {
-            scheme: theme.scheme,
             text: theme.text,
             secondary: theme.text_secondary,
             tertiary: theme.text_tertiary,
@@ -249,71 +255,31 @@ impl Palette {
             link: theme.link,
             added: theme.success_text,
             removed: theme.danger_text,
-            is_dark: theme.is_dark,
+            code_keyword: theme.code_keyword,
+            code_literal: theme.code_literal,
+            code_string: theme.code_string,
+            code_number: theme.code_number,
+            code_type: theme.code_type,
+            code_function: theme.code_function,
         }
     }
 
-    /// Syntax colors shared by transcript code blocks and the code editor.
+    /// Syntax colors shared by transcript code blocks and the code editor,
+    /// resolved from the active theme so every palette carries its own.
     pub fn token(&self, class: TokenClass) -> Hsla {
-        let dark = self.is_dark;
-        if self.scheme == crate::theme::ThemeScheme::VsCode {
-            return match class {
-                TokenClass::Keyword => hue(dark, 0xC586C0, 0xAF00DB),
-                TokenClass::Literal | TokenClass::Number => hue(dark, 0xB5CEA8, 0x087044),
-                TokenClass::String => hue(dark, 0xCE9178, 0xA31515),
-                TokenClass::Type => hue(dark, 0x4EC9B0, 0x1D647C),
-                TokenClass::Function => hue(dark, 0xDCDCAA, 0x795E26),
-                TokenClass::Comment => self.ghost,
-                TokenClass::Meta => self.tertiary,
-                TokenClass::Added => self.added,
-                TokenClass::Removed => self.removed,
-            };
-        }
-        if self.scheme == crate::theme::ThemeScheme::Nord {
-            return match class {
-                TokenClass::Keyword => hue(dark, 0xB48EAD, 0x70446A),
-                TokenClass::Literal | TokenClass::Number => hue(dark, 0xB48EAD, 0x70446A),
-                TokenClass::String => hue(dark, 0xA3BE8C, 0x46652E),
-                TokenClass::Type => hue(dark, 0x8FBCBB, 0x285F5E),
-                TokenClass::Function => hue(dark, 0x88C0D0, 0x385C89),
-                TokenClass::Comment => self.ghost,
-                TokenClass::Meta => self.tertiary,
-                TokenClass::Added => self.added,
-                TokenClass::Removed => self.removed,
-            };
-        }
-        if self.scheme == crate::theme::ThemeScheme::Codex {
-            // A restrained companion to the Codex-inspired neutral UI, not
-            // a claim about the CLI's independently configurable syntax theme.
-            return match class {
-                TokenClass::Keyword => hue(dark, 0xB5A0E6, 0x6C3EA1),
-                TokenClass::Literal | TokenClass::Number => hue(dark, 0xD9B872, 0x844E0B),
-                TokenClass::String => hue(dark, 0x8EC8A6, 0x246A48),
-                TokenClass::Type => hue(dark, 0x98BDEB, 0x245D90),
-                TokenClass::Function => hue(dark, 0xBED0F3, 0x315E8C),
-                TokenClass::Comment => self.ghost,
-                TokenClass::Meta => self.tertiary,
-                TokenClass::Added => self.added,
-                TokenClass::Removed => self.removed,
-            };
-        }
         match class {
-            TokenClass::Keyword => hue(dark, 0xC98BC0, 0x9A4B92),
-            TokenClass::Literal => hue(dark, 0xD9A05B, 0x9A6019),
-            TokenClass::String => hue(dark, 0x94C08A, 0x3F7A36),
+            TokenClass::Keyword => self.code_keyword,
+            TokenClass::Literal => self.code_literal,
+            TokenClass::String => self.code_string,
+            TokenClass::Number => self.code_number,
+            TokenClass::Type => self.code_type,
+            TokenClass::Function => self.code_function,
             TokenClass::Comment => self.ghost,
-            TokenClass::Number => hue(dark, 0xD9A05B, 0x9A6019),
-            TokenClass::Type => hue(dark, 0x8FB8D9, 0x2F6690),
-            TokenClass::Function => hue(dark, 0x8FB8D9, 0x2F6690),
             TokenClass::Meta => self.tertiary,
             TokenClass::Added => self.added,
             TokenClass::Removed => self.removed,
         }
     }
-}
-
-fn hue(is_dark: bool, dark: u32, light: u32) -> Hsla {
-    gpui::rgb(if is_dark { dark } else { light }).into()
 }
 
 // ── Flattened inline text ──────────────────────────────────────────────────

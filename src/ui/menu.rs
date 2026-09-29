@@ -31,9 +31,9 @@ use std::rc::Rc;
 use gpui::{
     AnyElement, App, Bounds, Display, Element, ElementId, FocusHandle, FontWeight, GlobalElementId,
     InspectorElementId, InteractiveElement, IntoElement, KeyDownEvent, LayoutId, MouseButton,
-    MouseDownEvent, ParentElement, Pixels, Point, Position, RenderOnce, SharedString, Size,
-    StatefulInteractiveElement, Style, Styled, Window, actions, anchored, canvas, deferred, div,
-    prelude::FluentBuilder, px,
+    MouseDownEvent, ParentElement, Pixels, Point, Position, RenderOnce, ScrollHandle, SharedString,
+    Size, StatefulInteractiveElement, Style, Styled, Window, actions, anchored, canvas, deferred,
+    div, prelude::FluentBuilder, px,
 };
 
 actions!(
@@ -202,6 +202,7 @@ struct MenuState {
 #[derive(Clone)]
 pub struct ContextMenuHandle {
     state: Rc<RefCell<MenuState>>,
+    scroll: ScrollHandle,
     /// Stable focus identity shared by dropdown and keyboard context triggers.
     trigger_focus: FocusHandle,
     focus: FocusHandle,
@@ -219,6 +220,7 @@ impl ContextMenuHandle {
     pub fn new(cx: &mut App) -> Self {
         Self {
             state: Rc::new(RefCell::new(MenuState::default())),
+            scroll: ScrollHandle::new(),
             trigger_focus: cx.focus_handle(),
             focus: cx.focus_handle(),
             trigger_bounds: Rc::new(Cell::new(None)),
@@ -313,6 +315,7 @@ impl ContextMenuHandle {
         window: &mut Window,
         cx: &mut App,
     ) {
+        self.scroll.scroll_to_item(0);
         let was_open = {
             let mut state = self.state.borrow_mut();
             let was_open = state.open.is_some();
@@ -958,6 +961,7 @@ impl RenderOnce for MenuCard {
             .max_w(px(320.0))
             .max_h(px(360.0))
             .overflow_y_scroll()
+            .track_scroll(&self.handle.scroll)
             .py(px(5.0))
             .rounded(px(10.0))
             .border_1()
@@ -1140,6 +1144,7 @@ fn on_menu_key(
     let current = handle.state.borrow().highlighted;
     if let Some(next) = next_highlight(focusable, current, key) {
         handle.state.borrow_mut().highlighted = Some(next);
+        handle.scroll.scroll_to_item(next);
         window.refresh();
         cx.stop_propagation();
         return;

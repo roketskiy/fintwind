@@ -154,6 +154,24 @@ settings.scheme_codex:
   en: Codex
 settings.scheme_nord:
   en: Nord
+settings.scheme_linear:
+  en: Linear
+settings.scheme_notion:
+  en: Notion
+settings.scheme_one:
+  en: One
+settings.scheme_proof:
+  en: Proof
+settings.scheme_raycast:
+  en: Raycast
+settings.scheme_rose_pine:
+  en: Rose Pine
+settings.scheme_solarized:
+  en: Solarized
+settings.scheme_vercel:
+  en: Vercel
+settings.scheme_vs_code_plus:
+  en: VS Code Plus
 settings.ui_text_size:
   en: Interface text size
 settings.ui_text_size_description:

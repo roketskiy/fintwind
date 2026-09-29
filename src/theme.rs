@@ -235,6 +235,15 @@ pub struct Theme {
     /// Inline `code` foreground and its rounded wash.
     pub code_text: Hsla,
     pub code_wash: Hsla,
+    /// Syntax colors for code blocks and the code editor, one per token
+    /// class. Every palette family supplies both appearances so transcript
+    /// highlighting no longer needs per-scheme branches.
+    pub code_keyword: Hsla,
+    pub code_literal: Hsla,
+    pub code_string: Hsla,
+    pub code_number: Hsla,
+    pub code_type: Hsla,
+    pub code_function: Hsla,
 
     /// Light fill for primary buttons (send, allow), dark glyph on top.
     pub inverse: Hsla,
@@ -297,6 +306,12 @@ impl Theme {
             selection: hsla(211.0 / 360.0, 1.0, 0.50, 0.55),
             code_text: rgb(0xE0A882).into(),
             code_wash: hsla(220.0 / 360.0, 0.10, 0.90, 0.08),
+            code_keyword: rgb(0xC98BC0).into(),
+            code_literal: rgb(0xD9A05B).into(),
+            code_string: rgb(0x94C08A).into(),
+            code_number: rgb(0xD9A05B).into(),
+            code_type: rgb(0x8FB8D9).into(),
+            code_function: rgb(0x8FB8D9).into(),
 
             inverse: rgb(0xE7E9EC).into(),
             on_inverse: rgb(0x17181C).into(),
@@ -350,6 +365,12 @@ impl Theme {
             selection: hsla(211.0 / 360.0, 1.0, 0.50, 0.35),
             code_text: rgb(0x9A5528).into(),
             code_wash: hsla(0.0, 0.0, 0.12, 0.07),
+            code_keyword: rgb(0x9A4B92).into(),
+            code_literal: rgb(0x9A6019).into(),
+            code_string: rgb(0x3F7A36).into(),
+            code_number: rgb(0x9A6019).into(),
+            code_type: rgb(0x2F6690).into(),
+            code_function: rgb(0x2F6690).into(),
 
             inverse: rgb(0x202227).into(),
             on_inverse: rgb(0xF8F8F9).into(),
@@ -366,6 +387,9 @@ impl Theme {
     }
 
     /// Resolve a palette family against the current light/dark appearance.
+    ///
+    /// New families use a light/dark base and override the semantics they
+    /// restyle; the original presets remain explicit (see `palettes`).
     pub fn for_scheme(scheme: ThemeScheme, is_dark: bool) -> Self {
         match scheme {
             ThemeScheme::Default => {
@@ -378,6 +402,15 @@ impl Theme {
             ThemeScheme::VsCode => Self::vs_code(is_dark),
             ThemeScheme::Codex => Self::codex(is_dark),
             ThemeScheme::Nord => Self::nord(is_dark),
+            ThemeScheme::Linear => Self::linear(is_dark),
+            ThemeScheme::Notion => Self::notion(is_dark),
+            ThemeScheme::One => Self::one(is_dark),
+            ThemeScheme::Proof => Self::proof(is_dark),
+            ThemeScheme::Raycast => Self::raycast(is_dark),
+            ThemeScheme::RosePine => Self::rose_pine(is_dark),
+            ThemeScheme::Solarized => Self::solarized(is_dark),
+            ThemeScheme::Vercel => Self::vercel(is_dark),
+            ThemeScheme::VsCodePlus => Self::vs_code_plus(is_dark),
         }
     }
 }

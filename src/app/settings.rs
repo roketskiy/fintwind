@@ -1,4 +1,4 @@
-use crate::theme::ui_px;
+use crate::theme::{ThemeScheme, ui_px};
 
 use gpui::actions;
 
@@ -544,6 +544,7 @@ impl Fintwind {
     fn render_appearance_settings(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let selected_theme = self.state.theme;
+        let selected_scheme = self.state.theme_scheme;
         let selected_language = self.state.language;
         let weak = cx.entity().downgrade();
         let theme_handle = self.menu_handle("theme-selector", cx);
@@ -568,6 +569,34 @@ impl Fintwind {
                             });
                         })
                         .selected(preference == selected_theme)
+                    })
+                    .collect()
+            },
+        );
+
+        let weak = cx.entity().downgrade();
+        let scheme_handle = self.menu_handle("scheme-selector", cx);
+        let scheme_selector = dropdown_menu(
+            MenuChip::new("scheme-selector")
+                .label(selected_scheme.label())
+                .outlined()
+                .selected(scheme_handle.is_open())
+                .w(px(160.0))
+                .justify_between(),
+            "scheme-selector-menu",
+            &scheme_handle,
+            MenuAlign::BelowRight,
+            move |_| {
+                ThemeScheme::ALL
+                    .into_iter()
+                    .map(|scheme| {
+                        let weak = weak.clone();
+                        MenuItem::new(scheme.label(), move |window, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.set_theme_scheme(scheme, window, cx);
+                            });
+                        })
+                        .selected(scheme == selected_scheme)
                     })
                     .collect()
             },
@@ -776,6 +805,38 @@ impl Fintwind {
                             ),
                     )
                     .child(theme_selector),
+            )
+            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(
+                div()
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.scheme")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.scheme_description")),
+                            ),
+                    )
+                    .child(scheme_selector),
             )
             .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
             .child(
@@ -1045,6 +1106,21 @@ impl Fintwind {
         }
         self.state.theme = preference;
         crate::theme::apply_theme_preference(preference, self.state.theme_scheme, window, cx);
+        self.save();
+        cx.notify();
+    }
+
+    fn set_theme_scheme(
+        &mut self,
+        scheme: ThemeScheme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.theme_scheme == scheme {
+            return;
+        }
+        self.state.theme_scheme = scheme;
+        crate::theme::apply_theme_preference(self.state.theme, scheme, window, cx);
         self.save();
         cx.notify();
     }

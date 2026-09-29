@@ -141,7 +141,19 @@ daemon.hide_token:
 settings.theme:
   en: Theme
 settings.theme_description:
-  en: Choose between system, light, or dark themes
+  en: Follow your system appearance or choose light or dark
+settings.scheme:
+  en: Color theme
+settings.scheme_description:
+  en: Choose a palette for both light and dark appearance
+settings.scheme_default:
+  en: Fintwind
+settings.scheme_vscode:
+  en: VS Code Modern
+settings.scheme_codex:
+  en: Codex
+settings.scheme_nord:
+  en: Nord
 settings.ui_text_size:
   en: Interface text size
 settings.ui_text_size_description:

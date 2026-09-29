@@ -21,10 +21,23 @@ pub enum ThemePreference {
 pub enum ThemeScheme {
     #[default]
     Default,
+    VsCode,
+    Codex,
+    Nord,
 }
 
 impl ThemeScheme {
-    pub const ALL: [Self; 1] = [Self::Default];
+    pub const ALL: [Self; 4] = [Self::Default, Self::VsCode, Self::Codex, Self::Nord];
+
+    pub fn label(self) -> String {
+        let key = match self {
+            Self::Default => "settings.scheme_default",
+            Self::VsCode => "settings.scheme_vscode",
+            Self::Codex => "settings.scheme_codex",
+            Self::Nord => "settings.scheme_nord",
+        };
+        crate::i18n::translate(key)
+    }
 }
 
 impl ThemePreference {

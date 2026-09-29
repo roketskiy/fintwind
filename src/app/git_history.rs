@@ -342,32 +342,54 @@ impl Fintwind {
                                 // rest collapse into a trailing "+n" chip.
                                 let refs_shown = commit.refs.len().min(2);
                                 let overflow = commit.refs.len() - refs_shown;
-                                for ref_name in commit.refs.iter().take(refs_shown) {
-                                    let color =
-                                        if ref_name == "HEAD" || ref_name.starts_with("HEAD ->") {
-                                            theme.accent
-                                        } else {
-                                            theme.text_tertiary
-                                        };
-                                    headline =
-                                        headline.child(ref_chip(ref_name.clone(), color, &theme));
-                                }
-                                if overflow > 0 {
+                                for (ref_index, commit_ref) in
+                                    commit.refs.iter().take(refs_shown).enumerate()
+                                {
                                     headline = headline.child(ref_chip(
-                                        format!("+{overflow}"),
-                                        theme.text_tertiary,
+                                        format!("history-ref-{index}-{ref_index}"),
+                                        commit_ref.label.clone(),
+                                        commit_ref.remote,
+                                        commit_ref.head,
                                         &theme,
                                     ));
                                 }
-                                let headline = headline.child(div().flex_1()).child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(ui_px(10.5))
-                                        .text_color(theme.text_tertiary)
-                                        .child(format_time_ago(
-                                            now.saturating_sub(commit.timestamp),
-                                        )),
-                                );
+                                if overflow > 0 {
+                                    headline = headline.child(ref_chip(
+                                        format!("history-ref-{index}-overflow"),
+                                        format!("+{overflow}"),
+                                        false,
+                                        false,
+                                        &theme,
+                                    ));
+                                }
+                                let headline = headline
+                                    .child(div().flex_1())
+                                    .when(!commit.pushed, |headline| {
+                                        headline.child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "history-unpushed-{index}"
+                                                )))
+                                                .flex_none()
+                                                .flex()
+                                                .items_center()
+                                                .tooltip(Tooltip::text(tr!("git_history.unpushed")))
+                                                .child(icon(
+                                                    "icons/cloud-upload.svg",
+                                                    12.0,
+                                                    theme.warning,
+                                                )),
+                                        )
+                                    })
+                                    .child(
+                                        div()
+                                            .flex_none()
+                                            .text_size(ui_px(10.5))
+                                            .text_color(theme.text_tertiary)
+                                            .child(format_time_ago(
+                                                now.saturating_sub(commit.timestamp),
+                                            )),
+                                    );
                                 let detail = div()
                                     .flex()
                                     .items_baseline()
@@ -462,15 +484,34 @@ impl Fintwind {
 }
 
 /// A small rounded label next to a commit's short hash: a ref decoration
-/// (`HEAD -> main`, `origin/main`) or the "+n" overflow marker.
-fn ref_chip(label: String, color: Hsla, theme: &Theme) -> Div {
+/// (`HEAD -> main`, `origin/main`) or the "+n" overflow marker. Remote refs
+/// gain a globe glyph and a tooltip, so every chip is stateful (`.tooltip`
+/// needs an id); local refs and the "+n" overflow stay plain text.
+fn ref_chip(
+    id: String,
+    label: String,
+    remote: bool,
+    is_head: bool,
+    theme: &Theme,
+) -> Stateful<Div> {
+    let color = if is_head {
+        theme.accent
+    } else {
+        theme.text_tertiary
+    };
     div()
+        .id(SharedString::from(id))
         .flex_none()
         .px(px(5.0))
         .h(px(15.0))
         .rounded(px(4.0))
         .flex()
         .items_center()
+        .when(remote, |chip| {
+            chip.gap(px(3.0))
+                .child(icon("icons/globe.svg", 9.0, color))
+                .tooltip(Tooltip::text(tr!("git_history.remote_ref")))
+        })
         .text_size(ui_px(10.0))
         .text_color(color)
         .bg(theme.overlay)

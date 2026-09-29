@@ -866,6 +866,8 @@ git_history.empty: コミットはまだありません
 git_history.empty_description: このブランチに表示できるコミットがありません
 git_history.hash_copied: "%{hash} をコピーしました"
 git_history.refresh: 履歴を更新
+git_history.unpushed: リモートに未プッシュ
+git_history.remote_ref: リモート参照
 
 commit.message_placeholder: コミットメッセージ（空欄の場合は自動生成）…
 commit.message: コミットメッセージ

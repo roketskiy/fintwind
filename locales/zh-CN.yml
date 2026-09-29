@@ -828,6 +828,8 @@ git_history.empty: 暂无提交
 git_history.empty_description: 此分支没有可显示的提交
 git_history.hash_copied: 已复制 %{hash}
 git_history.refresh: 刷新历史
+git_history.unpushed: 未推送到远程
+git_history.remote_ref: 云端引用
 commit.message_placeholder: 提交信息（留空以自动生成）…
 commit.message: 提交信息
 commit.include_unstaged: 包含未暂存的更改

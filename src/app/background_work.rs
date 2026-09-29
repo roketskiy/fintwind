@@ -1,5 +1,6 @@
 use crate::theme::{code_px, ui_px};
 
+use super::transcript_view::{ActivityClusterContext, ActivitySurface};
 use super::*;
 
 const MAX_BACKGROUND_OUTPUT_BYTES: usize = 512 * 1024;
@@ -29,6 +30,15 @@ pub(super) struct BackgroundWorkRegistry {
     transcripts: HashMap<BackgroundWorkKey, BackgroundWorkTranscript>,
     last_output_cache_refresh: Option<Instant>,
     output_viewports: HashMap<BackgroundWorkKey, BackgroundOutputViewport>,
+    /// Which of an item's transcript blocks have their activity cards open,
+    /// keyed by the block's index inside that item's own transcript.
+    ///
+    /// Deliberately off the session's `activities_expanded`: those keys are
+    /// the selected session's block positions, and the two transcripts number
+    /// their blocks independently, so sharing the map would expand a parent
+    /// block when a subagent's opens. Live turns start open, matching the
+    /// session transcript; only a user toggle lands here.
+    pub(super) activities_expanded: HashMap<(BackgroundWorkKey, usize), bool>,
     selection: TranscriptSelection,
 }
 
@@ -493,6 +503,8 @@ impl BackgroundWorkRegistry {
         self.rendered_output.remove(key);
         self.dirty_output.remove(key);
         self.output_viewports.remove(key);
+        self.activities_expanded
+            .retain(|(entry, _), _| entry != key);
         self.order.retain(|entry| entry != key);
     }
 
@@ -1032,6 +1044,25 @@ impl Fintwind {
             .find(|item| item.origin_activity_ids.iter().any(|id| id == activity_id))
     }
 
+    /// An item's stored cluster disclosure for one of its transcript blocks,
+    /// if the user toggled it. `None` leaves the default — open for a live
+    /// turn, closed otherwise — to the shared cluster renderer.
+    pub(super) fn background_activity_cluster_expanded(
+        &self,
+        key: &BackgroundWorkKey,
+        block_index: usize,
+    ) -> Option<bool> {
+        self.state
+            .selected_session
+            .and_then(|session_id| self.background_work.get(&session_id))
+            .and_then(|registry| {
+                registry
+                    .activities_expanded
+                    .get(&(key.clone(), block_index))
+            })
+            .copied()
+    }
+
     pub(super) fn maybe_refresh_background_work(&mut self, cx: &mut Context<Self>) {
         let mut output_changed = false;
         for registry in self.background_work.values_mut() {
@@ -1281,6 +1312,7 @@ impl Fintwind {
     pub(super) fn render_background_work_surface(
         &self,
         key: &BackgroundWorkKey,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
@@ -1444,6 +1476,7 @@ impl Fintwind {
                                 item,
                                 transcript,
                                 selection.clone(),
+                                window,
                                 cx,
                             )
                         })),
@@ -1656,6 +1689,7 @@ impl Fintwind {
         item: &BackgroundWorkItem,
         transcript: &BackgroundWorkTranscript,
         selection: TranscriptSelection,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let theme = Theme::current(cx);
@@ -1706,125 +1740,71 @@ impl Fintwind {
             )
         };
         // Group blocks by their anchor once per frame; the per-message filter
-        // below then costs one lookup instead of a full block scan.
-        let mut blocks_by_after: HashMap<usize, Vec<&TranscriptBlock>> = HashMap::new();
-        for block in &transcript.transcript_blocks {
+        // below then costs one lookup instead of a full block scan. Each entry
+        // keeps the block's index in this transcript, which is what its
+        // disclosure state and control ids are scoped by.
+        let mut blocks_by_after: HashMap<usize, Vec<(usize, &TranscriptBlock)>> = HashMap::new();
+        for (block_index, block) in transcript.transcript_blocks.iter().enumerate() {
             blocks_by_after
                 .entry(block.after_message)
                 .or_default()
-                .push(block);
+                .push((block_index, block));
         }
+        // The item's own liveness: the same questions the session transcript
+        // asks of its runtime, answered from the background item instead. A
+        // live subagent's newest block names its newest activity and starts
+        // open, exactly as a live turn does in the parent transcript.
+        let live_turn_id = (item.status.is_live())
+            .then(|| {
+                transcript
+                    .turns
+                    .last()
+                    .filter(|turn| turn.status == TurnStatus::Running)
+                    .map(|turn| turn.id)
+            })
+            .flatten();
         for after_message in 0..=transcript.messages.len() {
-            for block in blocks_by_after.get(&after_message).into_iter().flatten() {
+            for (block_index, block) in blocks_by_after.get(&after_message).into_iter().flatten() {
                 if block.activities.is_empty() {
                     continue;
                 }
-                let disclosure_id = block.activities[0].id;
-                let expanded = self
-                    .expanded_activity_items
-                    .get(&disclosure_id)
-                    .copied()
-                    .unwrap_or(false);
-                let click_weak = cx.entity().downgrade();
-                let key_weak = cx.entity().downgrade();
-                let focus = self
-                    .transcript_control_focus(format!("background-activity-{disclosure_id}"), cx);
-                let mut cluster = div().w_full().min_w_0().flex().flex_col().child(
-                    div()
-                        .id(SharedString::from(format!(
-                            "background-activity-{disclosure_id}"
-                        )))
-                        .track_focus(&focus)
-                        .tab_index(0)
-                        .h(px(30.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(6.0))
-                        .cursor_default()
-                        .text_size(ui_px(12.5))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text_secondary)
-                        .focus_visible(|style| style.text_color(theme.text))
-                        .hover(|style| style.text_color(theme.text))
-                        .child(activity_header_title(&block.activities, false, None))
-                        .child(icon(
-                            if expanded {
-                                "icons/chevron-down.svg"
-                            } else {
-                                "icons/chevron-right.svg"
-                            },
-                            11.0,
-                            theme.text_tertiary,
-                        ))
-                        .on_click(move |_, _, cx| {
-                            let _ = click_weak.update(cx, |this, cx| {
-                                this.expanded_activity_items
-                                    .insert(disclosure_id, !expanded);
-                                cx.notify();
-                            });
-                        })
-                        .on_key_down(move |event: &KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                let _ = key_weak.update(cx, |this, cx| {
-                                    this.expanded_activity_items
-                                        .insert(disclosure_id, !expanded);
-                                    cx.notify();
-                                });
-                                cx.stop_propagation();
-                            }
-                        }),
-                );
-                if expanded {
-                    let mut activities = div()
-                        .ml(px(6.0))
-                        .pl(px(12.0))
-                        .border_l_1()
-                        .border_color(theme.border)
-                        .flex()
-                        .flex_col()
-                        .gap(px(6.0));
-                    for activity in &block.activities {
-                        let color = if activity.failed {
-                            theme.danger
-                        } else if activity.complete {
-                            theme.text_tertiary
-                        } else {
-                            theme.accent
-                        };
-                        let detail = activity_row_detail(activity, false);
-                        activities = activities.child(
-                            div()
-                                .min_h(px(28.0))
-                                .flex()
-                                .items_center()
-                                .gap(px(7.0))
-                                .text_size(ui_px(11.5))
-                                .text_color(theme.text_secondary)
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(color)
-                                        .child(activity_action_label(activity)),
-                                )
-                                .when(!detail.is_empty(), |row| {
-                                    row.child(div().min_w_0().flex_1().truncate().child(detail))
-                                })
-                                .when(activity.failed, |row| {
-                                    row.child(icon("icons/x.svg", 10.0, theme.danger))
-                                })
-                                .when(!activity.complete && !activity.failed, |row| {
-                                    row.child(pulse_dot(5.0, theme.accent))
-                                }),
-                        );
-                    }
-                    cluster = cluster.child(activities);
-                }
-                content = content.child(cluster);
+                let live_turn = live_turn_id.is_some_and(|turn_id| block.turn_id == Some(turn_id));
+                let live_reasoning_id = live_turn
+                    .then(|| {
+                        block
+                            .activities
+                            .iter()
+                            .rev()
+                            .find(|activity| activity.reasoning.is_some() && !activity.complete)
+                            .map(|activity| activity.id)
+                    })
+                    .flatten();
+                content = content.child(self.render_activity_cluster(
+                    &block.activities,
+                    ActivityClusterContext {
+                        surface: ActivitySurface::Background(item.key.clone()),
+                        block_index: *block_index,
+                        live_turn,
+                        live_reasoning_id,
+                        selection: selection.clone(),
+                    },
+                    &theme,
+                    window,
+                    cx,
+                ));
             }
             if let Some(message) = transcript.messages.get(after_message) {
                 content = content.child(render_message_row(message, cx));
             }
+        }
+        // The closing line describes the conversation as a whole, so it belongs
+        // after the last message; the selection input still comes last below.
+        if let Some(footer) =
+            render_background_transcript_footer(item, transcript, &theme, |model| {
+                self.model_display_name(Some(model))
+            })
+        {
+            content = content.child(footer);
         }
         // While the update card is open, its own registry owns the drag
         // gesture; this surface's window-level listeners stay uninstalled.
@@ -1843,6 +1823,126 @@ fn background_work_selection_input(selection: TranscriptSelection) -> impl IntoE
     .absolute()
     .w(px(0.0))
     .h(px(0.0))
+}
+
+/// The closing line for a subagent transcript: which agent and model produced
+/// the conversation and how long it took — the TUI footer's
+/// `Build · Model · 25.9s` shape. `None` only when the item carries no role,
+/// no model, and no measurable time, which leaves the surface with no footer
+/// row at all.
+///
+/// Only fields the subagent's own item actually carries are read. Its turns
+/// never carry statistics: `AgentTurn::stats` is written for the foreground
+/// turn only, and the one-shot hydration snapshot that *would* have brought
+/// them over is dropped the moment the child's first delta has landed. So this
+/// deliberately does not compute tokens or tokens-per-second — a wall-clock
+/// estimate would read as measured throughput. A missing value drops its
+/// segment instead of being filled in, which also keeps a live child's footer
+/// exactly as informative as a restored one's. Nothing here touches
+/// provider-private material such as the stop control id, the parent id, or a
+/// resume cursor.
+fn background_transcript_stats_line(
+    item: &BackgroundWorkItem,
+    transcript: &BackgroundWorkTranscript,
+    model_display: impl Fn(&str) -> String,
+) -> Option<String> {
+    let duration_ms = background_transcript_duration_ms(item, transcript);
+    // The driver copies these straight off the child's payload, so an empty
+    // string is a real value; an empty segment would leave a dangling
+    // separator in the assembled line.
+    let role = item.role.as_deref().filter(|role| !role.is_empty());
+    let model = item
+        .model
+        .as_deref()
+        .filter(|model| !model.is_empty())
+        .map(model_display)
+        .filter(|model| !model.is_empty());
+    turn_stats_line(role, model.as_deref(), duration_ms, 0, 0)
+}
+
+/// How long the transcript's work took, in milliseconds, or `None` when no
+/// source knows.
+///
+/// A settled child is measured over its whole session — earliest turn start to
+/// latest turn completion — rather than over its last turn: one child can be
+/// resumed by several tool calls, each resume opening another turn, so the last
+/// turn's own span under-reports a continued conversation. The item's
+/// provider-reported `duration_ms` only covers the execution it was attached
+/// to, so it backs up a transcript whose turns never settled instead of
+/// standing in for it.
+///
+/// While the item is still live that same field still holds the *previous*
+/// execution's terminal value, which would freeze the counter, so a live child
+/// reads the clock instead. That is a cheap `SystemTime::now()` with no lock
+/// and no allocation, the pane is already leased at the shared pulse rate by
+/// the header's spinner, and the value only changes once a second — so the
+/// line adds no frame of its own.
+fn background_transcript_duration_ms(
+    item: &BackgroundWorkItem,
+    transcript: &BackgroundWorkTranscript,
+) -> Option<u64> {
+    if item.status.is_live() {
+        return Some(unix_time_millis().saturating_sub(item.started_at_ms));
+    }
+    background_transcript_span_ms(transcript).or_else(|| item.duration_ms)
+}
+
+/// Earliest turn start to latest turn completion, in milliseconds, across
+/// every turn the transcript holds. `None` when no turn records a completion,
+/// which is what a child whose turns never settled looks like.
+fn background_transcript_span_ms(transcript: &BackgroundWorkTranscript) -> Option<u64> {
+    let mut started_at: Option<u64> = None;
+    let mut completed_at: Option<u64> = None;
+    for turn in &transcript.turns {
+        started_at = Some(match started_at {
+            Some(current) => current.min(turn.started_at),
+            None => turn.started_at,
+        });
+        if let Some(completed) = turn.completed_at {
+            completed_at = Some(match completed_at {
+                Some(current) => current.max(completed),
+                None => completed,
+            });
+        }
+    }
+    // Turn timestamps are seconds; widen to the ladder's milliseconds.
+    let span = completed_at?.saturating_sub(started_at?);
+    Some(span.saturating_mul(1_000))
+}
+
+/// [`background_transcript_stats_line`] rendered after the last message,
+/// styled after the assistant footer so a subagent's closing line reads like
+/// the main transcript's. `None` when the line has nothing to say, so an
+/// unknown-meanings transcript gains no empty band.
+fn render_background_transcript_footer(
+    item: &BackgroundWorkItem,
+    transcript: &BackgroundWorkTranscript,
+    theme: &Theme,
+    model_display: impl Fn(&str) -> String,
+) -> Option<Stateful<Div>> {
+    let stats = background_transcript_stats_line(item, transcript, model_display)?;
+    Some(
+        div()
+            // `.tooltip` is a `StatefulInteractiveElement` method, so this row
+            // has to be stateful. The key rides along in case the transcript
+            // branch ever widens past subagents, matching the sibling ids.
+            .id(SharedString::from(format!(
+                "background-turn-stats-{}-{}",
+                item.key.provider_id, item.key.kind as u8
+            )))
+            .w_full()
+            .min_w_0()
+            // A footer in a narrow right panel has to clip: the ellipsis only
+            // applies once the text is truncated to one line, matching the
+            // sibling summary rows in this file.
+            .truncate()
+            .text_ellipsis()
+            .text_size(ui_px(11.5))
+            .line_height(ui_px(16.0))
+            .text_color(theme.text_tertiary)
+            .tooltip(Tooltip::text(stats.clone()))
+            .child(stats),
+    )
 }
 
 fn background_work_count_summary(processes: usize, agents: usize) -> String {

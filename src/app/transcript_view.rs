@@ -835,6 +835,79 @@ impl ConversationNavigationRail {
     }
 }
 
+/// Which transcript owns the activity cluster being rendered.
+///
+/// The selected session's transcript and a background item's transcript are
+/// routinely on screen together, and both render their clusters through
+/// [`Fintwind::render_activity_cluster`]. The surface keys every per-block
+/// identity — disclosure state, focus handles, element ids — so a block of
+/// one surface can never read, or fight over, another's.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) enum ActivitySurface {
+    /// A turn block of the selected session's transcript.
+    Session,
+    /// A block of a background item's own transcript, shown in the right
+    /// panel's work surface. The key identifies the item.
+    Background(BackgroundWorkKey),
+}
+
+/// The owning surface's answers for one activity cluster.
+///
+/// The shared renderer cannot derive these: the two surfaces learn liveness
+/// from different state, and each installs its text-selection input for its
+/// own registry.
+#[derive(Clone)]
+pub(super) struct ActivityClusterContext {
+    pub(super) surface: ActivitySurface,
+    /// The block's index inside the owning transcript: its disclosure key and
+    /// part of its control ids.
+    pub(super) block_index: usize,
+    /// The owning turn is still streaming: the header names the newest
+    /// activity and the cluster starts expanded.
+    pub(super) live_turn: bool,
+    /// The reasoning activity streaming in this block, if any.
+    pub(super) live_reasoning_id: Option<Uuid>,
+    /// Registry this cluster's selectable text registers into.
+    pub(super) selection: TranscriptSelection,
+}
+
+impl ActivityClusterContext {
+    /// Whether the cluster's cards are showing. A live turn starts open in
+    /// both surfaces; past that, only the user's stored toggle matters.
+    fn expanded(&self, this: &Fintwind) -> bool {
+        let stored = match &self.surface {
+            ActivitySurface::Session => this.activities_expanded.get(&self.block_index).copied(),
+            ActivitySurface::Background(key) => {
+                this.background_activity_cluster_expanded(key, self.block_index)
+            }
+        };
+        stored.unwrap_or(self.live_turn)
+    }
+
+    /// Stem for the cluster's focus handle and element id. Background surfaces
+    /// are namespaced per item and block, so they collide with neither the
+    /// session's `activity-toggle-*` controls nor another item's.
+    fn control_id(&self) -> String {
+        match &self.surface {
+            ActivitySurface::Session => format!("activity-toggle-{}", self.block_index),
+            ActivitySurface::Background(key) => format!(
+                "background-activity-{}-{}-{}",
+                key.kind as u8, key.provider_id, self.block_index
+            ),
+        }
+    }
+}
+
+/// The per-card answers, derived from the cluster's context for one activity.
+#[derive(Clone)]
+pub(super) struct ActivityCardContext {
+    pub(super) surface: ActivitySurface,
+    pub(super) selection: TranscriptSelection,
+    /// The reasoning in this card streams right now: it stays open by default
+    /// and its body follows the stream.
+    pub(super) reasoning_live: bool,
+}
+
 impl Fintwind {
     fn scroll_to_navigation_turn(&mut self, message_id: Uuid, cx: &mut Context<Self>) {
         let row_index = self
@@ -876,39 +949,85 @@ impl Fintwind {
         cx.notify();
     }
 
-    pub(super) fn toggle_activities(
+    /// Toggle one activity cluster's card list.
+    ///
+    /// The session transcript keeps the reader's place across the row's height
+    /// change; a background surface scrolls a plain div, so it only needs the
+    /// state flip — pinning or remeasuring session rows for a subagent's block
+    /// would move a transcript that has nothing to do with this disclosure.
+    pub(super) fn toggle_activity_cluster(
         &mut self,
+        surface: ActivitySurface,
         block_index: usize,
         current: bool,
         cx: &mut Context<Self>,
     ) {
-        self.toggle_block_disclosure(block_index, cx, |this| {
-            this.activities_expanded.insert(block_index, !current);
-        });
+        match surface {
+            ActivitySurface::Session => self.toggle_block_disclosure(block_index, cx, |this| {
+                this.activities_expanded.insert(block_index, !current);
+            }),
+            ActivitySurface::Background(key) => {
+                // Scoped to the item, not the registry: two subagents each hold
+                // a block 0 of their own transcript.
+                let session_id = self.state.selected_session;
+                if let Some(session_id) = session_id
+                    && let Some(registry) = self.background_work.get_mut(&session_id)
+                {
+                    registry
+                        .activities_expanded
+                        .insert((key, block_index), !current);
+                }
+                cx.notify();
+            }
+        }
     }
 
-    pub(super) fn toggle_activity_item(&mut self, id: Uuid, current: bool, cx: &mut Context<Self>) {
-        let block_index = self
-            .selected_transcript_blocks()
-            .iter()
-            .position(|block| block.activities.iter().any(|activity| activity.id == id));
-        let Some(block_index) = block_index else {
-            return;
-        };
-        self.toggle_block_disclosure(block_index, cx, |this| {
-            this.expanded_activity_items.insert(id, !current);
-            if current {
-                // Collapsed: the rows would only be rebuilt from the same
-                // changes if it reopens, so do not keep them alive for every
-                // edit the session ever made.
-                this.activity_diffs.borrow_mut().remove(&id);
-                this.activity_diff_viewports.borrow_mut().remove(&id);
-                this.activity_detail_viewports.borrow_mut().remove(&id);
-                this.activity_section_viewports
-                    .borrow_mut()
-                    .retain(|(activity_id, _), _| *activity_id != id);
+    pub(super) fn toggle_activity_item(
+        &mut self,
+        surface: ActivitySurface,
+        id: Uuid,
+        current: bool,
+        cx: &mut Context<Self>,
+    ) {
+        match surface {
+            ActivitySurface::Session => {
+                let Some(block_index) = self
+                    .selected_transcript_blocks()
+                    .iter()
+                    .position(|block| block.activities.iter().any(|activity| activity.id == id))
+                else {
+                    return;
+                };
+                self.toggle_block_disclosure(block_index, cx, |this| {
+                    this.expanded_activity_items.insert(id, !current);
+                    if current {
+                        this.release_activity_item_caches(id);
+                    }
+                });
             }
-        });
+            // A background surface scrolls a plain div, so there is no row to
+            // pin or remeasure. The shared per-item caches still drop when the
+            // card closes.
+            ActivitySurface::Background(_) => {
+                self.expanded_activity_items.insert(id, !current);
+                if current {
+                    self.release_activity_item_caches(id);
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    /// Drop the per-item render caches a collapsed card would otherwise keep
+    /// alive: the rows would only be rebuilt from the same changes if it
+    /// reopens, so do not hold them for every edit the session ever made.
+    fn release_activity_item_caches(&self, id: Uuid) {
+        self.activity_diffs.borrow_mut().remove(&id);
+        self.activity_diff_viewports.borrow_mut().remove(&id);
+        self.activity_detail_viewports.borrow_mut().remove(&id);
+        self.activity_section_viewports
+            .borrow_mut()
+            .retain(|(activity_id, _), _| *activity_id != id);
     }
 
     /// Opens a file a tool changed in the right panel's viewer.
@@ -1174,14 +1293,19 @@ impl Fintwind {
     /// The markdown render context for one transcript row. Element keys are
     /// scoped to the row, so a virtualized remount recreates the same keys and
     /// an in-progress selection survives scrolling.
+    ///
+    /// `selection` names the registry the text registers into: the session
+    /// transcript's own, or a background work surface's. Each surface installs
+    /// its selection input for its own registry, so the two must agree.
     fn markdown_ctx<'a>(
         &self,
         row: String,
         palette: &'a MarkdownPalette,
         metrics: MarkdownMetrics,
         animate_streaming: bool,
+        selection: &TranscriptSelection,
     ) -> MarkdownCtx<'a> {
-        MarkdownCtx::new(row, palette, metrics, self.transcript_selection.clone())
+        MarkdownCtx::new(row, palette, metrics, selection.clone())
             .with_link_handler(self.markdown_link_handler.clone())
             .with_streaming_animation(animate_streaming)
     }
@@ -1328,6 +1452,7 @@ impl Fintwind {
                         &palette,
                         metrics,
                         animate_streaming,
+                        &self.transcript_selection,
                     );
                     // Human and assistant messages share the Markdown path.
                     // Parse only visible rows rather than doing work for every
@@ -2170,11 +2295,6 @@ impl Fintwind {
                     .get(block_index)
                     .is_some_and(|block| block.turn_id == Some(turn_id))
             });
-        let expanded = self
-            .activities_expanded
-            .get(&block_index)
-            .copied()
-            .unwrap_or(live_turn);
         let live_reasoning_id = (self
             .selected_runtime()
             .is_some_and(|runtime| runtime.stream_phase == Some(StreamPhase::Reasoning))
@@ -2190,9 +2310,46 @@ impl Fintwind {
                 .map(|activity| activity.id)
         })
         .flatten();
-        let header_title = activity_header_title(activities, live_turn, live_reasoning_id);
-        let header_focus =
-            self.transcript_control_focus(format!("activity-toggle-{block_index}"), cx);
+        self.render_activity_cluster(
+            activities,
+            ActivityClusterContext {
+                surface: ActivitySurface::Session,
+                block_index,
+                live_turn,
+                live_reasoning_id,
+                selection: self.transcript_selection.clone(),
+            },
+            theme,
+            window,
+            cx,
+        )
+    }
+
+    /// One block's activity cluster: the summary line that toggles the card
+    /// list, plus the cards themselves.
+    ///
+    /// Shared by the selected session's transcript and a background item's own
+    /// transcript, so a subagent's work reads exactly like its parent's —
+    /// including the truncating header, which is what keeps a long summary
+    /// inside a narrow surface. Every per-block identity — disclosure state,
+    /// focus handle, element id — comes from the context, so a block of one
+    /// surface can never read, or fight over, another's.
+    pub(super) fn render_activity_cluster(
+        &self,
+        activities: &[ActivityItem],
+        context: ActivityClusterContext,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let expanded = context.expanded(self);
+        let control_id = context.control_id();
+        let header_title =
+            activity_header_title(activities, context.live_turn, context.live_reasoning_id);
+        let header_focus = self.transcript_control_focus(control_id.clone(), cx);
+        let click_surface = context.surface.clone();
+        let key_surface = context.surface.clone();
+        let block_index = context.block_index;
         let cluster = div()
             .w_full()
             .min_w_0()
@@ -2201,7 +2358,7 @@ impl Fintwind {
             .gap(px(4.0))
             .child(
                 div()
-                    .id(SharedString::from(format!("activity-toggle-{block_index}")))
+                    .id(SharedString::from(control_id))
                     .track_focus(&header_focus)
                     .tab_index(0)
                     .w_full()
@@ -2234,11 +2391,21 @@ impl Fintwind {
                         theme.text_tertiary,
                     ))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.toggle_activities(block_index, expanded, cx);
+                        this.toggle_activity_cluster(
+                            click_surface.clone(),
+                            block_index,
+                            expanded,
+                            cx,
+                        );
                     }))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                         if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.toggle_activities(block_index, expanded, cx);
+                            this.toggle_activity_cluster(
+                                key_surface.clone(),
+                                block_index,
+                                expanded,
+                                cx,
+                            );
                             cx.stop_propagation();
                         }
                     })),
@@ -2248,9 +2415,6 @@ impl Fintwind {
         }
         // A flat panel. The only chrome is the left rail, so the fill has to
         // read on its own against the transcript canvas.
-        let activity_surface = theme.raised;
-        let activity_hover_surface = theme.raised.blend(theme.overlay);
-        let activity_active_surface = theme.raised.blend(theme.overlay_strong);
         let mut items = div()
             .w_full()
             .min_w_0()
@@ -2263,8 +2427,41 @@ impl Fintwind {
             .flex_col()
             .gap(px(8.0));
         for activity in activities {
-            let id = activity.id;
-            let background_work = self
+            let card_context = ActivityCardContext {
+                surface: context.surface.clone(),
+                selection: context.selection.clone(),
+                reasoning_live: context.live_reasoning_id == Some(activity.id),
+            };
+            let card = self.render_activity_card(activity, &card_context, theme, window, cx);
+            items = items.child(card);
+        }
+        cluster.child(items).into_any_element()
+    }
+
+    /// One activity card: the row that names the action and, when the activity
+    /// carries more than a title, the expandable detail below it.
+    ///
+    /// The session transcript and a background work surface render the same
+    /// card; only the owning surface's answers differ, and they arrive in
+    /// `context`.
+    pub(super) fn render_activity_card(
+        &self,
+        activity: &ActivityItem,
+        context: &ActivityCardContext,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let activity_surface = theme.raised;
+        let activity_hover_surface = theme.raised.blend(theme.overlay);
+        let activity_active_surface = theme.raised.blend(theme.overlay_strong);
+        let id = activity.id;
+        let background_work = match context.surface {
+            // Only the session surface links into the background-work
+            // registry. A card inside an item's own surface has nothing to
+            // reopen, and a nested child's item lives in a registry the
+            // selected session does not hold.
+            ActivitySurface::Session => self
                 .state
                 .selected_session
                 .zip(activity.source_id.as_deref())
@@ -2279,686 +2476,366 @@ impl Fintwind {
                                 item.model.clone(),
                             )
                         })
-                });
-            let subagent_work = background_work
-                .as_ref()
-                .filter(|(_, key, ..)| key.kind == BackgroundWorkKind::Subagent)
-                .cloned();
-            let background_badge = background_work
-                .clone()
-                .map(|(session_id, key, status, ..)| {
-                    let click_key = key.clone();
-                    let focus =
-                        self.transcript_control_focus(format!("activity-background-{id}"), cx);
-                    let color = work_status_color(status, *theme);
-                    div()
-                        .id(SharedString::from(format!("activity-background-{id}")))
-                        .track_focus(&focus)
-                        .tab_index(0)
-                        .h(px(24.0))
-                        .px(px(7.0))
-                        .rounded(px(6.0))
-                        .border_1()
-                        .border_color(theme.border_strong)
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .cursor_default()
-                        .text_size(ui_px(10.5))
-                        .text_color(color)
-                        .focus_visible(|style| style.border_color(theme.accent))
-                        .hover(|style| style.bg(theme.overlay_strong))
-                        .active(|style| style.bg(theme.overlay_strong).opacity(0.8))
-                        .child(work_status_label(status))
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                        .on_click(cx.listener(move |this, _, _, cx| {
+                }),
+            ActivitySurface::Background(_) => None,
+        };
+        let subagent_work = background_work
+            .as_ref()
+            .filter(|(_, key, ..)| key.kind == BackgroundWorkKind::Subagent)
+            .cloned();
+        let background_badge = background_work
+            .clone()
+            .map(|(session_id, key, status, ..)| {
+                let click_key = key.clone();
+                let focus = self.transcript_control_focus(format!("activity-background-{id}"), cx);
+                let color = work_status_color(status, *theme);
+                div()
+                    .id(SharedString::from(format!("activity-background-{id}")))
+                    .track_focus(&focus)
+                    .tab_index(0)
+                    .h(px(24.0))
+                    .px(px(7.0))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(theme.border_strong)
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .cursor_default()
+                    .text_size(ui_px(10.5))
+                    .text_color(color)
+                    .focus_visible(|style| style.border_color(theme.accent))
+                    .hover(|style| style.bg(theme.overlay_strong))
+                    .active(|style| style.bg(theme.overlay_strong).opacity(0.8))
+                    .child(work_status_label(status))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.open_background_work_surface(session_id, click_key.clone(), cx);
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.open_background_work_surface(session_id, key.clone(), cx);
                             cx.stop_propagation();
-                            this.open_background_work_surface(session_id, click_key.clone(), cx);
-                        }))
-                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                this.open_background_work_surface(session_id, key.clone(), cx);
-                                cx.stop_propagation();
-                            }
-                        }))
-                });
-            let reasoning = activity.reasoning.as_ref();
-            let reasoning_live = live_reasoning_id == Some(id);
-            let sections = if reasoning.is_some() {
-                Vec::new()
-            } else {
-                activity_disclosure_sections(activity)
-            };
-            let preview = if reasoning.is_some() {
-                String::new()
-            } else {
-                activity_preview(activity)
-            };
-            let action_label = activity_action_label(activity);
-            let action_label_running = subagent_work
-                .as_ref()
-                .map(|(_, _, status, ..)| status.is_live())
-                .unwrap_or(reasoning_live || (!activity.complete && !activity.failed));
-            let mut row_detail = activity_row_detail(activity, reasoning_live);
-            if row_detail.trim().is_empty() {
-                row_detail = preview;
+                        }
+                    }))
+            });
+        let reasoning = activity.reasoning.as_ref();
+        let reasoning_live = context.reasoning_live;
+        let sections = if reasoning.is_some() {
+            Vec::new()
+        } else {
+            activity_disclosure_sections(activity)
+        };
+        let preview = if reasoning.is_some() {
+            String::new()
+        } else {
+            activity_preview(activity)
+        };
+        let action_label = activity_action_label(activity);
+        let action_label_running = subagent_work
+            .as_ref()
+            .map(|(_, _, status, ..)| status.is_live())
+            .unwrap_or(reasoning_live || (!activity.complete && !activity.failed));
+        let mut row_detail = activity_row_detail(activity, reasoning_live);
+        if row_detail.trim().is_empty() {
+            row_detail = preview;
+        }
+        if let Some((_, _, _, title, _)) = subagent_work.as_ref() {
+            let title = title.trim();
+            if !title.is_empty() {
+                row_detail = title.to_owned();
             }
-            if let Some((_, _, _, title, _)) = subagent_work.as_ref() {
-                let title = title.trim();
-                if !title.is_empty() {
-                    row_detail = title.to_owned();
-                }
+        }
+        let file_change_stats = activity_file_change_stats(activity);
+        // One changed file is unambiguous, so the row itself can offer to
+        // open it. A change touching several names each file in the diff
+        // below, and each of those rows opens its own.
+        let open_file_button = match activity.file_changes.as_slice() {
+            [change] if activity.kind == ActivityKind::FileChange => {
+                Some(self.render_activity_open_file_button(
+                    format!("activity-open-{id}"),
+                    change.path.clone(),
+                    theme,
+                    cx,
+                ))
             }
-            let file_change_stats = activity_file_change_stats(activity);
-            // One changed file is unambiguous, so the row itself can offer to
-            // open it. A change touching several names each file in the diff
-            // below, and each of those rows opens its own.
-            let open_file_button = match activity.file_changes.as_slice() {
-                [change] if activity.kind == ActivityKind::FileChange => {
-                    Some(self.render_activity_open_file_button(
-                        format!("activity-open-{id}"),
-                        change.path.clone(),
-                        theme,
-                        cx,
-                    ))
-                }
-                _ => None,
-            };
-            let shows_diff = reasoning.is_none() && activity_shows_diff(activity);
-            let has_detail = reasoning
-                .is_some_and(|reasoning| !reasoning.content.trim().is_empty())
-                || !sections.is_empty()
-                || shows_diff;
-            let item_expanded = has_detail
-                && self
-                    .expanded_activity_items
-                    .get(&id)
-                    .copied()
-                    .unwrap_or(reasoning_live);
-            let item_focus = self.transcript_control_focus(format!("activity-item-{id}"), cx);
-            let click_subagent_work = subagent_work.clone();
-            let key_subagent_work = subagent_work.clone();
-            // The rail is the card's own left border, not a header ornament,
-            // so it lengthens with the expanded body. Accent only while this
-            // activity is still running; settled work recedes to gray.
-            let rail = if action_label_running {
-                theme.accent
-            } else {
-                theme.text_tertiary
-            };
-            let mut item = div()
-                .w_full()
-                .min_w_0()
-                .relative()
-                .overflow_hidden()
-                .border_l(px(3.0))
-                .border_color(rail)
-                .bg(activity_surface)
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .id(SharedString::from(format!("activity-item-{id}")))
-                        .h(px(32.0))
-                        .px(px(12.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .text_size(ui_px(12.5))
-                        .line_height(ui_px(17.0))
-                        .when(has_detail || subagent_work.is_some(), |element| {
-                            element
-                                .track_focus(&item_focus)
-                                .tab_index(0)
-                                .cursor_default()
-                                .focus_visible(|element| element.bg(activity_hover_surface))
-                                .hover(|element| element.bg(activity_hover_surface))
-                                .active(|element| element.bg(activity_active_surface))
-                        })
+            _ => None,
+        };
+        let shows_diff = reasoning.is_none() && activity_shows_diff(activity);
+        let has_detail = reasoning.is_some_and(|reasoning| !reasoning.content.trim().is_empty())
+            || !sections.is_empty()
+            || shows_diff;
+        let item_expanded = has_detail
+            && self
+                .expanded_activity_items
+                .get(&id)
+                .copied()
+                .unwrap_or(reasoning_live);
+        let item_focus = self.transcript_control_focus(format!("activity-item-{id}"), cx);
+        let click_surface = context.surface.clone();
+        let key_surface = context.surface.clone();
+        let click_subagent_work = subagent_work.clone();
+        let key_subagent_work = subagent_work.clone();
+        // The rail is the card's own left border, not a header ornament,
+        // so it lengthens with the expanded body. Accent only while this
+        // activity is still running; settled work recedes to gray.
+        let rail = if action_label_running {
+            theme.accent
+        } else {
+            theme.text_tertiary
+        };
+        let mut item = div()
+            .w_full()
+            .min_w_0()
+            .relative()
+            .overflow_hidden()
+            .border_l(px(3.0))
+            .border_color(rail)
+            .bg(activity_surface)
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .id(SharedString::from(format!("activity-item-{id}")))
+                    .h(px(32.0))
+                    .px(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .text_size(ui_px(12.5))
+                    .line_height(ui_px(17.0))
+                    .when(has_detail || subagent_work.is_some(), |element| {
+                        element
+                            .track_focus(&item_focus)
+                            .tab_index(0)
+                            .cursor_default()
+                            .focus_visible(|element| element.bg(activity_hover_surface))
+                            .hover(|element| element.bg(activity_hover_surface))
+                            .active(|element| element.bg(activity_active_surface))
+                    })
+                    .child(
+                        div()
+                            .flex_none()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text_secondary)
+                            .child(if action_label_running {
+                                let base = theme.text_secondary;
+                                // The accent reads as "active" — the same
+                                // hue as the running badge — and survives
+                                // both themes far better than a grayscale
+                                // blend on gray text.
+                                let highlight = theme.accent;
+                                motion::pulse(Duration::from_millis(2400), move |phase| {
+                                    flowing_activity_label(
+                                        &action_label,
+                                        phase,
+                                        base,
+                                        highlight,
+                                        FontWeight::SEMIBOLD,
+                                    )
+                                    .into_any_element()
+                                })
+                                .every(2)
+                                .into_any_element()
+                            } else {
+                                SharedString::from(action_label).into_any_element()
+                            }),
+                    )
+                    .when(!row_detail.is_empty(), |element| {
+                        element.child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_color(theme.text_secondary)
+                                .child(SharedString::from(row_detail)),
+                        )
+                    })
+                    .when_some(file_change_stats, |row, (additions, deletions)| {
+                        row.child(
+                            div()
+                                .flex_none()
+                                .text_color(theme.success_text)
+                                .child(SharedString::from(format!("+{additions}"))),
+                        )
                         .child(
                             div()
                                 .flex_none()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(theme.text_secondary)
-                                .child(if action_label_running {
-                                    let base = theme.text_secondary;
-                                    // The accent reads as "active" — the same
-                                    // hue as the running badge — and survives
-                                    // both themes far better than a grayscale
-                                    // blend on gray text.
-                                    let highlight = theme.accent;
-                                    motion::pulse(Duration::from_millis(2400), move |phase| {
-                                        flowing_activity_label(
-                                            &action_label,
-                                            phase,
-                                            base,
-                                            highlight,
-                                            FontWeight::SEMIBOLD,
-                                        )
-                                        .into_any_element()
-                                    })
-                                    .every(2)
-                                    .into_any_element()
-                                } else {
-                                    SharedString::from(action_label).into_any_element()
-                                }),
+                                .text_color(theme.danger_text)
+                                .child(SharedString::from(format!("-{deletions}"))),
                         )
-                        .when(!row_detail.is_empty(), |element| {
-                            element.child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_color(theme.text_secondary)
-                                    .child(SharedString::from(row_detail)),
-                            )
-                        })
-                        .when_some(file_change_stats, |row, (additions, deletions)| {
+                    })
+                    .when_some(
+                        subagent_work
+                            .as_ref()
+                            .and_then(|(_, _, _, _, model)| model.as_deref())
+                            .map(str::trim)
+                            .filter(|model| !model.is_empty())
+                            .map(str::to_owned),
+                        |row, model| {
                             row.child(
                                 div()
                                     .flex_none()
-                                    .text_color(theme.success_text)
-                                    .child(SharedString::from(format!("+{additions}"))),
+                                    .max_w(px(180.0))
+                                    .truncate()
+                                    .text_size(ui_px(10.5))
+                                    .text_color(theme.text_tertiary)
+                                    .child(SharedString::from(model)),
                             )
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .text_color(theme.danger_text)
-                                    .child(SharedString::from(format!("-{deletions}"))),
-                            )
-                        })
-                        .when_some(
-                            subagent_work
-                                .as_ref()
-                                .and_then(|(_, _, _, _, model)| model.as_deref())
-                                .map(str::trim)
-                                .filter(|model| !model.is_empty())
-                                .map(str::to_owned),
-                            |row, model| {
-                                row.child(
-                                    div()
-                                        .flex_none()
-                                        .max_w(px(180.0))
-                                        .truncate()
-                                        .text_size(ui_px(10.5))
-                                        .text_color(theme.text_tertiary)
-                                        .child(SharedString::from(model)),
-                                )
+                        },
+                    )
+                    .children(background_badge)
+                    .children(open_file_button)
+                    .when(has_detail, |element| {
+                        element.child(icon(
+                            if item_expanded {
+                                "icons/chevron-down.svg"
+                            } else {
+                                "icons/chevron-right.svg"
                             },
-                        )
-                        .children(background_badge)
-                        .children(open_file_button)
-                        .when(has_detail, |element| {
-                            element.child(icon(
-                                if item_expanded {
-                                    "icons/chevron-down.svg"
-                                } else {
-                                    "icons/chevron-right.svg"
-                                },
-                                11.0,
-                                theme.text_tertiary,
-                            ))
-                        })
-                        .when(!has_detail && reasoning.is_none(), |element| {
-                            element
-                                .when(activity.failed, |element| {
-                                    element.child(
-                                        icon("icons/x.svg", 11.0, theme.danger).into_any_element(),
-                                    )
-                                })
-                                .when(!activity.complete && !activity.failed, |element| {
-                                    element.child(pulse_dot(5.0, theme.accent))
-                                })
-                        })
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            if let Some((session_id, key, ..)) = click_subagent_work.as_ref() {
+                            11.0,
+                            theme.text_tertiary,
+                        ))
+                    })
+                    .when(!has_detail && reasoning.is_none(), |element| {
+                        element
+                            .when(activity.failed, |element| {
+                                element.child(
+                                    icon("icons/x.svg", 11.0, theme.danger).into_any_element(),
+                                )
+                            })
+                            .when(!activity.complete && !activity.failed, |element| {
+                                element.child(pulse_dot(5.0, theme.accent))
+                            })
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if let Some((session_id, key, ..)) = click_subagent_work.as_ref() {
+                            this.open_background_work_surface(
+                                session_id.to_owned(),
+                                key.clone(),
+                                cx,
+                            );
+                        } else if has_detail {
+                            this.toggle_activity_item(click_surface.clone(), id, item_expanded, cx);
+                        }
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            if let Some((session_id, key, ..)) = key_subagent_work.as_ref() {
                                 this.open_background_work_surface(
                                     session_id.to_owned(),
                                     key.clone(),
                                     cx,
                                 );
                             } else if has_detail {
-                                this.toggle_activity_item(id, item_expanded, cx);
-                            }
-                        }))
-                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                                if let Some((session_id, key, ..)) = key_subagent_work.as_ref() {
-                                    this.open_background_work_surface(
-                                        session_id.to_owned(),
-                                        key.clone(),
-                                        cx,
-                                    );
-                                } else if has_detail {
-                                    this.toggle_activity_item(id, item_expanded, cx);
-                                } else {
-                                    return;
-                                }
-                                cx.stop_propagation();
-                            }
-                        })),
-                );
-            if item_expanded && let Some(reasoning) = reasoning {
-                if reasoning.content.len() > md::virtualized::THRESHOLD
-                    || self.reasoning_views.borrow().contains_key(&id)
-                {
-                    let view = self
-                        .reasoning_views
-                        .borrow_mut()
-                        .entry(id)
-                        .or_insert_with(|| {
-                            cx.new(|cx| {
-                                md::virtualized::ReasoningView::new(
-                                    format!("reasoning-{id}"),
-                                    self.transcript_selection.clone(),
-                                    self.markdown_link_handler.clone(),
-                                    self.activity_scroll_viewports
-                                        .borrow()
-                                        .get(&id)
-                                        .filter(|viewport| !viewport.follow_tail.get())
-                                        .map(|viewport| -viewport.scroll_handle.offset().y),
+                                this.toggle_activity_item(
+                                    key_surface.clone(),
+                                    id,
+                                    item_expanded,
                                     cx,
-                                )
-                            })
-                        })
-                        .clone();
-                    view.update(cx, |view, cx| {
-                        view.set_source(
-                            &reasoning.content,
-                            (reasoning.started_at_ms, reasoning.finished_at_ms),
-                            reasoning_live,
-                            cx,
-                        )
-                    });
-                    item = item.child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .border_t_1()
-                            .border_color(theme.border_strong)
-                            .child(view),
-                    );
-                } else {
-                    // Reasoning remains model prose even though it now shares the
-                    // activity stream, so keep selectable markdown rather than
-                    // presenting it as monospace tool output.
-                    let mut palette = MarkdownPalette::from_theme(theme);
-                    palette.text = theme.text_secondary;
-                    palette.secondary = theme.text_tertiary;
-                    let ctx = self.markdown_ctx(
-                        format!("reasoning-{id}"),
-                        &palette,
-                        MarkdownMetrics::compact(),
-                        reasoning_live && !cx.reduce_motion(),
-                    );
-                    let reasoning_viewport = self
-                        .activity_scroll_viewports
-                        .borrow_mut()
-                        .entry(id)
-                        .or_default()
-                        .clone();
-                    let mut views = self.activity_markdown.borrow_mut();
-                    let view = views.entry(id).or_default();
-                    view.set_text(&reasoning.content, reasoning_live);
-                    let wheel_scroll = reasoning_viewport.scroll_handle.clone();
-                    let wheel_follow_tail = reasoning_viewport.follow_tail.clone();
-                    let markdown = md::render::markdown(view, &ctx);
-                    if reasoning_live && !cx.reduce_motion() && view.is_fading() {
-                        // The reasoning dissolve rides the half-rate lease: fast
-                        // thinking keeps a fade active for the whole phase, every
-                        // tick rebuilds each visible transcript row, and 15 fps
-                        // alpha on the dim 11.5px peek is indistinguishable. The
-                        // answer text keeps the full-rate dissolve.
-                        motion::pulse_lease_slow(window.current_view(), cx);
-                    }
-                    item = item.child(
-                        div()
-                            .w_full()
-                            .min_w_0()
-                            .relative()
-                            .max_h(px(400.0))
-                            .overflow_hidden()
-                            .border_t_1()
-                            .border_color(theme.border_strong)
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!("reasoning-scroll-{id}")))
-                                    .w_full()
-                                    .min_w_0()
-                                    .max_h(px(400.0))
-                                    .overflow_y_scroll()
-                                    .track_scroll(&reasoning_viewport.scroll_handle)
-                                    .px(px(12.0))
-                                    .py(px(8.0))
-                                    .children(markdown)
-                                    .on_scroll_wheel(move |_, window, cx| {
-                                        contain_scroll(&wheel_scroll, cx);
-                                        let scroll = wheel_scroll.clone();
-                                        let follow_tail = wheel_follow_tail.clone();
-                                        window.defer(cx, move |_, _| {
-                                            follow_tail.set(activity_scroll_at_bottom(&scroll));
-                                        });
-                                    }),
-                            )
-                            .child(activity_scroll_fade(
-                                reasoning_viewport.scroll_handle.clone(),
-                                ActivityScrollFadeSide::Top,
-                                activity_surface,
-                            ))
-                            .child(activity_scroll_fade(
-                                reasoning_viewport.scroll_handle.clone(),
-                                ActivityScrollFadeSide::Bottom,
-                                activity_surface,
-                            ))
-                            .child(scrollbar::vertical(
-                                &reasoning_viewport.scroll_handle,
-                                &reasoning_viewport.scrollbar,
-                            ))
-                            .child(activity_scroll_guard(reasoning_viewport, reasoning_live)),
-                    );
-                }
-            }
-            if item_expanded && shows_diff {
-                let diff = self.activity_diff_rows(activity);
-                if !diff.is_empty() {
-                    item = item.child(self.render_activity_diff(
-                        id,
-                        &diff,
-                        activity_surface,
-                        theme,
-                        cx,
-                    ));
-                }
-            }
-            if item_expanded
-                && reasoning.is_none()
-                && (!sections.is_empty() || !activity.image_urls.is_empty())
+                                );
+                            } else {
+                                return;
+                            }
+                            cx.stop_propagation();
+                        }
+                    })),
+            );
+        if item_expanded && let Some(reasoning) = reasoning {
+            if reasoning.content.len() > md::virtualized::THRESHOLD
+                || self.reasoning_views.borrow().contains_key(&id)
             {
-                let palette = MarkdownPalette::from_theme(theme);
+                let view = self
+                    .reasoning_views
+                    .borrow_mut()
+                    .entry(id)
+                    .or_insert_with(|| {
+                        cx.new(|cx| {
+                            md::virtualized::ReasoningView::new(
+                                format!("reasoning-{id}"),
+                                context.selection.clone(),
+                                self.markdown_link_handler.clone(),
+                                self.activity_scroll_viewports
+                                    .borrow()
+                                    .get(&id)
+                                    .filter(|viewport| !viewport.follow_tail.get())
+                                    .map(|viewport| -viewport.scroll_handle.offset().y),
+                                cx,
+                            )
+                        })
+                    })
+                    .clone();
+                view.update(cx, |view, cx| {
+                    view.set_source(
+                        &reasoning.content,
+                        (reasoning.started_at_ms, reasoning.finished_at_ms),
+                        reasoning_live,
+                        cx,
+                    )
+                });
+                item = item.child(
+                    div()
+                        .w_full()
+                        .min_w_0()
+                        .border_t_1()
+                        .border_color(theme.border_strong)
+                        .child(view),
+                );
+            } else {
+                // Reasoning remains model prose even though it now shares the
+                // activity stream, so keep selectable markdown rather than
+                // presenting it as monospace tool output.
+                let mut palette = MarkdownPalette::from_theme(theme);
+                palette.text = theme.text_secondary;
+                palette.secondary = theme.text_tertiary;
                 let ctx = self.markdown_ctx(
-                    format!("activity-{id}"),
+                    format!("reasoning-{id}"),
                     &palette,
                     MarkdownMetrics::compact(),
-                    false,
+                    reasoning_live && !cx.reduce_motion(),
+                    &context.selection,
                 );
-                let detail_viewport = self
-                    .activity_detail_viewports
+                let reasoning_viewport = self
+                    .activity_scroll_viewports
                     .borrow_mut()
                     .entry(id)
                     .or_default()
                     .clone();
-                let mut detail_card = div()
-                    .w_full()
-                    .min_w_0()
-                    .px(px(12.0))
-                    .py(px(8.0))
-                    .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .font_family(md::render::mono_family())
-                    .text_size(code_px(10.5))
-                    .line_height(code_px(16.0))
-                    .text_color(theme.text_secondary)
-                    .whitespace_normal()
-                    .overflow_hidden();
-                for section in sections {
-                    let section_kind = section.kind;
-                    let content = section.content;
-                    let mut section_view = div().w_full().min_w_0().flex().flex_col().gap(px(3.0));
-                    if let Some(label) = section_kind.label() {
-                        let copy_content = content.clone();
-                        let copied = self
-                            .copied_activity_feedback
-                            .contains_key(&(id, section_kind));
-                        let copy_fintwind = cx.entity().downgrade();
-                        let copy_tooltip = SharedString::from(if copied {
-                            tr!("common.copied")
-                        } else {
-                            tr!("common.copy_named", name = label.to_lowercase())
-                        });
-                        section_view = section_view.child(
-                            div()
-                                .h(px(24.0))
-                                .flex()
-                                .items_center()
-                                .justify_between()
-                                .child(
-                                    div()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text_secondary)
-                                        .child(label),
-                                )
-                                .when(!content.is_empty(), |header| {
-                                    header.child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "copy-activity-{}-{}",
-                                                id,
-                                                section_kind.id()
-                                            )))
-                                            .size(px(24.0))
-                                            .rounded(px(6.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .cursor_default()
-                                            .hover(|button| button.bg(theme.overlay))
-                                            .active(|button| button.bg(theme.overlay_strong))
-                                            .child(icon(
-                                                if copied {
-                                                    "icons/check.svg"
-                                                } else {
-                                                    "icons/copy.svg"
-                                                },
-                                                13.0,
-                                                theme.text_ghost,
-                                            ))
-                                            .tooltip(Tooltip::text(copy_tooltip.clone()))
-                                            .on_click(move |_, _, cx| {
-                                                cx.write_to_clipboard(ClipboardItem::new_string(
-                                                    copy_content.clone(),
-                                                ));
-                                                let _ = copy_fintwind.update(cx, |this, cx| {
-                                                    this.show_activity_section_copied(
-                                                        id,
-                                                        section_kind,
-                                                        cx,
-                                                    );
-                                                });
-                                            }),
-                                    )
-                                }),
-                        );
-                    }
-                    if !content.is_empty() {
-                        if activity.kind == ActivityKind::Command
-                            && section_kind == ActivityDisclosureSectionKind::Output
-                        {
-                            let output_viewport = self
-                                .activity_scroll_viewports
-                                .borrow_mut()
-                                .entry(id)
-                                .or_default()
-                                .clone();
-                            let wheel_scroll = output_viewport.scroll_handle.clone();
-                            let wheel_follow_tail = output_viewport.follow_tail.clone();
-                            section_view = section_view.child(
-                                div()
-                                    .w_full()
-                                    .min_w_0()
-                                    .relative()
-                                    .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "activity-output-scroll-{id}"
-                                            )))
-                                            .w_full()
-                                            .min_w_0()
-                                            .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
-                                            .overflow_y_scroll()
-                                            .track_scroll(&output_viewport.scroll_handle)
-                                            .py(px(4.0))
-                                            .pr(px(8.0))
-                                            .text_size(code_px(10.5))
-                                            .line_height(code_px(16.0))
-                                            .child(md::render::plain_text(
-                                                content.clone(),
-                                                md::render::mono_family(),
-                                                FontWeight::NORMAL,
-                                                theme.text_secondary,
-                                                &ctx,
-                                            ))
-                                            .on_scroll_wheel(move |_, window, cx| {
-                                                contain_scroll(&wheel_scroll, cx);
-                                                let scroll = wheel_scroll.clone();
-                                                let follow_tail = wheel_follow_tail.clone();
-                                                window.defer(cx, move |_, _| {
-                                                    follow_tail
-                                                        .set(activity_scroll_at_bottom(&scroll));
-                                                });
-                                            }),
-                                    )
-                                    .child(activity_scroll_fade(
-                                        output_viewport.scroll_handle.clone(),
-                                        ActivityScrollFadeSide::Top,
-                                        activity_surface,
-                                    ))
-                                    .child(activity_scroll_fade(
-                                        output_viewport.scroll_handle.clone(),
-                                        ActivityScrollFadeSide::Bottom,
-                                        activity_surface,
-                                    ))
-                                    .child(scrollbar::vertical(
-                                        &output_viewport.scroll_handle,
-                                        &output_viewport.scrollbar,
-                                    ))
-                                    .child(activity_scroll_guard(
-                                        output_viewport,
-                                        !activity.complete,
-                                    )),
-                            );
-                        } else {
-                            let section_viewport = self
-                                .activity_section_viewports
-                                .borrow_mut()
-                                .entry((id, section_kind))
-                                .or_default()
-                                .clone();
-                            let wheel_scroll = section_viewport.scroll_handle.clone();
-                            let wheel_follow_tail = section_viewport.follow_tail.clone();
-                            // Scrolling inside a section stops propagation, so
-                            // the card viewport never sees the wheel. Release
-                            // its tail-follow here or a live card would yank
-                            // the section out of view on the next stream tick.
-                            let card_follow_tail = detail_viewport.follow_tail.clone();
-                            let card_scroll = detail_viewport.scroll_handle.clone();
-                            section_view = section_view.child(
-                                div()
-                                    .w_full()
-                                    .min_w_0()
-                                    .relative()
-                                    .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "activity-section-scroll-{}-{}",
-                                                id,
-                                                section_kind.id()
-                                            )))
-                                            .w_full()
-                                            .min_w_0()
-                                            .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
-                                            .overflow_y_scroll()
-                                            .track_scroll(&section_viewport.scroll_handle)
-                                            .pr(px(8.0))
-                                            .text_size(code_px(10.5))
-                                            .line_height(code_px(16.0))
-                                            .child(md::render::plain_text(
-                                                content.clone(),
-                                                md::render::mono_family(),
-                                                FontWeight::NORMAL,
-                                                theme.text_secondary,
-                                                &ctx,
-                                            ))
-                                            .on_scroll_wheel(move |_, window, cx| {
-                                                contain_scroll(&wheel_scroll, cx);
-                                                let scroll = wheel_scroll.clone();
-                                                let follow_tail = wheel_follow_tail.clone();
-                                                let card_follow_tail = card_follow_tail.clone();
-                                                let card_scroll = card_scroll.clone();
-                                                window.defer(cx, move |_, _| {
-                                                    let at_bottom =
-                                                        activity_scroll_at_bottom(&scroll);
-                                                    follow_tail.set(at_bottom);
-                                                    if !at_bottom {
-                                                        card_follow_tail.set(
-                                                            activity_scroll_at_bottom(&card_scroll),
-                                                        );
-                                                    }
-                                                });
-                                            }),
-                                    )
-                                    .child(activity_scroll_fade(
-                                        section_viewport.scroll_handle.clone(),
-                                        ActivityScrollFadeSide::Top,
-                                        activity_surface,
-                                    ))
-                                    .child(activity_scroll_fade(
-                                        section_viewport.scroll_handle.clone(),
-                                        ActivityScrollFadeSide::Bottom,
-                                        activity_surface,
-                                    ))
-                                    .child(scrollbar::vertical(
-                                        &section_viewport.scroll_handle,
-                                        &section_viewport.scrollbar,
-                                    ))
-                                    .when(
-                                        section_kind == ActivityDisclosureSectionKind::Output,
-                                        |element| {
-                                            element.child(activity_scroll_guard(
-                                                section_viewport,
-                                                !activity.complete,
-                                            ))
-                                        },
-                                    ),
-                            );
-                        }
-                    }
-                    detail_card = detail_card.child(section_view);
+                let mut views = self.activity_markdown.borrow_mut();
+                let view = views.entry(id).or_default();
+                view.set_text(&reasoning.content, reasoning_live);
+                let wheel_scroll = reasoning_viewport.scroll_handle.clone();
+                let wheel_follow_tail = reasoning_viewport.follow_tail.clone();
+                let markdown = md::render::markdown(view, &ctx);
+                if reasoning_live && !cx.reduce_motion() && view.is_fading() {
+                    // The reasoning dissolve rides the half-rate lease: fast
+                    // thinking keeps a fade active for the whole phase, every
+                    // tick rebuilds each visible transcript row, and 15 fps
+                    // alpha on the dim 11.5px peek is indistinguishable. The
+                    // answer text keeps the full-rate dissolve.
+                    motion::pulse_lease_slow(window.current_view(), cx);
                 }
-                for (image_index, image_url) in activity.image_urls.iter().enumerate() {
-                    let image = self.image_for_reference(image_url, None, None, cx);
-                    detail_card = detail_card.child(render_activity_image(
-                        image_url,
-                        image,
-                        id,
-                        image_index,
-                        theme,
-                    ));
-                }
-                let wheel_scroll = detail_viewport.scroll_handle.clone();
-                let wheel_follow_tail = detail_viewport.follow_tail.clone();
                 item = item.child(
                     div()
                         .w_full()
                         .min_w_0()
                         .relative()
-                        .max_h(px(ACTIVITY_DETAIL_MAX_HEIGHT))
+                        .max_h(px(400.0))
                         .overflow_hidden()
                         .border_t_1()
                         .border_color(theme.border_strong)
                         .child(
                             div()
-                                .id(SharedString::from(format!("activity-detail-scroll-{id}")))
+                                .id(SharedString::from(format!("reasoning-scroll-{id}")))
                                 .w_full()
                                 .min_w_0()
-                                .max_h(px(ACTIVITY_DETAIL_MAX_HEIGHT))
+                                .max_h(px(400.0))
                                 .overflow_y_scroll()
-                                .track_scroll(&detail_viewport.scroll_handle)
-                                .child(detail_card)
+                                .track_scroll(&reasoning_viewport.scroll_handle)
+                                .px(px(12.0))
+                                .py(px(8.0))
+                                .children(markdown)
                                 .on_scroll_wheel(move |_, window, cx| {
                                     contain_scroll(&wheel_scroll, cx);
                                     let scroll = wheel_scroll.clone();
@@ -2969,25 +2846,342 @@ impl Fintwind {
                                 }),
                         )
                         .child(activity_scroll_fade(
-                            detail_viewport.scroll_handle.clone(),
+                            reasoning_viewport.scroll_handle.clone(),
                             ActivityScrollFadeSide::Top,
                             activity_surface,
                         ))
                         .child(activity_scroll_fade(
-                            detail_viewport.scroll_handle.clone(),
+                            reasoning_viewport.scroll_handle.clone(),
                             ActivityScrollFadeSide::Bottom,
                             activity_surface,
                         ))
                         .child(scrollbar::vertical(
-                            &detail_viewport.scroll_handle,
-                            &detail_viewport.scrollbar,
+                            &reasoning_viewport.scroll_handle,
+                            &reasoning_viewport.scrollbar,
                         ))
-                        .child(activity_scroll_guard(detail_viewport, !activity.complete)),
+                        .child(activity_scroll_guard(reasoning_viewport, reasoning_live)),
                 );
             }
-            items = items.child(item);
         }
-        cluster.child(items).into_any_element()
+        if item_expanded && shows_diff {
+            let diff = self.activity_diff_rows(activity);
+            if !diff.is_empty() {
+                item =
+                    item.child(self.render_activity_diff(id, &diff, activity_surface, theme, cx));
+            }
+        }
+        if item_expanded
+            && reasoning.is_none()
+            && (!sections.is_empty() || !activity.image_urls.is_empty())
+        {
+            let palette = MarkdownPalette::from_theme(theme);
+            let ctx = self.markdown_ctx(
+                format!("activity-{id}"),
+                &palette,
+                MarkdownMetrics::compact(),
+                false,
+                &context.selection,
+            );
+            let detail_viewport = self
+                .activity_detail_viewports
+                .borrow_mut()
+                .entry(id)
+                .or_default()
+                .clone();
+            let mut detail_card = div()
+                .w_full()
+                .min_w_0()
+                .px(px(12.0))
+                .py(px(8.0))
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .font_family(md::render::mono_family())
+                .text_size(code_px(10.5))
+                .line_height(code_px(16.0))
+                .text_color(theme.text_secondary)
+                .whitespace_normal()
+                .overflow_hidden();
+            for section in sections {
+                let section_kind = section.kind;
+                let content = section.content;
+                let mut section_view = div().w_full().min_w_0().flex().flex_col().gap(px(3.0));
+                if let Some(label) = section_kind.label() {
+                    let copy_content = content.clone();
+                    let copied = self
+                        .copied_activity_feedback
+                        .contains_key(&(id, section_kind));
+                    let copy_fintwind = cx.entity().downgrade();
+                    let copy_tooltip = SharedString::from(if copied {
+                        tr!("common.copied")
+                    } else {
+                        tr!("common.copy_named", name = label.to_lowercase())
+                    });
+                    section_view = section_view.child(
+                        div()
+                            .h(px(24.0))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text_secondary)
+                                    .child(label),
+                            )
+                            .when(!content.is_empty(), |header| {
+                                header.child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "copy-activity-{}-{}",
+                                            id,
+                                            section_kind.id()
+                                        )))
+                                        .size(px(24.0))
+                                        .rounded(px(6.0))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_default()
+                                        .hover(|button| button.bg(theme.overlay))
+                                        .active(|button| button.bg(theme.overlay_strong))
+                                        .child(icon(
+                                            if copied {
+                                                "icons/check.svg"
+                                            } else {
+                                                "icons/copy.svg"
+                                            },
+                                            13.0,
+                                            theme.text_ghost,
+                                        ))
+                                        .tooltip(Tooltip::text(copy_tooltip.clone()))
+                                        .on_click(move |_, _, cx| {
+                                            cx.write_to_clipboard(ClipboardItem::new_string(
+                                                copy_content.clone(),
+                                            ));
+                                            let _ = copy_fintwind.update(cx, |this, cx| {
+                                                this.show_activity_section_copied(
+                                                    id,
+                                                    section_kind,
+                                                    cx,
+                                                );
+                                            });
+                                        }),
+                                )
+                            }),
+                    );
+                }
+                if !content.is_empty() {
+                    if activity.kind == ActivityKind::Command
+                        && section_kind == ActivityDisclosureSectionKind::Output
+                    {
+                        let output_viewport = self
+                            .activity_scroll_viewports
+                            .borrow_mut()
+                            .entry(id)
+                            .or_default()
+                            .clone();
+                        let wheel_scroll = output_viewport.scroll_handle.clone();
+                        let wheel_follow_tail = output_viewport.follow_tail.clone();
+                        section_view = section_view.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .relative()
+                                .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "activity-output-scroll-{id}"
+                                        )))
+                                        .w_full()
+                                        .min_w_0()
+                                        .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
+                                        .overflow_y_scroll()
+                                        .track_scroll(&output_viewport.scroll_handle)
+                                        .py(px(4.0))
+                                        .pr(px(8.0))
+                                        .text_size(code_px(10.5))
+                                        .line_height(code_px(16.0))
+                                        .child(md::render::plain_text(
+                                            content.clone(),
+                                            md::render::mono_family(),
+                                            FontWeight::NORMAL,
+                                            theme.text_secondary,
+                                            &ctx,
+                                        ))
+                                        .on_scroll_wheel(move |_, window, cx| {
+                                            contain_scroll(&wheel_scroll, cx);
+                                            let scroll = wheel_scroll.clone();
+                                            let follow_tail = wheel_follow_tail.clone();
+                                            window.defer(cx, move |_, _| {
+                                                follow_tail.set(activity_scroll_at_bottom(&scroll));
+                                            });
+                                        }),
+                                )
+                                .child(activity_scroll_fade(
+                                    output_viewport.scroll_handle.clone(),
+                                    ActivityScrollFadeSide::Top,
+                                    activity_surface,
+                                ))
+                                .child(activity_scroll_fade(
+                                    output_viewport.scroll_handle.clone(),
+                                    ActivityScrollFadeSide::Bottom,
+                                    activity_surface,
+                                ))
+                                .child(scrollbar::vertical(
+                                    &output_viewport.scroll_handle,
+                                    &output_viewport.scrollbar,
+                                ))
+                                .child(activity_scroll_guard(output_viewport, !activity.complete)),
+                        );
+                    } else {
+                        let section_viewport = self
+                            .activity_section_viewports
+                            .borrow_mut()
+                            .entry((id, section_kind))
+                            .or_default()
+                            .clone();
+                        let wheel_scroll = section_viewport.scroll_handle.clone();
+                        let wheel_follow_tail = section_viewport.follow_tail.clone();
+                        // Scrolling inside a section stops propagation, so
+                        // the card viewport never sees the wheel. Release
+                        // its tail-follow here or a live card would yank
+                        // the section out of view on the next stream tick.
+                        let card_follow_tail = detail_viewport.follow_tail.clone();
+                        let card_scroll = detail_viewport.scroll_handle.clone();
+                        section_view = section_view.child(
+                            div()
+                                .w_full()
+                                .min_w_0()
+                                .relative()
+                                .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
+                                .overflow_hidden()
+                                .child(
+                                    div()
+                                        .id(SharedString::from(format!(
+                                            "activity-section-scroll-{}-{}",
+                                            id,
+                                            section_kind.id()
+                                        )))
+                                        .w_full()
+                                        .min_w_0()
+                                        .max_h(px(ACTIVITY_SECTION_MAX_HEIGHT))
+                                        .overflow_y_scroll()
+                                        .track_scroll(&section_viewport.scroll_handle)
+                                        .pr(px(8.0))
+                                        .text_size(code_px(10.5))
+                                        .line_height(code_px(16.0))
+                                        .child(md::render::plain_text(
+                                            content.clone(),
+                                            md::render::mono_family(),
+                                            FontWeight::NORMAL,
+                                            theme.text_secondary,
+                                            &ctx,
+                                        ))
+                                        .on_scroll_wheel(move |_, window, cx| {
+                                            contain_scroll(&wheel_scroll, cx);
+                                            let scroll = wheel_scroll.clone();
+                                            let follow_tail = wheel_follow_tail.clone();
+                                            let card_follow_tail = card_follow_tail.clone();
+                                            let card_scroll = card_scroll.clone();
+                                            window.defer(cx, move |_, _| {
+                                                let at_bottom = activity_scroll_at_bottom(&scroll);
+                                                follow_tail.set(at_bottom);
+                                                if !at_bottom {
+                                                    card_follow_tail.set(
+                                                        activity_scroll_at_bottom(&card_scroll),
+                                                    );
+                                                }
+                                            });
+                                        }),
+                                )
+                                .child(activity_scroll_fade(
+                                    section_viewport.scroll_handle.clone(),
+                                    ActivityScrollFadeSide::Top,
+                                    activity_surface,
+                                ))
+                                .child(activity_scroll_fade(
+                                    section_viewport.scroll_handle.clone(),
+                                    ActivityScrollFadeSide::Bottom,
+                                    activity_surface,
+                                ))
+                                .child(scrollbar::vertical(
+                                    &section_viewport.scroll_handle,
+                                    &section_viewport.scrollbar,
+                                ))
+                                .when(
+                                    section_kind == ActivityDisclosureSectionKind::Output,
+                                    |element| {
+                                        element.child(activity_scroll_guard(
+                                            section_viewport,
+                                            !activity.complete,
+                                        ))
+                                    },
+                                ),
+                        );
+                    }
+                }
+                detail_card = detail_card.child(section_view);
+            }
+            for (image_index, image_url) in activity.image_urls.iter().enumerate() {
+                let image = self.image_for_reference(image_url, None, None, cx);
+                detail_card = detail_card.child(render_activity_image(
+                    image_url,
+                    image,
+                    id,
+                    image_index,
+                    theme,
+                ));
+            }
+            let wheel_scroll = detail_viewport.scroll_handle.clone();
+            let wheel_follow_tail = detail_viewport.follow_tail.clone();
+            item = item.child(
+                div()
+                    .w_full()
+                    .min_w_0()
+                    .relative()
+                    .max_h(px(ACTIVITY_DETAIL_MAX_HEIGHT))
+                    .overflow_hidden()
+                    .border_t_1()
+                    .border_color(theme.border_strong)
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("activity-detail-scroll-{id}")))
+                            .w_full()
+                            .min_w_0()
+                            .max_h(px(ACTIVITY_DETAIL_MAX_HEIGHT))
+                            .overflow_y_scroll()
+                            .track_scroll(&detail_viewport.scroll_handle)
+                            .child(detail_card)
+                            .on_scroll_wheel(move |_, window, cx| {
+                                contain_scroll(&wheel_scroll, cx);
+                                let scroll = wheel_scroll.clone();
+                                let follow_tail = wheel_follow_tail.clone();
+                                window.defer(cx, move |_, _| {
+                                    follow_tail.set(activity_scroll_at_bottom(&scroll));
+                                });
+                            }),
+                    )
+                    .child(activity_scroll_fade(
+                        detail_viewport.scroll_handle.clone(),
+                        ActivityScrollFadeSide::Top,
+                        activity_surface,
+                    ))
+                    .child(activity_scroll_fade(
+                        detail_viewport.scroll_handle.clone(),
+                        ActivityScrollFadeSide::Bottom,
+                        activity_surface,
+                    ))
+                    .child(scrollbar::vertical(
+                        &detail_viewport.scroll_handle,
+                        &detail_viewport.scrollbar,
+                    ))
+                    .child(activity_scroll_guard(detail_viewport, !activity.complete)),
+            );
+        }
+        item.into_any_element()
     }
 
     /// The diff for an expanded file-change activity.

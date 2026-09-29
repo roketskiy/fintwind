@@ -26,7 +26,7 @@ pub mod git_branch {
 }
 
 pub mod git_history {
-    pub use fintwind_protocol::git::CommitEntry;
+    pub use fintwind_protocol::git::{CommitEntry, CommitRef};
 }
 
 pub mod git_commit {

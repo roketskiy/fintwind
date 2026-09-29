@@ -25,10 +25,27 @@ impl BranchSnapshot {
     }
 }
 
+/// One `%D` decoration of a commit, split into its own label. `remote` marks
+/// decorations that point at a remote-tracking ref, e.g. `origin/main`;
+/// `head` marks the decoration `HEAD` points at (`HEAD` itself when
+/// detached, `HEAD -> branch` otherwise).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CommitRef {
+    /// The label as Git prints it, e.g. `HEAD -> main`, `origin/main`, or
+    /// `tag: v1.2.0`.
+    pub label: String,
+    /// Whether this decoration points at a remote ref, i.e. starts with one
+    /// of the repository's remote names followed by `/`.
+    pub remote: bool,
+    /// Whether this decoration is where `HEAD` points.
+    pub head: bool,
+}
+
 /// One entry in a workspace's commit history, as drawn by the Git history
 /// panel. `refs` are Git's `%D` decorations split into separate labels, e.g.
-/// `["HEAD -> main", "origin/main", "tag: v1.2.0"]`; `is_head` marks the
-/// commit `HEAD` points at, including a detached HEAD.
+/// `HEAD -> main`, `origin/main`, `tag: v1.2.0`; `is_head` marks the commit
+/// `HEAD` points at, including a detached HEAD; `pushed` tells whether the
+/// commit is reachable from any remote ref.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommitEntry {
     pub hash: String,
@@ -37,8 +54,9 @@ pub struct CommitEntry {
     pub author: String,
     /// Author date, in Unix seconds.
     pub timestamp: u64,
-    pub refs: Vec<String>,
+    pub refs: Vec<CommitRef>,
     pub is_head: bool,
+    pub pushed: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

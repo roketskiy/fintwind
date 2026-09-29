@@ -1649,6 +1649,10 @@ git_history.hash_copied:
   en: "Copied %{hash}"
 git_history.refresh:
   en: Refresh history
+git_history.unpushed:
+  en: Not pushed to a remote
+git_history.remote_ref:
+  en: Remote ref
 commit.message_placeholder:
   en: Commit message (leave blank to generate)…
 commit.message:

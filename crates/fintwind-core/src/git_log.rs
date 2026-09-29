@@ -4,12 +4,13 @@
 //! from the background executor; render paths consume only the cached
 //! [`CommitEntry`] values they return.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::process::Output;
 
 use anyhow::{Context as _, bail};
 
-pub use fintwind_protocol::git::CommitEntry;
+pub use fintwind_protocol::git::{CommitEntry, CommitRef};
 
 /// The commit history of a workspace, newest first. `branch` `None` reads
 /// `HEAD`; `Some` names a branch or any revision Git accepts. `Ok(None)`
@@ -27,6 +28,25 @@ pub fn list(
     if !repository_output.status.success() {
         return Ok(None);
     }
+
+    // Remote names decide which `%D` decorations point at remote-tracking
+    // refs. A repository without remotes is common, so a failing `git
+    // remote` simply yields an empty list rather than an error.
+    let remotes_output = crate::command_env::plain_command("git")
+        .arg("remote")
+        .current_dir(cwd)
+        .output()
+        .context("failed to execute git remote")?;
+    let remotes = if remotes_output.status.success() {
+        String::from_utf8_lossy(&remotes_output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
 
     // `%x1f` is the unit separator between fields and `%x1e` the record
     // separator between commits, so subjects containing newlines, spaces, or
@@ -50,6 +70,39 @@ pub fn list(
         bail!("{}", command_error(&output));
     }
 
+    // Commits reachable from the revision but from no remote ref are
+    // unpushed. `-n limit` matches the `git log` limit: `git log` is a
+    // porcelain front for the same newest-first walk `git rev-list`
+    // performs, so the unpushed hashes inside the returned window are
+    // always among the first `limit` of the full unpushed list, and the
+    // truncation cannot miss one. (Unpushed and pushed commits may
+    // interleave in merge histories; the guarantee is the shared traversal
+    // order, not their separation.) Without remotes, `--remotes` expands
+    // to nothing and every commit counts as unpushed, which matches the
+    // semantics.
+    let rev = branch.unwrap_or("HEAD");
+    let rev_list_output = crate::command_env::plain_command("git")
+        .args([
+            "rev-list",
+            "-n",
+            &limit.to_string(),
+            rev,
+            "--not",
+            "--remotes",
+        ])
+        .current_dir(cwd)
+        .output()
+        .context("failed to execute git rev-list")?;
+    if !rev_list_output.status.success() {
+        bail!("{}", command_error(&rev_list_output));
+    }
+    let unpushed = String::from_utf8_lossy(&rev_list_output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_owned)
+        .collect::<HashSet<_>>();
+
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut commits = Vec::new();
     for record in stdout.split('\u{1e}') {
@@ -72,11 +125,15 @@ pub fn list(
             .split(", ")
             .map(str::trim)
             .filter(|label| !label.is_empty())
-            .map(str::to_owned)
+            .map(|label| CommitRef {
+                head: label == "HEAD" || label.starts_with("HEAD ->"),
+                remote: remotes
+                    .iter()
+                    .any(|remote| label.starts_with(&format!("{remote}/"))),
+                label: label.to_owned(),
+            })
             .collect::<Vec<_>>();
-        let is_head = refs
-            .iter()
-            .any(|label| label == "HEAD" || label.starts_with("HEAD ->"));
+        let is_head = refs.iter().any(|commit_ref| commit_ref.head);
         commits.push(CommitEntry {
             hash: hash.to_owned(),
             short_hash: short_hash.to_owned(),
@@ -85,6 +142,7 @@ pub fn list(
             timestamp,
             refs,
             is_head,
+            pushed: !unpushed.contains(hash),
         });
     }
     Ok(Some(commits))

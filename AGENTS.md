@@ -22,6 +22,17 @@
 ## 新模型信息
 - 详见docs/model-info-sources.md
 
+## 官网 / 落地页
+
+- 落地页是独立仓库：https://github.com/roketskiy/fintwind-website （本地在 fintwind
+  的同级目录 `../fintwind-website/`），已从本仓库迁出，不要在本仓库找网站代码。
+- 线上地址 https://fintwind.xyz ，由 Cloudflare Workers Builds 托管：向该仓库 push
+  即自动构建部署，无需手动发布。
+- 本地构建与预览（在该仓库根目录执行）：`bun install` → `bun run build` → `bun run preview`。
+- 页面版本号由 GitHub Actions 自动同步：本仓库发布正式 release 时会自动更新
+  `src/data/product.ts` 的 `version` 并触发部署，无需手动改页面版本；但 release
+  说明里的 OpenCode 兼容范围需发版时人工核对。
+
 ## Windows release 构建
 
 dev watcher 占用的是 `target/debug/fintwind.exe`，release 写到 `target/release`，两者不冲突，不必停 watcher。两个可执行文件必须放在同一目录：应用从自身旁边启动 `fintwind-daemon.exe`。

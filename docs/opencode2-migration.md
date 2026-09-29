@@ -87,8 +87,8 @@
   V2 不读取 V1 的 `session`/`message`/`part` 表；V1 会话导入（PR #40723）作为应用迁移存在，
   但**当前发布状态未确认**。
 - 含义：**Fintwind 持久化的 `ProviderResumeCursor::OpenCode{session_id}`（v1 `ses_` id）迁移后
-  大概率无法续聊**。需要沿用既有护栏思路（参照 `docs/remove-non-opencode-providers.md` 的
-  「旧会话拒绝启动新回合」模式）：旧会话可查看、不启动新回合、提示用户新建。
+  大概率无法续聊**。沿用旧 provider 移除时的护栏思路——「旧会话拒绝启动新回合」
+  模式：旧会话可查看、不启动新回合、提示用户新建。
 
 ## 6. 迁移工作量评估
 

@@ -139,6 +139,22 @@ pub(crate) fn task_id_from_notification_tag(tag: &str) -> Option<Uuid> {
     tag.strip_prefix(TASK_NOTIFICATION_TAG_PREFIX)?.parse().ok()
 }
 
+/// A provider probe is valid only for the OpenCode location it queried. Keep
+/// that location on the event so a late result from another project cannot
+/// replace the catalog currently shown in the composer.
+#[derive(Clone, Debug)]
+struct ProviderProbeResult {
+    directory: Option<PathBuf>,
+    probe: ProviderProbe,
+}
+
+#[derive(Clone, Debug)]
+struct ProviderDetectionResult {
+    generation: u64,
+    directory: Option<PathBuf>,
+    probe: ProviderProbe,
+}
+
 fn signal_event_pump(wake: &smol::channel::Sender<()>) {
     let _ = wake.try_send(());
 }
@@ -1328,10 +1344,14 @@ pub struct Fintwind {
     onboarding_projectless_focus: FocusHandle,
     sidebar_add_project_focus: FocusHandle,
     probes: Vec<ProviderProbe>,
-    provider_probe_tx: Sender<ProviderProbe>,
-    provider_probe_events: Receiver<ProviderProbe>,
-    provider_model_discoveries: HashSet<String>,
-    provider_model_discoveries_pending: HashSet<String>,
+    provider_probe_tx: Sender<ProviderProbeResult>,
+    provider_probe_events: Receiver<ProviderProbeResult>,
+    provider_model_discoveries: HashSet<Option<PathBuf>>,
+    provider_model_discoveries_pending: HashSet<Option<PathBuf>>,
+    /// Location represented by `probes`. It changes with the selected session,
+    /// while completed discoveries for other locations remain in the daemon's
+    /// disk cache and are reused when that location is selected again.
+    provider_probe_directory: Option<PathBuf>,
     /// CLI version, probed off-thread. Missing key means the probe has not
     /// answered yet; `None` means it ran and found nothing.
     provider_versions: HashMap<String, Option<String>>,
@@ -1342,13 +1362,15 @@ pub struct Fintwind {
     provider_version_probes_pending: HashSet<String>,
     /// Fast provider detection results from the daemon, including its cached
     /// model catalog. Live discovery revalidates these probes afterward.
-    provider_detection_tx: Sender<ProviderProbe>,
-    provider_detection_events: Receiver<ProviderProbe>,
+    provider_detection_tx: Sender<ProviderDetectionResult>,
+    provider_detection_events: Receiver<ProviderDetectionResult>,
     /// Providers the running re-detection has not answered for yet; empty
     /// means no re-detection is in flight.
     provider_detection_remaining: usize,
+    provider_detection_directory: Option<PathBuf>,
     /// When provider detection last completed, for the page's "Checked" label.
     provider_detection_checked_at: Option<Instant>,
+    provider_detection_generation: u64,
     model_picker_tab: ModelPickerTab,
     /// Keyboard cursor over the model picker's filtered rows. `None` means the
     /// keyboard has not moved yet, so `enter` takes the first row.
@@ -3176,6 +3198,7 @@ impl Fintwind {
                 provider_probe_events,
                 provider_model_discoveries: HashSet::new(),
                 provider_model_discoveries_pending: HashSet::new(),
+                provider_probe_directory: None,
                 provider_versions: HashMap::new(),
                 provider_version_tx,
                 provider_version_events,
@@ -3183,7 +3206,9 @@ impl Fintwind {
                 provider_detection_tx,
                 provider_detection_events,
                 provider_detection_remaining: 0,
+                provider_detection_directory: None,
                 provider_detection_checked_at: None,
+                provider_detection_generation: 0,
                 model_picker_tab,
                 model_picker_highlight: None,
                 model_picker_scroll: ScrollHandle::new(),

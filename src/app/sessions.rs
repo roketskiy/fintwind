@@ -400,6 +400,9 @@ impl Fintwind {
             self.state.last_service_tier = service_tier;
             self.state.last_context_window = context_window;
         }
+        if session_changed {
+            self.switch_provider_location();
+        }
         if self
             .selected_session()
             .is_some_and(|session| !session.has_started())

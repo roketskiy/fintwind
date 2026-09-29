@@ -1642,6 +1642,7 @@ mod tests {
                 runtime_id: Uuid::nil(),
                 command: Command::ProbeProvider {
                     binary_override: None,
+                    directory: None,
                     discover_models: false,
                     probe_version: false,
                 },

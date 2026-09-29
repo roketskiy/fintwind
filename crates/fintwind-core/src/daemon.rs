@@ -227,6 +227,7 @@ impl Backend for FintwindBackend {
             }
             Command::ProbeProvider {
                 binary_override,
+                directory,
                 discover_models,
                 probe_version,
             } => {
@@ -235,7 +236,9 @@ impl Backend for FintwindBackend {
                     override_value if discover_models || probe_version => {
                         crate::model::provider_probe(override_value)
                     }
-                    override_value => crate::model::cached_provider_probe(override_value),
+                    override_value => {
+                        crate::model::cached_provider_probe(override_value, directory.as_deref())
+                    }
                 };
                 let version = probe_version
                     .then(|| {
@@ -246,7 +249,7 @@ impl Backend for FintwindBackend {
                     })
                     .flatten();
                 if discover_models {
-                    probe = crate::model::discover_provider_models(probe);
+                    probe = crate::model::discover_provider_models(probe, directory.as_deref());
                 }
                 Ok(ResponsePayload::ProviderProbe { probe, version })
             }

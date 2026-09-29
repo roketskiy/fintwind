@@ -24,10 +24,33 @@ pub enum ThemeScheme {
     VsCode,
     Codex,
     Nord,
+    Linear,
+    Notion,
+    One,
+    Proof,
+    Raycast,
+    RosePine,
+    Solarized,
+    Vercel,
+    VsCodePlus,
 }
 
 impl ThemeScheme {
-    pub const ALL: [Self; 4] = [Self::Default, Self::VsCode, Self::Codex, Self::Nord];
+    pub const ALL: [Self; 13] = [
+        Self::Default,
+        Self::VsCode,
+        Self::Codex,
+        Self::Nord,
+        Self::Linear,
+        Self::Notion,
+        Self::One,
+        Self::Proof,
+        Self::Raycast,
+        Self::RosePine,
+        Self::Solarized,
+        Self::Vercel,
+        Self::VsCodePlus,
+    ];
 
     pub fn label(self) -> String {
         let key = match self {
@@ -35,6 +58,15 @@ impl ThemeScheme {
             Self::VsCode => "settings.scheme_vscode",
             Self::Codex => "settings.scheme_codex",
             Self::Nord => "settings.scheme_nord",
+            Self::Linear => "settings.scheme_linear",
+            Self::Notion => "settings.scheme_notion",
+            Self::One => "settings.scheme_one",
+            Self::Proof => "settings.scheme_proof",
+            Self::Raycast => "settings.scheme_raycast",
+            Self::RosePine => "settings.scheme_rose_pine",
+            Self::Solarized => "settings.scheme_solarized",
+            Self::Vercel => "settings.scheme_vercel",
+            Self::VsCodePlus => "settings.scheme_vs_code_plus",
         };
         crate::i18n::translate(key)
     }

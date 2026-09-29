@@ -21,7 +21,6 @@ the original feature bullet instead of adding separate entries for them.
 ## [0.2.3]
 
 - 支持 OpenCode v2.0.19（此前仅保证到 v2.0.16）
-
 - 新增 Git 历史面板：从会话胶囊即可进入，带本地/云端标签；超长提交信息不再溢出卡片、遮挡按钮
 - 新增 12 套可切换主题家族：VS Code Modern、Codex、Nord、Linear、Notion、One、Proof、Raycast、Rose Pine、Solarized、Vercel、VS Code Plus，原有 Fintwind 主题保留
 - 文件界面支持多开与回退

@@ -13,8 +13,8 @@ Website and downloads: <https://fintwind.xyz>
 
 > [!IMPORTANT]
 > OpenCode 2 has not been officially released, and breaking changes are still
-> common. If your OpenCode 2 is newer than v2.0.16, fintwind is not guaranteed
-> to work. **fintwind 0.2.3 supports OpenCode v2.0.16 and earlier;**
+> common. If your OpenCode 2 is newer than v2.0.19, fintwind is not guaranteed
+> to work. **fintwind 0.2.3 supports OpenCode v2.0.19 and earlier;**
 > **fintwind 0.2.0 supports OpenCode v2.0.11 and earlier.**
 
 Session demo: switching models, a session in progress, and scrolling a long transcript.
@@ -43,7 +43,7 @@ fintwind does not download or install the update itself.
 
 fintwind drives one agent backend: a local **OpenCode 2** server. Install and
 authenticate the `opencode` CLI first. This 0.2.3 release
-supports OpenCode **v2.0.16 and earlier** (0.2.0 supports **v2.0.11 and
+supports OpenCode **v2.0.19 and earlier** (0.2.0 supports **v2.0.11 and
 earlier**). fintwind starts it, and sessions, models, providers, and MCP
 servers all come from that backend. A newer OpenCode 2 is not guaranteed to work.
 

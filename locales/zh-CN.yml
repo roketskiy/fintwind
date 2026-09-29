@@ -367,6 +367,8 @@ sidebar.resize: 调整侧边栏宽度
 sidebar.status_working: 正在工作
 sidebar.status_waiting: 正在等待
 sidebar.status_failed: 失败
+sidebar.show_more: 显示更多
+sidebar.show_more_remaining: 还有 %{count} 个
 project.new_project: 新建项目…
 project.no_project: 不使用项目
 project.no_project_name: 无项目

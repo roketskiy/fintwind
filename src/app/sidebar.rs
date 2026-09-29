@@ -31,16 +31,8 @@ pub(super) struct SidebarGroup {
     pub(super) unfolded: bool,
 }
 
-/// The scroll state behind one unfolded group's body. Held per project so a
-/// group keeps its scroll position when it is folded and unfolded again.
-#[derive(Clone)]
-pub(super) struct SidebarGroupScroll {
-    pub(super) list: ListState,
-    pub(super) scrollbar: Rc<ScrollbarState>,
-}
-
 /// Height of a session card plus the separation reserved beneath it in the
-/// virtualized sidebar list. Keep the gap inside the list row so measured and
+/// sidebar list. Keep the gap inside the list row so measured and
 /// estimated heights stay identical for off-screen sessions.
 const SIDEBAR_SESSION_CARD_HEIGHT: f32 = 52.0;
 const SESSION_AVATAR_SIZE: f32 = 36.0;
@@ -60,20 +52,14 @@ const SIDEBAR_SEARCH_BOTTOM_GAP: f32 = 10.0;
 /// old text-only row so the trailing new-session control has a usable hit area.
 const SIDEBAR_PROJECT_CARD_HEIGHT: f32 = 34.0;
 const SIDEBAR_PROJECT_CARD_BOTTOM_GAP: f32 = 6.0;
-/// An unfolded group's body stops growing here — six session cards — and the
-/// rest scrolls inside the group, so one busy project cannot push every other
-/// project off screen.
-const SIDEBAR_GROUP_BODY_MAX_HEIGHT: f32 = SIDEBAR_SESSION_ROW_HEIGHT * 6.0;
-/// How far a group list renders above and below its viewport.
-const SIDEBAR_GROUP_OVERDRAW: f32 = SIDEBAR_SESSION_ROW_HEIGHT * 2.0;
-
-/// Height of an unfolded group's body: its session rows, capped at
-/// [`SIDEBAR_GROUP_BODY_MAX_HEIGHT`] so the remainder scrolls in place. Rows
-/// are a fixed height, so the cap falls on a row boundary and no card is ever
-/// cut in half.
-fn sidebar_group_body_height(sessions: usize) -> f32 {
-    (sessions as f32 * SIDEBAR_SESSION_ROW_HEIGHT).min(SIDEBAR_GROUP_BODY_MAX_HEIGHT)
-}
+/// Sessions an unfolded project group reveals before a "show more" affordance
+/// takes over. Six matches the previous in-group scroller's visible height, so
+/// the first screen of a busy project still reads exactly as it did before.
+const SIDEBAR_GROUP_VISIBLE_DEFAULT: usize = 6;
+/// How many more sessions one "show more" press reveals. Stepping by the
+/// default lets a long project grow one screen at a time instead of exploding
+/// on a single click, at the cost of one extra press per screen.
+const SIDEBAR_GROUP_VISIBLE_STEP: usize = 6;
 
 /// The session row's trailing time: how long the live turn has been working,
 /// or how long ago the agent last replied. A session that has never replied
@@ -112,6 +98,15 @@ pub(super) fn format_time_ago(seconds: u64) -> String {
         3_600..=86_399 => tr!("sidebar.hours_ago", count = seconds / 3_600),
         _ => tr!("sidebar.days_ago", count = seconds / 86_400),
     }
+}
+
+/// The visible count that puts session `index` on screen, rounded up to a
+/// show-more step and clamped to `total`. Reveal and session-switch round to
+/// the same steps a manual "show more" produces, so a task the user jumps to is
+/// always shown — even an old one past the default — without a second scroller.
+fn sidebar_group_visible_for(index: usize, total: usize) -> usize {
+    let by_step = (index / SIDEBAR_GROUP_VISIBLE_STEP + 1) * SIDEBAR_GROUP_VISIBLE_STEP;
+    by_step.max(SIDEBAR_GROUP_VISIBLE_DEFAULT).min(total)
 }
 
 /// Started sessions grouped by project. Groups are ordered by each project's
@@ -802,11 +797,12 @@ impl Fintwind {
                 .clone()
                 .with_uniform_item_height(px(SIDEBAR_SESSION_ROW_HEIGHT));
         }
-        // A group row is several times taller than the session hint, and the
-        // list's scroll extent comes from those hints until a row is measured.
-        // Measure every row once per snapshot instead: there is one per
-        // project, and a body's height is fixed, so this lays out the headers
-        // and bodies — never the session rows inside them.
+        // A group row is far taller than the session hint, and the list's
+        // scroll extent comes from those hints until a row is measured. Measure
+        // every row once per snapshot instead: there are a handful of project
+        // groups, and measuring a group resolves its height — the header plus
+        // each session a "show more" has revealed, which is why reveal and fold
+        // drive this rather than every frame.
         let _ = self.sidebar_list_state.clone().measure_all();
     }
 
@@ -826,11 +822,12 @@ impl Fintwind {
         }
     }
 
-    /// One project group: the header card, and — while the group is unfolded —
-    /// its sessions in a capped, virtualized list of their own, so a project
-    /// with hundreds of tasks scrolls inside its own group instead of pushing
-    /// the rest of the sidebar off screen.
-    fn render_sidebar_group(&self, group: &SidebarGroup, cx: &mut Context<Self>) -> Div {
+    /// One project group: its header card and, while it is unfolded, the start
+    /// of its session history laid out as ordinary rows — a bounded default
+    /// first, then a "show more" control that reveals another step at a time.
+    /// The whole group scrolls with the sidebar, so a project no longer nests a
+    /// second scroller of its own.
+    fn render_sidebar_group(&mut self, group: &SidebarGroup, cx: &mut Context<Self>) -> Div {
         let container = div()
             .w_full()
             .min_w_0()
@@ -840,73 +837,113 @@ impl Fintwind {
         if !group.unfolded || group.sessions.is_empty() {
             return container;
         }
-        let scroll = self.sidebar_group_scroll(group.project_id, group.sessions.len());
-        let sessions = group.sessions.clone();
-        let entity = cx.entity().downgrade();
-        let wheel_list = scroll.list.clone();
-        container.child(
-            div()
-                .id(SharedString::from(format!(
-                    "sidebar-group-body-{}",
-                    group.project_id
-                )))
-                .w_full()
-                .min_w_0()
-                .h(px(sidebar_group_body_height(group.sessions.len())))
-                .relative()
-                // The group list is nested in the sidebar list, so keep the
-                // wheel inside it while it has overflow of its own; a group
-                // that fits keeps chaining to the sidebar as before.
-                .on_scroll_wheel(move |_, _, cx| contain_scroll(&wheel_list, cx))
-                .child(
-                    list(scroll.list.clone(), move |index, _window, cx| {
-                        let Some(session_id) = sessions.get(index).copied() else {
-                            return div().into_any_element();
-                        };
-                        entity
-                            .upgrade()
-                            .map(|entity| {
-                                entity.update(cx, |this, cx| {
-                                    this.render_sidebar_session_item(session_id, cx)
-                                })
-                            })
-                            .unwrap_or_else(|| div().into_any_element())
-                    })
-                    .size_full(),
-                )
-                .child(scrollbar::vertical(&scroll.list, &scroll.scrollbar)),
-        )
+        let total = group.sessions.len();
+        let visible = self.sidebar_group_visible(group.project_id).min(total);
+        let mut body = div()
+            .id(SharedString::from(format!(
+                "sidebar-group-body-{}",
+                group.project_id
+            )))
+            .w_full()
+            .min_w_0()
+            .flex()
+            .flex_col();
+        // Session cards carry their own bottom rhythm, so a plain column keeps
+        // the exact 52+2 spacing the old virtualized rows reserved.
+        for &session_id in group.sessions.iter().take(visible) {
+            body = body.child(self.render_sidebar_session_item(session_id, cx));
+        }
+        if visible < total {
+            body = body.child(self.render_sidebar_show_more(group.project_id, total, cx));
+        }
+        container.child(body)
     }
 
-    /// The scroll state behind one unfolded group's body, created on first use
-    /// and kept for the window's lifetime so the group's scroll position
-    /// survives folding it away and unfolding it again.
-    fn sidebar_group_scroll(&self, project_id: Uuid, sessions: usize) -> SidebarGroupScroll {
-        let mut scrolls = self.sidebar_group_scrolls.borrow_mut();
-        let scroll = scrolls
-            .entry(project_id)
-            .or_insert_with(|| SidebarGroupScroll {
-                list: ListState::new(0, ListAlignment::Top, px(SIDEBAR_GROUP_OVERDRAW)),
-                scrollbar: ScrollbarState::new(),
-            });
-        if scroll.list.item_count() != sessions {
-            // Splicing the whole range drops the list to the top, so hold the
-            // user's place across a task being added or removed. A task added
-            // at the top is revealed by `reveal_sidebar_session_project`.
-            let anchor = scroll.list.logical_scroll_top();
-            scroll.list.splice(0..scroll.list.item_count(), sessions);
-            // Session rows are a fixed height, and the body is sized from the
-            // same constant, so the hint makes the group's extent exact before
-            // any of its rows have been measured.
-            let _ = scroll
-                .list
-                .clone()
-                .with_uniform_item_height(px(SIDEBAR_SESSION_ROW_HEIGHT));
-            if anchor.item_ix < sessions {
-                scroll.list.scroll_to(anchor);
-            }
+    /// Sessions currently revealed for a group: the default until a "show more"
+    /// press or a reveal records a larger count. Callers clamp to the group's
+    /// real size.
+    fn sidebar_group_visible(&self, project_id: Uuid) -> usize {
+        self.sidebar_group_visible_counts
+            .borrow()
+            .get(&project_id)
+            .copied()
+            .unwrap_or(SIDEBAR_GROUP_VISIBLE_DEFAULT)
+    }
+
+    /// Reveal another step of a group's sessions, or everything on the press
+    /// that reaches the end. No-op once the whole group is already shown.
+    fn show_more_sidebar_group(&mut self, project_id: Uuid, total: usize, cx: &mut Context<Self>) {
+        let current = self.sidebar_group_visible(project_id).min(total);
+        if current >= total {
+            return;
         }
-        scroll.clone()
+        let next = (current + SIDEBAR_GROUP_VISIBLE_STEP).min(total);
+        self.sidebar_group_visible_counts
+            .borrow_mut()
+            .insert(project_id, next);
+        cx.notify();
+    }
+
+    /// The trailing "show more" affordance for an unfolded group that still has
+    /// sessions hidden. A quiet text row, keyboard reachable like every other
+    /// sidebar control, that reveals the next step on activation.
+    fn render_sidebar_show_more(
+        &self,
+        project_id: Uuid,
+        total: usize,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        let remaining = total.saturating_sub(self.sidebar_group_visible(project_id));
+        div()
+            .id(SharedString::from(format!(
+                "sidebar-group-show-more-{project_id}"
+            )))
+            .w_full()
+            .min_w_0()
+            .h(px(SIDEBAR_ACTION_ROW_HEIGHT))
+            .flex_none()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .px(px(8.0))
+            .rounded(px(6.0))
+            .cursor_default()
+            .tab_index(0)
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .hover(|element| element.bg(theme.sidebar_item_background))
+            .active(|element| element.bg(theme.overlay_strong))
+            .child(icon("icons/chevron-down.svg", 11.0, theme.text_ghost))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(ui_px(12.5))
+                    .text_color(theme.text_secondary)
+                    .child(SharedString::from(tr!("sidebar.show_more"))),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_size(ui_px(11.0))
+                    .text_color(theme.text_muted)
+                    .child(SharedString::from(tr!(
+                        "sidebar.show_more_remaining",
+                        count = remaining
+                    ))),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.show_more_sidebar_group(project_id, total, cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if !event.keystroke.modifiers.modified()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    this.show_more_sidebar_group(project_id, total, cx);
+                    cx.stop_propagation();
+                }
+            }))
     }
 
     fn render_sidebar_group_header(
@@ -1081,7 +1118,16 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         let changed = if collapsed {
-            self.sidebar_expanded_groups.remove(&project_id)
+            let unfolded_removed = self.sidebar_expanded_groups.remove(&project_id);
+            // Folding resets the group to its default reveal, so "each expansion
+            // starts fresh" holds: a "show more" press or a reveal does not
+            // survive folding the group away.
+            let count_removed = self
+                .sidebar_group_visible_counts
+                .borrow_mut()
+                .remove(&project_id)
+                .is_some();
+            unfolded_removed || count_removed
         } else {
             self.sidebar_expanded_groups.insert(project_id)
         };
@@ -1092,8 +1138,8 @@ impl Fintwind {
 
     /// Reveals the group that owns `session_id` so a task the user just
     /// switched to (or created) is visible even though groups start folded.
-    /// The group's body is capped, so unfolding it is not enough on its own:
-    /// the task is also brought into the group's own viewport.
+    /// Unfolding shows only the default slice, so it is not enough on its own:
+    /// the group is also expanded far enough for the task to appear.
     pub(super) fn reveal_sidebar_session_project(
         &mut self,
         session_id: Uuid,
@@ -1108,47 +1154,58 @@ impl Fintwind {
         else {
             return;
         };
-        if self.sidebar_expanded_groups.insert(project_id) {
+        let unfolded_now = self.sidebar_expanded_groups.insert(project_id);
+        if unfolded_now {
             cx.notify();
         }
         let rows = self.sidebar_rows_cached();
-        let Some((sessions, index)) = rows.iter().find_map(|row| match row {
-            SidebarRow::Group(group) if group.project_id == project_id => group
-                .sessions
-                .iter()
-                .position(|session| *session == session_id)
-                .map(|index| (group.sessions.len(), index)),
-            _ => None,
-        }) else {
+        let Some((row_index, sessions, index)) =
+            rows.iter().enumerate().find_map(|(row_index, row)| match row {
+                SidebarRow::Group(group) if group.project_id == project_id => group
+                    .sessions
+                    .iter()
+                    .position(|session| *session == session_id)
+                    .map(|index| (row_index, group.sessions.len(), index)),
+                _ => None,
+            })
+        else {
             return;
         };
-        self.reveal_sidebar_group_session(project_id, sessions, index);
+        let grew = self.reveal_sidebar_group_session(project_id, sessions, index);
+        if unfolded_now || grew {
+            // With no in-group scroller, expanding a slice only makes the task
+            // renderable — it can still sit far below the outer viewport. Bring
+            // the sidebar list itself to the task's row so switching to (or
+            // creating) a task always lands it on screen, the way the old
+            // in-group scroll used to.
+            let header = SIDEBAR_PROJECT_CARD_HEIGHT + SIDEBAR_PROJECT_CARD_BOTTOM_GAP;
+            let row_top = header + index as f32 * SIDEBAR_SESSION_ROW_HEIGHT;
+            self.sidebar_list_state.scroll_to(ListOffset {
+                item_ix: row_index,
+                offset_in_item: px(row_top),
+            });
+            cx.notify();
+        }
     }
 
-    /// Bring session `index` of a group into view inside the group's capped
-    /// body, leaving the group's scroll alone when the row is already visible.
-    ///
-    /// Row and body heights are both fixed constants, so the visible window is
-    /// known before the body has ever been laid out — which is the case that
-    /// matters here, since the group is usually unfolded by this very switch.
-    fn reveal_sidebar_group_session(&self, project_id: Uuid, sessions: usize, index: usize) {
-        let scroll = self.sidebar_group_scroll(project_id, sessions);
-        let row_height = SIDEBAR_SESSION_ROW_HEIGHT;
-        let row_top = index as f32 * row_height;
-        let viewport = sidebar_group_body_height(sessions);
-        let scrolled = -f32::from(scroll.list.scroll_px_offset_for_scrollbar().y);
-        if row_top >= scrolled && row_top + row_height <= scrolled + viewport {
-            return;
+    /// Ensure session `index` of a group is revealed by growing the group's
+    /// visible count up to the show-more step that covers it. Returns whether
+    /// the count changed so the caller notifies once. With no in-group scroller
+    /// this is what keeps a switched-to task visible: its group is unfolded and
+    /// then expanded just far enough to show it.
+    fn reveal_sidebar_group_session(&self, project_id: Uuid, total: usize, index: usize) -> bool {
+        let current = self.sidebar_group_visible(project_id).min(total);
+        if index < current {
+            return false;
         }
-        // Park the row at the bottom of the window: the rows above it are the
-        // group's newer tasks, and revealing an old one should not push those
-        // off screen.
-        let target = (row_top + row_height - viewport).max(0.0);
-        let item_ix = (target / row_height).floor() as usize;
-        scroll.list.scroll_to(ListOffset {
-            item_ix,
-            offset_in_item: px(target - item_ix as f32 * row_height),
-        });
+        let target = sidebar_group_visible_for(index, total);
+        if target <= current {
+            return false;
+        }
+        self.sidebar_group_visible_counts
+            .borrow_mut()
+            .insert(project_id, target);
+        true
     }
 
     fn begin_session_rename(
@@ -1953,19 +2010,25 @@ mod tests {
     }
 
     #[test]
-    fn an_unfolded_group_caps_its_body_height() {
-        // A short group is exactly as tall as its rows; a long one stops at the
-        // cap, so the remainder scrolls inside the group.
-        assert_eq!(sidebar_group_body_height(0), 0.0);
+    fn revealing_a_session_rounds_visible_count_up_to_a_step() {
+        // A switched-to task past the default must still appear: reveal pulls in
+        // enough of its group to cover it, aligned to the steps "show more"
+        // uses, and never over-reveals past a short group's own size.
+        assert_eq!(sidebar_group_visible_for(0, 6), SIDEBAR_GROUP_VISIBLE_DEFAULT);
+        assert_eq!(sidebar_group_visible_for(5, 100), SIDEBAR_GROUP_VISIBLE_DEFAULT);
         assert_eq!(
-            sidebar_group_body_height(2),
-            SIDEBAR_SESSION_ROW_HEIGHT * 2.0
+            sidebar_group_visible_for(6, 100),
+            SIDEBAR_GROUP_VISIBLE_DEFAULT + SIDEBAR_GROUP_VISIBLE_STEP
         );
-        assert_eq!(sidebar_group_body_height(6), SIDEBAR_GROUP_BODY_MAX_HEIGHT);
         assert_eq!(
-            sidebar_group_body_height(200),
-            SIDEBAR_GROUP_BODY_MAX_HEIGHT
+            sidebar_group_visible_for(11, 100),
+            SIDEBAR_GROUP_VISIBLE_DEFAULT + SIDEBAR_GROUP_VISIBLE_STEP
         );
+        assert_eq!(
+            sidebar_group_visible_for(12, 100),
+            SIDEBAR_GROUP_VISIBLE_DEFAULT + SIDEBAR_GROUP_VISIBLE_STEP * 2
+        );
+        assert_eq!(sidebar_group_visible_for(3, 4), 4);
     }
 
     #[test]

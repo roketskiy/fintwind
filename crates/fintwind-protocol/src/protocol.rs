@@ -136,6 +136,11 @@ pub enum Command {
     },
     ProbeProvider {
         binary_override: Option<String>,
+        /// Workspace whose OpenCode location should be queried. New clients
+        /// always provide it; the optional form keeps older daemon clients
+        /// compatible and falls back to their process location.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        directory: Option<PathBuf>,
         discover_models: bool,
         probe_version: bool,
     },

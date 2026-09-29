@@ -1,6 +1,7 @@
 //! Daemon-only provider discovery layered over shared protocol models.
 
 use std::path::Path;
+use std::time::Duration;
 
 pub use fintwind_protocol::model::*;
 
@@ -23,8 +24,11 @@ pub fn provider_probe(binary_override: Option<&str>) -> ProviderProbe {
 /// last successful catalog immediately, then request live discovery to replace
 /// it. Cache I/O stays in the daemon instead of leaking host filesystem access
 /// into desktop or Web clients.
-pub fn cached_provider_probe(binary_override: Option<&str>) -> ProviderProbe {
-    let cached = crate::model_catalog::cached_models();
+pub fn cached_provider_probe(
+    binary_override: Option<&str>,
+    directory: Option<&Path>,
+) -> ProviderProbe {
+    let cached = crate::model_catalog::cached_models(directory);
     apply_cached_models(provider_probe(binary_override), cached)
 }
 
@@ -38,9 +42,12 @@ fn apply_cached_models(
     probe
 }
 
-pub fn discover_provider_models(mut probe: ProviderProbe) -> ProviderProbe {
+pub fn discover_provider_models(
+    mut probe: ProviderProbe,
+    directory: Option<&Path>,
+) -> ProviderProbe {
     if let Some(path) = probe.path.as_deref() {
-        let (models, agent_presets) = crate::model_catalog::discover_catalog(path);
+        let (models, agent_presets) = crate::model_catalog::discover_catalog(path, directory);
         probe.models = models;
         probe.agent_presets = agent_presets;
     }
@@ -52,8 +59,10 @@ pub fn discover_provider_models(mut probe: ProviderProbe) -> ProviderProbe {
 /// receive a normalized value rather than subprocess output.
 pub fn probe_provider_version(binary: &Path) -> Option<String> {
     let mut command = crate::command_env::command(binary);
-    let command = command.arg("--version").stdin(std::process::Stdio::null());
-    let output = crate::command_env::output(command).ok()?;
+    let command = command.arg("--version");
+    let output = crate::command_env::output_with_timeout(command, Duration::from_secs(5))
+        .ok()
+        .flatten()?;
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),

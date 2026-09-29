@@ -2,10 +2,12 @@
 
 use std::collections::HashSet;
 use std::ffi::{OsStr, OsString};
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::{OnceLock, RwLock};
+use std::sync::{OnceLock, RwLock, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[cfg(unix)]
 use std::fs::{self, OpenOptions};
@@ -90,6 +92,85 @@ pub fn output(command: &mut Command) -> io::Result<Output> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     spawn(command)?.wait_with_output()
+}
+
+/// Run a command without allowing a provider-side request to hold a daemon
+/// worker forever. A timeout returns `Ok(None)` after terminating the child;
+/// spawn and wait failures remain ordinary I/O errors.
+pub fn output_with_timeout(command: &mut Command, timeout: Duration) -> io::Result<Option<Output>> {
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = spawn(command)?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .expect("piped stdout requested before provider command spawn");
+    let mut stderr = child
+        .stderr
+        .take()
+        .expect("piped stderr requested before provider command spawn");
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stdout.read_to_end(&mut bytes);
+        let _ = stdout_tx.send(result.map(|_| bytes));
+    });
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let result = stderr.read_to_end(&mut bytes);
+        let _ = stderr_tx.send(result.map(|_| bytes));
+    });
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(error);
+            }
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            // Do not join here: a CLI may have handed the pipe to a child
+            // process, which would otherwise make the timeout path hang too.
+            return Ok(None);
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    let remaining = || timeout.saturating_sub(started.elapsed());
+    let stdout = match stdout_rx.recv_timeout(remaining()) {
+        Ok(result) => result?,
+        Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "provider stdout reader stopped unexpectedly",
+            ));
+        }
+    };
+    let stderr = match stderr_rx.recv_timeout(remaining()) {
+        Ok(result) => result?,
+        Err(mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "provider stderr reader stopped unexpectedly",
+            ));
+        }
+    };
+    let _ = stdout_reader.join();
+    let _ = stderr_reader.join();
+    Ok(Some(Output {
+        status,
+        stdout,
+        stderr,
+    }))
 }
 
 pub fn find_executable(name: &str) -> Option<PathBuf> {

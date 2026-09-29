@@ -747,9 +747,64 @@ impl Fintwind {
         self.probes.first()
     }
 
+    /// The OpenCode location associated with the selected session. Provider
+    /// catalogs are location-scoped even though the binary and daemon are
+    /// shared by the whole window.
+    pub(super) fn provider_directory(&self) -> Option<std::path::PathBuf> {
+        let directory = self
+            .selected_workspace_path()
+            .map(std::path::Path::to_path_buf)
+            .or_else(|| {
+                self.state
+                    .selected_project
+                    .and_then(|project_id| {
+                        self.state
+                            .projects
+                            .iter()
+                            .find(|project| project.id == project_id)
+                    })
+                    .map(|project| project.path.clone())
+            });
+        directory.map(Self::normalize_provider_directory)
+    }
+
+    fn normalize_provider_directory(directory: std::path::PathBuf) -> std::path::PathBuf {
+        #[cfg(windows)]
+        {
+            let mut value = directory.to_string_lossy().replace('/', "\\");
+            if let Some(stripped) = value.strip_prefix("\\\\?\\") {
+                value = stripped.to_owned();
+            }
+            while value.len() > 3 && value.ends_with('\\') {
+                value.pop();
+            }
+            return std::path::PathBuf::from(value.to_lowercase());
+        }
+        #[cfg(not(windows))]
+        directory
+    }
+
+    /// Move the in-memory catalog to the selected OpenCode location. The
+    /// catalog is cleared immediately so a previous project's models are never
+    /// offered while the new location is being detected from its cache.
+    pub(super) fn switch_provider_location(&mut self) {
+        let directory = self.provider_directory();
+        if self.provider_probe_directory == directory {
+            return;
+        }
+        self.provider_probe_directory = directory;
+        if let Some(probe) = self.probes.first_mut() {
+            probe.models = crate::model_catalog::fallback_models();
+            probe.agent_presets = crate::model_catalog::fallback_agent_presets();
+        }
+        self.request_provider_detection(false);
+    }
+
     pub(super) fn request_provider_model_discovery(&mut self) {
-        let provider = OPENCODE_PROVIDER.to_owned();
-        if self.provider_model_discoveries.contains(&provider) {
+        let directory = self.provider_directory();
+        if self.provider_model_discoveries_pending.contains(&directory)
+            || self.provider_model_discoveries.contains(&directory)
+        {
             return;
         }
         let Some(probe) = self
@@ -759,12 +814,15 @@ impl Fintwind {
         else {
             return;
         };
-        self.provider_model_discoveries.insert(provider.clone());
+        self.provider_model_discoveries.insert(directory.clone());
         self.provider_model_discoveries_pending
-            .insert(provider.clone());
+            .insert(directory.clone());
         let provider_probe_tx = self.provider_probe_tx.clone();
         let event_wake = self.event_wake_tx.clone();
         let daemon = self.daemon.client();
+        let fallback_probe = probe.clone();
+        let request_directory = directory.clone();
+        let result_directory = directory.clone();
         if std::thread::Builder::new()
             .name("fintwind-opencode-model-discovery".into())
             .spawn(move || {
@@ -773,21 +831,28 @@ impl Fintwind {
                     Uuid::nil(),
                     fintwind_client::Command::ProbeProvider {
                         binary_override: None,
+                        directory: request_directory,
                         discover_models: true,
                         probe_version: false,
                     },
                 ) {
                     Ok(fintwind_client::ResponsePayload::ProviderProbe { probe, .. }) => probe,
-                    _ => probe,
+                    _ => fallback_probe,
                 };
-                if provider_probe_tx.send(discovered).is_ok() {
+                if provider_probe_tx
+                    .send(ProviderProbeResult {
+                        directory: result_directory,
+                        probe: discovered,
+                    })
+                    .is_ok()
+                {
                     signal_event_pump(&event_wake);
                 }
             })
             .is_err()
         {
-            self.provider_model_discoveries.remove(&provider);
-            self.provider_model_discoveries_pending.remove(&provider);
+            self.provider_model_discoveries.remove(&directory);
+            self.provider_model_discoveries_pending.remove(&directory);
         }
     }
 
@@ -797,11 +862,11 @@ impl Fintwind {
     /// the fresh probe lands, so an open menu never blanks into a loading
     /// state while it refreshes.
     pub(super) fn refresh_provider_model_discovery(&mut self) {
-        let provider = OPENCODE_PROVIDER.to_owned();
-        if self.provider_model_discoveries_pending.contains(&provider) {
+        let directory = self.provider_directory();
+        if self.provider_model_discoveries_pending.contains(&directory) {
             return;
         }
-        self.provider_model_discoveries.remove(&provider);
+        self.provider_model_discoveries.remove(&directory);
         self.request_provider_model_discovery();
     }
 
@@ -820,6 +885,7 @@ impl Fintwind {
         let provider_version_tx = self.provider_version_tx.clone();
         let event_wake = self.event_wake_tx.clone();
         let daemon = self.daemon.client();
+        let directory = self.provider_directory();
         if std::thread::Builder::new()
             .name("fintwind-opencode-version-probe".into())
             .spawn(move || {
@@ -828,6 +894,7 @@ impl Fintwind {
                     Uuid::nil(),
                     fintwind_client::Command::ProbeProvider {
                         binary_override: None,
+                        directory,
                         discover_models: false,
                         probe_version: true,
                     },
@@ -859,13 +926,32 @@ impl Fintwind {
     /// refresh, or when its binary path just changed. Also re-runs model
     /// discovery and the version probe for whatever detection finds installed.
     pub(super) fn refresh_provider_detection(&mut self) {
-        if self.provider_detection_remaining > 0 {
+        self.request_provider_detection(true);
+    }
+
+    /// Detect the selected location, optionally invalidating its completed
+    /// discovery. Session switches use the cached path; the provider page and
+    /// picker refresh actions explicitly request a live revalidation.
+    fn request_provider_detection(&mut self, invalidate_models: bool) {
+        let directory = self.provider_directory();
+        if invalidate_models {
+            // Preserve an explicit refresh request even when detection is
+            // already in flight; its eventual result will schedule a fresh
+            // catalog discovery.
+            self.provider_model_discoveries.remove(&directory);
+        }
+        if self.provider_detection_remaining > 0 && self.provider_detection_directory == directory {
             return;
         }
+        self.provider_detection_generation = self.provider_detection_generation.wrapping_add(1);
+        let generation = self.provider_detection_generation;
+        self.provider_detection_directory = directory.clone();
         self.provider_detection_remaining = 1;
         let provider_detection_tx = self.provider_detection_tx.clone();
         let event_wake = self.event_wake_tx.clone();
         let daemon = self.daemon.client();
+        let request_directory = directory.clone();
+        let result_directory = directory.clone();
         if std::thread::Builder::new()
             .name("fintwind-provider-detection".into())
             .spawn(move || {
@@ -874,6 +960,7 @@ impl Fintwind {
                     Uuid::nil(),
                     fintwind_client::Command::ProbeProvider {
                         binary_override: None,
+                        directory: request_directory,
                         discover_models: false,
                         probe_version: false,
                     },
@@ -887,7 +974,14 @@ impl Fintwind {
                         agent_presets: crate::model_catalog::fallback_agent_presets(),
                     },
                 };
-                if provider_detection_tx.send(probe).is_ok() {
+                if provider_detection_tx
+                    .send(ProviderDetectionResult {
+                        generation,
+                        directory: result_directory,
+                        probe,
+                    })
+                    .is_ok()
+                {
                     signal_event_pump(&event_wake);
                 }
             })
@@ -896,24 +990,26 @@ impl Fintwind {
             self.provider_detection_remaining = 0;
             return;
         }
-        // A refresh means "re-check everything": clearing the per-launch guard
-        // lets catalog discovery run again as its detection lands below.
-        self.provider_model_discoveries.remove(OPENCODE_PROVIDER);
     }
 
     pub(super) fn drain_provider_detection_events(&mut self) -> bool {
         let mut changed = false;
         let mut installed = false;
-        while let Ok(probe) = self.provider_detection_events.try_recv() {
-            installed = probe.installed;
+        while let Ok(result) = self.provider_detection_events.try_recv() {
+            if result.generation != self.provider_detection_generation {
+                continue;
+            }
+            installed = result.probe.installed;
             self.provider_detection_remaining = self.provider_detection_remaining.saturating_sub(1);
             if self.provider_detection_remaining == 0 {
                 self.provider_detection_checked_at = Some(Instant::now());
             }
+            let probe = result.probe;
+            self.provider_probe_directory = result.directory;
             if let Some(existing) = self.probes.first_mut() {
                 if self
                     .provider_model_discoveries_pending
-                    .contains(OPENCODE_PROVIDER)
+                    .contains(&self.provider_probe_directory)
                 {
                     // A manual refresh may overlap an older live discovery.
                     // Keep that newer catalog while still accepting PATH
@@ -2572,13 +2668,23 @@ impl Fintwind {
 
     pub(super) fn drain_provider_probe_events(&mut self) -> bool {
         let mut changed = false;
-        while let Ok(probe) = self.provider_probe_events.try_recv() {
+        while let Ok(result) = self.provider_probe_events.try_recv() {
             self.provider_model_discoveries_pending
-                .remove(OPENCODE_PROVIDER);
+                .remove(&result.directory);
+            if result.directory != self.provider_probe_directory {
+                // The daemon has already refreshed the location-scoped cache;
+                // allow a later return to this project to request a fresh
+                // in-memory result rather than treating this ignored event as
+                // the current window's catalog.
+                self.provider_model_discoveries.remove(&result.directory);
+                continue;
+            }
+            self.provider_model_discoveries
+                .insert(result.directory.clone());
             if let Some(existing) = self.probes.first_mut() {
-                *existing = probe;
+                *existing = result.probe;
             } else {
-                self.probes.push(probe);
+                self.probes.push(result.probe);
             }
             changed = true;
         }

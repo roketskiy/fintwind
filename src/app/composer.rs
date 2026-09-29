@@ -849,6 +849,8 @@ impl Fintwind {
         let selected_model = selected_model.map(str::to_owned);
         let probes = self.probes.clone();
         let pending_discoveries = self.provider_model_discoveries_pending.clone();
+        let provider_directory = self.provider_directory();
+        let provider_detection_pending = self.provider_detection_remaining > 0;
         let favorites = self.state.favorite_models.clone();
         let weak = cx.entity().downgrade();
         let search = self.model_search.clone();
@@ -1078,7 +1080,9 @@ impl Fintwind {
                         tr!("models.none_found")
                     } else if selected_tab == ModelPickerTab::Favorites {
                         tr!("models.favorite_hint")
-                    } else if pending_discoveries.contains(OPENCODE_PROVIDER) {
+                    } else if provider_detection_pending
+                        || pending_discoveries.contains(&provider_directory)
+                    {
                         tr!("models.loading")
                     } else if probes.iter().any(|probe| probe.installed)
                         && probes.iter().all(|probe| probe.models.is_empty())

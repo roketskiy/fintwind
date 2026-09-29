@@ -1060,6 +1060,10 @@ impl Fintwind {
             .get(OPENCODE_PROVIDER)
             .and_then(|version| version.clone());
         let model_count = probe.map(|probe| probe.models.len()).unwrap_or(0);
+        let loading_models = checking
+            || self
+                .provider_model_discoveries_pending
+                .contains(&self.provider_directory());
 
         let refresh = outline_button(
             "refresh-builtin-providers",
@@ -1121,7 +1125,9 @@ impl Fintwind {
                             .text_size(ui_px(10.5))
                             .line_height(ui_px(15.0))
                             .text_color(theme.text_tertiary)
-                            .child(if installed {
+                            .child(if loading_models {
+                                tr!("models.loading")
+                            } else if installed {
                                 tr!("providers.no_available_models")
                             } else {
                                 tr!("providers.not_detected_as", command = "opencode")

@@ -1,6 +1,8 @@
 //! OpenCode model discovery.
 
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::model::{ProviderAgentPreset, ProviderModel, ProviderModelOption};
 
@@ -14,18 +16,36 @@ pub fn fallback_agent_presets() -> Vec<ProviderAgentPreset> {
     Vec::new()
 }
 
+/// OpenCode can return a valid but still-empty catalog while a cold server is
+/// loading provider configuration and background resources. Keep polling for a
+/// bounded period so a transient empty response is not presented as a Console
+/// policy failure. The bound also guarantees that a genuinely empty catalog
+/// eventually settles to the normal empty state.
+const MODEL_DISCOVERY_BUDGET: Duration = Duration::from_secs(15);
+const MODEL_DISCOVERY_INITIAL_DELAY: Duration = Duration::from_millis(250);
+const MODEL_DISCOVERY_MAX_DELAY: Duration = Duration::from_secs(2);
+const MODEL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Discovers models from the installed OpenCode CLI (`opencode models`).
-pub fn discover_catalog(binary: &Path) -> (Vec<ProviderModel>, Vec<ProviderAgentPreset>) {
-    let discovered = discover_opencode_models(binary);
+pub fn discover_catalog(
+    binary: &Path,
+    directory: Option<&Path>,
+) -> (Vec<ProviderModel>, Vec<ProviderAgentPreset>) {
+    let discovered = discover_opencode_models(binary, directory);
     let models = if let Some(discovered) = discovered {
         // An empty live catalog is authoritative: a Console policy may deny
-        // every model. Replaying the previous cache would make them selectable.
+        // every model. Replaying the previous cache after the bounded warm-up
+        // would make them selectable.
         let models = deduplicate(discovered);
-        write_cached_models(&models);
+        if !models.is_empty() {
+            write_cached_models(&models, directory);
+        } else {
+            remove_cached_models(directory);
+        }
         models
     } else {
         // Only a failed probe keeps the last successful catalog.
-        cached_models().unwrap_or_else(fallback_models)
+        cached_models(directory).unwrap_or_else(fallback_models)
     };
     (models, Vec::new())
 }
@@ -33,8 +53,8 @@ pub fn discover_catalog(binary: &Path) -> (Vec<ProviderModel>, Vec<ProviderAgent
 /// Where OpenCode's last discovered catalog is cached. Debug builds keep it
 /// in the checkout's gitignored `temp/` beside the debug database, so
 /// development never touches the installed app's cache.
-fn model_cache_path() -> PathBuf {
-    let directory = if cfg!(debug_assertions) {
+fn model_cache_path(directory: Option<&Path>) -> PathBuf {
+    let cache_directory = if cfg!(debug_assertions) {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../..")
             .join("temp")
@@ -45,14 +65,16 @@ fn model_cache_path() -> PathBuf {
             .join(crate::identity::DATA_DIRECTORY_NAME)
             .join("models")
     };
-    directory.join("opencode.json")
+    cache_directory
+        .join("opencode")
+        .join(format!("{}.json", directory_cache_key(directory)))
 }
 
 /// The catalog cached by the last successful discovery, or `None` when no run
 /// has cached one or the file no longer parses. Reads the filesystem, so call
 /// it from the discovery thread, never from render.
-pub fn cached_models() -> Option<Vec<ProviderModel>> {
-    read_models_file(&model_cache_path())
+pub fn cached_models(location: Option<&Path>) -> Option<Vec<ProviderModel>> {
+    read_models_file(&model_cache_path(location))
 }
 
 fn read_models_file(path: &Path) -> Option<Vec<ProviderModel>> {
@@ -63,8 +85,15 @@ fn read_models_file(path: &Path) -> Option<Vec<ProviderModel>> {
 
 /// Best-effort: a cache that fails to write only costs the next launch its
 /// head start.
-fn write_cached_models(models: &[ProviderModel]) {
-    let _ = write_models_file(&model_cache_path(), models);
+fn write_cached_models(models: &[ProviderModel], location: Option<&Path>) {
+    let _ = write_models_file(&model_cache_path(location), models);
+}
+
+/// An empty catalog is a successful, authoritative answer. Remove a previous
+/// non-empty cache so a later transport failure cannot resurrect models that
+/// the current Console policy has disabled.
+fn remove_cached_models(location: Option<&Path>) {
+    let _ = std::fs::remove_file(model_cache_path(location));
 }
 
 fn write_models_file(path: &Path, models: &[ProviderModel]) -> std::io::Result<()> {
@@ -78,46 +107,59 @@ fn write_models_file(path: &Path, models: &[ProviderModel]) -> std::io::Result<(
     std::fs::rename(temporary, path)
 }
 
-fn discover_opencode_models(binary: &Path) -> Option<Vec<ProviderModel>> {
+fn discover_opencode_models(binary: &Path, directory: Option<&Path>) -> Option<Vec<ProviderModel>> {
     // The plain `models` listing discards variants. Query the V2 catalog
     // through the CLI so discovery shares its authentication/service context.
-    let query = std::env::current_dir()
-        .ok()
-        .map(|directory| {
-            url::form_urlencoded::Serializer::new(String::new())
-                .append_pair("location[directory]", &directory.to_string_lossy())
-                .finish()
-        })
-        .unwrap_or_default();
+    let query = location_query(directory);
     let mut activation_command = crate::command_env::command(binary);
+    set_command_directory(&mut activation_command, directory);
     activation_command.args([
         "api",
         "post",
         &format!("/api/plugin/await-activation?{query}"),
     ]);
-    let _ = crate::command_env::output(&mut activation_command);
-    let mut catalog_command = crate::command_env::command(binary);
-    catalog_command.args(["api", "get", &format!("/api/model?{query}")]);
-    if let Ok(output) = crate::command_env::output(&mut catalog_command)
-        && output.status.success()
-        && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
-        && value
-            .get("data")
-            .and_then(serde_json::Value::as_array)
-            .is_some()
-    {
-        return Some(parse_opencode_catalog(&value));
+    let _ = crate::command_env::output_with_timeout(&mut activation_command, MODEL_COMMAND_TIMEOUT);
+
+    let started = Instant::now();
+    let mut delay = MODEL_DISCOVERY_INITIAL_DELAY;
+    loop {
+        let mut catalog_command = crate::command_env::command(binary);
+        set_command_directory(&mut catalog_command, directory);
+        catalog_command.args(["api", "get", &format!("/api/model?{query}")]);
+        if let Ok(Some(output)) =
+            crate::command_env::output_with_timeout(&mut catalog_command, MODEL_COMMAND_TIMEOUT)
+            && output.status.success()
+            && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
+            && value
+                .get("data")
+                .and_then(serde_json::Value::as_array)
+                .is_some()
+        {
+            let models = parse_opencode_catalog(&value);
+            if !models.is_empty() || started.elapsed() >= MODEL_DISCOVERY_BUDGET {
+                return Some(models);
+            }
+        } else if started.elapsed() >= MODEL_DISCOVERY_BUDGET {
+            break;
+        }
+
+        thread::sleep(delay);
+        delay = (delay * 2).min(MODEL_DISCOVERY_MAX_DELAY);
     }
+
     let mut command = crate::command_env::command(binary);
+    set_command_directory(&mut command, directory);
     command.arg("models");
-    let Ok(output) = crate::command_env::output(&mut command) else {
+    let Ok(Some(output)) =
+        crate::command_env::output_with_timeout(&mut command, MODEL_COMMAND_TIMEOUT)
+    else {
         return None;
     };
     let models = parse_opencode_models(&String::from_utf8_lossy(&output.stdout));
     if !output.status.success() || models.is_empty() {
         return None;
     }
-    let cached: std::collections::HashMap<_, _> = cached_models()
+    let cached: std::collections::HashMap<_, _> = cached_models(directory)
         .unwrap_or_default()
         .into_iter()
         .map(|model| (model.id.clone(), model))
@@ -128,6 +170,51 @@ fn discover_opencode_models(binary: &Path) -> Option<Vec<ProviderModel>> {
             .map(|model| cached.get(&model.id).cloned().unwrap_or(model))
             .collect(),
     )
+}
+
+fn location_query(directory: Option<&Path>) -> String {
+    let directory = directory
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
+    directory
+        .map(|directory| {
+            url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("location[directory]", &directory.to_string_lossy())
+                .finish()
+        })
+        .unwrap_or_default()
+}
+
+fn set_command_directory(command: &mut std::process::Command, directory: Option<&Path>) {
+    if let Some(directory) = directory {
+        command.current_dir(directory);
+    }
+}
+
+/// Stable, filesystem-safe FNV-1a key for a workspace-scoped model cache.
+/// Keeping the directory in the key prevents one project's Console policy or
+/// model list from becoming another project's startup cache.
+fn directory_cache_key(directory: Option<&Path>) -> String {
+    let mut value = directory
+        .map(|directory| directory.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "<default>".to_owned());
+    #[cfg(windows)]
+    {
+        value = value.replace('/', "\\");
+        if let Some(stripped) = value.strip_prefix("\\\\?\\") {
+            value = stripped.to_owned();
+        }
+        while value.len() > 3 && value.ends_with('\\') {
+            value.pop();
+        }
+        value = value.to_lowercase();
+    }
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {

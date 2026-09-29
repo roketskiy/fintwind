@@ -1798,6 +1798,31 @@ fn entry_on_day(entry: &UsageEntry, date: NaiveDate) -> Option<UsageEntry> {
         .collect();
     let last = lanes.iter().max_by_key(|lane| lane.timestamp)?;
     let child_days: Vec<_> = lanes.iter().filter(|lane| lane.subagent).collect();
+    let subagent_models = entry
+        .subagent_models
+        .iter()
+        .filter_map(|child| {
+            let days: Vec<_> = child
+                .days
+                .iter()
+                .filter(|day| local_date(day.timestamp) == Some(date))
+                .copied()
+                .collect();
+            let day_tokens: u64 = days.iter().map(|day| day.total).sum();
+            (day_tokens > 0).then(|| {
+                let mut selected = child.clone();
+                let ratio = day_tokens as f64 / child.total_tokens().max(1) as f64;
+                selected.input_tokens = days.iter().map(|day| day.input).sum();
+                selected.output_tokens = days.iter().map(|day| day.output).sum();
+                selected.reasoning_tokens = 0;
+                selected.cache_read_tokens = days.iter().map(|day| day.cache_read).sum();
+                selected.cache_write_tokens = days.iter().map(|day| day.cache_write).sum();
+                selected.cost = selected.cost.map(|cost| cost * ratio);
+                selected.days = days;
+                selected
+            })
+        })
+        .collect();
     // Model shares span the whole session; scaling them to this day's spend
     // would invent per-model timestamps the scan does not have. Construct the
     // day's entry without cloning message/hour vectors on the UI thread.
@@ -1812,7 +1837,22 @@ fn entry_on_day(entry: &UsageEntry, date: NaiveDate) -> Option<UsageEntry> {
         cache_read_tokens: lanes.iter().map(|lane| lane.cache_read).sum(),
         cache_write_tokens: lanes.iter().map(|lane| lane.cache_write).sum(),
         subagent_sessions: if entry.days.is_some() {
-            child_days.len() as u32
+            if entry.subagent_models.is_empty() {
+                child_days.len() as u32
+            } else {
+                entry
+                    .subagent_models
+                    .iter()
+                    .filter(|child| {
+                        child
+                            .days
+                            .iter()
+                            .any(|day| local_date(day.timestamp) == Some(date))
+                    })
+                    .map(|child| child.session_id.as_str())
+                    .collect::<std::collections::HashSet<_>>()
+                    .len() as u32
+            }
         } else {
             entry.subagent_sessions
         },
@@ -1825,6 +1865,7 @@ fn entry_on_day(entry: &UsageEntry, date: NaiveDate) -> Option<UsageEntry> {
         days: None,
         hours: Vec::new(),
         model_lanes: Vec::new(),
+        subagent_models,
     })
 }
 
@@ -1850,40 +1891,55 @@ struct ModelShare {
 ///
 /// Two adjustments keep the ranking consistent with the totals above it:
 ///
-/// - Sub-agent spend rides the session-level model. The lanes cover only the
-///   parent's own messages, so dropping the folded amount would make every
-///   model row short by exactly the sessions that delegate the most.
+/// - Folded sub-agent spend uses each child's model; the parent's message
+///   lanes cover only its own work. Older scans lacking child model data fall
+///   back to the session-level model.
 /// - A provider that reported no per-message cost would otherwise show the
 ///   model as free while the KPI above it charges for it; the session's own
 ///   estimate then lands on its biggest share instead.
 fn entry_model_shares(entry: &UsageEntry) -> Vec<ModelShare> {
+    let child_total: u64 = entry
+        .subagent_models
+        .iter()
+        .map(|child| child.total_tokens())
+        .sum();
+    let parent_total = entry.total_tokens().saturating_sub(child_total);
+    let child_cost: f64 = entry
+        .subagent_models
+        .iter()
+        .map(|child| child.cost.unwrap_or_default())
+        .sum();
+    let parent_cost = (entry.cost.unwrap_or_default() - child_cost).max(0.0);
     let mut shares: Vec<(Option<String>, u64, f64)> = if entry.model_lanes.is_empty() {
-        vec![(
-            entry.model.clone(),
-            entry.total_tokens(),
-            entry.cost.unwrap_or_default(),
-        )]
+        vec![(entry.model.clone(), parent_total, parent_cost)]
     } else {
         let mut lanes: Vec<(Option<String>, u64, f64)> = entry
             .model_lanes
             .iter()
             .map(|lane| (Some(lane.model.clone()), lane.total, lane.cost))
             .collect();
-        if entry.subagent_tokens > 0 {
+        if entry.subagent_models.is_empty() && entry.subagent_tokens > 0 {
             lanes.push((entry.model.clone(), entry.subagent_tokens, 0.0));
         }
+        let missing_tokens = parent_total.saturating_sub(lanes.iter().map(|lane| lane.1).sum());
+        let mut missing_index = None;
+        if missing_tokens > 0 {
+            missing_index = Some(lanes.len());
+            lanes.push((entry.model.clone(), missing_tokens, 0.0));
+        }
         if let Some(cost) = entry.cost {
-            let remainder = (cost - lanes.iter().map(|lane| lane.2).sum::<f64>()).max(0.0);
+            let remainder =
+                (cost - child_cost - lanes.iter().map(|lane| lane.2).sum::<f64>()).max(0.0);
             if remainder > 0.0 {
                 // A folded sub-agent has no model-level cost lane; book its
                 // remaining charge to the parent's named model when possible.
-                let recipient = entry
-                    .model
-                    .as_deref()
-                    .and_then(|model| {
-                        lanes
-                            .iter()
-                            .position(|lane| lane.0.as_deref() == Some(model))
+                let recipient = missing_index
+                    .or_else(|| {
+                        entry.model.as_deref().and_then(|model| {
+                            lanes
+                                .iter()
+                                .position(|lane| lane.0.as_deref() == Some(model))
+                        })
                     })
                     .unwrap_or(0);
                 if let Some(lane) = lanes.get_mut(recipient) {
@@ -1894,15 +1950,33 @@ fn entry_model_shares(entry: &UsageEntry) -> Vec<ModelShare> {
         lanes
     };
 
+    // A child's work must not make the parent's session count migrate to the
+    // child's model when its token volume is larger.
+    let primary_model = shares
+        .iter()
+        .max_by_key(|share| share.1)
+        .map(|share| share.0.clone());
+    shares.extend(entry.subagent_models.iter().map(|child| {
+        (
+            child.model.clone(),
+            child.total_tokens(),
+            child.cost.unwrap_or_default(),
+        )
+    }));
+
     shares.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut counted_primary = false;
     shares
         .into_iter()
-        .enumerate()
-        .map(|(index, (model, total, cost))| ModelShare {
-            model,
-            total,
-            cost,
-            primary: index == 0,
+        .map(|(model, total, cost)| {
+            let primary = !counted_primary && primary_model.as_ref() == Some(&model);
+            counted_primary |= primary;
+            ModelShare {
+                model,
+                total,
+                cost,
+                primary,
+            }
         })
         .collect()
 }
@@ -1950,23 +2024,98 @@ fn pricing_table(cached: Option<Arc<ModelsDevTable>>) -> Option<Arc<ModelsDevTab
 /// and allocation-light — it runs on the background executor between the
 /// scan and the views, never in render.
 pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDevTable>) {
-    for entry in &mut stats.entries {
-        let cost = entry
-            .model
-            .as_deref()
+    let price = |model: Option<&str>, input, output, reasoning, cache_read, cache_write| {
+        model
             .and_then(model_id_part)
             .and_then(|id| table.and_then(|table| table.resolve_model_cost(id)))
             .map(|rate| {
-                rate.charge(entry.input_tokens, rate.input)
-                    + rate.charge(
-                        entry.output_tokens.saturating_add(entry.reasoning_tokens),
-                        rate.output,
-                    )
-                    + rate.charge(entry.cache_read_tokens, rate.cache_read)
-                    + rate.charge(entry.cache_write_tokens, rate.cache_write)
-            });
+                rate.charge(input, rate.input)
+                    + rate.charge(output + reasoning, rate.output)
+                    + rate.charge(cache_read, rate.cache_read)
+                    + rate.charge(cache_write, rate.cache_write)
+            })
+    };
+    for entry in &mut stats.entries {
+        let mut parent_tokens = [
+            entry.input_tokens,
+            entry.output_tokens,
+            entry.reasoning_tokens,
+            entry.cache_read_tokens,
+            entry.cache_write_tokens,
+        ];
+        for child in &mut entry.subagent_models {
+            let child_tokens = [
+                child.input_tokens,
+                child.output_tokens,
+                child.reasoning_tokens,
+                child.cache_read_tokens,
+                child.cache_write_tokens,
+            ];
+            for (parent, child) in parent_tokens.iter_mut().zip(child_tokens) {
+                *parent = parent.saturating_sub(child);
+            }
+            child.cost = if child.total_tokens() == 0 {
+                Some(0.0)
+            } else {
+                price(
+                    child.model.as_deref(),
+                    child.input_tokens,
+                    child.output_tokens,
+                    child.reasoning_tokens,
+                    child.cache_read_tokens,
+                    child.cache_write_tokens,
+                )
+            };
+        }
+        let mut assigned = [0u64; 5];
+        let mut lane_cost = Some(0.0);
+        for lane in &mut entry.model_lanes {
+            for (sum, tokens) in assigned.iter_mut().zip(lane.tokens) {
+                *sum = sum.saturating_add(tokens);
+            }
+            let tokens = lane.tokens;
+            lane.cost = if tokens.iter().all(|count| *count == 0) {
+                0.0
+            } else {
+                let cost = price(
+                    Some(&lane.model),
+                    tokens[0],
+                    tokens[1],
+                    tokens[2],
+                    tokens[3],
+                    tokens[4],
+                );
+                lane_cost = lane_cost.and_then(|subtotal| Some(subtotal + cost?));
+                cost.unwrap_or_default()
+            };
+        }
+        let missing = std::array::from_fn::<_, 5, _>(|index| {
+            parent_tokens[index].saturating_sub(assigned[index])
+        });
+        let remainder_cost = if missing.iter().all(|tokens| *tokens == 0) {
+            Some(0.0)
+        } else {
+            price(
+                entry.model.as_deref(),
+                missing[0],
+                missing[1],
+                missing[2],
+                missing[3],
+                missing[4],
+            )
+        };
+        let parent_cost = lane_cost.and_then(|subtotal| Some(subtotal + remainder_cost?));
+        let cost = parent_cost.and_then(|parent_cost| {
+            entry
+                .subagent_models
+                .iter()
+                .try_fold(parent_cost, |total, child| Some(total + child.cost?))
+        });
         let Some(cost) = cost else {
             entry.cost = None;
+            for child in &mut entry.subagent_models {
+                child.cost = None;
+            }
             if let Some(days) = &mut entry.days {
                 for share in days {
                     share.cost = 0.0;
@@ -1980,25 +2129,80 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
             }
             continue;
         };
-        let total = entry.total_tokens();
-        let share = |tokens: u64| {
-            if total == 0 {
+        let own_total: u64 = parent_tokens.iter().sum();
+        let own_cost = parent_cost.unwrap_or_default();
+        let own_share = |tokens: u64| {
+            if own_total == 0 {
                 0.0
             } else {
-                cost * tokens as f64 / total as f64
+                own_cost * tokens as f64 / own_total as f64
             }
         };
         entry.cost = Some(cost);
         if let Some(days) = &mut entry.days {
+            let mut child_costs: HashMap<NaiveDate, f64> = HashMap::new();
+            for child in &entry.subagent_models {
+                let total = child.total_tokens();
+                for day in &child.days {
+                    if let Some(date) = local_date(day.timestamp) {
+                        *child_costs.entry(date).or_default() += if total == 0 {
+                            0.0
+                        } else {
+                            child.cost.unwrap_or_default() * day.total as f64 / total as f64
+                        };
+                    }
+                }
+            }
+            let mut child_day_totals: HashMap<NaiveDate, u64> = HashMap::new();
+            for day in days.iter().filter(|day| day.subagent) {
+                if let Some(date) = local_date(day.timestamp) {
+                    *child_day_totals.entry(date).or_default() += day.total;
+                }
+            }
             for day in days {
-                day.cost = share(day.total);
+                day.cost = if day.subagent {
+                    local_date(day.timestamp).map_or(0.0, |date| {
+                        let total = child_day_totals.get(&date).copied().unwrap_or_default();
+                        if total == 0 {
+                            0.0
+                        } else {
+                            child_costs.get(&date).copied().unwrap_or_default() * day.total as f64
+                                / total as f64
+                        }
+                    })
+                } else {
+                    own_share(day.total)
+                };
             }
         }
-        for hour in &mut entry.hours {
-            hour.cost = share(hour.input + hour.output + hour.cache_read + hour.cache_write);
+        let child_hours: usize = entry
+            .subagent_models
+            .iter()
+            .map(|child| child.hours.len())
+            .sum();
+        let own_hours = entry.hours.len().saturating_sub(child_hours);
+        for hour in &mut entry.hours[..own_hours] {
+            hour.cost = own_share(hour.input + hour.output + hour.cache_read + hour.cache_write);
+        }
+        let mut remaining_hours = &mut entry.hours[own_hours..];
+        for child in &entry.subagent_models {
+            let count = child.hours.len().min(remaining_hours.len());
+            let (child_hours, rest) = remaining_hours.split_at_mut(count);
+            remaining_hours = rest;
+            let child_total = child.total_tokens();
+            for hour in child_hours {
+                let tokens = hour.input + hour.output + hour.cache_read + hour.cache_write;
+                hour.cost = if child_total == 0 {
+                    0.0
+                } else {
+                    child.cost.unwrap_or_default() * tokens as f64 / child_total as f64
+                };
+            }
         }
         for lane in &mut entry.model_lanes {
-            lane.cost = share(lane.total);
+            if lane.tokens.iter().all(|tokens| *tokens == 0) {
+                lane.cost = own_share(lane.total);
+            }
         }
     }
 }
@@ -2064,6 +2268,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     let mut range_days: std::collections::HashSet<NaiveDate> = std::collections::HashSet::new();
 
     for entry in &stats.entries {
+        let mut session_days = std::collections::HashSet::new();
         // Totals, rankings, and the active-day count stay gated by the whole
         // session's last touch, not by where its messages landed: a session
         // that began before the window and continued into it spent that usage
@@ -2128,7 +2333,9 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
             day.cache_read = day.cache_read.saturating_add(lane.cache_read);
             day.cache_write = day.cache_write.saturating_add(lane.cache_write);
             day.cost += lane.cost;
-            day.sessions += 1;
+            if session_days.insert(date) {
+                day.sessions += 1;
+            }
         }
         if let Some(selected) = selected_day {
             if entry.hours.is_empty() {
@@ -2473,6 +2680,7 @@ mod tests {
             days: None,
             hours: Vec::new(),
             model_lanes: Vec::new(),
+            subagent_models: Vec::new(),
         }
     }
 
@@ -2533,6 +2741,9 @@ mod tests {
             model: "prov/m1".into(),
             total: 500_000,
             cost: 321.0,
+            tokens: [0; 5],
+            days: Vec::new(),
+            hours: Vec::new(),
         }];
 
         let mut unpriced = entry(1_800_000, "prov/other", 10);
@@ -2959,16 +3170,25 @@ mod tests {
                 model: "p/first".to_owned(),
                 total: 100,
                 cost: 0.0,
+                tokens: [0; 5],
+                days: Vec::new(),
+                hours: Vec::new(),
             },
             UsageModelLane {
                 model: "p/second".to_owned(),
                 total: 40,
                 cost: 0.0,
+                tokens: [0; 5],
+                days: Vec::new(),
+                hours: Vec::new(),
             },
             UsageModelLane {
                 model: "p/third".to_owned(),
                 total: 20,
                 cost: 0.0,
+                tokens: [0; 5],
+                days: Vec::new(),
+                hours: Vec::new(),
             },
         ];
         // The session spent 160 of its own plus 50 folded in from a sub-agent,

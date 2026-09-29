@@ -475,9 +475,26 @@ pub(crate) fn fetch_usage_stats(
     // a HashMap's visit order cannot be relied on to bring them together. The
     // partition is also what makes the result deterministic — the same store
     // has to produce the same totals twice.
-    let (subagents, parents): (Vec<_>, Vec<_>) = rows_by_id
+    let depths: HashMap<String, usize> = rows_by_id
+        .iter()
+        .filter(|(_, facts)| facts.kind == SessionKind::SubAgent)
+        .map(|(id, facts)| {
+            let mut depth = 0;
+            let mut parent = facts.parent.as_deref();
+            while let Some(next) = parent {
+                depth += 1;
+                if depth > rows_by_id.len() {
+                    break;
+                }
+                parent = rows_by_id.get(next).and_then(|row| row.parent.as_deref());
+            }
+            (id.clone(), depth)
+        })
+        .collect();
+    let (mut subagents, parents): (Vec<_>, Vec<_>) = rows_by_id
         .into_iter()
         .partition(|(_, facts)| facts.kind == SessionKind::SubAgent);
+    subagents.sort_by_key(|(id, _)| depths.get(id).copied().unwrap_or_default());
     let rows: Vec<_> = parents.into_iter().chain(subagents).collect();
     // Fetch the selected day's independent sessions in a bounded batch so
     // their HTTP latencies do not add up serially against the RPC deadline.
@@ -546,10 +563,12 @@ pub(crate) fn fetch_usage_stats(
                 if let Some(split) = split {
                     entry.days = Some(split.days);
                     entry.hours = split.hours;
+                    entry.model_lanes = split.models;
                 }
-                fold_subagent_into(&mut entries[parent_index], &entry);
-                // A sub-agent is not an entry of its own; the parent's model,
-                // directory, and timestamp already describe the work.
+                fold_subagent_into(&mut entries[parent_index], &entry, &id);
+                entry_index.insert(id.clone(), parent_index);
+                // The parent's entry owns the totals; the child's model is
+                // retained separately for the model and provider rankings.
                 continue;
             }
             // An orphaned sub-agent (its parent was deleted or aged out of the
@@ -584,7 +603,219 @@ pub(crate) fn fetch_usage_stats(
 /// The cost joins too, and it is merged rather than replaced: a sub-agent's
 /// estimate is additive spend, and throwing it away would make the page's
 /// "cost" KPI quietly low on exactly the sessions that delegate the most.
-fn fold_subagent_into(parent: &mut UsageEntry, child: &UsageEntry) {
+fn fold_subagent_into(parent: &mut UsageEntry, child: &UsageEntry, child_id: &str) {
+    let mut child_days = child
+        .days
+        .clone()
+        .unwrap_or_else(|| vec![entry_whole_day(child)]);
+    let missing_input = child
+        .input_tokens
+        .saturating_sub(child_days.iter().map(|day| day.input).sum());
+    let missing_output = child
+        .output_tokens
+        .saturating_add(child.reasoning_tokens)
+        .saturating_sub(child_days.iter().map(|day| day.output).sum());
+    let missing_read = child
+        .cache_read_tokens
+        .saturating_sub(child_days.iter().map(|day| day.cache_read).sum());
+    let missing_write = child
+        .cache_write_tokens
+        .saturating_sub(child_days.iter().map(|day| day.cache_write).sum());
+    let missing_total = missing_input
+        .saturating_add(missing_output)
+        .saturating_add(missing_read)
+        .saturating_add(missing_write);
+    if missing_total > 0 {
+        child_days.push(UsageDayShare {
+            timestamp: child.timestamp,
+            direct: missing_input.saturating_add(missing_output),
+            total: missing_total,
+            input: missing_input,
+            output: missing_output,
+            cache_read: missing_read,
+            cache_write: missing_write,
+            cost: (child.cost.unwrap_or_default()
+                - child_days.iter().map(|day| day.cost).sum::<f64>())
+            .max(0.0),
+            ..Default::default()
+        });
+    }
+    let mut child_hours = if child.hours.is_empty() {
+        vec![entry_whole_hour(child)]
+    } else {
+        child.hours.clone()
+    };
+    if !child.hours.is_empty() {
+        let missing = [
+            child.input_tokens,
+            child.output_tokens.saturating_add(child.reasoning_tokens),
+            child.cache_read_tokens,
+            child.cache_write_tokens,
+        ];
+        let recorded = [
+            child_hours.iter().map(|hour| hour.input).sum(),
+            child_hours.iter().map(|hour| hour.output).sum(),
+            child_hours.iter().map(|hour| hour.cache_read).sum(),
+            child_hours.iter().map(|hour| hour.cache_write).sum(),
+        ];
+        let remaining =
+            std::array::from_fn::<_, 4, _>(|index| missing[index].saturating_sub(recorded[index]));
+        if remaining.iter().any(|tokens| *tokens > 0) {
+            child_hours.push(fintwind_protocol::provider_session::UsageHourShare {
+                timestamp: child.timestamp,
+                estimated: true,
+                input: remaining[0],
+                output: remaining[1],
+                cache_read: remaining[2],
+                cache_write: remaining[3],
+                cost: 0.0,
+            });
+        }
+    }
+    let mut model_parts = child
+        .model_lanes
+        .iter()
+        .filter(|lane| lane.total > 0)
+        .map(
+            |lane| fintwind_protocol::provider_session::UsageSubagentModel {
+                session_id: child_id.to_owned(),
+                model: Some(lane.model.clone()),
+                input_tokens: lane.tokens[0],
+                output_tokens: lane.tokens[1],
+                reasoning_tokens: lane.tokens[2],
+                cache_read_tokens: lane.tokens[3],
+                cache_write_tokens: lane.tokens[4],
+                cost: Some(lane.cost),
+                days: lane.days.clone(),
+                hours: lane.hours.clone(),
+            },
+        )
+        .collect::<Vec<_>>();
+    let represented = [
+        model_parts
+            .iter()
+            .map(|part| part.input_tokens)
+            .sum::<u64>(),
+        model_parts
+            .iter()
+            .map(|part| part.output_tokens)
+            .sum::<u64>(),
+        model_parts
+            .iter()
+            .map(|part| part.reasoning_tokens)
+            .sum::<u64>(),
+        model_parts
+            .iter()
+            .map(|part| part.cache_read_tokens)
+            .sum::<u64>(),
+        model_parts
+            .iter()
+            .map(|part| part.cache_write_tokens)
+            .sum::<u64>(),
+    ];
+    let totals = [
+        child.input_tokens,
+        child.output_tokens,
+        child.reasoning_tokens,
+        child.cache_read_tokens,
+        child.cache_write_tokens,
+    ];
+    let remainder =
+        std::array::from_fn::<_, 5, _>(|index| totals[index].saturating_sub(represented[index]));
+    if model_parts.is_empty() || remainder.iter().any(|tokens| *tokens > 0) {
+        let mut accounted_days = HashSet::new();
+        let remainder_days = child_days
+            .iter()
+            .filter_map(|day| {
+                let same_day = model_parts
+                    .iter()
+                    .flat_map(|part| &part.days)
+                    .filter(|part| {
+                        local_day(part.timestamp) == local_day(day.timestamp)
+                            && !accounted_days.contains(&local_day(day.timestamp))
+                    });
+                let parts: Vec<_> = same_day.collect();
+                accounted_days.insert(local_day(day.timestamp));
+                let mut remaining = *day;
+                remaining.input = day
+                    .input
+                    .saturating_sub(parts.iter().map(|part| part.input).sum());
+                remaining.output = day
+                    .output
+                    .saturating_sub(parts.iter().map(|part| part.output).sum());
+                remaining.cache_read = day
+                    .cache_read
+                    .saturating_sub(parts.iter().map(|part| part.cache_read).sum());
+                remaining.cache_write = day
+                    .cache_write
+                    .saturating_sub(parts.iter().map(|part| part.cache_write).sum());
+                remaining.total = remaining.input
+                    + remaining.output
+                    + remaining.cache_read
+                    + remaining.cache_write;
+                remaining.direct = remaining.input + remaining.output;
+                remaining.cost =
+                    (day.cost - parts.iter().map(|part| part.cost).sum::<f64>()).max(0.0);
+                (remaining.total > 0).then_some(remaining)
+            })
+            .collect();
+        let mut accounted_hours = HashSet::new();
+        let remainder_hours = child_hours
+            .iter()
+            .filter_map(|hour| {
+                let parts: Vec<_> = model_parts
+                    .iter()
+                    .flat_map(|part| &part.hours)
+                    .filter(|part| {
+                        part.timestamp / 3600 == hour.timestamp / 3600
+                            && !accounted_hours.contains(&(hour.timestamp / 3600))
+                    })
+                    .collect();
+                accounted_hours.insert(hour.timestamp / 3600);
+                let mut remaining = *hour;
+                remaining.input = hour
+                    .input
+                    .saturating_sub(parts.iter().map(|part| part.input).sum());
+                remaining.output = hour
+                    .output
+                    .saturating_sub(parts.iter().map(|part| part.output).sum());
+                remaining.cache_read = hour
+                    .cache_read
+                    .saturating_sub(parts.iter().map(|part| part.cache_read).sum());
+                remaining.cache_write = hour
+                    .cache_write
+                    .saturating_sub(parts.iter().map(|part| part.cache_write).sum());
+                remaining.estimated = true;
+                (remaining.input + remaining.output + remaining.cache_read + remaining.cache_write
+                    > 0)
+                .then_some(remaining)
+            })
+            .collect();
+        model_parts.push(fintwind_protocol::provider_session::UsageSubagentModel {
+            session_id: child_id.to_owned(),
+            model: child.model.clone(),
+            input_tokens: remainder[0],
+            output_tokens: remainder[1],
+            reasoning_tokens: remainder[2],
+            cache_read_tokens: remainder[3],
+            cache_write_tokens: remainder[4],
+            cost: child.cost.map(|cost| {
+                (cost
+                    - model_parts
+                        .iter()
+                        .map(|part| part.cost.unwrap_or_default())
+                        .sum::<f64>())
+                .max(0.0)
+            }),
+            days: remainder_days,
+            hours: remainder_hours,
+        });
+    }
+    let priced_hours = model_parts
+        .iter()
+        .flat_map(|part| part.hours.iter().copied())
+        .collect::<Vec<_>>();
+    parent.subagent_models.extend(model_parts);
     // Preserve the child's date (and hour when available) before merging its
     // cumulative totals. The parent's last touch is not when the child spent.
     if parent.days.is_none() {
@@ -593,22 +824,15 @@ fn fold_subagent_into(parent: &mut UsageEntry, child: &UsageEntry) {
     if parent.hours.is_empty() {
         parent.hours.push(entry_whole_hour(parent));
     }
-    parent.days.as_mut().unwrap().extend(
-        child
-            .days
-            .clone()
-            .unwrap_or_else(|| vec![entry_whole_day(child)])
-            .into_iter()
-            .map(|mut share| {
-                share.subagent = true;
-                share
-            }),
-    );
-    if child.hours.is_empty() {
-        parent.hours.push(entry_whole_hour(child));
-    } else {
-        parent.hours.extend(child.hours.iter().copied());
-    }
+    parent
+        .days
+        .as_mut()
+        .unwrap()
+        .extend(child_days.into_iter().map(|mut share| {
+            share.subagent = true;
+            share
+        }));
+    parent.hours.extend(priced_hours);
     parent.input_tokens = parent.input_tokens.saturating_add(child.input_tokens);
     parent.output_tokens = parent.output_tokens.saturating_add(child.output_tokens);
     parent.reasoning_tokens = parent
@@ -762,6 +986,7 @@ fn usage_entry_from_row(facts: &RowFacts) -> Option<UsageEntry> {
         days: None,
         hours: Vec::new(),
         model_lanes: Vec::new(),
+        subagent_models: Vec::new(),
     })
 }
 
@@ -951,11 +1176,69 @@ fn session_day_split(
             let Some(model) = usage.model else {
                 continue;
             };
+            let tokens = [
+                usage.input,
+                usage.output.saturating_sub(usage.reasoning),
+                usage.reasoning,
+                usage.cache_read,
+                usage.cache_write,
+            ];
             match index_of_model.get(&model) {
                 Some(&index) => {
                     let existing = &mut models[index];
                     existing.total = existing.total.saturating_add(usage.total);
                     existing.cost += usage.cost;
+                    for (sum, part) in existing.tokens.iter_mut().zip(tokens) {
+                        *sum = sum.saturating_add(part);
+                    }
+                    if let Some(day) = existing
+                        .days
+                        .iter_mut()
+                        .find(|day| local_day(day.timestamp) == local_day(usage.timestamp))
+                    {
+                        day.direct = day.direct.saturating_add(usage.direct);
+                        day.total = day.total.saturating_add(usage.total);
+                        day.input = day.input.saturating_add(usage.input);
+                        day.output = day.output.saturating_add(usage.output);
+                        day.cache_read = day.cache_read.saturating_add(usage.cache_read);
+                        day.cache_write = day.cache_write.saturating_add(usage.cache_write);
+                        day.cost += usage.cost;
+                    } else {
+                        existing.days.push(UsageDayShare {
+                            timestamp: usage.timestamp,
+                            direct: usage.direct,
+                            total: usage.total,
+                            input: usage.input,
+                            output: usage.output,
+                            cache_read: usage.cache_read,
+                            cache_write: usage.cache_write,
+                            cost: usage.cost,
+                            ..Default::default()
+                        });
+                    }
+                    if let Some(hour) = existing
+                        .hours
+                        .iter_mut()
+                        .find(|hour| hour.timestamp / 3600 == usage.timestamp / 3600)
+                    {
+                        hour.input = hour.input.saturating_add(usage.input);
+                        hour.output = hour.output.saturating_add(usage.output);
+                        hour.cache_read = hour.cache_read.saturating_add(usage.cache_read);
+                        hour.cache_write = hour.cache_write.saturating_add(usage.cache_write);
+                        hour.cost += usage.cost;
+                    } else {
+                        existing
+                            .hours
+                            .push(fintwind_protocol::provider_session::UsageHourShare {
+                                timestamp: usage.timestamp,
+                                estimated: false,
+                                input: usage.input,
+                                output: usage.output,
+                                cache_read: usage.cache_read,
+                                cache_write: usage.cache_write,
+                                cost: usage.cost,
+                            });
+                    }
                 }
                 None => {
                     index_of_model.insert(model.clone(), models.len());
@@ -963,6 +1246,27 @@ fn session_day_split(
                         model,
                         total: usage.total,
                         cost: usage.cost,
+                        tokens,
+                        days: vec![UsageDayShare {
+                            timestamp: usage.timestamp,
+                            direct: usage.direct,
+                            total: usage.total,
+                            input: usage.input,
+                            output: usage.output,
+                            cache_read: usage.cache_read,
+                            cache_write: usage.cache_write,
+                            cost: usage.cost,
+                            ..Default::default()
+                        }],
+                        hours: vec![fintwind_protocol::provider_session::UsageHourShare {
+                            timestamp: usage.timestamp,
+                            estimated: false,
+                            input: usage.input,
+                            output: usage.output,
+                            cache_read: usage.cache_read,
+                            cache_write: usage.cache_write,
+                            cost: usage.cost,
+                        }],
                     });
                 }
             }
@@ -1008,6 +1312,7 @@ struct MessageUsage {
     total: u64,
     input: u64,
     output: u64,
+    reasoning: u64,
     cache_read: u64,
     cache_write: u64,
     model: Option<String>,
@@ -1045,6 +1350,7 @@ fn message_usage(row: &Value) -> Option<MessageUsage> {
         total,
         input,
         output: output.saturating_add(reasoning),
+        reasoning,
         cache_read,
         cache_write,
         // The message's own model, not the session's: a session that switched
@@ -2095,6 +2401,7 @@ mod tests {
             days: None,
             hours: Vec::new(),
             model_lanes: Vec::new(),
+            subagent_models: Vec::new(),
         };
         let child = UsageEntry {
             timestamp: 11,
@@ -2112,9 +2419,10 @@ mod tests {
             days: None,
             hours: Vec::new(),
             model_lanes: Vec::new(),
+            subagent_models: Vec::new(),
         };
 
-        fold_subagent_into(&mut parent, &child);
+        fold_subagent_into(&mut parent, &child, "child");
 
         // Every lane moved, so the breakdown agrees with the total.
         assert_eq!(parent.total_tokens(), 1_175 + 53);

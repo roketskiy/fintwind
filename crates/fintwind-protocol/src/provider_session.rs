@@ -180,6 +180,40 @@ pub struct UsageEntry {
     /// usage to the last one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_lanes: Vec<UsageModelLane>,
+    /// Folded sub-agents retain their own model and token mix for rankings and
+    /// pricing; they are not counted as additional top-level sessions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subagent_models: Vec<UsageSubagentModel>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageSubagentModel {
+    #[serde(default)]
+    pub session_id: String,
+    pub model: Option<String>,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_write_tokens: u64,
+    #[serde(default)]
+    pub cost: Option<f64>,
+    /// The child session's own dates, used when filtering a selected day.
+    #[serde(default)]
+    pub days: Vec<UsageDayShare>,
+    #[serde(default)]
+    pub hours: Vec<UsageHourShare>,
+}
+
+impl UsageSubagentModel {
+    pub fn total_tokens(&self) -> u64 {
+        self.input_tokens
+            .saturating_add(self.output_tokens)
+            .saturating_add(self.reasoning_tokens)
+            .saturating_add(self.cache_read_tokens)
+            .saturating_add(self.cache_write_tokens)
+    }
 }
 
 /// One local day's share of a session's usage. `timestamp` is the unix second
@@ -235,6 +269,14 @@ pub struct UsageModelLane {
     /// Sum of the per-message costs, which only exist when the provider
     /// reported them.
     pub cost: f64,
+    /// Message-level token categories, used to price a switching sub-agent
+    /// under each model's own rate.
+    #[serde(default)]
+    pub tokens: [u64; 5],
+    #[serde(default)]
+    pub days: Vec<UsageDayShare>,
+    #[serde(default)]
+    pub hours: Vec<UsageHourShare>,
 }
 
 impl UsageEntry {

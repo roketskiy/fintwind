@@ -4,8 +4,10 @@
 //! background executor. UI surfaces only paint the cached state below.
 
 use crate::theme::ui_px;
+use crate::ui::scrollbar::{self, ScrollbarState};
+use std::rc::Rc;
 
-use gpui::{KeyBinding, actions};
+use gpui::{KeyBinding, ScrollHandle, actions};
 
 use super::*;
 
@@ -78,6 +80,13 @@ pub(super) struct CommitDialogState {
     commit_focus: FocusHandle,
     commit_push_focus: FocusHandle,
     push_focus: FocusHandle,
+    /// Scroll state for the message box. A Code-mode `ComposerInput` sizes to
+    /// its content, so the embedder — not the field — owns the viewport and
+    /// its scrollbar, the same arrangement the right panel's file editor uses.
+    /// Without it a long commit message grows past the fixed box and paints
+    /// over the rows below it.
+    message_scroll: ScrollHandle,
+    message_scrollbar: Rc<ScrollbarState>,
 }
 
 impl CommitDialogState {
@@ -169,6 +178,8 @@ impl Fintwind {
             commit_focus: cx.focus_handle(),
             commit_push_focus: cx.focus_handle(),
             push_focus: cx.focus_handle(),
+            message_scroll: ScrollHandle::new(),
+            message_scrollbar: ScrollbarState::new(),
         });
         // Like Fintwind's other deferred surfaces, the modal joins the dispatch
         // tree only after it has drawn. Focus it two frames later so typing
@@ -536,6 +547,8 @@ impl Fintwind {
         let theme = Theme::current(cx);
         let branch = dialog.snapshot.branch.clone();
         let message = dialog.message.clone();
+        let message_scroll = dialog.message_scroll.clone();
+        let message_scrollbar = dialog.message_scrollbar.clone();
         let include_unstaged = dialog.include_unstaged;
         let pending = self
             .commit_operation
@@ -746,12 +759,31 @@ impl Fintwind {
             .child(
                 div()
                     .h(px(112.0))
-                    .px(px(16.0))
-                    .py(px(10.0))
-                    .text_size(ui_px(14.0))
-                    .line_height(ui_px(21.0))
-                    .text_color(theme.text)
-                    .child(message),
+                    .relative()
+                    .child(
+                        div()
+                            .id("commit-dialog-message")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&message_scroll)
+                            .child(
+                                div()
+                                    .w_full()
+                                    .px(px(16.0))
+                                    .py(px(10.0))
+                                    // Reserve a gutter on the right for the
+                                    // overlay scrollbar pinned to the viewport
+                                    // edge, so it never sits under wrapped
+                                    // text — the same inset the file editor
+                                    // keeps beside its scrollbar.
+                                    .pr(px(26.0))
+                                    .text_size(ui_px(14.0))
+                                    .line_height(ui_px(21.0))
+                                    .text_color(theme.text)
+                                    .child(message),
+                            ),
+                    )
+                    .child(scrollbar::vertical(&message_scroll, &message_scrollbar)),
             )
             .child(div().px(px(8.0)).child(include))
             .when_some(error, |card, error| {

@@ -18,6 +18,18 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.2.3]
+
+- 新增 Git 历史面板：从会话胶囊即可进入，带本地/云端标签；超长提交信息不再溢出卡片、遮挡按钮
+- 新增 12 套可切换主题家族：VS Code Modern、Codex、Nord、Linear、Notion、One、Proof、Raycast、Rose Pine、Solarized、Vercel、VS Code Plus，原有 Fintwind 主题保留
+- 文件界面支持多开与回退
+- 优化用量统计：子代理的 token 计入总量，模型和提供商排行按子代理实际使用的模型归属，费用按各自模型估算，并改用 models.dev 官方 API 价
+- 优化模型界面的刷新与加载状态
+- 侧边栏项目会话改为逐步显示
+- 对话结尾补充角色、模型和耗时；信息缺失时省略，不再显示不可靠的 token 统计
+- 修复浅色模式下 pwsh 行内预测提示不可见的问题
+- 顶部会话标签统一为 190 px 宽
+
 ## [0.2.2]
 
 - Open multiple sessions in tabs within one window, with more stable unread indicators

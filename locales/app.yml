@@ -731,6 +731,10 @@ sidebar.status_waiting:
   en: Waiting
 sidebar.status_failed:
   en: Failed
+sidebar.show_more:
+  en: Show more
+sidebar.show_more_remaining:
+  en: "%{count} hidden"
 
 project.new_project:
   en: New project…

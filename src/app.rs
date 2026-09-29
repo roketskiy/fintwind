@@ -1883,10 +1883,11 @@ pub struct Fintwind {
     /// Fingerprint + snapshot pair backing `sidebar_rows_cached`.
     sidebar_rows_fingerprint: Cell<Option<u64>>,
     sidebar_rows_snapshot: RefCell<Rc<Vec<SidebarRow>>>,
-    /// Scroll state of the session list inside each unfolded sidebar group,
-    /// keyed by project id, so a group scrolls on its own and keeps its
-    /// position across folding it away and back.
-    sidebar_group_scrolls: RefCell<HashMap<Uuid, SidebarGroupScroll>>,
+    /// How many sessions each unfolded project group currently reveals, keyed
+    /// by project id. Groups without an entry show the default slice; the count
+    /// is dropped on fold and on project removal, so every expansion starts
+    /// fresh and nothing lingers past the group it belongs to.
+    sidebar_group_visible_counts: RefCell<HashMap<Uuid, usize>>,
     transcript_row_kinds: RefCell<Vec<TranscriptRowKind>>,
     /// Fingerprint of the transcript inputs `transcript_row_kinds` was folded
     /// from, so an unchanged transcript costs nothing on a frame. `None` until
@@ -2063,7 +2064,7 @@ pub use image_preview::init as init_image_preview_keys;
 pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
 pub use sidebar::init as init_sidebar_keys;
-use sidebar::{SidebarGroupScroll, SidebarRow};
+use sidebar::SidebarRow;
 pub use skills_page::init as init_skills_keys;
 use streaming::*;
 use tabs::SessionTabDrag;
@@ -3435,7 +3436,7 @@ impl Fintwind {
                 sidebar_row_cache: RefCell::new(Vec::new()),
                 sidebar_rows_fingerprint: Cell::new(None),
                 sidebar_rows_snapshot: RefCell::new(Rc::new(Vec::new())),
-                sidebar_group_scrolls: RefCell::new(HashMap::new()),
+                sidebar_group_visible_counts: RefCell::new(HashMap::new()),
                 transcript_row_kinds: RefCell::new(Vec::new()),
                 transcript_row_kinds_fingerprint: Cell::new(None),
                 transcript_navigation_turns: RefCell::new(Rc::new(Vec::new())),

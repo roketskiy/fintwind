@@ -74,7 +74,13 @@ settings.mcp_market_keywords: MCP マーケット smithery ウェブ検索 学�
 daemon.reveal_token: トークンを表示
 daemon.hide_token: トークンを隠す
 settings.theme: テーマ
-settings.theme_description: システム、ライト、ダークのいずれかのテーマを選択します
+settings.theme_description: システムに合わせるか、ライト・ダークモードを選択します
+settings.scheme: 配色テーマ
+settings.scheme_description: ライト・ダーク両方に適用する配色を選択します
+settings.scheme_default: Fintwind
+settings.scheme_vscode: VS Code Modern
+settings.scheme_codex: Codex
+settings.scheme_nord: Nord
 settings.ui_text_size: インターフェースの文字サイズ
 settings.ui_text_size_description: アプリのインターフェース文字のサイズを調整します。変更はすぐに反映されます。
 settings.code_text_size: コードの文字サイズ

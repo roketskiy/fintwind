@@ -70,7 +70,13 @@ settings.mcp_market_keywords: MCP 市场 smithery 网页搜索 学术 论文 代
 daemon.reveal_token: 显示令牌
 daemon.hide_token: 隐藏令牌
 settings.theme: 主题
-settings.theme_description: 选择跟随系统、浅色或深色主题
+settings.theme_description: 跟随系统外观，或选择浅色、深色模式
+settings.scheme: 配色方案
+settings.scheme_description: 为浅色和深色模式选择一套配色
+settings.scheme_default: Fintwind
+settings.scheme_vscode: VS Code Modern
+settings.scheme_codex: Codex
+settings.scheme_nord: Nord
 settings.ui_text_size: 界面文字大小
 settings.ui_text_size_description: 调整应用界面文字的大小，更改立即生效。
 settings.code_text_size: 代码文字大小

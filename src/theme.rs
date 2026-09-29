@@ -3,6 +3,8 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use gpui::{App, Global, Hsla, Pixels, SharedString, Window, WindowAppearance, hsla, px, rgb};
 use parking_lot::Mutex;
 
+mod palettes;
+
 pub use fintwind_client::persistence::{
     DEFAULT_CODE_FONT_FAMILY, DEFAULT_CODE_TEXT_SCALE, DEFAULT_UI_FONT_FAMILY,
     DEFAULT_UI_TEXT_SCALE,
@@ -185,6 +187,7 @@ fn native_override(preference: ThemePreference) -> Option<bool> {
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub is_dark: bool,
+    pub scheme: ThemeScheme,
     pub canvas: Hsla,
     pub sidebar: Hsla,
     pub sidebar_drag_background: Hsla,
@@ -209,7 +212,7 @@ pub struct Theme {
     pub text_muted: Hsla,
     pub text_ghost: Hsla,
 
-    /// Brand coral. Logo, caret, live-activity pulses — nothing structural.
+    /// Theme accent for activity, focus and other interaction chrome.
     pub accent: Hsla,
     /// Accent used as text on neutral surfaces.
     pub accent_text: Hsla,
@@ -222,8 +225,7 @@ pub struct Theme {
     /// Link text and underline color.
     pub link: Hsla,
     pub resize_handle: Hsla,
-    /// Meter fills in the usage panel. Quota-meter blue by convention;
-    /// warning/danger take over as a lane fills.
+    /// Meter fills in the usage panel; warning/danger take over as a lane fills.
     pub gauge: Hsla,
 
     /// Text-selection wash. Painted *under* the glyphs, so it stays
@@ -260,6 +262,7 @@ impl Theme {
     pub fn dark() -> Self {
         Self {
             is_dark: true,
+            scheme: ThemeScheme::Default,
             canvas: rgb(0x1A1A1A).into(),
             sidebar: rgb(0x181818).into(),
             sidebar_drag_background: rgb(0x181818).into(),
@@ -312,6 +315,7 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             is_dark: false,
+            scheme: ThemeScheme::Default,
             canvas: rgb(0xFFFFFF).into(),
             sidebar: rgb(0xF9F9F9).into(),
             sidebar_drag_background: rgb(0xF9F9F9).into(),
@@ -362,10 +366,6 @@ impl Theme {
     }
 
     /// Resolve a palette family against the current light/dark appearance.
-    ///
-    /// The default scheme is intentionally the only member today. New schemes
-    /// should add a branch here and keep the semantic fields stable so views do
-    /// not need to know how a palette is authored.
     pub fn for_scheme(scheme: ThemeScheme, is_dark: bool) -> Self {
         match scheme {
             ThemeScheme::Default => {
@@ -375,6 +375,9 @@ impl Theme {
                     Self::light()
                 }
             }
+            ThemeScheme::VsCode => Self::vs_code(is_dark),
+            ThemeScheme::Codex => Self::codex(is_dark),
+            ThemeScheme::Nord => Self::nord(is_dark),
         }
     }
 }

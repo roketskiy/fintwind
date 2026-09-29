@@ -32,6 +32,7 @@ struct ConversationNavigationRailSnapshot {
     active_turn: Option<Uuid>,
     reset_generation: u64,
     theme_is_dark: bool,
+    theme_scheme: crate::theme::ThemeScheme,
 }
 
 impl PartialEq for ConversationNavigationRailSnapshot {
@@ -42,6 +43,7 @@ impl PartialEq for ConversationNavigationRailSnapshot {
             && self.active_turn == other.active_turn
             && self.reset_generation == other.reset_generation
             && self.theme_is_dark == other.theme_is_dark
+            && self.theme_scheme == other.theme_scheme
     }
 }
 
@@ -54,6 +56,7 @@ impl Default for ConversationNavigationRailSnapshot {
             active_turn: None,
             reset_generation: 0,
             theme_is_dark: true,
+            theme_scheme: crate::theme::ThemeScheme::Default,
         }
     }
 }
@@ -316,13 +319,15 @@ impl Fintwind {
                 !self.transcript_is_scrolled.get(),
             )
             .map(|index| navigation_turns[index].message_id);
+            let theme = Theme::current(cx);
             let navigation_rail_snapshot = ConversationNavigationRailSnapshot {
                 visible: navigation_rail_visible,
                 turns: navigation_turns,
                 viewport_height: f32::from(viewport_size.height),
                 active_turn,
                 reset_generation: self.navigation_rail_reset_generation.get(),
-                theme_is_dark: Theme::current(cx).is_dark,
+                theme_is_dark: theme.is_dark,
+                theme_scheme: theme.scheme,
             };
             if self.navigation_rail.read(cx).snapshot != navigation_rail_snapshot {
                 self.navigation_rail.update(cx, |rail, cx| {

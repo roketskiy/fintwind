@@ -49,6 +49,9 @@ pub struct CommitRef {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommitEntry {
     pub hash: String,
+    /// Full parent hashes, first parent first; empty for a root commit.
+    #[serde(default)]
+    pub parents: Vec<String>,
     pub short_hash: String,
     pub subject: String,
     pub author: String,

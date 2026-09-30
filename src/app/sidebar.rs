@@ -1160,14 +1160,16 @@ impl Fintwind {
         }
         let rows = self.sidebar_rows_cached();
         let Some((row_index, sessions, index)) =
-            rows.iter().enumerate().find_map(|(row_index, row)| match row {
-                SidebarRow::Group(group) if group.project_id == project_id => group
-                    .sessions
-                    .iter()
-                    .position(|session| *session == session_id)
-                    .map(|index| (row_index, group.sessions.len(), index)),
-                _ => None,
-            })
+            rows.iter()
+                .enumerate()
+                .find_map(|(row_index, row)| match row {
+                    SidebarRow::Group(group) if group.project_id == project_id => group
+                        .sessions
+                        .iter()
+                        .position(|session| *session == session_id)
+                        .map(|index| (row_index, group.sessions.len(), index)),
+                    _ => None,
+                })
         else {
             return;
         };
@@ -2014,8 +2016,14 @@ mod tests {
         // A switched-to task past the default must still appear: reveal pulls in
         // enough of its group to cover it, aligned to the steps "show more"
         // uses, and never over-reveals past a short group's own size.
-        assert_eq!(sidebar_group_visible_for(0, 6), SIDEBAR_GROUP_VISIBLE_DEFAULT);
-        assert_eq!(sidebar_group_visible_for(5, 100), SIDEBAR_GROUP_VISIBLE_DEFAULT);
+        assert_eq!(
+            sidebar_group_visible_for(0, 6),
+            SIDEBAR_GROUP_VISIBLE_DEFAULT
+        );
+        assert_eq!(
+            sidebar_group_visible_for(5, 100),
+            SIDEBAR_GROUP_VISIBLE_DEFAULT
+        );
         assert_eq!(
             sidebar_group_visible_for(6, 100),
             SIDEBAR_GROUP_VISIBLE_DEFAULT + SIDEBAR_GROUP_VISIBLE_STEP

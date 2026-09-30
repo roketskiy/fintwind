@@ -670,6 +670,7 @@ commands.claude_init: 分析项目并编写 CLAUDE.md
 commands.claude_review: 审查拉取请求
 commands.claude_security_review: 对尚未合并的更改进行安全审查
 composer.edit_in_composer: 在输入框中编辑
+composer.reorder_followup: 拖动调整顺序；聚焦后按 Alt+上/下
 composer.steer: 引导
 composer.remove_followup: 从队列中移除
 user_input.other_placeholder: 输入其他回答

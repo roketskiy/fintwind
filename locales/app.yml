@@ -1323,6 +1323,8 @@ commands.claude_security_review:
 
 composer.edit_in_composer:
   en: Edit in composer
+composer.reorder_followup:
+  en: Drag to reorder; Alt+Up/Down when focused
 composer.steer:
   en: Steer
 composer.remove_followup:

@@ -119,9 +119,10 @@ bun scripts/bundle-windows.ts
   原生先例时,以 [Zed](https://github.com/zed-industries/zed) 源码作为参考。
   Zed 是 GPUI 的权威代码库;读它的 crates 而不是 `gpui-component`,并且读
   `Cargo.toml` 中固定的 gpui 版本,使 API 与 Fintwind 构建所用的一致。
-- 按关注点划分这两个参考:T3 Code 回答"coding-agent 客户端该做什么",Zed
-  回答"一个打磨过的 GPUI 应用该怎么实现"。对两者都要同样克制——局部修复
-  或用户已明确指定的变更,不要去翻参考源码。
+- 按关注点划分参考:T3 Code 回答"coding-agent 客户端该做什么",Zed
+  回答"一个打磨过的 GPUI 应用该怎么实现",Ely 回答"具体组件可以怎样设计与呈现"。
+  按任务需要选用,不要求每次查阅全部参考;局部修复或用户已明确指定的变更,
+  不必为了参考而扩大调查范围。
 - 把参考当作行为与设计的证据,而不是照抄 Web 特有交互模式或已知 bug 的
   指令。Fintwind 应当保持原生 Windows 惯例。
 - 用户明确的截图与反馈,优先于此前的处理方式或仅仅"保持一致"的处理方式。
@@ -129,3 +130,25 @@ bun scripts/bundle-windows.ts
   并保持其顺序。绝不在对话记录中暴露 provider 的私有控制标记。
 - 在 dev watcher 管理的刚重新编译、已签名的应用中,针对确切的 provider 交互
   验证可见变更;仅凭一次成功的 Rust 构建是不够的。
+
+### Ely 组件参考（不是项目依赖）
+
+- [Ely GPUI Components](https://github.com/ZacharyZhang-NY/Ely-GPUI-Components)
+  是往后 UI 实现的参考之一。[在线展示](https://ely-gpui.zacharyzhang.com)
+  用于了解组件效果;仓库的 `src/` 用于查阅具体实现。
+- 用户已明确:只作为组件参考,不是正式接入组件库。“引入 Ely”在这里指登记
+  参考来源,不意味着添加 `ely-gpui-component` Cargo 依赖或迁移应用框架。
+- 新建或改进具体组件时,可按需参考其布局、间距、视觉层级、交互状态和 GPUI
+  实现。常用入口: `src/buttons/`、`src/forms/`、`src/charts/`、`src/agent/`。
+  只读任务相关部分,不必克隆整个仓库、运行 gallery 或构建其 Web 前端。
+- 用 Fintwind 现有主题、字体与字号设置、图标、翻译、焦点处理和动画机制实现;
+  保留现有业务状态与事件流程。参考不意味着照搬 Ely 风格,也不要求统一改造
+  按钮、输入框、聊天记录、终端、WebView 或其他既有组件。
+- 不需要预先维护 Ely fork、对齐两边 GPUI 版本、建立通用适配层、接入其主题
+  或资源系统,也不要调用其 `init()` 注册全局字体与快捷键。这些是正式依赖
+  接入才可能需要的工程,不属于当前参考用途;除非用户另行明确要求。
+- 仅查看设计与源码不需要版本兼容工程。真正复用具体实现时,才核对所用 API
+  与 Fintwind 当前 GPUI 是否兼容;以本项目固定版本及 Zed 实现为依据。
+- Ely 自述处于早期且仅在 macOS 测试过,参考实现不等于 Windows 行为已验证。
+  实际落地仍须遵循本项目性能、键盘操作、减弱动态效果和验证规则,不照搬
+  持续动画或频繁全窗口刷新。若复制源码或资源,保留相应许可与归属声明。

@@ -5,6 +5,7 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::attachments::{AttachmentUpload, StoredAttachment};
+use crate::browser::{BrowserAction, BrowserRequest, BrowserResult, BrowserScope, BrowserShare};
 use crate::model::{AgentSession, Project, ProviderProbe, UserInputAnswer};
 use crate::persistence::{ComposerDraftChange, ComposerDrafts, SessionMessageMatch};
 use crate::provider_session::{
@@ -16,7 +17,7 @@ use crate::skills::SkillsCatalog;
 use crate::usage::PlanUsage;
 use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes
@@ -56,6 +57,23 @@ pub enum ClientMessage {
         resume_from: Vec<ReplayCursor>,
     },
     Request(Request),
+    /// Share live browser pages with the daemon. Live-only: the grant is
+    /// bound to this connection and a session runtime, is never persisted,
+    /// and dies with the connection or the runtime.
+    BrowserPublish {
+        pages: Vec<BrowserShare>,
+    },
+    /// Answer a daemon-delivered [`ServerMessage::BrowserRequest`]. Only the
+    /// connection that owns the published page may answer it.
+    BrowserResult {
+        request_id: Uuid,
+        result: BrowserResult,
+    },
+    /// Cancel a browser request this connection owns. Cancelling is not the
+    /// same as undoing an action that already reached the page.
+    BrowserCancel {
+        request_id: Uuid,
+    },
     Shutdown,
 }
 
@@ -348,6 +366,17 @@ pub enum Command {
     },
     CloseTerminal,
     CloseSession,
+    /// List the browser pages currently shared for this request's session
+    /// runtime. Empty when the runtime is not active.
+    BrowserList,
+    /// Ask the GUI that owns a shared page to perform one action. The outer
+    /// request's session and runtime must match the scope; the daemon waits
+    /// for the owner's answer and answers this RPC with a serialized
+    /// [`BrowserResult`]. A timeout is terminal and never retried.
+    BrowserInvoke {
+        scope: BrowserScope,
+        action: BrowserAction,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -424,6 +453,30 @@ pub enum ServerMessage {
         outcome: ResponseOutcome,
     },
     Event(SequencedEvent),
+    /// Deliver one browser action request to the connection that published
+    /// the page. Live-only: never journalled, never replayed on reconnect.
+    BrowserRequest {
+        request: BrowserRequest,
+    },
+    /// Tell the owning connection to abandon a browser request: the daemon
+    /// timed out, the invoking client vanished, or the runtime was replaced.
+    BrowserCancel {
+        request_id: Uuid,
+    },
+    /// The daemon refused a page publish. Carries the attempted scopes so the
+    /// GUI can drop exactly the grants the daemon did not accept. This is
+    /// not a generic rejection channel: it is sent only for a refused
+    /// `ClientMessage::BrowserPublish`.
+    BrowserShareRejected {
+        scopes: Vec<BrowserScope>,
+        message: String,
+    },
+    /// Scopes that just lost their grant because their session runtime ended
+    /// or was replaced. Live-only: never replayed, and a later re-share
+    /// under a new grant is a different scope that is not revoked by this.
+    BrowserScopesRevoked {
+        scopes: Vec<BrowserScope>,
+    },
     /// The daemon-owned project/task catalog changed through another client.
     /// Clients should invalidate their lightweight task-state snapshot; live
     /// runtime events continue through [`Self::Event`].
@@ -542,6 +595,11 @@ pub enum ResponsePayload {
     Workspace {
         result: WorkspaceResult,
     },
+    /// Opaque JSON payload for protocol extensions. Browser list/invoke
+    /// results ride here so the enum does not need one variant per tool.
+    Json {
+        value: Value,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -656,7 +714,7 @@ mod tests {
 
         assert_eq!(json["type"], "forkSessionFromResponse");
         assert_eq!(json["turnCount"], 7);
-        assert_eq!(PROTOCOL_VERSION, 7);
+        assert_eq!(PROTOCOL_VERSION, 8);
     }
 
     #[test]
@@ -674,7 +732,7 @@ mod tests {
 
         assert_eq!(json["type"], "rewindSessionToMessage");
         assert_eq!(json["turnCount"], 4);
-        assert_eq!(PROTOCOL_VERSION, 7);
+        assert_eq!(PROTOCOL_VERSION, 8);
     }
 
     #[test]

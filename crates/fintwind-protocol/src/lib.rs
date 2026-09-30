@@ -28,6 +28,7 @@ macro_rules! tr {
 
 pub mod attachments;
 pub mod blob;
+pub mod browser;
 pub mod checkpoint;
 pub mod composer;
 mod driver_wire;

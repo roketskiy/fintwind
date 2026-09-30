@@ -828,6 +828,22 @@ right_panel.tabs: 右侧面板标签页
 right_panel.add_tab: 添加面板标签页
 right_panel.hide: 隐藏右侧面板
 right_panel.close_tab: 关闭%{title}
+right_panel.share_browser: 共享给当前会话
+right_panel.revoke_browser_share: 接管并取消共享
+right_panel.browser_share_blocked: 需要本地 daemon 与正在运行的会话
+browser_collaboration.click_summary: 点击:%{selector}
+browser_collaboration.fill_summary: 输入%{selector}:%{text}
+browser_collaboration.navigate_summary: 导航至%{url}
+browser_collaboration.reading: 读取页面
+browser_collaboration.running: 正在操作浏览器
+browser_collaboration.shared_status: 页面已共享；修改需逐次确认
+browser_collaboration.approve_once: 允许这一次
+browser_collaboration.reject: 拒绝
+browser_collaboration.take_over: 接管并停止共享
+browser_collaboration.share_rejected: 页面共享被拒绝：%{message}
+browser_collaboration.runtime_replaced: 会话 runtime 已更换，共享已撤销，请重新共享
+browser_collaboration.publish_failed: daemon 连接已断开，页面共享随之撤销：%{error}
+browser_collaboration.too_many_pages: 当前连接共享页面数已达上限，请先取消一个页面
 environment.title: 环境
 environment.summary: 环境和后台工作
 environment.changes: 更改

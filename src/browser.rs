@@ -23,6 +23,9 @@
 
 use crate::theme::ui_px;
 
+mod collaboration;
+pub(crate) use collaboration::BrowserCollaborationEvent;
+
 use std::rc::Rc;
 
 use gpui::{
@@ -42,6 +45,46 @@ use crate::{
 };
 
 const TOOLBAR_HEIGHT: f32 = 42.0;
+
+/// Only the isolated developer host can request a remote debugging endpoint.
+#[cfg(feature = "browser-poc")]
+#[derive(Clone)]
+pub(crate) struct BrowserPocEnvironment {
+    /// An absolute, newly created profile directory owned by this probe run.
+    pub profile: std::path::PathBuf,
+    /// A reserved nonzero port; random-port discovery is not supported here.
+    pub cdp_port: u16,
+}
+
+#[cfg(feature = "browser-poc")]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrowserPocPageState {
+    pub id: &'static str,
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub loading: bool,
+    pub ready: bool,
+    pub error: Option<String>,
+    pub native_focused: bool,
+    pub native_focus_gains: u64,
+    pub native_visible: bool,
+    pub native_bounds: Option<[f32; 4]>,
+    pub native_cdp_calls: Vec<BrowserPocCdpCall>,
+}
+
+#[cfg(feature = "browser-poc")]
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct BrowserPocCdpCall {
+    id: u64,
+    method: String,
+    completion_ms: Option<u64>,
+    response_bytes: Option<usize>,
+    context_id: Option<i64>,
+    native_error: Option<String>,
+}
+
 /// What the address input resolves to when the user submits it.
 #[derive(Debug, PartialEq, Eq)]
 enum AddressTarget {
@@ -195,6 +238,7 @@ mod host {
     };
     use webview2_com::Microsoft::Web::WebView2::Win32::*;
     use webview2_com::{
+        CallDevToolsProtocolMethodCompletedHandler,
         CreateCoreWebView2CompositionControllerCompletedHandler,
         CreateCoreWebView2EnvironmentCompletedHandler, CursorChangedEventHandler,
         DocumentTitleChangedEventHandler, FocusChangedEventHandler, MoveFocusRequestedEventHandler,
@@ -215,7 +259,7 @@ mod host {
         pub title: Box<dyn Fn(String)>,
         pub open_url: Box<dyn Fn(String)>,
         pub cursor_changed: Box<dyn Fn()>,
-        pub focus_changed: Box<dyn Fn()>,
+        pub focus_changed: Box<dyn Fn(bool)>,
     }
 
     /// Delivers the finished host — or the reason there isn't one — exactly
@@ -320,9 +364,81 @@ mod host {
     }
 
     /// The `ICoreWebView2` behind the surface.
-    pub(super) struct Webview(ICoreWebView2);
+    pub(super) struct Webview(
+        ICoreWebView2,
+        #[cfg(feature = "browser-poc")] Rc<RefCell<Vec<super::BrowserPocCdpCall>>>,
+    );
 
     impl Webview {
+        #[cfg(feature = "browser-poc")]
+        pub(super) fn cdp_diagnostics(&self) -> Vec<super::BrowserPocCdpCall> {
+            self.1.borrow().clone()
+        }
+
+        /// STA-only asynchronous CDP, with no listening debugging endpoint.
+        pub(super) fn call_cdp(
+            &self,
+            method: &str,
+            parameters: &str,
+        ) -> smol::channel::Receiver<Result<String, String>> {
+            let (sender, receiver) = smol::channel::bounded(1);
+            let completion = sender.clone();
+            #[cfg(feature = "browser-poc")]
+            let diagnostic = {
+                let mut calls = self.1.borrow_mut();
+                let id = calls.last().map_or(1, |call| call.id + 1);
+                if calls.len() == 32 {
+                    calls.remove(0);
+                }
+                calls.push(super::BrowserPocCdpCall {
+                    id,
+                    method: method.to_owned(),
+                    completion_ms: None,
+                    response_bytes: None,
+                    context_id: None,
+                    native_error: None,
+                });
+                (self.1.clone(), id, std::time::Instant::now())
+            };
+            let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(
+                move |result, json| {
+                    #[cfg(feature = "browser-poc")]
+                    if let Some(call) = diagnostic
+                        .0
+                        .borrow_mut()
+                        .iter_mut()
+                        .find(|call| call.id == diagnostic.1)
+                    {
+                        call.completion_ms = Some(diagnostic.2.elapsed().as_millis() as u64);
+                        call.response_bytes = Some(json.len());
+                        call.native_error = result.as_ref().err().map(ToString::to_string);
+                        if call.method == "Page.createIsolatedWorld" {
+                            call.context_id = serde_json::from_str::<serde_json::Value>(&json)
+                                .ok()
+                                .and_then(|value| {
+                                    value
+                                        .get("executionContextId")
+                                        .and_then(serde_json::Value::as_i64)
+                                });
+                        }
+                    }
+                    let result = result.map(|()| json).map_err(|error| error.to_string());
+                    let _ = completion.try_send(result);
+                    Ok(())
+                },
+            ));
+            if let Err(error) = unsafe {
+                self.0.CallDevToolsProtocolMethod(
+                    &HSTRING::from(method),
+                    &HSTRING::from(parameters),
+                    &handler,
+                )
+            } {
+                let _ = sender.try_send(Err(error.to_string()));
+            }
+            receiver
+        }
+
         pub fn can_go_back(&self) -> windows::core::Result<bool> {
             let mut value = BOOL(0);
             unsafe { self.0.CanGoBack(&mut value) }?;
@@ -386,6 +502,8 @@ mod host {
         scale: Cell<f32>,
         visible: Cell<bool>,
         focused: Rc<Cell<bool>>,
+        #[cfg(feature = "browser-poc")]
+        focus_gains: Rc<Cell<u64>>,
         cursor: Rc<Cell<CursorStyle>>,
         /// Buttons currently held, so a move or wheel during a drag reports
         /// them the way Win32 would.
@@ -395,6 +513,10 @@ mod host {
     }
 
     impl WebviewHost {
+        pub(super) fn collaboration_visible(&self) -> bool {
+            self.visible.get()
+        }
+
         /// Build a composition-hosted WebView2 and hand it back once it
         /// exists.
         ///
@@ -408,20 +530,72 @@ mod host {
         pub fn create(
             parent: isize,
             surface: Rc<dyn PlatformNativeSurface>,
+            #[cfg(feature = "browser-poc")] poc_environment: Option<&super::BrowserPocEnvironment>,
             callbacks: Callbacks,
             ready: Box<dyn FnOnce(Result<Rc<WebviewHost>, String>)>,
         ) {
             let ready: Ready = Rc::new(RefCell::new(Some(ready)));
-            let Some(user_data) = user_data_folder() else {
+            #[cfg(feature = "browser-poc")]
+            if let Some(poc) = poc_environment
+                && (poc.cdp_port == 0 || !poc.profile.is_absolute())
+            {
+                deliver(
+                    &ready,
+                    Err("the probe requires a nonzero port and an absolute test profile".into()),
+                );
+                return;
+            }
+            #[cfg(feature = "browser-poc")]
+            if poc_environment.is_some()
+                && let Err(error) = reject_poc_overrides()
+            {
+                deliver(&ready, Err(error));
+                return;
+            }
+            #[cfg(feature = "browser-poc")]
+            let user_data = poc_environment
+                .map(|environment| HSTRING::from(environment.profile.as_path()))
+                .or_else(user_data_folder);
+            #[cfg(not(feature = "browser-poc"))]
+            let user_data = user_data_folder();
+            let Some(user_data) = user_data else {
                 deliver(&ready, Err("no local application data folder".to_owned()));
                 return;
             };
 
+            #[cfg(feature = "browser-poc")]
+            let options: Option<ICoreWebView2EnvironmentOptions> = poc_environment.map(|poc| {
+                let options = webview2_com::CoreWebView2EnvironmentOptions::default();
+                unsafe {
+                    options.set_exclusive_user_data_folder_access(true);
+                    options.set_additional_browser_arguments(format!(
+                        "--remote-debugging-address=127.0.0.1 --remote-debugging-port={} --enable-automation",
+                        poc.cdp_port
+                    ));
+                }
+                options.into()
+            });
+            #[cfg(not(feature = "browser-poc"))]
+            let options: Option<ICoreWebView2EnvironmentOptions> = None;
+            #[cfg(feature = "browser-poc")]
+            let expected_profile = poc_environment.map(|poc| poc.profile.clone());
+
             let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new({
                 let ready = ready.clone();
+                // Keep the COM options alive through asynchronous creation.
+                let options = options.clone();
                 move |result, environment| {
+                    let _options = &options;
                     match result.and_then(|()| environment.ok_or_else(|| E_FAIL.into())) {
                         Ok(environment) => {
+                            #[cfg(feature = "browser-poc")]
+                            if let Some(expected_profile) = &expected_profile
+                                && let Err(error) =
+                                    verify_poc_profile(&environment, expected_profile)
+                            {
+                                deliver(&ready, Err(error));
+                                return Ok(());
+                            }
                             create_controller(parent, surface, environment, callbacks, ready)
                         }
                         Err(error) => deliver(&ready, Err(error.to_string())),
@@ -434,7 +608,7 @@ mod host {
                 CreateCoreWebView2EnvironmentWithOptions(
                     PCWSTR::null(),
                     &user_data,
-                    None::<&ICoreWebView2EnvironmentOptions>,
+                    options.as_ref(),
                     &handler,
                 )
             };
@@ -499,6 +673,24 @@ mod host {
         /// ours to descend from, and the events are the documented signal.
         pub fn native_focus_within(&self) -> bool {
             self.focused.get()
+        }
+
+        #[cfg(feature = "browser-poc")]
+        pub(super) fn poc_geometry(&self) -> (bool, Option<[f32; 4]>) {
+            let bounds = self.last_bounds.get().map(|bounds| {
+                [
+                    f32::from(bounds.origin.x),
+                    f32::from(bounds.origin.y),
+                    f32::from(bounds.size.width),
+                    f32::from(bounds.size.height),
+                ]
+            });
+            (self.visible.get(), bounds)
+        }
+
+        #[cfg(feature = "browser-poc")]
+        pub(super) fn poc_focus_gains(&self) -> u64 {
+            self.focus_gains.get()
         }
 
         pub fn focus_page(&self) {
@@ -641,6 +833,80 @@ mod host {
             }
             let _ = unsafe { self.composition.SendMouseInput(kind, keys, data, point) };
         }
+    }
+
+    /// Reject policy overrides before WebView2 can start a debugging endpoint
+    /// against a registry-selected (possibly real, logged-in) profile.
+    #[cfg(feature = "browser-poc")]
+    fn reject_poc_overrides() -> Result<(), String> {
+        use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND};
+        use windows_sys::Win32::System::Registry::{
+            HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
+            RegCloseKey, RegOpenKeyExW,
+        };
+
+        if std::env::vars_os().any(|(name, _)| {
+            name.to_string_lossy()
+                .to_ascii_uppercase()
+                .starts_with("WEBVIEW2_")
+        }) {
+            return Err(
+                "remove WEBVIEW2_* overrides before running the isolated browser probe".into(),
+            );
+        }
+        let path: Vec<u16> = "Software\\Policies\\Microsoft\\Edge\\WebView2"
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        for root in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+            for view in [KEY_WOW64_32KEY, KEY_WOW64_64KEY] {
+                let mut key = std::ptr::null_mut();
+                let status =
+                    unsafe { RegOpenKeyExW(root, path.as_ptr(), 0, KEY_READ | view, &mut key) };
+                if status == 0 {
+                    unsafe { RegCloseKey(key) };
+                    return Err(
+                        "WebView2 registry policies are present; isolated CDP probing is disabled"
+                            .into(),
+                    );
+                }
+                if status != ERROR_FILE_NOT_FOUND && status != ERROR_PATH_NOT_FOUND {
+                    return Err(format!(
+                        "cannot rule out WebView2 policy overrides (Windows error {status})"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Catch runtime policy overrides as well as rejecting them before launch.
+    #[cfg(feature = "browser-poc")]
+    fn verify_poc_profile(
+        environment: &ICoreWebView2Environment,
+        expected: &std::path::Path,
+    ) -> Result<(), String> {
+        let environment = environment
+            .cast::<ICoreWebView2Environment7>()
+            .map_err(|error| format!("cannot verify the test profile: {error}"))?;
+        let mut actual = PWSTR::null();
+        unsafe { environment.UserDataFolder(&mut actual) }
+            .map_err(|error| format!("cannot read the test profile: {error}"))?;
+        let actual = std::path::PathBuf::from(take_pwstr(actual));
+        // Both paths exist by this point. Windows canonical paths normalize
+        // extended-length prefixes and case differences for this comparison.
+        let actual = actual.canonicalize().map_err(|error| error.to_string())?;
+        let expected = expected.canonicalize().map_err(|error| error.to_string())?;
+        if !actual
+            .as_os_str()
+            .as_encoded_bytes()
+            .eq_ignore_ascii_case(expected.as_os_str().as_encoded_bytes())
+        {
+            return Err(
+                "WebView2 replaced the isolated test profile; refusing to create a page".into(),
+            );
+        }
+        Ok(())
     }
 
     impl Drop for WebviewHost {
@@ -798,12 +1064,18 @@ mod host {
         }));
         unsafe { webview.add_NewWindowRequested(&new_window, &mut token) }?;
 
+        #[cfg(feature = "browser-poc")]
+        let focus_gains = Rc::new(Cell::new(0u64));
         let got_focus = FocusChangedEventHandler::create(Box::new({
             let focused = focused.clone();
             let focus_changed = focus_changed.clone();
+            #[cfg(feature = "browser-poc")]
+            let focus_gains = focus_gains.clone();
             move |_, _| {
                 focused.set(true);
-                focus_changed();
+                #[cfg(feature = "browser-poc")]
+                focus_gains.set(focus_gains.get().saturating_add(1));
+                focus_changed(true);
                 Ok(())
             }
         }));
@@ -814,7 +1086,7 @@ mod host {
             let focus_changed = focus_changed.clone();
             move |_, _| {
                 focused.set(false);
-                focus_changed();
+                focus_changed(false);
                 Ok(())
             }
         }));
@@ -826,7 +1098,7 @@ mod host {
             let focused = focused.clone();
             move |_, args| {
                 focused.set(false);
-                focus_changed();
+                focus_changed(false);
                 focus_window(parent);
                 if let Some(args) = args.as_ref() {
                     let _ = unsafe { args.SetHandled(true) };
@@ -854,7 +1126,11 @@ mod host {
         unsafe { composition.add_CursorChanged(&cursor_event, &mut token) }?;
 
         Ok(Rc::new(WebviewHost {
-            webview: Webview(webview),
+            webview: Webview(
+                webview,
+                #[cfg(feature = "browser-poc")]
+                Rc::new(RefCell::new(Vec::new())),
+            ),
             controller,
             composition,
             surface,
@@ -864,6 +1140,8 @@ mod host {
             scale: Cell::new(1.0),
             visible: Cell::new(false),
             focused,
+            #[cfg(feature = "browser-poc")]
+            focus_gains,
             cursor,
             buttons: Cell::new(0),
             hovered: Cell::new(false),
@@ -915,6 +1193,9 @@ pub struct BrowserView {
     host: Option<Rc<WebviewHost>>,
     /// Why the webview could not be created, shown in place of the page.
     host_error: Option<String>,
+    collaboration: collaboration::BrowserCollaboration,
+    #[cfg(feature = "browser-poc")]
+    poc_environment: Option<BrowserPocEnvironment>,
     /// Somewhere to navigate to as soon as the host lands. WebView2's
     /// controller is created asynchronously, so the surface can be asked to
     /// open a URL before it has anything to open it in.
@@ -950,6 +1231,61 @@ pub struct BrowserView {
 
 impl BrowserView {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self::new_inner(
+            window,
+            cx,
+            #[cfg(feature = "browser-poc")]
+            None,
+        )
+    }
+
+    #[cfg(feature = "browser-poc")]
+    pub(crate) fn new_for_poc(
+        environment: BrowserPocEnvironment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_inner(window, cx, Some(environment))
+    }
+
+    #[cfg(feature = "browser-poc")]
+    pub(crate) fn poc_state(&self, id: &'static str) -> BrowserPocPageState {
+        let (native_visible, native_bounds) = self
+            .host
+            .as_ref()
+            .map(|host| host.poc_geometry())
+            .unwrap_or_default();
+        BrowserPocPageState {
+            id,
+            url: self.current_url.clone(),
+            title: self.page_title.clone(),
+            loading: self.loading,
+            ready: self.host.is_some(),
+            error: self.host_error.clone(),
+            native_focused: self
+                .host
+                .as_ref()
+                .is_some_and(|host| host.native_focus_within()),
+            native_focus_gains: self.host.as_ref().map_or(0, |host| host.poc_focus_gains()),
+            native_visible,
+            native_bounds,
+            native_cdp_calls: self
+                .host
+                .as_ref()
+                .map_or_else(Vec::new, |host| host.webview.cdp_diagnostics()),
+        }
+    }
+
+    #[cfg(feature = "browser-poc")]
+    pub(crate) fn poc_reclaim_keyboard(&mut self, cx: &mut Context<Self>) {
+        self.reclaim_native_keyboard(cx);
+    }
+
+    fn new_inner(
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        #[cfg(feature = "browser-poc")] poc_environment: Option<BrowserPocEnvironment>,
+    ) -> Self {
         let address = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
@@ -1030,6 +1366,9 @@ impl BrowserView {
             address,
             host: None,
             host_error: None,
+            collaboration: Default::default(),
+            #[cfg(feature = "browser-poc")]
+            poc_environment,
             #[cfg(target_os = "windows")]
             pending_url: None,
             navigation_requested: false,
@@ -1105,28 +1444,56 @@ impl BrowserView {
         let on_cursor = deferred.clone();
         let on_focus = deferred.clone();
         let on_ready = deferred.clone();
+        let load_invalidation = self.collaboration.native_invalidation.clone();
+        let url_invalidation = self.collaboration.native_invalidation.clone();
+        let focus_invalidation = self.collaboration.native_invalidation.clone();
 
         host::WebviewHost::create(
             parent,
             surface,
+            #[cfg(feature = "browser-poc")]
+            self.poc_environment.as_ref(),
             host::Callbacks {
                 page_load: Box::new(move |event, url| {
+                    if matches!(event, PageLoad::Started)
+                        && let Some(valid) = load_invalidation.borrow().as_ref()
+                    {
+                        valid.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
                     on_page_load.update(move |this, cx| this.page_load_changed(event, url, cx));
                 }),
                 url_changed: Box::new(move |url| {
+                    if let Some(valid) = url_invalidation.borrow().as_ref() {
+                        valid.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
                     on_url.update(move |this, cx| this.source_changed(url, cx));
                 }),
                 title: Box::new(move |title| {
                     on_title.update(move |this, cx| this.title_changed(title, cx));
                 }),
                 open_url: Box::new(move |url| {
-                    on_new_window.update(move |this, cx| this.navigate_to_url(url, cx));
+                    on_new_window.update(move |this, cx| {
+                        // The existing popup policy stays same-page, but an
+                        // agent-triggered popup must not acquire native focus.
+                        let focus = this.browser_share().is_none();
+                        this.navigate_to_url_with_focus(url, focus, cx);
+                    });
                 }),
                 cursor_changed: Box::new(move || {
                     on_cursor.update(|_, cx| cx.notify());
                 }),
-                focus_changed: Box::new(move || {
-                    on_focus.update(|_, cx| cx.notify());
+                focus_changed: Box::new(move |focused| {
+                    if focused && let Some(valid) = focus_invalidation.borrow().as_ref() {
+                        valid.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    on_focus.update(move |this, cx| {
+                        // Native keyboard focus belongs to a human page
+                        // interaction. CDP actions deliberately never MoveFocus.
+                        if focused {
+                            this.revoke_browser_share(cx);
+                        }
+                        cx.notify();
+                    });
                 }),
             },
             Box::new(move |outcome| {
@@ -1156,6 +1523,10 @@ impl BrowserView {
     /// Unlike a page load this must not touch `loading` or the title.
     #[cfg(target_os = "windows")]
     fn source_changed(&mut self, url: String, cx: &mut Context<Self>) {
+        // Even a same-URL history/document event invalidates an in-flight
+        // observation. The native callback already retired its capability;
+        // keep the visible share state in agreement with that decision.
+        self.revoke_browser_share(cx);
         if url.is_empty() || self.current_url.as_deref() == Some(url.as_str()) {
             return;
         }
@@ -1168,6 +1539,7 @@ impl BrowserView {
     fn page_load_changed(&mut self, event: PageLoad, url: String, cx: &mut Context<Self>) {
         match event {
             PageLoad::Started => {
+                self.revoke_browser_share(cx);
                 self.loading = true;
                 // A fresh document invalidates the previous page's title; the
                 // new one arrives via the title observer once known.
@@ -1230,6 +1602,11 @@ impl BrowserView {
     }
 
     pub fn navigate_to_url(&mut self, url: String, cx: &mut Context<Self>) {
+        self.navigate_to_url_with_focus(url, true, cx);
+    }
+
+    fn navigate_to_url_with_focus(&mut self, url: String, focus: bool, cx: &mut Context<Self>) {
+        self.revoke_browser_share(cx);
         let Some(host) = &self.host else {
             self.pending_url = Some(url);
             return;
@@ -1242,7 +1619,9 @@ impl BrowserView {
         self.current_url = Some(url);
         self.address_dirty = false;
         self.echo_page_url(cx);
-        self.focus_page(cx);
+        if focus {
+            self.focus_page(cx);
+        }
         cx.notify();
     }
 
@@ -1397,6 +1776,7 @@ impl BrowserView {
     }
 
     fn go_back(&mut self, _cx: &mut Context<Self>) {
+        self.revoke_browser_share(_cx);
         if let Some(host) = &self.host {
             let _ = host.webview.go_back();
             self.refresh_navigation_state();
@@ -1405,6 +1785,7 @@ impl BrowserView {
     }
 
     fn go_forward(&mut self, _cx: &mut Context<Self>) {
+        self.revoke_browser_share(_cx);
         if let Some(host) = &self.host {
             let _ = host.webview.go_forward();
             self.refresh_navigation_state();
@@ -1413,6 +1794,7 @@ impl BrowserView {
     }
 
     fn reload(&mut self, _cx: &mut Context<Self>) {
+        self.revoke_browser_share(_cx);
         if let Some(host) = &self.host
             && self.navigation_requested
         {
@@ -1423,6 +1805,7 @@ impl BrowserView {
     }
 
     fn hard_reload(&mut self, _cx: &mut Context<Self>) {
+        self.revoke_browser_share(_cx);
         #[cfg(target_os = "windows")]
         if let Some(host) = &self.host
             && self.navigation_requested
@@ -1700,6 +2083,7 @@ impl BrowserView {
     fn forward_page_input(
         host: Rc<WebviewHost>,
         focus: FocusHandle,
+        view: WeakEntity<BrowserView>,
         hitbox: gpui::Hitbox,
         window: &mut Window,
     ) {
@@ -1712,10 +2096,14 @@ impl BrowserView {
         window.on_mouse_event({
             let host = host.clone();
             let hitbox = hitbox.clone();
+            let view = view.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
                     return;
                 }
+                // Retire the grant before forwarding human input, including
+                // when the page already has native focus (no focus event).
+                let _ = view.update(cx, |this, cx| this.revoke_browser_share(cx));
                 // Both focus systems move together: clicking the page is
                 // how the user says the keyboard belongs to it now, and
                 // whatever held GPUI focus — the address bar, the composer —
@@ -1765,8 +2153,9 @@ impl BrowserView {
             }
         });
 
-        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, _| {
+        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
             if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
+                let _ = view.update(cx, |this, cx| this.revoke_browser_share(cx));
                 host.scroll(event.position, event.delta, event.modifiers);
             }
         });
@@ -1779,12 +2168,14 @@ impl BrowserView {
     /// only while a fallback snapshot is still being captured. The panel's
     /// resize handle keeps itself entirely left of this area, so the page owns
     /// the full width.
-    fn render_page_area(&self, theme: Theme) -> Div {
+    fn render_page_area(&self, theme: Theme, cx: &Context<Self>) -> Div {
         let host = self.host.clone();
         #[cfg(target_os = "windows")]
         let input = self.host.clone();
         #[cfg(target_os = "windows")]
         let focus = self.focus_handle.clone();
+        #[cfg(target_os = "windows")]
+        let view = cx.entity().downgrade();
         div()
             .flex_1()
             .min_h_0()
@@ -1805,7 +2196,7 @@ impl BrowserView {
                     move |_, _hitbox, _window, _| {
                         #[cfg(target_os = "windows")]
                         if let Some(host) = input {
-                            Self::forward_page_input(host, focus, _hitbox, _window);
+                            Self::forward_page_input(host, focus, view, _hitbox, _window);
                         }
                     },
                 )
@@ -1852,10 +2243,13 @@ impl Render for BrowserView {
             self.render_host_error(error.into(), theme)
                 .into_any_element()
         } else if self.navigation_requested {
-            self.render_page_area(theme).into_any_element()
+            self.render_page_area(theme, cx).into_any_element()
         } else {
             self.render_start_page(theme).into_any_element()
         };
+        let collaboration = self
+            .render_collaboration_bar(window, cx)
+            .map(|bar| bar.into_any_element());
 
         div()
             .id("browser-surface")
@@ -1879,6 +2273,7 @@ impl Render for BrowserView {
             .flex()
             .flex_col()
             .child(self.render_toolbar(cx))
+            .when_some(collaboration, |element, bar| element.child(bar))
             .child(body)
     }
 }

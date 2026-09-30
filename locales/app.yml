@@ -1647,6 +1647,38 @@ right_panel.hide:
   en: Hide right panel
 right_panel.close_tab:
   en: Close %{title}
+right_panel.share_browser:
+  en: Share with the current session
+right_panel.revoke_browser_share:
+  en: Take over and stop sharing
+right_panel.browser_share_blocked:
+  en: Needs a local daemon and a running session
+browser_collaboration.click_summary:
+  en: "Click: %{selector}"
+browser_collaboration.fill_summary:
+  en: "Fill %{selector}: %{text}"
+browser_collaboration.navigate_summary:
+  en: "Navigate: %{url}"
+browser_collaboration.reading:
+  en: Read page
+browser_collaboration.running:
+  en: Browser operation in progress
+browser_collaboration.shared_status:
+  en: Page shared; changes require approval
+browser_collaboration.approve_once:
+  en: Approve once
+browser_collaboration.reject:
+  en: Reject
+browser_collaboration.take_over:
+  en: Take over / stop sharing
+browser_collaboration.share_rejected:
+  en: "Page sharing was rejected: %{message}"
+browser_collaboration.runtime_replaced:
+  en: The session runtime was replaced; the shared page was revoked. Share it again to continue.
+browser_collaboration.publish_failed:
+  en: "The daemon connection dropped, so the shared page was revoked: %{error}"
+browser_collaboration.too_many_pages:
+  en: This connection already shares the maximum number of pages; stop sharing one first.
 
 environment.title:
   en: Environment

@@ -9,6 +9,10 @@ license = "GPL-3.0-only"
 name = "fintwind"
 path = "src/main.rs"
 
+[features]
+# Developer-only WebView2 / Playwright validation; never enabled by default.
+browser-poc = ["windows-sys/Win32_System_Registry"]
+
 [workspace]
 members = [
     "crates/fintwind-client",

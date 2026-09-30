@@ -14,6 +14,10 @@ use tungstenite::{Message, WebSocket};
 use uuid::Uuid;
 
 use fintwind_protocol::MAX_WIRE_MESSAGE_BYTES;
+use fintwind_protocol::browser::{
+    BrowserAction, BrowserRequest, BrowserResult, BrowserScope, BrowserShare,
+    MAX_BROWSER_PAGES_PER_CONNECTION, MAX_BROWSER_RESULT_BYTES, MAX_BROWSER_TITLE_BYTES,
+};
 use fintwind_protocol::{
     ClientMessage, Command, PROTOCOL_VERSION, ReplayCursor, Request, ResponseOutcome,
     ResponsePayload, RpcError, SequencedEvent, ServerMessage, WireDriverEvent,
@@ -22,9 +26,50 @@ use fintwind_protocol::{
 const READ_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_BUFFERED_EVENTS_PER_RUNTIME: usize = 4096;
+/// Browser notifications are delivered to a GUI consumer that must keep up.
+/// A small bounded channel keeps a stuck or absent consumer from growing
+/// daemon memory: an undeliverable request is answered with an immediate
+/// error result, and an undeliverable cancel, rejection or revocation ends
+/// the lease instead of being ignored.
+const MAX_BUFFERED_BROWSER_NOTIFICATIONS: usize = 128;
+
+/// Live-only browser traffic delivered to the GUI. There is deliberately no
+/// replay: a reconnecting client starts with no pending requests, and a
+/// request already delivered is never delivered twice.
+pub enum BrowserNotification {
+    /// The daemon routed one action to this client's published page.
+    Request(BrowserRequest),
+    /// The daemon gave up on a request (timeout or the invoker vanished).
+    Cancel(Uuid),
+    /// The daemon refused a publish. The listed scopes are the ones that did
+    /// not take, so the GUI drops exactly those grants and shows the error.
+    ShareRejected {
+        scopes: Vec<BrowserScope>,
+        message: String,
+    },
+    /// These scopes lost their grant because their session runtime ended or
+    /// was replaced. A later re-share under a new grant is a different scope
+    /// and is not listed here.
+    ScopesRevoked(Vec<BrowserScope>),
+    /// The connection ended. Pending page grants are gone with it.
+    Disconnected,
+}
+
+/// A browser notification that cannot be delivered ends the lease. The GUI
+/// can no longer be trusted to honor grants — a dropped cancel or revocation
+/// could leave an action running — so the subscriber is closed, the client is
+/// marked disconnected, and the caller must break the socket loop rather
+/// than leave a live socket behind lingering grants.
+fn browser_notification_undeliverable(inner: &ClientInner) {
+    if let Some(taken) = inner.browser.lock().take() {
+        let _ = taken.try_send(BrowserNotification::Disconnected);
+    }
+    inner.disconnected.store(true, Ordering::Release);
+}
 
 enum Outgoing {
     Message(ClientMessage),
+    Disconnect,
     Shutdown,
 }
 
@@ -34,6 +79,10 @@ struct ClientInner {
     sessions: Mutex<HashMap<(Uuid, Uuid), Sender<SequencedEvent>>>,
     pending_events: Mutex<HashMap<(Uuid, Uuid), VecDeque<SequencedEvent>>>,
     task_state_subscribers: Mutex<Vec<Sender<u64>>>,
+    /// Single browser consumer. A later `subscribe_browser_requests` call
+    /// replaces the previous receiver instead of fanning one request out to
+    /// several consumers; requests already delivered are not replayed.
+    browser: Mutex<Option<Sender<BrowserNotification>>>,
     last_sequences: Mutex<HashMap<(Uuid, Uuid), LastSequence>>,
     disconnected: AtomicBool,
 }
@@ -110,6 +159,7 @@ impl DaemonClient {
             sessions: Mutex::new(HashMap::new()),
             pending_events: Mutex::new(HashMap::new()),
             task_state_subscribers: Mutex::new(Vec::new()),
+            browser: Mutex::new(None),
             last_sequences: Mutex::new(last_sequences),
             disconnected: AtomicBool::new(false),
         });
@@ -147,6 +197,83 @@ impl DaemonClient {
         receiver
     }
 
+    /// Subscribe to live-only browser traffic. Only one consumer is expected:
+    /// subscribing again replaces the previous receiver, and a request that
+    /// was already delivered is not replayed to the new one. The replaced
+    /// consumer is told the lease is over so it drops its page grants instead
+    /// of acting on requests that now belong elsewhere.
+    pub fn subscribe_browser_requests(&self) -> Receiver<BrowserNotification> {
+        if self.inner.disconnected.load(Ordering::Acquire) {
+            // A dead lease: the very first notification reports it.
+            let (events, receiver) = bounded(1);
+            let _ = events.send(BrowserNotification::Disconnected);
+            return receiver;
+        }
+        let (events, receiver) = bounded(MAX_BUFFERED_BROWSER_NOTIFICATIONS);
+        if let Some(previous) = self.inner.browser.lock().replace(events) {
+            let _ = previous.try_send(BrowserNotification::Disconnected);
+        }
+        receiver
+    }
+
+    /// Share live browser pages with the daemon. The published set replaces
+    /// this connection's previous set, so an empty list revokes every page.
+    /// Bounds are checked before enqueueing so an oversized publish fails
+    /// locally. The result reports whether the message was enqueued on a live
+    /// connection; it never blocks on the socket.
+    pub fn publish_browser_pages(&self, pages: Vec<BrowserShare>) -> anyhow::Result<()> {
+        if pages.len() > MAX_BROWSER_PAGES_PER_CONNECTION {
+            anyhow::bail!(
+                "a connection may publish at most {MAX_BROWSER_PAGES_PER_CONNECTION} browser pages"
+            );
+        }
+        for page in &pages {
+            if !page.scope.is_well_formed() {
+                anyhow::bail!("a published browser scope has nil session, runtime, page or grant");
+            }
+            if page.title.len() > MAX_BROWSER_TITLE_BYTES {
+                anyhow::bail!("a published browser title is too long");
+            }
+            BrowserAction::validate_url(&page.url).map_err(anyhow::Error::msg)?;
+        }
+        self.send_browser_message(ClientMessage::BrowserPublish { pages })
+    }
+
+    /// Answer a daemon-delivered browser request. Only the connection that
+    /// published the page may answer; the daemon refuses anything else. An
+    /// oversized result fails here instead of being silently truncated
+    /// somewhere else on the wire.
+    pub fn complete_browser_request(
+        &self,
+        request_id: Uuid,
+        result: BrowserResult,
+    ) -> anyhow::Result<()> {
+        match serde_json::to_vec(&result) {
+            Ok(bytes) if bytes.len() <= MAX_BROWSER_RESULT_BYTES => {}
+            _ => anyhow::bail!("a browser result exceeds the size limit"),
+        }
+        self.send_browser_message(ClientMessage::BrowserResult { request_id, result })
+    }
+
+    /// Cancel a browser request this connection owns. Cancelling is not
+    /// undoing an action that may already have reached the page.
+    pub fn cancel_browser_request(&self, request_id: Uuid) -> anyhow::Result<()> {
+        self.send_browser_message(ClientMessage::BrowserCancel { request_id })
+    }
+
+    fn send_browser_message(&self, message: ClientMessage) -> anyhow::Result<()> {
+        if self.inner.disconnected.load(Ordering::Acquire) {
+            bail!("fintwind daemon is disconnected");
+        }
+        // The outgoing queue is unbounded, so this never blocks the GUI
+        // thread; a disconnected writer is the only failure, and it means
+        // the message was not enqueued on a live lease.
+        self.inner
+            .outgoing
+            .send(Outgoing::Message(message))
+            .map_err(|_| anyhow!("fintwind daemon connection is closed"))
+    }
+
     pub fn request(
         &self,
         session_id: Uuid,
@@ -167,6 +294,10 @@ impl DaemonClient {
             bail!("fintwind daemon is disconnected");
         }
         let request_id = Uuid::new_v4();
+        // A browser invoke acts on a real page. If this caller gives up
+        // first, the GUI action must be cancelled too instead of running on
+        // with nobody waiting; other commands have no GUI-side leg.
+        let cancels_browser_action = matches!(command, Command::BrowserInvoke { .. });
         let (response, response_rx) = bounded(1);
         self.inner.pending.lock().insert(request_id, response);
         let message = ClientMessage::Request(Request {
@@ -189,6 +320,13 @@ impl DaemonClient {
             Ok(Err(error)) => Err(anyhow!(error.message)),
             Err(error) => {
                 self.inner.pending.lock().remove(&request_id);
+                if cancels_browser_action {
+                    // The server maps this back to the internal request id
+                    // and tells the page owner to stop. Failure to enqueue
+                    // the cancel is reported: a silent cancel would leave a
+                    // browser action running.
+                    self.send_browser_message(ClientMessage::BrowserCancel { request_id })?;
+                }
                 Err(anyhow!("timed out waiting for fintwind daemon: {error}"))
             }
         }
@@ -241,6 +379,12 @@ impl DaemonClient {
     pub fn shutdown(&self) {
         let _ = self.inner.outgoing.send(Outgoing::Shutdown);
     }
+
+    /// Close only this connection, not the daemon or its other clients.
+    /// Its browser capabilities end with the socket and are not resumed.
+    pub fn disconnect(&self) {
+        let _ = self.inner.outgoing.send(Outgoing::Disconnect);
+    }
 }
 
 fn daemon_url(address: &str) -> anyhow::Result<String> {
@@ -278,6 +422,11 @@ fn run_client(
                 Outgoing::Shutdown => {
                     let _ = write_json(&mut socket, &ClientMessage::Shutdown);
                     let _ = socket.flush();
+                    graceful = true;
+                    break 'connection;
+                }
+                Outgoing::Disconnect => {
+                    let _ = socket.close(None);
                     graceful = true;
                     break 'connection;
                 }
@@ -341,6 +490,67 @@ fn run_client(
                             .lock()
                             .retain(|subscriber| subscriber.send(revision).is_ok());
                     }
+                    ServerMessage::BrowserRequest { request } => {
+                        // Bounded delivery: a GUI that is not draining, has
+                        // no subscriber, or dropped its receiver must not
+                        // grow daemon-side queues and must not let the
+                        // action run unobserved. The request is failed
+                        // immediately on the socket thread instead.
+                        let request_id = request.request_id;
+                        let subscriber = inner.browser.lock().clone();
+                        let delivered = match subscriber {
+                            Some(events) => events
+                                .try_send(BrowserNotification::Request(request))
+                                .is_ok(),
+                            None => false,
+                        };
+                        if !delivered {
+                            let _ = inner.outgoing.send(Outgoing::Message(
+                                ClientMessage::BrowserResult {
+                                    request_id,
+                                    result: BrowserResult::error(
+                                        "the browser client could not accept the request",
+                                    ),
+                                },
+                            ));
+                        }
+                    }
+                    ServerMessage::BrowserCancel { request_id } => {
+                        // A cancel must never be silently dropped: if it
+                        // cannot be delivered the lease is broken, so the GUI
+                        // clears its page grants and the socket loop exits.
+                        let subscriber = inner.browser.lock().clone();
+                        if let Some(events) = subscriber
+                            && events
+                                .try_send(BrowserNotification::Cancel(request_id))
+                                .is_err()
+                        {
+                            browser_notification_undeliverable(&inner);
+                            break 'connection;
+                        }
+                    }
+                    ServerMessage::BrowserShareRejected { scopes, message } => {
+                        let subscriber = inner.browser.lock().clone();
+                        if let Some(events) = subscriber
+                            && events
+                                .try_send(BrowserNotification::ShareRejected { scopes, message })
+                                .is_err()
+                        {
+                            browser_notification_undeliverable(&inner);
+                            break 'connection;
+                        }
+                    }
+                    ServerMessage::BrowserScopesRevoked { scopes } => {
+                        let subscriber = inner.browser.lock().clone();
+                        if let Some(events) = subscriber
+                            && events
+                                .try_send(BrowserNotification::ScopesRevoked(scopes))
+                                .is_err()
+                        {
+                            browser_notification_undeliverable(&inner);
+                            break 'connection;
+                        }
+                    }
                     ServerMessage::ShuttingDown => {
                         graceful = true;
                         break;
@@ -389,6 +599,14 @@ fn run_client(
             sequence,
             event: WireDriverEvent::new("processExited", serde_json::Value::Null),
         });
+    }
+    // Page grants died with the connection; tell the GUI before the terminal
+    // flag so a consumer cannot observe "connected" and pending work at once.
+    // try_send: a GUI that already stopped draining must not stall the exit
+    // path; dropping the sender closes the channel, which the consumer sees
+    // as the same lease end.
+    if let Some(events) = inner.browser.lock().take() {
+        let _ = events.try_send(BrowserNotification::Disconnected);
     }
     // Only now, with the synthetic session exits handed to their subscribers,
     // does the supervisor-visible flag go up: otherwise a supervisor poll

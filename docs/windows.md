@@ -96,6 +96,10 @@ Differences worth knowing:
   Keyboard and IME are unaffected — those still reach the page directly once
   it holds focus.
 
+Developer-only same-page Playwright validation is documented in
+[browser-automation.md](browser-automation.md). It uses a separate build and
+test profile; ordinary builds do not enable a CDP debugging endpoint.
+
 ## Troubleshooting
 
 **The window opens black, or the app exits at startup.** fintwind needs a working

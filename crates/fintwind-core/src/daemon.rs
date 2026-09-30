@@ -1303,7 +1303,9 @@ fn handle_driver_command(
         | Command::WriteTerminal { .. }
         | Command::ResizeTerminal { .. }
         | Command::CloseTerminal
-        | Command::CloseSession => {
+        | Command::CloseSession
+        | Command::BrowserList
+        | Command::BrowserInvoke { .. } => {
             bail!("daemon received a command in the wrong dispatch path")
         }
     }

@@ -16,7 +16,7 @@ mod process;
 mod provider_thinking;
 mod workspace_client;
 
-pub use client::DaemonClient;
+pub use client::{BrowserNotification, DaemonClient};
 pub use fintwind_protocol::*;
 pub use process::{DaemonProcess, DaemonSupervisor};
 pub use workspace_client::WorkspaceClient;

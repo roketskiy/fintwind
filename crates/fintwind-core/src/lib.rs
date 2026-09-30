@@ -19,6 +19,7 @@ macro_rules! tr {
 
 pub mod attachments;
 pub mod blob_store;
+pub mod browser_broker;
 pub mod checkpoint;
 pub mod command_env;
 pub mod composer_complete;

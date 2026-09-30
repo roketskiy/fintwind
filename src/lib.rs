@@ -31,6 +31,8 @@ macro_rules! tr_cow {
 mod app;
 mod assets;
 mod browser;
+#[cfg(all(target_os = "windows", feature = "browser-poc"))]
+mod browser_poc;
 pub mod daemon;
 mod driver;
 mod input;
@@ -47,6 +49,14 @@ pub use fintwind_client::{
     checkpoint, command_env, composer_complete, git_branch, git_commit, git_history, i18n,
     identity, model, model_catalog, persistence, projectless, skills, usage, worktree,
 };
+
+/// Stage-one browser PoC entry point: an isolated host for the composition
+/// WebView2 surfaces, driven by an external runner over CDP. Only reachable
+/// through the explicit `--browser-poc` flag in `main`, and only in a build
+/// that asked for the `browser-poc` feature — a normal build neither compiles
+/// nor runs it.
+#[cfg(all(target_os = "windows", feature = "browser-poc"))]
+pub use browser_poc::try_run_browser_poc;
 
 use gpui::{
     App, Application, Bounds, KeyBinding, Menu, MenuItem, TitlebarOptions,

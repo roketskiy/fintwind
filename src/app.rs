@@ -1617,6 +1617,9 @@ pub struct Fintwind {
     /// A Browser surface was just opened; the next right panel render moves
     /// focus into its address bar.
     right_panel_pending_browser_focus: Option<Uuid>,
+    /// Which pages are shared with which live session runtime, and the
+    /// background bridge that carries the daemon's direct browser traffic.
+    browser_collaboration: browser_collaboration::AppBrowserCollaborationState,
     /// GPUI is compositing deferred draws on a plane above native views, so
     /// menus render over the live webview and no snapshot occlusion is needed.
     /// When the overlay could not be enabled, the browser falls back to
@@ -2043,6 +2046,7 @@ mod activity_diff;
 mod autocomplete;
 mod background_work;
 mod branches;
+mod browser_collaboration;
 mod command_palette;
 mod commit_dialog;
 mod components;
@@ -3320,6 +3324,7 @@ impl Fintwind {
                 right_panel_terminals: HashMap::new(),
                 right_panel_browsers: HashMap::new(),
                 right_panel_pending_browser_focus: None,
+                browser_collaboration: browser_collaboration::AppBrowserCollaborationState::new(),
                 scene_overlay_enabled,
                 settings_page: None,
                 skills_catalog: None,
@@ -3559,6 +3564,9 @@ impl Fintwind {
                 this.start_runtime_attachment(session_id, cx);
             }
             this.start_pending_checkpoint_captures(cx);
+            // The browser collaboration bridge starts empty: nothing is
+            // shared until the user asks for it from the right panel.
+            this.start_browser_collaboration(cx);
             // The autocomplete indexes prefetch alongside, so typing `/` or
             // `@` into the very first prompt already has data to draw.
             this.refresh_composer_sources(cx);

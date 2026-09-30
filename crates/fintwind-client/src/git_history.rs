@@ -1,0 +1,111 @@
+//! In-memory commit graph layout. Call once when a history fetch completes,
+//! not from a row builder or a frame's render path.
+// Lane allocation adapted from Ely GPUI Components, src/git/graph.rs,
+// commit e17e31a6890c09ebcfa8b61133d7bc7c625edf69, under the MIT license.
+// See docs/licenses/ely-gpui-components-MIT.txt for copyright and permission.
+
+pub use fintwind_protocol::git::{CommitEntry, CommitRef};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GraphHalf {
+    Top,
+    Bottom,
+    Through,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GraphStroke {
+    pub from: usize,
+    pub to: usize,
+    pub half: GraphHalf,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GraphRow {
+    pub lane: usize,
+    pub strokes: Vec<GraphStroke>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CommitGraph {
+    pub rows: Vec<GraphRow>,
+    /// Shared span keeps the same lane at the same x coordinate in every row.
+    pub width: usize,
+}
+
+impl CommitGraph {
+    /// Input must be topologically ordered (children before all their parents).
+    /// Parents outside a truncated window keep outgoing lines at its bottom.
+    pub fn new(commits: &[CommitEntry]) -> Self {
+        let mut waiting: Vec<Option<&str>> = Vec::new();
+        let mut graph = Self::default();
+        for commit in commits {
+            let before = waiting.clone();
+            let lane = before
+                .iter()
+                .position(|wait| *wait == Some(commit.hash.as_str()))
+                .or_else(|| waiting.iter().position(Option::is_none))
+                .unwrap_or_else(|| {
+                    waiting.push(None);
+                    waiting.len() - 1
+                });
+            for wait in waiting
+                .iter_mut()
+                .filter(|wait| **wait == Some(commit.hash.as_str()))
+            {
+                *wait = None;
+            }
+            let mut strokes: Vec<_> = before
+                .iter()
+                .enumerate()
+                .filter_map(|(at, wait)| {
+                    let wait = (*wait)?;
+                    Some(GraphStroke {
+                        from: at,
+                        to: if wait == commit.hash { lane } else { at },
+                        half: if wait == commit.hash {
+                            GraphHalf::Top
+                        } else {
+                            GraphHalf::Through
+                        },
+                    })
+                })
+                .collect();
+            for (index, parent) in commit.parents.iter().enumerate() {
+                let target = match waiting
+                    .iter()
+                    .position(|wait| *wait == Some(parent.as_str()))
+                {
+                    Some(joined) => joined,
+                    None if index == 0 => {
+                        waiting[lane] = Some(parent);
+                        lane
+                    }
+                    None => {
+                        let free = waiting.iter().position(Option::is_none).unwrap_or_else(|| {
+                            waiting.push(None);
+                            waiting.len() - 1
+                        });
+                        waiting[free] = Some(parent);
+                        free
+                    }
+                };
+                strokes.push(GraphStroke {
+                    from: lane,
+                    to: target,
+                    half: GraphHalf::Bottom,
+                });
+            }
+            graph.width = graph
+                .width
+                .max(before.len())
+                .max(waiting.len())
+                .max(lane + 1);
+            while waiting.last() == Some(&None) {
+                waiting.pop();
+            }
+            graph.rows.push(GraphRow { lane, strokes });
+        }
+        graph
+    }
+}

@@ -848,6 +848,7 @@ git_history.hash_copied: 已复制 %{hash}
 git_history.refresh: 刷新历史
 git_history.unpushed: 未推送到远程
 git_history.remote_ref: 云端引用
+git_history.select_commit: 选择提交以查看完整信息
 commit.message_placeholder: 提交信息（留空以自动生成）…
 commit.message: 提交信息
 commit.include_unstaged: 包含未暂存的更改

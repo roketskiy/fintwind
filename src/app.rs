@@ -1399,14 +1399,14 @@ pub struct Fintwind {
     /// reads this in-memory cache; misses are fulfilled on the background
     /// executor. `Err` is cached as well so a broken path is not retried every
     /// frame.
-    commit_log: QueryCache<
-        (PathBuf, Option<String>),
-        Result<Option<Vec<crate::git_history::CommitEntry>>, String>,
-    >,
+    commit_log: QueryCache<git_history::HistoryKey, git_history::HistoryResult>,
     /// The history panel's branch filter; `None` follows HEAD.
     history_branch: Option<String>,
     history_list_state: ListState,
-    history_row_cache: RefCell<Vec<crate::git_history::CommitEntry>>,
+    history_row_cache: Arc<git_history::HistoryRows>,
+    history_row_key: Option<git_history::HistoryKey>,
+    history_row_height: Pixels,
+    history_details_scroll: ScrollHandle,
     /// Keyboard cursor over the history list; `None` means no row selected.
     history_highlight: Option<usize>,
     branch_operation_pending: bool,
@@ -3220,7 +3220,10 @@ impl Fintwind {
                 commit_log: QueryCache::new(MAX_CACHED_WORKSPACES),
                 history_branch: None,
                 history_list_state: ListState::new(0, ListAlignment::Top, px(96.0)),
-                history_row_cache: RefCell::new(Vec::new()),
+                history_row_cache: Arc::new(git_history::HistoryRows::default()),
+                history_row_key: None,
+                history_row_height: px(0.0),
+                history_details_scroll: ScrollHandle::new(),
                 history_highlight: None,
                 branch_operation_pending: false,
                 commit_dialog: None,

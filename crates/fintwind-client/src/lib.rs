@@ -9,6 +9,7 @@ pub mod command_env;
 pub mod composer_complete;
 pub mod custom_providers;
 pub mod driver;
+pub mod git_history;
 pub mod models_dev;
 pub mod opencode_config;
 pub mod persistence;
@@ -23,10 +24,6 @@ pub use workspace_client::WorkspaceClient;
 
 pub mod git_branch {
     pub use fintwind_protocol::git::{BranchEntry, BranchSnapshot};
-}
-
-pub mod git_history {
-    pub use fintwind_protocol::git::{CommitEntry, CommitRef};
 }
 
 pub mod git_commit {

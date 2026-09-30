@@ -1689,6 +1689,8 @@ git_history.unpushed:
   en: Not pushed to a remote
 git_history.remote_ref:
   en: Remote ref
+git_history.select_commit:
+  en: Select a commit to view its full details
 commit.message_placeholder:
   en: Commit message (leave blank to generate)…
 commit.message:

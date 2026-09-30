@@ -1077,6 +1077,10 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if cx.stop_active_drag(window) {
+            cx.stop_propagation();
+            return;
+        }
         if self.settings_page.take().is_some() {
             let focus_handle = self.composer_focus(cx);
             window.focus(&focus_handle, cx);

@@ -699,6 +699,7 @@ commands.claude_review: プルリクエストをレビュー
 commands.claude_security_review: 保留中の変更をセキュリティレビュー
 
 composer.edit_in_composer: 入力欄で編集
+composer.reorder_followup: ドラッグで並べ替え；フォーカス中に Alt+↑/↓
 composer.steer: 指示を追加
 composer.remove_followup: キューから削除
 user_input.other_placeholder: 別の回答を入力

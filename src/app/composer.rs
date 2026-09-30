@@ -30,6 +30,51 @@ pub(super) fn composer_submit_action(
 /// pointer is still over the transcript, not only once it reaches the card.
 pub(super) const CHAT_FILE_DROP_GROUP: &str = "chat-file-drop";
 
+#[derive(Clone)]
+struct QueuedMessageDrag {
+    session_id: Uuid,
+    message_id: Uuid,
+    content: SharedString,
+}
+
+struct QueuedMessageDragPreview {
+    content: SharedString,
+    cursor_offset: gpui::Point<Pixels>,
+}
+
+impl Render for QueuedMessageDragPreview {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::current(cx);
+        div()
+            .pl(self.cursor_offset.x)
+            .pt(self.cursor_offset.y)
+            .child(
+                div()
+                    .w(px(320.0))
+                    .h(px(32.0))
+                    .px(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(9.0))
+                    .rounded(px(7.0))
+                    .border_1()
+                    .border_color(theme.accent)
+                    .bg(theme.composer)
+                    .shadow_md()
+                    .child(icon("icons/queue.svg", 13.0, theme.text_tertiary))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(ui_px(13.0))
+                            .text_color(theme.text)
+                            .child(self.content.clone()),
+                    ),
+            )
+    }
+}
+
 // ── Control-row width budget ─────────────────────────────────────────────
 //
 // The row is model · traits · access · mode · … · send. Every label in it
@@ -2113,8 +2158,15 @@ impl Fintwind {
                 .get(&session.id)
                 .is_some_and(|runtime| runtime.driver.supports_steer());
         let mut list = div().flex().flex_col().py(px(4.0));
-        for message in &session.queued_messages {
+        for (index, message) in session.queued_messages.iter().enumerate() {
             let message_id = message.id;
+            let previous_id = index
+                .checked_sub(1)
+                .map(|index| session.queued_messages[index].id);
+            let next_id = session
+                .queued_messages
+                .get(index + 1)
+                .map(|message| message.id);
             let content = if message.visible_content().trim().is_empty() {
                 message
                     .attachments
@@ -2124,6 +2176,11 @@ impl Fintwind {
                     .join(", ")
             } else {
                 message.visible_content().to_owned()
+            };
+            let drag = QueuedMessageDrag {
+                session_id,
+                message_id,
+                content: SharedString::from(content),
             };
             let steer_control = steerable.then(|| {
                 div()
@@ -2206,6 +2263,7 @@ impl Fintwind {
             list = list.child(
                 div()
                     .id(SharedString::from(format!("queued-message-{message_id}")))
+                    .relative()
                     .h(px(32.0))
                     .pl(px(12.0))
                     .pr(px(6.0))
@@ -2218,15 +2276,39 @@ impl Fintwind {
                     .hover(|element| element.bg(theme.overlay))
                     .active(|element| element.bg(theme.overlay_strong))
                     .tooltip(Tooltip::text(tr!("composer.edit_in_composer")))
-                    .child(icon("icons/queue.svg", 13.0, theme.text_tertiary))
                     .child(
                         div()
+                            .id(SharedString::from(format!(
+                                "queued-message-drag-{message_id}"
+                            )))
                             .flex_1()
                             .min_w_0()
-                            .truncate()
-                            .text_size(ui_px(13.0))
-                            .text_color(theme.text)
-                            .child(SharedString::from(content)),
+                            .h_full()
+                            .flex()
+                            .items_center()
+                            .gap(px(9.0))
+                            .cursor_move()
+                            .tooltip(Tooltip::text(tr!("composer.reorder_followup")))
+                            .child(icon(
+                                "icons/chevrons-up-down.svg",
+                                13.0,
+                                theme.text_tertiary,
+                            ))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .text_size(ui_px(13.0))
+                                    .text_color(theme.text)
+                                    .child(drag.content.clone()),
+                            )
+                            .on_drag(drag, |drag, cursor_offset, _, cx| {
+                                cx.new(|_| QueuedMessageDragPreview {
+                                    content: drag.content.clone(),
+                                    cursor_offset,
+                                })
+                            }),
                     )
                     .child(
                         div()
@@ -2278,11 +2360,71 @@ impl Fintwind {
                         this.edit_queued_message(session_id, message_id, window, cx);
                     }))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.modifiers.alt {
+                            let target = match event.keystroke.key.as_str() {
+                                "up" => Some((previous_id, false)),
+                                "down" => Some((next_id, true)),
+                                _ => None,
+                            };
+                            if let Some((target_id, after)) = target {
+                                if let Some(target_id) = target_id {
+                                    this.reorder_queued_message(
+                                        session_id, message_id, target_id, after, cx,
+                                    );
+                                }
+                                cx.stop_propagation();
+                                return;
+                            }
+                        }
                         if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                             this.edit_queued_message(session_id, message_id, window, cx);
                             cx.stop_propagation();
                         }
-                    })),
+                    }))
+                    // The two halves provide insertion targets without changing
+                    // row layout or intercepting ordinary clicks on its controls.
+                    .when(cx.has_active_drag(), |row| {
+                        row.children([false, true].map(|after| {
+                            div()
+                                .id(SharedString::from(format!(
+                                    "queued-message-drop-{message_id}-{after}"
+                                )))
+                                .absolute()
+                                .left_0()
+                                .right_0()
+                                .h(px(16.0))
+                                .when(after, |zone| zone.bottom_0())
+                                .when(!after, |zone| zone.top_0())
+                                // Accept no-op drops too so GPUI always refreshes
+                                // after removing the drag preview and drop zones.
+                                .drag_over::<QueuedMessageDrag>(move |style, drag, _, _| {
+                                    if drag.session_id != session_id
+                                        || drag.message_id == message_id
+                                    {
+                                        return style;
+                                    }
+                                    let style = if after {
+                                        style.border_b_2()
+                                    } else {
+                                        style.border_t_2()
+                                    };
+                                    style.border_color(theme.accent)
+                                })
+                                .on_drop(cx.listener(
+                                    move |this, drag: &QueuedMessageDrag, _, cx| {
+                                        if drag.session_id == session_id {
+                                            this.reorder_queued_message(
+                                                session_id,
+                                                drag.message_id,
+                                                message_id,
+                                                after,
+                                                cx,
+                                            );
+                                        }
+                                    },
+                                ))
+                        }))
+                    }),
             );
         }
         Some(

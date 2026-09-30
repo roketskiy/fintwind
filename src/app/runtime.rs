@@ -2207,6 +2207,48 @@ impl Fintwind {
         cx.notify();
     }
 
+    /// Resolve both IDs against the current queue: a turn may have consumed
+    /// the source or target while a drag was in progress.
+    pub(super) fn reorder_queued_message(
+        &mut self,
+        session_id: Uuid,
+        message_id: Uuid,
+        target_id: Uuid,
+        after: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.selected_session != Some(session_id) || message_id == target_id {
+            return;
+        }
+        let Some(session) = self.state.session_mut(session_id) else {
+            return;
+        };
+        let Some(source) = session
+            .queued_messages
+            .iter()
+            .position(|message| message.id == message_id)
+        else {
+            return;
+        };
+        let Some(target) = session
+            .queued_messages
+            .iter()
+            .position(|message| message.id == target_id)
+        else {
+            return;
+        };
+        let insertion = target + usize::from(after);
+        let destination = insertion - usize::from(source < insertion);
+        if source == destination {
+            return;
+        }
+        let message = session.queued_messages.remove(source);
+        session.queued_messages.insert(destination, message);
+        session.updated_at = unix_time();
+        self.save();
+        cx.notify();
+    }
+
     pub(super) fn remove_queued_message(
         &mut self,
         session_id: Uuid,

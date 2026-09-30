@@ -2,17 +2,17 @@
 
 [English](README.md) | 简体中文
 
-fintwind 是 [OpenCode 2](https://opencode.ai/v2/docs)——[OpenCode](https://opencode.ai)
-编码 agent 的 v2 系列——的原生 Windows 桌面客户端。界面由 Rust 和
-[GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 直接在 GPU 上绘制，
-不是 Electron 套壳。项目、会话和对话记录都留在你自己的机器上。
+[OpenCode 2](https://opencode.ai/v2/docs) 的原生 Windows 桌面客户端。
+使用 Rust 和 [GPUI](https://github.com/zed-industries/zed/tree/main/crates/gpui) 构建，
+不是 Electron 套壳。在一个窗口内管理项目、打开多个会话标签页，并查看 agent 的回复、
+思考过程和工具活动。
 
-官网与下载：<https://fintwind.xyz>
+[官网](https://fintwind.xyz) · [下载](https://github.com/roketskiy/fintwind/releases/latest) · [更新日志](CHANGELOG.md)
 
 > [!IMPORTANT]
-> OpenCode 2 尚未正式发布，后续仍会有大量破坏性变更。当本机的 OpenCode 2
-> 新于 v2.0.19 时，无法保证 fintwind 能正常运行。**目前 0.2.3 支持 OpenCode
-> v2.0.19 及更早版本；0.2.0 支持 v2.0.11 及更早版本。**
+> **fintwind 0.2.3 支持 OpenCode 2.0.19。** OpenCode 2 仍在持续变化，
+> 无法保证与更新版本兼容。建议使用下方固定版本的安装命令，不要在未确认兼容性时
+> 直接安装最新版 CLI。OpenCode 1 不是本项目支持的后端。
 
 会话演示：切换模型、进行中的会话，以及滚动一条很长的对话记录。
 
@@ -20,106 +20,120 @@ https://github.com/user-attachments/assets/beb2dcb5-88dd-4f2b-9415-153af9c93bf9
 
 ## 安装
 
+### 1. 安装 OpenCode 2
+
+fintwind 依赖本机的 `opencode` CLI，应用安装包不包含它。
+在 PowerShell 中执行以下命令之一，**两种方式任选一种即可**。
+
+使用 [Node.js 和 npm](https://nodejs.org/)：
+
+```powershell
+npm install -g @opencode/cli@2.0.19
+```
+
+或使用 [Bun](https://bun.sh/)：
+
+```powershell
+bun install -g --trust @opencode/cli@2.0.19
+```
+
+Bun 的 `--trust` 用于允许运行这个包必需的安装脚本。
+这里使用的是 V2 的包名 `@opencode/cli`；其他安装方式见
+[OpenCode 官方安装文档](https://opencode.ai/v2/docs/)。
+
+重新打开一个 PowerShell 窗口，检查安装并启动 OpenCode：
+
+```powershell
+opencode --version
+opencode
+```
+
+确认版本为 `2.0.19`。在 OpenCode 终端界面中通过 `/connect` 连接模型提供商，
+或使用已有的提供商配置。fintwind 使用 OpenCode 的模型、提供商凭据和 MCP 配置。
+**无需手动运行 `opencode serve`**：fintwind 会启动自己的本地私有服务。
+
+### 2. 安装 fintwind
+
+- **系统：** Windows 10 1809 或更新版本，或 Windows 11；x86_64 或 Arm64。
+- **图形驱动：** 支持功能级别 11_0 或更高的 Direct3D 11 驱动。
+- **Git 功能：** 安装 [Git for Windows](https://git-scm.com/download/win)，并确保 `PATH` 中可用。
+
 从[最新 release](https://github.com/roketskiy/fintwind/releases/latest) 下载
 `fintwind-<version>-<arch>-Setup.exe` 并运行。安装程序按用户安装到
-`%LOCALAPPDATA%\Programs\fintwind`，不需要管理员权限。旁边同时提供便携版 `.zip`。
+`%LOCALAPPDATA%\Programs\fintwind`，不需要管理员权限。
 
-`fintwind.exe` 和 `fintwind-daemon.exe` 必须放在同一目录。应用从自己旁边启动
-daemon，只拷走其中一个就起不来。
+使用便携版时，解压 release 中的 `.zip`，运行 `fintwind.exe`。
+**`fintwind.exe` 和 `fintwind-daemon.exe` 必须放在同一目录**，应用会从自身目录启动 daemon。
 
-系统要求是 Windows 10 1809 或更新版本，或 Windows 11，x86_64 或 Arm64。
-SmartScreen、数据目录和尚未支持的功能见 [docs/windows.md](docs/windows.md)。
+有新版本时，「更新」按钮会打开对应的 release 页面；应用不会自动下载或安装更新。
+SmartScreen、CLI 检测、数据目录和 WebView2 说明见
+[Windows 安装与故障排查](docs/windows.md)。
 
-有新版本时，侧栏会出现「更新」按钮，点开对应的 GitHub release。应用不会自己下载安装。
+## 功能
 
-## 环境要求
+- **项目与会话标签页。** 按项目管理会话，在同一窗口打开多个会话，支持标签拖动排序和未读提示。
+- **会话控制。** 切换模型、模型支持的思考程度，以及访问模式（询问、自动接受编辑、完全访问）。
+  agent 工作时可以排队或插话；符合条件的 Git 回合可通过 OpenCode 原生功能回退和恢复。
+- **清晰的 agent 活动。** 查看流式回复、思考、工具调用、子代理活动和嵌套 Code Mode 调用，
+  保留 OpenCode 的工具名称。对话记录和思考过程使用虚拟化列表，限制每帧需要处理的内容。
+- **文件与 Git。** 浏览工作区文件、打开多个文件标签页、查看 diff 和 Git 提交历史。
+  可从输入栏添加附件，也可将文件拖到对话中；图片和 PDF 会内联发送给 OpenCode。
+- **终端与浏览器。** 提供内置终端和可选的 WebView2 浏览器面板；会话界面本身仍由原生 GPUI 渲染。
+- **外观设置。** 保留 Fintwind 主题，并提供另外 12 套主题家族；支持浅色、深色、跟随系统，
+  以及界面和代码字体、字号设置。动效遵循系统的「减弱动态效果」偏好。
+- **用量统计。** 根据本机 OpenCode 会话记录展示活动热力图、按日和按小时图表、模型与提供商排行，
+  并计入子代理用量。显示的费用是估算值，不是账单。
+- **MCP 管理。** 浏览 MCP 市场、添加远程服务器、完成 OAuth 登录并查看连接状态。
+- **原生公式排版。** 支持行内和独立公式，包括 `\(…\)` 和 `\[…\]`，排版工作在后台执行。
 
-fintwind 只驱动一个 agent 后端：本机的 **OpenCode 2** 服务。
-请先安装并登录 `opencode` CLI。本 0.2.3 版本支持 **v2.0.19 及更早版本**
-（0.2.0 支持 **v2.0.11 及更早版本**）。
-fintwind 会拉起它；会话、模型、provider 和 MCP 服务器都来自这个后端。
-比 v2.0.19 更新的 OpenCode 2 无法保证能正常运行。
+## 本地数据与项目范围
 
-## 特点
+fintwind 没有自己的账号，也不提供云端同步。应用管理的项目、任务和附件存储在本机的
+SQLite 与文件中，OpenCode 原生会话数据由 OpenCode 管理。
+**本地存储不等于离线推理：** 提示词及相关内容仍会发送给你在 OpenCode 中配置的模型提供商和工具。
 
-- **原生渲染。** 会话界面是 Rust + GPUI。只有右侧可选的浏览器面板使用系统 WebView2。
-- **长对话仍然跟手。** 对话记录和思考过程做了虚拟化，每一帧只构建屏幕上看得见的行，
-  高刷新率屏幕上流式输出也不会拖垮界面。
-- **跟着系统走。** 深色和浅色跟随 Windows 主题，动效尊重「减弱动态效果」，
-  主要操作可以用键盘完成。
-- **Windows 自己的壳。** 系统托盘、原生菜单、内置终端、按用户安装。
-- **本地优先。** 项目、会话、对话记录和附件都在本机（SQLite 和本地文件）。
-  daemon 只监听回环地址，并用每次启动生成的令牌鉴权。fintwind 没有自己的账号，
-  也不做云端同步。
-- **默认零遥测。** 配置就是本地 JSON 文件，可以备份，也可以直接拷走。
-- **会话留在你手里。** 在输入栏切换模型、思考程度和访问模式（询问、自动接受编辑、完全访问）。
-  agent 工作时可以排队或插话。基于 Git 的回合可以用 OpenCode 自己的 revert 回退，
-  会话保持同一个。
-- **工具过程读得清。** 思考、工具调用和嵌套的 Code Mode 调用按原顺序留在对话里，
-  卡片上是 OpenCode 的原始工具名。
-- **用量来自你自己的记录。** 从本机 OpenCode 2 会话统计 token 和费用：活动热力图、
-  按日柱状图、按模型排名。
-- **MCP 市场。** 浏览并添加远程 MCP 服务器，支持 OAuth 登录，并能看到连接状态。
-- **公式按公式排版。** 行内和独立公式原生排版，包括模型更常输出的 `\[…\]` 和 `\(…\)`，
-  排版不占 UI 线程。
+本项目是 [EGOIST](https://github.com/egoist) 的 [waku](https://github.com/egoist/waku)
+的独立 fork，采用 [GPL-3.0-only](LICENSE)，不是 OpenCode 官方桌面端。
+fintwind 只发布 Windows 版本，只使用 OpenCode 2 作为 agent 后端。
+你仍然可以通过 OpenCode 使用多个模型提供商；其他 agent 后端不在本 fork 的范围内。
 
-## 运行时内存
+### 内存快照
 
-窗口开着时的一次任务管理器读数。桌面进程 69.4 MB，`fintwind-daemon.exe` 25.7 MB，
-加在一起大约 95 MB。
+一次任务管理器截图中，桌面进程占用 69.4 MB，`fintwind-daemon.exe` 占用 25.7 MB，
+两者合计约 95 MB。这不是性能基准，也不是完整 agent 运行环境的总内存：
+不包含 OpenCode 和其他进程，实际占用会随工作负载变化。
 
 ![任务管理器：fintwind 69.4 MB，fintwind-daemon.exe 25.7 MB](docs/media/runtime-memory.png)
 
-## 范围
-
-fintwind 是 [EGOIST](https://github.com/egoist) 的 [waku](https://github.com/egoist/waku)
-的 fork，同样采用 [GPL-3.0](LICENSE)。这个 fork 只保留一个后端——本机 OpenCode 2——并且只发布
-Windows。多 provider、macOS 和 Linux 请用上游项目。
-
-它不是 OpenCode 官方桌面端，而是给已经在用 OpenCode 2、希望对话记录跑在原生窗口里的
-Windows 用户。
-
 ## 架构
 
-原生桌面端是独立 `fintwind-daemon` 进程的 RPC 客户端。Provider 会话运行在
-[`fintwind-core`](crates/fintwind-core) 中，隐藏在
-[`fintwind-protocol`](crates/fintwind-protocol) 的带鉴权、带版本化的
-WebSocket 契约之后。桌面端只依赖
-[`fintwind-client`](crates/fintwind-client)，不依赖 daemon 的具体实现。
+桌面端通过 [`fintwind-client`](crates/fintwind-client) 与独立的
+[`fintwind-daemon`](crates/fintwind-daemon) 进程通信，使用
+[`fintwind-protocol`](crates/fintwind-protocol) 定义的带鉴权、带版本的 WebSocket 协议。
+[`fintwind-core`](crates/fintwind-core) 实现 daemon 管理的存储、工作区与 Git 操作，
+以及 OpenCode 集成。daemon 监听回环地址，并使用每次启动时生成的令牌鉴权。
 
-daemon 拥有任务 SQLite 数据、上传的附件、provider 原生的会话分叉，以及全部
-工作区文件系统与 Git 操作。它返回的路径一律指 daemon 所在主机。桌面端只保留
-展示状态和可丢弃的预览缓存。daemon 只监听回环地址，并用每次启动生成的令牌鉴权。
-
-无项目的任务工作区位于 daemon 主机的 `~/.fintwind/projects/<日期>/<slug>` 下。
-daemon 首次加载时会把旧版 `~/.fintwind/<日期>/<slug>` 布局创建的工作区迁移过去。
-
-配置归属同样分离：Release 桌面端写 `~/.fintwind/app.json`，Debug 则隔离在
-`temp/app.json`。daemon 的 provider 设置保存在 `~/.fintwind/settings.json`。
-
-连接到桌面进程之外托管的 daemon 时，fintwind 绝不在客户机上解释 daemon 的路径。
-因此在协议增加 daemon 主机侧的目录选择器与终端流端点之前，本地目录选择器和
-PTY 不可用；文件、diff、Git、skills、用量、任务状态与附件则已经走 daemon RPC。
+Release 桌面端配置位于 `~/.fintwind/app.json`，Debug 使用 `temp/app.json`。
+daemon 的提供商设置位于 `~/.fintwind/settings.json`。
+未关联项目的任务使用 `~/.fintwind/projects/<日期>/<slug>` 下的工作区。
 
 ## 开发
 
-开发环境要求 Windows 10 1809 或更新、MSVC 工具链、
-[Rust 1.96 或更新](https://www.rust-lang.org/tools/install) 以及
-[Bun](https://bun.sh/)。请先按
-[CONTRIBUTING.md](CONTRIBUTING.md) 安装原生构建依赖。
+需要 Windows、MSVC C++ 工具链与 Windows SDK、
+[Rust 1.96 或更新版本](https://www.rust-lang.org/tools/install)，以及 [Bun](https://bun.sh/)。
+环境配置与检查要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ```sh
 bun install
 bun run dev
 ```
 
-Release 构建把 `fintwind-daemon` 放在应用旁边。开发时 daemon 位于
-`target/debug/fintwind-debug-daemon`，这样只改 provider 相关代码时可以
-单独替换 daemon，不必重启 fintwind Debug。
+开发 watcher 会构建桌面端和独立的 `target/debug/fintwind-debug-daemon.exe`；
+只修改 provider 相关代码时，可以替换 daemon 而不重启 Debug 桌面端。
+Release 构建会把 `fintwind-daemon.exe` 放在 `fintwind.exe` 旁边。
 
-开发流程与检查项见 [CONTRIBUTING.md](CONTRIBUTING.md)；
-发布维护者还应阅读 [RELEASING.md](RELEASING.md)。
+打包和发布维护流程见 [RELEASING.md](RELEASING.md)。
 
 ## 许可证
 
-fintwind 基于 [GNU General Public License v3.0 only](LICENSE) 授权。
+[GNU General Public License v3.0 only](LICENSE)。

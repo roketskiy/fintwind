@@ -329,15 +329,24 @@ impl Fintwind {
                                 } else {
                                     theme.text_secondary
                                 };
-                                let mut headline =
-                                    div().flex().items_center().gap(px(8.0)).min_w_0().child(
-                                        div()
-                                            .flex_none()
-                                            .text_size(code_px(11.5))
-                                            .font_family(crate::theme::code_font_family())
-                                            .text_color(hash_color)
-                                            .child(SharedString::from(commit.short_hash)),
-                                    );
+                                let hash = div()
+                                    .flex_none()
+                                    .text_size(code_px(11.5))
+                                    .font_family(crate::theme::code_font_family())
+                                    .text_color(hash_color)
+                                    .child(SharedString::from(commit.short_hash));
+                                // Ref chips live in a shrinkable, clipping
+                                // container: long decorations ("HEAD ->
+                                // feature/…" + "origin/feature/…") must never
+                                // push the timestamp past the row's edge —
+                                // the overflow is cut here instead.
+                                let mut chips = div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.0));
                                 // At most two ref chips carry their names; the
                                 // rest collapse into a trailing "+n" chip.
                                 let refs_shown = commit.refs.len().min(2);
@@ -345,7 +354,7 @@ impl Fintwind {
                                 for (ref_index, commit_ref) in
                                     commit.refs.iter().take(refs_shown).enumerate()
                                 {
-                                    headline = headline.child(ref_chip(
+                                    chips = chips.child(ref_chip(
                                         format!("history-ref-{index}-{ref_index}"),
                                         commit_ref.label.clone(),
                                         commit_ref.remote,
@@ -354,7 +363,7 @@ impl Fintwind {
                                     ));
                                 }
                                 if overflow > 0 {
-                                    headline = headline.child(ref_chip(
+                                    chips = chips.child(ref_chip(
                                         format!("history-ref-{index}-overflow"),
                                         format!("+{overflow}"),
                                         false,
@@ -362,8 +371,13 @@ impl Fintwind {
                                         &theme,
                                     ));
                                 }
-                                let headline = headline
-                                    .child(div().flex_1())
+                                let headline = div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .min_w_0()
+                                    .child(hash)
+                                    .child(chips)
                                     .when(!commit.pushed, |headline| {
                                         headline.child(
                                             div()
@@ -395,6 +409,7 @@ impl Fintwind {
                                     .items_baseline()
                                     .gap(px(8.0))
                                     .min_w_0()
+                                    .overflow_hidden()
                                     .child(
                                         div()
                                             .min_w_0()
@@ -417,6 +432,7 @@ impl Fintwind {
                                     .id(SharedString::from(format!("history-row-{index}")))
                                     .min_h(px(HISTORY_ROW_HEIGHT))
                                     .w_full()
+                                    .overflow_hidden()
                                     .px(px(12.0))
                                     .py(px(6.0))
                                     .flex()

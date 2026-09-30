@@ -663,7 +663,9 @@ impl Fintwind {
             cx,
         );
         self.sidebar_expanded_groups.remove(&project_id);
-        self.sidebar_group_visible_counts.borrow_mut().remove(&project_id);
+        self.sidebar_group_visible_counts
+            .borrow_mut()
+            .remove(&project_id);
         self.state
             .projects
             .retain(|project| project.id != project_id);

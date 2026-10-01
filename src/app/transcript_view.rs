@@ -862,9 +862,11 @@ pub(super) struct ActivityClusterContext {
     /// The block's index inside the owning transcript: its disclosure key and
     /// part of its control ids.
     pub(super) block_index: usize,
-    /// The owning turn is still streaming: the header names the newest
-    /// activity. Only clusters with unfinished activities start expanded.
+    /// The owning turn is still streaming: the header names the newest activity.
     pub(super) live_turn: bool,
+    /// This is the newest activity group. It stays open during a live turn,
+    /// even after its activities finish, until another group appears.
+    pub(super) latest_group: bool,
     /// The reasoning activity streaming in this block, if any.
     pub(super) live_reasoning_id: Option<Uuid>,
     /// Registry this cluster's selectable text registers into.
@@ -872,19 +874,16 @@ pub(super) struct ActivityClusterContext {
 }
 
 impl ActivityClusterContext {
-    /// Whether the cluster's cards are showing. Unfinished activities in a
-    /// live turn start open in both surfaces; a completed batch closes unless
-    /// the user has stored an explicit disclosure choice.
-    fn expanded(&self, this: &Fintwind, activities: &[ActivityItem]) -> bool {
+    /// Only a newer group or the turn settling auto-collapses the latest group.
+    /// An explicit disclosure choice always takes precedence on both surfaces.
+    fn expanded(&self, this: &Fintwind) -> bool {
         let stored = match &self.surface {
             ActivitySurface::Session => this.activities_expanded.get(&self.block_index).copied(),
             ActivitySurface::Background(key) => {
                 this.background_activity_cluster_expanded(key, self.block_index)
             }
         };
-        stored.unwrap_or_else(|| {
-            self.live_turn && activities.iter().any(|activity| !activity.complete)
-        })
+        stored.unwrap_or(self.live_turn && self.latest_group)
     }
 
     /// Stem for the cluster's focus handle and element id. Background surfaces
@@ -2319,6 +2318,7 @@ impl Fintwind {
                 surface: ActivitySurface::Session,
                 block_index,
                 live_turn,
+                latest_group: block_index + 1 == self.selected_transcript_blocks().len(),
                 live_reasoning_id,
                 selection: self.transcript_selection.clone(),
             },
@@ -2345,7 +2345,7 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let expanded = context.expanded(self, activities);
+        let expanded = context.expanded(self);
         let control_id = context.control_id();
         let header_title =
             activity_header_title(activities, context.live_turn, context.live_reasoning_id);

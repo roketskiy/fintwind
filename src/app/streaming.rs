@@ -408,9 +408,9 @@ impl Fintwind {
                         // an expanded card rebuilds from the new ones.
                         self.activity_diffs.borrow_mut().remove(&activity_id);
                     }
-                    // A completed batch auto-collapses even while its turn is
-                    // running. Late updates can target rows outside the tail
-                    // remeasure window, so invalidate the owning block too.
+                    // Completion changes the card's status and default detail
+                    // disclosure, not the group's disclosure. Late updates may
+                    // sit outside the tail window, so remeasure their block too.
                     if completion_changed && self.state.selected_session == Some(session_id) {
                         self.remeasure_transcript_block(block_index);
                     }

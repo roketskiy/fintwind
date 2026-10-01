@@ -1047,7 +1047,7 @@ impl Fintwind {
 
     /// An item's stored cluster disclosure for one of its transcript blocks,
     /// if the user toggled it. `None` leaves the default — open for a live
-    /// turn, closed otherwise — to the shared cluster renderer.
+    /// batch in a live turn, closed otherwise — to the shared cluster renderer.
     pub(super) fn background_activity_cluster_expanded(
         &self,
         key: &BackgroundWorkKey,
@@ -1753,8 +1753,8 @@ impl Fintwind {
         }
         // The item's own liveness: the same questions the session transcript
         // asks of its runtime, answered from the background item instead. A
-        // live subagent's newest block names its newest activity and starts
-        // open, exactly as a live turn does in the parent transcript.
+        // live subagent's blocks name their newest activity; only batches with
+        // unfinished activities start open, as in the parent transcript.
         let live_turn_id = (item.status.is_live())
             .then(|| {
                 transcript

@@ -582,7 +582,7 @@ pub struct OpenCodeDriver {
     session_id: String,
     /// This task's workspace: every location-scoped request names it
     /// explicitly, since the server can no longer be assumed to run here.
-    cwd: PathBuf,
+    cwd: Arc<Mutex<PathBuf>>,
     events: DriverEventSender,
     background_refresh_generation: Arc<AtomicU64>,
     background_transcript_hydrations: Arc<Mutex<HashSet<String>>>,
@@ -1023,6 +1023,10 @@ impl OpenCodeDriver {
         let stream_feed = Arc::clone(&event_feed);
         let stream_family = Arc::clone(&session_family);
         let stream_liveness = server.liveness();
+        let cwd = Arc::new(Mutex::new(cwd));
+        let stream_cwd = Arc::clone(&cwd);
+        let background_refresh_generation = Arc::new(AtomicU64::new(0));
+        let stream_background_generation = Arc::clone(&background_refresh_generation);
         thread::Builder::new()
             .name("fintwind-opencode-events".into())
             .spawn(move || {
@@ -1040,6 +1044,18 @@ impl OpenCodeDriver {
                     }
                     match stream_feed.recv_timeout(Duration::from_millis(500)) {
                         Ok(Some(value)) => {
+                            if value.get("type").and_then(Value::as_str) == Some("session.moved")
+                                && event_session_id(&value) == Some(stream_session.as_str())
+                                && let Some(directory) = event_payload(&value)
+                                    .pointer("/location/directory")
+                                    .and_then(Value::as_str)
+                                && !directory.is_empty()
+                            {
+                                *stream_cwd.lock() = PathBuf::from(directory);
+                                // Old-directory child listings must not retire the
+                                // moved session's background work after the handoff.
+                                stream_background_generation.fetch_add(1, Ordering::AcqRel);
+                            }
                             reconciliation.observe_connection(&stream_feed, *stream_turn.lock());
                             if !reconciliation.is_completed_event(&value, &stream_session) {
                                 if !reconciliation.defer_terminal(&value, &stream_session) {
@@ -1424,7 +1440,7 @@ impl OpenCodeDriver {
             session_id,
             cwd,
             events: stream_events,
-            background_refresh_generation: Arc::new(AtomicU64::new(0)),
+            background_refresh_generation,
             background_transcript_hydrations: Arc::new(Mutex::new(HashSet::new())),
             commands,
             permissions,
@@ -1471,7 +1487,7 @@ impl DriverControl for OpenCodeDriver {
             .fetch_add(1, Ordering::AcqRel)
             .saturating_add(1);
         let parent_id = self.session_id.clone();
-        let directory = opencode_location_directory(&self.cwd);
+        let directory = opencode_location_directory(&self.cwd.lock());
         let events = self.events.clone();
         let generation_guard = Arc::clone(&self.background_refresh_generation);
         let transcript_hydrations = Arc::clone(&self.background_transcript_hydrations);
@@ -1545,6 +1561,29 @@ impl DriverControl for OpenCodeDriver {
                 let Some(sessions) = sessions else {
                     return;
                 };
+                // V2 session rows are durable history, not execution status.
+                // A resumed child can still carry its previous outcome while
+                // running, so the process-local active roster takes precedence.
+                // Failed or malformed reads prove nothing: preserve UI state.
+                let active = request_json_on_port_with_directory(
+                    port,
+                    "GET",
+                    "/api/session/active",
+                    None,
+                    Duration::from_secs(10),
+                    Some(&directory),
+                );
+                let Some(active) = active
+                    .as_ref()
+                    .ok()
+                    .and_then(|response| response.get("data"))
+                    .and_then(Value::as_object)
+                else {
+                    return;
+                };
+                if generation_guard.load(Ordering::Acquire) != generation {
+                    return;
+                }
                 let items = sessions
                     .into_iter()
                     .filter_map(|payload| {
@@ -1557,21 +1596,19 @@ impl DriverControl for OpenCodeDriver {
                         .then(|| {
                             let mut child =
                                 OpenCodeChildSession::new(child_id, &parent_id, &payload);
-                            let status = payload
-                                .pointer("/status/type")
-                                .or_else(|| payload.get("status"))
-                                .and_then(Value::as_str);
-                            child.item.status = match status {
-                                Some("busy" | "running" | "starting") => {
-                                    BackgroundWorkStatus::Running
-                                }
-                                Some("error" | "failed") => BackgroundWorkStatus::Failed,
-                                Some("idle" | "completed" | "success") => {
-                                    BackgroundWorkStatus::Completed
-                                }
-                                _ => BackgroundWorkStatus::Starting,
-                            };
+                            child.item.status =
+                                restored_child_status(&payload, active.contains_key(child_id));
                             child.item.can_stop = child.item.status.is_stoppable();
+                            if let Some(created) =
+                                payload.pointer("/time/created").and_then(Value::as_u64)
+                            {
+                                child.item.started_at_ms = created;
+                            }
+                            if let Some(updated) =
+                                payload.pointer("/time/updated").and_then(Value::as_u64)
+                            {
+                                child.item.updated_at_ms = updated;
+                            }
                             child.item
                         })
                     })
@@ -1801,6 +1838,29 @@ impl OpenCodeChildSession {
             execution_started_at_ms: None,
             pending_revives: VecDeque::new(),
         }
+    }
+}
+
+fn restored_child_status(payload: &Value, active: bool) -> BackgroundWorkStatus {
+    if active {
+        return BackgroundWorkStatus::Running;
+    }
+    match payload.get("outcome").and_then(Value::as_str) {
+        Some("succeeded") => BackgroundWorkStatus::Completed,
+        Some("failed") => BackgroundWorkStatus::Failed,
+        Some("interrupted") => BackgroundWorkStatus::Stopped,
+        _ => match payload
+            .pointer("/status/type")
+            .or_else(|| payload.get("status"))
+            .and_then(Value::as_str)
+        {
+            // Compatibility with servers which still publish a status field.
+            Some("busy" | "running" | "starting") => BackgroundWorkStatus::Running,
+            Some("error" | "failed") => BackgroundWorkStatus::Failed,
+            Some("idle" | "completed" | "success") => BackgroundWorkStatus::Completed,
+            // Missing information is not evidence of an execution start.
+            _ => BackgroundWorkStatus::Lost,
+        },
     }
 }
 
@@ -2507,12 +2567,42 @@ fn dispatch_server_event(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let session = event_session_id(value);
+    // Moves are placement news for every tracked row, including other clients'
+    // sessions. Do not route them through the current transcript/child filter.
+    if kind == "session.moved" {
+        if let Some(native_session_id) = session {
+            let _ = events.send(DriverEvent::NativeSessionMoved {
+                native_session_id: native_session_id.to_owned(),
+            });
+        }
+        return;
+    }
     let lifecycle = matches!(
         kind,
         "session.created" | "session.updated" | "session.deleted"
     );
 
     if let Some(session) = session.filter(|session| *session != root) {
+        // A resumed historical child has no new session.created. Only an
+        // exact pending call plus its execution start can attach it here;
+        // unrelated or replayed starts must not reopen historical work.
+        if kind == "session.execution.started"
+            && !state.children.contains_key(session)
+            && let Some(index) = state
+                .pending_subagents
+                .iter()
+                .position(|pending| pending.target.as_deref() == Some(session))
+            && let Some(pending) = state.pending_subagents.remove(index)
+        {
+            let mut child = OpenCodeChildSession::new(session, root, event_payload(value));
+            // Start events carry no title. Let the registry keep the title
+            // restored from native history rather than replacing it with Bot.
+            child.item.title.clear();
+            child.item.origin_activity_ids.push(pending.activity_id);
+            child.item.command = pending.prompt.clone();
+            child.prompt = pending.prompt;
+            state.children.insert(session.to_owned(), child);
+        }
         let known_child = state
             .children
             .get(session)

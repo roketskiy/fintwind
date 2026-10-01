@@ -161,6 +161,10 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         ),
         DriverEvent::Error(error) => ("error", Value::String(error)),
         DriverEvent::NativeSessionsChanged => ("nativeSessionsChanged", Value::Null),
+        DriverEvent::NativeSessionMoved { native_session_id } => (
+            "nativeSessionMoved",
+            json!({ "nativeSessionId": native_session_id }),
+        ),
         DriverEvent::ProcessExited => ("processExited", Value::Null),
     };
     Ok(WireDriverEvent::new(kind, payload))
@@ -189,6 +193,13 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
                 .unwrap_or(false),
         },
         "nativeSessionsChanged" => DriverEvent::NativeSessionsChanged,
+        "nativeSessionMoved" => DriverEvent::NativeSessionMoved {
+            native_session_id: payload
+                .get("nativeSessionId")
+                .and_then(Value::as_str)
+                .context("missing moved native session id")?
+                .to_owned(),
+        },
         "textStarted" => DriverEvent::TextStarted {
             part: reasoning_part_from_wire(&payload),
         },

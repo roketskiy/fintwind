@@ -502,13 +502,20 @@ impl Backend for FintwindBackend {
                     result: fork_provider_session(request)?,
                 })
             }
-            Command::ListProviderSessions { binary, directory } => {
+            Command::ListProviderSessions {
+                binary,
+                directory,
+                tracked_session_ids,
+            } => {
                 // Goes through the binary's private global server; the
                 // directory rides along as per-request location data.
                 // Blocking I/O, so this runs on the request thread.
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let sessions =
-                    crate::driver::native::list_sessions(&server, &directory.to_string_lossy())?;
+                let sessions = crate::driver::native::list_sessions_with_tracked(
+                    &server,
+                    &directory.to_string_lossy(),
+                    &tracked_session_ids,
+                )?;
                 Ok(ResponsePayload::ProviderSessions { sessions })
             }
             Command::FetchNativeTranscript {
@@ -1368,6 +1375,10 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             json!({ "transcript": transcript, "continuation": continuation }),
         ),
         DriverEvent::NativeSessionsChanged => ("nativeSessionsChanged", Value::Null),
+        DriverEvent::NativeSessionMoved { native_session_id } => (
+            "nativeSessionMoved",
+            json!({ "nativeSessionId": native_session_id }),
+        ),
         DriverEvent::TextStarted { part } => ("textStarted", json!({ "part": part })),
         DriverEvent::TextDelta { part, delta } => {
             ("textDelta", json!({ "part": part, "delta": delta }))
@@ -1513,6 +1524,13 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
                 .unwrap_or(false),
         },
         "nativeSessionsChanged" => DriverEvent::NativeSessionsChanged,
+        "nativeSessionMoved" => DriverEvent::NativeSessionMoved {
+            native_session_id: payload
+                .get("nativeSessionId")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow!("missing moved native session id"))?
+                .to_owned(),
+        },
         "textStarted" => DriverEvent::TextStarted {
             part: reasoning_part_from_wire(&payload),
         },

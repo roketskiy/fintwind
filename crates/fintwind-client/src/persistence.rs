@@ -830,13 +830,26 @@ impl StateStore {
         binary: PathBuf,
         directory: PathBuf,
     ) -> io::Result<Vec<NativeSessionSummary>> {
+        self.list_provider_sessions_with_tracked(binary, directory, Vec::new())
+    }
+
+    pub fn list_provider_sessions_with_tracked(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        tracked_session_ids: Vec<String>,
+    ) -> io::Result<Vec<NativeSessionSummary>> {
         match self
             .daemon
             .client()
             .request(
                 Uuid::nil(),
                 Uuid::nil(),
-                Command::ListProviderSessions { binary, directory },
+                Command::ListProviderSessions {
+                    binary,
+                    directory,
+                    tracked_session_ids,
+                },
             )
             .map_err(to_io_error)?
         {

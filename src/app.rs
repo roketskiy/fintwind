@@ -3575,7 +3575,7 @@ impl Fintwind {
             this.start_pending_checkpoint_captures(cx);
             // The browser collaboration bridge starts empty: nothing is
             // shared until the user asks for it from the right panel.
-            this.start_browser_collaboration(cx);
+            this.start_browser_collaboration(window, cx);
             // The autocomplete indexes prefetch alongside, so typing `/` or
             // `@` into the very first prompt already has data to draw.
             this.refresh_composer_sources(cx);

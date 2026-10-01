@@ -875,14 +875,21 @@ browser_collaboration.fill_summary: "入力 %{selector}: %{text}"
 browser_collaboration.navigate_summary: "移動: %{url}"
 browser_collaboration.reading: ページを読み取る
 browser_collaboration.running: ブラウザ操作を実行中
-browser_collaboration.shared_status: ページを共有中。変更は都度承認が必要です
+browser_collaboration.shared_status: 現在のセッションに共有中。操作には承認が必要です。共有を停止すると引き継げます。
 browser_collaboration.approve_once: 今回のみ許可
 browser_collaboration.reject: 拒否
-browser_collaboration.take_over: 引き継いで共有を停止
+browser_collaboration.take_over: 共有を停止
+browser_collaboration.share: 共有
+browser_collaboration.shared: 共有中
+browser_collaboration.opening: 開いています
+browser_collaboration.stop_opening: ブラウザーの自動操作を停止
 browser_collaboration.share_rejected: "ページの共有が拒否されました: %{message}"
 browser_collaboration.runtime_replaced: セッションのランタイムが差し替えられたため、共有を解除しました。再度共有してください。
 browser_collaboration.publish_failed: "デーモン接続が切れたため、ページの共有を解除しました: %{error}"
 browser_collaboration.too_many_pages: この接続の共有ページ数が上限です。先にいずれかの共有を解除してください。
+browser_collaboration.automatic_status: フルアクセスで自動操作できます。通常の閲覧では共有を解除しません。共有を停止すると引き継げます。
+browser_collaboration.scroll_summary: "スクロール: %{delta_y}"
+browser_collaboration.open_handled: ページを開く（アプリホストが処理）
 
 environment.title: 環境
 environment.summary: 環境とバックグラウンド作業

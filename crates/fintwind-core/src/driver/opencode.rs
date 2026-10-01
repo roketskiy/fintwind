@@ -575,6 +575,7 @@ fn verify_resume_location(session: &Value, cwd: &Path, session_id: &str) -> anyh
 }
 
 pub struct OpenCodeDriver {
+    browser_binding: Option<crate::browser_tools::BrowserToolBinding>,
     // `Drop` releases this lease before waking the worker, guaranteeing that
     // final process teardown runs on the worker rather than the UI thread.
     server: Option<PooledServer>,
@@ -596,7 +597,16 @@ pub struct OpenCodeDriver {
 }
 
 impl OpenCodeDriver {
+    #[cfg(test)]
     pub fn start(options: DriverStartOptions, events: DriverEventSender) -> anyhow::Result<Self> {
+        Self::start_with_browser(options, events, None)
+    }
+
+    pub(crate) fn start_with_browser(
+        options: DriverStartOptions,
+        events: DriverEventSender,
+        browser: Option<crate::browser_tools::BrowserToolRuntime>,
+    ) -> anyhow::Result<Self> {
         let DriverStartOptions {
             binary,
             cwd,
@@ -619,7 +629,12 @@ impl OpenCodeDriver {
 
         // OpenCode hosts many sessions per process, and a second
         // `opencode serve` in the same workspace contends with the live one.
-        let server = crate::opencode_pool::acquire(&binary, &cwd)?;
+        let server = match &browser {
+            Some(browser) => {
+                crate::opencode_pool::acquire_with_browser(&binary, &browser.registry)?
+            }
+            None => crate::opencode_pool::acquire(&binary, &cwd)?,
+        };
 
         // Reuse the native session when resuming so the conversation, and the
         // cursor already persisted for it, stay the same.
@@ -685,6 +700,31 @@ impl OpenCodeDriver {
                     .ok_or_else(|| anyhow!("OpenCode returned no session ID"))?
             }
         };
+        let browser_binding = if let Some(runtime) = &browser {
+            let activation = crate::browser_plugin::wait_until_active(&server, &location_directory);
+            if activation.is_ok()
+                && server.browser_tools.as_ref().is_some_and(|tools| {
+                    tools.belongs_to(&runtime.registry) && tools.is_activated()
+                })
+            {
+                Some(
+                    server
+                        .browser_tools
+                        .as_ref()
+                        .context("private OpenCode server has no browser tools")?
+                        .bind(session_id.clone(), runtime)?,
+                )
+            } else {
+                // Browser integration is optional, ordinary chat is not.
+                // No binding means every tool call fails closed. Do not make
+                // an unsupported or disabled plugin break provider recovery.
+                crate::opencode_diagnostics::record("browser-plugin-unavailable", server.port, 0);
+                None
+            }
+        } else {
+            None
+        };
+
         let _ = events.send(DriverEvent::Connected {
             provider_cursor: Some(ProviderResumeCursor::OpenCode {
                 session_id: session_id.clone(),
@@ -1379,6 +1419,7 @@ impl OpenCodeDriver {
             })?;
 
         Ok(Self {
+            browser_binding,
             server: Some(server),
             session_id,
             cwd,
@@ -1664,6 +1705,7 @@ impl DriverControl for OpenCodeDriver {
 
 impl Drop for OpenCodeDriver {
     fn drop(&mut self) {
+        drop(self.browser_binding.take());
         self.event_feed.cancel();
         // The worker owns the other server lease. Release the UI-owned lease
         // first, then wake the worker so any final terminate/wait happens there.

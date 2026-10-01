@@ -1668,13 +1668,21 @@ browser_collaboration.reading:
 browser_collaboration.running:
   en: Browser operation in progress
 browser_collaboration.shared_status:
-  en: Page shared; changes require approval
+  en: Shared with this session; changes require approval. Stop sharing to take over.
 browser_collaboration.approve_once:
   en: Approve once
 browser_collaboration.reject:
   en: Reject
 browser_collaboration.take_over:
-  en: Take over / stop sharing
+  en: Stop sharing
+browser_collaboration.share:
+  en: Share
+browser_collaboration.shared:
+  en: Shared
+browser_collaboration.opening:
+  en: Opening
+browser_collaboration.stop_opening:
+  en: Stop browser automation
 browser_collaboration.share_rejected:
   en: "Page sharing was rejected: %{message}"
 browser_collaboration.runtime_replaced:
@@ -1683,6 +1691,12 @@ browser_collaboration.publish_failed:
   en: "The daemon connection dropped, so the shared page was revoked: %{error}"
 browser_collaboration.too_many_pages:
   en: This connection already shares the maximum number of pages; stop sharing one first.
+browser_collaboration.automatic_status:
+  en: Full-access automation is enabled. Browsing keeps sharing active; stop sharing to take over.
+browser_collaboration.scroll_summary:
+  en: "Scroll: %{delta_y}"
+browser_collaboration.open_handled:
+  en: Open a page (handled by the app host)
 
 environment.title:
   en: Environment

@@ -8,6 +8,13 @@
 //! error instead of falling back to another page, and no message on this
 //! channel may carry raw scripts, arbitrary CDP methods, cookies or local
 //! file contents.
+//!
+//! A GUI connection may additionally register one *launcher* scope per live
+//! session runtime. The launcher's page and grant ids are capability
+//! identities, not a real tab: they never appear in any page list, and only
+//! [`BrowserAction::Open`] is ever routed to them. Exactly one launcher per
+//! session runtime may exist at a time; a second registration is refused
+//! instead of guessing which one to use.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +34,9 @@ pub const MAX_BROWSER_SELECTOR_BYTES: usize = 512;
 pub const MAX_BROWSER_TEXT_BYTES: usize = 8 * 1024;
 pub const MAX_BROWSER_URL_BYTES: usize = 4096;
 pub const MAX_BROWSER_TITLE_BYTES: usize = 1024;
+/// Upper bound for one scroll request, in pixels. A zero delta is refused
+/// separately, so the only accepted range is `-MAX..=MAX` without zero.
+pub const MAX_BROWSER_SCROLL_DELTA: u64 = 2_000;
 /// Pages one connection may publish at once. Mirrored by the daemon broker
 /// and pre-checked by the client so an oversized publish fails locally.
 pub const MAX_BROWSER_PAGES_PER_CONNECTION: usize = 16;
@@ -65,18 +75,49 @@ pub struct BrowserShare {
 /// and text bounds keep a broken page from steering unbounded payloads, and
 /// navigation is restricted to scheme-checked HTTP(S) URLs without embedded
 /// credentials.
+///
+/// [`Self::Open`] is the one launcher-side action: only a registered browser
+/// launcher may ever be routed an `Open`. [`Self::Scroll`] is an ordinary
+/// page action and is served only by a page publication, like the rest.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum BrowserAction {
     Snapshot,
-    Click { selector: String },
-    Fill { selector: String, text: String },
-    Navigate { url: String },
+    Click {
+        selector: String,
+    },
+    Fill {
+        selector: String,
+        text: String,
+    },
+    Navigate {
+        url: String,
+    },
+    /// Ask the GUI that registered the session runtime's launcher to open a
+    /// new tab. The answered value is the new page's identity, and the page
+    /// is then shared under a fresh scope of its own.
+    Open {
+        url: String,
+    },
+    /// Scroll a shared page by a bounded delta. A zero delta is refused
+    /// rather than treated as a harmless no-op, and the bound keeps a
+    /// broken or hostile caller from asking for an unbounded scroll.
+    Scroll {
+        delta_y: i32,
+    },
 }
 
 impl BrowserAction {
-    /// Observation is the default permission; mutations need per-request
-    /// confirmation by the page owner.
+    /// Whether this action is outside the default observation permission.
+    /// It does **not** mean the daemon demands a per-request approval: the
+    /// page owner decides, and an owner in full-access mode answers these
+    /// without prompting. Snapshot is the only action an owner may treat as
+    /// always permitted.
     pub fn requires_approval(&self) -> bool {
         !matches!(self, Self::Snapshot)
     }
@@ -116,8 +157,13 @@ impl BrowserAction {
         {
             return Err("browser input exceeds the size limit".into());
         }
-        if let Self::Navigate { url } = self {
+        if let Self::Navigate { url } | Self::Open { url } = self {
             Self::validate_url(url)?;
+        }
+        if let Self::Scroll { delta_y } = self
+            && (*delta_y == 0 || delta_y.unsigned_abs() as u64 > MAX_BROWSER_SCROLL_DELTA)
+        {
+            return Err("browser scroll delta must be a non-zero amount within the limit".into());
         }
         Ok(())
     }

@@ -109,6 +109,7 @@ impl Default for PoolSlot {
 }
 
 struct Pool {
+    browser_tools: Weak<crate::browser_tools::BrowserTools>,
     /// Set once `shutdown_all` ran. Every later `acquire` must refuse to
     /// start a process nobody would ever shut down again.
     closed: bool,
@@ -119,6 +120,7 @@ fn pool() -> &'static Mutex<Pool> {
     static POOL: OnceLock<Mutex<Pool>> = OnceLock::new();
     POOL.get_or_init(|| {
         Mutex::new(Pool {
+            browser_tools: Weak::new(),
             closed: false,
             slots: HashMap::new(),
         })
@@ -133,10 +135,47 @@ fn pool() -> &'static Mutex<Pool> {
 /// driver start on the background executor is.
 pub(crate) fn acquire(binary: &Path, cwd: &Path) -> anyhow::Result<PooledServer> {
     let _ = cwd;
+    let browser = pool().lock().unwrap().browser_tools.upgrade();
     acquire_with_start(binary, || -> anyhow::Result<OpenCodeServer> {
         let directory = serve_working_directory()?;
-        OpenCodeServer::start(binary, &directory)
+        match browser {
+            Some(registry) => {
+                OpenCodeServer::start_with_browser(binary, &directory, registry.issue_server()?)
+            }
+            None => OpenCodeServer::start(binary, &directory),
+        }
     })
+}
+
+/// The daemon installs this before accepting clients, so discovery and native
+/// session APIs cannot create an uninstrumented resident process first.
+pub(crate) fn attach_browser_tools(
+    registry: &Arc<crate::browser_tools::BrowserTools>,
+) -> anyhow::Result<()> {
+    let mut pool = pool().lock().unwrap();
+    if pool
+        .browser_tools
+        .upgrade()
+        .is_some_and(|existing| !Arc::ptr_eq(&existing, registry))
+    {
+        anyhow::bail!("OpenCode process pool already belongs to another daemon");
+    }
+    pool.browser_tools = Arc::downgrade(registry);
+    Ok(())
+}
+
+pub(crate) fn acquire_with_browser(
+    binary: &Path,
+    registry: &Arc<crate::browser_tools::BrowserTools>,
+) -> anyhow::Result<PooledServer> {
+    acquire_with_start(binary, || {
+        let directory = serve_working_directory()?;
+        OpenCodeServer::start_with_browser(binary, &directory, registry.issue_server()?)
+    })
+    // A resident process acquired by a non-browser caller is not silently
+    // restarted under active tasks. The driver checks registry ownership and
+    // activation and leaves browser access unbound if unavailable; ordinary
+    // chat remains usable without pretending injection happened.
 }
 
 fn acquire_with_start(

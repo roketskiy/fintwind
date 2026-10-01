@@ -185,10 +185,13 @@ pub struct SessionOptions {
 pub(crate) fn start_local(
     options: DriverStartOptions,
     events: DriverEventSender,
+    browser: crate::browser_tools::BrowserToolRuntime,
 ) -> anyhow::Result<DriverHandle> {
-    // OpenCode's own server is its real API, and it is what exposes
-    // interactive permission requests.
-    let inner: Arc<dyn DriverControl> = Arc::new(opencode::OpenCodeDriver::start(options, events)?);
+    let inner: Arc<dyn DriverControl> = Arc::new(opencode::OpenCodeDriver::start_with_browser(
+        options,
+        events,
+        Some(browser),
+    )?);
     Ok(DriverHandle { inner })
 }
 

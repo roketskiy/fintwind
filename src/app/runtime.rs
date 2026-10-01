@@ -531,6 +531,7 @@ impl Fintwind {
             // project; keep its group unfolded so the active row stays visible.
             self.reveal_sidebar_session_project(selected, cx);
         }
+        self.sync_browser_automation_host(cx);
     }
 
     pub(super) fn start_runtime_attachment(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
@@ -1989,7 +1990,7 @@ impl Fintwind {
                     .get(&session_id)
                     .is_some_and(|runtime| runtime.options_generation == generation);
                 if is_current && !applied {
-                    fintwind.reset_session_runtime(session_id);
+                    fintwind.reset_session_runtime(session_id, cx);
                     cx.notify();
                 }
             });
@@ -2826,6 +2827,9 @@ impl Fintwind {
             runtime.stream_remeasure_pending = markdown_changed;
             if keep_runtime {
                 self.runtimes.insert(session_id, runtime);
+            }
+            if self.state.selected_session == Some(session_id) {
+                self.sync_browser_automation_host(cx);
             }
             let session_updated = runtime_changed || background_changed;
             changed |= session_updated;

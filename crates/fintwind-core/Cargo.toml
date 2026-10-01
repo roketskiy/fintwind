@@ -34,3 +34,4 @@ libc = "0.2"
 
 [dev-dependencies]
 fintwind-client = { path = "../fintwind-client" }
+sha2 = "0.10"

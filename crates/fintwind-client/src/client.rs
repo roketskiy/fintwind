@@ -239,6 +239,23 @@ impl DaemonClient {
         self.send_browser_message(ClientMessage::BrowserPublish { pages })
     }
 
+    /// Register or clear this connection's browser launcher capability for
+    /// one live session runtime. `Some` installs (or replaces) the launcher;
+    /// `None` clears it, which fails any open still routed to it and leaves
+    /// this connection's page shares untouched. The scope's page and grant
+    /// ids are launcher identities, never a real tab: they are not published
+    /// as pages and cannot address a page action. Bounds are checked before
+    /// enqueueing so a malformed registration fails locally; the result only
+    /// reports whether the message was enqueued on a live connection.
+    pub fn publish_browser_host(&self, scope: Option<BrowserScope>) -> anyhow::Result<()> {
+        if let Some(scope) = &scope
+            && !scope.is_well_formed()
+        {
+            anyhow::bail!("a browser launcher scope has nil session, runtime, page or grant");
+        }
+        self.send_browser_message(ClientMessage::BrowserHost { scope })
+    }
+
     /// Answer a daemon-delivered browser request. Only the connection that
     /// published the page may answer; the daemon refuses anything else. An
     /// oversized result fails here instead of being silently truncated

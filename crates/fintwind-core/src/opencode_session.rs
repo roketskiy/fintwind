@@ -5,7 +5,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -453,7 +453,9 @@ fn fork_message_id(message_ids: &[String], retained_turns: usize) -> anyhow::Res
 }
 
 pub(crate) struct OpenCodeServer {
-    child: Mutex<Child>,
+    child: Arc<Mutex<Child>>,
+    pub(crate) browser_tools: Option<Arc<crate::browser_tools::BrowserToolServer>>,
+    _browser_plugin: Option<crate::browser_plugin::BrowserPlugin>,
     pub(crate) port: u16,
 }
 
@@ -468,6 +470,36 @@ impl OpenCodeServer {
         binary: &Path,
         cwd: &Path,
         environment: &[(String, String)],
+    ) -> anyhow::Result<Self> {
+        Self::start_inner(binary, cwd, environment, None, None)
+    }
+
+    pub(crate) fn start_with_browser(
+        binary: &Path,
+        cwd: &Path,
+        tools: Arc<crate::browser_tools::BrowserToolServer>,
+    ) -> anyhow::Result<Self> {
+        let plugin = crate::browser_plugin::BrowserPlugin::create(cwd)?;
+        let environment = vec![
+            ("OPENCODE_CONFIG_CONTENT".into(), plugin.config()?),
+            (
+                crate::browser_plugin::ADDRESS_ENV.into(),
+                tools.address().into(),
+            ),
+            (
+                crate::browser_plugin::TOKEN_ENV.into(),
+                tools.token().into(),
+            ),
+        ];
+        Self::start_inner(binary, cwd, &environment, Some(tools), Some(plugin))
+    }
+
+    fn start_inner(
+        binary: &Path,
+        cwd: &Path,
+        environment: &[(String, String)],
+        browser_tools: Option<Arc<crate::browser_tools::BrowserToolServer>>,
+        browser_plugin: Option<crate::browser_plugin::BrowserPlugin>,
     ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .context("could not reserve a local port for OpenCode")?;
@@ -503,9 +535,31 @@ impl OpenCodeServer {
         // event-stream reader reaches the server by port alone.
         server_passwords().lock().insert(port, password);
         let server = Self {
-            child: Mutex::new(child),
+            child: Arc::new(Mutex::new(child)),
+            browser_tools,
+            _browser_plugin: browser_plugin,
             port,
         };
+        if let Some(tools) = &server.browser_tools {
+            let child = Arc::downgrade(&server.child);
+            let tools = Arc::downgrade(tools);
+            thread::Builder::new()
+                .name("fintwind-browser-tool-process".into())
+                .spawn(move || {
+                    loop {
+                        let alive = child.upgrade().is_some_and(|child| {
+                            child.lock().try_wait().is_ok_and(|status| status.is_none())
+                        });
+                        if !alive {
+                            if let Some(tools) = tools.upgrade() {
+                                tools.revoke();
+                            }
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                })?;
+        }
         let started_at = Instant::now();
         loop {
             if server_is_ready(&server) {
@@ -608,6 +662,9 @@ impl OpenCodeServer {
     /// Terminates and reaps the owned child. The timeout is a graceful-exit
     /// budget; a server that ignores TERM is killed afterward.
     pub(crate) fn shutdown(&self, timeout: Duration) {
+        if let Some(tools) = &self.browser_tools {
+            tools.revoke();
+        }
         release_port(self.port);
         let mut child = self.child.lock();
         if child.try_wait().is_ok_and(|status| status.is_some()) {
@@ -639,15 +696,18 @@ impl OpenCodeServer {
 
 impl Drop for OpenCodeServer {
     fn drop(&mut self) {
+        if let Some(tools) = &self.browser_tools {
+            tools.revoke();
+        }
         release_port(self.port);
-        let child = self.child.get_mut();
+        let mut child = self.child.lock();
         if child.try_wait().is_ok_and(|status| status.is_some()) {
             return;
         }
         #[cfg(unix)]
         let _ = child.kill();
         #[cfg(not(unix))]
-        kill_process_tree(child);
+        kill_process_tree(&mut child);
         let _ = child.wait();
     }
 }

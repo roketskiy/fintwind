@@ -73,6 +73,10 @@ impl Drop for ConnectionGuard {
 pub trait Backend: Send + Sync + 'static {
     fn handle(&self, request: Request, events: EventSink) -> anyhow::Result<ResponsePayload>;
 
+    fn browser_tools(&self) -> Option<Arc<crate::browser_tools::BrowserTools>> {
+        None
+    }
+
     fn shutdown(&self) {}
 }
 
@@ -511,6 +515,19 @@ pub fn serve(
         .context("could not configure fintwind daemon listener")?;
     let hub = Arc::new(Hub::default());
     let broker = Arc::new(BrowserBroker::new());
+    let backend_tools = backend.browser_tools();
+    let tools = backend_tools.clone().unwrap_or_default();
+    tools.attach(
+        format!(
+            "ws://{}{}",
+            listener.local_addr()?,
+            fintwind_protocol::browser_tools::BROWSER_TOOL_ENDPOINT
+        ),
+        &broker,
+    );
+    if backend_tools.is_some() {
+        crate::opencode_pool::attach_browser_tools(&tools)?;
+    }
     let dispatcher = Arc::new(RequestDispatcher::new(
         backend.clone(),
         hub.clone(),
@@ -534,6 +551,7 @@ pub fn serve(
                 let dispatcher = dispatcher.clone();
                 let hub = hub.clone();
                 let broker = broker.clone();
+                let tools = tools.clone();
                 let shutdown = shutdown.clone();
                 let options = options.clone();
                 std::thread::Builder::new()
@@ -541,7 +559,7 @@ pub fn serve(
                     .spawn(move || {
                         let _connection_permit = connection_permit;
                         if let Err(error) = handle_connection(
-                            stream, &token, dispatcher, hub, broker, shutdown, &options,
+                            stream, &token, dispatcher, hub, broker, tools, shutdown, &options,
                         ) {
                             eprintln!("fintwind-daemon connection ended: {error:#}");
                         }
@@ -565,6 +583,7 @@ fn handle_connection(
     dispatcher: Arc<RequestDispatcher>,
     hub: Arc<Hub>,
     broker: Arc<BrowserBroker>,
+    tools: Arc<crate::browser_tools::BrowserTools>,
     shutdown: Arc<AtomicBool>,
     options: &ServerOptions,
 ) -> anyhow::Result<()> {
@@ -576,8 +595,30 @@ fn handle_connection(
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_HANDSHAKE_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_HANDSHAKE_MESSAGE_BYTES));
-    let mut socket = accept_hdr_with_config(stream, validate_handshake, Some(config))
-        .context("WebSocket handshake failed")?;
+    let is_browser_tool = Arc::new(AtomicBool::new(false));
+    let handshake_browser_tool = is_browser_tool.clone();
+    let mut socket = accept_hdr_with_config(
+        stream,
+        move |request: &HandshakeRequest, response| {
+            if request.uri().path() == fintwind_protocol::browser_tools::BROWSER_TOOL_ENDPOINT {
+                if request.headers().contains_key("origin") {
+                    return Err(handshake_error(
+                        StatusCode::FORBIDDEN,
+                        "browser tool connections must originate from the private plugin",
+                    ));
+                }
+                handshake_browser_tool.store(true, Ordering::Relaxed);
+                Ok(response)
+            } else {
+                validate_handshake(request, response)
+            }
+        },
+        Some(config),
+    )
+    .context("WebSocket handshake failed")?;
+    if is_browser_tool.load(Ordering::Relaxed) {
+        return crate::browser_tools_transport::handle(socket, tools, shutdown);
+    }
     let hello = read_client_message(&mut socket)?;
     let resume_from = match hello {
         ClientMessage::Hello {
@@ -629,6 +670,7 @@ fn handle_connection(
 
     let (outgoing, outgoing_rx) = unbounded();
     let subscriber_id = hub.subscribe(&resume_from, outgoing.clone());
+    broker.register_connection(subscriber_id);
     // Everything after this point is cleaned by Drop, including error
     // returns and unwinds, so a broken socket cannot leave a subscribed
     // connection with live publications behind.
@@ -681,6 +723,26 @@ fn handle_connection(
                         );
                     }
                 }
+                Ok(ClientMessage::BrowserHost { scope }) => {
+                    // A launcher registration is bound to this connection,
+                    // exactly like a page publish. A refusal — a nil id, a
+                    // runtime that is not the session's live one, or another
+                    // connection already holding the session runtime's
+                    // launcher — carries the attempted scope so the GUI drops
+                    // exactly the capability the daemon did not accept. A
+                    // refusal never disturbs the connection's pages.
+                    if let Err(error) =
+                        broker.register_host(subscriber_id, scope.clone(), outgoing.clone())
+                    {
+                        let _ = write_json(
+                            &mut socket,
+                            &ServerMessage::BrowserShareRejected {
+                                scopes: scope.into_iter().collect(),
+                                message: error.to_string(),
+                            },
+                        );
+                    }
+                }
                 Ok(ClientMessage::BrowserResult { request_id, result }) => {
                     if let Err(error) = broker.complete(request_id, subscriber_id, result) {
                         let _ = write_json(
@@ -721,9 +783,10 @@ fn handle_connection(
     Ok(())
 }
 
-/// The daemon serves exactly one versioned endpoint. Native clients do not
-/// send an Origin header, so no origin check is needed; anything else —
-/// including browser handshakes — is refused here regardless of token.
+/// The general desktop endpoint uses the daemon token. The restricted
+/// `/v1/browser-tools` endpoint is selected before this callback and uses a
+/// separate process capability plus an Origin rejection. Neither transport
+/// accepts the other transport's credential or message protocol.
 fn validate_handshake(
     request: &HandshakeRequest,
     response: HandshakeResponse,

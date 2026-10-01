@@ -5,6 +5,9 @@
     "dev": "bun ./scripts/dev.ts",
     "browser:poc": "bun ./scripts/browser-poc.ts",
     "browser:collaboration": "bun ./scripts/browser-collaboration.ts",
+    "browser:tools": "cargo run --locked --package fintwind-core --example browser_tools_e2e",
+    "browser:tools-opencode": "bun ./scripts/browser-tools-opencode.ts",
+    "browser:tools-native": "bun ./scripts/browser-tools-native.ts",
     "bundle": "bun ./scripts/bundle-windows.ts",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push"

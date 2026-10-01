@@ -838,14 +838,21 @@ browser_collaboration.fill_summary: 输入%{selector}:%{text}
 browser_collaboration.navigate_summary: 导航至%{url}
 browser_collaboration.reading: 读取页面
 browser_collaboration.running: 正在操作浏览器
-browser_collaboration.shared_status: 页面已共享；修改需逐次确认
+browser_collaboration.shared_status: 已共享给当前会话，操作需逐次确认；停止共享即可接管。
 browser_collaboration.approve_once: 允许这一次
 browser_collaboration.reject: 拒绝
-browser_collaboration.take_over: 接管并停止共享
+browser_collaboration.take_over: 停止共享
+browser_collaboration.share: 共享
+browser_collaboration.shared: 已共享
+browser_collaboration.opening: 正在打开
+browser_collaboration.stop_opening: 停止浏览器自动化
 browser_collaboration.share_rejected: 页面共享被拒绝：%{message}
 browser_collaboration.runtime_replaced: 会话 runtime 已更换，共享已撤销，请重新共享
 browser_collaboration.publish_failed: daemon 连接已断开，页面共享随之撤销：%{error}
 browser_collaboration.too_many_pages: 当前连接共享页面数已达上限，请先取消一个页面
+browser_collaboration.automatic_status: 完全访问下可连续操作。普通浏览不会取消共享；停止共享即可接管。
+browser_collaboration.scroll_summary: 滚动:%{delta_y}
+browser_collaboration.open_handled: 打开页面（由应用宿主处理）
 environment.title: 环境
 environment.summary: 环境和后台工作
 environment.changes: 更改

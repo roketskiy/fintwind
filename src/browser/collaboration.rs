@@ -3,6 +3,28 @@
 //! Failure modes: stale grants, navigation during approval/execution, duplicate
 //! requests, cancellation between CDP calls, ambiguous/hidden targets, unbounded
 //! page data, and accidentally exposing arbitrary JavaScript or raw CDP.
+//!
+//! Two authorization shapes live here. The original is a manual, per-page share
+//! the user confirms and every mutation on it asks again ([`begin_browser_share`]).
+//! The second is *automatic*: full-access sessions get continuous automation on
+//! a page ([`begin_browser_automation`] / [`set_browser_automatic`]). Automatic
+//! authority is bound to a tab, so navigation keeps the scope and grant but
+//! rotates the document guard — the old guard is invalidated the instant a new
+//! document starts and a fresh one replaces it only once loading finishes, so a
+//! stale element reference or an in-flight input step can never resume against a
+//! document it did not observe.
+//!
+//! References follow the mature observe → reference → re-observe pattern rather
+//! than copying any one framework: a snapshot runs in an isolated world, mints a
+//! random nonce, stores each control's element object in a per-snapshot map
+//! (never a DOM property), and returns `ref:<nonce>:<ordinal>` tokens. Actions
+//! resolve a token through that map, refusing a token from an older snapshot or
+//! a torn-down document with an explicit stale error, and still accept exact CSS
+//! for callers that prefer it.
+//!
+//! [`begin_browser_share`]: BrowserView::begin_browser_share
+//! [`begin_browser_automation`]: BrowserView::begin_browser_automation
+//! [`set_browser_automatic`]: BrowserView::set_browser_automatic
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -10,7 +32,7 @@ use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use futures_lite::FutureExt;
 use gpui::{Context, EventEmitter, FocusHandle, IntoElement, Window, div, prelude::*, px};
@@ -23,7 +45,17 @@ use fintwind_protocol::browser::{
     BrowserAction, BrowserRequest, BrowserResult, BrowserScope, BrowserShare,
 };
 
+/// Defensive cap on a single scroll gesture. The protocol already refuses a
+/// zero or out-of-range delta; this bounds the value the native side sends even
+/// if a caller skipped that check.
+const MAX_SCROLL_DELTA: i32 = 2_000;
+
+/// How long an automatic request waits for an in-flight document load to finish
+/// before answering. Bounded so a stuck load cannot pin a request forever.
+const AUTOMATION_LOAD_WAIT: Duration = Duration::from_secs(10);
+
 pub(crate) enum BrowserCollaborationEvent {
+    ShareRequested,
     ShareChanged,
     Finished {
         request_id: Uuid,
@@ -40,6 +72,14 @@ pub(super) struct BrowserCollaboration {
     /// Native callbacks can invalidate a capability immediately, even while
     /// GPUI is borrowed and the entity update must wait one executor turn.
     pub(super) native_invalidation: Rc<RefCell<Option<Arc<AtomicBool>>>>,
+    /// An explicit stop during an automation launch. Replaced per launch so a
+    /// finished launch's flag cannot cancel a newer one. Native focus and
+    /// ordinary pointer input are deliberately not permission changes.
+    pub(super) automation_intervention: Rc<RefCell<Option<Arc<AtomicBool>>>>,
+    /// Whether the current share is full-access automatic automation. Automatic
+    /// shares skip per-action approval and keep their grant across navigation.
+    automatic: bool,
+    control_enabled: bool,
     pending: Option<BrowserRequest>,
     running: Option<(Uuid, Arc<AtomicBool>)>,
     controls: Option<[FocusHandle; 4]>,
@@ -57,9 +97,42 @@ impl Drop for BrowserCollaboration {
     }
 }
 
+/// The outcome of one poll inside the bounded "wait for the page to finish
+/// loading" loop that serves an automatic request mid-navigation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WaitStep {
+    Continue,
+    Ready,
+    Timeout,
+    Cancelled,
+}
+
 impl BrowserView {
     pub(crate) fn browser_share(&self) -> Option<BrowserShare> {
         self.collaboration.share.clone()
+    }
+
+    /// Whether an explicit stop was requested during this automation launch.
+    pub(super) fn automation_intervened(&self) -> bool {
+        self.collaboration
+            .automation_intervention
+            .borrow()
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::SeqCst))
+    }
+
+    /// The app pauses the launcher after an explicit stop so an agent cannot
+    /// open a replacement tab. The flag survives revocation until a fresh
+    /// authorized launch or manual share re-arms it.
+    pub(crate) fn browser_automation_was_taken_over(&self) -> bool {
+        self.automation_intervened()
+    }
+
+    /// Arm a fresh generational explicit-stop flag for a new launch.
+    pub(super) fn arm_automation_intervention(&mut self) -> Arc<AtomicBool> {
+        let flag = Arc::new(AtomicBool::new(false));
+        *self.collaboration.automation_intervention.borrow_mut() = Some(flag.clone());
+        flag
     }
 
     #[cfg(feature = "browser-poc")]
@@ -67,6 +140,8 @@ impl BrowserView {
         self.collaboration.pending.clone()
     }
 
+    /// The original manual share: per-page, per-mutation approval. Kept intact
+    /// for the PoC and the manual path; nothing about it becomes automatic.
     pub(crate) fn begin_browser_share(&mut self, scope: BrowserScope, cx: &mut Context<Self>) {
         self.revoke_browser_share(cx);
         if !scope.is_well_formed() {
@@ -92,16 +167,105 @@ impl BrowserView {
         let valid = Arc::new(AtomicBool::new(true));
         *self.collaboration.native_invalidation.borrow_mut() = Some(valid.clone());
         self.collaboration.valid = Some(valid);
-        // Sharing is an explicit human action. Start with native typing owned
-        // by GPUI so later entry into the page is an observable takeover edge;
-        // browser requests themselves never MoveFocus or reclaim focus.
-        self.reclaim_native_keyboard(cx);
+        self.collaboration.automatic = false;
+        // A manual share is a human action on the current page: it ends any
+        // automation-open wait and drops any stale intervention flag.
+        self.navigation_automation_pending = false;
+        self.navigation_automation_cancelled = false;
+        self.collaboration
+            .automation_intervention
+            .borrow_mut()
+            .take();
         cx.emit(BrowserCollaborationEvent::ShareChanged);
         cx.notify();
     }
 
+    /// Full-access automatic automation for the page this tab just opened. The
+    /// caller has already confirmed full access and waited for a real, loaded
+    /// page; this never changes keyboard ownership. Returns whether the page
+    /// was actually shared: an explicit stop during load, a still-loading or
+    /// invalid page, or a missing host
+    /// all answer `false` and leave nothing shared.
+    pub(crate) fn begin_browser_automation(
+        &mut self,
+        scope: BrowserScope,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let ready = self.browser_ready_for_automation();
+        self.revoke_browser_share(cx);
+        if ready != Ok(true) {
+            return false;
+        }
+        if self.automation_intervened() {
+            return false;
+        }
+        if self.navigation_automation_cancelled {
+            return false;
+        }
+        if !scope.is_well_formed() {
+            return false;
+        }
+        let Some(url) = self.current_url.as_deref() else {
+            return false;
+        };
+        if self.loading || self.host.is_none() || url.len() > 4096 || valid_url(url).is_err() {
+            return false;
+        }
+        self.collaboration.share = Some(BrowserShare {
+            scope,
+            url: url.to_owned(),
+            title: self
+                .page_title
+                .as_deref()
+                .unwrap_or_default()
+                .chars()
+                .take(256)
+                .collect(),
+        });
+        let valid = Arc::new(AtomicBool::new(true));
+        *self.collaboration.native_invalidation.borrow_mut() = Some(valid.clone());
+        self.collaboration.valid = Some(valid);
+        self.collaboration.automatic = true;
+        // The open resolved into a share, so its launch is over: drop the
+        // intervention flag and the wait marker.
+        self.collaboration
+            .automation_intervention
+            .borrow_mut()
+            .take();
+        self.navigation_automation_pending = false;
+        self.navigation_automation_cancelled = false;
+        cx.emit(BrowserCollaborationEvent::ShareChanged);
+        cx.notify();
+        true
+    }
+
+    /// Toggle full-access automation on an existing share. Promoting a manual
+    /// share enables continuous automation; demoting must not silently retain
+    /// the authority, so disabling revokes the share outright — a dropped mode
+    /// or a supervised switch ends the grant rather than leaving it automatic.
+    pub(crate) fn set_browser_automatic(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if !enabled {
+            self.revoke_browser_share(cx);
+            return;
+        }
+        // Only ever promote a share that already exists; never invent one.
+        if self.collaboration.share.is_none() {
+            return;
+        }
+        if !self.collaboration.automatic {
+            self.collaboration.automatic = true;
+            cx.emit(BrowserCollaborationEvent::ShareChanged);
+            cx.notify();
+        }
+    }
+
     pub(crate) fn revoke_browser_share(&mut self, cx: &mut Context<Self>) {
         let changed = self.collaboration.share.take().is_some();
+        self.collaboration.automatic = false;
+        self.navigation_automation_pending = false;
+        // An explicit-stop marker survives revocation so a queued ready timer
+        // cannot share a cancelled opening. A fresh authorized launch or manual
+        // share is the only reset; ordinary navigation is not a reset.
         self.collaboration.native_invalidation.borrow_mut().take();
         if let Some(valid) = self.collaboration.valid.take() {
             valid.store(false, Ordering::SeqCst);
@@ -125,11 +289,132 @@ impl BrowserView {
         }
     }
 
+    pub(crate) fn take_over_browser(&mut self, cx: &mut Context<Self>) {
+        let shared = self.collaboration.share.is_some();
+        if self.navigation_automation_pending {
+            self.navigation_automation_cancelled = true;
+            if let Some(flag) = self.collaboration.automation_intervention.borrow().as_ref() {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
+        self.revoke_browser_share(cx);
+        // A loading page may not have a share yet, but its launcher must still
+        // stop. Emit even then so the app withdraws the open capability.
+        if !shared {
+            cx.emit(BrowserCollaborationEvent::ShareChanged);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn enable_browser_collaboration_control(
+        &mut self,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.collaboration.control_enabled = enabled;
+        cx.notify();
+    }
+
+    pub(crate) fn finish_browser_opening(&mut self, cx: &mut Context<Self>) {
+        if self.navigation_automation_pending {
+            self.navigation_automation_pending = false;
+            cx.notify();
+        }
+    }
+
+    /// A document transition is beginning (a real navigation, a reload, history,
+    /// or an automation launch). A manual grant ends here; an automatic one
+    /// keeps its scope and grant but its document guard is already invalidated
+    /// natively, so we drop it here too and let the load events install a fresh
+    /// one — a request landing now waits for the load instead of asking the user
+    /// to re-share. Any still-open approval is retired.
+    pub(super) fn note_document_unloading(&mut self, cx: &mut Context<Self>) {
+        if self
+            .collaboration
+            .share
+            .as_ref()
+            .is_some_and(|_| self.collaboration.automatic)
+        {
+            if let Some(pending) = self.collaboration.pending.take() {
+                self.finish_browser_request(
+                    pending.request_id,
+                    BrowserResult::error(
+                        "The page navigated; the pending operation was not approved.",
+                    ),
+                    cx,
+                );
+            }
+            if let Some(valid) = &self.collaboration.valid {
+                valid.store(false, Ordering::SeqCst);
+            }
+        } else if self.collaboration.share.is_some() {
+            // An unshared page may still be an authorized opening in progress.
+            // Its first load must keep the explicit-stop toolbar available.
+            self.revoke_browser_share(cx);
+        }
+    }
+
+    /// A cross-document load finished successfully. For an automatic share this
+    /// installs a *fresh* document guard (never reviving the retired one) and
+    /// refreshes the published URL. Manual shares were revoked at navigation
+    /// start and have nothing to do here.
+    pub(super) fn note_document_ready(&mut self, url: &str, cx: &mut Context<Self>) {
+        if !self.collaboration.automatic {
+            return;
+        }
+        if let Some(share) = self.collaboration.share.as_mut() {
+            share.url = url.chars().take(4096).collect();
+        }
+        let valid = Arc::new(AtomicBool::new(true));
+        *self.collaboration.native_invalidation.borrow_mut() = Some(valid.clone());
+        self.collaboration.valid = Some(valid);
+        cx.emit(BrowserCollaborationEvent::ShareChanged);
+    }
+
+    /// A same-document navigation (a router pushing hash/state). An automatic
+    /// share keeps its grant and refreshes its published URL, and rotates to a
+    /// fresh guard — the document, and therefore its element references, is
+    /// preserved, so a token from the prior snapshot still resolves to the same
+    /// element. A manual grant is revoked as before.
+    pub(super) fn note_source_changed(&mut self, url: &str, cx: &mut Context<Self>) {
+        if self
+            .collaboration
+            .share
+            .as_ref()
+            .is_some_and(|_| self.collaboration.automatic)
+        {
+            if let Some(share) = self.collaboration.share.as_mut()
+                && !url.is_empty()
+            {
+                share.url = url.chars().take(4096).collect();
+            }
+            let valid = Arc::new(AtomicBool::new(true));
+            *self.collaboration.native_invalidation.borrow_mut() = Some(valid.clone());
+            self.collaboration.valid = Some(valid);
+            cx.emit(BrowserCollaborationEvent::ShareChanged);
+        } else if self.collaboration.share.is_some() {
+            self.revoke_browser_share(cx);
+        }
+    }
+
     pub(crate) fn handle_browser_request(
         &mut self,
         request: BrowserRequest,
         cx: &mut Context<Self>,
     ) {
+        // Opening a page is a launcher capability, never a page grant: the app
+        // host routes `Open`, so a page-level grant must refuse it rather than
+        // grant a page navigation from inside the page.
+        if matches!(request.action, BrowserAction::Open { .. }) {
+            self.finish_browser_request(
+                request.request_id,
+                BrowserResult::error(
+                    "Opening a page is handled by the app host, not by this page's grant.",
+                ),
+                cx,
+            );
+            return;
+        }
         let error = if self.collaboration.share.as_ref().map(|share| &share.scope)
             != Some(&request.scope)
         {
@@ -146,7 +431,10 @@ impl BrowserView {
             self.finish_browser_request(request.request_id, BrowserResult::Error { message }, cx);
             return;
         }
-        if request.action.requires_approval() {
+        // Full access runs continuously: only a manual, non-automatic share
+        // still stops for per-mutation approval. Observation is always allowed.
+        let needs_approval = request.action.requires_approval() && !self.collaboration.automatic;
+        if needs_approval {
             self.collaboration
                 .summary_scroll
                 .set_offset(gpui::Point::default());
@@ -232,6 +520,47 @@ impl BrowserView {
             );
             return;
         }
+        if self.host.is_none() {
+            self.finish_browser_request(
+                request.request_id,
+                BrowserResult::Error {
+                    message: "Native page is unavailable.".into(),
+                },
+                cx,
+            );
+            return;
+        }
+        // A full-access share crossed a navigation: wait — bounded and on the
+        // foreground executor, never heavy UI or a sync block — for the load to
+        // finish, then bind the *current* document guard rather than making the
+        // user re-share. This is the one place the tab's ability to act
+        // continuously across navigation is honored.
+        if self.loading && self.collaboration.automatic {
+            self.wait_for_page_ready(request, cx);
+            return;
+        }
+        self.bind_and_execute(request, Arc::new(AtomicBool::new(false)), cx);
+    }
+
+    /// Bind the currently valid document guard and run the request on the
+    /// background executor. The guard is captured here, so a document change
+    /// mid-operation stops every later step of this one operation.
+    fn bind_and_execute(
+        &mut self,
+        request: BrowserRequest,
+        cancelled: Arc<AtomicBool>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.collaboration.share.as_ref().map(|share| &share.scope) != Some(&request.scope) {
+            self.finish_browser_request(
+                request.request_id,
+                BrowserResult::Error {
+                    message: "Browser authorization expired before execution.".into(),
+                },
+                cx,
+            );
+            return;
+        }
         let Some(host) = self.host.clone() else {
             self.finish_browser_request(
                 request.request_id,
@@ -242,6 +571,20 @@ impl BrowserView {
             );
             return;
         };
+        // Only reachable for a manual share (automatic requests wait above): a
+        // live manual grant with an in-flight load means the document is
+        // mid-transition, which is refused rather than operated against.
+        if self.loading {
+            self.finish_browser_request(
+                request.request_id,
+                BrowserResult::Error {
+                    message: "The page is still loading; take a fresh snapshot once it settles."
+                        .into(),
+                },
+                cx,
+            );
+            return;
+        }
         let Some(valid) = self
             .collaboration
             .valid
@@ -259,7 +602,6 @@ impl BrowserView {
             );
             return;
         };
-        let cancelled = Arc::new(AtomicBool::new(false));
         self.collaboration.running = Some((request.request_id, cancelled.clone()));
         let guard = OperationGuard { valid, cancelled };
         let executor = cx.background_executor().clone();
@@ -290,65 +632,222 @@ impl BrowserView {
         .detach();
     }
 
+    /// Serve an automatic request that arrived mid-navigation. Polls a bounded
+    /// 75 ms on the foreground executor (never a sync block), stops early on
+    /// cancel, revoke, or human takeover, and re-enters execution with the fresh
+    /// guard the load installed once the page settles.
+    fn wait_for_page_ready(&mut self, request: BrowserRequest, cx: &mut Context<Self>) {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.collaboration.running = Some((request.request_id, cancelled.clone()));
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let deadline = Instant::now() + AUTOMATION_LOAD_WAIT;
+            loop {
+                executor.timer(Duration::from_millis(75)).await;
+                let decision = this.update(cx, |this, _cx| {
+                    evaluate_wait(
+                        this,
+                        &request.scope,
+                        request.request_id,
+                        &cancelled,
+                        deadline,
+                    )
+                });
+                match decision.unwrap_or(WaitStep::Cancelled) {
+                    WaitStep::Continue => continue,
+                    WaitStep::Ready => {
+                        let _ = this.update(cx, |this, cx| {
+                            this.bind_and_execute(request.clone(), cancelled.clone(), cx);
+                        });
+                        return;
+                    }
+                    WaitStep::Timeout => {
+                        let _ = this.update(cx, |this, cx| {
+                            if this
+                                .collaboration
+                                .running
+                                .as_ref()
+                                .is_some_and(|(id, _)| *id == request.request_id)
+                            {
+                                this.collaboration.running.take();
+                                this.finish_browser_request(
+                                    request.request_id,
+                                    BrowserResult::error(
+                                        "The page is still loading; take a fresh snapshot once it settles.",
+                                    ),
+                                    cx,
+                                );
+                                cx.notify();
+                            }
+                        });
+                        return;
+                    }
+                    WaitStep::Cancelled => return,
+                }
+            }
+        })
+        .detach();
+    }
+
+    pub(super) fn render_collaboration_control(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::Stateful<gpui::Div>> {
+        let shared = self.collaboration.share.is_some();
+        let opening = self.navigation_automation_pending;
+        if !self.collaboration.control_enabled && !shared && !opening {
+            return None;
+        }
+        let theme = crate::theme::Theme::current(cx);
+        let controls = self.collaboration_controls(cx);
+        let label = if shared {
+            tr!("browser_collaboration.shared")
+        } else if opening {
+            tr!("browser_collaboration.opening")
+        } else {
+            tr!("browser_collaboration.share")
+        };
+        let tooltip = if opening {
+            tr!("browser_collaboration.stop_opening")
+        } else if !shared {
+            tr!("right_panel.share_browser")
+        } else if self.collaboration.automatic {
+            tr!("browser_collaboration.automatic_status")
+        } else {
+            tr!("browser_collaboration.shared_status")
+        };
+        let enabled = self.is_collaboration_action_enabled();
+        let control = div()
+            .id("browser-share-control")
+            .track_focus(&controls[2])
+            .tab_index(0)
+            .tab_stop(enabled)
+            .h_7()
+            .px_2()
+            .ml_1()
+            .gap_1()
+            .rounded_md()
+            .border_1()
+            .border_color(theme.border)
+            .focus_visible(|style| style.border_color(theme.accent))
+            .flex_none()
+            .flex()
+            .items_center()
+            .cursor_default()
+            .text_size(crate::theme::ui_px(12.0))
+            .text_color(if shared || opening {
+                theme.text
+            } else {
+                theme.text_secondary
+            })
+            .when(shared || opening, |element| element.bg(theme.overlay))
+            .child(
+                gpui::svg()
+                    .path(if shared || opening {
+                        "icons/x.svg"
+                    } else {
+                        "icons/bot.svg"
+                    })
+                    .size_3()
+                    .flex_none()
+                    .text_color(theme.text_secondary),
+            )
+            .child(label)
+            .tooltip(move |window, cx| {
+                crate::ui::tooltip::Tooltip::new(tooltip.clone()).build(window, cx)
+            });
+        Some(if enabled {
+            control
+                .hover(|element| element.bg(theme.overlay_strong))
+                .active(|element| element.bg(theme.overlay_strong))
+                .on_activation(cx, |this, _, cx| {
+                    if this.collaboration.share.is_some() || this.navigation_automation_pending {
+                        this.take_over_browser(cx);
+                    } else {
+                        cx.emit(BrowserCollaborationEvent::ShareRequested);
+                    }
+                })
+        } else {
+            control.opacity(0.55)
+        })
+    }
+
+    fn collaboration_controls(&mut self, cx: &mut Context<Self>) -> [FocusHandle; 4] {
+        self.collaboration
+            .controls
+            .get_or_insert_with(|| std::array::from_fn(|_| cx.focus_handle()))
+            .clone()
+    }
+
+    fn focus_collaboration_control(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(controls) = &self.collaboration.controls
+            && self.is_collaboration_action_enabled()
+        {
+            window.focus(&controls[2], cx);
+        } else {
+            window.focus(&self.focus_handle, cx);
+        }
+    }
+
+    fn is_collaboration_action_enabled(&self) -> bool {
+        self.collaboration.share.is_some()
+            || self.navigation_automation_pending
+            || (self.navigation_requested
+                && !self.loading
+                && self.host.is_some()
+                && self.host_error.is_none()
+                && self.navigation_error.is_none())
+    }
+
     pub(super) fn render_collaboration_bar(
         &mut self,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement> {
-        self.collaboration.share.as_ref()?;
+        // Continuous automation has one compact toolbar control. A second row
+        // is reserved for a real supervised decision, never for idle status.
+        let pending = self.collaboration.pending.clone()?;
         let theme = crate::theme::Theme::current(cx);
-        let controls = self
-            .collaboration
-            .controls
-            .get_or_insert_with(|| {
-                [
-                    cx.focus_handle(),
-                    cx.focus_handle(),
-                    cx.focus_handle(),
-                    cx.focus_handle(),
-                ]
-            })
-            .clone();
-        let pending = self.collaboration.pending.clone();
-        let summary = pending
-            .as_ref()
-            .map(|request| match &request.action {
-                BrowserAction::Click { selector } => {
-                    tr!("browser_collaboration.click_summary", selector = selector)
-                }
-                BrowserAction::Fill { selector, text } => tr!(
-                    "browser_collaboration.fill_summary",
-                    selector = selector,
-                    text = text
-                ),
-                BrowserAction::Navigate { url } => {
-                    tr!("browser_collaboration.navigate_summary", url = url)
-                }
-                BrowserAction::Snapshot => tr!("browser_collaboration.reading"),
-            })
-            .unwrap_or_else(|| {
-                if self.collaboration.running.is_some() {
-                    tr!("browser_collaboration.running")
-                } else {
-                    tr!("browser_collaboration.shared_status")
-                }
-            });
+        let controls = self.collaboration_controls(cx);
+        let summary = match &pending.action {
+            BrowserAction::Click { selector } => {
+                tr!("browser_collaboration.click_summary", selector = selector)
+            }
+            BrowserAction::Fill { selector, text } => tr!(
+                "browser_collaboration.fill_summary",
+                selector = selector,
+                text = text
+            ),
+            BrowserAction::Navigate { url } => {
+                tr!("browser_collaboration.navigate_summary", url = url)
+            }
+            BrowserAction::Scroll { delta_y } => {
+                tr!("browser_collaboration.scroll_summary", delta_y = *delta_y)
+            }
+            // `Open` is refused before it is ever queued, so it never has a
+            // pending row; a finite string keeps the match exhaustive.
+            BrowserAction::Open { .. } => tr!("browser_collaboration.open_handled"),
+            BrowserAction::Snapshot => tr!("browser_collaboration.reading"),
+        };
         Some(
             div()
                 .id("browser-collaboration-bar")
                 .flex_none()
                 .flex()
                 .flex_col()
-                .gap(px(4.0))
-                .p(px(6.0))
+                .gap_2()
+                .p_2()
+                .border_b_1()
+                .border_color(theme.border)
                 .bg(theme.surface)
                 .text_color(theme.text)
-                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                     if event.keystroke.key == "escape"
                         && !event.keystroke.modifiers.modified()
                         && let Some(request) = this.collaboration.pending.as_ref()
                     {
                         this.reject_browser_request(request.request_id, cx);
+                        this.focus_collaboration_control(window, cx);
                         cx.stop_propagation();
                     }
                 }))
@@ -360,7 +859,7 @@ impl BrowserView {
                         .border_1()
                         .border_color(theme.surface)
                         .focus_visible(|style| style.border_color(theme.accent))
-                        .max_h(px(100.0))
+                        .max_h_24()
                         .overflow_y_scroll()
                         .track_scroll(&self.collaboration.summary_scroll)
                         .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
@@ -383,70 +882,86 @@ impl BrowserView {
                             cx.stop_propagation();
                             cx.notify();
                         }))
-                        .text_size(px(11.0))
+                        .text_size(crate::theme::ui_px(12.0))
                         .text_color(theme.text)
                         .child(summary),
                 )
-                .child(
-                    div()
-                        .flex()
-                        .flex_wrap()
-                        .gap(px(6.0))
-                        .when_some(pending, |row, pending| {
-                            let id = pending.request_id;
-                            row.child(
-                                div()
-                                    .id("browser-approve")
-                                    .track_focus(&controls[0])
-                                    .tab_index(0)
-                                    .min_h(px(32.0))
-                                    .px(px(8.0))
-                                    .py(px(4.0))
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .focus_visible(|style| style.border_color(theme.accent))
-                                    .cursor_pointer()
-                                    .child(tr!("browser_collaboration.approve_once"))
-                                    .on_activation(cx, move |this, _, cx| {
-                                        this.approve_browser_request(id, cx)
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .id("browser-reject")
-                                    .track_focus(&controls[1])
-                                    .tab_index(0)
-                                    .min_h(px(32.0))
-                                    .px(px(8.0))
-                                    .py(px(4.0))
-                                    .border_1()
-                                    .border_color(theme.border)
-                                    .focus_visible(|style| style.border_color(theme.accent))
-                                    .cursor_pointer()
-                                    .child(tr!("browser_collaboration.reject"))
-                                    .on_activation(cx, move |this, _, cx| {
-                                        this.reject_browser_request(id, cx)
-                                    }),
-                            )
-                        })
-                        .child(
-                            div()
-                                .id("browser-revoke")
-                                .track_focus(&controls[2])
-                                .tab_index(0)
-                                .min_h(px(32.0))
-                                .px(px(8.0))
-                                .py(px(4.0))
-                                .border_1()
-                                .border_color(theme.border)
-                                .focus_visible(|style| style.border_color(theme.accent))
-                                .cursor_pointer()
-                                .child(tr!("browser_collaboration.take_over"))
-                                .on_activation(cx, |this, _, cx| this.revoke_browser_share(cx)),
-                        ),
-                ),
+                .child(div().flex().flex_wrap().gap_2().map(|row| {
+                    let id = pending.request_id;
+                    row.child(
+                        div()
+                            .id("browser-approve")
+                            .track_focus(&controls[0])
+                            .tab_index(0)
+                            .min_h_8()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_size(crate::theme::ui_px(12.0))
+                            .border_1()
+                            .border_color(theme.border)
+                            .focus_visible(|style| style.border_color(theme.accent))
+                            .cursor_default()
+                            .hover(|style| style.bg(theme.overlay))
+                            .active(|style| style.bg(theme.overlay_strong))
+                            .child(tr!("browser_collaboration.approve_once"))
+                            .on_activation(cx, move |this, window, cx| {
+                                this.approve_browser_request(id, cx);
+                                this.focus_collaboration_control(window, cx);
+                            }),
+                    )
+                    .child(
+                        div()
+                            .id("browser-reject")
+                            .track_focus(&controls[1])
+                            .tab_index(0)
+                            .min_h_8()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_size(crate::theme::ui_px(12.0))
+                            .border_1()
+                            .border_color(theme.border)
+                            .focus_visible(|style| style.border_color(theme.accent))
+                            .cursor_default()
+                            .hover(|style| style.bg(theme.overlay))
+                            .active(|style| style.bg(theme.overlay_strong))
+                            .child(tr!("browser_collaboration.reject"))
+                            .on_activation(cx, move |this, window, cx| {
+                                this.reject_browser_request(id, cx);
+                                this.focus_collaboration_control(window, cx);
+                            }),
+                    )
+                })),
         )
     }
+}
+
+/// Pure decision for the bounded load-wait loop. Reads only in-memory view
+/// state — never I/O — so it is safe to call from a foreground entity update.
+fn evaluate_wait(
+    this: &BrowserView,
+    scope: &BrowserScope,
+    _id: Uuid,
+    cancelled: &AtomicBool,
+    deadline: Instant,
+) -> WaitStep {
+    if cancelled.load(Ordering::SeqCst) {
+        return WaitStep::Cancelled;
+    }
+    if this.navigation_automation_cancelled {
+        return WaitStep::Cancelled;
+    }
+    if this.collaboration.share.as_ref().map(|share| &share.scope) != Some(scope) {
+        return WaitStep::Cancelled;
+    }
+    if !this.loading {
+        return WaitStep::Ready;
+    }
+    if Instant::now() >= deadline {
+        return WaitStep::Timeout;
+    }
+    WaitStep::Continue
 }
 
 struct OperationGuard {
@@ -459,6 +974,33 @@ impl OperationGuard {
             Ok(())
         } else {
             Err("Browser authorization was cancelled. An issued operation may have occurred; do not retry automatically.".into())
+        }
+    }
+
+    /// A terminal dispatch may itself replace the document (navigation or a
+    /// clicked link). Retiring that document is not a failed dispatch. This
+    /// acknowledges only that input was issued, never that the next page loaded;
+    /// explicit cancellation still reports an uncertain outcome.
+    fn check_issued(&self) -> Result<(), String> {
+        if !self.cancelled.load(Ordering::SeqCst) {
+            Ok(())
+        } else {
+            self.check()
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CompletionGuard {
+    SameDocument,
+    Issued,
+}
+
+impl CompletionGuard {
+    fn check(self, guard: &OperationGuard) -> Result<(), String> {
+        match self {
+            Self::SameDocument => guard.check(),
+            Self::Issued => guard.check_issued(),
         }
     }
 }
@@ -483,6 +1025,25 @@ async fn cdp(
     parameters: Value,
     guard: &OperationGuard,
     executor: &gpui::BackgroundExecutor,
+) -> Result<Value, String> {
+    cdp_with_completion(
+        host,
+        method,
+        parameters,
+        guard,
+        executor,
+        CompletionGuard::SameDocument,
+    )
+    .await
+}
+
+async fn cdp_with_completion(
+    host: &WebviewHost,
+    method: &str,
+    parameters: Value,
+    guard: &OperationGuard,
+    executor: &gpui::BackgroundExecutor,
+    completion: CompletionGuard,
 ) -> Result<Value, String> {
     guard.check()?;
     let parameters = executor.spawn(async move { parameters.to_string() }).await;
@@ -515,8 +1076,36 @@ async fn cdp(
                 .map_err(|_| "Invalid native browser result".to_owned())
         })
         .await?;
-    guard.check()?;
+    completion.check(guard)?;
     Ok(value)
+}
+
+/// Shared body for `Runtime.evaluate`. `await_promise` lets an action run an
+/// async expression (a scroll-into-view that waits a frame to settle). A real
+/// page exception is reported as a controlled failure — the target state may be
+/// stale — rather than echoing the page's private exception body.
+async fn evaluate_context(
+    host: &WebviewHost,
+    context: i64,
+    expression: String,
+    await_promise: bool,
+    guard: &OperationGuard,
+    executor: &gpui::BackgroundExecutor,
+) -> Result<Value, String> {
+    let mut parameters = json!({"contextId":context,"expression":expression,"returnByValue":true});
+    if await_promise {
+        parameters["awaitPromise"] = json!(true);
+    }
+    let value = cdp(host, "Runtime.evaluate", parameters, guard, executor).await?;
+    if value.get("exceptionDetails").is_some() {
+        return Err(
+            "The page rejected the operation; the target state may be stale — take a fresh snapshot and observe again.".into(),
+        );
+    }
+    value
+        .pointer("/result/value")
+        .cloned()
+        .ok_or_else(|| "Native page did not return a structured result".into())
 }
 
 async fn evaluate(
@@ -526,23 +1115,17 @@ async fn evaluate(
     guard: &OperationGuard,
     executor: &gpui::BackgroundExecutor,
 ) -> Result<Value, String> {
-    let value = cdp(
-        host,
-        "Runtime.evaluate",
-        json!({"contextId":context,"expression":expression,"returnByValue":true}),
-        guard,
-        executor,
-    )
-    .await?;
-    if value.get("exceptionDetails").is_some() {
-        return Err(
-            "The requested element is missing, ambiguous, hidden, disabled, or unsupported.".into(),
-        );
-    }
-    value
-        .pointer("/result/value")
-        .cloned()
-        .ok_or_else(|| "Native page did not return a structured result".into())
+    evaluate_context(host, context, expression, false, guard, executor).await
+}
+
+async fn evaluate_promise(
+    host: &WebviewHost,
+    context: i64,
+    expression: String,
+    guard: &OperationGuard,
+    executor: &gpui::BackgroundExecutor,
+) -> Result<Value, String> {
+    evaluate_context(host, context, expression, true, guard, executor).await
 }
 
 /// Wait for down to complete before issuing up: WebView2 CDP commands may be
@@ -555,6 +1138,7 @@ async fn input_pair(
     up: Value,
     guard: &OperationGuard,
     executor: &gpui::BackgroundExecutor,
+    completion: CompletionGuard,
 ) -> Result<(), String> {
     let (down, up) = executor
         .spawn(async move { (down.to_string(), up.to_string()) })
@@ -581,7 +1165,7 @@ async fn input_pair(
     let up_result = wait(host.webview.call_cdp(method, &up)).await;
     down_result?;
     up_result?;
-    guard.check()
+    completion.check(guard)
 }
 
 async fn execute(
@@ -591,40 +1175,90 @@ async fn execute(
     executor: &gpui::BackgroundExecutor,
 ) -> Result<Value, String> {
     action.validate()?;
-    if let BrowserAction::Navigate { url } = action {
-        valid_url(&url)?;
-        // Completion acknowledges dispatch, not successful loading. Navigation
-        // revokes the grant; the user must share the new document explicitly.
-        return cdp(&host, "Page.navigate", json!({"url":url}), guard, executor).await;
+    // A page grant never opens a page; the app host owns that. `Navigate`
+    // acknowledges dispatch without waiting for the load: completion is not
+    // success, the document guard rotates on the load events.
+    match &action {
+        BrowserAction::Open { .. } => {
+            return Err(
+                "Opening a new page is handled by the app host, not by this page's grant.".into(),
+            );
+        }
+        BrowserAction::Navigate { url } => {
+            valid_url(url)?;
+            let url = url.clone();
+            let response = cdp_with_completion(
+                &host,
+                "Page.navigate",
+                json!({"url":url}),
+                guard,
+                executor,
+                CompletionGuard::Issued,
+            )
+            .await?;
+            if response
+                .get("errorText")
+                .and_then(Value::as_str)
+                .is_some_and(|error| !error.is_empty())
+            {
+                return Err("The browser could not navigate to the requested page; observe again without retrying automatically.".into());
+            }
+            return Ok(json!({"issued":true,"requiresObservation":true}));
+        }
+        _ => {}
     }
     let tree = cdp(&host, "Page.getFrameTree", json!({}), guard, executor).await?;
     let frame = tree
         .pointer("/frameTree/frame/id")
         .and_then(Value::as_str)
         .ok_or("Main document is unavailable")?;
-    let world = cdp(&host, "Page.createIsolatedWorld", json!({"frameId":frame,"worldName":"fintwind-browser-collaboration","grantUniveralAccess":false}), guard, executor).await?;
+    let world = cdp(&host, "Page.createIsolatedWorld", json!({"frameId":frame,"worldName":"fintwind-browser-collaboration","grantUniversalAccess":false}), guard, executor).await?;
     let context = world
         .get("executionContextId")
         .and_then(Value::as_i64)
         .ok_or("Isolated document context is unavailable")?;
-    if matches!(action, BrowserAction::Snapshot) {
-        return evaluate(&host, context, SNAPSHOT.to_owned(), guard, executor).await;
+    // Observation and a scroll act inside the isolated world; the former builds
+    // the element map, the latter nudges the real viewport.
+    match &action {
+        BrowserAction::Snapshot => {
+            return evaluate(&host, context, SNAPSHOT.to_owned(), guard, executor).await;
+        }
+        BrowserAction::Scroll { delta_y } => {
+            let clamped = (*delta_y).clamp(-MAX_SCROLL_DELTA, MAX_SCROLL_DELTA);
+            let expression = format!(
+                "(()=>{{try{{window.scrollBy(0,{clamped});}}catch(e){{}}return {{issued:true,requiresObservation:true}};}})()"
+            );
+            return evaluate(&host, context, expression, guard, executor).await;
+        }
+        _ => {}
     }
     let (selector, fill) = match action {
         BrowserAction::Click { selector } => (selector, None),
         BrowserAction::Fill { selector, text } => (selector, Some(text)),
-        _ => unreachable!(),
+        BrowserAction::Snapshot
+        | BrowserAction::Scroll { .. }
+        | BrowserAction::Navigate { .. }
+        | BrowserAction::Open { .. } => unreachable!(),
     };
     let selector = serde_json::to_string(&selector).map_err(|_| "Invalid selector")?;
+    let fill_literal = if fill.is_some() { "true" } else { "false" };
+    // Resolve the target (a `ref:` token through the snapshot map, or exact CSS)
+    // and validate it, returning a structured reason instead of a thrown value.
+    // A target with no clickable point on screen is scrolled into view and
+    // given a bounded settle — the page may animate its own scrolling — before
+    // the native coordinates are computed from a real client box of the target.
     let expression = format!(
-        "(() => {{ const nodes=document.querySelectorAll({selector}); if(nodes.length!==1) throw new Error(); const e=nodes[0]; const type=(e.type||'').toLowerCase(); if(e.disabled || ['password','hidden','file'].includes(type)) throw new Error(); const r=e.getBoundingClientRect(),s=getComputedStyle(e); if(r.width<=0||r.height<=0||s.visibility!=='visible'||s.display==='none'||r.x<0||r.y<0||r.right>innerWidth||r.bottom>innerHeight) throw new Error(); const x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y); if(hit!==e&&!e.contains(hit)) throw new Error(); {} return {{x,y}}; }})()",
-        if fill.is_some() {
-            "if(!['INPUT','TEXTAREA'].includes(e.tagName)||e.readOnly|| (e.tagName==='INPUT'&&!['text','search','email','url','tel'].includes(type)))throw new Error(); e.focus(); e.select(); globalThis.__fintwindFillTarget=e;"
-        } else {
-            ""
-        }
+        "(async () => {{\n  const fail=(reason,message)=>({{ok:false,reason,message}});\n  const SEL={selector};\n  const FILL={fill_literal};\n  let el=null;\n  if(SEL.slice(0,4)==='ref:'){{\n    const store=globalThis.__fintwindElementRefs;\n    el=(store&&store.get)?store.get(SEL):undefined;\n    if(!el||!el.isConnected)return fail('stale','target reference is stale; take a fresh snapshot');\n  }} else {{\n    let nodes;\n    try{{nodes=document.querySelectorAll(SEL);}}catch(e){{return fail('invalid','the selector is not valid CSS');}}\n    if(nodes.length===0)return fail('no-matches','no element matches the selector');\n    if(nodes.length>1)return fail('multiple','the selector matches multiple elements; make it unique');\n    el=nodes[0];\n  }}\n  const tag=el.tagName||'';const t=(el.type||'').toLowerCase();\n  if(el.disabled===true||(el.getAttribute&&el.getAttribute('aria-disabled')==='true'))return fail('disabled','the target is disabled');\n  if(t==='password'||t==='file')return fail('password','password and file targets are not supported');\n  if(FILL){{\n    if(tag!=='INPUT'&&tag!=='TEXTAREA')return fail('unsupported','fill requires an input or textarea');\n    if(el.readOnly===true)return fail('readonly','the target is read-only');\n    if(tag==='INPUT'&&['text','search','email','url','tel'].indexOf(t)<0)return fail('unsupported','this input type cannot be filled');\n  }}\n  const st=getComputedStyle(el);const r0=el.getBoundingClientRect();\n  if(!st||st.visibility!=='visible'||st.display==='none'||(st.opacity!==''&&parseFloat(st.opacity)===0)||r0.width<=0||r0.height<=0)return fail('hidden','the target is not visible');\n  // A page can animate its own scrolling (the site sets `scroll-behavior:smooth`\n  // on html), so a fixed frame count can still measure coordinates mid-flight.\n  // Wait for scrolling to actually stop - bounded, with a timer race so a\n  // throttled animation frame cannot stall the operation. Two quiet readings\n  // keep a mid-animation frame from being mistaken for rest, and the point is\n  // chosen afterwards, so a scroll that starts mid-measure cannot move it.\n  const settle=async function(){{\n    const until=performance.now()+600;let lx=null,ly=null,stable=0;\n    while(performance.now()<until){{\n      await new Promise(function(res){{let done=false;const fin=function(){{if(!done){{done=true;res();}}}};requestAnimationFrame(fin);setTimeout(fin,32);}});\n      const x=window.scrollX||0,y=window.scrollY||0;\n      if(x===lx&&y===ly){{if(++stable>=2)return true;}}else{{stable=0;lx=x;ly=y;}}\n    }}\n    return false;\n  }};\n  const bringIntoView=function(){{\n    try{{el.scrollIntoView({{block:'center',inline:'nearest',behavior:'instant'}});}}\n    catch(e){{try{{el.scrollIntoView({{block:'center',inline:'nearest'}});}}catch(e2){{try{{el.scrollIntoView();}}catch(e3){{}}}}}}\n  }};\n  // Click a real box of the target, not the middle of its bounding rect: an\n  // inline element that wraps spans every line, so the center of the union\n  // rect can fall in the blank space between lines and reach the wrapper\n  // instead of the target, and a control taller than the viewport can never\n  // fit its whole rect on screen. Take the first client box whose center is\n  // on screen and hit-tests to the target or one of its descendants, so a\n  // line hidden under a sticky header is skipped instead of clicked through.\n  // A genuinely covered target still fails: this never falls back to a DOM click.\n  const choosePoint=function(){{\n    let list;\n    try{{list=el.getClientRects?el.getClientRects():[];}}catch(e){{list=[];}}\n    const boxes=(list&&list.length)?Array.from(list):[el.getBoundingClientRect()];\n    let onScreen=0;\n    for(let i=0;i<boxes.length;i++){{\n      const box=boxes[i];const x=box.left+box.width/2,y=box.top+box.height/2;\n      if(x<0||y<0||x>innerWidth||y>innerHeight)continue;\n      onScreen++;\n      let hit=null;\n      try{{hit=document.elementFromPoint(x,y);}}catch(e2){{}}\n      if(hit===el||(el.contains&&el.contains(hit))){{\n        return {{ok:true,onScreen:true,x:Math.min(Math.max(x,0),innerWidth),y:Math.min(Math.max(y,0),innerHeight)}};\n      }}\n    }}\n    return {{ok:false,onScreen:onScreen>0}};\n  }};\n  let chosen=choosePoint();\n  if(!chosen.ok)bringIntoView();\n  if(!(await settle()))return fail('scroll-timeout','scrolling did not settle; take a fresh snapshot once the page stops moving');\n  chosen=choosePoint();\n  if(!chosen.onScreen)return fail('out-of-viewport','the target is outside the viewport after scrolling');\n  if(!chosen.ok)return fail('occluded','another element covers the target');\n  if(FILL){{try{{el.focus();if(el.select)el.select();}}catch(e){{}}globalThis.__fintwindFillTarget=el;}}\n  return {{ok:true,x:chosen.x,y:chosen.y,tag:tag.toLowerCase()}};\n}})()"
     );
-    let target = evaluate(&host, context, expression, guard, executor).await?;
+    let target = evaluate_promise(&host, context, expression, guard, executor).await?;
+    if target.get("ok").and_then(Value::as_bool) != Some(true) {
+        let message = target
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| target.get("reason").and_then(Value::as_str))
+            .unwrap_or("The target could not be resolved; observe again with a fresh snapshot.");
+        return Err(message.to_owned());
+    }
     if let Some(text) = fill {
         evaluate(&host, context, FILL_TARGET_CHECK.into(), guard, executor).await?;
         input_pair(
@@ -634,6 +1268,7 @@ async fn execute(
             json!({"type":"keyUp","key":"Backspace","code":"Backspace","windowsVirtualKeyCode":8}),
             guard,
             executor,
+            CompletionGuard::SameDocument,
         )
         .await?;
         evaluate(&host, context, FILL_TARGET_CHECK.into(), guard, executor).await?;
@@ -661,6 +1296,7 @@ async fn execute(
             json!({"type":"mouseReleased","x":x,"y":y,"button":"left","clickCount":1}),
             guard,
             executor,
+            CompletionGuard::Issued,
         )
         .await?;
     }
@@ -669,43 +1305,72 @@ async fn execute(
 
 const FILL_TARGET_CHECK: &str = "(() => { const e=globalThis.__fintwindFillTarget; if(!e || !e.isConnected || document.activeElement!==e || e.disabled || e.readOnly || (e.tagName==='INPUT'&&!['text','search','email','url','tel'].includes((e.type||'').toLowerCase()))) throw new Error(); return true; })()";
 
-/// Visible, bounded text and controls only. Text nodes below form fields are
-/// omitted too: body.innerText can otherwise expose a textarea's default value.
+/// Observe → reference. Runs in the isolated world, mints a per-snapshot nonce,
+/// and records each visible control's element object in a fresh
+/// `globalThis.__fintwindElementRefs` map keyed by `ref:<nonce>:<ordinal>` — a
+/// plain object map, never a DOM property — so an action can turn a token back
+/// into the exact element it observed. A new snapshot replaces the map, so any
+/// token from an older one stops resolving (an explicit stale error); a document
+/// change tears the world down and does the same.
+///
+/// Sensitive fields are never read: input values are not exported, and a
+/// password/hidden/file control is skipped entirely (its name/label is not
+/// leaked either). Text below form fields is omitted so a textarea's default
+/// value cannot surface. Names come only from aria/associated labels, bounded.
 /// This intentionally does not read cookies, storage or raw HTML.
-/// Repair only the bounded slice: an emoji cut in half must not send an
-/// unpaired UTF-16 surrogate into WebView2's native CDP result path.
 const SNAPSHOT: &str = r#"(() => {
- const clip=(text,limit)=>text.slice(0,Math.max(0,limit)).toWellFormed();
- const visibleText=(root,limit,budget)=>{
-  let text='',scanned=0;
-  if(!root)return text;
-  const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
-  while(scanned++<budget && text.length<limit && walker.nextNode()) {
-   const node=walker.currentNode,e=node.parentElement;
-   if(!e||e.closest('input,textarea,select,script,style,noscript,template,[hidden]'))continue;
-   const s=getComputedStyle(e),r=e.getBoundingClientRect();
-   if(s.display==='none'||s.visibility!=='visible'||r.width<=0||r.height<=0)continue;
-   const part=node.textContent.trim();
-   if(part){const separator=text?'\n':'';text+=separator+clip(part,limit-text.length-separator.length);}
+  const clip=(text,limit)=>{text=String(text==null?'':text);return text.slice(0,Math.max(0,limit)).toWellFormed();};
+  const visibleText=(root,limit,budget)=>{
+   let text='',scanned=0;
+   if(!root)return text;
+   const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+   while(scanned++<budget && text.length<limit && walker.nextNode()) {
+    const node=walker.currentNode,e=node.parentElement;
+    if(!e||e.closest('input,textarea,select,script,style,noscript,template,[hidden]'))continue;
+    const s=getComputedStyle(e),r=e.getBoundingClientRect();
+    if(s.display==='none'||s.visibility!=='visible'||r.width<=0||r.height<=0)continue;
+    const part=node.textContent.trim();
+    if(part){const separator=text?'\n':'';text+=separator+clip(part,limit-text.length-separator.length);}
+   }
+   return clip(text,limit);
+  };
+  const controlName=(e)=>{
+   const t=(e.type||'').toLowerCase();
+   if(t==='password'||t==='hidden'||t==='file')return '';
+   let al=e.getAttribute&&e.getAttribute('aria-label'); if(al&&al.trim())return clip(al.trim(),120);
+   const alby=e.getAttribute&&e.getAttribute('aria-labelledby');
+    if(alby){let out='';alby.split(/\s+/).slice(0,16).forEach(function(id){const n=id&&document.getElementById(id); if(n&&out.length<120)out+=' '+visibleText(n,120-out.length,200);}); out=out.trim(); if(out)return clip(out,120);}
+    if(e.labels&&e.labels.length){let out='';for(const l of Array.from(e.labels).slice(0,8)){if(out.length>=120)break;out+=' '+visibleText(l,120-out.length,200);} out=out.trim(); if(out)return clip(out,120);}
+    if(e.id){let l=null; try{l=document.querySelector('label[for="'+e.id.replace(/["\\]/g,'\\$&')+'"]');}catch(err){} if(l){const x=visibleText(l,120,200); if(x)return clip(x,120);}}
+   let wrap=null; try{wrap=e.closest('label');}catch(err){}
+    if(wrap){const x=visibleText(wrap,120,200); if(x)return clip(x,120);}
+   const ph=e.getAttribute&&e.getAttribute('placeholder'); if(ph&&ph.trim())return clip(ph.trim(),120);
+   const vt=visibleText(e,120,200); if(vt)return clip(vt,120);
+   return '';
+  };
+  const nonce=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():('ns'+Date.now().toString(36)+Math.random().toString(36).slice(2));
+  const store=(globalThis.__fintwindElementRefs=new Map());
+  const controls=[];
+  const elements=document.createTreeWalker(document.documentElement,NodeFilter.SHOW_ELEMENT);
+  let scannedControls=0,e;
+  while(scannedControls++<2000 && controls.length<60 && (e=elements.nextNode())) {
+   if(!e.matches('button,a[href],input,textarea,select,[role="button"],[role="link"],[role="textbox"],[role="checkbox"],[role="tab"],[role="menuitem"],[role="option"]'))continue;
+   const t=(e.type||'').toLowerCase();
+   if(t==='password'||t==='hidden'||t==='file')continue;
+   const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+   if(r.width<=0||r.height<=0||s.display==='none'||s.visibility!=='visible')continue;
+   const ref='ref:'+nonce+':'+controls.length;
+   store.set(ref,e);
+   controls.push({tag:(e.tagName||'').toLowerCase(),role:clip((e.getAttribute&&e.getAttribute('role'))||(e.tagName||'').toLowerCase(),64),name:controlName(e),ref:ref,selector:ref,disabled:!!(e.disabled===true||(e.getAttribute&&e.getAttribute('aria-disabled')==='true'))});
   }
-  return clip(text,limit);
- };
- const controls=[];
- const elements=document.createTreeWalker(document.documentElement,NodeFilter.SHOW_ELEMENT);
- let scannedControls=0,e;
- while(scannedControls++<2000 && controls.length<60 && (e=elements.nextNode())) {
-  if(!e.matches('button,a[href],input,textarea,select,[role="button"]'))continue;
-  const t=(e.type||'').toLowerCase(),r=e.getBoundingClientRect(),s=getComputedStyle(e);
-  if(['password','hidden','file'].includes(t)||r.width<=0||r.height<=0||s.display==='none'||s.visibility!=='visible')continue;
-   controls.push({tag:e.tagName.toLowerCase(),role:clip(e.getAttribute('role')||'',64),name:clip(e.getAttribute('aria-label')||e.getAttribute('placeholder')||visibleText(e,120,200),120),selector:e.id&&e.id.length<=128&&e.id.isWellFormed()?'#'+CSS.escape(e.id):null,disabled:!!e.disabled});
- }
- const text=visibleText(document.body,8000,2000);
- const result={url:clip(location.href,4096),title:clip(document.title,256),text,controls,truncated:true,scope:'main_document',untrustedPageContent:true};
- const encoder=new TextEncoder();
- while(encoder.encode(JSON.stringify(result)).length>28000) {
-  if(result.text.length)result.text=clip(result.text,Math.floor(result.text.length/2));
-  else if(result.controls.length)result.controls.pop();
-  else break;
- }
- return result;
+  const text=visibleText(document.body,8000,2000);
+  const result={url:clip(location.href,4096),title:clip(document.title,256),text:text,controls:controls,truncated:true,scope:'main_document',untrustedPageContent:true,refNonce:nonce};
+  const encoder=new TextEncoder();
+  let sizeGuard=0;
+  while(encoder.encode(JSON.stringify(result)).length>28000 && sizeGuard++<40) {
+   if(result.text.length)result.text=clip(result.text,Math.floor(result.text.length/2));
+   else if(result.controls.length){const dropped=result.controls.pop(); if(dropped&&store.delete)store.delete(dropped.ref);}
+   else break;
+  }
+  return result;
 })()"#;

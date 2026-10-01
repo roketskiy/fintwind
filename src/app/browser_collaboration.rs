@@ -27,15 +27,18 @@ use super::*;
 use crate::browser::{BrowserCollaborationEvent, BrowserView};
 use fintwind_client::{BrowserNotification, DaemonClient};
 use fintwind_protocol::browser::{
-    BrowserRequest, BrowserResult, BrowserScope, BrowserShare, MAX_BROWSER_PAGES_PER_CONNECTION,
+    BrowserAction, BrowserRequest, BrowserResult, BrowserScope, BrowserShare,
+    MAX_BROWSER_PAGES_PER_CONNECTION,
 };
+
+mod automation;
 
 /// Wake-queue bound. The bridge thread blocks here when the UI is behind,
 /// which is the only backpressure this bridge applies.
 const WAKE_QUEUE_BOUND: usize = 128;
 
-/// Why the shared-page control is unavailable right now. The header shows
-/// the reason instead of disabling silently.
+/// Why a toolbar share request is unavailable. The app reports the reason
+/// rather than silently ignoring activation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BrowserShareBlocker {
     /// No task is selected, so there is no session to bind a grant to.
@@ -48,7 +51,7 @@ pub(super) enum BrowserShareBlocker {
     TooManyPages,
 }
 
-/// What the right-panel header's browser control does for the active page.
+/// What a browser toolbar's share control can do for its exact page.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum BrowserShareAffordance {
     /// Share the page with the selected session's live runtime.
@@ -99,6 +102,21 @@ pub(super) struct AppBrowserCollaborationState {
     /// disconnect and the supervisor's replacement, and after a failed
     /// publish until then.
     client: Option<DaemonClient>,
+    /// Connection-scoped launcher for the selected full-access session. It is
+    /// not a browser page and never appears in the shared-page list.
+    host: Option<BrowserScope>,
+    /// A daemon-retired cursor cannot be republished while its replacement's
+    /// driver event is still queued. A new runtime gets a fresh launcher,
+    /// never the predecessor's page grants.
+    retired_browser_runtime: Option<(Uuid, Uuid)>,
+    automation_pages: std::collections::HashSet<Uuid>,
+    automation_paused: bool,
+    /// A cancelled opening must never share its page when loading finishes.
+    openings: HashMap<Uuid, Uuid>,
+    /// Keep completed opens linked to their exact page grant while it lives:
+    /// a cancellation queued behind the ready timer can still withdraw a
+    /// page published just before the daemon rejected the late completion.
+    opened_pages: HashMap<Uuid, BrowserScope>,
     /// Dropping this stops the bridge thread even while it blocks.
     stop_tx: crossbeam_channel::Sender<()>,
 }
@@ -113,6 +131,12 @@ impl AppBrowserCollaborationState {
             task: Task::ready(()),
             generation: 0,
             client: None,
+            host: None,
+            retired_browser_runtime: None,
+            automation_pages: Default::default(),
+            automation_paused: false,
+            openings: HashMap::new(),
+            opened_pages: HashMap::new(),
             stop_tx,
         }
     }
@@ -217,8 +241,13 @@ fn run_browser_bridge(
 
 impl Fintwind {
     /// Start the bridge once the app entity exists. Called once from
-    /// [`Fintwind::new`]; nothing is shared until the user asks for it.
-    pub(super) fn start_browser_collaboration(&mut self, cx: &mut Context<Self>) {
+    /// [`Fintwind::new`]. FullAccess publishes a session launcher, while
+    /// existing manual pages remain unshared until the user asks for it.
+    pub(super) fn start_browser_collaboration(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
         let clients = self.daemon.subscribe_clients();
         let (wake_tx, wake_rx) = smol::channel::bounded::<BridgeWake>(WAKE_QUEUE_BOUND);
         let stop_rx = {
@@ -233,10 +262,12 @@ impl Fintwind {
 
         // A wake loop, not the stream event pump: browser traffic must never
         // delay or be delayed by a streaming frame.
-        let task = cx.spawn(async move |this, cx| {
+        let task = cx.spawn_in(window, async move |this, cx| {
             while let Ok(wake) = wake_rx.recv().await {
                 let alive = this
-                    .update(cx, |this, cx| this.handle_browser_bridge_wake(wake, cx))
+                    .update_in(cx, |this, window, cx| {
+                        this.handle_browser_bridge_wake(wake, window, cx)
+                    })
                     .unwrap_or(false);
                 if !alive {
                     break;
@@ -246,7 +277,12 @@ impl Fintwind {
         self.browser_collaboration.task = task;
     }
 
-    fn handle_browser_bridge_wake(&mut self, wake: BridgeWake, cx: &mut Context<Self>) -> bool {
+    fn handle_browser_bridge_wake(
+        &mut self,
+        wake: BridgeWake,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         match wake {
             BridgeWake::Client { client, generation } => {
                 self.rebind_browser_collaboration(client, generation, cx);
@@ -264,7 +300,7 @@ impl Fintwind {
                 }
                 match notification {
                     BrowserNotification::Request(request) => {
-                        self.dispatch_browser_request(request, generation, cx);
+                        self.dispatch_browser_request(request, generation, window, cx);
                     }
                     BrowserNotification::Cancel(request_id) => {
                         self.cancel_browser_request(request_id, cx);
@@ -281,8 +317,16 @@ impl Fintwind {
                     // exactly the refused scope is revoked, so a rejection
                     // that crossed a re-share cannot take the new grant.
                     BrowserNotification::ShareRejected { scopes, message } => {
+                        let host_rejected = self
+                            .browser_collaboration
+                            .host
+                            .as_ref()
+                            .is_some_and(|host| scopes.contains(host));
+                        if host_rejected {
+                            self.pause_browser_automation(cx);
+                        }
                         let revoked = self.revoke_receipt_scopes(&scopes, cx);
-                        if revoked {
+                        if revoked || host_rejected {
                             self.show_toast(tr!(
                                 "browser_collaboration.share_rejected",
                                 message = message
@@ -293,8 +337,23 @@ impl Fintwind {
                     // because the session's runtime was replaced. The UI must
                     // not keep claiming a share the daemon no longer honors.
                     BrowserNotification::ScopesRevoked(scopes) => {
+                        let host_revoked = self
+                            .browser_collaboration
+                            .host
+                            .as_ref()
+                            .is_some_and(|host| scopes.contains(host));
+                        if host_revoked {
+                            let retired = self
+                                .browser_collaboration
+                                .host
+                                .as_ref()
+                                .map(|host| (host.session_id, host.runtime_id));
+                            self.pause_browser_automation(cx);
+                            self.browser_collaboration.retired_browser_runtime = retired;
+                            self.browser_collaboration.automation_paused = false;
+                        }
                         let revoked = self.revoke_receipt_scopes(&scopes, cx);
-                        if revoked {
+                        if revoked || host_revoked {
                             self.show_toast(tr!("browser_collaboration.runtime_replaced"));
                         }
                     }
@@ -314,17 +373,27 @@ impl Fintwind {
         generation: u64,
         cx: &mut Context<Self>,
     ) {
+        let replacement = self.browser_collaboration.generation != 0;
         self.drop_browser_connection(cx);
+        if replacement {
+            self.browser_collaboration.automation_paused = true;
+        }
         self.browser_collaboration.generation = generation;
         self.browser_collaboration.client = Some(client);
+        self.sync_browser_automation_host(cx);
     }
 
     /// Drop the current connection's publishing ability and every grant.
     /// Used on disconnect, on a failed publish, and before a rebind.
     fn drop_browser_connection(&mut self, cx: &mut Context<Self>) {
+        if self.browser_collaboration.generation != 0 {
+            self.browser_collaboration.automation_paused = true;
+        }
         self.browser_collaboration.client = None;
+        self.browser_collaboration.host = None;
         self.browser_collaboration.shares.clear();
         self.browser_collaboration.pending.clear();
+        self.browser_collaboration.openings.clear();
         self.revoke_all_browser_shares(cx);
     }
 
@@ -336,10 +405,14 @@ impl Fintwind {
         browser: &Entity<BrowserView>,
         cx: &mut Context<Self>,
     ) {
+        let local = !self.daemon.is_remote();
+        browser.update(cx, |view, cx| {
+            view.enable_browser_collaboration_control(local, cx)
+        });
         let subscription = cx.subscribe(
             browser,
             move |this: &mut Self, _, event: &BrowserCollaborationEvent, cx| {
-                this.handle_browser_collaboration_event(event, cx);
+                this.handle_browser_collaboration_event(browser_id, event, cx);
             },
         );
         self.browser_collaboration
@@ -354,6 +427,18 @@ impl Fintwind {
         browser_id: Uuid,
         cx: &mut Context<Self>,
     ) {
+        if self
+            .browser_collaboration
+            .automation_pages
+            .contains(&browser_id)
+            || self
+                .browser_collaboration
+                .openings
+                .values()
+                .any(|id| *id == browser_id)
+        {
+            self.pause_browser_automation(cx);
+        }
         self.retire_browser_collaboration(browser_id);
         self.publish_browser_shares(cx);
     }
@@ -362,6 +447,31 @@ impl Fintwind {
     /// Used where no `Context` is at hand (session removal); the cache is
     /// the last published snapshot, so this stays correct without entities.
     pub(super) fn retire_browser_collaboration(&mut self, browser_id: Uuid) {
+        if self
+            .browser_collaboration
+            .automation_pages
+            .remove(&browser_id)
+            || self
+                .browser_collaboration
+                .openings
+                .values()
+                .any(|id| *id == browser_id)
+        {
+            self.browser_collaboration.automation_paused = true;
+            self.withdraw_browser_automation_host();
+            let retired = self
+                .browser_collaboration
+                .openings
+                .iter()
+                .filter_map(|(id, page)| (*page == browser_id).then_some(*id))
+                .collect::<Vec<_>>();
+            for id in retired {
+                self.finish_browser_opening(
+                    id,
+                    BrowserResult::error("The browser tab was closed during opening."),
+                );
+            }
+        }
         self.browser_collaboration.subscriptions.remove(&browser_id);
         let pages = self
             .browser_collaboration
@@ -400,11 +510,35 @@ impl Fintwind {
 
     fn handle_browser_collaboration_event(
         &mut self,
+        browser_id: Uuid,
         event: &BrowserCollaborationEvent,
         cx: &mut Context<Self>,
     ) {
         match event {
-            BrowserCollaborationEvent::ShareChanged => self.publish_browser_shares(cx),
+            BrowserCollaborationEvent::ShareRequested => self.share_browser(browser_id, cx),
+            BrowserCollaborationEvent::ShareChanged => {
+                // An explicit stop (or lifecycle retirement) revoked a page. Stop
+                // the launch capability too, rather than opening a replacement
+                // tab behind the user's back on the next tool call.
+                let revoked = self
+                    .browser_collaboration
+                    .automation_pages
+                    .iter()
+                    .any(|id| {
+                        self.right_panel_browsers
+                            .get(id)
+                            .is_none_or(|browser| browser.read(cx).browser_share().is_none())
+                    })
+                    || self.browser_collaboration.openings.values().any(|id| {
+                        self.right_panel_browsers.get(id).is_some_and(|browser| {
+                            browser.read(cx).browser_automation_was_taken_over()
+                        })
+                    });
+                if revoked {
+                    self.pause_browser_automation(cx);
+                }
+                self.publish_browser_shares(cx);
+            }
             BrowserCollaborationEvent::Finished { request_id, result } => {
                 // Answer on the connection that delivered the request; a
                 // reconnected connection refuses the late completion anyway.
@@ -426,6 +560,9 @@ impl Fintwind {
                 shares.push(share);
             }
         }
+        self.browser_collaboration
+            .opened_pages
+            .retain(|_, scope| shares.iter().any(|share| share.scope == *scope));
         if let Some(error) = self.publish_share_set(shares) {
             self.fail_browser_connection(error, cx);
         }
@@ -442,7 +579,9 @@ impl Fintwind {
                     .shares
                     .get(&share.scope.page_id)
                     .is_some_and(|previous| {
-                        previous.scope == share.scope && previous.url == share.url
+                        previous.scope == share.scope
+                            && previous.url == share.url
+                            && previous.title == share.title
                     })
             });
         if unchanged {
@@ -466,6 +605,7 @@ impl Fintwind {
     /// below would otherwise start — their `ShareChanged` events re-enter the
     /// publish path and find no client to publish on.
     fn fail_browser_connection(&mut self, error: String, cx: &mut Context<Self>) {
+        self.browser_collaboration.automation_paused = true;
         self.browser_collaboration.client = None;
         self.browser_collaboration.shares.clear();
         self.revoke_all_browser_shares(cx);
@@ -501,6 +641,7 @@ impl Fintwind {
         &mut self,
         request: BrowserRequest,
         generation: u64,
+        window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
         if generation != self.browser_collaboration.generation {
@@ -514,8 +655,13 @@ impl Fintwind {
         if client.is_disconnected() {
             return;
         }
+        if let BrowserAction::Open { url } = &request.action {
+            self.open_automation_browser(request.clone(), url.clone(), generation, window, cx);
+            return;
+        }
         let scope = request.scope.clone();
         let runtime_current = self.state.selected_session == Some(scope.session_id)
+            && self.runtimes.contains_key(&scope.session_id)
             && self
                 .selected_session()
                 .and_then(|session| session.runtime_event_cursor)
@@ -550,6 +696,18 @@ impl Fintwind {
             );
             return;
         }
+        if self
+            .browser_collaboration
+            .automation_pages
+            .contains(&scope.page_id)
+            && (!self.browser_full_access() || self.browser_collaboration.automation_paused)
+        {
+            self.revoke_browser_grant(scope.page_id, cx);
+            let _ = client.complete_browser_request(request.request_id, BrowserResult::error(
+                "Automatic browser access was withdrawn; explicitly share the page again to continue.",
+            ));
+            return;
+        }
         self.browser_collaboration
             .pending
             .insert(request.request_id, client);
@@ -559,6 +717,28 @@ impl Fintwind {
     /// The daemon gave up on a request: retire it wherever it sits.
     fn cancel_browser_request(&mut self, request_id: Uuid, cx: &mut Context<Self>) {
         self.browser_collaboration.pending.remove(&request_id);
+        if let Some(page_id) = self.browser_collaboration.openings.remove(&request_id)
+            && let Some(browser) = self.right_panel_browsers.get(&page_id)
+        {
+            browser.update(cx, |view, cx| view.finish_browser_opening(cx));
+        }
+        if let Some(scope) = self.browser_collaboration.opened_pages.remove(&request_id) {
+            let exact = self
+                .right_panel_browsers
+                .get(&scope.page_id)
+                .is_some_and(|browser| {
+                    browser
+                        .read(cx)
+                        .browser_share()
+                        .is_some_and(|share| share.scope == scope)
+                });
+            if exact {
+                self.browser_collaboration
+                    .automation_pages
+                    .remove(&scope.page_id);
+                self.revoke_browser_grant(scope.page_id, cx);
+            }
+        }
         for browser in self.right_panel_browsers.values() {
             browser.update(cx, |view, cx| view.cancel_browser_request(request_id, cx));
         }
@@ -570,6 +750,10 @@ impl Fintwind {
     /// before the leftovers are dropped. The share cache is only touched by
     /// the publish those revocations trigger, so an empty set is published.
     pub(super) fn revoke_all_browser_shares(&mut self, cx: &mut Context<Self>) {
+        self.withdraw_browser_automation_host();
+        self.browser_collaboration.openings.clear();
+        self.browser_collaboration.opened_pages.clear();
+        self.browser_collaboration.automation_pages.clear();
         let browsers = self
             .right_panel_browsers
             .values()
@@ -607,7 +791,7 @@ impl Fintwind {
         }
     }
 
-    /// What the header's browser control should offer for `browser_id`.
+    /// What the toolbar's share request may do for `browser_id`.
     /// An existing grant can always be taken back, even once its runtime has
     /// ended; only a new share needs every precondition.
     pub(super) fn browser_share_affordance(
@@ -651,9 +835,29 @@ impl Fintwind {
         BrowserShareAffordance::Share
     }
 
-    /// Share the active page with the selected session's live runtime. A
+    /// Share the page whose toolbar was activated with the live runtime. A
     /// fresh grant id per share: nothing is inherited across shares.
-    pub(super) fn share_active_browser(&mut self, cx: &mut Context<Self>) {
+    fn share_browser(&mut self, browser_id: Uuid, cx: &mut Context<Self>) {
+        if !matches!(self.active_right_panel_surface(), Some(RightPanelSurface::Browser(id)) if *id == browser_id)
+        {
+            // A queued toolbar event cannot share a background or retired tab
+            // after switching sessions or selecting a different surface.
+            return;
+        }
+        match self.browser_share_affordance(browser_id, cx) {
+            BrowserShareAffordance::Share if !self.daemon.is_remote() => {}
+            BrowserShareAffordance::Blocked(BrowserShareBlocker::TooManyPages) => {
+                self.show_toast(tr!("browser_collaboration.too_many_pages"));
+                cx.notify();
+                return;
+            }
+            BrowserShareAffordance::Revoke => return,
+            _ => {
+                self.show_toast(tr!("right_panel.browser_share_blocked"));
+                cx.notify();
+                return;
+            }
+        }
         let Some(session_id) = self.state.selected_session else {
             return;
         };
@@ -667,28 +871,6 @@ impl Fintwind {
         else {
             return;
         };
-        let Some(browser_id) =
-            self.active_right_panel_surface()
-                .and_then(|surface| match surface {
-                    RightPanelSurface::Browser(browser_id) => Some(*browser_id),
-                    _ => None,
-                })
-        else {
-            return;
-        };
-        // Refuse before the daemon has to: the per-connection page limit is
-        // small and known, so the user is told instead of the grant silently
-        // landing nowhere.
-        let shared_pages = self
-            .right_panel_browsers
-            .values()
-            .filter(|browser| browser.read(cx).browser_share().is_some())
-            .count();
-        if shared_pages >= MAX_BROWSER_PAGES_PER_CONNECTION {
-            self.show_toast(tr!("browser_collaboration.too_many_pages"));
-            cx.notify();
-            return;
-        }
         let Some(browser) = self.right_panel_browsers.get(&browser_id).cloned() else {
             return;
         };
@@ -699,19 +881,15 @@ impl Fintwind {
             grant_id: Uuid::new_v4(),
         };
         browser.update(cx, |view, cx| view.begin_browser_share(scope, cx));
-    }
-
-    /// Take the active page back.
-    pub(super) fn revoke_active_browser_share(&mut self, cx: &mut Context<Self>) {
-        let Some(browser_id) =
-            self.active_right_panel_surface()
-                .and_then(|surface| match surface {
-                    RightPanelSurface::Browser(browser_id) => Some(*browser_id),
-                    _ => None,
-                })
-        else {
-            return;
-        };
-        self.revoke_browser_grant(browser_id, cx);
+        if self.browser_full_access() {
+            self.browser_collaboration.automation_paused = false;
+            browser.update(cx, |view, cx| view.set_browser_automatic(true, cx));
+            if browser.read(cx).browser_share().is_some() {
+                self.browser_collaboration
+                    .automation_pages
+                    .insert(browser_id);
+            }
+            self.sync_browser_automation_host(cx);
+        }
     }
 }

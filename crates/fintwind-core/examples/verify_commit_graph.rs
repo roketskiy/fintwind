@@ -192,6 +192,18 @@ fn main() -> anyhow::Result<()> {
     let graph = CommitGraph::new(&commits);
     verify_edges(&commits, &graph)?;
     ensure!(graph.width >= 2, "merge did not open a lane");
+    // The side branch reaches the common ancestor before the first-parent
+    // chain does in this topological order. It must not steal the main lane.
+    for hash in [&head, &merge, &main, &root] {
+        let index = commits
+            .iter()
+            .position(|commit| &commit.hash == hash)
+            .context("main commit missing")?;
+        ensure!(
+            graph.rows[index].lane == 0,
+            "first-parent chain changed lanes at {hash}"
+        );
+    }
     let branch = fetch(&repo, 100, Some("feature"))?.context("branch missing")?;
     ensure!(
         branch.len() == 2 && branch[0].hash == feature && branch[1].hash == root,
@@ -230,7 +242,7 @@ fn main() -> anyhow::Result<()> {
         &report,
         serde_json::to_vec_pretty(&json!({
             "status": "passed", "fixture": repo, "width": graph.width, "rows": rows,
-            "checks": ["wire round trip", "empty repository", "clock-skew topology", "merge edges", "root", "refs and unpushed", "branch filter", "truncation", "invalid revision", "non-repository"],
+            "checks": ["wire round trip", "empty repository", "clock-skew topology", "merge edges", "stable first-parent lane", "root", "refs and unpushed", "branch filter", "truncation", "invalid revision", "non-repository"],
         }))?,
     )?;
     println!("[OK] Git-to-graph E2E passed: {}", report.display());

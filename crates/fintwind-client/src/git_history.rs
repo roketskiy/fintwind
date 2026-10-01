@@ -5,6 +5,7 @@
 // See docs/licenses/ely-gpui-components-MIT.txt for copyright and permission.
 
 pub use fintwind_protocol::git::{CommitEntry, CommitRef};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GraphHalf {
@@ -37,18 +38,45 @@ impl CommitGraph {
     /// Input must be topologically ordered (children before all their parents).
     /// Parents outside a truncated window keep outgoing lines at its bottom.
     pub fn new(commits: &[CommitEntry]) -> Self {
+        // Reserve lane zero for the displayed tip's first-parent ancestry.
+        // A side branch may reach a common ancestor earlier in topo order;
+        // keep its incoming lane until that ancestor instead of moving the
+        // main line into the side branch's lane.
+        let by_hash: HashMap<_, _> = commits
+            .iter()
+            .map(|commit| (commit.hash.as_str(), commit))
+            .collect();
+        let mut mainline = HashSet::new();
+        let mut next = commits.first().map(|commit| commit.hash.as_str());
+        while let Some(hash) = next {
+            if !mainline.insert(hash) {
+                break;
+            }
+            next = by_hash
+                .get(hash)
+                .and_then(|commit| commit.parents.first())
+                .map(String::as_str);
+        }
         let mut waiting: Vec<Option<&str>> = Vec::new();
         let mut graph = Self::default();
         for commit in commits {
             let before = waiting.clone();
-            let lane = before
-                .iter()
-                .position(|wait| *wait == Some(commit.hash.as_str()))
-                .or_else(|| waiting.iter().position(Option::is_none))
-                .unwrap_or_else(|| {
+            let on_mainline = mainline.contains(commit.hash.as_str());
+            let lane = if on_mainline {
+                if waiting.is_empty() {
                     waiting.push(None);
-                    waiting.len() - 1
-                });
+                }
+                0
+            } else {
+                before
+                    .iter()
+                    .position(|wait| *wait == Some(commit.hash.as_str()))
+                    .or_else(|| waiting.iter().position(Option::is_none))
+                    .unwrap_or_else(|| {
+                        waiting.push(None);
+                        waiting.len() - 1
+                    })
+            };
             for wait in waiting
                 .iter_mut()
                 .filter(|wait| **wait == Some(commit.hash.as_str()))
@@ -72,22 +100,30 @@ impl CommitGraph {
                 })
                 .collect();
             for (index, parent) in commit.parents.iter().enumerate() {
-                let target = match waiting
-                    .iter()
-                    .position(|wait| *wait == Some(parent.as_str()))
-                {
-                    Some(joined) => joined,
-                    None if index == 0 => {
-                        waiting[lane] = Some(parent);
-                        lane
-                    }
-                    None => {
-                        let free = waiting.iter().position(Option::is_none).unwrap_or_else(|| {
-                            waiting.push(None);
-                            waiting.len() - 1
-                        });
-                        waiting[free] = Some(parent);
-                        free
+                let target = if on_mainline && index == 0 {
+                    // Do not consume another lane waiting for this ancestor:
+                    // both lines terminate at its node through Top strokes.
+                    waiting[lane] = Some(parent);
+                    lane
+                } else {
+                    match waiting
+                        .iter()
+                        .position(|wait| *wait == Some(parent.as_str()))
+                    {
+                        Some(joined) => joined,
+                        None if index == 0 => {
+                            waiting[lane] = Some(parent);
+                            lane
+                        }
+                        None => {
+                            let free =
+                                waiting.iter().position(Option::is_none).unwrap_or_else(|| {
+                                    waiting.push(None);
+                                    waiting.len() - 1
+                                });
+                            waiting[free] = Some(parent);
+                            free
+                        }
                     }
                 };
                 strokes.push(GraphStroke {

@@ -88,7 +88,7 @@ impl Fintwind {
             )
         });
         if reapable {
-            self.reset_session_runtime(session_id);
+            self.reset_session_runtime(session_id, cx);
         }
         if self.state.selected_session == Some(session_id) {
             // Prefer the tab that takes this one's place, else the previous.
@@ -543,7 +543,7 @@ impl Fintwind {
         self.submission_preparations.remove(&session_id);
         self.staged_undos.remove(&session_id);
         self.undo_redo_preparations.remove(&session_id);
-        self.reset_session_runtime(session_id);
+        self.reset_session_runtime(session_id, cx);
         self.forget_session_tab(session_id);
         self.background_work.remove(&session_id);
         self.provider_retries.remove(&session_id);
@@ -733,7 +733,7 @@ impl Fintwind {
             crate::persistence::ComposerDraftKey::for_session(&self.state.sessions[index]);
         self.response_fork_preparations.remove(&session_id);
         self.submission_preparations.remove(&session_id);
-        self.reset_session_runtime(session_id);
+        self.reset_session_runtime(session_id, cx);
         self.runtime_attach_pending.remove(&session_id);
         self.runtime_attach_misses.remove(&session_id);
         self.forget_session_tab(session_id);
@@ -1219,7 +1219,11 @@ impl Fintwind {
         }
     }
 
-    pub(super) fn reset_session_runtime(&mut self, session_id: Uuid) {
+    pub(super) fn reset_session_runtime(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        if self.state.selected_session == Some(session_id) {
+            self.pause_browser_automation(cx);
+            self.revoke_all_browser_shares(cx);
+        }
         if let Some(runtime) = self.runtimes.remove(&session_id) {
             runtime.driver.cancel();
             runtime.driver.close();
@@ -1355,6 +1359,7 @@ impl Fintwind {
         {
             let session_id = session.id;
             session.runtime_mode = mode;
+            self.browser_access_mode_changed(cx);
             self.apply_session_options(session_id, cx);
             self.save();
             cx.notify();
@@ -1367,6 +1372,7 @@ impl Fintwind {
         {
             let session_id = session.id;
             session.interaction_mode = mode;
+            self.browser_access_mode_changed(cx);
             self.apply_session_options(session_id, cx);
             self.save();
             cx.notify();

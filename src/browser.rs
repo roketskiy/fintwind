@@ -1019,9 +1019,28 @@ mod host {
 
         let completed = NavigationCompletedEventHandler::create(Box::new({
             let page_load = page_load.clone();
-            move |webview, _| {
+            move |webview, args| {
                 let url = webview.as_ref().map(source_of).unwrap_or_default();
-                page_load(PageLoad::Finished, url);
+                // A committed navigation can still fail to load (DNS/TLS/abort).
+                // `IsSuccess` is the authoritative signal; treating every
+                // completion as success would let a network failure masquerade
+                // as a loaded page and be shared automatically.
+                let mut success = windows::core::BOOL::default();
+                let ok = args
+                    .as_ref()
+                    .and_then(|args| unsafe { args.IsSuccess(&mut success) }.ok())
+                    .is_some_and(|_| success.as_bool());
+                if ok {
+                    page_load(PageLoad::Finished, url);
+                } else {
+                    let mut status = COREWEBVIEW2_WEB_ERROR_STATUS(0);
+                    let web_error = args
+                        .as_ref()
+                        .and_then(|args| unsafe { args.WebErrorStatus(&mut status) }.ok())
+                        .map(|_| status.0)
+                        .unwrap_or(0);
+                    page_load(PageLoad::Failed { web_error }, url);
+                }
                 Ok(())
             }
         }));
@@ -1201,12 +1220,28 @@ pub struct BrowserView {
     /// open a URL before it has anything to open it in.
     #[cfg(target_os = "windows")]
     pending_url: Option<String>,
+    /// A URL an agent launcher asked to open before the host existed. Unlike
+    /// `pending_url` it is deliberately navigated *without* taking native focus,
+    /// so an automation launch does not simulate a human page takeover.
+    #[cfg(target_os = "windows")]
+    pending_auto_navigation: Option<String>,
     /// A navigation has been requested at least once: the surface shows the
     /// page area instead of the start hint, and the native view may be shown.
     navigation_requested: bool,
     current_url: Option<String>,
     page_title: Option<String>,
     loading: bool,
+    /// A committed navigation that failed to load (network/TLS/DNS). This is a
+    /// transient page error WebView2 shows itself; it is deliberately not the
+    /// permanent `host_error`, and the next navigation clears it. Automation
+    /// refuses to share an error page by gating on this.
+    navigation_error: Option<String>,
+    /// An automation launch is waiting for a loaded page. The toolbar offers
+    /// an explicit stop while this is set; ordinary browsing does not stop it.
+    navigation_automation_pending: bool,
+    /// An automation launch was explicitly stopped. The launcher must not
+    /// share the page afterwards; only a fresh launch clears this.
+    navigation_automation_cancelled: bool,
     can_go_back: bool,
     can_go_forward: bool,
     /// The user has edited the address since it last echoed the page, so page
@@ -1371,10 +1406,15 @@ impl BrowserView {
             poc_environment,
             #[cfg(target_os = "windows")]
             pending_url: None,
+            #[cfg(target_os = "windows")]
+            pending_auto_navigation: None,
             navigation_requested: false,
             current_url: None,
             page_title: None,
             loading: false,
+            navigation_error: None,
+            navigation_automation_pending: false,
+            navigation_automation_cancelled: false,
             can_go_back: false,
             can_go_forward: false,
             address_dirty: false,
@@ -1446,7 +1486,6 @@ impl BrowserView {
         let on_ready = deferred.clone();
         let load_invalidation = self.collaboration.native_invalidation.clone();
         let url_invalidation = self.collaboration.native_invalidation.clone();
-        let focus_invalidation = self.collaboration.native_invalidation.clone();
 
         host::WebviewHost::create(
             parent,
@@ -1455,7 +1494,9 @@ impl BrowserView {
             self.poc_environment.as_ref(),
             host::Callbacks {
                 page_load: Box::new(move |event, url| {
-                    if matches!(event, PageLoad::Started)
+                    // Both a new document and a failed load retire the previous
+                    // document's guard natively; only `Finished` keeps going.
+                    if matches!(event, PageLoad::Started | PageLoad::Failed { .. })
                         && let Some(valid) = load_invalidation.borrow().as_ref()
                     {
                         valid.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1482,18 +1523,11 @@ impl BrowserView {
                 cursor_changed: Box::new(move || {
                     on_cursor.update(|_, cx| cx.notify());
                 }),
-                focus_changed: Box::new(move |focused| {
-                    if focused && let Some(valid) = focus_invalidation.borrow().as_ref() {
-                        valid.store(false, std::sync::atomic::Ordering::SeqCst);
-                    }
-                    on_focus.update(move |this, cx| {
-                        // Native keyboard focus belongs to a human page
-                        // interaction. CDP actions deliberately never MoveFocus.
-                        if focused {
-                            this.revoke_browser_share(cx);
-                        }
-                        cx.notify();
-                    });
+                focus_changed: Box::new(move |_focused| {
+                    // Focus is keyboard ownership, not permission withdrawal.
+                    // Ordinary browsing (including autofocus) keeps the grant;
+                    // only the explicit stop control signals a takeover.
+                    on_focus.update(|_, cx| cx.notify());
                 }),
             },
             Box::new(move |outcome| {
@@ -1513,24 +1547,34 @@ impl BrowserView {
                 if let Some(url) = self.pending_url.take() {
                     self.navigate_to_url(url, cx);
                 }
+                // An agent launch that raced creation waits here too, and is
+                // completed without re-arming the interception flags: a human
+                // takeover during creation must survive into the ready check.
+                #[cfg(target_os = "windows")]
+                if let Some(url) = self.pending_auto_navigation.take() {
+                    self.complete_automation_navigation(url, cx);
+                }
             }
             Err(error) => self.host_error = Some(error),
         }
         cx.notify();
     }
 
-    /// The page navigated within the same document, so only the URL moved.
-    /// Unlike a page load this must not touch `loading` or the title.
+    /// The page navigated within the same document (a router pushing state or an
+    /// anchor), so only the URL moved. Unlike a page load this must not touch
+    /// `loading` or the title. An automatic share refreshes its published URL
+    /// and keeps its grant; a manual one is revoked as before.
     #[cfg(target_os = "windows")]
     fn source_changed(&mut self, url: String, cx: &mut Context<Self>) {
-        // Even a same-URL history/document event invalidates an in-flight
-        // observation. The native callback already retired its capability;
-        // keep the visible share state in agreement with that decision.
-        self.revoke_browser_share(cx);
+        // An automatic share keeps its grant across same-document navigation and
+        // rotates to a fresh guard here; a manual grant is revoked.
+        self.note_source_changed(url.as_str(), cx);
         if url.is_empty() || self.current_url.as_deref() == Some(url.as_str()) {
             return;
         }
         self.current_url = Some(url);
+        // A successful same-document move clears a prior load error.
+        self.navigation_error = None;
         self.refresh_navigation_state();
         self.echo_page_url(cx);
         cx.notify();
@@ -1539,7 +1583,10 @@ impl BrowserView {
     fn page_load_changed(&mut self, event: PageLoad, url: String, cx: &mut Context<Self>) {
         match event {
             PageLoad::Started => {
-                self.revoke_browser_share(cx);
+                // A fresh document invalidates the previous page's guard; an
+                // automatic share keeps its grant through this (guard rotated on
+                // `Finished`), a manual one is revoked.
+                self.note_document_unloading(cx);
                 self.loading = true;
                 // A fresh document invalidates the previous page's title; the
                 // new one arrives via the title observer once known.
@@ -1547,7 +1594,21 @@ impl BrowserView {
                 // Committed navigation supersedes whatever was frozen.
                 self.snapshot = None;
             }
-            PageLoad::Finished => self.loading = false,
+            PageLoad::Finished => {
+                self.loading = false;
+                self.navigation_error = None;
+                self.note_document_ready(url.as_str(), cx);
+            }
+            PageLoad::Failed { web_error } => {
+                // A committed navigation that failed to load records a transient
+                // error and revokes any automatic grant: a failed load is never
+                // shared, and there is no valid document to hand a fresh guard.
+                self.loading = false;
+                self.navigation_error =
+                    Some(format!("The page failed to load (web error {web_error})."));
+                self.navigation_automation_pending = false;
+                self.revoke_browser_share(cx);
+            }
         }
         if !url.is_empty() {
             self.current_url = Some(url);
@@ -1606,12 +1667,21 @@ impl BrowserView {
     }
 
     fn navigate_to_url_with_focus(&mut self, url: String, focus: bool, cx: &mut Context<Self>) {
-        self.revoke_browser_share(cx);
+        // An ordinary navigation clears a prior error; the grant decision
+        // (keep for automatic, revoke for manual) is the collaboration layer's.
+        // It must not clear an explicit stop while an opening receipt is queued.
+        self.note_document_unloading(cx);
+        self.navigation_error = None;
+        self.navigation_automation_pending = false;
         let Some(host) = &self.host else {
             self.pending_url = Some(url);
             return;
         };
         if host.webview.load_url(&url).is_err() {
+            // Record it now: a launcher polling for readiness must not wait out
+            // a timeout over a load that already refused to start.
+            self.navigation_error = Some("The browser could not start loading the page.".into());
+            cx.notify();
             return;
         }
         self.navigation_requested = true;
@@ -1623,6 +1693,97 @@ impl BrowserView {
             self.focus_page(cx);
         }
         cx.notify();
+    }
+
+    /// Open a page on behalf of an agent launcher. Like an ordinary navigation
+    /// but it never takes native focus (no `focus_page`), and it arms the
+    /// automation-open stop state so an explicit takeover during load is
+    /// caught. Returns nothing; the launcher learns the outcome through
+    /// [`browser_ready_for_automation`].
+    pub fn navigate_for_automation(&mut self, url: String, cx: &mut Context<Self>) {
+        self.note_document_unloading(cx);
+        self.navigation_error = None;
+        // A fresh launch arms the wait, clears any prior interception, and mints
+        // a fresh (generational) human-intervention flag. Only this method — a
+        // genuinely new request — resets the cancelled state.
+        self.navigation_automation_pending = true;
+        self.navigation_automation_cancelled = false;
+        self.arm_automation_intervention();
+        if self.host.is_none() {
+            #[cfg(target_os = "windows")]
+            {
+                self.pending_auto_navigation = Some(url);
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                self.pending_url = Some(url);
+            }
+            return;
+        }
+        self.complete_automation_navigation(url, cx);
+    }
+
+    /// Finish an automation navigation whose host already exists, without
+    /// re-arming the interception flags (called both directly and from
+    /// `webview_ready` once the controller lands).
+    fn complete_automation_navigation(&mut self, url: String, cx: &mut Context<Self>) {
+        if self.host.is_none() {
+            #[cfg(target_os = "windows")]
+            {
+                self.pending_auto_navigation = Some(url);
+            }
+            return;
+        }
+        let Some(host) = &self.host else {
+            return;
+        };
+        if host.webview.load_url(&url).is_err() {
+            self.navigation_error = Some("The browser could not open the requested page.".into());
+            self.navigation_automation_pending = false;
+            cx.notify();
+            return;
+        }
+        self.navigation_requested = true;
+        self.loading = true;
+        self.current_url = Some(url);
+        self.address_dirty = false;
+        self.echo_page_url(cx);
+        // No focus_page: an agent launch must not simulate a human takeover.
+        cx.notify();
+    }
+
+    /// Whether the page an agent launcher opened is ready to be shared. Pure
+    /// in-memory read — no I/O. `Ok(true)` a real, loaded HTTP(S) page;
+    /// `Ok(false)` still loading or not yet navigated; `Err(..)` a host failure,
+    /// a failed load, or a cancelled launch — none of which may be shared.
+    pub(crate) fn browser_ready_for_automation(&self) -> Result<bool, String> {
+        if let Some(error) = self.host_error.as_deref() {
+            return Err(error.to_owned());
+        }
+        // Only an explicit stop cancels opening, not native keyboard focus.
+        if self.automation_intervened() {
+            return Err("Browser opening was cancelled by human takeover.".into());
+        }
+        if self.navigation_automation_cancelled {
+            return Err("Browser opening was cancelled by human takeover.".into());
+        }
+        if let Some(error) = self.navigation_error.as_deref() {
+            return Err(error.to_owned());
+        }
+        if self.host.is_none() {
+            return Ok(false);
+        }
+        // The controller existing is not enough: an initial about:blank reports
+        // `loading == false` until a navigation commits, so require a real
+        // navigation that has settled on an HTTP(S) URL.
+        if !self.navigation_requested || self.loading {
+            return Ok(false);
+        }
+        let navigated = self
+            .current_url
+            .as_deref()
+            .is_some_and(|url| url.starts_with("http://") || url.starts_with("https://"));
+        Ok(navigated)
     }
 
     /// Hand the keyboard to the page. `makeFirstResponder` runs responder
@@ -1776,7 +1937,8 @@ impl BrowserView {
     }
 
     fn go_back(&mut self, _cx: &mut Context<Self>) {
-        self.revoke_browser_share(_cx);
+        self.note_document_unloading(_cx);
+        self.navigation_error = None;
         if let Some(host) = &self.host {
             let _ = host.webview.go_back();
             self.refresh_navigation_state();
@@ -1785,7 +1947,8 @@ impl BrowserView {
     }
 
     fn go_forward(&mut self, _cx: &mut Context<Self>) {
-        self.revoke_browser_share(_cx);
+        self.note_document_unloading(_cx);
+        self.navigation_error = None;
         if let Some(host) = &self.host {
             let _ = host.webview.go_forward();
             self.refresh_navigation_state();
@@ -1794,7 +1957,8 @@ impl BrowserView {
     }
 
     fn reload(&mut self, _cx: &mut Context<Self>) {
-        self.revoke_browser_share(_cx);
+        self.note_document_unloading(_cx);
+        self.navigation_error = None;
         if let Some(host) = &self.host
             && self.navigation_requested
         {
@@ -1805,7 +1969,8 @@ impl BrowserView {
     }
 
     fn hard_reload(&mut self, _cx: &mut Context<Self>) {
-        self.revoke_browser_share(_cx);
+        self.note_document_unloading(_cx);
+        self.navigation_error = None;
         #[cfg(target_os = "windows")]
         if let Some(host) = &self.host
             && self.navigation_requested
@@ -1907,13 +2072,14 @@ impl BrowserView {
             }))
     }
 
-    fn render_toolbar(&self, cx: &mut Context<Self>) -> Div {
+    fn render_toolbar(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let has_page = self.navigation_requested;
         let secure = self.current_url.as_deref().is_some_and(is_secure_url);
         let progress = self
             .loading
             .then(|| (self.estimated_progress().clamp(0.04, 1.0) * 1000.0).round() / 1000.0);
+        let collaboration = self.render_collaboration_control(cx);
 
         div()
             .h(px(TOOLBAR_HEIGHT))
@@ -2003,6 +2169,7 @@ impl BrowserView {
                 |this, _, cx| this.open_external(cx),
                 cx,
             ))
+            .when_some(collaboration, |toolbar, control| toolbar.child(control))
     }
 
     fn render_start_page(&self, theme: Theme) -> Div {
@@ -2083,7 +2250,6 @@ impl BrowserView {
     fn forward_page_input(
         host: Rc<WebviewHost>,
         focus: FocusHandle,
-        view: WeakEntity<BrowserView>,
         hitbox: gpui::Hitbox,
         window: &mut Window,
     ) {
@@ -2096,14 +2262,10 @@ impl BrowserView {
         window.on_mouse_event({
             let host = host.clone();
             let hitbox = hitbox.clone();
-            let view = view.clone();
             move |event: &MouseDownEvent, phase, window, cx| {
                 if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
                     return;
                 }
-                // Retire the grant before forwarding human input, including
-                // when the page already has native focus (no focus event).
-                let _ = view.update(cx, |this, cx| this.revoke_browser_share(cx));
                 // Both focus systems move together: clicking the page is
                 // how the user says the keyboard belongs to it now, and
                 // whatever held GPUI focus — the address bar, the composer —
@@ -2153,9 +2315,8 @@ impl BrowserView {
             }
         });
 
-        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, cx| {
+        window.on_mouse_event(move |event: &ScrollWheelEvent, phase, window, _| {
             if phase == DispatchPhase::Bubble && hitbox.should_handle_scroll(window) {
-                let _ = view.update(cx, |this, cx| this.revoke_browser_share(cx));
                 host.scroll(event.position, event.delta, event.modifiers);
             }
         });
@@ -2168,14 +2329,12 @@ impl BrowserView {
     /// only while a fallback snapshot is still being captured. The panel's
     /// resize handle keeps itself entirely left of this area, so the page owns
     /// the full width.
-    fn render_page_area(&self, theme: Theme, cx: &Context<Self>) -> Div {
+    fn render_page_area(&self, theme: Theme, _cx: &Context<Self>) -> Div {
         let host = self.host.clone();
         #[cfg(target_os = "windows")]
         let input = self.host.clone();
         #[cfg(target_os = "windows")]
         let focus = self.focus_handle.clone();
-        #[cfg(target_os = "windows")]
-        let view = cx.entity().downgrade();
         div()
             .flex_1()
             .min_h_0()
@@ -2196,7 +2355,7 @@ impl BrowserView {
                     move |_, _hitbox, _window, _| {
                         #[cfg(target_os = "windows")]
                         if let Some(host) = input {
-                            Self::forward_page_input(host, focus, view, _hitbox, _window);
+                            Self::forward_page_input(host, focus, _hitbox, _window);
                         }
                     },
                 )
@@ -2218,10 +2377,16 @@ impl BrowserView {
 }
 
 /// Distilled page-load event, so handler closures stay free of WebView2 types.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum PageLoad {
     Started,
     Finished,
+    /// A committed navigation that failed to load (network/TLS/DNS). The page
+    /// shows WebView2's own error view; this carries the raw web-error status so
+    /// the surface can surface a real failure instead of a false success.
+    Failed {
+        web_error: i32,
+    },
 }
 impl Focusable for BrowserView {
     fn focus_handle(&self, _: &App) -> FocusHandle {

@@ -13,6 +13,15 @@
  * - a publish that is refused while the UI still claims the pages are shared;
  * - a run whose build eats its own budget, hangs, leaks a token into a report,
  *   kills a process it does not own, or reports a pass it did not earn.
+ * - a full-access native adapter still awaiting every approval, no-id controls
+ *   lacking refs, stale refs clicking a replacement, navigation breaking the
+ *   automatic grant, or downgrading to manual mode leaving automatic authority;
+ * - a human focusing, scrolling or clicking a shared page withdrawing the
+ *   grant that only the explicit stop owns, and an explicit take-over that
+ *   leaves a live lease behind;
+ * - a covered, wrapped or taller-than-viewport target clicked through a DOM
+ *   click, refused when a real box of it is reachable, or measured while the
+ *   page's own smooth scroll is still moving.
  *
  * Playwright performs fixture setup, DOM reads and page counting only. Every
  * action under test is performed by the daemon's reverse RPC into the GUI's
@@ -81,7 +90,8 @@ type BrowserAction =
   | { kind: 'snapshot' }
   | { kind: 'click'; selector: string }
   | { kind: 'fill'; selector: string; text: string }
-  | { kind: 'navigate'; url: string };
+  | { kind: 'navigate'; url: string }
+  | { kind: 'scroll'; deltaY: number };
 /** The wire shape of `BrowserResult`: tagged by `kind`, never `status`. */
 type InvokeOutcome = { kind: 'ok'; value: unknown } | { kind: 'error'; message: string };
 
@@ -95,7 +105,7 @@ type HostState = {
   browserShares: Array<{ page: PageId; scope: Scope; url: string; title: string }>;
   pendingBrowserRequests: Array<{ page: PageId; requestId: string; action: string; detail: string }>;
   bridge: { configured: boolean; connected: boolean; sessionId: string | null; runtimeId: string | null; error: string | null } | null;
-  pages: Array<{ id: PageId; ready: boolean; url: string | null; title: string | null; nativeFocused: boolean; nativeFocusGains: number; error: string | null }>;
+  pages: Array<{ id: PageId; ready: boolean; loading: boolean; url: string | null; title: string | null; nativeFocused: boolean; nativeFocusGains: number; error: string | null }>;
 };
 
 let example: ChildProcess | undefined;
@@ -176,7 +186,7 @@ async function control(action: string, extra: Record<string, string | undefined>
   await writeFile(`${path}.tmp`, JSON.stringify({ requestId, action, ...extra }));
   await rename(`${path}.tmp`, path);
   await poll(`Host ${action}`, requireState, value => value.lastControlId === requestId);
-  if (action === 'share-page' && extra.grantId && client) {
+  if (['share-page', 'share-automatic-page'].includes(action) && extra.grantId && client) {
     await poll('the daemon accepted the explicit share', async () => {
       const result = await client!.request(sessionId, extra.runtimeId ?? activeRuntimeId, { type: 'browserList' });
       return result.payload?.value as Array<{scope: Scope}>;
@@ -489,7 +499,9 @@ try {
     const textarea = document.createElement('textarea');
     textarea.id = 'e2e-textarea'; textarea.value = textareaValue;
     textarea.textContent = textareaValue;
-    document.body.append(textarea);
+     const label = document.createElement('label');
+     label.append('Safe textarea label ', textarea);
+     document.body.append(label);
     const long = document.createElement('p');
     long.id = 'e2e-long'; long.textContent = longText;
     document.body.append(long);
@@ -552,8 +564,8 @@ try {
     assert.equal(listed[0]!.scope.pageId, pageIds.get('alpha'));
     assert.equal(listed[0]!.scope.sessionId, sessionId);
     assert.equal(listed[0]!.url, `${origin}/page/alpha?run=${runId}`);
-    // The collaboration bar takes layout space; the fixture's own controls must
-    // stay visible and inside the viewport, or later clicks target nothing.
+    // Sharing must leave the fixture's controls visible and within the real
+    // page viewport; idle sharing no longer adds a second status row.
     const bounds = await pages.alpha!.evaluate(() => {
       const read = (selector: string) => {
         const element = document.querySelector(selector);
@@ -568,7 +580,7 @@ try {
     // Sharing is an explicit human action: it keeps native typing where it is
     // instead of stealing the keyboard for the agent.
     await expectNoFocusChange(focusBeforeShare, 'sharing a page');
-    return 'One lease, one page, exact scope; the bar shrank the viewport and the controls stayed visible.';
+    return 'One lease, one page, exact scope; the controls stayed visible and native keyboard ownership did not change.';
   });
 
   await check('a snapshot carries no input values, cookies or unbounded page', async () => {
@@ -903,6 +915,241 @@ try {
     assert.equal(live.kind, 'ok', JSON.stringify(live));
     return 'The replaced runtime revoked the old grant, and a fresh share works under the new runtime.';
   });
+
+  // Adapter-only behavior in the isolated PoC host. This deliberately does
+  // not claim to test the complete product's FullAccess picker or open button.
+  let automaticScope: Scope;
+  let previousRef = '';
+  type NativeSnapshot = { controls: Array<{ name: string; ref?: string; selector: string }> };
+  const automaticSnapshot = async (): Promise<NativeSnapshot> => {
+    const outcome = await invoke(automaticScope, {kind:'snapshot'});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    return (outcome as {kind:'ok'; value: NativeSnapshot}).value;
+  };
+  const findRef = (snapshot: NativeSnapshot, name: string): string => {
+    const element = snapshot.controls.find(control => control.name === name);
+    assert(element && element.selector.startsWith('ref:'), `No observed reference for ${name}`);
+    return element.selector;
+  };
+  const noIdCount = () => pages.gamma!.locator('[data-automation="no-id-value"]').textContent();
+
+  await check('automatic sharing clicks a no-id target without a per-action approval', async () => {
+    const grantId = randomUUID();
+    await control('share-automatic-page', {pageId:'gamma', grantId, runtimeId:activeRuntimeId});
+    automaticScope = scopeFor('gamma', grantId);
+    previousRef = findRef(await automaticSnapshot(), 'no id count');
+    const countBefore = Number(await noIdCount());
+    const outcome = await invoke(automaticScope, {kind:'click', selector:previousRef});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    await poll('the no-id button was clicked once', noIdCount, value => Number(value) === countBefore + 1);
+    assert.equal((await requireState()).pendingBrowserRequests.length, 0);
+    assert.equal(await pages.gamma!.evaluate(() => (window as any).automationEvents.clickTrusted), true);
+    return 'An observed no-id element ref produced exactly one trusted click with no approval command.';
+  });
+
+  await check('a stale observation reference cannot target a replacement', async () => {
+    await automaticSnapshot();
+    const before = await noIdCount();
+    const outcome = await invoke(automaticScope, {kind:'click', selector:previousRef});
+    assert.equal(outcome.kind, 'error', JSON.stringify(outcome));
+    assert.match((outcome as {kind:'error';message:string}).message, /ref|stale|snapshot|observ/i);
+    assert.equal(await noIdCount(), before);
+    return 'Refreshing observation expired the prior ref; the stale action made no DOM change.';
+  });
+
+  await check('automatic input uses a no-id ref and trusted input', async () => {
+    const selector = findRef(await automaticSnapshot(), 'no id input');
+    const text = `automatic-${runId}`;
+    const outcome = await invoke(automaticScope, {kind:'fill', selector, text});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    await poll('the no-id input received text', () => pages.gamma!.locator('[data-automation="no-id-input-value"]').textContent(), value => value === text);
+    assert.equal(await pages.gamma!.evaluate(() => (window as any).automationEvents.inputTrusted), true);
+    assert.equal((await requireState()).pendingBrowserRequests.length, 0);
+  });
+
+  await check('automatic scrolling moves the viewport without approval', async () => {
+    const before = await pages.gamma!.evaluate(() => scrollY);
+    const outcome = await invoke(automaticScope, {kind:'scroll', deltaY:700});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    await poll('the viewport scrolled', () => pages.gamma!.evaluate(() => scrollY), value => value > before);
+    assert.equal((await requireState()).pendingBrowserRequests.length, 0);
+  });
+
+  await check('an observed below-fold control can be scrolled to and clicked once', async () => {
+    const selector = findRef(await automaticSnapshot(), 'below fold');
+    const before = await focusGains();
+    const outcome = await invoke(automaticScope, {kind:'click', selector});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    await poll('the below-fold click was trusted', () => pages.gamma!.evaluate(() => (window as any).automationEvents.belowFoldTrusted), value => value === true);
+    await expectNoFocusChange(before, 'the automatic scroll-to-target click');
+  });
+
+  await check('a wrapped inline link is clicked on its own line, not the blank center of its rect', async () => {
+    // The link spans two lines, so the center of its bounding rect falls in the
+    // blank space between them; only a real client box of the link lands there.
+    const selector = findRef(await automaticSnapshot(), 'wrapped link');
+    const before = await focusGains();
+    const outcome = await invoke(automaticScope, {kind:'click', selector});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    await poll('the wrapped link received the click on its own line', () => pages.gamma!.locator('#wrapped-link-result').textContent(), value => value === 'clicked');
+    assert.equal(await pages.gamma!.evaluate(() => (window as any).automationEvents.wrappedTrusted), true);
+    await expectNoFocusChange(before, 'the wrapped-link click');
+    return 'The observed wrapped link was clicked once, as trusted input, on a real line of its inline box.';
+  });
+
+  await check('a control taller than the viewport is clicked by its visible center', async () => {
+    const selector = findRef(await automaticSnapshot(), 'tall card');
+    const before = await focusGains();
+    const outcome = await invoke(automaticScope, {kind:'click', selector});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    await poll('the tall control received the click', () => pages.gamma!.locator('#tall-card-result').textContent(), value => value === 'clicked');
+    assert.equal(await pages.gamma!.evaluate(() => (window as any).automationEvents.tallTrusted), true);
+    await expectNoFocusChange(before, 'the tall-control click');
+    return 'A control taller than the viewport was clicked once at a point that hit-tests to it, without demanding its whole rect on screen.';
+  });
+
+  await check('a wrapped bottom link is clicked on a line the sticky header does not cover', async () => {
+    // The link is taller than the viewport and its first lines sit under the
+    // sticky header; a clear line must be chosen instead of the union middle.
+    const selector = findRef(await automaticSnapshot(), 'bottom wrapped link');
+    const outcome = await invoke(automaticScope, {kind:'click', selector});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    await poll('the bottom wrapped link received the click on a visible line', () => pages.gamma!.locator('#bottom-link-result').textContent(), value => value === 'clicked');
+    assert.equal(await pages.gamma!.evaluate(() => (window as any).automationEvents.bottomTrusted), true);
+    return 'The bottom link was clicked once on a clear line of its inline box, not refused for the lines the sticky header covers.';
+  });
+
+  await check('a covered target stays refused by the native hit test and the control is untouched', async () => {
+    const selector = findRef(await automaticSnapshot(), 'blocked');
+    const before = await noIdCount();
+    const outcome = await invoke(automaticScope, {kind:'click', selector});
+    assert.equal(outcome.kind, 'error', JSON.stringify(outcome));
+    assert.match((outcome as {kind:'error';message:string}).message, /covers|covered|occluded/i);
+    assert.equal(await pages.gamma!.locator('#blocked-result').textContent(), 'not-clicked');
+    assert.equal(await noIdCount(), before);
+    assert.equal((await requireState()).pendingBrowserRequests.length, 0);
+    return 'The covering overlay kept the target refused; no synthetic DOM click bypassed the real hit test.';
+  });
+
+  await check('a viewport that keeps moving is refused without issuing a click', async () => {
+    const selector = findRef(await automaticSnapshot(), 'no id count');
+    const before = await noIdCount();
+    const timer = await pages.gamma!.evaluate(() => {
+      let top = 100;
+      return window.setInterval(() => {
+        top += 4;
+        window.scrollTo({top, behavior:'instant'});
+      }, 8);
+    });
+    try {
+      const outcome = await invoke(automaticScope, {kind:'click', selector});
+      assert.equal(outcome.kind, 'error', JSON.stringify(outcome));
+      assert.match((outcome as {kind:'error';message:string}).message, /scrolling did not settle/i);
+      assert.equal(await noIdCount(), before);
+      assert.equal((await requireState()).pendingBrowserRequests.length, 0);
+      return 'Continuous viewport movement exceeded the bounded settle wait; no mouse input was dispatched.';
+    } finally {
+      await pages.gamma!.evaluate(id => window.clearInterval(id), timer);
+    }
+  });
+
+  await check('automatic navigation retains the tab grant but expires document refs', async () => {
+    const old = findRef(await automaticSnapshot(), 'no id count');
+    const target = `${origin}/page/gamma?run=${runId}&stage=automatic`;
+    const navigation = await invoke(automaticScope, {kind:'navigate', url:target});
+    assert.equal(navigation.kind, 'ok', JSON.stringify(navigation));
+    // Model-like sequencing: observe immediately after the dispatch result,
+    // without the runner first waiting for browser lifecycle events to settle.
+    const current = await automaticSnapshot();
+    await poll('the automatic page navigated', async () => pages.gamma!.url(), value => value === target);
+    await poll('the native automatic page finished loading', requireState, value => value.pages.some(page => page.id === 'gamma' && page.ready && !page.loading && page.url === target));
+    assert((await requireState()).browserShares.some(share => share.scope.grantId === automaticScope.grantId));
+    const stale = await invoke(automaticScope, {kind:'click', selector:old});
+    assert.equal(stale.kind, 'error', JSON.stringify(stale));
+    assert.equal(await noIdCount(), '0');
+    const click = await invoke(automaticScope, {kind:'click', selector:findRef(current, 'no id count')});
+    assert.equal(click.kind, 'ok', JSON.stringify(click));
+    await poll('the new document remains operable', noIdCount, value => value === '1');
+  });
+
+  await check('clicking an observed link acknowledges dispatch across document replacement', async () => {
+    const current = await automaticSnapshot();
+    const selector = findRef(current, 'no id navigation link');
+    const outcome = await invoke(automaticScope, {kind:'click', selector});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    assert.equal((outcome as {kind:'ok';value:{issued:boolean}}).value.issued, true);
+    const target = `${origin}/page/gamma?run=${runId}&stage=clicked-link`;
+    await poll('the clicked link replaced the document', requireState, value => value.pages.some(page => page.id === 'gamma' && !page.loading && page.url === target));
+    const snapshot = await automaticSnapshot();
+    assert((await requireState()).browserShares.some(share => share.scope.grantId === automaticScope.grantId));
+    const stale = await invoke(automaticScope, {kind:'click', selector});
+    assert.equal(stale.kind, 'error', JSON.stringify(stale));
+    const click = await invoke(automaticScope, {kind:'click', selector:findRef(snapshot, 'no id count')});
+    assert.equal(click.kind, 'ok', JSON.stringify(click));
+    await poll('the linked document remains operable', noIdCount, value => value === '1');
+  });
+
+  await check('downgrading automatic sharing revokes its permission immediately', async () => {
+    const before = await noIdCount();
+    await control('manual-browser-mode', {pageId:'gamma'});
+    const outcome = await invoke(automaticScope, {kind:'click', selector:'#count'});
+    assert.equal(outcome.kind, 'error', JSON.stringify(outcome));
+    assert.equal(await noIdCount(), before);
+    assert((await requireState()).browserShares.every(share => share.scope.grantId !== automaticScope.grantId));
+  });
+
+  await check('a human focusing an automatic page keeps the share and the page stays operable', async () => {
+    // Ordinary native focus is not a takeover: only the explicit stop command
+    // withdraws the grant, so the scope must survive it and keep working.
+    const grantId = randomUUID();
+    await control('share-automatic-page', {pageId:'gamma', grantId, runtimeId:activeRuntimeId});
+    automaticScope = scopeFor('gamma', grantId);
+    const selector = findRef(await automaticSnapshot(), 'no id count');
+    const before = await noIdCount();
+    await control('focus-page', {pageId:'gamma'});
+    await poll('the focus left the share in place', requireState, value => value.browserShares.some(share => share.scope.grantId === grantId), 15_000);
+    const outcome = await invoke(automaticScope, {kind:'click', selector});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    await poll('the automatic click still landed after focus', noIdCount, value => Number(value) === Number(before) + 1);
+    assert.equal(await pages.gamma!.evaluate(() => (window as any).automationEvents.clickTrusted), true);
+    assert.equal((await requireState()).pendingBrowserRequests.length, 0);
+    return 'Ordinary native focus did not withdraw the grant: the scope stayed shared and the next automatic click still ran once.';
+  });
+
+  await check('ordinary human wheel and click input keeps the automatic share', async () => {
+    // A person scrolling and clicking the page is not a takeover either.
+    // Playwright only produces the human input here; every action under test
+    // still goes through the daemon into the native adapter.
+    const scrollBefore = await pages.gamma!.evaluate(() => scrollY);
+    await pages.gamma!.mouse.move(4, 4);
+    await pages.gamma!.mouse.wheel(0, 300);
+    await poll('the human wheel scrolled the page', () => pages.gamma!.evaluate(() => scrollY), value => value > scrollBefore, 5_000);
+    const header = await pages.gamma!.locator('.site-head').boundingBox();
+    assert(header, 'the fixture header is laid out');
+    await pages.gamma!.mouse.click(header.x + header.width / 2, header.y + header.height / 2);
+    await Bun.sleep(400);
+    await poll('human input kept the share', requireState, value => value.browserShares.some(share => share.scope.grantId === automaticScope.grantId), 15_000);
+    const selector = findRef(await automaticSnapshot(), 'no id count');
+    const before = await noIdCount();
+    const outcome = await invoke(automaticScope, {kind:'click', selector});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    await poll('the daemon click still landed after human input', noIdCount, value => Number(value) === Number(before) + 1);
+    assert.equal(await pages.gamma!.evaluate(() => (window as any).automationEvents.clickTrusted), true);
+    return 'A real wheel scroll and a real click by the person left the grant in place; the next daemon action still executed once.';
+  });
+
+  await check('the explicit take-over revokes the share and later actions are refused', async () => {
+    // The one sanctioned stop: the same command the browser toolbar drives.
+    const grant = automaticScope.grantId;
+    const before = await noIdCount();
+    await control('take-over-page', {pageId:'gamma'});
+    await poll('the take-over withdrew the share', requireState, value => !value.browserShares.some(share => share.scope.grantId === grant) && value.pendingBrowserRequests.length === 0, 15_000);
+    const outcome = await invoke(automaticScope, {kind:'click', selector:'#count'});
+    assert.equal(outcome.kind, 'error', JSON.stringify(outcome));
+    assert.match((outcome as {kind:'error';message:string}).message, /revok|share|expired|no longer/i);
+    assert.equal(await noIdCount(), before, 'the revoked grant cannot mutate');
+    return 'The explicit stop withdrew the grant, and a later action on the old scope was refused without being retried.';
+  });
 } catch (error) {
   // Never surface the ready line here: it carries the bearer token.
   report.errors.push(error instanceof Error ? error.stack ?? error.message : String(error));
@@ -967,7 +1214,7 @@ try {
   }
   if (interrupted && !report.errors.includes('E2E interrupted.')) report.errors.push('E2E interrupted.');
   report.finishedAt = new Date().toISOString();
-  if (report.checks.length !== 21) report.errors.push(`Expected 21 behavior checks; ran ${report.checks.length}.`);
+  if (report.checks.length !== 37) report.errors.push(`Expected 37 behavior checks; ran ${report.checks.length}.`);
   report.status = report.errors.length || report.checks.some(check => check.status === 'failed')
     || report.cleanup.some(step => step.status === 'failed') ? 'failed' : 'passed';
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2));

@@ -19,6 +19,16 @@
  * - console/network: #debug fires console.error('fintwind-poc-console') and a
  *   deliberately 404ing fetch('/missing-resource') that is never awaited, so a
  *   missing rejection handler would surface as an unhandled rejection.
+ * - automation targets: no-id controls and a below-fold no-id button expose
+ *   missing element refs, stale refs, continuous navigation and scroll gaps.
+ * - clicking: the page sets `scroll-behavior:smooth` on html like the real
+ *   site, so a scrolled-to target is still moving when its coordinates are
+ *   measured; a wrapped inline link's bounding-rect center falls between its
+ *   lines; a control taller than the viewport never fits its whole rect on
+ *   screen; a sticky header covers the top lines of the bottom link; and a
+ *   covered target must stay refused instead of being clicked through a DOM
+ *   click. None of these may be taken from CSS alone - only the real WebView2
+ *   run proves the shipped locate script picks a real box of the target.
  *
  * Hardening: exact route matching, UUID-validated runIds, fixed pageIds, HTML
  * escaping, no-store HTML, no cookies set (cookie presence read-only, never
@@ -90,15 +100,23 @@ function pageHtml(pageId: PageId, runId: string, frameOrigin: string): string {
   const safePageId = escapeHtml(pageId);
   const safeRun = escapeHtml(runId);
   const safeFrame = escapeHtml(frameOrigin);
+  // An even number of short lines: a two-line inline element's union rect has
+  // its center in the blank space between the lines, and a sixty-line link is
+  // taller than any viewport, so neither can be clicked by its rect's middle.
+  const bottomLinkLines = Array.from({ length: 60 }, (_, index) => `bottom link ${index + 1}<br>`).join('');
   return `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Fintwind PoC ${safePageId}</title>
 <style>
 #overlay-wrap { position: relative; display: inline-block; }
 #overlay { position: absolute; inset: 0; background: ButtonFace; }
+html { scroll-behavior: smooth; }
+.site-head { position: sticky; top: 0; z-index: 5; height: 72px; display: flex; align-items: center; padding: 0 12px; background: ButtonFace; border-bottom: 1px solid ButtonBorder; }
+.narrow { max-width: 200px; line-height: 1.6; }
 </style>
 </head>
 <body data-page-id="${safePageId}">
+<div class="site-head" aria-hidden="true">shared site header</div>
 <button id="count" type="button">count</button> <span id="count-value" data-count="0">0</span>
 <input id="name" type="text" /> <span id="name-value"></span>
 <button id="show-delayed" type="button">show delayed</button> <button id="delayed" type="button" hidden>delayed</button> <span id="delayed-result">not-clicked</span>
@@ -108,11 +126,50 @@ function pageHtml(pageId: PageId, runId: string, frameOrigin: string): string {
 <a id="route" href="#routed">route</a> <a id="popup" href="/popup?run=${safeRun}" target="_blank">popup</a>
 <button id="debug" type="button">debug</button> <span id="cookie-present">false</span>
 <iframe title="Cross-origin fixture" src="${safeFrame}/frame?run=${safeRun}"></iframe>
+<button type="button" data-automation="no-id-count">no id count</button>
+<output data-automation="no-id-value">0</output>
+<input type="text" aria-label="no id input" data-automation="no-id-input" />
+<output data-automation="no-id-input-value"></output>
+<a href="/page/${pageId}?run=${safeRun}&stage=clicked-link" data-automation="no-id-link">no id navigation link</a>
+<p class="narrow"><a href="#wrapped-link" aria-label="wrapped link" data-automation="wrapped-link">wrapped link one<br>wrapped link two</a></p>
+<span id="wrapped-link-result">not-clicked</span>
+<div style="margin-top:1300px"><button type="button" data-automation="below-fold">below fold</button></div>
+<button type="button" data-automation="tall-card" style="height:160vh">tall card</button>
+<span id="tall-card-result">not-clicked</span>
+<p class="narrow"><a href="#bottom-link" aria-label="bottom wrapped link" data-automation="bottom-link">${bottomLinkLines}</a></p>
+<span id="bottom-link-result">not-clicked</span>
 <script>
 (function () {
   var pageId = document.body.getAttribute("data-page-id") || "";
   var count = 0;
-  window.pocEvents = { clickTrusted: false, inputTrusted: false };
+   window.pocEvents = { clickTrusted: false, inputTrusted: false };
+   window.automationEvents = { clickTrusted: false, inputTrusted: false, belowFoldTrusted: false, wrappedTrusted: false, tallTrusted: false, bottomTrusted: false };
+   document.querySelector('[data-automation="no-id-count"]').addEventListener('click', function(event) {
+     var value=document.querySelector('[data-automation="no-id-value"]');
+     value.textContent=String(Number(value.textContent)+1);
+     window.automationEvents.clickTrusted=event.isTrusted;
+   });
+   document.querySelector('[data-automation="no-id-input"]').addEventListener('input', function(event) {
+     document.querySelector('[data-automation="no-id-input-value"]').textContent=event.target.value;
+     window.automationEvents.inputTrusted=event.isTrusted;
+   });
+   document.querySelector('[data-automation="below-fold"]').addEventListener('click', function(event) {
+     window.automationEvents.belowFoldTrusted=event.isTrusted;
+   });
+   document.querySelector('[data-automation="wrapped-link"]').addEventListener('click', function(event) {
+     event.preventDefault();
+     setText('wrapped-link-result','clicked');
+     window.automationEvents.wrappedTrusted=event.isTrusted;
+   });
+   document.querySelector('[data-automation="tall-card"]').addEventListener('click', function(event) {
+     setText('tall-card-result','clicked');
+     window.automationEvents.tallTrusted=event.isTrusted;
+   });
+   document.querySelector('[data-automation="bottom-link"]').addEventListener('click', function(event) {
+     event.preventDefault();
+     setText('bottom-link-result','clicked');
+     window.automationEvents.bottomTrusted=event.isTrusted;
+   });
   function byId(id) { return document.getElementById(id); }
   function setText(id, text) { var el = byId(id); if (el) { el.textContent = text; } }
   byId("count").addEventListener("click", function (event) {

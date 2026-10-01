@@ -17,7 +17,10 @@ use crate::skills::SkillsCatalog;
 use crate::usage::PlanUsage;
 use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 
-pub const PROTOCOL_VERSION: u32 = 8;
+/// Desktop protocol version. Bumped when the `ClientMessage` or
+/// `ServerMessage` grammar changes; the handshake refuses a mismatch in
+/// either direction, so an old client and a new daemon never half-speak.
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes
@@ -62,6 +65,15 @@ pub enum ClientMessage {
     /// and dies with the connection or the runtime.
     BrowserPublish {
         pages: Vec<BrowserShare>,
+    },
+    /// Register — or clear, with `None` — this connection's browser launcher
+    /// capability for one live session runtime. The scope's page and grant
+    /// ids are launcher identities, not a real tab: they never appear in any
+    /// page list, and only [`crate::browser::BrowserAction::Open`] is routed
+    /// to them. A refusal is answered with
+    /// [`ServerMessage::BrowserShareRejected`] carrying the attempted scope.
+    BrowserHost {
+        scope: Option<BrowserScope>,
     },
     /// Answer a daemon-delivered [`ServerMessage::BrowserRequest`]. Only the
     /// connection that owns the published page may answer it.
@@ -466,7 +478,8 @@ pub enum ServerMessage {
     /// The daemon refused a page publish. Carries the attempted scopes so the
     /// GUI can drop exactly the grants the daemon did not accept. This is
     /// not a generic rejection channel: it is sent only for a refused
-    /// `ClientMessage::BrowserPublish`.
+    /// `ClientMessage::BrowserPublish` or a refused
+    /// `ClientMessage::BrowserHost`.
     BrowserShareRejected {
         scopes: Vec<BrowserScope>,
         message: String,
@@ -714,7 +727,7 @@ mod tests {
 
         assert_eq!(json["type"], "forkSessionFromResponse");
         assert_eq!(json["turnCount"], 7);
-        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(PROTOCOL_VERSION, 9);
     }
 
     #[test]
@@ -732,7 +745,7 @@ mod tests {
 
         assert_eq!(json["type"], "rewindSessionToMessage");
         assert_eq!(json["turnCount"], 4);
-        assert_eq!(PROTOCOL_VERSION, 8);
+        assert_eq!(PROTOCOL_VERSION, 9);
     }
 
     #[test]

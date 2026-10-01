@@ -26,6 +26,13 @@
 //! - **Cancelled-before-start**: a cancel that arrives before its invoke has
 //!   registered (the caller gave up immediately) is remembered as a
 //!   tombstone, so the late invoke refuses instead of executing.
+//! - **Wrong launcher**: opening a tab is a launcher-only action. It is
+//!   routed exclusively to the one connection that registered a launcher for
+//!   the live session runtime, never to a page grant and never to a launcher
+//!   of another session. Two launchers for one session runtime are an
+//!   ambiguity the broker refuses instead of guessing, and a launcher that
+//!   disappears mid-request fails its pending open instead of letting it
+//!   complete against a capability that no longer exists.
 //!
 //! All state transitions happen under one mutex. Channel sends are
 //! non-blocking (unbounded crossbeam senders), so holding the lock across a
@@ -52,6 +59,9 @@ pub const MAX_BROWSER_PUBLICATIONS: usize = 256;
 pub const MAX_BROWSER_PENDING_PER_SCOPE: usize = 1;
 /// Global bound on in-flight actions.
 pub const MAX_BROWSER_PENDING_REQUESTS: usize = 64;
+/// Global bound on registered launchers, one per live connection at most, so
+/// a crowd of connections cannot grow the broker through launchers either.
+pub const MAX_BROWSER_HOSTS: usize = MAX_BROWSER_PUBLICATIONS;
 /// Requestor RPC ids remembered per live connection. Ids are never evicted:
 /// a full set rejects new requests from that connection until it closes, so
 /// an id can never come back around for a second execution.
@@ -76,6 +86,16 @@ struct Publication {
     outgoing: Sender<ServerMessage>,
 }
 
+/// A connection-level launcher capability for one live session runtime. The
+/// scope's page and grant ids are launcher identities, not a real tab: this
+/// is deliberately not a `BrowserShare`, so a launcher can never be listed,
+/// addressed by a page action, or mistaken for a shared page.
+struct HostPublication {
+    scope: BrowserScope,
+    subscriber_id: u64,
+    outgoing: Sender<ServerMessage>,
+}
+
 struct PendingRequest {
     /// The internal id the GUI sees; the invoking RPC keeps its own
     /// `request_id`, recorded below so results and cancels map back.
@@ -85,12 +105,20 @@ struct PendingRequest {
     requestor_subscriber_id: u64,
     requestor_request_id: Uuid,
     scope: BrowserScope,
+    /// Whether this request is an `Open` routed to a launcher. Only an open
+    /// is answered while a host — not a page publication — still covers its
+    /// scope.
+    opening: bool,
     respond: Sender<BrowserResult>,
 }
 
 #[derive(Default)]
 struct BrokerState {
+    connected_callers: HashSet<u64>,
     publications: Vec<Publication>,
+    /// Registered launchers, at most one per connection. Never listed, never
+    /// routed a page action: only `Open` resolves through here.
+    hosts: Vec<HostPublication>,
     pending: Vec<PendingRequest>,
     /// session -> active runtime, mirrored from the server's runtime map.
     active_runtimes: HashMap<Uuid, Uuid>,
@@ -113,6 +141,9 @@ pub(crate) struct BrowserBroker {
 }
 
 impl BrowserBroker {
+    pub(crate) fn register_connection(&self, connection: u64) {
+        self.state.lock().connected_callers.insert(connection);
+    }
     pub(crate) fn new() -> Self {
         Self {
             state: Mutex::new(BrokerState::default()),
@@ -149,27 +180,46 @@ impl BrowserBroker {
     /// `runtime_id` (`None` revokes the whole session), tell each affected
     /// owner once, and fail the session's in-flight requests. Scopes are
     /// matched exactly, so a later re-share under a new grant is a different
-    /// scope and survives.
+    /// scope and survives. Launchers are revoked the same way: a launcher of
+    /// a replaced runtime loses its capability and its pending opens fail.
     fn purge_stale_scopes(state: &mut BrokerState, session_id: Uuid, runtime_id: Option<Uuid>) {
         let is_stale = |scope: &BrowserScope| {
             scope.session_id == session_id
                 && !runtime_id.is_some_and(|runtime| runtime == scope.runtime_id)
         };
         // One revocation notice per owner, deduplicated: a scope that had a
-        // page and an in-flight request is reported once.
+        // page, a launcher and an in-flight request is reported once.
         let mut revoked_per_owner: HashMap<u64, Vec<BrowserScope>> = HashMap::new();
+        let remember = |revoked: &mut HashMap<u64, Vec<BrowserScope>>,
+                        owner_subscriber_id: u64,
+                        scope: BrowserScope| {
+            let entry = revoked.entry(owner_subscriber_id).or_default();
+            if !entry.contains(&scope) {
+                entry.push(scope);
+            }
+        };
         let mut kept = Vec::with_capacity(state.publications.len());
         for publication in std::mem::take(&mut state.publications) {
             if is_stale(&publication.share.scope) {
-                revoked_per_owner
-                    .entry(publication.subscriber_id)
-                    .or_default()
-                    .push(publication.share.scope);
+                remember(
+                    &mut revoked_per_owner,
+                    publication.subscriber_id,
+                    publication.share.scope,
+                );
             } else {
                 kept.push(publication);
             }
         }
         state.publications = kept;
+        let mut kept_hosts = Vec::with_capacity(state.hosts.len());
+        for host in std::mem::take(&mut state.hosts) {
+            if is_stale(&host.scope) {
+                remember(&mut revoked_per_owner, host.subscriber_id, host.scope);
+            } else {
+                kept_hosts.push(host);
+            }
+        }
+        state.hosts = kept_hosts;
         let mut index = 0;
         while index < state.pending.len() {
             if is_stale(&state.pending[index].scope) {
@@ -274,11 +324,21 @@ impl BrowserBroker {
                 );
             }
         }
-        // The new set becomes this connection's current scopes. Anything
-        // still pending for a scope it no longer covers is cancelled: the
-        // GUI is told to stop acting, and the invoker gets an error.
-        let current_scopes: Vec<BrowserScope> =
+        // The new set becomes this connection's current page scopes. Its
+        // launcher scope — if it registered one — is covered too: publishing
+        // pages must never cancel a pending open that was routed to the
+        // launcher. Anything still pending for a scope this connection no
+        // longer covers at all is cancelled: the GUI is told to stop acting,
+        // and the invoker gets an error.
+        let mut current_scopes: Vec<BrowserScope> =
             pages.iter().map(|page| page.scope.clone()).collect();
+        if let Some(host) = state
+            .hosts
+            .iter()
+            .find(|host| host.subscriber_id == subscriber_id)
+        {
+            current_scopes.push(host.scope.clone());
+        }
         state
             .publications
             .retain(|publication| publication.subscriber_id != subscriber_id);
@@ -319,22 +379,137 @@ impl BrowserBroker {
         }
     }
 
+    /// Register, replace or clear this connection's browser launcher
+    /// capability.
+    ///
+    /// `scope` of `Some` installs (or replaces) the launcher for one live
+    /// session runtime. The scope carries fresh page and grant ids that are
+    /// launcher identities, never a real tab, so registering one neither
+    /// creates nor touches a page publication. A registration that would
+    /// leave two connections holding a launcher for the same session runtime
+    /// is refused: the target of an open would be ambiguous, and this broker
+    /// never guesses. A `None` scope clears the connection's launcher and
+    /// fails its pending opens without disturbing its page publications.
+    pub(crate) fn register_host(
+        &self,
+        subscriber_id: u64,
+        scope: Option<BrowserScope>,
+        outgoing: Sender<ServerMessage>,
+    ) -> anyhow::Result<()> {
+        let Some(scope) = scope else {
+            let mut state = self.state.lock();
+            let Some(index) = state
+                .hosts
+                .iter()
+                .position(|host| host.subscriber_id == subscriber_id)
+            else {
+                return Ok(());
+            };
+            let removed = state.hosts.swap_remove(index);
+            Self::cancel_host_pending(
+                &mut state,
+                &removed,
+                "the browser launcher was unregistered",
+            );
+            return Ok(());
+        };
+        if !scope.is_well_formed() {
+            anyhow::bail!("a browser launcher scope has nil session, runtime, page or grant");
+        }
+        let mut state = self.state.lock();
+        // Record the sender before anything else: a later revocation must be
+        // deliverable even to a connection whose launcher is already gone.
+        state
+            .outgoing_by_connection
+            .insert(subscriber_id, outgoing.clone());
+        if state.active_runtimes.get(&scope.session_id) != Some(&scope.runtime_id) {
+            anyhow::bail!(
+                "session {} has no live runtime {} to register a browser launcher for",
+                scope.session_id,
+                scope.runtime_id
+            );
+        }
+        let same_runtime_elsewhere = state.hosts.iter().any(|host| {
+            host.subscriber_id != subscriber_id
+                && host.scope.session_id == scope.session_id
+                && host.scope.runtime_id == scope.runtime_id
+        });
+        if same_runtime_elsewhere {
+            anyhow::bail!(
+                "another connection already registered a browser launcher for this session runtime"
+            );
+        }
+        if !state
+            .hosts
+            .iter()
+            .any(|host| host.subscriber_id == subscriber_id)
+            && state.hosts.len() >= MAX_BROWSER_HOSTS
+        {
+            anyhow::bail!("too many browser launchers are registered");
+        }
+        // Replacing this connection's own launcher retires the old identity:
+        // a pending open for it can no longer be answered, so it is failed
+        // now instead of timing out.
+        let replaced = state
+            .hosts
+            .iter()
+            .position(|host| host.subscriber_id == subscriber_id)
+            .map(|index| state.hosts.swap_remove(index));
+        if let Some(previous) = replaced {
+            if previous.scope != scope {
+                Self::cancel_host_pending(
+                    &mut state,
+                    &previous,
+                    "the browser launcher was replaced",
+                );
+            }
+        }
+        state.hosts.push(HostPublication {
+            scope,
+            subscriber_id,
+            outgoing,
+        });
+        Ok(())
+    }
+
+    /// Fail every pending open routed to `host`, tell its owner to stop
+    /// acting, and leave page publications untouched.
+    fn cancel_host_pending(state: &mut BrokerState, host: &HostPublication, message: &str) {
+        let mut index = 0;
+        while index < state.pending.len() {
+            let matches_host = state.pending[index].opening
+                && state.pending[index].owner_subscriber_id == host.subscriber_id
+                && state.pending[index].scope == host.scope;
+            if matches_host {
+                let pending = state.pending.swap_remove(index);
+                let _ = pending.owner_outgoing.send(ServerMessage::BrowserCancel {
+                    request_id: pending.request_id,
+                });
+                let _ = pending.respond.send(BrowserResult::error(message));
+                continue;
+            }
+            index += 1;
+        }
+    }
+
     /// Pages shared for `runtime_id` of `session_id`. Empty when that runtime
     /// is not the session's active one.
     pub(crate) fn list(&self, session_id: Uuid, runtime_id: Uuid) -> Vec<BrowserShare> {
         let state = self.state.lock();
-        if state.active_runtimes.get(&session_id) != Some(&runtime_id) {
-            return Vec::new();
+        list_shares(&state, session_id, runtime_id)
+    }
+
+    pub(crate) fn list_for_caller(
+        &self,
+        session_id: Uuid,
+        runtime_id: Uuid,
+        caller: u64,
+    ) -> anyhow::Result<Vec<BrowserShare>> {
+        let state = self.state.lock();
+        if !state.connected_callers.contains(&caller) {
+            anyhow::bail!("the browser caller disconnected before observation");
         }
-        state
-            .publications
-            .iter()
-            .filter(|publication| {
-                publication.share.scope.session_id == session_id
-                    && publication.share.scope.runtime_id == runtime_id
-            })
-            .map(|publication| publication.share.clone())
-            .collect()
+        Ok(list_shares(&state, session_id, runtime_id))
     }
 
     /// Route one action to the GUI that owns the page and wait for its
@@ -364,6 +539,9 @@ impl BrowserBroker {
             return BrowserResult::error(message);
         }
         let mut state = self.state.lock();
+        if !state.connected_callers.contains(&requestor_subscriber_id) {
+            return BrowserResult::error("the browser caller disconnected before execution");
+        }
         // A cancel that arrived before this invoke registered wins: the
         // caller gave up, so the action must not run at all.
         if state
@@ -407,15 +585,30 @@ impl BrowserBroker {
                 "this browser request was already attempted; observe again instead of retrying",
             );
         }
-        let Some(publication) = state
-            .publications
-            .iter()
-            .find(|publication| publication.share.scope == scope)
-        else {
-            return BrowserResult::error("no live browser page is shared for this scope");
+        // `Open` is launcher-only: the lookup never consults page
+        // publications, so a page grant cannot open a tab. Every other
+        // action is page-only and never resolves through a launcher. The
+        // scope match is exact and happens under this lock, so a launcher or
+        // page that disappeared between an outer lookup and here fails
+        // closed instead of being routed.
+        let (owner_subscriber_id, owner_outgoing) = if matches!(action, BrowserAction::Open { .. })
+        {
+            let Some(host) = state.hosts.iter().find(|host| host.scope == scope) else {
+                return BrowserResult::error(
+                    "no live browser launcher is registered for this scope",
+                );
+            };
+            (host.subscriber_id, host.outgoing.clone())
+        } else {
+            let Some(publication) = state
+                .publications
+                .iter()
+                .find(|publication| publication.share.scope == scope)
+            else {
+                return BrowserResult::error("no live browser page is shared for this scope");
+            };
+            (publication.subscriber_id, publication.outgoing.clone())
         };
-        let owner_subscriber_id = publication.subscriber_id;
-        let owner_outgoing = publication.outgoing.clone();
         if state.active_runtimes.get(&scope.session_id) != Some(&scope.runtime_id) {
             return BrowserResult::error("the session runtime is no longer active");
         }
@@ -433,6 +626,7 @@ impl BrowserBroker {
         }
         let request_id = Uuid::new_v4();
         let (respond, result_rx) = unbounded();
+        let opening = matches!(action, BrowserAction::Open { .. });
         let request = BrowserRequest {
             request_id,
             scope: scope.clone(),
@@ -455,6 +649,7 @@ impl BrowserBroker {
             requestor_subscriber_id,
             requestor_request_id,
             scope,
+            opening,
             respond,
         });
         drop(state);
@@ -501,21 +696,94 @@ impl BrowserBroker {
         let pending = state.pending.swap_remove(index);
         // An answer is only trusted while the grant is still current: the
         // page must remain published by this owner under this exact scope,
-        // and the runtime must still be active.
-        let grant_current = state.publications.iter().any(|publication| {
-            publication.subscriber_id == pending.owner_subscriber_id
-                && publication.share.scope == pending.scope
-        }) && state.active_runtimes.get(&pending.scope.session_id)
-            == Some(&pending.scope.runtime_id);
+        // and the runtime must still be active. A pending open is current
+        // only while this owner still holds the launcher for that scope —
+        // a page publication never substitutes for a launcher.
+        let grant_current = if pending.opening {
+            state.hosts.iter().any(|host| {
+                host.subscriber_id == pending.owner_subscriber_id && host.scope == pending.scope
+            }) && state.active_runtimes.get(&pending.scope.session_id)
+                == Some(&pending.scope.runtime_id)
+        } else {
+            state.publications.iter().any(|publication| {
+                publication.subscriber_id == pending.owner_subscriber_id
+                    && publication.share.scope == pending.scope
+            }) && state.active_runtimes.get(&pending.scope.session_id)
+                == Some(&pending.scope.runtime_id)
+        };
         let result = enforce_result_bound(result);
+        let stale_message = if pending.opening {
+            "the browser launcher is no longer registered"
+        } else {
+            "the browser page share is no longer active"
+        };
         let _ = if grant_current {
             pending.respond.send(result)
         } else {
-            pending.respond.send(BrowserResult::error(
-                "the browser page share is no longer active",
-            ))
+            pending.respond.send(BrowserResult::error(stale_message))
         };
         Ok(())
+    }
+
+    /// Open a new tab through the one launcher registered for
+    /// `session_id`/`runtime_id` and wait for the GUI's answer. The caller
+    /// names a session and runtime, never a page: the launcher's own scope
+    /// is the address, so a caller cannot aim this at another session's
+    /// launcher or at a page grant.
+    ///
+    /// The lookups are deliberately split: the launcher is selected here,
+    /// and the actual routing happens in [`Self::invoke`], which re-checks
+    /// the caller, the live runtime and the exact launcher scope under its
+    /// own lock. A launcher unregistered between the two steps therefore
+    /// fails the call instead of opening a tab under a stale capability.
+    pub(crate) fn open(
+        &self,
+        session_id: Uuid,
+        runtime_id: Uuid,
+        url: &str,
+        requestor_subscriber_id: u64,
+        requestor_request_id: Uuid,
+    ) -> BrowserResult {
+        if let Err(message) = BrowserAction::validate_url(url) {
+            return BrowserResult::error(message);
+        }
+        let scope = {
+            let state = self.state.lock();
+            if !state.connected_callers.contains(&requestor_subscriber_id) {
+                return BrowserResult::error("the browser caller disconnected before execution");
+            }
+            if state.active_runtimes.get(&session_id) != Some(&runtime_id) {
+                return BrowserResult::error("the session runtime is no longer active");
+            }
+            let mut launchers = state
+                .hosts
+                .iter()
+                .filter(|host| {
+                    host.scope.session_id == session_id && host.scope.runtime_id == runtime_id
+                })
+                .map(|host| host.scope.clone());
+            let Some(scope) = launchers.next() else {
+                return BrowserResult::error(
+                    "no live browser launcher is registered for this session runtime",
+                );
+            };
+            if launchers.next().is_some() {
+                // More than one launcher for one session runtime has no safe
+                // answer, so none is chosen.
+                return BrowserResult::error(
+                    "more than one browser launcher is registered for this session runtime",
+                );
+            }
+            scope
+        };
+        self.invoke(
+            scope,
+            BrowserAction::Open {
+                url: url.to_owned(),
+            },
+            requestor_subscriber_id,
+            requestor_request_id,
+        )
     }
 
     /// Cancel a browser request. Two callers are legitimate: the owning
@@ -581,14 +849,21 @@ impl BrowserBroker {
     }
 
     /// Drop every trace of a closing connection: its publications, its
-    /// spent requestor ids, its cancel tombstones, plus pending requests it
-    /// owned (answered as failed) or requested (cancelled on the owner so a
-    /// GUI task does not outlive its caller).
+    /// launchers, its spent requestor ids, its cancel tombstones, plus
+    /// pending requests it owned (answered as failed) or requested
+    /// (cancelled on the owner so a GUI task does not outlive its caller).
     pub(crate) fn remove_connection(&self, subscriber_id: u64) {
         let mut state = self.state.lock();
+        state.connected_callers.remove(&subscriber_id);
         state
             .publications
             .retain(|publication| publication.subscriber_id != subscriber_id);
+        // A closing connection's launchers die with it. Their pending opens
+        // are failed by the pending loop below through the owner branch; the
+        // launcher itself leaves no trace to replay against later.
+        state
+            .hosts
+            .retain(|host| host.subscriber_id != subscriber_id);
         state.seen_request_ids.remove(&subscriber_id);
         state.cancelled_rpc_ids.remove(&subscriber_id);
         state.outgoing_by_connection.remove(&subscriber_id);
@@ -609,6 +884,9 @@ impl BrowserBroker {
                 let _ = pending.owner_outgoing.send(ServerMessage::BrowserCancel {
                     request_id: pending.request_id,
                 });
+                let _ = pending.respond.send(BrowserResult::error(
+                    "the browser caller disconnected; an issued action may have occurred",
+                ));
             }
         }
     }
@@ -634,6 +912,21 @@ impl BrowserBroker {
             });
         }
     }
+}
+
+fn list_shares(state: &BrokerState, session_id: Uuid, runtime_id: Uuid) -> Vec<BrowserShare> {
+    if state.active_runtimes.get(&session_id) != Some(&runtime_id) {
+        return Vec::new();
+    }
+    state
+        .publications
+        .iter()
+        .filter(|publication| {
+            publication.share.scope.session_id == session_id
+                && publication.share.scope.runtime_id == runtime_id
+        })
+        .map(|publication| publication.share.clone())
+        .collect()
 }
 
 fn tombstones_total(state: &BrokerState) -> usize {

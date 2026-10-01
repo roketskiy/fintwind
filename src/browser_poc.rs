@@ -64,6 +64,11 @@
 //! - **Spoofed answers**: a completion is only accepted from the connection
 //!   that published the page. A second client's `BrowserResult` for the same
 //!   request id is refused by the daemon, not merely ignored here.
+//! - **Explicit takeover**: `focus-page` drives ordinary native focus without
+//!   withdrawing sharing. `take-over-page` calls the same stop command as the
+//!   browser toolbar. `share-automatic-page`
+//!   exercises only the native adapter; it does not simulate a product
+//!   launcher, FullAccess picker, or complete application acceptance.
 //!
 //! # Contract with the runner
 //!
@@ -73,7 +78,8 @@
 //! ```json
 //! {"requestId": "uuid", "action": "focus-gpui" | "close-page" | "shutdown"
 //!  | "share-page" | "revoke-page" | "approve-browser" | "reject-browser"
-//!  | "cancel-browser" | "bridge-disconnect" | "bridge-connect",
+//!  | "cancel-browser" | "bridge-disconnect" | "bridge-connect"
+//!  | "share-automatic-page" | "manual-browser-mode" | "focus-page",
 //!  "pageId": "alpha", "grantId": "uuid", "browserRequestId": "uuid"}
 //! ```
 //!
@@ -939,6 +945,8 @@ impl BrowserPocRoot {
                         format!("{selector} -> {} chars", text.chars().count()),
                     ),
                     BrowserAction::Navigate { url } => ("navigate".to_owned(), url.clone()),
+                    BrowserAction::Open { url } => ("open".to_owned(), url.clone()),
+                    BrowserAction::Scroll { delta_y } => ("scroll".to_owned(), delta_y.to_string()),
                 };
                 Some(HostPendingBrowserRequest {
                     page: page.id,
@@ -1082,6 +1090,7 @@ impl BrowserPocRoot {
     /// One event per page: a share changed, or one operation finished.
     fn on_browser_event(&mut self, event: &BrowserCollaborationEvent, cx: &mut Context<Self>) {
         match event {
+            BrowserCollaborationEvent::ShareRequested => {}
             BrowserCollaborationEvent::ShareChanged => self.publish_browser_shares(cx),
             BrowserCollaborationEvent::Finished { request_id, result } => {
                 // The completion rides back on the same connection, so a
@@ -1113,6 +1122,15 @@ impl BrowserPocRoot {
                 }
                 window.focus(&self.focus_handle, cx);
             }
+            "focus-page" => {
+                if let Some(index) = self.page_index(control.page_id.as_deref()) {
+                    // Exercise ordinary native focus, not a direct grant
+                    // revocation or a synthesized DOM focus event.
+                    self.pages[index].entity.clone().update(cx, |view, cx| {
+                        view.focus_default(window, cx);
+                    });
+                }
+            }
             "close-page" => match control.page_id.as_deref() {
                 Some(page_id) => {
                     if let Some(index) = self.pages.iter().position(|page| page.id == page_id) {
@@ -1133,7 +1151,7 @@ impl BrowserPocRoot {
             // Phase two: an explicit human share of one page. The grant id is
             // chosen by the runner, so "share again" is a genuinely new lease
             // and the previous one cannot be reused.
-            "share-page" => {
+            "share-page" | "share-automatic-page" => {
                 let Some(grant_id) = control
                     .grant_id
                     .as_deref()
@@ -1163,15 +1181,35 @@ impl BrowserPocRoot {
                     grant_id,
                 };
                 let entity = self.pages[index].entity.clone();
-                entity.update(cx, |view, cx| view.begin_browser_share(scope, cx));
+                entity.update(cx, |view, cx| {
+                    if control.action == "share-automatic-page" {
+                        view.begin_browser_automation(scope, cx);
+                    } else {
+                        view.begin_browser_share(scope, cx);
+                    }
+                });
             }
-            "revoke-page" => {
+            "manual-browser-mode" => {
+                if let Some(index) = self.page_index(control.page_id.as_deref()) {
+                    self.pages[index]
+                        .entity
+                        .clone()
+                        .update(cx, |view, cx| view.set_browser_automatic(false, cx));
+                }
+            }
+            "take-over-page" | "revoke-page" => {
                 let Some(index) = self.page_index(control.page_id.as_deref()) else {
                     eprintln!("[browser-poc] revoke-page: no page {:?}", control.page_id);
                     return;
                 };
                 let entity = self.pages[index].entity.clone();
-                entity.update(cx, |view, cx| view.revoke_browser_share(cx));
+                entity.update(cx, |view, cx| {
+                    if control.action == "take-over-page" {
+                        view.take_over_browser(cx);
+                    } else {
+                        view.revoke_browser_share(cx);
+                    }
+                });
                 self.publish_browser_shares(cx);
             }
             // Approvals are ordinary control commands driven through the same

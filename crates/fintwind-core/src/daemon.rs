@@ -26,6 +26,7 @@ use crate::settings::DaemonSettingsStore;
 use fintwind_protocol::provider_session::{ProviderSessionFork, ProviderSessionForkRequest};
 
 pub struct FintwindBackend {
+    browser_tools: Arc<crate::browser_tools::BrowserTools>,
     sessions: Mutex<HashMap<Uuid, (Uuid, DriverHandle)>>,
     terminals: Mutex<HashMap<Uuid, (Uuid, crate::terminal::DaemonTerminal)>>,
     settings: DaemonSettingsStore,
@@ -54,6 +55,7 @@ impl FintwindBackend {
                 .join("attachments"),
         );
         Ok(Self {
+            browser_tools: Arc::default(),
             sessions: Mutex::new(HashMap::new()),
             terminals: Mutex::new(HashMap::new()),
             settings,
@@ -201,6 +203,9 @@ fn migrate_projectless_state(
 }
 
 impl Backend for FintwindBackend {
+    fn browser_tools(&self) -> Option<Arc<crate::browser_tools::BrowserTools>> {
+        Some(self.browser_tools.clone())
+    }
     fn handle(&self, request: Request, events: EventSink) -> anyhow::Result<ResponsePayload> {
         let session_id = request.session_id;
         let runtime_id = request.runtime_id;
@@ -714,7 +719,15 @@ impl Backend for FintwindBackend {
                 };
                 let (wake, _wake_events) = smol::channel::bounded(1);
                 let (event_sender, event_receiver) = driver::event_channel(wake);
-                let handle = driver::start_local(options, event_sender)?;
+                let handle = driver::start_local(
+                    options,
+                    event_sender,
+                    crate::browser_tools::BrowserToolRuntime {
+                        registry: self.browser_tools.clone(),
+                        session_id,
+                        runtime_id,
+                    },
+                )?;
                 let supports_steer = handle.supports_steer();
                 std::thread::Builder::new()
                     .name(format!("fintwind-daemon-events-{session_id}"))

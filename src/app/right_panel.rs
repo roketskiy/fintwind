@@ -5,10 +5,6 @@ use std::path::{Path, PathBuf};
 
 use super::*;
 
-use super::browser_collaboration::BrowserShareAffordance;
-use super::providers_page::outline_button;
-use crate::ui::ActivationExt;
-
 const TAB_SCROLL_FADE_WIDTH: f32 = 24.0;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1750,6 +1746,7 @@ impl Fintwind {
         // every share with it: the user shares the page they are looking at,
         // and the new task starts with none.
         self.revoke_all_browser_shares(cx);
+        self.reset_browser_automation_for_session(cx);
         if self.right_panel_visible {
             self.request_active_terminal_focus();
             self.request_active_browser_focus();
@@ -2184,7 +2181,7 @@ impl Fintwind {
             ))
     }
 
-    fn ensure_right_panel_browser(
+    pub(super) fn ensure_right_panel_browser(
         &mut self,
         browser_id: Uuid,
         window: &mut Window,
@@ -2547,53 +2544,6 @@ impl Fintwind {
                         theme.surface,
                     )),
             );
-
-        // The browser share control only appears for the active page: a
-        // grant addresses one page, never "whatever is open now". A remote
-        // daemon's pages are not this GUI's, so the control stays hidden
-        // there rather than explaining itself.
-        if !self.daemon.is_remote()
-            && let Some(browser_id) =
-                self.active_right_panel_surface()
-                    .and_then(|surface| match surface {
-                        RightPanelSurface::Browser(browser_id) => Some(*browser_id),
-                        _ => None,
-                    })
-        {
-            let affordance = self.browser_share_affordance(browser_id, cx);
-            let blocked = matches!(affordance, BrowserShareAffordance::Blocked(_));
-            let label = match affordance {
-                BrowserShareAffordance::Share => tr!("right_panel.share_browser"),
-                BrowserShareAffordance::Revoke => tr!("right_panel.revoke_browser_share"),
-                BrowserShareAffordance::Blocked(_) => tr!("right_panel.browser_share_blocked"),
-            };
-            let focus = self.transcript_control_focus("right-panel-browser-share", cx);
-            let share_button = outline_button(
-                "right-panel-browser-share",
-                label,
-                Some("icons/globe.svg"),
-                &theme,
-            )
-            .track_focus(&focus)
-            .when(blocked, |element| element.opacity(0.55));
-            let share_button = if blocked {
-                share_button
-            } else {
-                share_button.on_activation(cx, move |this: &mut Self, _, cx| match affordance {
-                    BrowserShareAffordance::Share => this.share_active_browser(cx),
-                    BrowserShareAffordance::Revoke => this.revoke_active_browser_share(cx),
-                    BrowserShareAffordance::Blocked(_) => {}
-                })
-            };
-            header = header.child(
-                div()
-                    .flex_none()
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                        cx.stop_propagation();
-                    })
-                    .child(share_button),
-            );
-        }
 
         if !self.right_panel_surfaces.is_empty() {
             let weak = cx.entity().downgrade();

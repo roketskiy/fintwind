@@ -812,6 +812,8 @@ errors.read_provider_exit_status: "%{provider} の終了ステータスを読み
 errors.initialize_provider: "%{provider} を初期化できませんでした：%{error}"
 errors.provider_no_session_id: "%{provider} からセッション ID が返されませんでした"
 errors.provider_rejected_prompt_detail: "%{provider} がプロンプトを拒否しました：%{error}"
+errors.provider_prompt_unconfirmed_detail: "%{provider} がメッセージを受信したか確認できません。履歴を確認中です。自動再送はしません：%{error}"
+errors.provider_transcript_reconcile_failed: "返信全体を復元できませんでした。メッセージと添付ファイルは保持され、次の待機メッセージは送信されていません。"
 errors.stop_provider: "%{provider} を停止できませんでした：%{error}"
 errors.switch_provider_model: "%{provider} のモデルを切り替えられませんでした：%{error}"
 errors.change_provider_thinking: "%{provider} の思考レベルを変更できませんでした：%{error}"

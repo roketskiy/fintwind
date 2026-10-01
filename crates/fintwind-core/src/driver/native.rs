@@ -1569,7 +1569,25 @@ fn integration_rows(response: &Value) -> &[Value] {
 }
 
 /// Translate the native message rows (oldest first) into the app's model.
-fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> NativeTranscript {
+pub(crate) fn translate_rows_with_blobs(
+    rows: &[Value],
+    blobs: Option<&BlobStore>,
+) -> NativeTranscript {
+    translate_native_rows(rows, blobs, false)
+}
+
+/// Recovery has already validated the admitted input IDs. Even an empty
+/// user row owns a turn when it carries non-image files; its client restores
+/// the original attachment metadata instead of importing images here.
+pub(crate) fn translate_recovered_rows(rows: &[Value]) -> NativeTranscript {
+    translate_native_rows(rows, None, true)
+}
+
+fn translate_native_rows(
+    rows: &[Value],
+    blobs: Option<&BlobStore>,
+    retain_empty_users: bool,
+) -> NativeTranscript {
     let mut transcript = NativeTranscript {
         messages: Vec::new(),
         blocks: Vec::new(),
@@ -1631,7 +1649,7 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
                     .flatten()
                     .filter_map(|file| native_image_attachment(file, blobs, &mut image_bytes_left))
                     .collect::<Vec<_>>();
-                if text.trim().is_empty() && attachments.is_empty() {
+                if !retain_empty_users && text.trim().is_empty() && attachments.is_empty() {
                     continue;
                 }
                 let turn = AgentTurn {
@@ -1640,6 +1658,7 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
                     status: TurnStatus::Completed,
                     provider_turn_started: true,
                     provider_resume_at: None,
+                    provider_prompt: None,
                     started_at: created_at,
                     completed_at: Some(created_at),
                     checkpoint: None,
@@ -1717,6 +1736,7 @@ fn translate_rows_with_blobs(rows: &[Value], blobs: Option<&BlobStore>) -> Nativ
                             status: TurnStatus::Completed,
                             provider_turn_started: true,
                             provider_resume_at: None,
+                            provider_prompt: None,
                             started_at: created_at,
                             completed_at: Some(completed_at),
                             checkpoint: None,

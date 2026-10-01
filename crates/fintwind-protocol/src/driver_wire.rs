@@ -47,6 +47,13 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             ("availableCommands", serde_json::to_value(commands)?)
         }
         DriverEvent::TurnStarted => ("turnStarted", Value::Null),
+        DriverEvent::TurnTranscriptReconciled {
+            transcript,
+            continuation,
+        } => (
+            "turnTranscriptReconciled",
+            json!({ "transcript": transcript, "continuation": continuation }),
+        ),
         DriverEvent::TextStarted { part } => ("textStarted", json!({ "part": part })),
         DriverEvent::TextDelta { part, delta } => {
             ("textDelta", json!({ "part": part, "delta": delta }))
@@ -169,6 +176,18 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "autoTitleUpdated" => DriverEvent::AutoTitleUpdated(serde_json::from_value(payload)?),
         "availableCommands" => DriverEvent::AvailableCommands(serde_json::from_value(payload)?),
         "turnStarted" => DriverEvent::TurnStarted,
+        "turnTranscriptReconciled" => DriverEvent::TurnTranscriptReconciled {
+            transcript: serde_json::from_value(
+                payload
+                    .get("transcript")
+                    .cloned()
+                    .context("missing turn transcript")?,
+            )?,
+            continuation: payload
+                .get("continuation")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        },
         "nativeSessionsChanged" => DriverEvent::NativeSessionsChanged,
         "textStarted" => DriverEvent::TextStarted {
             part: reasoning_part_from_wire(&payload),

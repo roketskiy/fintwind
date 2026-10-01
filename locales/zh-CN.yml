@@ -777,6 +777,8 @@ errors.read_provider_exit_status: "无法读取 %{provider} 的退出状态：%{
 errors.initialize_provider: "无法初始化 %{provider}：%{error}"
 errors.provider_no_session_id: "%{provider} 未返回会话 ID"
 errors.provider_rejected_prompt_detail: "%{provider} 拒绝了消息：%{error}"
+errors.provider_prompt_unconfirmed_detail: "暂时无法确认 %{provider} 是否已接收消息。正在核实会话历史，不会自动重发：%{error}"
+errors.provider_transcript_reconcile_failed: "无法补齐完整回复。已保留你的消息和附件，未发送下一条排队消息。"
 errors.stop_provider: "无法停止 %{provider}：%{error}"
 errors.switch_provider_model: "无法切换 %{provider} 模型：%{error}"
 errors.change_provider_thinking: "无法更改 %{provider} 的思考强度：%{error}"

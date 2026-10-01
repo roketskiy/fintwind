@@ -966,6 +966,12 @@ struct SessionRuntime {
     /// after the authoritative text is dropped. A fresh `started` reopens the
     /// key. Cleared with `open_text`.
     settled_text: HashSet<String>,
+    /// Start of output from a server-initiated continuation. A recovered
+    /// window replaces only this suffix, not the previously settled reply.
+    continuation_projection_start: Option<(usize, usize)>,
+    /// A rejected durable window must not lead to a false success or queued
+    /// submission. The original local messages and attachments are retained.
+    transcript_reconciliation_failed: bool,
     /// The provider's busy report for the live turn, if any. Runtime
     /// presentation state: it never persists and always dies with the turn.
     provider_phase: Option<ProviderPhase>,

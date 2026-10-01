@@ -731,8 +731,42 @@ fn http_request(
     timeout: Duration,
     directory_header: Option<&str>,
 ) -> anyhow::Result<Vec<u8>> {
-    let mut stream = TcpStream::connect(("127.0.0.1", port))
-        .with_context(|| format!("could not connect to OpenCode on local port {port}"))?;
+    http_request_with_limit(
+        port,
+        method,
+        path,
+        body,
+        timeout,
+        directory_header,
+        usize::MAX,
+    )
+}
+
+/// Reconciliation is opportunistic: refuse an oversized response rather than
+/// allocating an unbounded history, and cap the whole HTTP exchange's time.
+pub(crate) fn request_json_on_port_bounded(
+    port: u16,
+    path: &str,
+    timeout: Duration,
+    max_bytes: usize,
+) -> anyhow::Result<Value> {
+    let response = http_request_with_limit(port, "GET", path, None, timeout, None, max_bytes)?;
+    serde_json::from_slice(&response).context("OpenCode returned invalid reconciliation JSON")
+}
+
+fn http_request_with_limit(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&[u8]>,
+    timeout: Duration,
+    directory_header: Option<&str>,
+    max_bytes: usize,
+) -> anyhow::Result<Vec<u8>> {
+    let deadline = Instant::now() + timeout;
+    let mut stream =
+        TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), timeout)
+            .with_context(|| format!("could not connect to OpenCode on local port {port}"))?;
     stream.set_read_timeout(Some(timeout))?;
     stream.set_write_timeout(Some(timeout))?;
     let body = body.unwrap_or_default();
@@ -762,11 +796,21 @@ fn http_request(
         if http_response_is_complete(&response)? {
             break;
         }
+        if max_bytes != usize::MAX {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                bail!("OpenCode reconciliation HTTP deadline exceeded");
+            }
+            stream.set_read_timeout(Some(remaining))?;
+        }
         let read = stream
             .read(&mut buffer)
             .with_context(|| format!("failed reading OpenCode response for {method} {path}"))?;
         if read == 0 {
             break;
+        }
+        if read > max_bytes.saturating_sub(response.len()) {
+            bail!("OpenCode reconciliation HTTP response exceeded its byte limit");
         }
         response.extend_from_slice(&buffer[..read]);
     }

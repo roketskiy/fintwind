@@ -24,9 +24,10 @@ pub fn fallback_agent_presets() -> Vec<ProviderAgentPreset> {
 const MODEL_DISCOVERY_BUDGET: Duration = Duration::from_secs(15);
 const MODEL_DISCOVERY_INITIAL_DELAY: Duration = Duration::from_millis(250);
 const MODEL_DISCOVERY_MAX_DELAY: Duration = Duration::from_secs(2);
-const MODEL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const MODEL_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Discovers models from the installed OpenCode CLI (`opencode models`).
+/// Discovers models through the installed OpenCode binary's private pooled
+/// server, naming the workspace on every request.
 pub fn discover_catalog(
     binary: &Path,
     directory: Option<&Path>,
@@ -107,33 +108,45 @@ fn write_models_file(path: &Path, models: &[ProviderModel]) -> std::io::Result<(
     std::fs::rename(temporary, path)
 }
 
+/// Asks the pooled server for the V2 catalog, tolerating a cold server that
+/// has not loaded provider configuration yet.
+///
+/// Every request goes through [`crate::opencode_pool::acquire`]: the CLI's
+/// `api` subcommand without an endpoint joins the user-level public service
+/// — starting one when it is not running — and its `models` listing discards
+/// the variants the catalog carries, so discovery must not shell out to the
+/// CLI for either route. The workspace is named on each request as location
+/// data, the same way sessions sharing this process resolve their
+/// configuration, and the pooled request helper authenticates against the
+/// credentials the server was started with.
 fn discover_opencode_models(binary: &Path, directory: Option<&Path>) -> Option<Vec<ProviderModel>> {
-    // The plain `models` listing discards variants. Query the V2 catalog
-    // through the CLI so discovery shares its authentication/service context.
-    let query = location_query(directory);
-    let mut activation_command = crate::command_env::command(binary);
-    set_command_directory(&mut activation_command, directory);
-    activation_command.args([
-        "api",
-        "post",
-        &format!("/api/plugin/await-activation?{query}"),
-    ]);
-    let _ = crate::command_env::output_with_timeout(&mut activation_command, MODEL_COMMAND_TIMEOUT);
+    let location = workspace_location(directory)?;
+    let server = crate::opencode_pool::acquire(binary, Path::new(&location)).ok()?;
+
+    // Kick provider activation the same way the CLI call did. The answer
+    // carries no catalog; only the side effect on this server matters, and a
+    // cold server may still list nothing until the budget below expires.
+    let _ = server.request_for_directory_with_timeout(
+        &location,
+        "POST",
+        "/api/plugin/await-activation",
+        None,
+        MODEL_REQUEST_TIMEOUT,
+    );
 
     let started = Instant::now();
     let mut delay = MODEL_DISCOVERY_INITIAL_DELAY;
     loop {
-        let mut catalog_command = crate::command_env::command(binary);
-        set_command_directory(&mut catalog_command, directory);
-        catalog_command.args(["api", "get", &format!("/api/model?{query}")]);
-        if let Ok(Some(output)) =
-            crate::command_env::output_with_timeout(&mut catalog_command, MODEL_COMMAND_TIMEOUT)
-            && output.status.success()
-            && let Ok(value) = serde_json::from_slice::<serde_json::Value>(&output.stdout)
-            && value
-                .get("data")
-                .and_then(serde_json::Value::as_array)
-                .is_some()
+        if let Ok(value) = server.request_for_directory_with_timeout(
+            &location,
+            "GET",
+            "/api/model",
+            None,
+            MODEL_REQUEST_TIMEOUT,
+        ) && value
+            .get("data")
+            .and_then(serde_json::Value::as_array)
+            .is_some()
         {
             let models = parse_opencode_catalog(&value);
             if !models.is_empty() || started.elapsed() >= MODEL_DISCOVERY_BUDGET {
@@ -147,48 +160,27 @@ fn discover_opencode_models(binary: &Path, directory: Option<&Path>) -> Option<V
         delay = (delay * 2).min(MODEL_DISCOVERY_MAX_DELAY);
     }
 
-    let mut command = crate::command_env::command(binary);
-    set_command_directory(&mut command, directory);
-    command.arg("models");
-    let Ok(Some(output)) =
-        crate::command_env::output_with_timeout(&mut command, MODEL_COMMAND_TIMEOUT)
-    else {
-        return None;
-    };
-    let models = parse_opencode_models(&String::from_utf8_lossy(&output.stdout));
-    if !output.status.success() || models.is_empty() {
-        return None;
-    }
-    let cached: std::collections::HashMap<_, _> = cached_models(directory)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|model| (model.id.clone(), model))
-        .collect();
-    Some(
-        models
-            .into_iter()
-            .map(|model| cached.get(&model.id).cloned().unwrap_or(model))
-            .collect(),
-    )
+    None
 }
 
-fn location_query(directory: Option<&Path>) -> String {
+/// The directory string every discovery request names as its workspace.
+///
+/// The pooled server runs in its own data directory, so a relative path is
+/// resolved here — the server would otherwise resolve it against its own
+/// working directory and read another workspace's configuration. This
+/// mirrors the driver's location normalization. When no workspace can be
+/// named at all, discovery fails and the caller keeps the cached catalog
+/// rather than guessing the server's own directory.
+fn workspace_location(directory: Option<&Path>) -> Option<String> {
     let directory = directory
         .map(Path::to_path_buf)
-        .or_else(|| std::env::current_dir().ok());
-    directory
-        .map(|directory| {
-            url::form_urlencoded::Serializer::new(String::new())
-                .append_pair("location[directory]", &directory.to_string_lossy())
-                .finish()
-        })
-        .unwrap_or_default()
-}
-
-fn set_command_directory(command: &mut std::process::Command, directory: Option<&Path>) {
-    if let Some(directory) = directory {
-        command.current_dir(directory);
-    }
+        .or_else(|| std::env::current_dir().ok())?;
+    let directory = if directory.is_absolute() {
+        directory
+    } else {
+        std::fs::canonicalize(&directory).unwrap_or(directory)
+    };
+    Some(directory.to_string_lossy().into_owned())
 }
 
 /// Stable, filesystem-safe FNV-1a key for a workspace-scoped model cache.
@@ -286,26 +278,6 @@ fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {
         .collect()
 }
 
-fn parse_opencode_models(output: &str) -> Vec<ProviderModel> {
-    output
-        .lines()
-        .filter_map(|line| {
-            let id = strip_ansi(line).trim().to_owned();
-            if id.is_empty() || id.split_whitespace().count() != 1 || !id.contains('/') {
-                return None;
-            }
-            let (provider, model) = id.split_once('/')?;
-            if provider.is_empty() || model.is_empty() {
-                return None;
-            }
-            Some(
-                ProviderModel::new(id.clone(), display_name_from_slug(model))
-                    .sub_provider(display_name_from_slug(provider)),
-            )
-        })
-        .collect()
-}
-
 fn display_name_from_slug(slug: &str) -> String {
     let words = slug
         .split(['-', '_'])
@@ -333,23 +305,6 @@ fn display_name_from_slug(slug: &str) -> String {
     } else {
         words.join(" ")
     }
-}
-
-fn strip_ansi(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    let mut chars = value.chars();
-    while let Some(char) = chars.next() {
-        if char == '\u{1b}' {
-            for code in chars.by_ref() {
-                if code.is_ascii_alphabetic() {
-                    break;
-                }
-            }
-        } else {
-            output.push(char);
-        }
-    }
-    output
 }
 
 fn deduplicate(models: Vec<ProviderModel>) -> Vec<ProviderModel> {
@@ -398,16 +353,5 @@ mod tests {
         assert_eq!(read_models_file(&path), None);
 
         let _ = std::fs::remove_dir_all(directory);
-    }
-
-    #[test]
-    fn parses_opencode_provider_qualified_models() {
-        let models = parse_opencode_models(
-            "opencode/big-pickle\n\u{1b}[32mgithub-copilot/gpt-5.4\u{1b}[0m\nnoise here\n",
-        );
-        assert_eq!(models.len(), 2);
-        assert_eq!(models[1].id, "github-copilot/gpt-5.4");
-        assert_eq!(models[1].name, "GPT-5.4");
-        assert_eq!(models[1].sub_provider.as_deref(), Some("Github Copilot"));
     }
 }

@@ -52,6 +52,8 @@ use crate::opencode_session::{
     encode_path_segment, fork_session_removing_turns_on_server, request_json_on_port_with_directory,
 };
 
+mod recovery;
+
 /// How often the permission poll scans the server's pending requests. The
 /// endpoint answers instantly when nothing is pending and opencode does not
 /// stream permission events, so this cadence bounds how long an approval
@@ -864,6 +866,9 @@ impl OpenCodeDriver {
         // live; `recv` blocks until the first event or the stream's end.
         let event_feed = Arc::new(crate::opencode_events::subscribe(server.port)?);
         let session_family = Arc::new(SessionFamily::new(session_id.clone()));
+        let mut reconciliation =
+            recovery::Coordinator::new(server.port, session_id.clone(), Arc::clone(&event_feed))?;
+        let submissions = Arc::clone(&reconciliation.submissions);
 
         // opencode answers permission requests through a polling endpoint
         // (`GET /api/permission/request`) instead of the event stream v1
@@ -964,9 +969,8 @@ impl OpenCodeDriver {
                 }
             })?;
 
-        // The feed holds only the port, never a server handle: the hub's
-        // stream ends exactly when the process exits, so a handle held here
-        // would keep the pooled server from ever being killed.
+        // Readers do not own the private process. A weak liveness check
+        // distinguishes actual process exit from a reconnectable SSE fault.
         let stream_port = server.port;
         let stream_session = session_id.clone();
         let stream_events = events.clone();
@@ -978,6 +982,7 @@ impl OpenCodeDriver {
         let stream_forms = Arc::clone(&forms);
         let stream_feed = Arc::clone(&event_feed);
         let stream_family = Arc::clone(&session_family);
+        let stream_liveness = server.liveness();
         thread::Builder::new()
             .name("fintwind-opencode-events".into())
             .spawn(move || {
@@ -987,29 +992,73 @@ impl OpenCodeDriver {
                     forms: stream_forms,
                     ..OpenCodeStreamState::default()
                 };
-                // The hub delivers parsed JSON already. A stream end is the
-                // server going away — there is no reconnect.
+                // SSE loss is a transport fault, not process exit. The hub
+                // reconnects; durable reconciliation runs off this consumer.
                 loop {
                     if stream_feed.is_cancelled() {
                         break;
                     }
-                    match stream_feed.recv() {
-                        Ok(value) => dispatch_server_event(
-                            &value,
-                            &stream_session,
-                            &stream_event_sink,
-                            &stream_commands,
+                    match stream_feed.recv_timeout(Duration::from_millis(500)) {
+                        Ok(Some(value)) => {
+                            reconciliation.observe_connection(&stream_feed, *stream_turn.lock());
+                            if !reconciliation.is_completed_event(&value, &stream_session) {
+                                if !reconciliation.defer_terminal(&value, &stream_session) {
+                                    dispatch_server_event(
+                                        &value,
+                                        &stream_session,
+                                        &stream_event_sink,
+                                        &stream_commands,
+                                        &stream_turn,
+                                        stream_port,
+                                        auto_approve,
+                                        &mut state,
+                                        &stream_family,
+                                    );
+                                }
+                                reconciliation.observe(
+                                    &value,
+                                    &stream_session,
+                                    *stream_turn.lock(),
+                                );
+                            }
+                        }
+                        Ok(None) => {
+                            if !stream_liveness.is_alive() {
+                                break;
+                            }
+                        }
+                        Err(_) => {
+                            if !stream_liveness.is_alive() {
+                                break;
+                            }
+                            // Even an unexpected reader shutdown is not proof
+                            // that the private process exited. Keep the durable
+                            // backstop available without spinning on a dead rx.
+                            thread::sleep(Duration::from_millis(500));
+                        }
+                    };
+                    let active = *stream_turn.lock();
+                    if let Some(recovered) =
+                        reconciliation.poll(&stream_feed, active, !stream_feed.has_pending_events())
+                    {
+                        if let Some(completed) = apply_recovered_turn(
+                            recovered,
                             &stream_turn,
-                            stream_port,
-                            auto_approve,
+                            &reconciliation.submissions,
                             &mut state,
-                            &stream_family,
-                        ),
-                        Err(_) => break,
+                            &stream_event_sink,
+                            stream_port,
+                        ) {
+                            reconciliation.mark_completed(completed);
+                        }
                     }
                 }
                 if !stream_feed.is_cancelled() {
                     let _ = stream_event_sink.send(DriverEvent::ProcessExited);
+                    // A dead private process has no useful subscription left.
+                    // Wake the shared reader and stop permission/recovery
+                    // work even if a UI still retains this driver handle.
+                    stream_feed.cancel();
                 }
             })?;
 
@@ -1025,7 +1074,12 @@ impl OpenCodeDriver {
                 while let Ok(message) = command_rx.recv() {
                     match message {
                         CommandMessage::Prompt { text, files } => {
-                            *worker_turn.lock() = true;
+                            let submission = {
+                                let mut active = worker_turn.lock();
+                                let generation = submissions.lock().begin();
+                                *active = true;
+                                generation
+                            };
                             let _ = worker_events.send(DriverEvent::TurnStarted);
                             // `prompt` acknowledges as soon as the prompt
                             // is accepted; completion arrives as
@@ -1038,15 +1092,37 @@ impl OpenCodeDriver {
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let posted = prompt_bodies(&text, &files, worker_task_id.as_deref())
-                                .and_then(|(current, legacy)| {
-                                    crate::opencode_session::post_current_or_legacy(
-                                        |body| worker_server.request("POST", &path, Some(body)),
-                                        &current,
-                                        Some(&legacy),
-                                    )
-                                });
+                            let bodies = prompt_bodies(&text, &files, worker_task_id.as_deref());
+                            let invalid_input = bodies.is_err();
+                            let posted = bodies.and_then(|(mut current, legacy)| {
+                                // The V2 API admits a client message ID.
+                                // Retain it across a lost acknowledgement
+                                // so reconciliation can identify this input
+                                // without repeating a side-effecting prompt.
+                                if let Some(id) = submissions.lock().input_id() {
+                                    current["id"] = json!(id);
+                                }
+                                crate::opencode_session::post_current_or_legacy(
+                                    |body| worker_server.request("POST", &path, Some(body)),
+                                    &current,
+                                    Some(&legacy),
+                                )
+                            });
+                            if let Ok(response) = &posted {
+                                submissions.lock().accepted(submission, response);
+                            }
                             if let Err(error) = posted {
+                                let rejected =
+                                    invalid_input || error.to_string().contains("HTTP 4");
+                                if !rejected {
+                                    submissions.lock().unconfirmed(submission);
+                                    let _ = worker_events.send(DriverEvent::Error(tr!(
+                                        "errors.provider_prompt_unconfirmed_detail",
+                                        provider = "OpenCode",
+                                        error = error
+                                    )));
+                                    continue;
+                                }
                                 let _ = worker_events.send(DriverEvent::Error(tr!(
                                     "errors.provider_rejected_prompt_detail",
                                     provider = "OpenCode",
@@ -1056,6 +1132,7 @@ impl OpenCodeDriver {
                                 // for a turn that failed to start, so settle
                                 // it here instead of hanging.
                                 if std::mem::take(&mut *worker_turn.lock()) {
+                                    submissions.lock().clear();
                                     let _ = worker_events.send(DriverEvent::TurnFinished {
                                         success: false,
                                         summary: Some(tr!(
@@ -1074,7 +1151,13 @@ impl OpenCodeDriver {
                             // prompt is accepted, unlike the message route,
                             // which blocks until the merged turn ends — which
                             // is what makes it the steer vehicle.
-                            if !*worker_turn.lock() {
+                            let steering = {
+                                let active = worker_turn.lock();
+                                (*active)
+                                    .then(|| submissions.lock().begin_steer())
+                                    .flatten()
+                            };
+                            let Some(steering) = steering else {
                                 let _ = worker_events.send(DriverEvent::SteerRejected {
                                     message: text,
                                     reason: tr!(
@@ -1083,25 +1166,44 @@ impl OpenCodeDriver {
                                     ),
                                 });
                                 continue;
-                            }
+                            };
                             let path = format!(
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let posted = prompt_bodies(&text, &files, worker_task_id.as_deref())
-                                .and_then(|(current, legacy)| {
-                                    crate::opencode_session::post_current_or_legacy(
-                                        |body| worker_server.request("POST", &path, Some(body)),
-                                        &current,
-                                        Some(&legacy),
-                                    )
-                                });
+                            let bodies = prompt_bodies(&text, &files, worker_task_id.as_deref());
+                            let invalid_input = bodies.is_err();
+                            let posted = bodies.and_then(|(mut current, legacy)| {
+                                current["id"] = json!(steering.input_id);
+                                crate::opencode_session::post_current_or_legacy(
+                                    |body| worker_server.request("POST", &path, Some(body)),
+                                    &current,
+                                    Some(&legacy),
+                                )
+                            });
                             match posted {
-                                Ok(_) => {
+                                Ok(response) => {
+                                    // Admission and its client acknowledgement
+                                    // must precede a recovery snapshot. Otherwise
+                                    // the event worker could settle after the
+                                    // fence update but before SteerAccepted,
+                                    // losing the pending attachment presentation.
+                                    let _active = worker_turn.lock();
+                                    submissions.lock().accepted(steering.generation, &response);
                                     let _ = worker_events
                                         .send(DriverEvent::SteerAccepted { message: text });
                                 }
                                 Err(error) => {
+                                    if !invalid_input && !error.to_string().contains("HTTP 4") {
+                                        submissions.lock().unconfirmed_steer(steering, text);
+                                        let _ = worker_events.send(DriverEvent::Error(tr!(
+                                            "errors.provider_prompt_unconfirmed_detail",
+                                            provider = "OpenCode",
+                                            error = error
+                                        )));
+                                        continue;
+                                    }
+                                    submissions.lock().reject_steer(steering);
                                     let _ = worker_events.send(DriverEvent::SteerRejected {
                                         message: text,
                                         reason: tr!(
@@ -2758,8 +2860,9 @@ fn handle_event(
             // `text` is the part's full value — the exact text the stored part
             // keeps. The live message is rewritten from it, the same way a
             // reasoning fragment settles.
+            let part = text_part_key(payload);
             let _ = events.send(DriverEvent::TextEnded {
-                part: text_part_key(payload),
+                part,
                 text: payload
                     .get("text")
                     .and_then(Value::as_str)
@@ -2792,8 +2895,9 @@ fn handle_event(
             // the exact text the stored reasoning part keeps. Rewriting the
             // live block from it heals deltas lost to reordering or a
             // redelivered stream.
+            let part = reasoning_part_key(payload);
             let _ = events.send(DriverEvent::ReasoningEnded {
-                part: reasoning_part_key(payload),
+                part,
                 text: payload
                     .get("text")
                     .and_then(Value::as_str)
@@ -3117,6 +3221,15 @@ fn handle_event(
                 });
             }
         }
+        "session.execution.interrupted" => {
+            clear_foreground_turn_state(state, events);
+            if std::mem::take(&mut *turn_active.lock()) {
+                let _ = events.send(DriverEvent::TurnFinished {
+                    success: false,
+                    summary: None,
+                });
+            }
+        }
         "session.error" => {
             let message = payload
                 .pointer("/error/message")
@@ -3209,16 +3322,49 @@ fn ensure_foreground_turn_active(turn_active: &Mutex<bool>, events: &impl Driver
     let _ = events.send(DriverEvent::TurnStarted);
 }
 
+/// Publish a whole ordered native window before settling. The client replaces
+/// this turn atomically; individual ended parts cannot insert missing content
+/// before newer parts already shown. Hold the fence across publication.
+fn apply_recovered_turn(
+    recovered: recovery::RecoveredTurn,
+    turn_active: &Mutex<bool>,
+    submissions: &Mutex<recovery::SubmissionFence>,
+    state: &mut OpenCodeStreamState,
+    events: &impl DriverEventSink,
+    port: u16,
+) -> Option<recovery::Completion> {
+    let mut active = turn_active.lock();
+    let mut fence = submissions.lock();
+    if !*active || !fence.matches(recovered.generation) {
+        return None;
+    }
+    for message in recovered.acknowledged_steers {
+        let _ = events.send(DriverEvent::SteerAccepted { message });
+    }
+    let _ = events.send(DriverEvent::TurnTranscriptReconciled {
+        transcript: recovered.transcript,
+        continuation: recovered.continuation,
+    });
+    clear_foreground_turn_state(state, events);
+    *active = false;
+    fence.clear();
+    crate::opencode_diagnostics::record("turn_reconciled", port, recovered.generation);
+    if let Some(error) = recovered.error.as_ref() {
+        let _ = events.send(DriverEvent::Error(error.clone()));
+    }
+    let _ = events.send(DriverEvent::TurnFinished {
+        success: recovered.success,
+        summary: recovered.error,
+    });
+    Some(recovered.completion)
+}
+
 /// Settles a still-active turn when the server's runner reports idle.
 ///
-/// Turn settlement otherwise hangs on `session.execution.succeeded`/`failed`,
-/// so a lost or reordered execution event would leave the task in Working
-/// forever. The runner's idle report is the durable backstop: it always
-/// publishes at the end of a run — including failures, where it precedes
-/// `session.execution.failed` — so the outcome is resolved from the newest
-/// assistant message (its `error` field records a failed run) instead of
-/// assuming success. An unfetchable outcome stays untouched: the execution
-/// event or the stream's own exit still has a chance to settle the turn.
+/// Legacy event-handler fallback. The production event consumer intercepts
+/// these hints and asks `recovery::Coordinator` to validate a durable boundary
+/// for the current input instead: current V2 releases do not reliably emit
+/// these events, and a completed assistant step alone is not a completed turn.
 fn settle_on_idle_report(
     port: u16,
     session_id: &str,

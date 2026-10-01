@@ -2057,6 +2057,8 @@ impl Fintwind {
                 settled_reasoning: HashSet::new(),
                 open_text: HashMap::new(),
                 settled_text: HashSet::new(),
+                continuation_projection_start: None,
+                transcript_reconciliation_failed: false,
                 provider_phase: None,
                 pending_permission: None,
                 pending_user_input: None,
@@ -2600,6 +2602,7 @@ impl Fintwind {
             runtime.settled_reasoning.clear();
             runtime.open_text.clear();
             runtime.settled_text.clear();
+            runtime.transcript_reconciliation_failed = false;
             runtime.provider_phase = None;
             // The new submission supersedes any backoff from the previous turn.
             self.provider_retries.remove(&session_id);
@@ -2630,6 +2633,9 @@ impl Fintwind {
                 // lands, so redo stops being possible from here. A failed
                 // preparation never reaches the server and keeps the marker.
                 self.clear_staged_undo(session_id);
+                if let Some(session) = self.state.session_mut(session_id) {
+                    session.bind_active_prompt_transport(&driver_prompt);
+                }
                 driver.prompt(driver_prompt, files);
             }
             Err(error) => {
@@ -2783,6 +2789,7 @@ impl Fintwind {
                         | DriverEvent::SteerAccepted { .. }
                         | DriverEvent::SteerRejected { .. }
                         | DriverEvent::TurnFinished { .. }
+                        | DriverEvent::TurnTranscriptReconciled { .. }
                         | DriverEvent::Error(_)
                         | DriverEvent::ProcessExited
                 );
@@ -2800,6 +2807,7 @@ impl Fintwind {
                         // The authoritative fragment text rewrites the live
                         // block's markdown in one pass.
                         | DriverEvent::ReasoningEnded { .. }
+                        | DriverEvent::TurnTranscriptReconciled { .. }
                 );
                 if background_output_delta {
                     // The registry batches log text into SharedString at 10Hz;
@@ -2882,6 +2890,7 @@ impl Fintwind {
             | DriverEvent::ReasoningStarted { .. }
             | DriverEvent::ReasoningDelta { .. }
             | DriverEvent::ReasoningEnded { .. }
+            | DriverEvent::TurnTranscriptReconciled { .. }
             | DriverEvent::Activity { .. }
             | DriverEvent::RichActivity(_)
             | DriverEvent::Permission { .. } => accepts_turn_output,

@@ -237,6 +237,7 @@ impl BackgroundWorkRegistry {
                         status: TurnStatus::Running,
                         provider_turn_started: true,
                         provider_resume_at: None,
+                        provider_prompt: None,
                         started_at: unix_time(),
                         completed_at: None,
                         checkpoint: None,

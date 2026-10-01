@@ -577,6 +577,15 @@ pub struct AgentTurn {
     pub provider_turn_started: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_resume_at: Option<String>,
+    /// Actual initial transport text when template expansion or legacy
+    /// attachment presentation differs from the user's stored command.
+    /// Kept in existing turn JSON, not in a new message-table column.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "providerPrompt"
+    )]
+    pub provider_prompt: Option<String>,
     pub started_at: u64,
     pub completed_at: Option<u64>,
     #[serde(default)]
@@ -1074,6 +1083,7 @@ impl AgentSession {
                 status: TurnStatus::Completed,
                 provider_turn_started: true,
                 provider_resume_at: None,
+                provider_prompt: None,
                 started_at,
                 completed_at: Some(completed_at),
                 checkpoint: None,
@@ -1101,6 +1111,7 @@ impl AgentSession {
             status: TurnStatus::Running,
             provider_turn_started: false,
             provider_resume_at: None,
+            provider_prompt: None,
             started_at: now,
             completed_at: None,
             checkpoint: None,
@@ -1119,6 +1130,123 @@ impl AgentSession {
             .last()
             .filter(|turn| turn.status == TurnStatus::Running)
             .map(|turn| turn.id)
+    }
+
+    /// Bind the text actually sent for the initial input, while retaining the
+    /// user's typed command and attachment presentation in the transcript.
+    pub fn bind_active_prompt_transport(&mut self, prompt: &str) {
+        let Some(turn) = self.active_turn_id() else {
+            return;
+        };
+        let Some(user) = self
+            .messages
+            .iter()
+            .find(|message| message.turn_id == Some(turn) && message.role == MessageRole::User)
+        else {
+            return;
+        };
+        let binding = (user.content != prompt).then(|| prompt.to_owned());
+        if let Some(active) = self.turns.last_mut() {
+            active.provider_prompt = binding;
+        }
+    }
+
+    /// Atomically replace the live turn's projection in native order. Unlike
+    /// replaying ended parts, this can insert a missing early part before a
+    /// later part that the live feed has already displayed.
+    pub fn reconcile_active_transcript(
+        &mut self,
+        transcript: crate::provider_session::NativeTranscript,
+    ) -> bool {
+        let Some(turn) = self.active_turn_id() else {
+            return false;
+        };
+        let message_start = self
+            .messages
+            .iter()
+            .position(|message| message.turn_id == Some(turn))
+            .unwrap_or(self.messages.len());
+        let block_start = self
+            .transcript_blocks
+            .iter()
+            .position(|block| block.turn_id == Some(turn))
+            .unwrap_or(self.transcript_blocks.len());
+        self.reconcile_active_transcript_from(transcript, message_start, block_start)
+    }
+
+    /// A provider-initiated continuation replaces only output received since
+    /// its TurnStarted, preserving the already settled prefix of that turn.
+    pub fn reconcile_active_transcript_from(
+        &mut self,
+        mut transcript: crate::provider_session::NativeTranscript,
+        message_start: usize,
+        block_start: usize,
+    ) -> bool {
+        let Some(turn) = self.active_turn_id() else {
+            return false;
+        };
+        if message_start > self.messages.len()
+            || block_start > self.transcript_blocks.len()
+            || self.messages[message_start..]
+                .iter()
+                .any(|message| message.turn_id.is_some_and(|id| id != turn))
+            || transcript
+                .blocks
+                .iter()
+                .any(|block| block.after_message > transcript.messages.len())
+        {
+            return false;
+        }
+        let mut users = self.messages[message_start..]
+            .iter()
+            .filter(|message| message.role == MessageRole::User)
+            .cloned()
+            .collect::<std::collections::VecDeque<_>>();
+        let first_user = self
+            .messages
+            .iter()
+            .find(|message| message.turn_id == Some(turn) && message.role == MessageRole::User)
+            .map(|message| message.id);
+        let transport = self
+            .turns
+            .last()
+            .and_then(|turn| turn.provider_prompt.as_deref());
+        // Presentation and attachment handles are client-owned. Native user
+        // rows determine their positions, not their display metadata.
+        for message in &mut transcript.messages {
+            message.turn_id = Some(turn);
+            message.streaming = false;
+            if message.role == MessageRole::User
+                && let Some(index) = users.iter().position(|local| {
+                    let expected = if Some(local.id) == first_user {
+                        transport.unwrap_or(&local.content)
+                    } else {
+                        &local.content
+                    };
+                    expected.trim() == message.content.trim()
+                })
+                && let Some(local) = users.remove(index)
+            {
+                message.id = local.id;
+                message.content = local.content;
+                message.display_content = local.display_content;
+                message.attachments = local.attachments;
+            }
+        }
+        if !users.is_empty() {
+            // An incomplete native window must never discard local inputs.
+            return false;
+        }
+        for block in &mut transcript.blocks {
+            block.turn_id = Some(turn);
+            block.after_message += message_start;
+        }
+        self.messages.truncate(message_start);
+        self.messages.append(&mut transcript.messages);
+        self.transcript_blocks.truncate(block_start);
+        self.transcript_blocks.append(&mut transcript.blocks);
+        self.updated_at = unix_time();
+        true
     }
 
     /// Undo [`Self::begin_turn`] for a turn whose provider never started —
@@ -1181,6 +1309,7 @@ impl AgentSession {
             status: TurnStatus::Running,
             provider_turn_started: true,
             provider_resume_at: None,
+            provider_prompt: None,
             started_at: now,
             completed_at: None,
             checkpoint: None,
@@ -1584,6 +1713,12 @@ pub enum DriverEvent {
     /// the server starts a run on its own (opencode `session.execution.started`
     /// after a settled turn — background-task auto-continue).
     TurnStarted,
+    /// A validated durable window, published before its TurnFinished. Kept
+    /// atomic so a missing early part cannot be appended after a later one.
+    TurnTranscriptReconciled {
+        transcript: crate::provider_session::NativeTranscript,
+        continuation: bool,
+    },
     /// A provider text part opened (opencode v2 `session.text.started`). The
     /// message is reserved here, before later tool events, so a batched tail
     /// can fill the sentence the part already started instead of landing after

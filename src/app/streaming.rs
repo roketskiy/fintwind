@@ -568,10 +568,77 @@ impl Fintwind {
             }
             DriverEvent::TurnStarted => {
                 runtime.last_driver_error = None;
+                runtime.transcript_reconciliation_failed = false;
                 runtime.provider_phase = None;
                 self.provider_retries.remove(&session_id);
                 if let Some(session) = self.state.session_mut(session_id) {
+                    runtime.continuation_projection_start = session
+                        .active_turn_id()
+                        .is_none()
+                        .then_some((session.messages.len(), session.transcript_blocks.len()));
                     session.resume_provider_turn();
+                }
+            }
+            DriverEvent::TurnTranscriptReconciled {
+                transcript,
+                continuation,
+            } => {
+                if self.accepts_turn_output(session_id) {
+                    let previous_kinds = self.snapshot_selected_transcript_rows(session_id);
+                    let applied = self.state.session_mut(session_id).is_some_and(|session| {
+                        if continuation {
+                            runtime.continuation_projection_start.is_some_and(
+                                |(messages, blocks)| {
+                                    session.reconcile_active_transcript_from(
+                                        transcript, messages, blocks,
+                                    )
+                                },
+                            )
+                        } else {
+                            session.reconcile_active_transcript(transcript)
+                        }
+                    });
+                    if applied {
+                        runtime.transcript_reconciliation_failed = false;
+                        runtime.open_text.clear();
+                        runtime.settled_text.clear();
+                        runtime.open_reasoning.clear();
+                        runtime.settled_reasoning.clear();
+                        runtime.stream_phase = None;
+                        self.state.mark_session_dirty(session_id);
+                        if let Some(previous) = previous_kinds {
+                            self.splice_active_transcript_rows_after_visibility_change(&previous);
+                            // Keep the reader's history scroll/disclosures.
+                            // Only this turn's rewritten suffix needs fresh
+                            // measurements; translation already ran off-UI.
+                            let kinds = self.transcript_row_kinds.borrow();
+                            let from = self.selected_session().and_then(|session| {
+                                let turn = session.active_turn_id()?;
+                                kinds.iter().position(|kind| match kind {
+                                    TranscriptRowKind::Message(index) => session
+                                        .messages
+                                        .get(*index)
+                                        .is_some_and(|message| message.turn_id == Some(turn)),
+                                    TranscriptRowKind::TurnBlock(index) => session
+                                        .transcript_blocks
+                                        .get(*index)
+                                        .is_some_and(|block| block.turn_id == Some(turn)),
+                                    TranscriptRowKind::WorkingIndicator => true,
+                                    _ => false,
+                                })
+                            });
+                            if let Some(from) = from {
+                                self.remeasure_transcript_rows(from..kinds.len());
+                            }
+                        }
+                    } else {
+                        runtime.transcript_reconciliation_failed = true;
+                        let error = tr!("errors.provider_transcript_reconcile_failed");
+                        runtime.last_driver_error = Some(error.clone());
+                        if self.state.selected_session == Some(session_id) {
+                            self.show_toast(error);
+                        }
+                    }
                 }
             }
             DriverEvent::ProviderBusy => {
@@ -915,6 +982,15 @@ impl Fintwind {
                 }
             }
             DriverEvent::TurnFinished { success, summary } => {
+                let (success, summary) =
+                    if std::mem::take(&mut runtime.transcript_reconciliation_failed) {
+                        (
+                            false,
+                            Some(tr!("errors.provider_transcript_reconcile_failed")),
+                        )
+                    } else {
+                        (success, summary)
+                    };
                 self.settle_foreground_work(
                     session_id,
                     if success {

@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use anyhow::Context;
@@ -61,12 +61,27 @@ impl Deref for PooledServer {
 }
 
 impl PooledServer {
+    /// Readers can check actual process exit without extending its lifetime.
+    pub(crate) fn liveness(&self) -> ServerLiveness {
+        ServerLiveness(Arc::downgrade(&self.inner))
+    }
+
     /// Wraps a server a session started for itself, outside the global pool.
     #[cfg(test)]
     pub(crate) fn dedicated(server: OpenCodeServer) -> Self {
         Self {
             inner: Arc::new(PoolInner { server }),
         }
+    }
+}
+
+pub(crate) struct ServerLiveness(Weak<PoolInner>);
+
+impl ServerLiveness {
+    pub(crate) fn is_alive(&self) -> bool {
+        self.0
+            .upgrade()
+            .is_some_and(|inner| inner.server.is_alive())
     }
 }
 

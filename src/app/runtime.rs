@@ -2795,6 +2795,8 @@ impl Fintwind {
             let Some(mut runtime) = self.runtimes.remove(&session_id) else {
                 continue;
             };
+            let previous_block_count = (self.state.selected_session == Some(session_id))
+                .then(|| self.selected_transcript_blocks().len());
             let follow_up_remeasure = std::mem::take(&mut runtime.stream_remeasure_pending);
             Self::collect_runtime_events(&mut runtime);
             let mut runtime_changed = false;
@@ -2872,6 +2874,16 @@ impl Fintwind {
             runtime.stream_remeasure_pending = markdown_changed;
             if keep_runtime {
                 self.runtimes.insert(session_id, runtime);
+            }
+            // A new activity group closes the previously newest group, which
+            // may be separated from the tail by several assistant text parts.
+            // Invalidate it once per drain, not on activity completion.
+            if self.state.selected_session == Some(session_id)
+                && let Some(previous_count) = previous_block_count
+                && previous_count > 0
+                && self.selected_transcript_blocks().len() > previous_count
+            {
+                self.remeasure_transcript_block(previous_count - 1);
             }
             if self.state.selected_session == Some(session_id) {
                 self.sync_browser_automation_host(cx);

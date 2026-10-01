@@ -1046,8 +1046,8 @@ impl Fintwind {
     }
 
     /// An item's stored cluster disclosure for one of its transcript blocks,
-    /// if the user toggled it. `None` leaves the default — open for a live
-    /// batch in a live turn, closed otherwise — to the shared cluster renderer.
+    /// if the user toggled it. `None` leaves the default — open for the newest
+    /// group in a live turn, closed otherwise — to the shared cluster renderer.
     pub(super) fn background_activity_cluster_expanded(
         &self,
         key: &BackgroundWorkKey,
@@ -1753,8 +1753,8 @@ impl Fintwind {
         }
         // The item's own liveness: the same questions the session transcript
         // asks of its runtime, answered from the background item instead. A
-        // live subagent's blocks name their newest activity; only batches with
-        // unfinished activities start open, as in the parent transcript.
+        // live subagent's blocks name their newest activity; the newest group
+        // stays open until another group appears, as in the parent transcript.
         let live_turn_id = (item.status.is_live())
             .then(|| {
                 transcript
@@ -1786,6 +1786,7 @@ impl Fintwind {
                         surface: ActivitySurface::Background(item.key.clone()),
                         block_index: *block_index,
                         live_turn,
+                        latest_group: *block_index + 1 == transcript.transcript_blocks.len(),
                         live_reasoning_id,
                         selection: selection.clone(),
                     },

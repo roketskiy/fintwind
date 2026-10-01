@@ -179,6 +179,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = self._body()
         path = self._path()
+        log({"event": "post", "path": path})
         if path == "/api/session":
             return self.handle_create_session()
         if path.endswith("/prompt"):
@@ -216,6 +217,14 @@ class Handler(BaseHTTPRequestHandler):
         return self._empty(200)
 
     def handle_active(self):
+        if "active_responses" in BEHAVIOR:
+            with LOCK:
+                index = STATE.get("active_requests", 0)
+                STATE["active_requests"] = index + 1
+                responses = BEHAVIOR["active_responses"]
+                response = responses[min(index, len(responses) - 1)]
+            log({"event": "active", "response_index": index})
+            return self._json(response.get("http_status", 200), response["body"])
         turn = turn_by_index(current_turn())
         # The active roster lists a session solely by the `active` flag — it is
         # independent of session `status`, which is what makes it a real veto
@@ -257,6 +266,10 @@ class Handler(BaseHTTPRequestHandler):
                             part["text"] = text
 
     def handle_messages(self):
+        sid = self._session_id()
+        if sid in BEHAVIOR.get("session_messages", {}):
+            log({"event": "messages", "sid": sid})
+            return self._json(200, {"data": BEHAVIOR["session_messages"][sid]})
         idx = current_turn()
         turn = turn_by_index(idx)
         delivered = bool(STATE.get("delivered", {}).get(idx))
@@ -567,6 +580,8 @@ class Handler(BaseHTTPRequestHandler):
             asst = step.get("assistant_msg_id", turn.get("assistant_msg_id", "msg_asst"))
             if "sleep_ms" in step:
                 time.sleep(step["sleep_ms"] / 1000.0)
+            if "event" in step:
+                self._emit(step["event"], step)
             if "move" in step:
                 move = step["move"]
                 moved_id = move.get("sessionID", sid)

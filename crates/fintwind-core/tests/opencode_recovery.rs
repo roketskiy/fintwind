@@ -267,6 +267,238 @@ fn opencode_session_moves() {
     );
 }
 
+/// Missing V2 status fields must not revive history; an active child can carry
+/// an old outcome, failed/malformed active reads must not settle it, and
+/// unknown execution state must never invent a start or a stop control.
+#[test]
+#[ignore = "owns a private daemon/pool; run separately from the recovery matrix"]
+fn opencode_subagent_restore_status() {
+    let run = Run::new();
+    let workspace = run.workspace("subagent-restore");
+    let created = 1_700_000_000_000u64;
+    let row = |id: &str, parent: Option<&str>, outcome: Option<&str>| {
+        let mut row = json!({
+            "id": id, "title": id,
+            "location": {"directory": workspace},
+            "time": {"created": created, "updated": created + 2000},
+        });
+        if let Some(parent) = parent {
+            row["parentID"] = json!(parent);
+        }
+        if let Some(outcome) = outcome {
+            row["outcome"] = json!(outcome);
+            row["time"]["idle"] = json!(created + 2000);
+        }
+        row
+    };
+    let expected = [
+        ("ses_done", "completed", false),
+        ("ses_failed", "failed", false),
+        ("ses_stopped", "stopped", false),
+        ("ses_running", "running", true),
+        ("ses_unknown", "lost", false),
+        ("ses_legacy", "completed", false),
+    ];
+    let mut legacy = row("ses_legacy", Some("ses_parent"), None);
+    legacy["status"] = json!({"type": "idle"});
+    let messages: serde_json::Map<String, Value> = expected
+        .iter()
+        .map(|(id, ..)| {
+            (
+                (*id).to_owned(),
+                json!(settled_history(
+                    "msg_user",
+                    "msg_answer",
+                    created,
+                    id,
+                    "succeeded"
+                )),
+            )
+        })
+        .collect();
+    let fixture = build_fixture(
+        &run,
+        "subagent-restore",
+        &json!({
+            "models": {workspace.to_string_lossy(): [{"id": "m", "providerID": "p", "enabled": true}]},
+            "session_rows": [
+                row("ses_parent", None, Some("succeeded")),
+                row("ses_done", Some("ses_parent"), Some("succeeded")),
+                row("ses_failed", Some("ses_parent"), Some("failed")),
+                row("ses_stopped", Some("ses_parent"), Some("interrupted")),
+                row("ses_running", Some("ses_parent"), Some("succeeded")),
+                row("ses_unknown", Some("ses_parent"), None),
+                legacy,
+                row("ses_unrelated", Some("ses_other"), Some("succeeded")),
+            ],
+            "session_messages": messages,
+            "active_responses": [
+                {"body": {"data": {"ses_running": {"type": "running"}}}},
+                {"http_status": 503, "body": {"error": "unavailable"}},
+                {"body": {"data": []}},
+                {"body": {"data": {"ses_running": {"type": "running"}}}},
+            ],
+            "turns": [{"active": true, "created_ms": created + 3000, "sse": [
+                {"event": {"type": "session.execution.started", "data": {"sessionID": "ses_done"}}},
+                {"event": {"type": "session.tool.input.started", "data": {"sessionID": "ses_parent", "id": "call_resume", "name": "subagent"}}},
+                {"event": {"type": "session.tool.called", "data": {"sessionID": "ses_parent", "id": "call_resume", "input": {"sessionID": "ses_done", "prompt": "continue the child"}}}},
+                {"event": {"type": "session.execution.started", "data": {"sessionID": "ses_done"}}},
+                {"event": {"type": "session.text.delta", "data": {"sessionID": "ses_done", "delta": "new child output"}}},
+            ]}],
+        }),
+    );
+    let harness = start_harness(&run.root);
+    let (session, runtime) = (Uuid::new_v4(), Uuid::new_v4());
+    let mut options = start_options(&fixture.bin, &workspace);
+    options.provider_cursor = Some(json!({"provider": "openCode", "sessionId": "ses_parent"}));
+    harness
+        .client
+        .request(session, runtime, Command::Start { options })
+        .unwrap();
+    let events = harness.client.subscribe(session, runtime);
+    let mut report = Fact::default();
+    report.server_log = Some(fixture.server_log.clone());
+    for round in 0..4 {
+        harness
+            .client
+            .request(session, runtime, Command::RefreshBackgroundWork)
+            .unwrap();
+        let mut items = None;
+        let mut snapshots = 0;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Ok(event) = events.recv_timeout(Duration::from_millis(50)) {
+                if event.event.kind == "backgroundWork" {
+                    let payload = &event.event.payload;
+                    if payload["type"] == "reconcileLive" {
+                        items = payload["items"].as_array().cloned();
+                    }
+                    if payload["type"] == "transcript" && payload.get("snapshot").is_some() {
+                        snapshots += 1;
+                    }
+                }
+                report.collected.absorb(&event);
+            }
+            // Successful rounds complete on their roster (plus first hydration).
+            // Failed rounds close an observation window after the read is logged.
+            let read_done = read_jsonl(&fixture.server_log)
+                .iter()
+                .any(|entry| entry["event"] == "active" && entry["response_index"] == round);
+            if (round == 0 && items.is_some() && snapshots == expected.len())
+                || (round == 3 && items.is_some())
+                || ((round == 1 || round == 2)
+                    && read_done
+                    && deadline.saturating_duration_since(Instant::now()) < Duration::from_secs(4))
+            {
+                break;
+            }
+        }
+        if round == 1 || round == 2 {
+            report.expect(
+                items.is_none(),
+                format!("round {round}: a failed active read must preserve existing state"),
+            );
+            continue;
+        }
+        let items = items.unwrap_or_default();
+        report.expect(
+            items.len() == expected.len(),
+            format!("round {round}: only this parent's children belong in the roster"),
+        );
+        for (id, status, can_stop) in expected {
+            let item = items
+                .iter()
+                .find(|item| item.pointer("/key/providerId") == Some(&json!(id)));
+            report.expect(
+                item.is_some_and(|item| item["status"] == status && item["canStop"] == can_stop),
+                format!("round {round}: {id} must be {status} with canStop={can_stop}"),
+            );
+            report.expect(
+                item.is_some_and(|item| item["startedAtMs"] == created),
+                format!("round {round}: {id} must retain its native creation time"),
+            );
+        }
+        if round == 0 {
+            report.expect(
+                snapshots == expected.len(),
+                "historical transcripts must remain readable",
+            );
+        }
+    }
+    let requests = read_jsonl(&fixture.server_log);
+    report.expect(
+        !requests.iter().any(|entry| {
+            entry["event"] == "post"
+                && entry["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("/prompt") || path.ends_with("/interrupt"))
+        }),
+        "restoring a session must neither execute nor interrupt a child",
+    );
+    // A reused native child emits no session.created. Its bound execution
+    // must use a live Upsert, which can reopen the desktop registry's settled
+    // item; another ReconcileLive is deliberately not enough to do that.
+    harness
+        .client
+        .request(
+            session,
+            runtime,
+            Command::Prompt {
+                prompt: "continue parent".into(),
+                files: vec![],
+            },
+        )
+        .unwrap();
+    let mut resumed = false;
+    let mut prompt_seen = false;
+    let mut output_seen = false;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline && !output_seen {
+        if let Ok(event) = events.recv_timeout(Duration::from_millis(50)) {
+            if event.event.kind == "backgroundWork" {
+                let payload = &event.event.payload;
+                if payload["type"] == "upsert"
+                    && payload.pointer("/key/providerId") == Some(&json!("ses_done"))
+                {
+                    report.expect(
+                        payload["status"] == "running" && payload["canStop"] == true,
+                        "the resumed child must become live and stoppable",
+                    );
+                    report.expect(
+                        payload["originActivityIds"] == json!(["call_resume"]),
+                        "only the bound resume may reopen a historical child",
+                    );
+                    report.expect(
+                        payload["title"] == "",
+                        "a resume without metadata must retain the restored child title",
+                    );
+                    resumed = true;
+                }
+                if let Some(started) = payload.get("started") {
+                    prompt_seen = started["prompt"] == "continue the child";
+                }
+                if let Some(delta) = payload.get("textDelta") {
+                    output_seen = delta["delta"] == "new child output";
+                }
+            }
+            report.collected.absorb(&event);
+        }
+    }
+    report.expect(
+        resumed && prompt_seen && output_seen,
+        "a completed historical child must support a genuine resume without a new session.created",
+    );
+    let artifact = run.root.join("result-subagent-restore.json");
+    fs::write(
+        &artifact,
+        serde_json::to_vec_pretty(&finish_artifact(&[("subagent-restore", &report)], vec![]))
+            .unwrap(),
+    )
+    .unwrap();
+    eprintln!("subagent restore artifact: {}", artifact.display());
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+}
+
 // -- run layout -----------------------------------------------------------
 
 fn repo_root() -> PathBuf {

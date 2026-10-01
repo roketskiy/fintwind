@@ -1520,6 +1520,29 @@ impl DriverControl for OpenCodeDriver {
                 let Some(sessions) = sessions else {
                     return;
                 };
+                // V2 session rows are durable history, not execution status.
+                // A resumed child can still carry its previous outcome while
+                // running, so the process-local active roster takes precedence.
+                // Failed or malformed reads prove nothing: preserve UI state.
+                let active = request_json_on_port_with_directory(
+                    port,
+                    "GET",
+                    "/api/session/active",
+                    None,
+                    Duration::from_secs(10),
+                    Some(&directory),
+                );
+                let Some(active) = active
+                    .as_ref()
+                    .ok()
+                    .and_then(|response| response.get("data"))
+                    .and_then(Value::as_object)
+                else {
+                    return;
+                };
+                if generation_guard.load(Ordering::Acquire) != generation {
+                    return;
+                }
                 let items = sessions
                     .into_iter()
                     .filter_map(|payload| {
@@ -1532,21 +1555,19 @@ impl DriverControl for OpenCodeDriver {
                         .then(|| {
                             let mut child =
                                 OpenCodeChildSession::new(child_id, &parent_id, &payload);
-                            let status = payload
-                                .pointer("/status/type")
-                                .or_else(|| payload.get("status"))
-                                .and_then(Value::as_str);
-                            child.item.status = match status {
-                                Some("busy" | "running" | "starting") => {
-                                    BackgroundWorkStatus::Running
-                                }
-                                Some("error" | "failed") => BackgroundWorkStatus::Failed,
-                                Some("idle" | "completed" | "success") => {
-                                    BackgroundWorkStatus::Completed
-                                }
-                                _ => BackgroundWorkStatus::Starting,
-                            };
+                            child.item.status =
+                                restored_child_status(&payload, active.contains_key(child_id));
                             child.item.can_stop = child.item.status.is_stoppable();
+                            if let Some(created) =
+                                payload.pointer("/time/created").and_then(Value::as_u64)
+                            {
+                                child.item.started_at_ms = created;
+                            }
+                            if let Some(updated) =
+                                payload.pointer("/time/updated").and_then(Value::as_u64)
+                            {
+                                child.item.updated_at_ms = updated;
+                            }
                             child.item
                         })
                     })
@@ -1775,6 +1796,29 @@ impl OpenCodeChildSession {
             execution_started_at_ms: None,
             pending_revives: VecDeque::new(),
         }
+    }
+}
+
+fn restored_child_status(payload: &Value, active: bool) -> BackgroundWorkStatus {
+    if active {
+        return BackgroundWorkStatus::Running;
+    }
+    match payload.get("outcome").and_then(Value::as_str) {
+        Some("succeeded") => BackgroundWorkStatus::Completed,
+        Some("failed") => BackgroundWorkStatus::Failed,
+        Some("interrupted") => BackgroundWorkStatus::Stopped,
+        _ => match payload
+            .pointer("/status/type")
+            .or_else(|| payload.get("status"))
+            .and_then(Value::as_str)
+        {
+            // Compatibility with servers which still publish a status field.
+            Some("busy" | "running" | "starting") => BackgroundWorkStatus::Running,
+            Some("error" | "failed") => BackgroundWorkStatus::Failed,
+            Some("idle" | "completed" | "success") => BackgroundWorkStatus::Completed,
+            // Missing information is not evidence of an execution start.
+            _ => BackgroundWorkStatus::Lost,
+        },
     }
 }
 
@@ -2497,6 +2541,26 @@ fn dispatch_server_event(
     );
 
     if let Some(session) = session.filter(|session| *session != root) {
+        // A resumed historical child has no new session.created. Only an
+        // exact pending call plus its execution start can attach it here;
+        // unrelated or replayed starts must not reopen historical work.
+        if kind == "session.execution.started"
+            && !state.children.contains_key(session)
+            && let Some(index) = state
+                .pending_subagents
+                .iter()
+                .position(|pending| pending.target.as_deref() == Some(session))
+            && let Some(pending) = state.pending_subagents.remove(index)
+        {
+            let mut child = OpenCodeChildSession::new(session, root, event_payload(value));
+            // Start events carry no title. Let the registry keep the title
+            // restored from native history rather than replacing it with Bot.
+            child.item.title.clear();
+            child.item.origin_activity_ids.push(pending.activity_id);
+            child.item.command = pending.prompt.clone();
+            child.prompt = pending.prompt;
+            state.children.insert(session.to_owned(), child);
+        }
         let known_child = state
             .children
             .get(session)

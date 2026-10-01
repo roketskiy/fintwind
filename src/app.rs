@@ -1740,6 +1740,10 @@ pub struct Fintwind {
     model_latency: HashMap<(String, String), providers_fetch::ModelLatencyState>,
     /// Generation token for the debounced native-session reconcile.
     native_reconcile_generation: u64,
+    /// Moved rows can disappear from the selected directory's roster.
+    native_moved_sessions: HashSet<String>,
+    /// Placement versions invalidate hydration/attachment snapshots read before a move.
+    native_placement_generations: HashMap<Uuid, u64>,
     /// Server transcript version (local fetch timestamp) already applied to
     /// each session that tracks a native one — imported or created here — so
     /// re-opening a session does not refetch unless the server moved.
@@ -3375,6 +3379,8 @@ impl Fintwind {
                 provider_connectivity: HashMap::new(),
                 model_latency: HashMap::new(),
                 native_reconcile_generation: 0,
+                native_moved_sessions: HashSet::new(),
+                native_placement_generations: HashMap::new(),
                 native_transcript_fetched: HashMap::new(),
                 native_transcript_fetches: HashSet::new(),
                 staged_undos: HashMap::new(),

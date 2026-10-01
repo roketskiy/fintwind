@@ -60,6 +60,12 @@ pub struct ProviderSessionFork {
 #[serde(rename_all = "camelCase")]
 pub struct NativeSessionSummary {
     pub session_id: String,
+    /// Authoritative current location, including moves outside the listed directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directory: Option<std::path::PathBuf>,
+    /// Resolved on the daemon host, never through filesystem I/O in a UI frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<crate::model::SessionWorkspace>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     /// Unix seconds.

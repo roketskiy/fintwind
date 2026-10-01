@@ -863,7 +863,7 @@ pub(super) struct ActivityClusterContext {
     /// part of its control ids.
     pub(super) block_index: usize,
     /// The owning turn is still streaming: the header names the newest
-    /// activity and the cluster starts expanded.
+    /// activity. Only clusters with unfinished activities start expanded.
     pub(super) live_turn: bool,
     /// The reasoning activity streaming in this block, if any.
     pub(super) live_reasoning_id: Option<Uuid>,
@@ -872,16 +872,19 @@ pub(super) struct ActivityClusterContext {
 }
 
 impl ActivityClusterContext {
-    /// Whether the cluster's cards are showing. A live turn starts open in
-    /// both surfaces; past that, only the user's stored toggle matters.
-    fn expanded(&self, this: &Fintwind) -> bool {
+    /// Whether the cluster's cards are showing. Unfinished activities in a
+    /// live turn start open in both surfaces; a completed batch closes unless
+    /// the user has stored an explicit disclosure choice.
+    fn expanded(&self, this: &Fintwind, activities: &[ActivityItem]) -> bool {
         let stored = match &self.surface {
             ActivitySurface::Session => this.activities_expanded.get(&self.block_index).copied(),
             ActivitySurface::Background(key) => {
                 this.background_activity_cluster_expanded(key, self.block_index)
             }
         };
-        stored.unwrap_or(self.live_turn)
+        stored.unwrap_or_else(|| {
+            self.live_turn && activities.iter().any(|activity| !activity.complete)
+        })
     }
 
     /// Stem for the cluster's focus handle and element id. Background surfaces
@@ -2342,7 +2345,7 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let expanded = context.expanded(self);
+        let expanded = context.expanded(self, activities);
         let control_id = context.control_id();
         let header_title =
             activity_header_title(activities, context.live_turn, context.live_reasoning_id);

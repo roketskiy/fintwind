@@ -211,6 +211,9 @@ pub enum Command {
     ListProviderSessions {
         binary: PathBuf,
         directory: PathBuf,
+        /// Missing rows may have moved rather than been deleted. Resolve them by ID.
+        #[serde(default)]
+        tracked_session_ids: Vec<String>,
     },
     /// Fetch one native session's transcript and translate it into the app's
     /// message/block model. Runs off any session runtime: the daemon reaches

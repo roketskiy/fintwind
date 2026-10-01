@@ -357,7 +357,7 @@ impl Fintwind {
             Some(StreamPhase::Reasoning | StreamPhase::Activity)
         );
         if let Some(session) = self.state.session_mut(session_id) {
-            for block in session.transcript_blocks.iter_mut().rev() {
+            for (block_index, block) in session.transcript_blocks.iter_mut().enumerate().rev() {
                 let matching = block.activities.iter_mut().rev().find(|activity| {
                     item.source_id
                         .as_ref()
@@ -369,6 +369,7 @@ impl Fintwind {
                 if let Some(activity) = matching {
                     let has_arguments = item.arguments.is_some();
                     let replaces_changes = !item.file_changes.is_empty();
+                    let completion_changed = activity.complete != item.complete;
                     let activity_id = activity.id;
                     activity.kind = item.kind;
                     activity.title = item.title;
@@ -406,6 +407,12 @@ impl Fintwind {
                         // The rows this activity's diff was built from are gone;
                         // an expanded card rebuilds from the new ones.
                         self.activity_diffs.borrow_mut().remove(&activity_id);
+                    }
+                    // A completed batch auto-collapses even while its turn is
+                    // running. Late updates can target rows outside the tail
+                    // remeasure window, so invalidate the owning block too.
+                    if completion_changed && self.state.selected_session == Some(session_id) {
+                        self.remeasure_transcript_block(block_index);
                     }
                     return;
                 }
@@ -542,6 +549,10 @@ impl Fintwind {
             DriverEvent::NativeSessionsChanged => {
                 // Sessions came or went on the OpenCode server while a driver
                 // is attached; refresh the sidebar's roster.
+                self.schedule_native_session_reconcile(cx);
+            }
+            DriverEvent::NativeSessionMoved { native_session_id } => {
+                self.native_moved_sessions.insert(native_session_id);
                 self.schedule_native_session_reconcile(cx);
             }
             DriverEvent::AgentPresetSelected(agent_preset) => {

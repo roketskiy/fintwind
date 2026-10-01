@@ -289,6 +289,7 @@ impl Fintwind {
         if !needs_hydration || !self.session_hydrations.insert(session_id) {
             return;
         }
+        let placement_generation = self.native_placement_generation(session_id);
         let daemon = self.daemon.clone();
         cx.spawn(async move |fintwind, cx| {
             let result = cx
@@ -305,13 +306,26 @@ impl Fintwind {
             let _ = fintwind.update(cx, |fintwind, cx| {
                 fintwind.session_hydrations.remove(&session_id);
                 match result {
-                    Ok(session) => {
+                    Ok(mut session) => {
+                        let placement_changed = fintwind.native_placement_generation(session_id)
+                            != placement_generation
+                            || fintwind.native_placement_generation(session_id) > 0;
                         let replaced = if let Some(existing) = fintwind
                             .state
                             .sessions
                             .iter_mut()
                             .find(|existing| existing.id == session_id)
                         {
+                            // A save notification can still be pending even if
+                            // this fetch began after the native move. Keep the
+                            // roster-owned placement, not the daemon snapshot's.
+                            if placement_changed
+                                || existing.native_session_id.is_some()
+                                || existing.provider_cursor.is_some()
+                            {
+                                session.project_id = existing.project_id;
+                                session.workspace = existing.workspace.clone();
+                            }
                             *existing = session;
                             true
                         } else {

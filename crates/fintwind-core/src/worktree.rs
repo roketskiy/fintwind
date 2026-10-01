@@ -17,6 +17,44 @@ const MAX_CANDIDATES: usize = 100;
 
 pub use fintwind_protocol::git::CreatedWorktree;
 
+/// Identify externally created linked worktrees, including nested project
+/// directories and detached HEAD. Called only on daemon request workers.
+pub(crate) fn inspect_workspace(path: &Path) -> fintwind_protocol::model::SessionWorkspace {
+    use fintwind_protocol::model::SessionWorkspace;
+    let output = crate::command_env::plain_command("git")
+        .args([
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-dir",
+            "--git-common-dir",
+        ])
+        .current_dir(path)
+        .output();
+    let Ok(output) = output else {
+        return SessionWorkspace::Local;
+    };
+    if !output.status.success() {
+        return SessionWorkspace::Local;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut lines = text.lines();
+    let (Some(git_dir), Some(common_dir)) = (lines.next(), lines.next()) else {
+        return SessionWorkspace::Local;
+    };
+    if git_dir == common_dir {
+        return SessionWorkspace::Local;
+    }
+    let branch = git_stdout(path, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .or_else(|_| git_stdout(path, &["rev-parse", "--short", "HEAD"]))
+        .unwrap_or_default()
+        .trim()
+        .to_owned();
+    SessionWorkspace::Worktree {
+        path: path.to_path_buf(),
+        branch,
+    }
+}
+
 pub fn create(
     project_path: &Path,
     project_id: Uuid,

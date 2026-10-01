@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 LOCK = threading.Condition()
 STATE = {
@@ -179,6 +179,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = self._body()
         path = self._path()
+        log({"event": "post", "path": path})
         if path == "/api/session":
             return self.handle_create_session()
         if path.endswith("/prompt"):
@@ -216,6 +217,14 @@ class Handler(BaseHTTPRequestHandler):
         return self._empty(200)
 
     def handle_active(self):
+        if "active_responses" in BEHAVIOR:
+            with LOCK:
+                index = STATE.get("active_requests", 0)
+                STATE["active_requests"] = index + 1
+                responses = BEHAVIOR["active_responses"]
+                response = responses[min(index, len(responses) - 1)]
+            log({"event": "active", "response_index": index})
+            return self._json(response.get("http_status", 200), response["body"])
         turn = turn_by_index(current_turn())
         # The active roster lists a session solely by the `active` flag — it is
         # independent of session `status`, which is what makes it a real veto
@@ -257,6 +266,10 @@ class Handler(BaseHTTPRequestHandler):
                             part["text"] = text
 
     def handle_messages(self):
+        sid = self._session_id()
+        if sid in BEHAVIOR.get("session_messages", {}):
+            log({"event": "messages", "sid": sid})
+            return self._json(200, {"data": BEHAVIOR["session_messages"][sid]})
         idx = current_turn()
         turn = turn_by_index(idx)
         delivered = bool(STATE.get("delivered", {}).get(idx))
@@ -295,6 +308,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_session_get(self):
         sid = self._session_id()
+        if "session_rows" in BEHAVIOR:
+            with LOCK:
+                rows = STATE.setdefault("session_rows", json.loads(json.dumps(BEHAVIOR["session_rows"])))
+                if sid is None:
+                    directory = parse_qs(urlparse(self.path).query).get("directory", [None])[0]
+                    log({"event": "session_list", "directory": directory, "header_directory": self._directory()})
+                    return self._json(200, {"data": [row for row in rows if row["location"]["directory"] == directory]})
+                row = next((row for row in rows if row["id"] == sid), None)
+                return self._json(200, {"data": row}) if row else self._json(404, {"error": "not found"})
         if sid is None:
             return self._json(200, {"data": [], "cursor": {"next": ""}})
         turn = turn_by_index(current_turn())
@@ -315,7 +337,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_create_session(self):
         with LOCK:
-            STATE["session_id"] = f"ses_fake_{os.getpid():06d}"
+            STATE["session_id"] = BEHAVIOR.get("session_id", f"ses_fake_{os.getpid():06d}")
             sid = STATE["session_id"]
         return self._json(200, {"data": {"id": sid}})
 
@@ -558,6 +580,20 @@ class Handler(BaseHTTPRequestHandler):
             asst = step.get("assistant_msg_id", turn.get("assistant_msg_id", "msg_asst"))
             if "sleep_ms" in step:
                 time.sleep(step["sleep_ms"] / 1000.0)
+            if "event" in step:
+                self._emit(step["event"], step)
+            if "move" in step:
+                move = step["move"]
+                moved_id = move.get("sessionID", sid)
+                with LOCK:
+                    rows = STATE.setdefault("session_rows", json.loads(json.dumps(BEHAVIOR["session_rows"])))
+                    for row in rows:
+                        if row["id"] == moved_id:
+                            row["location"] = {"directory": move["directory"]}
+                            row["time"]["updated"] += 1000
+                self._emit({"type": "session.moved", "data": {"sessionID": moved_id,
+                            "projectID": "project_destination",
+                            "location": {"directory": move["directory"]}}}, step)
             if "heartbeat_ms" in step:
                 try:
                     self._heartbeat()

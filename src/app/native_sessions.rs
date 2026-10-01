@@ -226,6 +226,41 @@ fn native_transcript_refresh_due(
 }
 
 impl Fintwind {
+    pub(super) fn native_placement_generation(&self, session_id: Uuid) -> u64 {
+        self.native_placement_generations
+            .get(&session_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Parked tabs hold their own editors. Invalidate those as well as the
+    /// visible editors, retaining dirty text without permission to write it
+    /// into the destination's identically named file.
+    fn isolate_moved_session_editors(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        let editors = if self.state.selected_session == Some(session_id) {
+            Some(&mut self.right_panel_file_editors)
+        } else {
+            self.right_panel_session_states
+                .get_mut(&session_id)
+                .map(|state| {
+                    state.expanded_paths.clear();
+                    state.diff_snapshot = None;
+                    &mut state.file_editors
+                })
+        };
+        if let Some(editors) = editors {
+            for editor in editors.values_mut() {
+                editor.reading = false;
+                editor.read_epoch += 1;
+                editor.writable = false;
+                editor.state.update(cx, |input, cx| {
+                    input.set_read_only(true);
+                    cx.notify();
+                });
+            }
+        }
+    }
+
     /// Request a reconcile after a short debounce. Safe to call often.
     pub(super) fn schedule_native_session_reconcile(&mut self, cx: &mut Context<Self>) {
         self.native_reconcile_generation += 1;
@@ -252,17 +287,13 @@ impl Fintwind {
     /// The workspace directory whose native surface a session talks to: its
     /// own project's checkout, not whichever project happens to be selected.
     fn native_session_directory(&self, session_id: Uuid) -> Option<PathBuf> {
-        let project_id = self
+        let session = self
             .state
             .sessions
             .iter()
-            .find(|session| session.id == session_id)?
-            .project_id;
-        self.state
-            .projects
-            .iter()
-            .find(|project| project.id == project_id)
-            .map(|project| project.path.clone())
+            .find(|session| session.id == session_id)?;
+        self.workspace_path_for_session(session)
+            .map(Path::to_path_buf)
     }
 
     /// List the server's sessions for the selected project's workspace and
@@ -296,13 +327,29 @@ impl Fintwind {
         }
         self.native_reconcile_generation += 1;
         let generation = self.native_reconcile_generation;
+        let moved = self.native_moved_sessions.clone();
+        let tracked_session_ids = self
+            .state
+            .sessions
+            .iter()
+            .filter_map(|session| {
+                let native = session.native_session_id.as_deref().or_else(|| {
+                    session
+                        .provider_cursor
+                        .as_ref()
+                        .map(|cursor| cursor.native_id())
+                })?;
+                (session.project_id == project_id || moved.contains(native))
+                    .then(|| native.to_owned())
+            })
+            .collect();
         let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
             let listed = cx
                 .background_executor()
                 .spawn(async move {
                     fintwind_client::persistence::StateStore::remote(daemon)
-                        .list_provider_sessions(binary, directory)
+                        .list_provider_sessions_with_tracked(binary, directory, tracked_session_ids)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -312,7 +359,10 @@ impl Fintwind {
                     return;
                 }
                 match listed {
-                    Ok(sessions) => this.apply_native_session_roster(project_id, sessions, cx),
+                    Ok(sessions) => {
+                        this.native_moved_sessions.retain(|id| !moved.contains(id));
+                        this.apply_native_session_roster(project_id, sessions, cx);
+                    }
                     Err(error) => {
                         // Reconciliation is best-effort: a server that cannot
                         // be reached leaves the current roster in place. Only
@@ -354,10 +404,12 @@ impl Fintwind {
         for summary in &summaries {
             match resolve_roster_target(&self.state.sessions, project_id, summary) {
                 RosterTarget::Update(session_id) => {
+                    changed |= self.update_native_session_location(session_id, summary, cx);
                     changed |= self.update_session_from_summary(session_id, summary);
                 }
                 RosterTarget::Claim(session_id) => {
                     self.claim_native_session(session_id, summary);
+                    self.update_native_session_location(session_id, summary, cx);
                     self.update_session_from_summary(session_id, summary);
                     changed = true;
                 }
@@ -384,6 +436,7 @@ impl Fintwind {
                     }
                     self.drop_roster_row(remove);
                     self.claim_native_session(claim, summary);
+                    self.update_native_session_location(claim, summary, cx);
                     self.update_session_from_summary(claim, summary);
                     changed = true;
                 }
@@ -402,7 +455,9 @@ impl Fintwind {
                     session.updated_at = summary.updated_at.max(1);
                     session.last_reply_at = Some(summary.updated_at.max(1));
                     session.detail_loaded = false;
+                    let session_id = session.id;
                     self.state.push_session(session);
+                    self.update_native_session_location(session_id, summary, cx);
                     changed = true;
                 }
             }
@@ -440,6 +495,83 @@ impl Fintwind {
         {
             self.ensure_native_transcript(selected, cx);
         }
+    }
+
+    /// Re-home the existing row, never replace its transcript, tab or draft.
+    /// An app-created worktree already at this location keeps its parent project;
+    /// an actual move adopts the destination project (creating it if needed).
+    fn update_native_session_location(
+        &mut self,
+        session_id: Uuid,
+        summary: &NativeSessionSummary,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(directory) = summary.directory.as_ref() else {
+            return false;
+        };
+        let Some(session) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+        else {
+            return false;
+        };
+        let normalize = Self::normalize_provider_directory;
+        let location_changed = self
+            .workspace_path_for_session(session)
+            .is_none_or(|path| normalize(path.to_path_buf()) != normalize(directory.clone()));
+        let mut project_id = session.project_id;
+        let old_workspace = session.workspace.clone();
+        if location_changed {
+            project_id = if let Some(project) = self
+                .state
+                .projects
+                .iter()
+                .find(|project| normalize(project.path.clone()) == normalize(directory.clone()))
+            {
+                project.id
+            } else {
+                let project = Project::from_path(directory.clone());
+                let id = project.id;
+                self.state.projects.push(project);
+                id
+            };
+        }
+        let workspace = summary.workspace.clone().unwrap_or_else(|| {
+            if location_changed {
+                SessionWorkspace::Local
+            } else {
+                old_workspace.clone()
+            }
+        });
+        if !location_changed && old_workspace == workspace {
+            return false;
+        }
+        if let Some(session) = self.state.session_mut(session_id) {
+            session.project_id = project_id;
+            session.workspace = workspace;
+        }
+        *self
+            .native_placement_generations
+            .entry(session_id)
+            .or_default() += 1;
+        if location_changed {
+            self.isolate_moved_session_editors(session_id, cx);
+        }
+        if self.state.selected_session == Some(session_id) {
+            self.state.selected_project = Some(project_id);
+            self.reveal_sidebar_session_project(session_id, cx);
+            if location_changed {
+                self.visible_branch_snapshot = None;
+                self.right_panel_working_tree.clear();
+                self.right_panel_expanded_paths.clear();
+                self.reload_clean_right_panel_file_editors(cx);
+                self.switch_provider_location();
+            }
+            self.invalidate_workspace_queries(cx);
+        }
+        true
     }
 
     /// Point an untracked local row at its native session so later rosters
@@ -530,6 +662,7 @@ impl Fintwind {
             .retain(|session| session.id != session_id);
         self.remove_right_panel_session_state(session_id);
         self.native_transcript_fetched.remove(&session_id);
+        self.native_placement_generations.remove(&session_id);
         self.staged_undos.remove(&session_id);
         self.undo_redo_preparations.remove(&session_id);
         self.forget_session_tab(session_id);
@@ -1019,6 +1152,8 @@ mod tests {
     fn native_summary(session_id: &str, title: &str, updated_at: u64) -> NativeSessionSummary {
         NativeSessionSummary {
             session_id: session_id.to_owned(),
+            directory: None,
+            workspace: None,
             title: Some(title.to_owned()),
             created_at: updated_at - 60,
             updated_at,

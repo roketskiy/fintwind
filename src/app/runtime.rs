@@ -453,9 +453,39 @@ impl Fintwind {
 
     fn apply_remote_task_state(
         &mut self,
-        snapshot: RemoteTaskStateSnapshot,
+        mut snapshot: RemoteTaskStateSnapshot,
         cx: &mut Context<Self>,
     ) {
+        // The native server owns placement. Daemon catalog notifications can
+        // contain a snapshot read before our move was persisted; they may
+        // refresh other metadata, but cannot revoke an observed native placement.
+        for remote in &mut snapshot.sessions {
+            if let Some(local) = self
+                .state
+                .sessions
+                .iter()
+                .find(|local| local.id == remote.id)
+                && (self.native_placement_generation(remote.id) > 0
+                    || local.native_session_id.is_some()
+                    || local.provider_cursor.is_some())
+            {
+                remote.project_id = local.project_id;
+                remote.workspace = local.workspace.clone();
+            }
+        }
+        for project in &self.state.projects {
+            if snapshot
+                .sessions
+                .iter()
+                .any(|session| session.project_id == project.id)
+                && !snapshot
+                    .projects
+                    .iter()
+                    .any(|remote| remote.id == project.id)
+            {
+                snapshot.projects.push(project.clone());
+            }
+        }
         let runtime_ids = self.runtimes.keys().copied().collect::<HashSet<_>>();
         let removed = merge_remote_session_catalog(
             &mut self.state.sessions,
@@ -541,13 +571,14 @@ impl Fintwind {
         }
         let daemon = self.daemon.clone();
         let event_wake = self.event_wake_tx.clone();
+        let placement_generation = self.native_placement_generation(session_id);
         cx.spawn(async move |fintwind, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move { attach_driver(daemon, session_id, event_wake) })
                 .await;
             let _ = fintwind.update(cx, move |fintwind, cx| {
-                fintwind.finish_runtime_attachment(session_id, result, cx);
+                fintwind.finish_runtime_attachment(session_id, placement_generation, result, cx);
             });
         })
         .detach();
@@ -556,6 +587,7 @@ impl Fintwind {
     fn finish_runtime_attachment(
         &mut self,
         session_id: Uuid,
+        placement_generation: u64,
         result: anyhow::Result<Option<(AgentSession, PreparedDriver)>>,
         cx: &mut Context<Self>,
     ) {
@@ -563,7 +595,7 @@ impl Fintwind {
             return;
         }
         match result {
-            Ok(Some((session, prepared))) => {
+            Ok(Some((mut session, prepared))) => {
                 self.runtime_attach_misses.remove(&session_id);
                 let Some(index) = self
                     .state
@@ -574,6 +606,17 @@ impl Fintwind {
                     return;
                 };
                 if !self.runtimes.contains_key(&session_id) {
+                    // SaveTaskState is asynchronous: even a fetch started after
+                    // the move can read the old daemon row. Native placement is
+                    // updated only by the roster's unified handoff, not hydration.
+                    if self.native_placement_generation(session_id) != placement_generation
+                        || self.native_placement_generation(session_id) > 0
+                        || self.state.sessions[index].native_session_id.is_some()
+                        || self.state.sessions[index].provider_cursor.is_some()
+                    {
+                        session.project_id = self.state.sessions[index].project_id;
+                        session.workspace = self.state.sessions[index].workspace.clone();
+                    }
                     self.state.sessions[index] = session;
                     self.install_prepared_driver(session_id, prepared);
                     if self.state.selected_session == Some(session_id) {
@@ -768,7 +811,9 @@ impl Fintwind {
         directory.map(Self::normalize_provider_directory)
     }
 
-    fn normalize_provider_directory(directory: std::path::PathBuf) -> std::path::PathBuf {
+    pub(super) fn normalize_provider_directory(
+        directory: std::path::PathBuf,
+    ) -> std::path::PathBuf {
         #[cfg(windows)]
         {
             let mut value = directory.to_string_lossy().replace('/', "\\");
@@ -2939,7 +2984,8 @@ impl Fintwind {
             | DriverEvent::CompactionUpdated(_)
             | DriverEvent::ProviderBusy
             | DriverEvent::ProviderRetry { .. }
-            | DriverEvent::NativeSessionsChanged => false,
+            | DriverEvent::NativeSessionsChanged
+            | DriverEvent::NativeSessionMoved { .. } => false,
         }
     }
 }

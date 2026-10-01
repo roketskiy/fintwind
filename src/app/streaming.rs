@@ -544,6 +544,10 @@ impl Fintwind {
                 // is attached; refresh the sidebar's roster.
                 self.schedule_native_session_reconcile(cx);
             }
+            DriverEvent::NativeSessionMoved { native_session_id } => {
+                self.native_moved_sessions.insert(native_session_id);
+                self.schedule_native_session_reconcile(cx);
+            }
             DriverEvent::AgentPresetSelected(agent_preset) => {
                 if let Some(session) = self.state.session_mut(session_id) {
                     session.agent_preset = agent_preset;

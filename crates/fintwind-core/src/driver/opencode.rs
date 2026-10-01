@@ -581,7 +581,7 @@ pub struct OpenCodeDriver {
     session_id: String,
     /// This task's workspace: every location-scoped request names it
     /// explicitly, since the server can no longer be assumed to run here.
-    cwd: PathBuf,
+    cwd: Arc<Mutex<PathBuf>>,
     events: DriverEventSender,
     background_refresh_generation: Arc<AtomicU64>,
     background_transcript_hydrations: Arc<Mutex<HashSet<String>>>,
@@ -983,6 +983,10 @@ impl OpenCodeDriver {
         let stream_feed = Arc::clone(&event_feed);
         let stream_family = Arc::clone(&session_family);
         let stream_liveness = server.liveness();
+        let cwd = Arc::new(Mutex::new(cwd));
+        let stream_cwd = Arc::clone(&cwd);
+        let background_refresh_generation = Arc::new(AtomicU64::new(0));
+        let stream_background_generation = Arc::clone(&background_refresh_generation);
         thread::Builder::new()
             .name("fintwind-opencode-events".into())
             .spawn(move || {
@@ -1000,6 +1004,18 @@ impl OpenCodeDriver {
                     }
                     match stream_feed.recv_timeout(Duration::from_millis(500)) {
                         Ok(Some(value)) => {
+                            if value.get("type").and_then(Value::as_str) == Some("session.moved")
+                                && event_session_id(&value) == Some(stream_session.as_str())
+                                && let Some(directory) = event_payload(&value)
+                                    .pointer("/location/directory")
+                                    .and_then(Value::as_str)
+                                && !directory.is_empty()
+                            {
+                                *stream_cwd.lock() = PathBuf::from(directory);
+                                // Old-directory child listings must not retire the
+                                // moved session's background work after the handoff.
+                                stream_background_generation.fetch_add(1, Ordering::AcqRel);
+                            }
                             reconciliation.observe_connection(&stream_feed, *stream_turn.lock());
                             if !reconciliation.is_completed_event(&value, &stream_session) {
                                 if !reconciliation.defer_terminal(&value, &stream_session) {
@@ -1383,7 +1399,7 @@ impl OpenCodeDriver {
             session_id,
             cwd,
             events: stream_events,
-            background_refresh_generation: Arc::new(AtomicU64::new(0)),
+            background_refresh_generation,
             background_transcript_hydrations: Arc::new(Mutex::new(HashSet::new())),
             commands,
             permissions,
@@ -1430,7 +1446,7 @@ impl DriverControl for OpenCodeDriver {
             .fetch_add(1, Ordering::AcqRel)
             .saturating_add(1);
         let parent_id = self.session_id.clone();
-        let directory = opencode_location_directory(&self.cwd);
+        let directory = opencode_location_directory(&self.cwd.lock());
         let events = self.events.clone();
         let generation_guard = Arc::clone(&self.background_refresh_generation);
         let transcript_hydrations = Arc::clone(&self.background_transcript_hydrations);
@@ -2465,6 +2481,16 @@ fn dispatch_server_event(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let session = event_session_id(value);
+    // Moves are placement news for every tracked row, including other clients'
+    // sessions. Do not route them through the current transcript/child filter.
+    if kind == "session.moved" {
+        if let Some(native_session_id) = session {
+            let _ = events.send(DriverEvent::NativeSessionMoved {
+                native_session_id: native_session_id.to_owned(),
+            });
+        }
+        return;
+    }
     let lifecycle = matches!(
         kind,
         "session.created" | "session.updated" | "session.deleted"

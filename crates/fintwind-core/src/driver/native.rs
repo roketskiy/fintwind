@@ -132,6 +132,45 @@ pub(crate) fn list_sessions(
     Ok(summaries)
 }
 
+/// A directory roster alone cannot distinguish a move from deletion. Only
+/// missing tracked IDs need an additional request; a failed lookup must not
+/// silently remove local rows. Resolve Git metadata once per distinct location.
+pub(crate) fn list_sessions_with_tracked(
+    server: &OpenCodeServer,
+    directory: &str,
+    tracked: &[String],
+) -> anyhow::Result<Vec<NativeSessionSummary>> {
+    let mut summaries = list_sessions(server, directory)?;
+    let mut known: HashSet<String> = summaries.iter().map(|row| row.session_id.clone()).collect();
+    for id in tracked {
+        if !known.insert(id.clone()) {
+            continue;
+        }
+        let path = format!("/api/session/{}", encode_path_segment(id));
+        let response = match server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT) {
+            Err(error) if error.to_string().contains("HTTP 404") => continue,
+            result => result?,
+        };
+        let row = response.get("data").unwrap_or(&response);
+        // Treat malformed success as an error, not evidence of deletion.
+        let summary = summary_from_row(row)
+            .ok_or_else(|| anyhow::anyhow!("OpenCode returned an invalid session {id}"))?;
+        summaries.push(summary);
+    }
+    let mut workspaces = HashMap::new();
+    for summary in &mut summaries {
+        if let Some(directory) = summary.directory.as_ref() {
+            summary.workspace = Some(
+                workspaces
+                    .entry(directory.clone())
+                    .or_insert_with(|| crate::worktree::inspect_workspace(directory))
+                    .clone(),
+            );
+        }
+    }
+    Ok(summaries)
+}
+
 /// Ask the workspace's server for its MCP servers' live connection statuses.
 /// The server owns the MCP connections, so this answers the same whether or
 /// not any session exists. Verified against the V2 OpenAPI `mcp.list`
@@ -233,6 +272,12 @@ fn summary_from_row(row: &Value) -> Option<NativeSessionSummary> {
     let time = row.get("time")?;
     Some(NativeSessionSummary {
         session_id: session_id.to_owned(),
+        directory: row
+            .pointer("/location/directory")
+            .and_then(Value::as_str)
+            .filter(|directory| !directory.trim().is_empty())
+            .map(std::path::PathBuf::from),
+        workspace: None,
         title: row
             .get("title")
             .and_then(Value::as_str)

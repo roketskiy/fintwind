@@ -54,6 +54,219 @@ use fintwind_protocol::provider_session::NativeTranscript;
 
 const DAEMON_TOKEN: &str = "opencode-recovery-e2e-token";
 
+#[test]
+#[ignore = "owns a private daemon/pool; run separately from the recovery matrix"]
+fn opencode_session_moves() {
+    let run = Run::new();
+    let source = run.workspace("move-source");
+    let destination = run.root.join("move-worktree");
+    let plain = run.workspace("move-plain");
+    // Temp artifacts live inside the checkout: without its own repository,
+    // this directory would inherit the harness's enclosing Git worktree.
+    assert!(
+        std::process::Command::new("git")
+            .args(["init", "-b", "plain"])
+            .current_dir(&plain)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    for args in [
+        vec!["init", "-b", "main"],
+        vec![
+            "-c",
+            "user.name=E2E",
+            "-c",
+            "user.email=e2e@example.invalid",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+        vec![
+            "worktree",
+            "add",
+            "-b",
+            "work/move",
+            destination.to_str().unwrap(),
+        ],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(args)
+                .current_dir(&source)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    let row = |id: &str| {
+        json!({
+            "id": id, "title": id,
+            "time": {"created": 1700000000000u64, "updated": 1700000000000u64},
+            "location": {"directory": source},
+        })
+    };
+    let fixture = build_fixture(
+        &run,
+        "session-moves",
+        &json!({
+            "session_id": "ses_move_root",
+            "session_rows": [row("ses_move_root"), row("ses_move_other")],
+            "turns": [{"active": true, "sse": [
+                {"move": {"directory": destination}},
+                {"move": {"sessionID": "ses_move_other", "directory": plain}},
+                {"sleep_ms": 100, "move": {"directory": plain}},
+                {"sleep_ms": 100, "move": {"directory": destination}},
+            ]}],
+        }),
+    );
+    let harness = start_harness(&run.root);
+    let list = || match harness
+        .client
+        .request(
+            Uuid::nil(),
+            Uuid::nil(),
+            Command::ListProviderSessions {
+                binary: fixture.bin.clone(),
+                directory: source.clone(),
+                tracked_session_ids: vec![
+                    "ses_move_root".into(),
+                    "ses_move_other".into(),
+                    "ses_deleted".into(),
+                ],
+            },
+        )
+        .unwrap()
+    {
+        ResponsePayload::ProviderSessions { sessions } => sessions,
+        _ => panic!("expected provider sessions"),
+    };
+    let before = list();
+    assert_eq!(before.len(), 2);
+    assert!(before.iter().all(
+        |summary| summary.workspace == Some(fintwind_protocol::model::SessionWorkspace::Local)
+    ));
+    let (session, runtime) = (Uuid::new_v4(), Uuid::new_v4());
+    harness
+        .client
+        .request(
+            session,
+            runtime,
+            Command::Start {
+                options: start_options(&fixture.bin, &source),
+            },
+        )
+        .unwrap();
+    let events = harness.client.subscribe(session, runtime);
+    harness
+        .client
+        .request(
+            session,
+            runtime,
+            Command::Prompt {
+                prompt: "move".into(),
+                files: vec![],
+            },
+        )
+        .unwrap();
+    let mut collected = Collected::default();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while collected
+        .kinds
+        .iter()
+        .filter(|(kind, _)| kind == "nativeSessionMoved")
+        .count()
+        < 4
+        && Instant::now() < deadline
+    {
+        if let Ok(event) = events.recv_timeout(Duration::from_millis(100)) {
+            collected.absorb(&event);
+        }
+    }
+    let after = list();
+    harness
+        .client
+        .request(session, runtime, Command::RefreshBackgroundWork)
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let background_directory_updated = loop {
+        if read_jsonl(&fixture.server_log).iter().any(|entry| {
+            entry["event"] == "session_list"
+                && entry["directory"].as_str() == destination.to_str()
+                && entry["header_directory"].as_str() == destination.to_str()
+        }) {
+            break true;
+        }
+        if Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let artifact = run.root.join("result-session-moves.json");
+    fs::write(
+        &artifact,
+        serde_json::to_vec_pretty(
+            &json!({"before": before, "after": after, "timeline": collected.timeline, "backgroundDirectoryUpdated": background_directory_updated}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    eprintln!("session move artifact: {}", artifact.display());
+    assert!(
+        background_directory_updated,
+        "driver location-scoped requests must follow the move"
+    );
+    let moved_ids: Vec<_> = collected
+        .timeline
+        .iter()
+        .filter(|event| event["kind"] == "nativeSessionMoved")
+        .map(|event| {
+            event["payload"]["nativeSessionId"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        moved_ids,
+        [
+            "ses_move_root",
+            "ses_move_other",
+            "ses_move_root",
+            "ses_move_root"
+        ]
+    );
+    assert_eq!(
+        after.len(),
+        2,
+        "moved sessions survive; deleted sessions stay absent"
+    );
+    let root = after
+        .iter()
+        .find(|summary| summary.session_id == "ses_move_root")
+        .unwrap();
+    assert_eq!(root.directory.as_ref(), Some(&destination));
+    assert_eq!(
+        root.workspace,
+        Some(fintwind_protocol::model::SessionWorkspace::Worktree {
+            path: destination,
+            branch: "work/move".into()
+        })
+    );
+    let other = after
+        .iter()
+        .find(|summary| summary.session_id == "ses_move_other")
+        .unwrap();
+    assert_eq!(other.directory.as_ref(), Some(&plain));
+    assert_eq!(
+        other.workspace,
+        Some(fintwind_protocol::model::SessionWorkspace::Local)
+    );
+}
+
 // -- run layout -----------------------------------------------------------
 
 fn repo_root() -> PathBuf {

@@ -1859,6 +1859,10 @@ pub enum DriverEvent {
     /// CLI or TUI). The app re-reconciles its sidebar with the server's
     /// session list. Never carries transcript data.
     NativeSessionsChanged,
+    /// A committed server-side move, not merely an inbox admission.
+    NativeSessionMoved {
+        native_session_id: String,
+    },
     Error(String),
     ProcessExited,
 }

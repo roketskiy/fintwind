@@ -1941,8 +1941,6 @@ pub struct Fintwind {
     /// answer join are O(session). Footers exist only for settled turns,
     /// whose parts are immutable, and settling moves the fingerprint.
     assistant_footer_cache: RefCell<HashMap<usize, (Option<SharedString>, Option<u64>)>>,
-    /// Admission labels indexed once per transcript fingerprint, not per row.
-    submission_label_cache: RefCell<HashMap<Uuid, &'static str>>,
     /// The row-kinds fingerprint `assistant_footer_cache` was built under.
     assistant_footer_fingerprint: Cell<Option<u64>>,
     /// Settled-turn stats line per message index, rebuilt when the row-kinds
@@ -3493,7 +3491,6 @@ impl Fintwind {
                 transcript_navigation_turns: RefCell::new(Rc::new(Vec::new())),
                 transcript_navigation_turns_fingerprint: Cell::new(None),
                 assistant_footer_cache: RefCell::new(HashMap::new()),
-                submission_label_cache: RefCell::new(HashMap::new()),
                 assistant_footer_fingerprint: Cell::new(None),
                 assistant_turn_stats_cache: RefCell::new(HashMap::new()),
                 assistant_turn_stats_fingerprint: Cell::new(None),

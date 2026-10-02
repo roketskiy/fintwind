@@ -20,17 +20,6 @@ impl SubmissionState {
     pub fn is_unconfirmed(self) -> bool {
         matches!(self, Self::Dispatching | Self::Unknown)
     }
-
-    pub fn label_key(self) -> &'static str {
-        match self {
-            Self::Preparing => "submission.preparing",
-            Self::Dispatching => "submission.dispatching",
-            Self::Accepted => "submission.accepted",
-            Self::Unknown => "submission.unknown",
-            Self::NotSent => "submission.not_sent",
-            Self::Rejected => "submission.rejected",
-        }
-    }
 }
 
 impl SubmissionReceipt {

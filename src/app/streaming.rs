@@ -519,8 +519,91 @@ impl Fintwind {
         allow_queue_drain: bool,
         cx: &mut Context<Self>,
     ) -> bool {
+        let preparing = self.submission_preparations.contains(&session_id)
+            && self
+                .state
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .and_then(|session| session.turns.last())
+                .and_then(|turn| turn.submission.as_ref())
+                .is_some_and(|receipt| {
+                    receipt.state == fintwind_protocol::submission::SubmissionState::Preparing
+                });
+        if preparing
+            && !matches!(
+                &event,
+                DriverEvent::RuntimeEventCursorAdvanced(_)
+                    | DriverEvent::Connected { .. }
+                    | DriverEvent::NativeSessionsChanged
+                    | DriverEvent::NativeSessionMoved { .. }
+                    | DriverEvent::AutoTitleUpdated(_)
+                    | DriverEvent::AvailableCommands(_)
+                    | DriverEvent::AgentPresetSelected(_)
+                    | DriverEvent::BackgroundWork(_)
+                    | DriverEvent::UsageUpdated { .. }
+                    | DriverEvent::PlanUsageUpdated(_)
+                    | DriverEvent::ProcessExited
+            )
+        {
+            // Buffered foreground events belong to the preceding input; this
+            // new turn is durable but cannot have started its provider yet.
+            return true;
+        }
+        if preparing && matches!(&event, DriverEvent::ProcessExited) {
+            self.mark_background_work_lost(session_id);
+            return false;
+        }
         runtime.last_active_at = Instant::now();
         match event {
+            DriverEvent::SubmissionUpdated(receipt) => {
+                let turn_id = receipt.id;
+                let not_sent = matches!(
+                    receipt.state,
+                    fintwind_protocol::submission::SubmissionState::NotSent
+                        | fintwind_protocol::submission::SubmissionState::Rejected
+                );
+                if self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .is_some_and(|session| {
+                        session.turns.last().is_some_and(|turn| turn.id == turn_id)
+                    })
+                    && receipt.state != fintwind_protocol::submission::SubmissionState::Preparing
+                {
+                    self.submission_preparations.remove(&session_id);
+                }
+                if let Some(session) = self.state.session_mut(session_id)
+                    && let Some(turn) = session.turns.iter_mut().find(|turn| turn.id == receipt.id)
+                    && turn
+                        .submission
+                        .as_ref()
+                        .is_none_or(|previous| receipt.supersedes(previous))
+                {
+                    turn.submission = Some(receipt);
+                }
+                if not_sent
+                    && let Some(session) = self.state.session_mut(session_id)
+                    && session
+                        .turns
+                        .last()
+                        .is_some_and(|turn| turn.id == turn_id && !turn.provider_turn_started)
+                {
+                    session.finish_active_turn(TurnStatus::Failed);
+                    session.status = SessionStatus::Idle;
+                }
+                if self.state.selected_session == Some(session_id)
+                    && let Some(index) = self.selected_session().and_then(|session| {
+                        session.messages.iter().position(|message| {
+                            message.turn_id == Some(turn_id) && message.role == MessageRole::User
+                        })
+                    })
+                {
+                    self.remeasure_transcript_message(index);
+                }
+            }
             DriverEvent::RuntimeEventCursorAdvanced(cursor) => {
                 if let Some(session) = self.state.session_mut(session_id) {
                     session.runtime_event_cursor = Some(cursor);
@@ -541,7 +624,7 @@ impl Fintwind {
                         .provider_cursor
                         .as_ref()
                         .map(|cursor| cursor.native_id().to_owned());
-                    if session.status == SessionStatus::Connecting {
+                    if !preparing && session.status == SessionStatus::Connecting {
                         session.status = SessionStatus::Working;
                     }
                 }

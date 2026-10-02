@@ -20,7 +20,7 @@ use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 /// Desktop protocol version. Bumped when the `ClientMessage` or
 /// `ServerMessage` grammar changes; the handshake refuses a mismatch in
 /// either direction, so an old client and a new daemon never half-speak.
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes
@@ -121,6 +121,20 @@ pub enum Command {
     /// second app. It observes the session actor without starting, replacing,
     /// or otherwise mutating the provider process.
     AttachSession,
+    /// Atomically store the input and its admission identity before preparation.
+    AcceptSubmission {
+        project: Project,
+        session: Box<AgentSession>,
+        submission: Box<crate::submission::SubmissionRecord>,
+    },
+    /// Claim a saved submission once. This never retries an unknown POST.
+    DispatchSubmission {
+        submission_id: Uuid,
+        workspace: crate::model::SessionWorkspace,
+    },
+    AbandonSubmission {
+        submission_id: Uuid,
+    },
     Start {
         options: WireDriverStartOptions,
     },
@@ -521,6 +535,9 @@ pub enum ResponseOutcome {
 )]
 pub enum ResponsePayload {
     Ack,
+    SubmissionSaved {
+        receipt: crate::submission::SubmissionReceipt,
+    },
     SessionRuntime {
         runtime_id: Option<Uuid>,
         supports_steer: bool,

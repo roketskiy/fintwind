@@ -96,13 +96,22 @@ pub(super) fn merge_remote_session_catalog(
         .collect::<HashSet<_>>();
     let removed = local
         .iter()
-        .filter(|session| session.has_started() && !remote_ids.contains(&session.id))
+        .filter(|session| {
+            session.has_started()
+                && !remote_ids.contains(&session.id)
+                && !has_local_runtime(session.id)
+        })
         .map(|session| session.id)
         .collect::<Vec<_>>();
-    local.retain(|session| !session.has_started() || remote_ids.contains(&session.id));
+    local.retain(|session| {
+        !session.has_started() || remote_ids.contains(&session.id) || has_local_runtime(session.id)
+    });
 
     for remote in remote {
         if let Some(local) = local.iter_mut().find(|session| session.id == remote.id) {
+            if has_local_runtime(local.id) {
+                continue;
+            }
             local.title = remote.title;
             local.auto_title = remote.auto_title;
             local.project_id = remote.project_id;
@@ -110,10 +119,8 @@ pub(super) fn merge_remote_session_catalog(
             local.model = remote.model;
             local.created_at = remote.created_at;
             local.last_reply_at = remote.last_reply_at;
-            if !has_local_runtime(local.id) {
-                local.status = remote.status;
-                local.updated_at = remote.updated_at;
-            }
+            local.status = remote.status;
+            local.updated_at = remote.updated_at;
         } else {
             local.push(remote);
         }
@@ -474,10 +481,13 @@ impl Fintwind {
             }
         }
         for project in &self.state.projects {
-            if snapshot
+            if (self.state.sessions.iter().any(|session| {
+                session.project_id == project.id
+                    && self.submission_preparations.contains(&session.id)
+            }) || snapshot
                 .sessions
                 .iter()
-                .any(|session| session.project_id == project.id)
+                .any(|session| session.project_id == project.id))
                 && !snapshot
                     .projects
                     .iter()
@@ -486,7 +496,12 @@ impl Fintwind {
                 snapshot.projects.push(project.clone());
             }
         }
-        let runtime_ids = self.runtimes.keys().copied().collect::<HashSet<_>>();
+        let runtime_ids = self
+            .runtimes
+            .keys()
+            .chain(self.submission_preparations.iter())
+            .copied()
+            .collect::<HashSet<_>>();
         let removed = merge_remote_session_catalog(
             &mut self.state.sessions,
             snapshot.sessions,
@@ -566,6 +581,7 @@ impl Fintwind {
 
     pub(super) fn start_runtime_attachment(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
         if self.runtimes.contains_key(&session_id)
+            || self.submission_preparations.contains(&session_id)
             || !self.runtime_attach_pending.insert(session_id)
         {
             return;
@@ -593,6 +609,9 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         if !self.runtime_attach_pending.remove(&session_id) {
+            return;
+        }
+        if self.submission_preparations.contains(&session_id) {
             return;
         }
         match result {
@@ -668,6 +687,18 @@ impl Fintwind {
     }
 
     fn interrupt_orphaned_runtime(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
+        if self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .is_some_and(|session| session.turns.iter().any(|turn| turn.submission.is_some()))
+        {
+            // Local driver absence proves neither rejection nor execution end.
+            // History reconciliation only reads the exact saved input ID.
+            self.ensure_native_transcript(session_id, cx);
+            return;
+        }
         let project_paths = self
             .state
             .projects
@@ -809,7 +840,9 @@ impl Fintwind {
                     })
                     .map(|project| project.path.clone())
             });
-        directory.map(Self::normalize_provider_directory)
+        // Comparison keys may fold case; API requests must retain the actual
+        // workspace path. The daemon resolves it off the UI thread.
+        directory
     }
 
     pub(super) fn normalize_provider_directory(
@@ -2381,6 +2414,8 @@ impl Fintwind {
             return;
         };
         if session.is_busy()
+            || fintwind_protocol::submission::has_unsettled_submissions(session)
+            || self.submission_preparations.contains(&session_id)
             || session.queued_messages.is_empty()
             || self.ending_checkpoint_pending(session_id)
         {
@@ -2418,12 +2453,17 @@ impl Fintwind {
         else {
             return;
         };
+        if self.submission_preparations.contains(&session_id) {
+            return;
+        }
         if self.ending_checkpoint_pending(session_id) {
             self.enqueue_follow_up_submission(session_id, submission, cx);
             self.defer_queue_drain(session_id);
             return;
         }
-        if session.status.is_busy() {
+        if session.status.is_busy()
+            || fintwind_protocol::submission::has_unsettled_submissions(session)
+        {
             self.enqueue_follow_up_submission(session_id, submission, cx);
             return;
         }
@@ -2461,7 +2501,7 @@ impl Fintwind {
         // message and its working indicator belong in the transcript the
         // moment the submission is accepted — a first prompt otherwise leaves
         // the empty state on screen for as long as a `git add -A` takes.
-        // Preparation failure unwinds the turn and restores the prompt.
+        // Preparation failure retains the turn and restores editable input.
         if selected {
             self.sync_transcript_rows();
         }
@@ -2487,6 +2527,39 @@ impl Fintwind {
             None
         };
         self.submission_preparations.insert(session_id);
+        let Some(turn_id) = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .and_then(AgentSession::active_turn_id)
+        else {
+            self.submission_preparations.remove(&session_id);
+            return;
+        };
+        let provider_prompt = submission.provider_prompt();
+        let provider_prompt = crate::composer_complete::expanded_submission(
+            &provider_prompt,
+            &self.slash_command_index,
+        )
+        .unwrap_or(provider_prompt);
+        let record = fintwind_protocol::submission::SubmissionRecord::new(
+            session_id,
+            turn_id,
+            provider_prompt.clone(),
+            submission.prompt_files(),
+        );
+        let persisted_session = self
+            .state
+            .session_mut(session_id)
+            .map(|session| {
+                session.bind_active_prompt_transport(&provider_prompt);
+                if let Some(turn) = session.turns.last_mut() {
+                    turn.submission = Some(record.receipt.clone());
+                }
+                session.clone()
+            })
+            .expect("the accepted submission still owns its session");
         if selected {
             self.activities_expanded.clear();
             self.expanded_activity_items.clear();
@@ -2517,11 +2590,19 @@ impl Fintwind {
         cx.notify();
 
         let preparation_prompt = human_prompt;
+        let daemon_client = self.daemon.client();
         let workspace_client = fintwind_client::WorkspaceClient::new(self.daemon.client());
         cx.spawn(async move |fintwind, cx| {
             let prepared = cx
                 .background_executor()
                 .spawn(async move {
+                    let result = (|| {
+                    let response = daemon_client.request(session_id, Uuid::nil(), fintwind_client::Command::AcceptSubmission {
+                        project: project.clone(), session: Box::new(persisted_session), submission: Box::new(record),
+                    })?;
+                    if !matches!(response, fintwind_client::ResponsePayload::SubmissionSaved { receipt } if receipt.id == turn_id && receipt.state == fintwind_protocol::submission::SubmissionState::Preparing) {
+                        anyhow::bail!(tr!("errors.submission_not_preparing"));
+                    }
                     prepare_submission(
                         workspace_client,
                         project,
@@ -2531,10 +2612,15 @@ impl Fintwind {
                         &preparation_prompt,
                         next_turn_count,
                     )
+                    })();
+                    if result.is_err() {
+                        let _ = daemon_client.request(session_id, Uuid::nil(), fintwind_client::Command::AbandonSubmission { submission_id: turn_id });
+                    }
+                    result
                 })
                 .await;
             let _ = fintwind.update(cx, move |fintwind, cx| {
-                fintwind.finish_submission_preparation(session_id, submission, prepared, cx);
+                fintwind.finish_submission_preparation(session_id, turn_id, submission, prepared, cx);
             });
         })
         .detach();
@@ -2543,11 +2629,35 @@ impl Fintwind {
     fn finish_submission_preparation(
         &mut self,
         session_id: Uuid,
+        turn_id: Uuid,
         submission: ComposerSubmission,
         prepared: anyhow::Result<PreparedSubmission>,
         cx: &mut Context<Self>,
     ) {
         if !self.submission_preparations.contains(&session_id) {
+            return;
+        }
+        let owns_turn = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .is_some_and(|session| session.turns.last().is_some_and(|turn| turn.id == turn_id));
+        if !owns_turn {
+            self.abandon_submission(session_id, turn_id, cx);
+            if !self
+                .state
+                .sessions
+                .iter()
+                .any(|session| session.id == session_id)
+            {
+                self.submission_preparations.remove(&session_id);
+            }
+            if self.state.selected_session == Some(session_id) {
+                self.restore_composer_submission(submission, cx);
+            }
+            self.show_toast(tr!("errors.submission_replaced"));
+            cx.notify();
             return;
         }
         let selected = self.state.selected_session == Some(session_id);
@@ -2566,11 +2676,14 @@ impl Fintwind {
                 if let Some(session) = self.state.session_mut(session_id)
                     && session.status == SessionStatus::Connecting
                 {
-                    // The submission never reached a provider and its prompt
-                    // returns to the composer, so the eagerly-begun turn and
-                    // its message leave the transcript with it.
-                    if let Some(turn_id) = session.active_turn_id() {
-                        session.unwind_unstarted_turn(turn_id);
+                    // Keep the durable input visible even when preparation
+                    // fails. It is not a provider execution failure.
+                    if let Some(turn) = session.turns.last_mut() {
+                        turn.status = TurnStatus::Failed;
+                        turn.completed_at = Some(unix_time());
+                        if let Some(receipt) = turn.submission.as_mut() {
+                            receipt.state = fintwind_protocol::submission::SubmissionState::NotSent;
+                        }
                     }
                     session.status = SessionStatus::Idle;
                 }
@@ -2588,6 +2701,7 @@ impl Fintwind {
                     self.show_toast(tr!("errors.create_worktree", error = error));
                 }
                 cx.notify();
+                self.save();
                 return;
             }
         };
@@ -2608,11 +2722,18 @@ impl Fintwind {
             .is_some_and(|session| {
                 session.status == SessionStatus::Connecting
                     && session.turns.last().is_some_and(|turn| {
-                        turn.status == TurnStatus::Running && !turn.provider_turn_started
+                        turn.id == turn_id
+                            && turn.status == TurnStatus::Running
+                            && !turn.provider_turn_started
                     })
             });
         if !can_start {
             self.submission_preparations.remove(&session_id);
+            self.abandon_submission(session_id, turn_id, cx);
+            if selected {
+                self.restore_composer_submission(submission, cx);
+            }
+            self.show_toast(tr!("errors.submission_replaced"));
             cx.notify();
             return;
         }
@@ -2662,16 +2783,7 @@ impl Fintwind {
         if selected && let Some(warning) = checkpoint_warning {
             self.show_toast(warning);
         }
-        // Template commands expand here, at the seam between the transcript
-        // and the transport: the user message keeps the typed `/name …` —
-        // the same echo the CLIs show — while the provider receives the
-        // rendered prompt. Claude's commands pass through untouched; its CLI
-        // owns their expansion.
-        let files = submission.prompt_files();
-        let prompt = submission.provider_prompt();
-        let driver_prompt =
-            crate::composer_complete::expanded_submission(&prompt, &self.slash_command_index)
-                .unwrap_or(prompt);
+        // The provider-facing template expansion was frozen at acceptance.
         let mut failed_to_start = false;
         match driver {
             Ok(driver) => {
@@ -2679,26 +2791,46 @@ impl Fintwind {
                 // lands, so redo stops being possible from here. A failed
                 // preparation never reaches the server and keeps the marker.
                 self.clear_staged_undo(session_id);
-                if let Some(session) = self.state.session_mut(session_id) {
-                    session.bind_active_prompt_transport(&driver_prompt);
+                let workspace = self
+                    .state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .map(|session| session.workspace.clone())
+                    .unwrap_or_default();
+                if let Some(receipt) = self
+                    .state
+                    .session_mut(session_id)
+                    .and_then(|session| session.turns.last_mut())
+                    .and_then(|turn| turn.submission.as_mut())
+                {
+                    receipt.state = fintwind_protocol::submission::SubmissionState::Dispatching;
+                    driver.submit(receipt.clone(), workspace);
                 }
-                driver.prompt(driver_prompt, files);
             }
             Err(error) => {
                 failed_to_start = true;
+                self.abandon_submission(session_id, turn_id, cx);
                 let message = tr!("errors.start_agent", error = error);
                 if let Some(session) = self.state.session_mut(session_id) {
                     session.status = SessionStatus::Failed;
+                    if let Some(receipt) = session
+                        .turns
+                        .last_mut()
+                        .and_then(|turn| turn.submission.as_mut())
+                    {
+                        receipt.state = fintwind_protocol::submission::SubmissionState::NotSent;
+                    }
                     session.push_message(MessageRole::Assistant, message);
                 }
                 self.finish_active_turn(session_id, TurnStatus::Failed);
             }
         }
-        // From this point onward `cancel_turn` has either a live driver to
-        // cancel or a settled startup failure. The next frame must therefore
-        // show Stop (or Send after failure), never the preparation spinner.
-        self.submission_preparations.remove(&session_id);
+        // Keep Stop fenced until DispatchSubmission has been acknowledged.
+        // Otherwise Cancel could overtake the RPC worker and stop the old turn
+        // just before the new prompt is queued. SubmissionUpdated releases it.
         if failed_to_start {
+            self.submission_preparations.remove(&session_id);
             self.capture_latest_turn_checkpoint_for(session_id);
             self.start_pending_checkpoint_captures(cx);
         }
@@ -2717,6 +2849,19 @@ impl Fintwind {
         while let Ok(event) = runtime.events.try_recv() {
             runtime.pending_events.push_back(event);
         }
+    }
+
+    fn abandon_submission(&self, session_id: Uuid, submission_id: Uuid, cx: &mut Context<Self>) {
+        let client = self.daemon.client();
+        cx.background_executor()
+            .spawn(async move {
+                let _ = client.request(
+                    session_id,
+                    Uuid::nil(),
+                    fintwind_client::Command::AbandonSubmission { submission_id },
+                );
+            })
+            .detach();
     }
 
     pub(super) fn drain_event_pump(&mut self, cx: &mut Context<Self>) -> EventPumpSchedule {
@@ -2987,6 +3132,7 @@ impl Fintwind {
                     )
             }
             DriverEvent::RuntimeEventCursorAdvanced(_)
+            | DriverEvent::SubmissionUpdated(_)
             | DriverEvent::Connected { .. }
             | DriverEvent::AgentPresetSelected(_)
             | DriverEvent::AutoTitleUpdated(_)

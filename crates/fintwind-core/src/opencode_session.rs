@@ -754,8 +754,9 @@ pub(crate) fn request_json_on_port_with_directory(
     timeout: Duration,
     directory: Option<&str>,
 ) -> anyhow::Result<Value> {
+    let directory = directory.map(|directory| resolve_request_directory(Path::new(directory)));
     let body = body.map(serde_json::to_vec).transpose()?;
-    let directory_header = directory.map(directory_header).transpose()?;
+    let directory_header = directory.as_deref().map(directory_header).transpose()?;
     let response = http_request(
         port,
         method,
@@ -771,6 +772,30 @@ pub(crate) fn request_json_on_port_with_directory(
     }
     serde_json::from_slice(&response)
         .with_context(|| format!("OpenCode returned invalid JSON for {method} {path}"))
+}
+
+/// Resolve one physical workspace spelling off the UI thread. Case folding
+/// belongs to comparison/cache keys, never to an API Location.
+pub(crate) fn resolve_request_directory(directory: &Path) -> String {
+    let path = std::fs::canonicalize(directory).unwrap_or_else(|_| {
+        if directory.is_absolute() {
+            directory.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(directory))
+                .unwrap_or_else(|_| directory.to_path_buf())
+        }
+    });
+    let value = path.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        if let Some(unc) = value.strip_prefix("\\\\?\\UNC\\") {
+            return format!("\\\\{unc}");
+        }
+        return value.strip_prefix("\\\\?\\").unwrap_or(&value).to_owned();
+    }
+    #[cfg(not(windows))]
+    value
 }
 
 /// The `x-opencode-directory` header line for one request. A directory

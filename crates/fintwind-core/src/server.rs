@@ -85,6 +85,7 @@ pub struct EventSink {
     session_id: Uuid,
     runtime_id: Uuid,
     hub: Arc<Hub>,
+    source_subscriber_id: Option<u64>,
 }
 
 impl EventSink {
@@ -94,12 +95,19 @@ impl EventSink {
             session_id: Uuid::nil(),
             runtime_id: Uuid::nil(),
             hub: Arc::new(Hub::default()),
+            source_subscriber_id: None,
         }
     }
 
     pub fn send(&self, event: WireDriverEvent) -> anyhow::Result<()> {
         self.hub.emit(self.session_id, self.runtime_id, event, true);
         Ok(())
+    }
+
+    /// Preparation belongs to this connection, not to a permanent runtime.
+    pub(crate) fn source_is_connected(&self) -> bool {
+        self.source_subscriber_id
+            .is_none_or(|id| self.hub.state.lock().subscribers.contains_key(&id))
     }
 
     /// Broadcast a live-only event without retaining it in the replay journal.
@@ -212,6 +220,7 @@ impl Hub {
             session_id,
             runtime_id,
             hub: self.clone(),
+            source_subscriber_id: None,
         }
     }
 
@@ -815,6 +824,9 @@ fn command_targets_runtime(command: &Command) -> bool {
     matches!(
         command,
         Command::AttachSession
+            | Command::AcceptSubmission { .. }
+            | Command::DispatchSubmission { .. }
+            | Command::AbandonSubmission { .. }
             | Command::Start { .. }
             | Command::Prompt { .. }
             | Command::Steer { .. }
@@ -900,7 +912,8 @@ fn run_runtime_mailbox(
                     broker.forget_runtime(session_id, (!removes_session).then_some(runtime_id));
                     active_runtime_id = None;
                 }
-            } else if active_runtime_id.is_none()
+            } else if !runtime_id.is_nil()
+                && active_runtime_id.is_none()
                 && !matches!(
                     &handled.outcome,
                     ResponseOutcome::Ok {
@@ -1000,7 +1013,9 @@ fn handle_request(
             hub.begin_runtime(session_id, runtime_id);
             broker.note_runtime(session_id, runtime_id);
         }
-        let outcome = match backend.handle(request, hub.event_sink(session_id, runtime_id)) {
+        let mut sink = hub.event_sink(session_id, runtime_id);
+        sink.source_subscriber_id = Some(source_subscriber_id);
+        let outcome = match backend.handle(request, sink) {
             Ok(payload) => ResponseOutcome::Ok { payload },
             Err(error) => ResponseOutcome::Error {
                 error: RpcError::from(error),
@@ -1054,6 +1069,7 @@ fn task_catalog_action(command: &Command) -> TaskCatalogAction {
             projects: projects.clone(),
         },
         Command::RemoveSession
+        | Command::AcceptSubmission { .. }
         | Command::RemoveProject { .. }
         | Command::ForkSessionFromResponse { .. }
         | Command::RewindSessionToMessage { .. } => TaskCatalogAction::Changed,

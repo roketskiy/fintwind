@@ -94,3 +94,16 @@ export const sessionDetails = sqliteTable("session_details", {
   sessionId: text("session_id").primaryKey(),
   data: text("data").notNull(),
 });
+
+/** Immutable prompt identity plus independently durable admission receipt. */
+export const submissions = sqliteTable(
+  "submissions",
+  {
+    id: text("id").primaryKey(),
+    sessionId: text("session_id").notNull(),
+    state: text("state").notNull(),
+    /** SubmissionRecord JSON; never included in diagnostic logs. */
+    data: text("data").notNull(),
+  },
+  (table) => [index("submissions_by_session").on(table.sessionId)],
+);

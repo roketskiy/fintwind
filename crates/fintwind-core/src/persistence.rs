@@ -1199,6 +1199,15 @@ impl StateStore {
     /// Persists whatever the app marked as changed, so a streaming turn writes
     /// one session row and a selection change writes no rows at all.
     pub fn save(&self, state: &mut PersistedState) -> io::Result<()> {
+        self.save_with_submission(state, None)
+    }
+
+    /// The submission and its visible input share the same commit boundary.
+    pub(crate) fn save_with_submission(
+        &self,
+        state: &mut PersistedState,
+        submission: Option<&fintwind_protocol::submission::SubmissionRecord>,
+    ) -> io::Result<()> {
         // Only changed sessions can hold a new inline payload, so the blob walk
         // follows the same set rather than every transcript on every save.
         let dirty = state.dirty_sessions.clone();
@@ -1222,6 +1231,16 @@ impl StateStore {
             });
         }
         let storage = guard.as_mut().expect("storage opened above");
+
+        // Unlike an expendable stream projection, a confirmed submission must
+        // survive a system crash as well as a daemon crash. On failure leaving
+        // FULL enabled is conservative; never weaken durability before commit.
+        if submission.is_some() {
+            storage
+                .connection
+                .execute_batch("PRAGMA synchronous = FULL;")
+                .map_err(to_io_error)?;
+        }
 
         if self.desktop_files {
             let app_settings = state.app_settings();
@@ -1266,7 +1285,6 @@ impl StateStore {
                     )
                     .map_err(to_io_error)?;
             }
-            storage.saved_projects = projects_fingerprint;
         }
 
         // Only sessions the app reported as changed are written. A draft that
@@ -1276,6 +1294,7 @@ impl StateStore {
         // does not leave this connection believing rows it never wrote are on
         // disk — which would make the next save skip them for good.
         let mut written_messages = Vec::new();
+        let mut persisted_sessions = storage.persisted_sessions.clone();
         for session in state
             .sessions
             .iter()
@@ -1294,7 +1313,7 @@ impl StateStore {
                             rusqlite::params_from_iter(session_params(session)),
                         )
                         .map_err(to_io_error)?;
-                    storage.persisted_sessions.insert(session.id);
+                    persisted_sessions.insert(session.id);
                 }
                 continue;
             }
@@ -1321,16 +1340,15 @@ impl StateStore {
                     storage.written_messages.get(&session.id).unwrap_or(&EMPTY),
                 )?,
             ));
-            storage.persisted_sessions.insert(session.id);
+            persisted_sessions.insert(session.id);
         }
 
-        let removed = storage
-            .persisted_sessions
+        let removed = persisted_sessions
             .iter()
             .copied()
             .filter(|id| !live.contains(id))
             .collect::<Vec<_>>();
-        for id in removed {
+        for id in &removed {
             let key = id.to_string();
             transaction
                 .execute("DELETE FROM sessions WHERE id = ?1", params![key])
@@ -1344,16 +1362,119 @@ impl StateStore {
             transaction
                 .execute("DELETE FROM messages WHERE session_id = ?1", params![key])
                 .map_err(to_io_error)?;
-            storage.persisted_sessions.remove(&id);
-            storage.written_messages.remove(&id);
+            transaction
+                .execute(
+                    "DELETE FROM submissions WHERE session_id = ?1",
+                    params![key],
+                )
+                .map_err(to_io_error)?;
+            persisted_sessions.remove(id);
         }
 
+        if let Some(submission) = submission {
+            transaction
+                .execute(
+                    "INSERT INTO submissions(id, session_id, state, data) VALUES(?1, ?2, ?3, ?4)",
+                    params![
+                        submission.receipt.id.to_string(),
+                        submission.session_id.to_string(),
+                        tag_of(submission.receipt.state),
+                        serde_json::to_string(submission).map_err(to_io_error)?,
+                    ],
+                )
+                .map_err(to_io_error)?;
+        }
         transaction.commit().map_err(to_io_error)?;
+        storage.saved_projects = projects_fingerprint;
+        storage.persisted_sessions = persisted_sessions;
+        for id in removed {
+            storage.written_messages.remove(&id);
+        }
         // Now that the rows are durable, and not before.
         for (session_id, fingerprints) in written_messages {
             storage.written_messages.insert(session_id, fingerprints);
         }
         state.dirty_sessions.clear();
+        if submission.is_some() {
+            let _ = storage
+                .connection
+                .execute_batch("PRAGMA synchronous = NORMAL;");
+        }
+        Ok(())
+    }
+
+    pub(crate) fn submission(
+        &self,
+        id: Uuid,
+    ) -> io::Result<Option<fintwind_protocol::submission::SubmissionRecord>> {
+        let connection = self.open()?;
+        let data: Option<String> = connection
+            .query_row(
+                "SELECT data FROM submissions WHERE id = ?1",
+                params![id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(to_io_error)?;
+        data.map(|data| serde_json::from_str(&data).map_err(to_io_error))
+            .transpose()
+    }
+
+    /// Compare-and-swap admission. An old receipt never permits another POST.
+    pub(crate) fn transition_submission(
+        &self,
+        id: Uuid,
+        from: fintwind_protocol::submission::SubmissionState,
+        to: fintwind_protocol::submission::SubmissionState,
+        native_session_id: Option<&str>,
+    ) -> io::Result<Option<fintwind_protocol::submission::SubmissionRecord>> {
+        let Some(mut submission) = self.submission(id)? else {
+            return Ok(None);
+        };
+        if submission.receipt.state != from {
+            return Ok(None);
+        }
+        submission.receipt.state = to;
+        submission.receipt.updated_at = crate::model::unix_time_millis();
+        if let Some(native_session_id) = native_session_id {
+            submission.receipt.native_session_id = Some(native_session_id.to_owned());
+        }
+        let connection = self.open()?;
+        connection
+            .execute_batch("PRAGMA synchronous = FULL;")
+            .map_err(to_io_error)?;
+        let data = serde_json::to_string(&submission).map_err(to_io_error)?;
+        let changed = connection
+            .execute(
+                "UPDATE submissions SET state = ?1, data = ?2 WHERE id = ?3 AND state = ?4",
+                params![tag_of(to), data, id.to_string(), tag_of(from)],
+            )
+            .map_err(to_io_error)?;
+        Ok((changed == 1).then_some(submission))
+    }
+
+    /// Receipts are authoritative even if a GUI saved a stale turn projection.
+    pub(crate) fn hydrate_submission_receipts(&self, session: &mut AgentSession) -> io::Result<()> {
+        let connection = self.open()?;
+        let mut statement = connection
+            .prepare("SELECT data FROM submissions WHERE session_id = ?1")
+            .map_err(to_io_error)?;
+        let rows = statement
+            .query_map(params![session.id.to_string()], |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(to_io_error)?;
+        for row in rows {
+            let record: fintwind_protocol::submission::SubmissionRecord =
+                serde_json::from_str(&row.map_err(to_io_error)?).map_err(to_io_error)?;
+            if let Some(turn) = session
+                .turns
+                .iter_mut()
+                .find(|turn| turn.id == record.receipt.id)
+            {
+                turn.submission = Some(record.receipt);
+            }
+        }
         Ok(())
     }
 

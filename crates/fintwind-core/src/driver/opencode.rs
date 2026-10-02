@@ -33,6 +33,7 @@ use anyhow::{Context as _, anyhow, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use crossbeam_channel::{Sender, unbounded};
 use fintwind_protocol::PromptFile;
+use fintwind_protocol::submission::{SubmissionRecord, SubmissionState};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -156,6 +157,7 @@ enum CommandMessage {
     Prompt {
         text: String,
         files: Vec<PromptFile>,
+        durable: Option<(SubmissionRecord, Arc<crate::persistence::StateStore>)>,
     },
     Steer {
         text: String,
@@ -537,16 +539,18 @@ fn form_reply_answer(fields: &[(String, bool)], answers: &[UserInputAnswer]) -> 
 }
 
 /// The directory string a request names this task's workspace with. An
-/// absolute cwd passes through untouched; a relative one is canonicalized so
-/// the server sees one stable path regardless of where its process runs, and
-/// a failed canonicalize falls back to the original value.
+/// existing paths are resolved so all API callers name one physical spelling.
+/// This is filesystem work and belongs to background workers only.
 fn opencode_location_directory(cwd: &Path) -> String {
-    if cwd.is_absolute() {
-        return cwd.to_string_lossy().into_owned();
-    }
-    std::fs::canonicalize(cwd)
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| cwd.to_string_lossy().into_owned())
+    crate::opencode_session::resolve_request_directory(cwd)
+}
+
+pub(crate) fn reconcile_saved_submission(
+    port: u16,
+    session: &str,
+    receipt: &fintwind_protocol::submission::SubmissionReceipt,
+) -> anyhow::Result<Option<super::SavedSubmissionReconciliation>> {
+    recovery::reconcile_saved(port, session, receipt)
 }
 
 /// A resume must stay inside the task's own workspace: on a server hosting
@@ -565,7 +569,9 @@ fn verify_resume_location(session: &Value, cwd: &Path, session_id: &str) -> anyh
     else {
         return Ok(());
     };
-    if Path::new(recorded) != Path::new(&opencode_location_directory(cwd)) {
+    if crate::opencode_session::resolve_request_directory(Path::new(recorded))
+        != opencode_location_directory(cwd)
+    {
         bail!(
             "OpenCode session `{session_id}` lives in `{recorded}`, not this task's directory `{}`",
             cwd.display()
@@ -1129,10 +1135,46 @@ impl OpenCodeDriver {
             .spawn(move || {
                 while let Ok(message) = command_rx.recv() {
                     match message {
-                        CommandMessage::Prompt { text, files } => {
+                        CommandMessage::Prompt {
+                            text,
+                            files,
+                            durable,
+                        } => {
+                            if let Some((record, store)) = &durable {
+                                // Persist the native session association before
+                                // the side effect; failed storage forbids POST.
+                                match store.transition_submission(
+                                    record.receipt.id,
+                                    SubmissionState::Dispatching,
+                                    SubmissionState::Dispatching,
+                                    Some(&worker_session),
+                                ) {
+                                    Ok(Some(saved)) => {
+                                        let _ = worker_events
+                                            .send(DriverEvent::SubmissionUpdated(saved.receipt));
+                                    }
+                                    _ => {
+                                        let _ = worker_events.send(DriverEvent::Error(tr!(
+                                            "errors.submission_dispatch_unknown"
+                                        )));
+                                        continue;
+                                    }
+                                }
+                            }
                             let submission = {
                                 let mut active = worker_turn.lock();
-                                let generation = submissions.lock().begin();
+                                let generation = match &durable {
+                                    Some((record, store)) => {
+                                        let mut fence = submissions.lock();
+                                        let generation = fence.begin_with_input(
+                                            record.receipt.input_id.clone(),
+                                            record.receipt.created_at,
+                                        );
+                                        fence.bind_receipt(record.receipt.id, store.clone());
+                                        generation
+                                    }
+                                    None => submissions.lock().begin(),
+                                };
                                 *active = true;
                                 generation
                             };
@@ -1158,6 +1200,11 @@ impl OpenCodeDriver {
                                 if let Some(id) = submissions.lock().input_id() {
                                     current["id"] = json!(id);
                                 }
+                                if durable.is_some() {
+                                    // Durable admission needs the V2 ID contract;
+                                    // never retry with a shape that drops it.
+                                    return worker_server.request("POST", &path, Some(&current));
+                                }
                                 crate::opencode_session::post_current_or_legacy(
                                     |body| worker_server.request("POST", &path, Some(body)),
                                     &current,
@@ -1167,9 +1214,52 @@ impl OpenCodeDriver {
                             if let Ok(response) = &posted {
                                 submissions.lock().accepted(submission, response);
                             }
+                            if let Some((record, store)) = &durable {
+                                let state = match &posted {
+                                    Ok(_) => SubmissionState::Accepted,
+                                    Err(error)
+                                        if invalid_input
+                                            || (error.to_string().contains("HTTP 4")
+                                                && !error.to_string().contains("HTTP 409")) =>
+                                    {
+                                        SubmissionState::Rejected
+                                    }
+                                    Err(_) => SubmissionState::Unknown,
+                                };
+                                match store.transition_submission(
+                                    record.receipt.id,
+                                    SubmissionState::Dispatching,
+                                    state,
+                                    Some(&worker_session),
+                                ) {
+                                    Ok(Some(saved)) => {
+                                        crate::opencode_diagnostics::submission(
+                                            "prompt_receipt",
+                                            &saved,
+                                            worker_server.port,
+                                            submission,
+                                        );
+                                        let _ = worker_events
+                                            .send(DriverEvent::SubmissionUpdated(saved.receipt));
+                                    }
+                                    _ => {
+                                        crate::opencode_diagnostics::submission(
+                                            "receipt_save_failed",
+                                            record,
+                                            worker_server.port,
+                                            submission,
+                                        );
+                                        let _ = worker_events.send(DriverEvent::Error(tr!(
+                                            "errors.submission_dispatch_unknown"
+                                        )));
+                                    }
+                                }
+                            }
                             if let Err(error) = posted {
-                                let rejected =
-                                    invalid_input || error.to_string().contains("HTTP 4");
+                                let rejected = invalid_input
+                                    || (error.to_string().contains("HTTP 4")
+                                        && !(durable.is_some()
+                                            && error.to_string().contains("HTTP 409")));
                                 if !rejected {
                                     submissions.lock().unconfirmed(submission);
                                     let _ = worker_events.send(DriverEvent::Error(tr!(
@@ -1464,10 +1554,25 @@ fn opencode_model_ref(model: &str, variant: Option<&str>) -> Option<Value> {
 }
 
 impl DriverControl for OpenCodeDriver {
+    fn submit(
+        &self,
+        submission: SubmissionRecord,
+        store: Arc<crate::persistence::StateStore>,
+    ) -> anyhow::Result<()> {
+        self.commands
+            .send(CommandMessage::Prompt {
+                text: submission.prompt.clone(),
+                files: submission.files.clone(),
+                durable: Some((submission, store)),
+            })
+            .map_err(|_| anyhow!("submission command worker is unavailable"))
+    }
+
     fn prompt(&self, prompt: String, files: Vec<PromptFile>) {
         let _ = self.commands.send(CommandMessage::Prompt {
             text: prompt,
             files,
+            durable: None,
         });
     }
 
@@ -1487,13 +1592,14 @@ impl DriverControl for OpenCodeDriver {
             .fetch_add(1, Ordering::AcqRel)
             .saturating_add(1);
         let parent_id = self.session_id.clone();
-        let directory = opencode_location_directory(&self.cwd.lock());
+        let cwd = self.cwd.lock().clone();
         let events = self.events.clone();
         let generation_guard = Arc::clone(&self.background_refresh_generation);
         let transcript_hydrations = Arc::clone(&self.background_transcript_hydrations);
         let _ = thread::Builder::new()
             .name("fintwind-opencode-subagents-refresh".into())
             .spawn(move || {
+                let directory = opencode_location_directory(&cwd);
                 // A server shared across workspaces must only see this
                 // directory's sessions. New servers filter by parent before
                 // paging; old ones may ignore or reject the parameter. Page
@@ -3470,6 +3576,7 @@ fn apply_recovered_turn(
     if !*active || !fence.matches(recovered.generation) {
         return None;
     }
+    fence.confirm_receipt(events, port);
     for message in recovered.acknowledged_steers {
         let _ = events.send(DriverEvent::SteerAccepted { message });
     }

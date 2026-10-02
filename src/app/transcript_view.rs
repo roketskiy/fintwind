@@ -1515,7 +1515,35 @@ impl Fintwind {
                         // pane) keeps the tick from busting sibling islands.
                         motion::pulse_lease(window.current_view(), cx);
                     }
-                    rendered
+                    let admission = if message.role == MessageRole::User {
+                        message
+                            .turn_id
+                            .and_then(|turn_id| {
+                                self.submission_label_cache.borrow().get(&turn_id).copied()
+                            })
+                            .map(|key| tr!(key))
+                    } else {
+                        None
+                    };
+                    if let Some(label) = admission {
+                        div()
+                            .w_full()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(rendered)
+                            .child(
+                                div()
+                                    .w_full()
+                                    .text_right()
+                                    .text_sm()
+                                    .text_color(theme.text_secondary)
+                                    .child(label),
+                            )
+                            .into_any_element()
+                    } else {
+                        rendered
+                    }
                 })
                 .unwrap_or_else(|| div().into_any_element()),
             TranscriptRowKind::TurnBlock(block_index) => self
@@ -1960,6 +1988,19 @@ impl Fintwind {
         // gives it, so the silence counter would only say the same thing twice
         // — and more vaguely — right above it.
         let retrying = self.selected_provider_retry().is_some();
+        let receipt = self
+            .selected_session()
+            .and_then(|session| session.turns.last())
+            .and_then(|turn| turn.submission.as_ref());
+        let admission_label = receipt
+            .filter(|receipt| {
+                !matches!(
+                    receipt.state,
+                    fintwind_protocol::submission::SubmissionState::Preparing
+                        | fintwind_protocol::submission::SubmissionState::Accepted
+                )
+            })
+            .map(|receipt| tr!(receipt.state.label_key()));
         let phase = self
             .selected_runtime()
             .and_then(|runtime| {
@@ -1968,7 +2009,10 @@ impl Fintwind {
                     runtime.last_active_at.elapsed().as_secs(),
                 )
             })
-            .filter(|phase| !(retrying && matches!(phase, WorkingPhase::Awaiting { .. })));
+            .filter(|phase| {
+                admission_label.is_none()
+                    && !(retrying && matches!(phase, WorkingPhase::Awaiting { .. }))
+            });
         div()
             .h(px(22.0))
             .flex()
@@ -1981,10 +2025,12 @@ impl Fintwind {
                     .line_height(ui_px(16.0))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(theme.text_tertiary)
-                    .child(SharedString::from(tr!(
-                        "transcript.working_for",
-                        duration = format_working_elapsed(elapsed)
-                    ))),
+                    .child(SharedString::from(admission_label.unwrap_or_else(|| {
+                        tr!(
+                            "transcript.working_for",
+                            duration = format_working_elapsed(elapsed)
+                        )
+                    }))),
             )
             .children(phase.map(|phase| self.render_working_phase(phase, theme, cx)))
             .into_any_element()

@@ -615,7 +615,11 @@ impl BackgroundWorkRegistry {
             if let Some(output) = self.items.get(&key).and_then(|item| item.output.as_deref()) {
                 self.rendered_output
                     .insert(key.clone(), SharedString::from(strip_ansi(output)));
-                if let Some(viewport) = self.output_viewports.get(&key) {
+                // A child transcript shares this viewport, but its position
+                // must not be driven by updates to the item's plain output.
+                if key.kind != BackgroundWorkKind::Subagent
+                    && let Some(viewport) = self.output_viewports.get(&key)
+                {
                     viewport.scroll_handle.scroll_to_bottom();
                 }
             }
@@ -1414,6 +1418,11 @@ impl Fintwind {
         });
         if item.key.kind == BackgroundWorkKind::Subagent {
             let transcript = registry.and_then(|registry| registry.transcripts.get(key));
+            let scroll_id = format!(
+                "background-transcript-scroll-{}-{}",
+                item.key.provider_id, item.key.kind as u8
+            );
+            let scroll_focus = self.transcript_control_focus(scroll_id.clone(), cx);
             return div()
                 .id("background-work-surface")
                 .tab_group()
@@ -1467,21 +1476,67 @@ impl Fintwind {
                 )
                 .child(
                     div()
-                        .id("background-transcript-scroll")
                         .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
-                        .px(px(16.0))
-                        .py(px(12.0))
-                        .children(transcript.map(|transcript| {
-                            self.render_background_transcript(
-                                item,
-                                transcript,
-                                selection.clone(),
-                                window,
-                                cx,
-                            )
-                        })),
+                        .relative()
+                        .overflow_hidden()
+                        .child(
+                            div()
+                                .id(SharedString::from(scroll_id))
+                                .track_focus(&scroll_focus)
+                                .tab_index(0)
+                                .size_full()
+                                .overflow_y_scroll()
+                                .track_scroll(&output_viewport.scroll_handle)
+                                .focus_visible(|style| style.border_1().border_color(theme.accent))
+                                .on_scroll_wheel({
+                                    let scroll = output_viewport.scroll_handle.clone();
+                                    move |_, _, cx| contain_scroll(&scroll, cx)
+                                })
+                                .on_key_down({
+                                    let scroll = output_viewport.scroll_handle.clone();
+                                    move |event: &KeyDownEvent, window, cx| {
+                                        if !scroll_focus.is_focused(window)
+                                            || event.keystroke.modifiers.modified()
+                                        {
+                                            return;
+                                        }
+                                        let current = scroll.offset();
+                                        let limit = scroll.max_offset().y;
+                                        let page = scroll.bounds().size.height * 0.9;
+                                        let next = match event.keystroke.key.as_str() {
+                                            "up" => current.y + ui_px(24.0),
+                                            "down" => current.y - ui_px(24.0),
+                                            "pageup" => current.y + page,
+                                            "pagedown" => current.y - page,
+                                            "home" => px(0.0),
+                                            "end" => -limit,
+                                            _ => return,
+                                        };
+                                        scroll.set_offset(point(
+                                            current.x,
+                                            next.clamp(-limit, px(0.0)),
+                                        ));
+                                        cx.stop_propagation();
+                                        cx.notify(window.current_view());
+                                    }
+                                })
+                                .px(px(16.0))
+                                .py(px(12.0))
+                                .children(transcript.map(|transcript| {
+                                    self.render_background_transcript(
+                                        item,
+                                        transcript,
+                                        selection.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(scrollbar::vertical(
+                            &output_viewport.scroll_handle,
+                            &output_viewport.scrollbar,
+                        )),
                 );
         }
         let card = div()

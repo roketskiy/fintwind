@@ -218,11 +218,46 @@ fn native_transcript_refresh_due(
     if session.native_session_id.is_none() {
         return false;
     }
-    if session.status.is_busy() || runtime_attached {
+    let cold_owned =
+        !runtime_attached && session.turns.iter().any(|turn| turn.submission.is_some());
+    if (session.status.is_busy() && !cold_owned) || runtime_attached {
         return false;
     }
     let has_content = session.detail_loaded && !session.messages.is_empty();
     !(has_content && fetched_at >= session.last_reply_at.unwrap_or(0))
+}
+
+/// Only checked at cold fetch boundaries, not during rendering. A last-turn ID
+/// alone cannot detect a receipt/terminal/checkpoint update on that same turn.
+fn native_transcript_revision(session: &AgentSession) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    session.native_session_id.hash(&mut hash);
+    session.project_id.hash(&mut hash);
+    std::mem::discriminant(&session.status).hash(&mut hash);
+    for turn in &session.turns {
+        turn.id.hash(&mut hash);
+        if let Some(receipt) = turn.submission.as_ref() {
+            std::mem::discriminant(&turn.status).hash(&mut hash);
+            turn.completed_at.hash(&mut hash);
+            receipt.id.hash(&mut hash);
+            receipt.input_id.hash(&mut hash);
+            std::mem::discriminant(&receipt.state).hash(&mut hash);
+            receipt.updated_at.hash(&mut hash);
+            receipt.native_session_id.hash(&mut hash);
+            if let Some(checkpoint) = turn.checkpoint.as_ref() {
+                checkpoint.git_ref.hash(&mut hash);
+                checkpoint.created_at.hash(&mut hash);
+                std::mem::discriminant(&checkpoint.status).hash(&mut hash);
+                for file in &checkpoint.files {
+                    file.path.hash(&mut hash);
+                    file.additions.hash(&mut hash);
+                    file.deletions.hash(&mut hash);
+                }
+            }
+        }
+    }
+    hash.finish()
 }
 
 impl Fintwind {
@@ -717,6 +752,12 @@ impl Fintwind {
             return;
         }
         let daemon = self.daemon.clone();
+        let expected_revision = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(native_transcript_revision);
         cx.spawn(async move |this, cx| {
             let fetched = cx
                 .background_executor()
@@ -729,6 +770,16 @@ impl Fintwind {
                 this.native_transcript_fetches.remove(&session_id);
                 match fetched {
                     Ok(transcript) => {
+                        if this
+                            .state
+                            .sessions
+                            .iter()
+                            .find(|session| session.id == session_id)
+                            .map(native_transcript_revision)
+                            != expected_revision
+                        {
+                            return;
+                        }
                         // The fetch raced the session coming back to life: a
                         // turn may have started between dispatch and apply,
                         // and replacing the transcript then would clobber
@@ -742,19 +793,43 @@ impl Fintwind {
                             .is_some_and(|session| session.status.is_busy())
                             || this.runtimes.contains_key(&session_id)
                             || this.submission_preparations.contains(&session_id);
-                        if !live && let Some(session) = this.state.session_mut(session_id) {
+                        let cold_owned = !this.runtimes.contains_key(&session_id)
+                            && !this.submission_preparations.contains(&session_id)
+                            && this
+                                .state
+                                .sessions
+                                .iter()
+                                .find(|session| session.id == session_id)
+                                .is_some_and(|session| {
+                                    session.turns.iter().any(|turn| turn.submission.is_some())
+                                });
+                        if (!live || cold_owned)
+                            && let Some(session) = this.state.session_mut(session_id)
+                        {
                             session.messages = transcript.messages;
                             session.transcript_blocks = transcript.blocks;
                             session.turns = transcript.turns;
+                            let unsettled =
+                                fintwind_protocol::submission::has_unsettled_submissions(session);
+                            session.status = if unsettled {
+                                SessionStatus::Working
+                            } else {
+                                SessionStatus::Idle
+                            };
                             session.detail_loaded = true;
                             // Not the wall clock: at least the server stamp
                             // the pull reflects, so a server clock ahead of
                             // this machine's cannot pin every future check
                             // into refetching.
-                            this.native_transcript_fetched.insert(
-                                session_id,
-                                unix_time().max(session.last_reply_at.unwrap_or(0)),
-                            );
+                            if unsettled {
+                                // Partial/busy/unknown reads are not caught up.
+                                this.native_transcript_fetched.remove(&session_id);
+                            } else {
+                                this.native_transcript_fetched.insert(
+                                    session_id,
+                                    unix_time().max(session.last_reply_at.unwrap_or(0)),
+                                );
+                            }
                             this.state.mark_session_dirty(session_id);
                             if this.state.selected_session == Some(session_id) {
                                 this.reset_visible_state();

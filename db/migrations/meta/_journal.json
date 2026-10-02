@@ -22,6 +22,20 @@
       "when": 1786435875650,
       "tag": "0002_cute_miracleman",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1790917936346,
+      "tag": "0003_imported_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1790918707290,
+      "tag": "0004_icy_tusk",
+      "breakpoints": true
     }
   ]
 }

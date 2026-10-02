@@ -123,17 +123,6 @@ fn discover_opencode_models(binary: &Path, directory: Option<&Path>) -> Option<V
     let location = workspace_location(directory)?;
     let server = crate::opencode_pool::acquire(binary, Path::new(&location)).ok()?;
 
-    // Kick provider activation the same way the CLI call did. The answer
-    // carries no catalog; only the side effect on this server matters, and a
-    // cold server may still list nothing until the budget below expires.
-    let _ = server.request_for_directory_with_timeout(
-        &location,
-        "POST",
-        "/api/plugin/await-activation",
-        None,
-        MODEL_REQUEST_TIMEOUT,
-    );
-
     let started = Instant::now();
     let mut delay = MODEL_DISCOVERY_INITIAL_DELAY;
     loop {
@@ -175,12 +164,9 @@ fn workspace_location(directory: Option<&Path>) -> Option<String> {
     let directory = directory
         .map(Path::to_path_buf)
         .or_else(|| std::env::current_dir().ok())?;
-    let directory = if directory.is_absolute() {
-        directory
-    } else {
-        std::fs::canonicalize(&directory).unwrap_or(directory)
-    };
-    Some(directory.to_string_lossy().into_owned())
+    Some(crate::opencode_session::resolve_request_directory(
+        &directory,
+    ))
 }
 
 /// Stable, filesystem-safe FNV-1a key for a workspace-scoped model cache.

@@ -146,6 +146,73 @@ impl RemoteDriverControl {
 }
 
 impl DriverControl for RemoteDriverControl {
+    fn submit(
+        &self,
+        receipt: fintwind_protocol::submission::SubmissionReceipt,
+        workspace: fintwind_protocol::model::SessionWorkspace,
+    ) {
+        let client = self.client.clone();
+        let events = self.events.clone();
+        let session_id = self.session_id;
+        let runtime_id = self.runtime_id;
+        let failure_events = events.clone();
+        let failure_receipt = receipt.clone();
+        let result = std::thread::Builder::new()
+            .name("fintwind-submit-receipt".into())
+            .spawn(move || {
+                match client.request(
+                    session_id,
+                    runtime_id,
+                    fintwind_client::Command::DispatchSubmission {
+                        submission_id: receipt.id,
+                        workspace,
+                    },
+                ) {
+                    Ok(fintwind_client::ResponsePayload::SubmissionSaved { receipt }) => {
+                        // Provider events may already be newer; the projection
+                        // applies receipts monotonically by their timestamp/state.
+                        let _ = events.send(DriverEvent::SubmissionUpdated(receipt));
+                    }
+                    _ => {
+                        let mut receipt = receipt;
+                        receipt.state = fintwind_protocol::submission::SubmissionState::Unknown;
+                        receipt.updated_at = fintwind_protocol::model::unix_time_millis();
+                        // It is safe to abandon only a still-Preparing row.
+                        // A committed claim can never be undone or resent here.
+                        if let Ok(fintwind_client::ResponsePayload::SubmissionSaved {
+                            receipt: saved,
+                        }) = client.request(
+                            session_id,
+                            uuid::Uuid::nil(),
+                            fintwind_client::Command::AbandonSubmission {
+                                submission_id: receipt.id,
+                            },
+                        ) {
+                            receipt = saved;
+                            if receipt.state
+                                == fintwind_protocol::submission::SubmissionState::Dispatching
+                            {
+                                receipt.state =
+                                    fintwind_protocol::submission::SubmissionState::Unknown;
+                            }
+                        }
+                        let _ = events.send(DriverEvent::SubmissionUpdated(receipt));
+                        let _ = events.send(DriverEvent::Error(crate::i18n::translate(
+                            "errors.submission_dispatch_unknown",
+                        )));
+                    }
+                }
+            });
+        if result.is_err() {
+            let mut receipt = failure_receipt;
+            receipt.state = fintwind_protocol::submission::SubmissionState::NotSent;
+            let _ = failure_events.send(DriverEvent::SubmissionUpdated(receipt));
+            let _ = failure_events.send(DriverEvent::Error(crate::i18n::translate(
+                "errors.submission_dispatch_unknown",
+            )));
+        }
+    }
+
     fn prompt(&self, prompt: String, files: Vec<fintwind_client::PromptFile>) {
         self.notify(fintwind_client::Command::Prompt { prompt, files });
     }

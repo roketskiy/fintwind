@@ -24,16 +24,19 @@ use crate::model::{
 use crate::persistence::{ComposerDraftStore, PersistedState, StateStore};
 use crate::settings::DaemonSettingsStore;
 use fintwind_protocol::provider_session::{ProviderSessionFork, ProviderSessionForkRequest};
+use fintwind_protocol::submission::SubmissionState;
 
 pub struct FintwindBackend {
     browser_tools: Arc<crate::browser_tools::BrowserTools>,
-    sessions: Mutex<HashMap<Uuid, (Uuid, DriverHandle)>>,
+    sessions: Arc<Mutex<HashMap<Uuid, (Uuid, DriverHandle)>>>,
     terminals: Mutex<HashMap<Uuid, (Uuid, crate::terminal::DaemonTerminal)>>,
     settings: DaemonSettingsStore,
-    task_store: StateStore,
-    task_state: Mutex<PersistedState>,
+    task_store: Arc<StateStore>,
+    task_state: Arc<Mutex<PersistedState>>,
     removed_session_ids: Mutex<HashSet<Uuid>>,
     removed_project_ids: Mutex<HashSet<Uuid>>,
+    active_preparations: Mutex<HashMap<Uuid, EventSink>>,
+    native_transcript_generations: Mutex<HashMap<String, u64>>,
     composer_drafts: ComposerDraftStore,
     attachments: AttachmentStore,
     checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
@@ -56,18 +59,248 @@ impl FintwindBackend {
         );
         Ok(Self {
             browser_tools: Arc::default(),
-            sessions: Mutex::new(HashMap::new()),
+            sessions: Arc::new(Mutex::new(HashMap::new())),
             terminals: Mutex::new(HashMap::new()),
             settings,
-            task_store,
-            task_state: Mutex::new(task_state),
+            task_store: Arc::new(task_store),
+            task_state: Arc::new(Mutex::new(task_state)),
             removed_session_ids: Mutex::new(HashSet::new()),
             removed_project_ids: Mutex::new(HashSet::new()),
+            active_preparations: Mutex::new(HashMap::new()),
+            native_transcript_generations: Mutex::new(HashMap::new()),
             composer_drafts,
             attachments,
             checkpoint_capture_locks: Mutex::new(HashMap::new()),
             default_cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         })
+    }
+
+    /// Recover admission facts only. No runtime is not proof of execution idle.
+    fn hydrate_submission_session(&self, session: &mut AgentSession) -> anyhow::Result<()> {
+        self.task_store.hydrate(session)?;
+        self.task_store.hydrate_submission_receipts(session)?;
+        let runtime_attached = self.sessions.lock().contains_key(&session.id);
+        let mut settled_unsent = false;
+        for turn in &mut session.turns {
+            let Some(receipt) = turn.submission.as_mut() else {
+                continue;
+            };
+            if session.provider_cursor.is_none()
+                && let Some(native) = receipt.native_session_id.as_ref()
+            {
+                session.provider_cursor =
+                    Some(ProviderResumeCursor::from_session_id(native.clone()));
+                session.native_session_id = Some(native.clone());
+            }
+            let preparing = self
+                .active_preparations
+                .lock()
+                .get(&receipt.id)
+                .is_some_and(EventSink::source_is_connected);
+            if preparing {
+                continue;
+            }
+            if !runtime_attached || receipt.state == SubmissionState::Preparing {
+                self.active_preparations.lock().remove(&receipt.id);
+                let target = match receipt.state {
+                    SubmissionState::Preparing => Some(SubmissionState::NotSent),
+                    SubmissionState::Dispatching => Some(SubmissionState::Unknown),
+                    _ => None,
+                };
+                if let Some(target) = target {
+                    let updated = self.task_store.transition_submission(
+                        receipt.id,
+                        receipt.state,
+                        target,
+                        None,
+                    )?;
+                    let updated = match updated {
+                        Some(saved) => Some(saved),
+                        None => self.task_store.submission(receipt.id)?,
+                    };
+                    if let Some(saved) = updated {
+                        *receipt = saved.receipt;
+                    }
+                }
+            }
+            if matches!(
+                receipt.state,
+                SubmissionState::NotSent | SubmissionState::Rejected
+            ) && turn.status == crate::model::TurnStatus::Running
+            {
+                turn.status = crate::model::TurnStatus::Interrupted;
+                turn.completed_at = Some(crate::model::unix_time());
+                settled_unsent = true;
+            }
+        }
+        if settled_unsent {
+            session.status = if fintwind_protocol::submission::has_unsettled_submissions(session) {
+                SessionStatus::Working
+            } else {
+                SessionStatus::Idle
+            };
+        }
+        Ok(())
+    }
+
+    /// Read-only provider reconciliation. Admission, history and execution
+    /// proof remain separate; a superseded read never returns a stale projection.
+    fn fetch_native_transcript(
+        &self,
+        binary: &Path,
+        directory: &Path,
+        native_id: &str,
+    ) -> anyhow::Result<fintwind_protocol::provider_session::NativeTranscript> {
+        use fintwind_protocol::submission::{
+            has_unsettled_submissions, merge_native_transcript, replace_native_window,
+        };
+        let (local, generation, expected_projection) = {
+            let mut state = self.task_state.lock();
+            let local = state.sessions.iter_mut().find(|session| {
+                session.native_session_id.as_deref() == Some(native_id)
+                    || session
+                        .provider_cursor
+                        .as_ref()
+                        .is_some_and(|cursor| cursor.native_id() == native_id)
+            });
+            let local = if let Some(local) = local {
+                self.hydrate_submission_session(local)?;
+                Some(local.clone())
+            } else {
+                None
+            };
+            let mut generations = self.native_transcript_generations.lock();
+            let generation = generations.entry(native_id.to_owned()).or_default();
+            *generation = generation.wrapping_add(1);
+            let expected_projection = local.as_ref().map(serde_json::to_vec).transpose()?;
+            (local, *generation, expected_projection)
+        };
+        let inputs = local
+            .as_ref()
+            .map(|session| {
+                session
+                    .turns
+                    .iter()
+                    .filter_map(|turn| {
+                        turn.submission
+                            .as_ref()
+                            .map(|receipt| receipt.input_id.clone())
+                    })
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default();
+        let server = crate::opencode_pool::acquire(binary, directory)?;
+        let mut transcript = driver::native::fetch_transcript(
+            &server,
+            native_id,
+            &self.task_store.blobs(),
+            &inputs,
+        )?;
+        let Some(mut local) = local else {
+            if self.native_transcript_generations.lock().get(native_id) != Some(&generation) {
+                bail!("native history read was superseded");
+            }
+            return Ok(transcript);
+        };
+        for turn in &local.turns {
+            if let Some(receipt) = turn.submission.as_ref()
+                && receipt.state.is_unconfirmed()
+                && transcript
+                    .turns
+                    .iter()
+                    .any(|native| native.provider_resume_at.as_deref() == Some(&receipt.input_id))
+                && let Some(saved) = self.task_store.transition_submission(
+                    receipt.id,
+                    receipt.state,
+                    SubmissionState::Accepted,
+                    Some(native_id),
+                )?
+            {
+                crate::opencode_diagnostics::submission(
+                    "cold_receipt_reconciled",
+                    &saved,
+                    server.port,
+                    generation,
+                );
+            }
+        }
+        // A failed CAS may mean a concurrent reader already confirmed receipt.
+        // Always reload the authority, never retain the old Unknown copy.
+        self.task_store.hydrate_submission_receipts(&mut local)?;
+        let terminal = local
+            .turns
+            .iter()
+            .find(|turn| {
+                turn.status == crate::model::TurnStatus::Running
+                    && turn
+                        .submission
+                        .as_ref()
+                        .is_some_and(|receipt| receipt.state == SubmissionState::Accepted)
+            })
+            .and_then(|turn| turn.submission.as_ref())
+            .and_then(|receipt| {
+                driver::reconcile_saved_submission(server.port, native_id, receipt)
+                    .ok()
+                    .flatten()
+                    .map(|proof| (receipt, proof))
+            })
+            .and_then(|(receipt, proof)| {
+                // The terminal cannot stamp an earlier partial history read.
+                replace_native_window(&mut transcript, proof.transcript, &receipt.input_id)
+                    .then_some((receipt.id, proof.status, proof.completed_at))
+            });
+
+        let mut state = self.task_state.lock();
+        if self.native_transcript_generations.lock().get(native_id) != Some(&generation) {
+            bail!("native history read was superseded");
+        }
+        let runtimes = self.sessions.lock();
+        if runtimes.contains_key(&local.id) {
+            bail!("native history read raced an attached runtime");
+        }
+        let existing = state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == local.id)
+            .ok_or_else(|| anyhow!("native history target was removed"))?;
+        if Some(serde_json::to_vec(existing)?) != expected_projection
+            || existing.turns.last().map(|turn| turn.id) != local.turns.last().map(|turn| turn.id)
+            || existing.native_session_id != local.native_session_id
+            || existing.turns.iter().any(|turn| {
+                self.active_preparations
+                    .lock()
+                    .get(&turn.id)
+                    .is_some_and(EventSink::source_is_connected)
+            })
+        {
+            bail!("native history target changed during reconciliation");
+        }
+        self.task_store.hydrate_submission_receipts(existing)?;
+        // Merge against the latest projection, so same-turn settlement,
+        // presentation and checkpoints published during I/O cannot roll back.
+        let mut transcript = merge_native_transcript(existing, transcript);
+        if let Some((id, status, completed_at)) = terminal
+            && let Some(turn) = transcript.turns.iter_mut().find(|turn| turn.id == id)
+            && turn.status == crate::model::TurnStatus::Running
+            && turn
+                .submission
+                .as_ref()
+                .is_some_and(|receipt| receipt.state == SubmissionState::Accepted)
+        {
+            turn.status = status;
+            turn.completed_at = Some(completed_at);
+        }
+        existing.messages = transcript.messages.clone();
+        existing.transcript_blocks = transcript.blocks.clone();
+        existing.turns = transcript.turns.clone();
+        existing.status = if has_unsettled_submissions(existing) {
+            SessionStatus::Working
+        } else {
+            SessionStatus::Idle
+        };
+        state.mark_session_dirty(local.id);
+        self.task_store.save(&mut state)?;
+        Ok(transcript)
     }
 
     /// Capture and persist one ending checkpoint exactly once per daemon.
@@ -210,6 +443,249 @@ impl Backend for FintwindBackend {
         let session_id = request.session_id;
         let runtime_id = request.runtime_id;
         match request.command {
+            Command::AcceptSubmission {
+                project,
+                session,
+                submission,
+            } => {
+                let session = *session;
+                let submission = *submission;
+                if session.id != session_id
+                    || submission.session_id != session_id
+                    || session.project_id != project.id
+                    || submission.receipt.state != SubmissionState::Preparing
+                    || !session.detail_loaded
+                    || !session.turns.last().is_some_and(|turn| {
+                        turn.id == submission.receipt.id
+                            && turn.status == crate::model::TurnStatus::Running
+                    })
+                {
+                    bail!("invalid submission identity");
+                }
+                let mut state = self.task_state.lock();
+                if let Some(existing) = state
+                    .sessions
+                    .iter_mut()
+                    .find(|candidate| candidate.id == session_id)
+                {
+                    self.hydrate_submission_session(existing)?;
+                }
+                if self.removed_session_ids.lock().contains(&session_id)
+                    || self.removed_project_ids.lock().contains(&project.id)
+                {
+                    bail!("submission target was removed");
+                }
+                if let Some(saved) = self.task_store.submission(submission.receipt.id)? {
+                    if saved.session_id != session_id
+                        || saved.receipt.input_id != submission.receipt.input_id
+                        || saved.prompt != submission.prompt
+                        || serde_json::to_value(&saved.files)?
+                            != serde_json::to_value(&submission.files)?
+                    {
+                        bail!("submission ID conflicts with a saved input");
+                    }
+                    return Ok(ResponsePayload::SubmissionSaved {
+                        receipt: saved.receipt,
+                    });
+                }
+                if state
+                    .sessions
+                    .iter()
+                    .find(|candidate| candidate.id == session_id)
+                    .is_some_and(|existing| {
+                        (existing.status.is_busy()
+                            || fintwind_protocol::submission::has_unsettled_submissions(existing))
+                            && existing
+                                .turns
+                                .last()
+                                .is_none_or(|turn| turn.id != submission.receipt.id)
+                    })
+                {
+                    bail!("session already has an active submission");
+                }
+                // Publish to daemon memory only after the database commit.
+                let mut next = state.clone();
+                if !next
+                    .projects
+                    .iter()
+                    .any(|candidate| candidate.id == project.id)
+                {
+                    next.projects.push(project);
+                }
+                if let Some(existing) = next
+                    .sessions
+                    .iter_mut()
+                    .find(|candidate| candidate.id == session_id)
+                {
+                    *existing = session;
+                } else {
+                    next.sessions.push(session);
+                }
+                next.mark_session_dirty(session_id);
+                self.task_store
+                    .save_with_submission(&mut next, Some(&submission))?;
+                *state = next;
+                self.active_preparations
+                    .lock()
+                    .insert(submission.receipt.id, events.clone());
+                crate::opencode_diagnostics::submission("saved", &submission, 0, 0);
+                Ok(ResponsePayload::SubmissionSaved {
+                    receipt: submission.receipt,
+                })
+            }
+            Command::AbandonSubmission { submission_id } => {
+                let mut state = self.task_state.lock();
+                let saved = self
+                    .task_store
+                    .submission(submission_id)?
+                    .ok_or_else(|| anyhow!("submission is missing"))?;
+                if saved.session_id != session_id {
+                    bail!("submission belongs to another session");
+                }
+                self.active_preparations.lock().remove(&submission_id);
+                if let Some(saved) = self.task_store.transition_submission(
+                    submission_id,
+                    SubmissionState::Preparing,
+                    SubmissionState::NotSent,
+                    None,
+                )? {
+                    crate::opencode_diagnostics::submission("preparation_failed", &saved, 0, 0);
+                    if let Some(session) = state
+                        .sessions
+                        .iter_mut()
+                        .find(|session| session.id == session_id)
+                    {
+                        self.task_store.hydrate(session)?;
+                        if let Some(turn) = session
+                            .turns
+                            .iter_mut()
+                            .find(|turn| turn.id == submission_id)
+                        {
+                            turn.submission = Some(saved.receipt);
+                            if !turn.provider_turn_started
+                                && turn.status == crate::model::TurnStatus::Running
+                            {
+                                turn.status = crate::model::TurnStatus::Failed;
+                                turn.completed_at = Some(crate::model::unix_time());
+                                session.status = SessionStatus::Idle;
+                            }
+                        }
+                        state.mark_session_dirty(session_id);
+                        self.task_store.save(&mut state)?;
+                    }
+                }
+                let saved = self
+                    .task_store
+                    .submission(submission_id)?
+                    .ok_or_else(|| anyhow!("submission is missing"))?;
+                Ok(ResponsePayload::SubmissionSaved {
+                    receipt: saved.receipt,
+                })
+            }
+            Command::DispatchSubmission {
+                submission_id,
+                workspace,
+            } => {
+                let mut state = self.task_state.lock();
+                if let Some(session) = state
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id == session_id)
+                {
+                    self.hydrate_submission_session(session)?;
+                }
+                let saved = self
+                    .task_store
+                    .submission(submission_id)?
+                    .ok_or_else(|| anyhow!("submission is missing"))?;
+                if saved.session_id != session_id {
+                    bail!("submission belongs to another session");
+                }
+                if saved.receipt.state != SubmissionState::Preparing {
+                    return Ok(ResponsePayload::SubmissionSaved {
+                        receipt: saved.receipt,
+                    });
+                }
+                let driver = {
+                    let sessions = self.sessions.lock();
+                    let (active_runtime_id, driver) = sessions
+                        .get(&session_id)
+                        .ok_or_else(|| anyhow!("submission runtime is unavailable"))?;
+                    if *active_runtime_id != runtime_id {
+                        bail!("submission runtime was replaced");
+                    }
+                    driver.clone()
+                };
+                let session = state
+                    .sessions
+                    .iter_mut()
+                    .find(|candidate| candidate.id == session_id)
+                    .ok_or_else(|| anyhow!("submission session is missing"))?;
+                if !session
+                    .turns
+                    .last()
+                    .is_some_and(|turn| turn.id == submission_id)
+                {
+                    bail!("submission turn was replaced");
+                }
+                session.workspace = workspace;
+                state.mark_session_dirty(session_id);
+                self.task_store.save(&mut state)?;
+                let Some(saved) = self.task_store.transition_submission(
+                    submission_id,
+                    SubmissionState::Preparing,
+                    SubmissionState::Dispatching,
+                    None,
+                )?
+                else {
+                    let saved = self
+                        .task_store
+                        .submission(submission_id)?
+                        .ok_or_else(|| anyhow!("submission is missing"))?;
+                    return Ok(ResponsePayload::SubmissionSaved {
+                        receipt: saved.receipt,
+                    });
+                };
+                crate::opencode_diagnostics::submission("dispatching", &saved, 0, 0);
+                self.active_preparations.lock().remove(&submission_id);
+                if let Some(turn) = state
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id == session_id)
+                    .and_then(|session| session.turns.last_mut())
+                {
+                    turn.submission = Some(saved.receipt.clone());
+                }
+                if let Err(error) = driver.submit(saved.clone(), self.task_store.clone()) {
+                    if let Some(saved) = self.task_store.transition_submission(
+                        submission_id,
+                        SubmissionState::Dispatching,
+                        SubmissionState::NotSent,
+                        None,
+                    )? {
+                        if let Some(session) = state
+                            .sessions
+                            .iter_mut()
+                            .find(|session| session.id == session_id)
+                        {
+                            if let Some(turn) = session.turns.last_mut() {
+                                turn.submission = Some(saved.receipt.clone());
+                            }
+                            session.finish_active_turn(crate::model::TurnStatus::Failed);
+                            session.status = SessionStatus::Idle;
+                        }
+                        state.mark_session_dirty(session_id);
+                        self.task_store.save(&mut state)?;
+                        return Ok(ResponsePayload::SubmissionSaved {
+                            receipt: saved.receipt,
+                        });
+                    }
+                    return Err(error);
+                }
+                Ok(ResponsePayload::SubmissionSaved {
+                    receipt: saved.receipt,
+                })
+            }
             Command::AttachSession => {
                 let sessions = self.sessions.lock();
                 let Some((runtime_id, driver)) = sessions.get(&session_id) else {
@@ -342,15 +818,69 @@ impl Backend for FintwindBackend {
                         .iter_mut()
                         .find(|existing| existing.id == session.id)
                     {
-                        if session_projection_precedes(
-                            existing,
-                            &session,
-                            active_runtimes.get(&session.id).copied(),
-                        ) {
+                        let preparing = existing.turns.iter().any(|turn| {
+                            turn.submission
+                                .as_ref()
+                                .is_some_and(|receipt| receipt.state == SubmissionState::Preparing)
+                        });
+                        let missing_pending_turn = existing.turns.iter().any(|turn| {
+                            turn.submission.as_ref().is_some_and(|receipt| {
+                                receipt.state.is_unconfirmed()
+                                    || turn.status == crate::model::TurnStatus::Running
+                            }) && !session.turns.iter().any(|incoming| incoming.id == turn.id)
+                        });
+                        let reopens_settled = existing.turns.iter().any(|turn| {
+                            turn.submission.is_some()
+                                && turn.status != crate::model::TurnStatus::Running
+                                && session.turns.iter().any(|incoming| {
+                                    incoming.id == turn.id
+                                        && incoming.status == crate::model::TurnStatus::Running
+                                })
+                        });
+                        if preparing {
+                            // Do not allow another client's workspace/options
+                            // snapshot to change the already accepted input.
+                            for queued in session.queued_messages {
+                                if !existing
+                                    .queued_messages
+                                    .iter()
+                                    .any(|item| item.id == queued.id)
+                                {
+                                    existing.queued_messages.push(queued);
+                                }
+                            }
+                        } else if missing_pending_turn
+                            || reopens_settled
+                            || session_projection_precedes(
+                                existing,
+                                &session,
+                                active_runtimes.get(&session.id).copied(),
+                            )
+                        {
                             merge_stale_session_metadata(existing, session);
                         } else {
+                            self.task_store.hydrate_submission_receipts(&mut session)?;
                             preserve_daemon_checkpoints(existing, &mut session);
+                            for turn in &mut session.turns {
+                                if let Some(receipt) = existing
+                                    .turns
+                                    .iter()
+                                    .find(|saved| saved.id == turn.id)
+                                    .and_then(|saved| saved.submission.as_ref())
+                                    && turn
+                                        .submission
+                                        .as_ref()
+                                        .is_none_or(|incoming| !incoming.supersedes(receipt))
+                                {
+                                    turn.submission = Some(receipt.clone());
+                                }
+                            }
                             *existing = session;
+                            if fintwind_protocol::submission::has_unsettled_submissions(existing)
+                                && !existing.status.is_busy()
+                            {
+                                existing.status = SessionStatus::Working;
+                            }
                         }
                     } else {
                         state.sessions.push(session);
@@ -421,7 +951,7 @@ impl Backend for FintwindBackend {
                     .iter_mut()
                     .find(|session| session.id == session_id)
                 {
-                    self.task_store.hydrate(session)?;
+                    self.hydrate_submission_session(session)?;
                     Some(session.clone())
                 } else {
                     None
@@ -523,12 +1053,7 @@ impl Backend for FintwindBackend {
                 directory,
                 session_id,
             } => {
-                let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let transcript = crate::driver::native::fetch_transcript(
-                    &server,
-                    &session_id,
-                    &self.task_store.blobs(),
-                )?;
+                let transcript = self.fetch_native_transcript(&binary, &directory, &session_id)?;
                 Ok(ResponsePayload::NativeTranscript { transcript })
             }
             Command::FetchNativeTurnStats {
@@ -736,10 +1261,76 @@ impl Backend for FintwindBackend {
                     },
                 )?;
                 let supports_steer = handle.supports_steer();
+                let task_state = self.task_state.clone();
+                let task_store = self.task_store.clone();
+                let active_runtimes = self.sessions.clone();
                 std::thread::Builder::new()
                     .name(format!("fintwind-daemon-events-{session_id}"))
                     .spawn(move || {
                         while let Ok(event) = event_receiver.recv() {
+                            if let DriverEvent::SubmissionUpdated(receipt) = &event {
+                                let mut state = task_state.lock();
+                                let current_runtime = active_runtimes
+                                    .lock()
+                                    .get(&session_id)
+                                    .is_some_and(|(active, _)| *active == runtime_id);
+                                if let Some(turn) = state
+                                    .sessions
+                                    .iter_mut()
+                                    .find(|session| session.id == session_id && current_runtime)
+                                    .and_then(|session| {
+                                        session.turns.iter_mut().find(|turn| turn.id == receipt.id)
+                                    })
+                                {
+                                    if turn
+                                        .submission
+                                        .as_ref()
+                                        .is_none_or(|previous| receipt.supersedes(previous))
+                                    {
+                                        turn.submission = Some(receipt.clone());
+                                    }
+                                }
+                            }
+                            if let DriverEvent::TurnFinished { success, .. } = &event {
+                                let mut state = task_state.lock();
+                                let current_runtime = active_runtimes
+                                    .lock()
+                                    .get(&session_id)
+                                    .is_some_and(|(active, _)| *active == runtime_id);
+                                if let Some(session) = state
+                                    .sessions
+                                    .iter_mut()
+                                    .find(|session| session.id == session_id && current_runtime)
+                                    && session
+                                        .turns
+                                        .last()
+                                        .and_then(|turn| turn.submission.as_ref())
+                                        .is_some_and(|receipt| {
+                                            matches!(
+                                                receipt.state,
+                                                SubmissionState::Accepted
+                                                    | SubmissionState::Dispatching
+                                                    | SubmissionState::Unknown
+                                                    | SubmissionState::Rejected
+                                            )
+                                        })
+                                {
+                                    session.finish_active_turn(if *success {
+                                        crate::model::TurnStatus::Completed
+                                    } else {
+                                        crate::model::TurnStatus::Failed
+                                    });
+                                    session.status = if *success {
+                                        SessionStatus::Idle
+                                    } else {
+                                        SessionStatus::Failed
+                                    };
+                                    state.mark_session_dirty(session_id);
+                                    // Publish the verified execution boundary
+                                    // before a client can submit its successor.
+                                    let _ = task_store.save(&mut state);
+                                }
+                            }
                             let wire = event_to_wire(event).unwrap_or_else(|error| {
                                 WireDriverEvent::new(
                                     "error",
@@ -1279,6 +1870,9 @@ fn handle_driver_command(
             return Ok(ResponsePayload::Cursor { cursor });
         }
         Command::AttachSession
+        | Command::AcceptSubmission { .. }
+        | Command::DispatchSubmission { .. }
+        | Command::AbandonSubmission { .. }
         | Command::Start { .. }
         | Command::GetSettings
         | Command::UpdateSettings { .. }
@@ -1353,6 +1947,9 @@ pub fn encode_enum<T: Serialize>(value: T) -> anyhow::Result<String> {
 
 fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
     let (kind, payload) = match event {
+        DriverEvent::SubmissionUpdated(receipt) => {
+            ("submissionUpdated", serde_json::to_value(receipt)?)
+        }
         DriverEvent::RuntimeEventCursorAdvanced(_) => {
             bail!("client-only runtime cursors cannot be sent by the daemon")
         }
@@ -1504,6 +2101,7 @@ fn reasoning_part_from_wire(payload: &Value) -> String {
 pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
     let payload = event.payload;
     Ok(match event.kind.as_str() {
+        "submissionUpdated" => DriverEvent::SubmissionUpdated(serde_json::from_value(payload)?),
         "connected" => DriverEvent::Connected {
             provider_cursor: serde_json::from_value(payload)?,
         },

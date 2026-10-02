@@ -45,6 +45,14 @@ impl DriverHandle {
         self.inner.prompt(prompt, files);
     }
 
+    pub fn submit(
+        &self,
+        receipt: fintwind_protocol::submission::SubmissionReceipt,
+        workspace: fintwind_protocol::model::SessionWorkspace,
+    ) {
+        self.inner.submit(receipt, workspace);
+    }
+
     pub fn supports_steer(&self) -> bool {
         self.inner.supports_steer()
     }
@@ -92,6 +100,12 @@ impl DriverHandle {
 
 pub trait DriverControl: Send + Sync {
     fn prompt(&self, prompt: String, files: Vec<PromptFile>);
+    fn submit(
+        &self,
+        _receipt: fintwind_protocol::submission::SubmissionReceipt,
+        _workspace: fintwind_protocol::model::SessionWorkspace,
+    ) {
+    }
     fn supports_steer(&self) -> bool {
         false
     }

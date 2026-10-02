@@ -20,6 +20,7 @@
 //!   `content` at all.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -71,6 +72,7 @@ pub(crate) fn list_sessions(
     server: &OpenCodeServer,
     directory: &str,
 ) -> anyhow::Result<Vec<NativeSessionSummary>> {
+    let directory = crate::opencode_session::resolve_request_directory(Path::new(directory));
     let mut summaries = Vec::new();
     let mut cursor: Option<String> = None;
     // Newer servers can exclude child sessions before paging; old servers
@@ -79,7 +81,7 @@ pub(crate) fn list_sessions(
     for page in 0..MAX_SESSION_PAGES {
         let mut base = format!(
             "/api/session?directory={}&limit={}",
-            encode_path_segment(directory),
+            encode_path_segment(&directory),
             PAGE_LIMIT
         );
         if let Some(token) = &cursor {
@@ -180,7 +182,8 @@ pub(crate) fn list_mcp_statuses(
     server: &OpenCodeServer,
     directory: &str,
 ) -> anyhow::Result<Vec<McpServerStatus>> {
-    let path = format!("/api/mcp?directory={}", encode_path_segment(directory));
+    let directory = crate::opencode_session::resolve_request_directory(Path::new(directory));
+    let path = format!("/api/mcp?directory={}", encode_path_segment(&directory));
     let response = server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT)?;
     let mut statuses = Vec::new();
     for row in response
@@ -312,8 +315,10 @@ pub(crate) fn fetch_transcript(
     server: &OpenCodeServer,
     session_id: &str,
     blobs: &BlobStore,
+    input_ids: &HashSet<String>,
 ) -> anyhow::Result<NativeTranscript> {
-    fetch_transcript_from_port(server.port, session_id, Some(blobs))
+    // Keep admitted file-only inputs before presentation filtering erases IDs.
+    fetch_transcript_from_port(server.port, session_id, Some(blobs), Some(input_ids))
 }
 
 /// [`fetch_transcript`] against a bare port, for background threads that must
@@ -324,13 +329,14 @@ pub(crate) fn fetch_transcript_on_port(
     port: u16,
     session_id: &str,
 ) -> anyhow::Result<NativeTranscript> {
-    fetch_transcript_from_port(port, session_id, None)
+    fetch_transcript_from_port(port, session_id, None, None)
 }
 
 fn fetch_transcript_from_port(
     port: u16,
     session_id: &str,
     blobs: Option<&BlobStore>,
+    retained_inputs: Option<&HashSet<String>>,
 ) -> anyhow::Result<NativeTranscript> {
     let mut pages: Vec<Vec<Value>> = Vec::new();
     let mut cursor: Option<String> = None;
@@ -367,7 +373,10 @@ fn fetch_transcript_from_port(
     }
     let mut rows = pages.into_iter().flatten().collect::<Vec<_>>();
     rows.reverse();
-    Ok(translate_rows_with_blobs(&rows, blobs))
+    Ok(match retained_inputs {
+        Some(inputs) => translate_native_rows(&rows, blobs, false, Some(inputs)),
+        None => translate_rows_with_blobs(&rows, blobs),
+    })
 }
 
 /// Read only the durable assistant steps of a settled turn. Never substitute
@@ -1618,20 +1627,21 @@ pub(crate) fn translate_rows_with_blobs(
     rows: &[Value],
     blobs: Option<&BlobStore>,
 ) -> NativeTranscript {
-    translate_native_rows(rows, blobs, false)
+    translate_native_rows(rows, blobs, false, None)
 }
 
 /// Recovery has already validated the admitted input IDs. Even an empty
 /// user row owns a turn when it carries non-image files; its client restores
 /// the original attachment metadata instead of importing images here.
 pub(crate) fn translate_recovered_rows(rows: &[Value]) -> NativeTranscript {
-    translate_native_rows(rows, None, true)
+    translate_native_rows(rows, None, true, None)
 }
 
 fn translate_native_rows(
     rows: &[Value],
     blobs: Option<&BlobStore>,
     retain_empty_users: bool,
+    retained_inputs: Option<&HashSet<String>>,
 ) -> NativeTranscript {
     let mut transcript = NativeTranscript {
         messages: Vec::new(),
@@ -1694,15 +1704,24 @@ fn translate_native_rows(
                     .flatten()
                     .filter_map(|file| native_image_attachment(file, blobs, &mut image_bytes_left))
                     .collect::<Vec<_>>();
-                if !retain_empty_users && text.trim().is_empty() && attachments.is_empty() {
+                let owned_input = row
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| retained_inputs.is_some_and(|inputs| inputs.contains(id)));
+                if !retain_empty_users
+                    && !owned_input
+                    && text.trim().is_empty()
+                    && attachments.is_empty()
+                {
                     continue;
                 }
                 let turn = AgentTurn {
                     id: uuid::Uuid::new_v4(),
+                    submission: None,
                     turn_count: transcript.turns.len() + 1,
                     status: TurnStatus::Completed,
                     provider_turn_started: true,
-                    provider_resume_at: None,
+                    provider_resume_at: row.get("id").and_then(Value::as_str).map(str::to_owned),
                     provider_prompt: None,
                     started_at: created_at,
                     completed_at: Some(created_at),
@@ -1777,6 +1796,7 @@ fn translate_native_rows(
                     None => {
                         let turn = AgentTurn {
                             id: uuid::Uuid::new_v4(),
+                            submission: None,
                             turn_count: transcript.turns.len() + 1,
                             status: TurnStatus::Completed,
                             provider_turn_started: true,

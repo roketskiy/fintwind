@@ -3,6 +3,7 @@
 mod activity;
 pub(crate) mod native;
 mod opencode;
+pub(crate) use opencode::reconcile_saved_submission;
 mod support;
 
 use std::path::PathBuf;
@@ -16,6 +17,13 @@ use crate::model::{
     BackgroundWorkKey, DriverEvent, InteractionMode, ProviderResumeCursor, RuntimeMode,
     UserInputAnswer,
 };
+
+/// Terminal proof and the exact history window that supplied it stay together.
+pub(crate) struct SavedSubmissionReconciliation {
+    pub status: crate::model::TurnStatus,
+    pub completed_at: u64,
+    pub transcript: fintwind_protocol::provider_session::NativeTranscript,
+}
 
 /// Provider events remain synchronous to send from reader threads, while the
 /// bounded wake channel lets the UI sleep until at least one event is ready.
@@ -79,6 +87,14 @@ impl DriverHandle {
         self.inner.prompt(prompt, files);
     }
 
+    pub(crate) fn submit(
+        &self,
+        submission: fintwind_protocol::submission::SubmissionRecord,
+        store: Arc<crate::persistence::StateStore>,
+    ) -> anyhow::Result<()> {
+        self.inner.submit(submission, store)
+    }
+
     /// Whether this transport can inject a user message into the currently
     /// running turn (steering) instead of starting a new one.
     pub fn supports_steer(&self) -> bool {
@@ -124,6 +140,13 @@ impl DriverHandle {
 
 pub trait DriverControl: Send + Sync {
     fn prompt(&self, prompt: String, files: Vec<PromptFile>);
+    fn submit(
+        &self,
+        _submission: fintwind_protocol::submission::SubmissionRecord,
+        _store: Arc<crate::persistence::StateStore>,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("durable submissions are not supported by this driver")
+    }
     fn supports_steer(&self) -> bool {
         false
     }

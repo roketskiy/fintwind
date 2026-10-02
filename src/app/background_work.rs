@@ -233,6 +233,7 @@ impl BackgroundWorkRegistry {
                     let turn_count = transcript.turns.len() + 1;
                     transcript.turns.push(AgentTurn {
                         id: turn_id,
+                        submission: None,
                         turn_count,
                         status: TurnStatus::Running,
                         provider_turn_started: true,

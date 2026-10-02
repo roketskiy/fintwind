@@ -40,6 +40,7 @@ struct Boundary {
 pub(super) struct SubmissionFence {
     generation: u64,
     boundary: Option<Boundary>,
+    durable_receipt: Option<(uuid::Uuid, Arc<crate::persistence::StateStore>)>,
 }
 
 pub(super) struct Steering {
@@ -49,18 +50,19 @@ pub(super) struct Steering {
 }
 
 fn input_id(timestamp: u64) -> String {
-    // Keep the native sortable shape; sequence zero precedes server-created
-    // rows in the same ms. A namespace prefix would disrupt message ordering.
-    let prefix = timestamp.wrapping_mul(0x1000) & 0xffff_ffff_ffff;
-    let suffix = uuid::Uuid::new_v4().simple().to_string();
-    format!("msg_{prefix:012x}{}", &suffix[..14])
+    fintwind_protocol::submission::new_input_id(timestamp)
 }
 
 impl SubmissionFence {
     pub(super) fn begin(&mut self) -> u64 {
-        self.generation = self.generation.wrapping_add(1);
         let started_at = unix_time_millis();
         let input_id = input_id(started_at);
+        self.begin_with_input(input_id, started_at)
+    }
+
+    pub(super) fn begin_with_input(&mut self, input_id: String, started_at: u64) -> u64 {
+        self.durable_receipt = None;
+        self.generation = self.generation.wrapping_add(1);
         self.boundary = Some(Boundary {
             generation: self.generation,
             started_at,
@@ -173,6 +175,52 @@ impl SubmissionFence {
 
     pub(super) fn clear(&mut self) {
         self.boundary = None;
+        self.durable_receipt = None;
+    }
+
+    pub(super) fn bind_receipt(
+        &mut self,
+        id: uuid::Uuid,
+        store: Arc<crate::persistence::StateStore>,
+    ) {
+        self.durable_receipt = Some((id, store));
+    }
+
+    /// Called only after the durable history walk proved this exact input.
+    pub(super) fn confirm_receipt(&self, events: &impl crate::driver::DriverEventSink, port: u16) {
+        use fintwind_protocol::submission::SubmissionState;
+        let Some((id, store)) = &self.durable_receipt else {
+            return;
+        };
+        let result = (|| -> std::io::Result<()> {
+            let Some(saved) = store.submission(*id)? else {
+                return Ok(());
+            };
+            if saved.receipt.state.is_unconfirmed()
+                && let Some(saved) = store.transition_submission(
+                    *id,
+                    saved.receipt.state,
+                    SubmissionState::Accepted,
+                    None,
+                )?
+            {
+                crate::opencode_diagnostics::submission(
+                    "receipt_reconciled",
+                    &saved,
+                    port,
+                    self.generation,
+                );
+                let _ = events.send(crate::model::DriverEvent::SubmissionUpdated(saved.receipt));
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            crate::opencode_diagnostics::record(
+                "receipt_reconcile_save_failed",
+                port,
+                self.generation,
+            );
+        }
     }
 }
 
@@ -231,7 +279,8 @@ impl Coordinator {
                     if feed.is_cancelled() {
                         break;
                     }
-                    let result = fetch_turn(port, &session, &probe.boundary, &feed);
+                    let result =
+                        fetch_turn(port, &session, &probe.boundary, || feed.is_cancelled());
                     if replies.send(ProbeResult { probe, result }).is_err() {
                         break;
                     }
@@ -439,7 +488,7 @@ fn fetch_turn(
     port: u16,
     session: &str,
     boundary: &Boundary,
-    feed: &EventFeed,
+    cancelled: impl Fn() -> bool,
 ) -> anyhow::Result<Option<RecoveredTurn>> {
     let path = format!("/api/session/{}", encode_path_segment(session));
     let info = request_json_on_port_bounded(port, &path, REQUEST_TIMEOUT, MAX_RECOVERY_BYTES)?;
@@ -466,7 +515,7 @@ fn fetch_turn(
     let mut full_window = false;
     let mut bytes = 0;
     for page in 0..MAX_PAGES {
-        if feed.is_cancelled() || started.elapsed() >= WALK_BUDGET {
+        if cancelled() || started.elapsed() >= WALK_BUDGET {
             bail!("OpenCode reconciliation cancelled or exceeded its budget");
         }
         let mut query = format!("{path}/message?limit={PAGE_LIMIT}");
@@ -679,5 +728,35 @@ fn fetch_turn(
         error,
         acknowledged_steers,
         completion,
+    }))
+}
+
+/// A cold receipt check uses the same exact-input terminal proof as live
+/// recovery, without subscribing to events, restarting execution or POSTing.
+pub(super) fn reconcile_saved(
+    port: u16,
+    session: &str,
+    receipt: &fintwind_protocol::submission::SubmissionReceipt,
+) -> anyhow::Result<Option<super::super::SavedSubmissionReconciliation>> {
+    let boundary = Boundary {
+        generation: 0,
+        started_at: receipt.created_at,
+        input_id: Some(receipt.input_id.clone()),
+        latest_input_id: Some(receipt.input_id.clone()),
+        unconfirmed_steers: Vec::new(),
+        accepted: true,
+        server_initiated: false,
+        execution_id: None,
+    };
+    Ok(fetch_turn(port, session, &boundary, || false)?.map(|turn| {
+        super::super::SavedSubmissionReconciliation {
+            status: if turn.success {
+                crate::model::TurnStatus::Completed
+            } else {
+                crate::model::TurnStatus::Failed
+            },
+            completed_at: turn.completion.created / 1000,
+            transcript: turn.transcript,
+        }
     }))
 }

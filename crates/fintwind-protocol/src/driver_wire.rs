@@ -33,6 +33,9 @@ fn reasoning_part_from_wire(payload: &Value) -> String {
 
 pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
     let (kind, payload) = match event {
+        DriverEvent::SubmissionUpdated(receipt) => {
+            ("submissionUpdated", serde_json::to_value(receipt)?)
+        }
         DriverEvent::RuntimeEventCursorAdvanced(_) => {
             bail!("client-only runtime cursors cannot be sent by the daemon")
         }
@@ -173,6 +176,7 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
 pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
     let payload = event.payload;
     Ok(match event.kind.as_str() {
+        "submissionUpdated" => DriverEvent::SubmissionUpdated(serde_json::from_value(payload)?),
         "connected" => DriverEvent::Connected {
             provider_cursor: serde_json::from_value(payload)?,
         },

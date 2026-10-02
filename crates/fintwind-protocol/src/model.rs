@@ -571,6 +571,8 @@ pub struct TurnStats {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentTurn {
     pub id: Uuid,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submission: Option<crate::submission::SubmissionReceipt>,
     pub turn_count: usize,
     pub status: TurnStatus,
     #[serde(default)]
@@ -1079,6 +1081,7 @@ impl AgentSession {
             }
             self.turns.push(AgentTurn {
                 id,
+                submission: None,
                 turn_count: offset + 1,
                 status: TurnStatus::Completed,
                 provider_turn_started: true,
@@ -1107,6 +1110,7 @@ impl AgentSession {
         let now = unix_time();
         self.turns.push(AgentTurn {
             id,
+            submission: None,
             turn_count: self.turns.len() + 1,
             status: TurnStatus::Running,
             provider_turn_started: false,
@@ -1305,6 +1309,7 @@ impl AgentSession {
         let now = unix_time();
         self.turns.push(AgentTurn {
             id: Uuid::new_v4(),
+            submission: None,
             turn_count: 1,
             status: TurnStatus::Running,
             provider_turn_started: true,
@@ -1421,6 +1426,8 @@ impl AgentSession {
 
         for turn in &mut fork.turns {
             turn.id = turn_ids[&turn.id];
+            // A fork copies history, not another session's submission receipt.
+            turn.submission = None;
         }
         for message in &mut fork.messages {
             message.id = Uuid::new_v4();
@@ -1690,6 +1697,7 @@ pub struct ProviderRetryAction {
 
 #[derive(Clone, Debug)]
 pub enum DriverEvent {
+    SubmissionUpdated(crate::submission::SubmissionReceipt),
     /// Client-only acknowledgement that every daemon event through this
     /// sequence has been incorporated into the local session projection.
     /// Providers never emit this and the daemon never serializes it.

@@ -19,9 +19,13 @@ use regex::Regex;
 
 /// CommonMark only recognizes angle-bracket autolinks. Transcript content is
 /// conversational, so bare web URLs should be useful without requiring the
-/// author to write `<https://...>` or `[label](https://...)`.
+/// author to write `<https://...>` or `[label](https://...)`. The body is
+/// confined to printable ASCII: CJK prose carries no spaces, so a
+/// Unicode-permissive body would swallow the rest of the sentence — full-width
+/// punctuation included — into the link, past anything the trailing-punctuation
+/// trim could rescue.
 static BARE_WEB_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)\bhttps?://[^\s<>"`\\]+"#).expect("bare web URL regex should compile")
+    Regex::new(r#"(?i)\bhttps?://[[!-~]&&[^<>"`\\]]+"#).expect("bare web URL regex should compile")
 });
 
 // ── Tree model ─────────────────────────────────────────────────────────────
@@ -1232,6 +1236,44 @@ mod tests {
             paragraph_text(&tree.blocks[0].block),
             "See https://example.com/docs?q=one, then \
              (https://en.wikipedia.org/wiki/Rust_(programming_language))."
+        );
+    }
+
+    #[test]
+    fn bare_urls_stop_before_cjk_prose_without_whitespace() {
+        let tree = parse(
+            "打开 http://localhost:3000，搜索“测试”，进入第一条结果。 \
+             参见 https://anoma.ly/notes/opencode-reloaded即可。",
+        );
+        let Block::Paragraph { runs } = &tree.blocks[0].block else {
+            panic!("expected a paragraph");
+        };
+        let links = runs
+            .iter()
+            .filter_map(|run| {
+                run.style
+                    .link
+                    .as_deref()
+                    .map(|target| (run.text.as_str(), target))
+            })
+            .collect::<Vec<_>>();
+
+        // CJK sentences have no spaces, so each link must end where the ASCII
+        // body of the URL does instead of running to end of paragraph.
+        assert_eq!(
+            links,
+            vec![
+                ("http://localhost:3000", "http://localhost:3000"),
+                (
+                    "https://anoma.ly/notes/opencode-reloaded",
+                    "https://anoma.ly/notes/opencode-reloaded"
+                ),
+            ]
+        );
+        assert_eq!(
+            paragraph_text(&tree.blocks[0].block),
+            "打开 http://localhost:3000，搜索“测试”，进入第一条结果。 \
+             参见 https://anoma.ly/notes/opencode-reloaded即可。"
         );
     }
 

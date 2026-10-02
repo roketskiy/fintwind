@@ -1737,6 +1737,24 @@ browser_collaboration.scroll_summary:
   en: "Scroll: %{delta_y}"
 browser_collaboration.open_handled:
   en: Open a page (handled by the app host)
+browser_collaboration.screenshot_summary:
+  en: Take a screenshot of the shared page
+browser_collaboration.evaluate_summary:
+  en: "Run JavaScript: %{expression}"
+browser_collaboration.click_at_summary:
+  en: Click at (%{x}, %{y})
+browser_collaboration.double_click_summary:
+  en: Double-click %{selector}
+browser_collaboration.press_summary:
+  en: Press %{key} on %{selector}
+browser_collaboration.hover_summary:
+  en: Hover over %{selector}
+browser_collaboration.select_summary:
+  en: Select %{value} in %{selector}
+browser_collaboration.drag_summary:
+  en: Drag %{from} to %{to}
+browser_collaboration.close_handled:
+  en: Page close is handled by the app host.
 
 environment.title:
   en: Environment

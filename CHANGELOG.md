@@ -18,6 +18,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- 内置浏览器工具扩展为 16 个：新增截图（返回模型可见的图像）、evaluate（受控执行页面 JavaScript，与其他变更操作同等授权）、按键、下拉选择、悬停、双击、拖拽、坐标点击与关闭页面；截图以有界 Media 通道送达，close 仅限会话自动打开的页面。evaluate 结果为 undefined 时按 null 返回而非误报原生错误，CDP 协议层拒绝改报可采取的受控错误；open 在分享发布经受住一个轮询周期后才向模型报成功，发布被拒不再谎报 pageId
+
 ## [0.2.3]
 
 - 支持 OpenCode v2.0.19（此前仅保证到 v2.0.16）

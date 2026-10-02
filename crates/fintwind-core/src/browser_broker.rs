@@ -936,9 +936,11 @@ fn tombstones_total(state: &BrokerState) -> usize {
 /// Cap the serialized result; a broken or hostile page must not push
 /// unbounded bytes through the bridge. The replacement message never
 /// includes the original content, so page text cannot leak through the error.
+/// Media (a screenshot) is bounded by capture parameters rather than trust,
+/// which is why it carries a larger, still-fixed budget.
 fn enforce_result_bound(result: BrowserResult) -> BrowserResult {
     match serde_json::to_vec(&result) {
-        Ok(bytes) if bytes.len() <= fintwind_protocol::browser::MAX_BROWSER_RESULT_BYTES => result,
+        Ok(bytes) if bytes.len() <= result.wire_budget() => result,
         _ => BrowserResult::error("the browser result exceeds the size limit"),
     }
 }

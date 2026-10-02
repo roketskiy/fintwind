@@ -43,6 +43,7 @@ use super::{BrowserView, host::WebviewHost};
 use crate::ui::ActivationExt;
 use fintwind_protocol::browser::{
     BrowserAction, BrowserRequest, BrowserResult, BrowserScope, BrowserShare,
+    MAX_BROWSER_MEDIA_BYTES,
 };
 
 /// Defensive cap on a single scroll gesture. The protocol already refuses a
@@ -402,17 +403,21 @@ impl BrowserView {
         request: BrowserRequest,
         cx: &mut Context<Self>,
     ) {
-        // Opening a page is a launcher capability, never a page grant: the app
-        // host routes `Open`, so a page-level grant must refuse it rather than
-        // grant a page navigation from inside the page.
-        if matches!(request.action, BrowserAction::Open { .. }) {
-            self.finish_browser_request(
-                request.request_id,
-                BrowserResult::error(
-                    "Opening a page is handled by the app host, not by this page's grant.",
-                ),
-                cx,
-            );
+        // Opening or closing a page is a launcher capability, never a page
+        // grant: the app host routes `Open` and owns the surface's lifetime,
+        // so a page-level grant must refuse both rather than act beyond the
+        // page it was granted.
+        let refusal = match &request.action {
+            BrowserAction::Open { .. } => {
+                Some("Opening a page is handled by the app host, not by this page's grant.")
+            }
+            BrowserAction::Close => {
+                Some("Closing a page is handled by the app host, not by this page's grant.")
+            }
+            _ => None,
+        };
+        if let Some(message) = refusal {
+            self.finish_browser_request(request.request_id, BrowserResult::error(message), cx);
             return;
         }
         let error = if self.collaboration.share.as_ref().map(|share| &share.scope)
@@ -620,7 +625,7 @@ impl BrowserView {
                     this.finish_browser_request(
                         request.request_id,
                         match result {
-                            Ok(value) => BrowserResult::Ok { value },
+                            Ok(outcome) => outcome.into_result(),
                             Err(message) => BrowserResult::Error { message },
                         },
                         cx,
@@ -824,9 +829,55 @@ impl BrowserView {
             BrowserAction::Scroll { delta_y } => {
                 tr!("browser_collaboration.scroll_summary", delta_y = *delta_y)
             }
-            // `Open` is refused before it is ever queued, so it never has a
-            // pending row; a finite string keeps the match exhaustive.
+            BrowserAction::Screenshot { .. } => {
+                tr!("browser_collaboration.screenshot_summary")
+            }
+            BrowserAction::Evaluate { expression } => {
+                // The approval row shows a bounded prefix of the expression,
+                // never the whole script the page is about to run.
+                let mut preview: String = expression.chars().take(64).collect();
+                if expression.chars().nth(64).is_some() {
+                    preview.push('…');
+                }
+                tr!(
+                    "browser_collaboration.evaluate_summary",
+                    expression = preview
+                )
+            }
+            BrowserAction::ClickAt { x, y } => {
+                tr!("browser_collaboration.click_at_summary", x = *x, y = *y)
+            }
+            BrowserAction::DoubleClick { selector } => {
+                tr!(
+                    "browser_collaboration.double_click_summary",
+                    selector = selector
+                )
+            }
+            BrowserAction::Press { selector, key } => {
+                tr!(
+                    "browser_collaboration.press_summary",
+                    selector = selector,
+                    key = key
+                )
+            }
+            BrowserAction::Hover { selector } => {
+                tr!("browser_collaboration.hover_summary", selector = selector)
+            }
+            BrowserAction::Select { selector, value } => {
+                tr!(
+                    "browser_collaboration.select_summary",
+                    selector = selector,
+                    value = value
+                )
+            }
+            BrowserAction::Drag { from, to } => {
+                tr!("browser_collaboration.drag_summary", from = from, to = to)
+            }
+            // `Open` and `Close` are refused before they are ever queued, so
+            // neither has a pending row; finite strings keep the match
+            // exhaustive.
             BrowserAction::Open { .. } => tr!("browser_collaboration.open_handled"),
+            BrowserAction::Close => tr!("browser_collaboration.close_handled"),
             BrowserAction::Snapshot => tr!("browser_collaboration.reading"),
         };
         Some(
@@ -1077,7 +1128,72 @@ async fn cdp_with_completion(
         })
         .await?;
     completion.check(guard)?;
+    // A protocol-level refusal — a destroyed execution context above all —
+    // must not fall through to the callers' missing-field errors, which
+    // would blame the page's structure for a transport condition.
+    if value.get("error").is_some() {
+        return Err(
+            "The browser refused the operation; take a fresh snapshot and observe again.".into(),
+        );
+    }
     Ok(value)
+}
+
+/// One `Page.captureScreenshot` with its own envelope. A capture is pure
+/// observation, but its base64 payload is inherently larger than any
+/// structured result, so it carries a wider timeout and size guard than the
+/// shared CDP path instead of widening those for everything. Returns the
+/// base64 image data.
+async fn cdp_capture(
+    host: &WebviewHost,
+    parameters: Value,
+    guard: &OperationGuard,
+    executor: &gpui::BackgroundExecutor,
+) -> Result<String, String> {
+    guard.check()?;
+    let parameters = executor.spawn(async move { parameters.to_string() }).await;
+    guard.check()?;
+    if !host.collaboration_visible() {
+        return Err(
+            "The shared page is not visible; return to it before requesting an operation.".into(),
+        );
+    }
+    let receiver = host.webview.call_cdp("Page.captureScreenshot", &parameters);
+    let raw = async {
+        receiver
+            .recv()
+            .await
+            .map_err(|_| "Native browser disconnected".to_owned())?
+    }
+    .or(async {
+        executor.timer(Duration::from_secs(10)).await;
+        Err("Browser screenshot timed out; observe the page again rather than retrying.".to_owned())
+    })
+    .await?;
+    if raw.len() > 6 * 1024 * 1024 {
+        return Err("The page screenshot exceeded the size limit.".into());
+    }
+    let value = executor
+        .spawn(async move {
+            serde_json::from_str::<Value>(&raw)
+                .map_err(|_| "Invalid native browser result".to_owned())
+        })
+        .await?;
+    if value.get("error").is_some() {
+        return Err(
+            "The browser refused the screenshot; take a fresh snapshot and observe again.".into(),
+        );
+    }
+    let data = value
+        .pointer("/data")
+        .and_then(Value::as_str)
+        .ok_or("Native page did not return a screenshot")?
+        .to_owned();
+    // A capture is observation, but it still races a document change: the
+    // same-document check applies, so a capture of a replaced page is not
+    // reported as success.
+    guard.check()?;
+    Ok(data)
 }
 
 /// Shared body for `Runtime.evaluate`. `await_promise` lets an action run an
@@ -1102,10 +1218,14 @@ async fn evaluate_context(
             "The page rejected the operation; the target state may be stale — take a fresh snapshot and observe again.".into(),
         );
     }
-    value
-        .pointer("/result/value")
+    let remote = value
+        .pointer("/result")
         .cloned()
-        .ok_or_else(|| "Native page did not return a structured result".into())
+        .ok_or_else(|| "Native page did not return a structured result".to_owned())?;
+    // `undefined` — and unserializable kinds such as functions — legitimately
+    // carry no `value` field; they report as null instead of failing as a
+    // native defect.
+    Ok(remote.get("value").cloned().unwrap_or(Value::Null))
 }
 
 async fn evaluate(
@@ -1168,20 +1288,152 @@ async fn input_pair(
     completion.check(guard)
 }
 
+/// CDP modifier bits for `Input.dispatchKeyEvent`, mirroring the protocol's
+/// `Control+`/`Shift+`/`Alt+` prefixes.
+const ALT_MODIFIER: u8 = 1;
+const CONTROL_MODIFIER: u8 = 2;
+const SHIFT_MODIFIER: u8 = 8;
+
+/// One mapped key press: the CDP `key`/`code` names, the optional text the
+/// press types, the Windows virtual key code, and the modifier bits.
+struct MappedKey {
+    key: String,
+    code: String,
+    text: Option<String>,
+    vk: u32,
+    modifiers: u8,
+}
+
+/// Map a validated `Press` combination onto CDP key-event fields. The protocol
+/// has already validated the grammar; anything unexpected here is a protocol
+/// error and is refused rather than guessed at.
+fn map_key(combination: &str) -> Result<MappedKey, String> {
+    let mut modifiers = 0u8;
+    let mut main = combination;
+    for _ in 0..3 {
+        match main.split_once('+') {
+            Some(("Control", tail)) if !tail.is_empty() => {
+                modifiers |= CONTROL_MODIFIER;
+                main = tail;
+            }
+            Some(("Shift", tail)) if !tail.is_empty() => {
+                modifiers |= SHIFT_MODIFIER;
+                main = tail;
+            }
+            Some(("Alt", tail)) if !tail.is_empty() => {
+                modifiers |= ALT_MODIFIER;
+                main = tail;
+            }
+            _ => break,
+        }
+    }
+    let named = match main {
+        "Enter" => Some(("Enter", "Enter", Some("\r"), 13)),
+        "Tab" => Some(("Tab", "Tab", None, 9)),
+        "Escape" => Some(("Escape", "Escape", None, 27)),
+        "Backspace" => Some(("Backspace", "Backspace", None, 8)),
+        "Delete" => Some(("Delete", "Delete", None, 46)),
+        "Insert" => Some(("Insert", "Insert", None, 45)),
+        "Home" => Some(("Home", "Home", None, 36)),
+        "End" => Some(("End", "End", None, 35)),
+        "PageUp" => Some(("PageUp", "PageUp", None, 33)),
+        "PageDown" => Some(("PageDown", "PageDown", None, 34)),
+        "ArrowUp" => Some(("ArrowUp", "ArrowUp", None, 38)),
+        "ArrowDown" => Some(("ArrowDown", "ArrowDown", None, 40)),
+        "ArrowLeft" => Some(("ArrowLeft", "ArrowLeft", None, 37)),
+        "ArrowRight" => Some(("ArrowRight", "ArrowRight", None, 39)),
+        "Space" => Some((" ", "Space", Some(" "), 32)),
+        _ => None,
+    };
+    if let Some((key, code, text, vk)) = named {
+        return Ok(MappedKey {
+            key: key.to_owned(),
+            code: code.to_owned(),
+            text: text.map(str::to_owned),
+            vk,
+            modifiers,
+        });
+    }
+    // Not a named key: the allowlist leaves exactly one printable ASCII char,
+    // and a `+` that is the key itself arrives here once a prefix is stripped.
+    let mut chars = main.chars();
+    let single = match (chars.next(), chars.next()) {
+        (Some(ch), None) if ch.is_ascii_graphic() => ch,
+        _ => return Err("The key is not in the supported key set.".into()),
+    };
+    let (vk, code) = match single {
+        'a'..='z' | 'A'..='Z' | '0'..='9' => {
+            let vk = single.to_ascii_uppercase() as u32;
+            let code = if single.is_ascii_alphabetic() {
+                format!("Key{}", single.to_ascii_uppercase())
+            } else {
+                format!("Digit{single}")
+            };
+            (vk, code)
+        }
+        ';' => (186, "Semicolon".to_owned()),
+        '=' | '+' => (187, "Equal".to_owned()),
+        ',' => (188, "Comma".to_owned()),
+        '-' => (189, "Minus".to_owned()),
+        '.' => (190, "Period".to_owned()),
+        '/' => (191, "Slash".to_owned()),
+        '`' => (192, "Backquote".to_owned()),
+        '[' => (219, "BracketLeft".to_owned()),
+        '\\' => (220, "Backslash".to_owned()),
+        ']' => (221, "BracketRight".to_owned()),
+        '\'' => (222, "Quote".to_owned()),
+        _ => return Err("The key is not in the supported key set.".into()),
+    };
+    Ok(MappedKey {
+        key: single.to_string(),
+        code,
+        text: Some(single.to_string()),
+        vk,
+        modifiers,
+    })
+}
+
+/// What one executed action produced: a JSON value, or a bounded media
+/// payload that travels as its own wire shape.
+pub(super) enum BrowserOutcome {
+    Json(Value),
+    Media { mime: String, data: String },
+}
+
+impl BrowserOutcome {
+    fn into_result(self) -> BrowserResult {
+        match self {
+            Self::Json(value) => BrowserResult::Ok { value },
+            Self::Media { mime, data } => {
+                BrowserResult::media(&mime, data).unwrap_or_else(|message| {
+                    BrowserResult::Error { message }
+                })
+            }
+        }
+    }
+}
+
 async fn execute(
     host: Rc<WebviewHost>,
     action: BrowserAction,
     guard: &OperationGuard,
     executor: &gpui::BackgroundExecutor,
-) -> Result<Value, String> {
+) -> Result<BrowserOutcome, String> {
     action.validate()?;
-    // A page grant never opens a page; the app host owns that. `Navigate`
-    // acknowledges dispatch without waiting for the load: completion is not
-    // success, the document guard rotates on the load events.
+    // A page grant never opens or closes a page; the app host owns both.
+    // `Navigate` acknowledges dispatch without waiting for the load: completion
+    // is not success, the document guard rotates on the load events. A
+    // screenshot observes the visible page directly, so it is answered here
+    // too, before the frame and isolated-world setup below.
     match &action {
         BrowserAction::Open { .. } => {
             return Err(
                 "Opening a new page is handled by the app host, not by this page's grant.".into(),
+            );
+        }
+        BrowserAction::Close => {
+            return Err(
+                "Closing a page is handled by the app host, not by this page's grant.".into(),
             );
         }
         BrowserAction::Navigate { url } => {
@@ -1203,7 +1455,41 @@ async fn execute(
             {
                 return Err("The browser could not navigate to the requested page; observe again without retrying automatically.".into());
             }
-            return Ok(json!({"issued":true,"requiresObservation":true}));
+            return Ok(BrowserOutcome::Json(json!({"issued":true,"requiresObservation":true})));
+        }
+        BrowserAction::Screenshot { full_page } => {
+            let full_page = *full_page;
+            let mut parameters = json!({"format":"png"});
+            if full_page {
+                parameters["captureBeyondViewport"] = json!(true);
+            }
+            let data = cdp_capture(&host, parameters, guard, executor).await?;
+            // The media budget is stated in decoded bytes; standard base64
+            // expands three bytes into four characters.
+            let max_encoded = 4 * MAX_BROWSER_MEDIA_BYTES.div_ceil(3);
+            if data.len() <= max_encoded {
+                return Ok(BrowserOutcome::Media {
+                    mime: "image/png".to_owned(),
+                    data,
+                });
+            }
+            // One bounded retry as JPEG before refusing: a busy page usually
+            // compresses far smaller in a lossy format.
+            let mut retry = json!({"format":"jpeg","quality":80});
+            if full_page {
+                retry["captureBeyondViewport"] = json!(true);
+            }
+            let data = cdp_capture(&host, retry, guard, executor).await?;
+            if data.len() > max_encoded {
+                return Err(
+                    "The page screenshot exceeds the size limit even as JPEG; reduce the window size."
+                        .into(),
+                );
+            }
+            return Ok(BrowserOutcome::Media {
+                mime: "image/jpeg".to_owned(),
+                data,
+            });
         }
         _ => {}
     }
@@ -1218,39 +1504,267 @@ async fn execute(
         .and_then(Value::as_i64)
         .ok_or("Isolated document context is unavailable")?;
     // Observation and a scroll act inside the isolated world; the former builds
-    // the element map, the latter nudges the real viewport.
-    match &action {
+    // the element map, the latter nudges the real viewport. Everything from
+    // here on owns its action: the early arms above only borrowed it.
+    match action {
         BrowserAction::Snapshot => {
-            return evaluate(&host, context, SNAPSHOT.to_owned(), guard, executor).await;
+            evaluate(&host, context, SNAPSHOT.to_owned(), guard, executor)
+                .await
+                .map(BrowserOutcome::Json)
         }
         BrowserAction::Scroll { delta_y } => {
-            let clamped = (*delta_y).clamp(-MAX_SCROLL_DELTA, MAX_SCROLL_DELTA);
+            let clamped = delta_y.clamp(-MAX_SCROLL_DELTA, MAX_SCROLL_DELTA);
             let expression = format!(
                 "(()=>{{try{{window.scrollBy(0,{clamped});}}catch(e){{}}return {{issued:true,requiresObservation:true}};}})()"
             );
-            return evaluate(&host, context, expression, guard, executor).await;
+            evaluate(&host, context, expression, guard, executor)
+                .await
+                .map(BrowserOutcome::Json)
         }
-        _ => {}
-    }
-    let (selector, fill) = match action {
-        BrowserAction::Click { selector } => (selector, None),
-        BrowserAction::Fill { selector, text } => (selector, Some(text)),
-        BrowserAction::Snapshot
-        | BrowserAction::Scroll { .. }
+        BrowserAction::Evaluate { expression } => {
+            evaluate_promise(&host, context, expression, guard, executor)
+                .await
+                .map(BrowserOutcome::Json)
+        }
+        BrowserAction::Click { selector } => {
+            let (x, y) = resolve_target(&host, context, &selector, false, false, guard, executor).await?;
+            input_pair(
+                &host,
+                "Input.dispatchMouseEvent",
+                json!({"type":"mousePressed","x":x,"y":y,"button":"left","clickCount":1}),
+                json!({"type":"mouseReleased","x":x,"y":y,"button":"left","clickCount":1}),
+                guard,
+                executor,
+                CompletionGuard::Issued,
+            )
+            .await?;
+            Ok(BrowserOutcome::Json(
+                json!({"issued":true,"requiresObservation":true}),
+            ))
+        }
+        BrowserAction::Fill { selector, text } => {
+            // A fill resolves with focus so the resolver stores the element as
+            // `__fintwindFillTarget`; the checks below read it back.
+            resolve_target(&host, context, &selector, true, true, guard, executor).await?;
+            evaluate(&host, context, FILL_TARGET_CHECK.into(), guard, executor).await?;
+            input_pair(
+                &host,
+                "Input.dispatchKeyEvent",
+                json!({"type":"keyDown","key":"Backspace","code":"Backspace","windowsVirtualKeyCode":8}),
+                json!({"type":"keyUp","key":"Backspace","code":"Backspace","windowsVirtualKeyCode":8}),
+                guard,
+                executor,
+                CompletionGuard::SameDocument,
+            )
+            .await?;
+            evaluate(&host, context, FILL_TARGET_CHECK.into(), guard, executor).await?;
+            cdp(
+                &host,
+                "Input.insertText",
+                json!({"text":text}),
+                guard,
+                executor,
+            )
+            .await?;
+            Ok(BrowserOutcome::Json(
+                json!({"issued":true,"requiresObservation":true}),
+            ))
+        }
+        BrowserAction::ClickAt { x, y } => {
+            // The protocol bounds a coordinate, but only the live viewport
+            // knows where the page actually ends; a point beyond it is refused
+            // rather than clipped onto a different target.
+            let viewport = evaluate(
+                &host,
+                context,
+                "(()=>({w:innerWidth,h:innerHeight}))()".to_owned(),
+                guard,
+                executor,
+            )
+            .await?;
+            let (Some(w), Some(h)) = (
+                viewport.get("w").and_then(Value::as_f64),
+                viewport.get("h").and_then(Value::as_f64),
+            ) else {
+                return Err("The page viewport is unavailable.".into());
+            };
+            if x as f64 > w || y as f64 > h {
+                return Err(format!(
+                    "The click coordinates ({x},{y}) are outside the viewport ({w:.0}×{h:.0}); take a snapshot and aim inside it."
+                ));
+            }
+            input_pair(
+                &host,
+                "Input.dispatchMouseEvent",
+                json!({"type":"mousePressed","x":x,"y":y,"button":"left","clickCount":1}),
+                json!({"type":"mouseReleased","x":x,"y":y,"button":"left","clickCount":1}),
+                guard,
+                executor,
+                CompletionGuard::Issued,
+            )
+            .await?;
+            Ok(BrowserOutcome::Json(
+                json!({"issued":true,"requiresObservation":true}),
+            ))
+        }
+        BrowserAction::DoubleClick { selector } => {
+            let (x, y) = resolve_target(&host, context, &selector, false, false, guard, executor).await?;
+            input_pair(
+                &host,
+                "Input.dispatchMouseEvent",
+                json!({"type":"mousePressed","x":x,"y":y,"button":"left","clickCount":2}),
+                json!({"type":"mouseReleased","x":x,"y":y,"button":"left","clickCount":2}),
+                guard,
+                executor,
+                CompletionGuard::Issued,
+            )
+            .await?;
+            Ok(BrowserOutcome::Json(
+                json!({"issued":true,"requiresObservation":true}),
+            ))
+        }
+        BrowserAction::Press { selector, key } => {
+            // The same focus resolution a fill uses, without its input-only
+            // restriction: the key press must land on the resolved control —
+            // a button, a card — not on whatever held focus before.
+            resolve_target(&host, context, &selector, true, false, guard, executor).await?;
+            evaluate(&host, context, FILL_TARGET_CHECK.into(), guard, executor).await?;
+            let mapped = map_key(&key)?;
+            // `text` is what the press types into the page; with Ctrl or Alt
+            // held it would type the wrong thing, so it is only sent for
+            // plain and shifted presses.
+            let text = match &mapped.text {
+                Some(text) if (mapped.modifiers & (CONTROL_MODIFIER | ALT_MODIFIER)) == 0 => {
+                    Some(text.as_str())
+                }
+                _ => None,
+            };
+            let mut down = json!({
+                "type":"keyDown",
+                "key":mapped.key,
+                "code":mapped.code,
+                "windowsVirtualKeyCode":mapped.vk,
+                "nativeVirtualKeyCode":mapped.vk,
+            });
+            if let Some(text) = text {
+                down["text"] = json!(text);
+            }
+            if mapped.modifiers != 0 {
+                down["modifiers"] = json!(mapped.modifiers);
+            }
+            let mut up = json!({
+                "type":"keyUp",
+                "key":mapped.key,
+                "code":mapped.code,
+                "windowsVirtualKeyCode":mapped.vk,
+                "nativeVirtualKeyCode":mapped.vk,
+            });
+            if mapped.modifiers != 0 {
+                up["modifiers"] = json!(mapped.modifiers);
+            }
+            input_pair(
+                &host,
+                "Input.dispatchKeyEvent",
+                down,
+                up,
+                guard,
+                executor,
+                CompletionGuard::Issued,
+            )
+            .await?;
+            Ok(BrowserOutcome::Json(
+                json!({"issued":true,"requiresObservation":true}),
+            ))
+        }
+        BrowserAction::Hover { selector } => {
+            let (x, y) = resolve_target(&host, context, &selector, false, false, guard, executor).await?;
+            cdp(
+                &host,
+                "Input.dispatchMouseEvent",
+                json!({"type":"mouseMoved","x":x,"y":y}),
+                guard,
+                executor,
+            )
+            .await?;
+            Ok(BrowserOutcome::Json(
+                json!({"issued":true,"requiresObservation":true}),
+            ))
+        }
+        BrowserAction::Select { selector, value } => {
+            // The select acts in the DOM, not at coordinates: no input event
+            // pair, and the page's own change listeners do the rest.
+            let selector = serde_json::to_string(&selector).map_err(|_| "Invalid selector")?;
+            let value = serde_json::to_string(&value).map_err(|_| "Invalid select value")?;
+            let result = evaluate(
+                &host,
+                context,
+                select_expression(&selector, &value),
+                guard,
+                executor,
+            )
+            .await?;
+            if result.get("issued").and_then(Value::as_bool) != Some(true) {
+                let message = result
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .or_else(|| result.get("reason").and_then(Value::as_str))
+                    .unwrap_or(
+                        "The target could not be resolved; observe again with a fresh snapshot.",
+                    );
+                return Err(message.to_owned());
+            }
+            Ok(BrowserOutcome::Json(
+                json!({"issued":true,"requiresObservation":true}),
+            ))
+        }
+        BrowserAction::Drag { from, to } => {
+            let start = resolve_target(&host, context, &from, false, false, guard, executor).await?;
+            let end = resolve_target(&host, context, &to, false, false, guard, executor).await?;
+            dispatch_drag(&host, start, end, guard, executor).await?;
+            Ok(BrowserOutcome::Json(
+                json!({"issued":true,"requiresObservation":true}),
+            ))
+        }
+        // Refused or answered before the isolated world was created.
+        BrowserAction::Open { .. }
+        | BrowserAction::Close
         | BrowserAction::Navigate { .. }
-        | BrowserAction::Open { .. } => unreachable!(),
-    };
-    let selector = serde_json::to_string(&selector).map_err(|_| "Invalid selector")?;
-    let fill_literal = if fill.is_some() { "true" } else { "false" };
-    // Resolve the target (a `ref:` token through the snapshot map, or exact CSS)
-    // and validate it, returning a structured reason instead of a thrown value.
-    // A target with no clickable point on screen is scrolled into view and
-    // given a bounded settle — the page may animate its own scrolling — before
-    // the native coordinates are computed from a real client box of the target.
-    let expression = format!(
-        "(async () => {{\n  const fail=(reason,message)=>({{ok:false,reason,message}});\n  const SEL={selector};\n  const FILL={fill_literal};\n  let el=null;\n  if(SEL.slice(0,4)==='ref:'){{\n    const store=globalThis.__fintwindElementRefs;\n    el=(store&&store.get)?store.get(SEL):undefined;\n    if(!el||!el.isConnected)return fail('stale','target reference is stale; take a fresh snapshot');\n  }} else {{\n    let nodes;\n    try{{nodes=document.querySelectorAll(SEL);}}catch(e){{return fail('invalid','the selector is not valid CSS');}}\n    if(nodes.length===0)return fail('no-matches','no element matches the selector');\n    if(nodes.length>1)return fail('multiple','the selector matches multiple elements; make it unique');\n    el=nodes[0];\n  }}\n  const tag=el.tagName||'';const t=(el.type||'').toLowerCase();\n  if(el.disabled===true||(el.getAttribute&&el.getAttribute('aria-disabled')==='true'))return fail('disabled','the target is disabled');\n  if(t==='password'||t==='file')return fail('password','password and file targets are not supported');\n  if(FILL){{\n    if(tag!=='INPUT'&&tag!=='TEXTAREA')return fail('unsupported','fill requires an input or textarea');\n    if(el.readOnly===true)return fail('readonly','the target is read-only');\n    if(tag==='INPUT'&&['text','search','email','url','tel'].indexOf(t)<0)return fail('unsupported','this input type cannot be filled');\n  }}\n  const st=getComputedStyle(el);const r0=el.getBoundingClientRect();\n  if(!st||st.visibility!=='visible'||st.display==='none'||(st.opacity!==''&&parseFloat(st.opacity)===0)||r0.width<=0||r0.height<=0)return fail('hidden','the target is not visible');\n  // A page can animate its own scrolling (the site sets `scroll-behavior:smooth`\n  // on html), so a fixed frame count can still measure coordinates mid-flight.\n  // Wait for scrolling to actually stop - bounded, with a timer race so a\n  // throttled animation frame cannot stall the operation. Two quiet readings\n  // keep a mid-animation frame from being mistaken for rest, and the point is\n  // chosen afterwards, so a scroll that starts mid-measure cannot move it.\n  const settle=async function(){{\n    const until=performance.now()+600;let lx=null,ly=null,stable=0;\n    while(performance.now()<until){{\n      await new Promise(function(res){{let done=false;const fin=function(){{if(!done){{done=true;res();}}}};requestAnimationFrame(fin);setTimeout(fin,32);}});\n      const x=window.scrollX||0,y=window.scrollY||0;\n      if(x===lx&&y===ly){{if(++stable>=2)return true;}}else{{stable=0;lx=x;ly=y;}}\n    }}\n    return false;\n  }};\n  const bringIntoView=function(){{\n    try{{el.scrollIntoView({{block:'center',inline:'nearest',behavior:'instant'}});}}\n    catch(e){{try{{el.scrollIntoView({{block:'center',inline:'nearest'}});}}catch(e2){{try{{el.scrollIntoView();}}catch(e3){{}}}}}}\n  }};\n  // Click a real box of the target, not the middle of its bounding rect: an\n  // inline element that wraps spans every line, so the center of the union\n  // rect can fall in the blank space between lines and reach the wrapper\n  // instead of the target, and a control taller than the viewport can never\n  // fit its whole rect on screen. Take the first client box whose center is\n  // on screen and hit-tests to the target or one of its descendants, so a\n  // line hidden under a sticky header is skipped instead of clicked through.\n  // A genuinely covered target still fails: this never falls back to a DOM click.\n  const choosePoint=function(){{\n    let list;\n    try{{list=el.getClientRects?el.getClientRects():[];}}catch(e){{list=[];}}\n    const boxes=(list&&list.length)?Array.from(list):[el.getBoundingClientRect()];\n    let onScreen=0;\n    for(let i=0;i<boxes.length;i++){{\n      const box=boxes[i];const x=box.left+box.width/2,y=box.top+box.height/2;\n      if(x<0||y<0||x>innerWidth||y>innerHeight)continue;\n      onScreen++;\n      let hit=null;\n      try{{hit=document.elementFromPoint(x,y);}}catch(e2){{}}\n      if(hit===el||(el.contains&&el.contains(hit))){{\n        return {{ok:true,onScreen:true,x:Math.min(Math.max(x,0),innerWidth),y:Math.min(Math.max(y,0),innerHeight)}};\n      }}\n    }}\n    return {{ok:false,onScreen:onScreen>0}};\n  }};\n  let chosen=choosePoint();\n  if(!chosen.ok)bringIntoView();\n  if(!(await settle()))return fail('scroll-timeout','scrolling did not settle; take a fresh snapshot once the page stops moving');\n  chosen=choosePoint();\n  if(!chosen.onScreen)return fail('out-of-viewport','the target is outside the viewport after scrolling');\n  if(!chosen.ok)return fail('occluded','another element covers the target');\n  if(FILL){{try{{el.focus();if(el.select)el.select();}}catch(e){{}}globalThis.__fintwindFillTarget=el;}}\n  return {{ok:true,x:chosen.x,y:chosen.y,tag:tag.toLowerCase()}};\n}})()"
-    );
-    let target = evaluate_promise(&host, context, expression, guard, executor).await?;
+        | BrowserAction::Screenshot { .. } => unreachable!(),
+    }
+}
+
+/// Build the target-resolution expression for a click-like action. `selector`
+/// is already a JSON string literal — a `ref:` token or exact CSS — placed
+/// directly into the script. With `focus`, the expression focuses the target
+/// and records it as `globalThis.__fintwindFillTarget` for the native
+/// follow-up checks; with `require_input` additionally, only a fillable
+/// input/textarea may be focused and its contents selected — a press, which
+/// also focuses, must reach buttons and other controls too.
+fn target_expression(selector: &str, focus: bool, require_input: bool) -> String {
+    let fill_literal = if focus { "true" } else { "false" };
+    let strict_literal = if require_input { "true" } else { "false" };
+    format!(
+        "(async () => {{\n  const fail=(reason,message)=>({{ok:false,reason,message}});\n  const SEL={selector};\n  const FILL={fill_literal};\n  const STRICT={strict_literal};\n  let el=null;\n  if(SEL.slice(0,4)==='ref:'){{\n    const store=globalThis.__fintwindElementRefs;\n    el=(store&&store.get)?store.get(SEL):undefined;\n    if(!el||!el.isConnected)return fail('stale','target reference is stale; take a fresh snapshot');\n  }} else {{\n    let nodes;\n    try{{nodes=document.querySelectorAll(SEL);}}catch(e){{return fail('invalid','the selector is not valid CSS');}}\n    if(nodes.length===0)return fail('no-matches','no element matches the selector');\n    if(nodes.length>1)return fail('multiple','the selector matches multiple elements; make it unique');\n    el=nodes[0];\n  }}\n  const tag=el.tagName||'';const t=(el.type||'').toLowerCase();\n  if(el.disabled===true||(el.getAttribute&&el.getAttribute('aria-disabled')==='true'))return fail('disabled','the target is disabled');\n  if(t==='password'||t==='file')return fail('password','password and file targets are not supported');\n  if(STRICT){{\n    if(tag!=='INPUT'&&tag!=='TEXTAREA')return fail('unsupported','fill requires an input or textarea');\n    if(el.readOnly===true)return fail('readonly','the target is read-only');\n    if(tag==='INPUT'&&['text','search','email','url','tel'].indexOf(t)<0)return fail('unsupported','this input type cannot be filled');\n  }}\n  const st=getComputedStyle(el);const r0=el.getBoundingClientRect();\n  if(!st||st.visibility!=='visible'||st.display==='none'||(st.opacity!==''&&parseFloat(st.opacity)===0)||r0.width<=0||r0.height<=0)return fail('hidden','the target is not visible');\n  // A page can animate its own scrolling (the site sets `scroll-behavior:smooth`\n  // on html), so a fixed frame count can still measure coordinates mid-flight.\n  // Wait for scrolling to actually stop - bounded, with a timer race so a\n  // throttled animation frame cannot stall the operation. Two quiet readings\n  // keep a mid-animation frame from being mistaken for rest, and the point is\n  // chosen afterwards, so a scroll that starts mid-measure cannot move it.\n  const settle=async function(){{\n    const until=performance.now()+600;let lx=null,ly=null,stable=0;\n    while(performance.now()<until){{\n      await new Promise(function(res){{let done=false;const fin=function(){{if(!done){{done=true;res();}}}};requestAnimationFrame(fin);setTimeout(fin,32);}});\n      const x=window.scrollX||0,y=window.scrollY||0;\n      if(x===lx&&y===ly){{if(++stable>=2)return true;}}else{{stable=0;lx=x;ly=y;}}\n    }}\n    return false;\n  }};\n  const bringIntoView=function(){{\n    try{{el.scrollIntoView({{block:'center',inline:'nearest',behavior:'instant'}});}}\n    catch(e){{try{{el.scrollIntoView({{block:'center',inline:'nearest'}});}}catch(e2){{try{{el.scrollIntoView();}}catch(e3){{}}}}}}\n  }};\n  // Click a real box of the target, not the middle of its bounding rect: an\n  // inline element that wraps spans every line, so the center of the union\n  // rect can fall in the blank space between lines and reach the wrapper\n  // instead of the target, and a control taller than the viewport can never\n  // fit its whole rect on screen. Take the first client box whose center is\n  // on screen and hit-tests to the target or one of its descendants, so a\n  // line hidden under a sticky header is skipped instead of clicked through.\n  // A genuinely covered target still fails: this never falls back to a DOM click.\n  const choosePoint=function(){{\n    let list;\n    try{{list=el.getClientRects?el.getClientRects():[];}}catch(e){{list=[];}}\n    const boxes=(list&&list.length)?Array.from(list):[el.getBoundingClientRect()];\n    let onScreen=0;\n    for(let i=0;i<boxes.length;i++){{\n      const box=boxes[i];const x=box.left+box.width/2,y=box.top+box.height/2;\n      if(x<0||y<0||x>innerWidth||y>innerHeight)continue;\n      onScreen++;\n      let hit=null;\n      try{{hit=document.elementFromPoint(x,y);}}catch(e2){{}}\n      if(hit===el||(el.contains&&el.contains(hit))){{\n        return {{ok:true,onScreen:true,x:Math.min(Math.max(x,0),innerWidth),y:Math.min(Math.max(y,0),innerHeight)}};\n      }}\n    }}\n    return {{ok:false,onScreen:onScreen>0}};\n  }};\n  let chosen=choosePoint();\n  if(!chosen.ok)bringIntoView();\n  if(!(await settle()))return fail('scroll-timeout','scrolling did not settle; take a fresh snapshot once the page stops moving');\n  chosen=choosePoint();\n  if(!chosen.onScreen)return fail('out-of-viewport','the target is outside the viewport after scrolling');\n  if(!chosen.ok)return fail('occluded','another element covers the target');\n  if(FILL){{try{{el.focus();if(STRICT&&el.select)el.select();}}catch(e){{}}globalThis.__fintwindFillTarget=el;}}\n  return {{ok:true,x:chosen.x,y:chosen.y,tag:tag.toLowerCase()}};\n}})()"
+    )
+}
+
+/// Resolve a target (a `ref:` token through the snapshot map, or exact CSS)
+/// and validate it, returning a structured reason instead of a thrown value.
+/// A target with no clickable point on screen is scrolled into view and given
+/// a bounded settle — the page may animate its own scrolling — before the
+/// coordinates are computed from a real client box of the target.
+async fn resolve_target(
+    host: &WebviewHost,
+    context: i64,
+    selector: &str,
+    focus: bool,
+    require_input: bool,
+    guard: &OperationGuard,
+    executor: &gpui::BackgroundExecutor,
+) -> Result<(f64, f64), String> {
+    let selector = serde_json::to_string(selector).map_err(|_| "Invalid selector")?;
+    let expression = target_expression(&selector, focus, require_input);
+    let target = evaluate_promise(host, context, expression, guard, executor).await?;
     if target.get("ok").and_then(Value::as_bool) != Some(true) {
         let message = target
             .get("message")
@@ -1259,48 +1773,80 @@ async fn execute(
             .unwrap_or("The target could not be resolved; observe again with a fresh snapshot.");
         return Err(message.to_owned());
     }
-    if let Some(text) = fill {
-        evaluate(&host, context, FILL_TARGET_CHECK.into(), guard, executor).await?;
-        input_pair(
-            &host,
-            "Input.dispatchKeyEvent",
-            json!({"type":"keyDown","key":"Backspace","code":"Backspace","windowsVirtualKeyCode":8}),
-            json!({"type":"keyUp","key":"Backspace","code":"Backspace","windowsVirtualKeyCode":8}),
-            guard,
-            executor,
-            CompletionGuard::SameDocument,
-        )
-        .await?;
-        evaluate(&host, context, FILL_TARGET_CHECK.into(), guard, executor).await?;
-        cdp(
-            &host,
-            "Input.insertText",
-            json!({"text":text}),
-            guard,
-            executor,
-        )
-        .await?;
-    } else {
-        let x = target
-            .get("x")
-            .and_then(Value::as_f64)
-            .ok_or("No target x coordinate")?;
-        let y = target
-            .get("y")
-            .and_then(Value::as_f64)
-            .ok_or("No target y coordinate")?;
-        input_pair(
-            &host,
+    let x = target
+        .get("x")
+        .and_then(Value::as_f64)
+        .ok_or("No target x coordinate")?;
+    let y = target
+        .get("y")
+        .and_then(Value::as_f64)
+        .ok_or("No target y coordinate")?;
+    Ok((x, y))
+}
+
+/// Build the one-shot select expression. It resolves the target exactly like
+/// the click resolver — token or unique CSS, enabled, visible — but acts in
+/// the DOM instead of at coordinates: it picks the option whose value equals
+/// the requested one, sets it, and fires `input`/`change` so page frameworks
+/// observe the edit like a real user change. `selector` and `value` are JSON
+/// string literals.
+fn select_expression(selector: &str, value: &str) -> String {
+    format!(
+        "(()=>{{\n  const fail=(reason,message)=>({{ok:false,reason,message}});\n  const SEL={selector};\n  const VALUE={value};\n  let el=null;\n  if(SEL.slice(0,4)==='ref:'){{\n    const store=globalThis.__fintwindElementRefs;\n    el=(store&&store.get)?store.get(SEL):undefined;\n    if(!el||!el.isConnected)return fail('stale','target reference is stale; take a fresh snapshot');\n  }} else {{\n    let nodes;\n    try{{nodes=document.querySelectorAll(SEL);}}catch(e){{return fail('invalid','the selector is not valid CSS');}}\n    if(nodes.length===0)return fail('no-matches','no element matches the selector');\n    if(nodes.length>1)return fail('multiple','the selector matches multiple elements; make it unique');\n    el=nodes[0];\n  }}\n  if(el.tagName!=='SELECT')return fail('unsupported','the target is not a select');\n  if(el.disabled===true||(el.getAttribute&&el.getAttribute('aria-disabled')==='true'))return fail('disabled','the target is disabled');\n  const st=getComputedStyle(el);const r0=el.getBoundingClientRect();\n  if(!st||st.visibility!=='visible'||st.display==='none'||(st.opacity!==''&&parseFloat(st.opacity)===0)||r0.width<=0||r0.height<=0)return fail('hidden','the target is not visible');\n  let option=null;\n  for(const o of el.options){{if(o.value===VALUE){{option=o;break;}}}}\n  if(!option)return fail('no-matches','the select has no option with that value');\n  if(option.disabled)return fail('disabled','the option is disabled');\n  if(el.value!==VALUE){{\n    el.value=VALUE;\n    el.dispatchEvent(new Event('input',{{bubbles:true}}));\n    el.dispatchEvent(new Event('change',{{bubbles:true}}));\n  }}\n  return {{issued:true,requiresObservation:true}};\n}})()"
+    )
+}
+
+/// Drag from one resolved point to another: press, walk eight interpolated
+/// moves, release. Once the press is issued the release is mandatory cleanup
+/// even when a move step failed — a pressed button must never be left
+/// hanging, the same contract `input_pair` enforces for down/up pairs.
+async fn dispatch_drag(
+    host: &WebviewHost,
+    from: (f64, f64),
+    to: (f64, f64),
+    guard: &OperationGuard,
+    executor: &gpui::BackgroundExecutor,
+) -> Result<(), String> {
+    let (fx, fy) = from;
+    let (tx, ty) = to;
+    cdp_with_completion(
+        host,
+        "Input.dispatchMouseEvent",
+        json!({"type":"mousePressed","x":fx,"y":fy,"button":"left","clickCount":1}),
+        guard,
+        executor,
+        CompletionGuard::Issued,
+    )
+    .await?;
+    let mut moves = Ok(());
+    for step in 1..=8 {
+        let t = f64::from(step) / 8.0;
+        let x = fx + (tx - fx) * t;
+        let y = fy + (ty - fy) * t;
+        if let Err(error) = cdp(
+            host,
             "Input.dispatchMouseEvent",
-            json!({"type":"mousePressed","x":x,"y":y,"button":"left","clickCount":1}),
-            json!({"type":"mouseReleased","x":x,"y":y,"button":"left","clickCount":1}),
+            json!({"type":"mouseMoved","x":x,"y":y,"button":"left"}),
             guard,
             executor,
-            CompletionGuard::Issued,
         )
-        .await?;
+        .await
+        {
+            moves = Err(error);
+            break;
+        }
     }
-    Ok(json!({"issued":true,"requiresObservation":true}))
+    let release = cdp_with_completion(
+        host,
+        "Input.dispatchMouseEvent",
+        json!({"type":"mouseReleased","x":tx,"y":ty,"button":"left","clickCount":1}),
+        guard,
+        executor,
+        CompletionGuard::Issued,
+    )
+    .await;
+    moves?;
+    release.map(|_| ())
 }
 
 const FILL_TARGET_CHECK: &str = "(() => { const e=globalThis.__fintwindFillTarget; if(!e || !e.isConnected || document.activeElement!==e || e.disabled || e.readOnly || (e.tagName==='INPUT'&&!['text','search','email','url','tel'].includes((e.type||'').toLowerCase()))) throw new Error(); return true; })()";

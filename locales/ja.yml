@@ -910,6 +910,15 @@ browser_collaboration.too_many_pages: この接続の共有ページ数が上限
 browser_collaboration.automatic_status: フルアクセスで自動操作できます。通常の閲覧では共有を解除しません。共有を停止すると引き継げます。
 browser_collaboration.scroll_summary: "スクロール: %{delta_y}"
 browser_collaboration.open_handled: ページを開く（アプリホストが処理）
+browser_collaboration.screenshot_summary: 共有ページのスクリーンショットを撮影
+browser_collaboration.evaluate_summary: "JavaScript を実行: %{expression}"
+browser_collaboration.click_at_summary: "座標 (%{x}, %{y}) をクリック"
+browser_collaboration.double_click_summary: "%{selector} をダブルクリック"
+browser_collaboration.press_summary: "%{selector} で %{key} を押す"
+browser_collaboration.hover_summary: "%{selector} にホバー"
+browser_collaboration.select_summary: "%{selector} で %{value} を選択"
+browser_collaboration.drag_summary: "%{from} を %{to} へドラッグ"
+browser_collaboration.close_handled: ページのクローズはアプリホストが処理します。
 
 environment.title: 環境
 environment.summary: 環境とバックグラウンド作業

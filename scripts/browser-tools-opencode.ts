@@ -18,7 +18,7 @@
  * Failure modes this runner is built to surface (written before the checks):
  * - the plugin does not load but ordinary `Start` still succeeds in degraded
  *   mode: only a successful tool round-trip proves browser activation;
- * - the seven tools are not registered, or one names a page the model did not
+ * - the sixteen tools are not registered, or one names a page the model did not
  *   actually see (broken list -> snapshot argument wiring);
  * - OpenCode's built-in desktop browser tools still reach the model, so it
  *   blames a disconnected host and never uses the in-app browser;
@@ -48,7 +48,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BUILTIN_BROWSER_TOOL_IDS, FINTWIND_BROWSER_TOOL_NAMES } from '../resources/opencode-browser-plugin.ts';
 import { startFakeProvider, type PlanStep } from './fixtures/browser-tools/fake-provider.ts';
-import { GuiProtocolOwner } from './fixtures/browser-tools/gui-protocol-owner.ts';
+import { GuiProtocolOwner, PNG_1X1_TRANSPARENT_BASE64 } from './fixtures/browser-tools/gui-protocol-owner.ts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // Everything here is loopback; inherited proxies must not touch it.
@@ -70,7 +70,7 @@ const INVOKE_TIMEOUT_MS = 25_000;
  * executes fewer checks failed early and must not be reported as a pass, so the
  * count is compared against the executed checks before the status is written.
  */
-const EXPECTED_CHECKS = 20;
+const EXPECTED_CHECKS = 25;
 
 const args = new Set(process.argv.slice(2));
 for (const arg of args) {
@@ -365,7 +365,7 @@ function providerToolNames(): string[] {
   return [...names];
 }
 
-/** The plugin activated, so `ctx.tool.list()` held the seven tools. This asks
+/** The plugin activated, so `ctx.tool.list()` held the sixteen tools. This asks
  *  the separate question the daemon depends on: did OpenCode put every
  *  `fintwind_browser_*` tool into the executable snapshot it sent to the
  *  provider? */
@@ -392,7 +392,7 @@ const PLUGIN_LOCAL_FAILURES = [
 /** The precise finding when the model never received the browser tools. */
 function pluginToolDiagnosis(): string {
   const seen = providerToolNames();
-  return `OpenCode did not expose all seven direct fintwind_browser_* tools in the model's executable snapshot. The provider saw only: [${seen.join(', ')}]. Registration, activation and Code Mode visibility are separate checks; this evidence does not establish a root cause.`;
+  return `OpenCode did not expose all ${FINTWIND_BROWSER_TOOL_NAMES.length} direct fintwind_browser_* tools in the model's executable snapshot. The provider saw only: [${seen.join(', ')}]. Registration, activation and Code Mode visibility are separate checks; this evidence does not establish a root cause.`;
 }
 
 /** The refusal came from the daemon rather than from the plugin itself. */
@@ -585,7 +585,7 @@ try {
   // The transform removal is order-dependent; the per-request context hook is
   // not. Both have to hold, or the model still reaches for a desktop browser
   // tool that can never connect to Fintwind.
-  await check('every model snapshot declares the seven fintwind tools and no built-in browser tool', 'real OpenCode tool registry + context hook -> provider snapshot', async () => {
+  await check(`every model snapshot declares the ${FINTWIND_BROWSER_TOOL_NAMES.length} fintwind tools and no built-in browser tool`, 'real OpenCode tool registry + context hook -> provider snapshot', async () => {
     if (!browserToolsReachedModel()) throw new Error(`blocked: ${pluginToolDiagnosis()}`);
     const seen = providerToolNames();
     const builtins = seen.filter(name => BUILTIN_BROWSER_TOOL_IDS.includes(name));
@@ -921,6 +921,138 @@ try {
       `the caller must fail on disconnect, not act: ${clicks[0]!.raw.slice(0, 200)}`);
     assert.equal(gui.totalApplied(), before, 'no action was re-sent after the disconnect');
     return 'owner disconnect ended the call with an error; no reconnect, no re-sent action.';
+  });
+
+  // The disconnect scenario above ended the sharing connection on purpose.
+  // The remaining scenarios still need a live owner, so reconnect and publish
+  // the same page again — a replacement connection, exactly like reopening
+  // the app window would be.
+  await gui.connect(daemonWsAddress, daemonToken, ready!.protocolVersion);
+  sharePage(sessionA, runtimeA, pageA, grantA, pageUrlA, pageTitleA);
+  await poll('the replacement owner re-shared the page', async () => {
+    const response = await client!.request(sessionA, runtimeA, { type: 'browserList' });
+    return response.payload?.value as Array<{ scope: { pageId: string; grantId: string } }> | undefined;
+  }, pages => !!pages?.some(page => page.scope.pageId === pageA && page.scope.grantId === grantA));
+
+  // The simulated owner does not run JavaScript: the value that comes back is
+  // its `issued` echo, so this run can only prove that an approved evaluate
+  // crossed the bridge exactly once — never that arbitrary JS executed.
+  await check('fintwind_browser_evaluate is gated like a mutation and the owner answers its issued echo', 'real plugin+registry+broker -> simulated GUI', async () => {
+    if (!browserToolsReachedModel()) throw new Error(`blocked: ${pluginToolDiagnosis()}`);
+    gui.policy = (action) => (action.kind === 'snapshot' ? 'approve' : 'hold');
+    const before = gui.page(pageA)!.appliedCount;
+    const marker = `T${(turnSeq += 1)}_${randomUUID().slice(0, 8)}`;
+    fake.plan_install([{ tool: 'fintwind_browser_list' }, { tool: 'fintwind_browser_evaluate', page: { from: 'list', index: 0 }, expression: 'document.title' }], marker);
+    await prompt(client!, sessionA, runtimeA, marker);
+    await poll('the evaluate reached the GUI as a pending approval', () => gui.hasPending('evaluate', pageA), ok => ok, INVOKE_TIMEOUT_MS);
+    assert.equal(gui.page(pageA)!.appliedCount, before, 'no JavaScript ran before approval');
+    gui.policy = () => 'approve';
+    await poll('the evaluate turn reaches its final answer', () => fake.turnCalls >= 3 && fake.toolResults.length === 2, ok => ok, INVOKE_TIMEOUT_MS);
+    await client!.waitForTurn(sessionA, runtimeA);
+    const evaluate = fake.toolResults.find(r => r.tool === 'fintwind_browser_evaluate')!;
+    assert.equal(evaluate.source, 'untrusted_shared_browser_page', `approved evaluate is wrapped: ${evaluate.raw.slice(0, 200)}`);
+    assert.deepEqual(evaluate.value, { kind: 'evaluate', issued: true }, 'the owner answered with its issued echo, not a computed value');
+    assert.equal(gui.page(pageA)!.appliedCount, before + 1, 'the evaluate applied exactly once after approval');
+    return 'evaluate was held like any mutation; after approval the model saw the simulated owner\'s issued echo as untrusted page data.';
+  });
+
+  // The media path is the one result shape that is not a JSON `ok` value: the
+  // plugin must turn the daemon's base64 media result into a data-URI file
+  // part, and the recorded result must show the model received both parts.
+  // The fixture's PNG is a known constant, so the exact bytes are asserted.
+  await check('fintwind_browser_screenshot returns a media result the model receives as a file part', 'real plugin+registry+broker -> simulated GUI', async () => {
+    if (!browserToolsReachedModel()) throw new Error(`blocked: ${pluginToolDiagnosis()}`);
+    gui.policy = (action) => (action.kind === 'snapshot' ? 'approve' : 'hold');
+    const before = gui.totalApplied();
+    const marker = `T${(turnSeq += 1)}_${randomUUID().slice(0, 8)}`;
+    fake.plan_install([{ tool: 'fintwind_browser_list' }, { tool: 'fintwind_browser_screenshot', page: { from: 'list', index: 0 }, fullPage: true }], marker);
+    await prompt(client!, sessionA, runtimeA, marker);
+    await poll('the screenshot reached the GUI as a pending approval', () => gui.hasPending('screenshot', pageA), ok => ok, INVOKE_TIMEOUT_MS);
+    assert.equal(gui.totalApplied(), before, 'a screenshot is an observation: no mutation before approval');
+    const pending = gui.pendingActions('screenshot', pageA)[0];
+    assert.equal(pending?.kind, 'screenshot', 'the pending action is a screenshot');
+    if (pending?.kind !== 'screenshot') throw new Error('the pending action was not a screenshot');
+    assert.equal(pending.fullPage, true, 'the screenshot carries the requested fullPage flag');
+    gui.policy = () => 'approve';
+    await poll('the screenshot turn reaches its final answer', () => fake.turnCalls >= 3 && fake.toolResults.length === 2, ok => ok, INVOKE_TIMEOUT_MS);
+    await client!.waitForTurn(sessionA, runtimeA);
+    const shot = fake.toolResults.find(r => r.tool === 'fintwind_browser_screenshot')!;
+    assert.equal(shot.source, 'untrusted_shared_browser_page', `the text wrapper must be untrusted-tagged: ${shot.raw.slice(0, 200)}`);
+    assert.equal(shot.screenshotMime, 'image/png', `the file part must carry the png mime: ${shot.raw.slice(0, 200)}`);
+    // The provider wire (an OpenAI-compatible `image_url`) carries no
+    // filename, so the name is only assertable when it survived the hop.
+    assert.ok(!shot.screenshotName || shot.screenshotName === 'screenshot.png',
+      `an unexpected file name survived the hop: ${shot.screenshotName}`);
+    assert(shot.screenshotDataUri !== null && shot.screenshotDataUri.startsWith('data:image/png;base64,'),
+      `the image must reach the model as a data-URI file part: ${shot.raw.slice(0, 200)}`);
+    assert.equal(shot.screenshotDataUri, `data:image/png;base64,${PNG_1X1_TRANSPARENT_BASE64}`,
+      'the exact fixture PNG bytes survived the media round trip');
+    assert.equal(gui.totalApplied(), before, 'an approved screenshot moves no mutation counter');
+    return 'the approved screenshot reached the model as an image file part — exact fixture PNG bytes in data-URI form with the untrusted text wrapper — and the mutation counter never moved.';
+  });
+
+  await check('fintwind_browser_press carries the exact key combination and the approved echo returns it', 'real plugin+registry+broker -> simulated GUI', async () => {
+    if (!browserToolsReachedModel()) throw new Error(`blocked: ${pluginToolDiagnosis()}`);
+    gui.policy = (action) => (action.kind === 'snapshot' ? 'approve' : 'hold');
+    const before = gui.page(pageA)!.appliedCount;
+    const marker = `T${(turnSeq += 1)}_${randomUUID().slice(0, 8)}`;
+    fake.plan_install([{ tool: 'fintwind_browser_list' }, { tool: 'fintwind_browser_press', page: { from: 'list', index: 0 }, target: { selector: '#q' }, key: 'Control+A' }], marker);
+    await prompt(client!, sessionA, runtimeA, marker);
+    await poll('the press reached the GUI as a pending approval', () => gui.hasPending('press', pageA), ok => ok, INVOKE_TIMEOUT_MS);
+    const pending = gui.pendingActions('press', pageA)[0];
+    assert.equal(pending?.kind, 'press', 'the pending action is a press');
+    if (pending?.kind !== 'press') throw new Error('the pending action was not a press');
+    assert.equal(pending.key, 'Control+A', 'the press carries the exact requested key combination');
+    assert.equal(gui.page(pageA)!.appliedCount, before, 'no keypress before approval');
+    gui.policy = () => 'approve';
+    await poll('the press turn reaches its final answer', () => fake.turnCalls >= 3 && fake.toolResults.length === 2, ok => ok, INVOKE_TIMEOUT_MS);
+    await client!.waitForTurn(sessionA, runtimeA);
+    const press = fake.toolResults.find(r => r.tool === 'fintwind_browser_press')!;
+    assert.equal(press.source, 'untrusted_shared_browser_page', 'an approved press is wrapped');
+    assert.deepEqual(press.value, { kind: 'press', key: 'Control+A' }, 'the applied press echoes the exact key back to the model');
+    assert.equal(gui.page(pageA)!.appliedCount, before + 1, 'the press applied exactly once after approval');
+    return 'the press waited for approval with its exact key combination intact, then echoed it to the model once applied.';
+  });
+
+  // The plugin has no local click_at bound, so the tool schema (`minimum: 0`,
+  // `maximum: 8192` on both integer coordinates) is the layer that must
+  // refuse; either way the refusal has to be explicit and nothing may reach
+  // the page owner or its ledger.
+  await check('an out-of-range click_at is refused before any page action', 'real plugin execute (or OpenCode schema) -> simulated GUI owner remains untouched', async () => {
+    if (!browserToolsReachedModel()) throw new Error(`blocked: ${pluginToolDiagnosis()}`);
+    gui.policy = () => 'hold';
+    const before = gui.totalApplied();
+    const refusedBy: string[] = [];
+    for (const coords of [{ x: 9000, y: 10 }, { x: 10, y: -1 }, { x: 10.5, y: 10 }]) {
+      const { results } = await runTurn(client!, sessionA, runtimeA,
+        [{ tool: 'fintwind_browser_list' }, { tool: 'fintwind_browser_click_at', page: { from: 'list', index: 0 }, x: coords.x, y: coords.y }]);
+      const refusal = String(results.at(-1)?.raw);
+      if (refusal.includes('No action was issued')) refusedBy.push(`plugin(${coords.x},${coords.y})`);
+      else if (/Expected a value less than or equal to|Expected a value greater than or equal to|Expected an integer/.test(refusal)) refusedBy.push(`schema(${coords.x},${coords.y})`);
+      else throw new Error(`click_at (${coords.x}, ${coords.y}) was not refused explicitly: ${refusal.slice(0, 200)}`);
+      assert.equal(gui.pending.size, 0, 'no out-of-range click_at reaches approval');
+      assert.equal(gui.totalApplied(), before, 'no out-of-range click_at is applied');
+    }
+    return `oversized, negative and fractional click_at coordinates were refused before any page action (${refusedBy.join(' and ')}), without connection errors or retries.`;
+  });
+
+  await check('fintwind_browser_close is gated and the page owner answers with closed', 'real plugin+registry+broker -> simulated GUI', async () => {
+    if (!browserToolsReachedModel()) throw new Error(`blocked: ${pluginToolDiagnosis()}`);
+    gui.policy = (action) => (action.kind === 'snapshot' ? 'approve' : 'hold');
+    const before = gui.page(pageA)!.appliedCount;
+    const marker = `T${(turnSeq += 1)}_${randomUUID().slice(0, 8)}`;
+    fake.plan_install([{ tool: 'fintwind_browser_list' }, { tool: 'fintwind_browser_close', page: { from: 'list', index: 0 } }], marker);
+    await prompt(client!, sessionA, runtimeA, marker);
+    await poll('the close reached the GUI as a pending approval', () => gui.hasPending('close', pageA), ok => ok, INVOKE_TIMEOUT_MS);
+    assert.equal(gui.page(pageA)!.appliedCount, before, 'no page was closed before approval');
+    gui.policy = () => 'approve';
+    await poll('the close turn reaches its final answer', () => fake.turnCalls >= 3 && fake.toolResults.length === 2, ok => ok, INVOKE_TIMEOUT_MS);
+    await client!.waitForTurn(sessionA, runtimeA);
+    const close = fake.toolResults.find(r => r.tool === 'fintwind_browser_close')!;
+    assert.equal(close.source, 'untrusted_shared_browser_page', 'an approved close is wrapped');
+    assert.deepEqual(close.value, { closed: true }, 'the simulated owner answered the close');
+    assert.equal(gui.page(pageA)!.appliedCount, before + 1, 'the close applied exactly once after approval');
+    return 'close waited for approval and the simulated owner answered {closed:true} — a real owner would end the page and revoke its scope.';
   });
 
   report.startup.push({ step: 'checks complete', status: 'ok', details: `${report.checks.filter(c => c.status === 'passed').length} passed` });

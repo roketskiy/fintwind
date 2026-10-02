@@ -265,16 +265,37 @@ impl Fintwind {
                         return true;
                     }
                     if ready != Ok(true) { return false }
+                    // The publish is fire-and-forget: a daemon refusal
+                    // arrives as a receipt only after this tick. Answering in
+                    // the same tick would hand out a grant the daemon may be
+                    // about to reject, so the publish records the scope here
+                    // and the pass below answers only once the share survived
+                    // a full tick.
+                    if let Some(expected) = this.browser_collaboration.opened_pages.get(&request.request_id).cloned() {
+                        let Some(share) = browser.read(cx).browser_share() else {
+                            this.complete_browser_opening(request.request_id, BrowserResult::error("The new page could not be published on the live browser connection."), cx);
+                            return true;
+                        };
+                        if share.scope != expected {
+                            this.complete_browser_opening(request.request_id, BrowserResult::error("The native page authorization was withdrawn."), cx);
+                            return true;
+                        }
+                        this.complete_browser_opening(request.request_id, BrowserResult::Ok { value: json!({
+                            "pageId": share.scope.page_id, "grantId":share.scope.grant_id,
+                            "url":share.url, "title":share.title,
+                        }) }, cx);
+                        return true;
+                    }
                     let shared = browser.update(cx, |view, cx| view.begin_browser_automation(scope.clone(), cx));
                     if !shared {
                         this.complete_browser_opening(request.request_id, BrowserResult::error("The native page could not be shared after loading."), cx);
                         return true;
                     }
                     this.browser_collaboration.automation_pages.insert(page_id);
-                    let Some(share) = browser.read(cx).browser_share() else {
+                    if browser.read(cx).browser_share().is_none() {
                         this.complete_browser_opening(request.request_id, BrowserResult::error("The native page authorization was withdrawn."), cx);
                         return true;
-                    };
+                    }
                     this.publish_browser_shares(cx);
                     if browser.read(cx).browser_share().is_none()
                         || this.browser_collaboration.client.is_none()
@@ -283,15 +304,147 @@ impl Fintwind {
                         return true;
                     }
                     this.browser_collaboration.opened_pages.insert(request.request_id, scope.clone());
-                    this.complete_browser_opening(request.request_id, BrowserResult::Ok { value: json!({
-                        "pageId": share.scope.page_id, "grantId":share.scope.grant_id,
-                        "url":share.url, "title":share.title,
-                    }) }, cx);
-                    true
+                    false
                 }).unwrap_or(true);
                 if done { break }
             }
         }).detach();
+    }
+
+    /// Close the page this session's automation opened. Launcher-side like
+    /// [`open_automation_browser`]: a page-level grant must never close its
+    /// own surface, so the app host answers `Close` here and the view layer
+    /// refuses it. Ordering invariants: the request is answered before
+    /// anything is torn down, because the teardown retires the view and
+    /// republishes the share set, failing anything still pending on the
+    /// page; and the page leaves `automation_pages` and `opened_pages`
+    /// before that teardown, so the close path's automation retirement does
+    /// not read the page's disappearance as a human takeover and pause the
+    /// whole automation host — an agent closing its own page is not a
+    /// takeover.
+    pub(super) fn close_automation_browser(
+        &mut self,
+        request: BrowserRequest,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.browser_collaboration.client.clone() else {
+            // No live connection to answer on; the daemon-side caller times
+            // out on its own, which is the honest outcome here.
+            return;
+        };
+        let page_id = request.scope.page_id;
+        if !self.browser_full_access() || self.browser_collaboration.automation_paused {
+            let _ = client.complete_browser_request(
+                request.request_id,
+                BrowserResult::error(
+                    "Closing a page needs this session's full-access browser permission.",
+                ),
+            );
+            return;
+        }
+        if !self.browser_collaboration.automation_pages.contains(&page_id) {
+            let _ = client.complete_browser_request(
+                request.request_id,
+                BrowserResult::error(
+                    "Only a page this session opened automatically can be closed by it; a manually shared tab is the user's.",
+                ),
+            );
+            return;
+        }
+        let surface_index = self
+            .right_panel_surfaces
+            .iter()
+            .position(|surface| matches!(surface, RightPanelSurface::Browser(id) if *id == page_id));
+        if surface_index.is_none() && !self.right_panel_browsers.contains_key(&page_id) {
+            // Nothing is left to announce the change, so any lingering grant
+            // is revoked here by publishing the cache minus this page.
+            self.revoke_browser_grant(page_id, cx);
+            let _ = client.complete_browser_request(
+                request.request_id,
+                BrowserResult::error("The browser page is already closed."),
+            );
+            return;
+        }
+        let granted = self
+            .right_panel_browsers
+            .get(&page_id)
+            .is_some_and(|browser| {
+                browser
+                    .read(cx)
+                    .browser_share()
+                    .is_some_and(|share| share.scope == request.scope)
+            });
+        if !granted {
+            let _ = client.complete_browser_request(
+                request.request_id,
+                BrowserResult::error("Page is not shared with this session and runtime."),
+            );
+            return;
+        }
+        let Some(surface_index) = surface_index else {
+            // Entities and surfaces are removed in lockstep, so this is only
+            // reachable if that bookkeeping went wrong; degrade to the
+            // already-closed outcome rather than closing a wrong tab.
+            self.revoke_browser_grant(page_id, cx);
+            let _ = client.complete_browser_request(
+                request.request_id,
+                BrowserResult::error("The browser page is already closed."),
+            );
+            return;
+        };
+        // Answer first: the teardown below retires the view and republishes
+        // the share set, so the completion must not depend on a state that is
+        // mid-removal.
+        let _ = client.complete_browser_request(
+            request.request_id,
+            BrowserResult::Ok {
+                value: json!({ "closed": true }),
+            },
+        );
+        // Retire the automation bookkeeping before the close: the close
+        // path's automation retirement must not read this page as a human
+        // takeover and pause the whole automation host.
+        self.browser_collaboration.automation_pages.remove(&page_id);
+        self.browser_collaboration
+            .opened_pages
+            .retain(|_, scope| scope.page_id != page_id);
+        self.close_browser_surface(surface_index, page_id, cx);
+    }
+
+    /// Close the browser surface at `index`, mirroring the browser branch of
+    /// `close_right_panel_surface` in `right_panel.rs`. That method is
+    /// private to its module, so its bookkeeping is repeated here instead of
+    /// called; keep the two in lockstep. The entity is removed before
+    /// `forget_browser_collaboration`, exactly as there, so the republication
+    /// excludes this page.
+    fn close_browser_surface(&mut self, index: usize, browser_id: Uuid, cx: &mut Context<Self>) {
+        self.right_panel_browsers.remove(&browser_id);
+        self.forget_browser_collaboration(browser_id, cx);
+        self.right_panel_surfaces.remove(index);
+        self.right_panel_active_surface = if self.right_panel_surfaces.is_empty() {
+            None
+        } else {
+            Some(match self.right_panel_active_surface {
+                Some(active) if active > index => active - 1,
+                Some(active) if active == index => index.saturating_sub(1),
+                Some(active) => active.min(self.right_panel_surfaces.len() - 1),
+                None => 0,
+            })
+        };
+        if let Some(active) = self.right_panel_active_surface {
+            // `reveal_right_panel_tab` is likewise private to right_panel.rs;
+            // this is its body.
+            self.right_panel_pending_tab_reveal = Some(active);
+            self.right_panel_tabs_scroll_handle.scroll_to_item(active);
+            self.request_active_terminal_focus();
+            self.request_active_browser_focus();
+        } else {
+            self.right_panel_pending_tab_reveal = None;
+            self.right_panel_pending_terminal_focus = None;
+            self.right_panel_pending_browser_focus = None;
+            self.set_right_panel_visible(false, cx);
+        }
+        cx.notify();
     }
 
     fn complete_browser_opening(

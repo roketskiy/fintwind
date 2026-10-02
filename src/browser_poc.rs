@@ -947,6 +947,25 @@ impl BrowserPocRoot {
                     BrowserAction::Navigate { url } => ("navigate".to_owned(), url.clone()),
                     BrowserAction::Open { url } => ("open".to_owned(), url.clone()),
                     BrowserAction::Scroll { delta_y } => ("scroll".to_owned(), delta_y.to_string()),
+                    BrowserAction::Screenshot { full_page } => {
+                        ("screenshot".to_owned(), full_page.to_string())
+                    }
+                    BrowserAction::Evaluate { expression } => {
+                        ("evaluate".to_owned(), truncate_detail(expression))
+                    }
+                    BrowserAction::ClickAt { x, y } => ("clickAt".to_owned(), format!("{x},{y}")),
+                    BrowserAction::DoubleClick { selector } => {
+                        ("doubleClick".to_owned(), selector.clone())
+                    }
+                    BrowserAction::Press { selector, key } => {
+                        ("press".to_owned(), format!("{selector} {key}"))
+                    }
+                    BrowserAction::Hover { selector } => ("hover".to_owned(), selector.clone()),
+                    BrowserAction::Select { selector, value } => {
+                        ("select".to_owned(), format!("{selector} {value}"))
+                    }
+                    BrowserAction::Drag { from, to } => ("drag".to_owned(), format!("{from} {to}")),
+                    BrowserAction::Close => ("close".to_owned(), String::new()),
                 };
                 Some(HostPendingBrowserRequest {
                     page: page.id,
@@ -1436,6 +1455,19 @@ fn summarize_page(state: &BrowserPocPageState) -> String {
         Some(url) => url.to_owned(),
         None => "ready".to_owned(),
     }
+}
+
+/// Keep a PoC detail small: an `evaluate` expression can be large, so the
+/// state file carries only its first 120 characters plus an ellipsis when
+/// it was longer.
+fn truncate_detail(text: &str) -> String {
+    const MAX_DETAIL_CHARS: usize = 120;
+    if text.chars().count() <= MAX_DETAIL_CHARS {
+        return text.to_owned();
+    }
+    let mut detail: String = text.chars().take(MAX_DETAIL_CHARS).collect();
+    detail.push('…');
+    detail
 }
 
 /// The control request, parsed as far as JSON allows. An unknown action or a

@@ -1,4 +1,38 @@
 _version: 2
+btw.command_description:
+  en: Ask a side question without adding to the conversation
+btw.argument_hint:
+  en: question
+btw.question_required:
+  en: Add a question after /btw.
+btw.attachments_unsupported:
+  en: /btw uses existing conversation context and does not accept attachments. Your input has been retained.
+btw.session_required:
+  en: Start a conversation before asking a side question.
+btw.unavailable:
+  en: OpenCode is not available for this conversation.
+btw.model_not_synced:
+  en: The selected model or variant has not been applied to OpenCode yet. Send a normal message to apply it, then retry the side question.
+btw.invalid_response:
+  en: OpenCode returned an invalid side-question response.
+btw.empty_answer:
+  en: The model returned no text. Side questions cannot execute tools. Try rephrasing the question.
+btw.cancelled:
+  en: Side question cancelled. The main task was not interrupted.
+btw.working:
+  en: Answering side question…
+btw.cancel:
+  en: Cancel side question
+btw.failed:
+  en: Could not answer this side question
+btw.retry:
+  en: Retry
+btw.copy:
+  en: Copy answer
+btw.copied:
+  en: Answer copied
+btw.transient:
+  en: Temporary answer · not added to the conversation
 submission.preparing:
   en: Saving and preparing to send
 submission.dispatching:

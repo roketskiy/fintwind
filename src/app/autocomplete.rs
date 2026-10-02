@@ -112,7 +112,7 @@ impl Fintwind {
             .selected_workspace_path()
             .map(std::path::Path::to_path_buf)
         else {
-            self.slash_command_index = Rc::new(Vec::new());
+            self.slash_command_index = Rc::new(super::btw::commands(&[], &[]));
             self.slash_command_index_key = None;
             self.mention_file_index = Rc::new(Vec::new());
             self.mention_file_index_path = None;
@@ -130,22 +130,20 @@ impl Fintwind {
         let command_key = (provider, project_path.clone());
         match self.slash_commands.read(&command_key) {
             Query::Ready(commands) => {
-                self.slash_command_index = Rc::new(composer_complete::merge_reported_commands(
-                    &commands, &reported,
-                ));
+                self.slash_command_index = Rc::new(super::btw::commands(&commands, &reported));
                 self.slash_command_index_key = Some(command_key);
             }
             Query::Pending => {
                 // A scan for this exact key is in flight; anything drawn
                 // meanwhile must not be another provider's list.
                 if self.slash_command_index_key.as_ref() != Some(&command_key) {
-                    self.slash_command_index = Rc::new(Vec::new());
+                    self.slash_command_index = Rc::new(super::btw::commands(&[], &reported));
                     self.slash_command_index_key = None;
                 }
             }
             Query::Missing(token) => {
                 if self.slash_command_index_key.as_ref() != Some(&command_key) {
-                    self.slash_command_index = Rc::new(Vec::new());
+                    self.slash_command_index = Rc::new(super::btw::commands(&[], &reported));
                     self.slash_command_index_key = None;
                 }
                 let path = project_path.clone();

@@ -1642,6 +1642,20 @@ impl Fintwind {
         let Some(edit) = self.message_edit.clone() else {
             return;
         };
+        // Intercept before rewind and restore this editor (never the separate
+        // main composer). Keyboard submission clears its field after emitting.
+        if self.state.selected_session == Some(edit.session_id)
+            && let Some(result) =
+                self.submit_btw_question(&prompt, edit.attachments.len(), edit.input.clone(), cx)
+        {
+            edit.input
+                .update(cx, |input, cx| input.set_content(prompt, cx));
+            if let Err(error) = result {
+                self.show_toast(error);
+            }
+            cx.notify();
+            return;
+        }
         if self.submission_preparations.contains(&edit.session_id) {
             return;
         }
@@ -2051,6 +2065,7 @@ impl Fintwind {
         else {
             return;
         };
+        self.btw_options_pending.insert(session_id);
         let Some(runtime) = self.runtimes.get_mut(&session_id) else {
             return;
         };
@@ -2070,6 +2085,8 @@ impl Fintwind {
                 if is_current && !applied {
                     fintwind.reset_session_runtime(session_id, cx);
                     cx.notify();
+                } else if is_current && applied {
+                    fintwind.btw_options_pending.remove(&session_id);
                 }
             });
         })
@@ -2121,6 +2138,7 @@ impl Fintwind {
         session_id: Uuid,
         prepared: PreparedDriver,
     ) -> DriverHandle {
+        self.btw_options_pending.remove(&session_id);
         let handle = prepared.handle.clone();
         self.runtimes.insert(
             session_id,
@@ -2196,6 +2214,9 @@ impl Fintwind {
         submission: ComposerSubmission,
         cx: &mut Context<Self>,
     ) {
+        if self.try_submit_btw(&submission, cx) {
+            return;
+        }
         let Some(session) = self.selected_session() else {
             return;
         };
@@ -2231,6 +2252,9 @@ impl Fintwind {
         submission: ComposerSubmission,
         cx: &mut Context<Self>,
     ) {
+        if self.try_submit_btw(&submission, cx) {
+            return;
+        }
         let Some(session) = self.selected_session().cloned() else {
             return;
         };

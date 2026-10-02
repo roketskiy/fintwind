@@ -30,6 +30,9 @@ pub(super) struct BackgroundWorkRegistry {
     transcripts: HashMap<BackgroundWorkKey, BackgroundWorkTranscript>,
     last_output_cache_refresh: Option<Instant>,
     output_viewports: HashMap<BackgroundWorkKey, BackgroundOutputViewport>,
+    /// Scroll surface for a subagent's transcript pane, provisioned the same
+    /// way as `output_viewports` so each child remembers its own position.
+    transcript_viewports: HashMap<BackgroundWorkKey, BackgroundOutputViewport>,
     /// Which of an item's transcript blocks have their activity cards open,
     /// keyed by the block's index inside that item's own transcript.
     ///
@@ -215,6 +218,11 @@ impl BackgroundWorkRegistry {
     }
 
     fn apply_transcript(&mut self, event: BackgroundWorkTranscriptEvent) {
+        // Every transcript event implies the child's surface may render, so
+        // provision its scroll viewport before the match touches the key.
+        self.transcript_viewports
+            .entry(event.key().clone())
+            .or_default();
         match event {
             BackgroundWorkTranscriptEvent::Started { key, prompt } => {
                 let transcript = self.transcripts.entry(key).or_default();
@@ -505,6 +513,7 @@ impl BackgroundWorkRegistry {
         self.rendered_output.remove(key);
         self.dirty_output.remove(key);
         self.output_viewports.remove(key);
+        self.transcript_viewports.remove(key);
         self.activities_expanded
             .retain(|(entry, _), _| entry != key);
         self.order.retain(|entry| entry != key);
@@ -1352,6 +1361,10 @@ impl Fintwind {
             .and_then(|registry| registry.output_viewports.get(key))
             .cloned()
             .unwrap_or_default();
+        let transcript_viewport = registry
+            .and_then(|registry| registry.transcript_viewports.get(key))
+            .cloned()
+            .unwrap_or_default();
         let selection = registry
             .map(|registry| registry.selection.clone())
             .unwrap_or_default();
@@ -1467,21 +1480,31 @@ impl Fintwind {
                 )
                 .child(
                     div()
-                        .id("background-transcript-scroll")
                         .flex_1()
                         .min_h_0()
-                        .overflow_y_scroll()
-                        .px(px(16.0))
-                        .py(px(12.0))
-                        .children(transcript.map(|transcript| {
-                            self.render_background_transcript(
-                                item,
-                                transcript,
-                                selection.clone(),
-                                window,
-                                cx,
-                            )
-                        })),
+                        .relative()
+                        .child(
+                            div()
+                                .id("background-transcript-scroll")
+                                .size_full()
+                                .overflow_y_scroll()
+                                .track_scroll(&transcript_viewport.scroll_handle)
+                                .px(px(16.0))
+                                .py(px(12.0))
+                                .children(transcript.map(|transcript| {
+                                    self.render_background_transcript(
+                                        item,
+                                        transcript,
+                                        selection.clone(),
+                                        window,
+                                        cx,
+                                    )
+                                })),
+                        )
+                        .child(scrollbar::vertical(
+                            &transcript_viewport.scroll_handle,
+                            &transcript_viewport.scrollbar,
+                        )),
                 );
         }
         let card = div()

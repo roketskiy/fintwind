@@ -1966,21 +1966,6 @@ pub enum BackgroundWorkTranscriptEvent {
     },
 }
 
-impl BackgroundWorkTranscriptEvent {
-    /// The background work item the event belongs to. Every variant carries
-    /// one, so callers can route or provision per-item state before matching.
-    pub fn key(&self) -> &BackgroundWorkKey {
-        match self {
-            Self::Started { key, .. }
-            | Self::TextDelta { key, .. }
-            | Self::ReasoningDelta { key, .. }
-            | Self::Activity { key, .. }
-            | Self::Snapshot { key, .. }
-            | Self::Finished { key, .. } => key,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BackgroundWorkKey {

@@ -37,6 +37,7 @@ pub struct FintwindBackend {
     removed_project_ids: Mutex<HashSet<Uuid>>,
     active_preparations: Mutex<HashMap<Uuid, EventSink>>,
     native_transcript_generations: Mutex<HashMap<String, u64>>,
+    side_generations: crate::session_generation::SessionGenerations,
     composer_drafts: ComposerDraftStore,
     attachments: AttachmentStore,
     checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
@@ -68,6 +69,7 @@ impl FintwindBackend {
             removed_project_ids: Mutex::new(HashSet::new()),
             active_preparations: Mutex::new(HashMap::new()),
             native_transcript_generations: Mutex::new(HashMap::new()),
+            side_generations: Default::default(),
             composer_drafts,
             attachments,
             checkpoint_capture_locks: Mutex::new(HashMap::new()),
@@ -1067,6 +1069,31 @@ impl Backend for FintwindBackend {
                     crate::driver::native::fetch_turn_stats(&server, &session_id, &step_ids)?;
                 Ok(ResponsePayload::NativeTurnStats { stats })
             }
+            Command::GenerateSessionText {
+                generation_id,
+                binary,
+                directory,
+                session_id,
+                question,
+                model,
+            } => {
+                let text = self.side_generations.generate(
+                    generation_id,
+                    &binary,
+                    &directory,
+                    &session_id,
+                    &question,
+                    model.as_ref(),
+                )?;
+                Ok(match text {
+                    Some(text) => ResponsePayload::SessionTextGenerated { text },
+                    None => ResponsePayload::SessionGenerationModelNotSynced,
+                })
+            }
+            Command::CancelSessionGeneration { generation_id } => {
+                self.side_generations.cancel(generation_id);
+                Ok(ResponsePayload::Ack)
+            }
             Command::FetchUsageStats {
                 binary,
                 directory,
@@ -1901,6 +1928,8 @@ fn handle_driver_command(
         | Command::ForkProviderSession { .. }
         | Command::ListProviderSessions { .. }
         | Command::FetchNativeTranscript { .. }
+        | Command::GenerateSessionText { .. }
+        | Command::CancelSessionGeneration { .. }
         | Command::FetchNativeTurnStats { .. }
         | Command::FetchUsageStats { .. }
         | Command::RenameProviderSession { .. }

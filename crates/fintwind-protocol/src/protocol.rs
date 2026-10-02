@@ -20,7 +20,7 @@ use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 /// Desktop protocol version. Bumped when the `ClientMessage` or
 /// `ServerMessage` grammar changes; the handshake refuses a mismatch in
 /// either direction, so an old client and a new daemon never half-speak.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes
@@ -236,6 +236,19 @@ pub enum Command {
         binary: PathBuf,
         directory: PathBuf,
         session_id: String,
+    },
+    /// One transient side answer; never admitted to the session's inbox/history.
+    GenerateSessionText {
+        generation_id: Uuid,
+        binary: PathBuf,
+        directory: PathBuf,
+        session_id: String,
+        question: String,
+        model: Option<crate::provider_session::SessionGenerationModel>,
+    },
+    /// Cancels only the side-generation HTTP exchange, not the main task.
+    CancelSessionGeneration {
+        generation_id: Uuid,
     },
     FetchNativeTurnStats {
         binary: PathBuf,
@@ -594,6 +607,11 @@ pub enum ResponsePayload {
     NativeTranscript {
         transcript: NativeTranscript,
     },
+    SessionTextGenerated {
+        text: String,
+    },
+    /// The selection differs from the native session; no generation was sent.
+    SessionGenerationModelNotSynced,
     NativeTurnStats {
         stats: Option<crate::model::TurnStats>,
     },
@@ -747,7 +765,6 @@ mod tests {
 
         assert_eq!(json["type"], "forkSessionFromResponse");
         assert_eq!(json["turnCount"], 7);
-        assert_eq!(PROTOCOL_VERSION, 9);
     }
 
     #[test]
@@ -765,7 +782,6 @@ mod tests {
 
         assert_eq!(json["type"], "rewindSessionToMessage");
         assert_eq!(json["turnCount"], 4);
-        assert_eq!(PROTOCOL_VERSION, 9);
     }
 
     #[test]

@@ -1,4 +1,21 @@
 _version: 1
+btw.command_description: 临时旁问，不加入主对话
+btw.argument_hint: 问题
+btw.question_required: 请在 /btw 后输入问题。
+btw.attachments_unsupported: /btw 使用已有对话上下文，不支持新附件。输入和附件已保留。
+btw.session_required: 请先开始对话，再提出旁问。
+btw.unavailable: 当前对话无法连接 OpenCode。
+btw.model_not_synced: 所选模型或推理档位尚未同步到 OpenCode。请先发送一条普通消息使其生效，再重试旁问。
+btw.invalid_response: OpenCode 返回了无效的旁问结果。
+btw.empty_answer: 模型没有返回文本。旁问无法执行工具，请尝试换一种问法。
+btw.cancelled: 旁问已取消，主任务未被打断。
+btw.working: 正在回答旁问…
+btw.cancel: 取消旁问
+btw.failed: 无法回答此旁问
+btw.retry: 重试
+btw.copy: 复制答案
+btw.copied: 答案已复制
+btw.transient: 临时答案 · 不加入主对话
 submission.preparing: 正在保存并准备发送
 submission.dispatching: 正在发送，尚未确认接收
 submission.accepted: 服务器已接收

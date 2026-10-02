@@ -92,6 +92,9 @@ impl Fintwind {
         for registry in self.background_work.values_mut() {
             registry.clear_selection();
         }
+        for state in self.btw_states.values() {
+            state.clear_selection();
+        }
     }
 
     pub(super) fn open_update_card(&mut self, window: &mut Window, cx: &mut Context<Self>) {

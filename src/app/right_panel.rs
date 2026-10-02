@@ -893,6 +893,7 @@ impl RightPanelSurface {
     fn label(&self) -> String {
         match self {
             Self::Context => tr!("usage.panel_title"),
+            Self::Btw => "/btw".to_owned(),
             Self::Browser(_) => tr!("right_panel.browser"),
             Self::Terminal(_) => tr!("right_panel.terminal"),
             Self::BackgroundWork { key, title } => {
@@ -916,6 +917,7 @@ impl RightPanelSurface {
     fn icon_path(&self) -> &'static str {
         match self {
             Self::Context => "icons/chart-column.svg",
+            Self::Btw => "icons/sparkle.svg",
             Self::Browser(_) => "icons/globe.svg",
             Self::Terminal(_) => "icons/terminal.svg",
             Self::BackgroundWork { key, .. } => work_kind_icon(key.kind),
@@ -937,6 +939,7 @@ fn reusable_surface_index(
             matches!(surface, RightPanelSurface::BackgroundWork { key: candidate, .. } if candidate == key)
         }),
         RightPanelSurface::Context
+        | RightPanelSurface::Btw
         | RightPanelSurface::Files
         | RightPanelSurface::Diff
         | RightPanelSurface::History
@@ -1707,6 +1710,10 @@ impl Fintwind {
         let Some(session_id) = self.state.selected_session else {
             return;
         };
+        self.cancel_btw(session_id);
+        if let Some(state) = self.btw_states.get(&session_id) {
+            state.clear_selection();
+        }
         let state = self.take_active_right_panel_state();
         self.right_panel_session_states.insert(session_id, state);
     }
@@ -1754,6 +1761,8 @@ impl Fintwind {
     }
 
     pub(super) fn remove_right_panel_session_state(&mut self, session_id: Uuid) {
+        self.btw_states.remove(&session_id);
+        self.btw_options_pending.remove(&session_id);
         self.context_summary_ids.remove(&session_id);
         let state = if self.state.selected_session == Some(session_id) {
             let state = self.take_active_right_panel_state();
@@ -1980,6 +1989,11 @@ impl Fintwind {
         if index >= self.right_panel_surfaces.len() {
             return;
         }
+        if self.right_panel_surfaces[index] == RightPanelSurface::Btw
+            && let Some(session_id) = self.state.selected_session
+        {
+            self.btw_states.remove(&session_id);
+        }
         let closed_file = matches!(self.right_panel_surfaces[index], RightPanelSurface::File(_));
         let was_active = self.right_panel_active_surface == Some(index);
         if let Some(terminal_id) = self.right_panel_surfaces[index].terminal_id() {
@@ -2053,6 +2067,14 @@ impl Fintwind {
         }
     }
 
+    pub(super) fn close_btw_panel(&mut self, cx: &mut Context<Self>) {
+        if let Some(index) =
+            reusable_surface_index(&self.right_panel_surfaces, &RightPanelSurface::Btw)
+        {
+            self.close_right_panel_surface(index, cx);
+        }
+    }
+
     pub(super) fn close_window_or_right_panel_tab_action(
         &mut self,
         _: &CloseWindow,
@@ -2060,8 +2082,10 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) {
         if let Some(active) = self.right_panel_active_surface {
-            let was_context =
-                self.active_right_panel_surface() == Some(&RightPanelSurface::Context);
+            let was_context = matches!(
+                self.active_right_panel_surface(),
+                Some(RightPanelSurface::Context | RightPanelSurface::Btw)
+            );
             self.close_right_panel_surface(active, cx);
             if was_context || self.right_panel_surfaces.is_empty() {
                 let focus_handle = self.composer_focus(cx);
@@ -2118,6 +2142,7 @@ impl Fintwind {
         let body = match self.active_right_panel_surface().cloned() {
             None => self.render_right_panel_chooser(cx).into_any_element(),
             Some(RightPanelSurface::Context) => self.render_context_panel(cx),
+            Some(RightPanelSurface::Btw) => self.render_btw_panel(cx),
             Some(RightPanelSurface::BackgroundWork { key, .. }) => self
                 .render_background_work_surface(&key, window, cx)
                 .into_any_element(),
@@ -2349,7 +2374,9 @@ impl Fintwind {
             let activate_weak = cx.entity().downgrade();
             let close_weak = cx.entity().downgrade();
             let context_tab = surface == RightPanelSurface::Context;
+            let btw_tab = surface == RightPanelSurface::Btw;
             let focusable_tab = context_tab
+                || btw_tab
                 || matches!(
                     surface,
                     RightPanelSurface::Files | RightPanelSurface::File(_)
@@ -2450,7 +2477,7 @@ impl Fintwind {
                                 let _ = close_weak.update(cx, |this, cx| {
                                     let was_active = this.right_panel_active_surface == Some(index);
                                     this.close_right_panel_surface(index, cx);
-                                    if context_tab && was_active {
+                                    if (context_tab || btw_tab) && was_active {
                                         window.focus(&this.composer.read(cx).focus(), cx);
                                     } else if was_active
                                         && matches!(surface, RightPanelSurface::File(_))
@@ -2467,7 +2494,7 @@ impl Fintwind {
                                             let was_active =
                                                 this.right_panel_active_surface == Some(index);
                                             this.close_right_panel_surface(index, cx);
-                                            if context_tab && was_active {
+                                            if (context_tab || btw_tab) && was_active {
                                                 window.focus(&this.composer.read(cx).focus(), cx);
                                             } else {
                                                 this.focus_active_right_panel_tab(window, cx);
@@ -2485,6 +2512,8 @@ impl Fintwind {
                             this.request_active_terminal_focus();
                             if context_tab {
                                 window.focus(&this.context_panel_focus, cx);
+                            } else if btw_tab && let Some(focus) = this.btw_panel_focus() {
+                                window.focus(&focus, cx);
                             }
                             cx.notify();
                         });
@@ -2497,6 +2526,8 @@ impl Fintwind {
                                     this.reveal_right_panel_tab(index);
                                     if context_tab {
                                         window.focus(&this.context_panel_focus, cx);
+                                    } else if btw_tab && let Some(focus) = this.btw_panel_focus() {
+                                        window.focus(&focus, cx);
                                     }
                                     cx.notify();
                                     cx.stop_propagation();

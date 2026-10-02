@@ -16,12 +16,6 @@ btw.retry: 重试
 btw.copy: 复制答案
 btw.copied: 答案已复制
 btw.transient: 临时答案 · 不加入主对话
-submission.preparing: 正在保存并准备发送
-submission.dispatching: 正在发送，尚未确认接收
-submission.accepted: 服务器已接收
-submission.unknown: 接收结果未知，不会自动重发
-submission.not_sent: 未发送，输入已保留
-submission.rejected: 服务器拒绝了本次提交
 errors.submission_dispatch_unknown: 无法确认本次提交的接收结果。输入和提交标识已保留，不会自动重发。
 errors.submission_not_preparing: 提交状态已改变，已停止准备，不会重复发送。
 errors.submission_replaced: 本次准备结果已过期，未继续发送。请检查已保留的输入。

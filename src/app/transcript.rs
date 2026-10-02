@@ -40,28 +40,6 @@ impl Fintwind {
             let next_kinds = self.selected_transcript_row_kinds();
             *self.transcript_row_kinds.borrow_mut() = next_kinds;
             self.transcript_row_kinds_fingerprint.set(Some(fingerprint));
-            let labels = self
-                .selected_session()
-                .map(|session| {
-                    session
-                        .turns
-                        .iter()
-                        .filter_map(|turn| {
-                            turn.submission
-                                .as_ref()
-                                .filter(|receipt| {
-                                    !matches!(
-                                        receipt.state,
-                                        fintwind_protocol::submission::SubmissionState::Preparing
-                                            | fintwind_protocol::submission::SubmissionState::Accepted
-                                    )
-                                })
-                                .map(|receipt| (turn.id, receipt.state.label_key()))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            *self.submission_label_cache.borrow_mut() = labels;
         }
         self.transcript_row_kinds.borrow().len()
     }
@@ -1406,15 +1384,6 @@ pub(super) fn turn_fold_label(session: &AgentSession, turn_id: Uuid) -> String {
     let Some(turn) = session.turns.iter().find(|turn| turn.id == turn_id) else {
         return tr!("transcript.worked");
     };
-    if let Some(receipt) = &turn.submission
-        && !matches!(
-            receipt.state,
-            fintwind_protocol::submission::SubmissionState::Preparing
-                | fintwind_protocol::submission::SubmissionState::Accepted
-        )
-    {
-        return tr!(receipt.state.label_key());
-    }
     let seconds = turn
         .completed_at
         .unwrap_or_else(unix_time)

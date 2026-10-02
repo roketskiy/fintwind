@@ -16,12 +16,6 @@ btw.retry: 再試行
 btw.copy: 回答をコピー
 btw.copied: 回答をコピーしました
 btw.transient: 一時的な回答 · 会話には追加されません
-submission.preparing: 保存して送信を準備中
-submission.dispatching: 送信中、受信確認待ち
-submission.accepted: サーバーが受信済み
-submission.unknown: 受信結果が不明です。自動再送しません
-submission.not_sent: 未送信、入力は保持されています
-submission.rejected: サーバーが送信を拒否しました
 errors.submission_dispatch_unknown: 受信結果を確認できません。入力と送信 ID は保持され、自動再送されません。
 errors.submission_not_preparing: 送信状態が変わりました。重複送信を防ぐため準備を停止しました。
 errors.submission_replaced: この準備結果は古いため送信していません。保持された入力を確認してください。

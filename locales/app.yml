@@ -33,18 +33,6 @@ btw.copied:
   en: Answer copied
 btw.transient:
   en: Temporary answer · not added to the conversation
-submission.preparing:
-  en: Saving and preparing to send
-submission.dispatching:
-  en: Sending; receipt not yet confirmed
-submission.accepted:
-  en: Accepted by server
-submission.unknown:
-  en: Receipt unknown; no automatic resend
-submission.not_sent:
-  en: Not sent; input retained
-submission.rejected:
-  en: Submission rejected by server
 errors.submission_dispatch_unknown:
   en: Could not confirm receipt. Your input and submission ID are retained; this message will not be resent automatically.
 errors.submission_not_preparing:

@@ -425,6 +425,15 @@ fn action_label(action: &BrowserAction) -> &'static str {
         BrowserAction::Navigate { .. } => "navigate",
         BrowserAction::Open { .. } => "open",
         BrowserAction::Scroll { .. } => "scroll",
+        BrowserAction::Screenshot { .. } => "screenshot",
+        BrowserAction::Evaluate { .. } => "evaluate",
+        BrowserAction::ClickAt { .. } => "clickAt",
+        BrowserAction::DoubleClick { .. } => "doubleClick",
+        BrowserAction::Press { .. } => "press",
+        BrowserAction::Hover { .. } => "hover",
+        BrowserAction::Select { .. } => "select",
+        BrowserAction::Drag { .. } => "drag",
+        BrowserAction::Close => "close",
     }
 }
 

@@ -659,6 +659,13 @@ impl Fintwind {
             self.open_automation_browser(request.clone(), url.clone(), generation, window, cx);
             return;
         }
+        if matches!(request.action, BrowserAction::Close) {
+            // Launcher-side like `Open`: a page-level grant must never close
+            // its own surface, so the app host answers this synchronously and
+            // nothing is parked in the pending map.
+            self.close_automation_browser(request, cx);
+            return;
+        }
         let scope = request.scope.clone();
         let runtime_current = self.state.selected_session == Some(scope.session_id)
             && self.runtimes.contains_key(&scope.session_id)

@@ -9,11 +9,10 @@
  *   ordered plan the runner installs and the tool results observed so far, so
  *   the same run produces the same provider-call count and the same tool call
  *   sequence every time.
- * - **Silently wrong tool payloads**: it builds snapshot/click/fill/scroll/
- *   navigate arguments from the real `fintwind_browser_list` result
- *   (pageId/grantId) or an explicit override, so a tool call can only name a
- *   page the model actually saw (or one the runner deliberately injects to
- *   probe scope).
+ * - **Silently wrong tool payloads**: it builds every tool's arguments from
+ *   the real `fintwind_browser_list` result (pageId/grantId) or an explicit
+ *   override, so a tool call can only name a page the model actually saw (or
+ *   one the runner deliberately injects to probe scope).
  * - **Hidden model contract**: the exact bytes the plugin returns to the model
  *   (including the untrusted-source wrapper) are recorded verbatim for the
  *   runner to assert on, rather than being hand-checked.
@@ -30,11 +29,16 @@
 
 import { BROWSER_INSTRUCTION_MARKER } from '../../../resources/opencode-browser-plugin.ts';
 
-/** One recorded tool result: the exact string OpenCode handed back to the model. */
+/** One recorded tool result. For the common string content, `raw` is the
+ *  exact `content` string OpenCode handed back to the model. For array content
+ *  (the screenshot path) `raw` is only the `{type:"text"}` part's wrapper
+ *  string — never the stringified array — and the `{type:"file"}` part is
+ *  captured in the three screenshot fields. */
 export type RecordedToolResult = {
   /** The tool the turn was executing when this result came back. */
   tool: string;
-  /** The raw `content` string of the tool message. */
+  /** The raw `content` string of the tool message; for array content, the
+   *  text part's string only. */
   raw: string;
   /** `raw` parsed as JSON when possible, else null. */
   parsed: unknown;
@@ -44,6 +48,14 @@ export type RecordedToolResult = {
   value: unknown;
   /** When the result looks like a browser error result. */
   browserError: string | null;
+  /** When the content was an array with a `{type:"file"}` part: its `mime`
+   *  (e.g. "image/png"), else null. */
+  screenshotMime: string | null;
+  /** The file part's `name` (e.g. "screenshot.png"), else null. */
+  screenshotName: string | null;
+  /** The file part's `uri` — the `data:<mime>;base64,<data>` URL the model
+   *  sees the image through — else null. */
+  screenshotDataUri: string | null;
 };
 
 /** Where the tool's pageId/grantId come from. */
@@ -55,7 +67,10 @@ export type ElementTarget =
   | { ref: string; selector?: undefined }
   | { selector: string; ref?: undefined };
 
-/** A single step of the deterministic plan the provider emits. */
+/** A single step of the deterministic plan the provider emits. The page
+ *  address comes from the last list result (or an explicit override), and an
+ *  element step carries the same `ref`/`selector` target shape the model is
+ *  told to use. */
 export type PlanStep =
   | { tool: 'fintwind_browser_open'; url: string }
   | { tool: 'fintwind_browser_list' }
@@ -63,7 +78,16 @@ export type PlanStep =
   | { tool: 'fintwind_browser_click'; page: PageSource; target: ElementTarget }
   | { tool: 'fintwind_browser_fill'; page: PageSource; target: ElementTarget; text: string }
   | { tool: 'fintwind_browser_scroll'; page: PageSource; deltaY: number }
-  | { tool: 'fintwind_browser_navigate'; page: PageSource; url: string };
+  | { tool: 'fintwind_browser_navigate'; page: PageSource; url: string }
+  | { tool: 'fintwind_browser_screenshot'; page: PageSource; fullPage?: boolean }
+  | { tool: 'fintwind_browser_evaluate'; page: PageSource; expression: string }
+  | { tool: 'fintwind_browser_press'; page: PageSource; target: ElementTarget; key: string }
+  | { tool: 'fintwind_browser_select'; page: PageSource; target: ElementTarget; value: string }
+  | { tool: 'fintwind_browser_hover'; page: PageSource; target: ElementTarget }
+  | { tool: 'fintwind_browser_double_click'; page: PageSource; target: ElementTarget }
+  | { tool: 'fintwind_browser_drag'; page: PageSource; from: string; to: string }
+  | { tool: 'fintwind_browser_click_at'; page: PageSource; x: number; y: number }
+  | { tool: 'fintwind_browser_close'; page: PageSource };
 
 const MODEL_ID = 'fixture-model';
 const FINAL_TEXT = 'FIXTURE-DONE';
@@ -155,6 +179,23 @@ export class FakeProvider {
         return { ...this.pageIds(step.page), deltaY: step.deltaY };
       case 'fintwind_browser_navigate':
         return { ...this.pageIds(step.page), url: step.url };
+      case 'fintwind_browser_screenshot':
+        return { ...this.pageIds(step.page), fullPage: step.fullPage === true };
+      case 'fintwind_browser_evaluate':
+        return { ...this.pageIds(step.page), expression: step.expression };
+      case 'fintwind_browser_press':
+        return { ...this.pageIds(step.page), ...step.target, key: step.key };
+      case 'fintwind_browser_select':
+        return { ...this.pageIds(step.page), ...step.target, value: step.value };
+      case 'fintwind_browser_hover':
+      case 'fintwind_browser_double_click':
+        return { ...this.pageIds(step.page), ...step.target };
+      case 'fintwind_browser_drag':
+        return { ...this.pageIds(step.page), from: step.from, to: step.to };
+      case 'fintwind_browser_click_at':
+        return { ...this.pageIds(step.page), x: step.x, y: step.y };
+      case 'fintwind_browser_close':
+        return this.pageIds(step.page);
     }
   }
 
@@ -221,6 +262,27 @@ export class FakeProvider {
       return { final: true };
     }
 
+    // OpenCode extracts media from a tool result into a synthetic user
+    // message for providers that cannot carry images inside tool results:
+    // v2.0.16 serializes it as a bare content array of `image_url` parts
+    // with data: URIs (no explanatory text). That message is the completion
+    // of the step this fixture just issued, so it advances the plan exactly
+    // like a tool message would — treating it as a fresh turn would restart
+    // the plan and loop the same call forever.
+    if (last && last.role === 'user' && isMediaExtractionMessage(last)) {
+      this.record_media_extraction(messages, serialized);
+      this.cursor += 1;
+      if (this.cursor < this.plan.length) {
+        const step = this.plan[this.cursor]!;
+        this.toolCalls += 1;
+        return { tool: step, id: `call_${this.toolCalls}` };
+      }
+      return { final: true };
+    }
+    if (last && last.role === 'user' && process.env.E2E_DEBUG_USER_MESSAGES === '1') {
+      console.error('[e2e-debug] user message content:', safeStringify(last).slice(0, 800));
+    }
+
     // A fresh turn message begins the plan from the top.
     this.cursor = 0;
     if (this.plan.length === 0) {
@@ -233,7 +295,19 @@ export class FakeProvider {
 
   private record_tool_result(messages: Array<Record<string, unknown>>): void {
     const last = messages[messages.length - 1]!;
-    const raw = typeof last.content === 'string' ? last.content : JSON.stringify(last.content ?? '');
+    // Array content is the screenshot path: the `{type:"text"}` part carries
+    // the untrusted wrapper JSON and the `{type:"file"}` part carries the
+    // data-URI image. The recorded `raw` is the text part's string, parsed as
+    // JSON — never the stringified array, which no model-side consumer sees.
+    // A plain string content result keeps its original shape unchanged.
+    const parts = Array.isArray(last.content)
+      ? last.content as Array<Record<string, unknown>>
+      : undefined;
+    const textPart = parts?.find(part => part?.type === 'text');
+    const filePart = parts?.find(part => part?.type === 'file');
+    const raw = parts
+      ? (typeof textPart?.text === 'string' ? textPart.text : '')
+      : (typeof last.content === 'string' ? last.content : JSON.stringify(last.content ?? ''));
     let parsed: unknown = null;
     try {
       parsed = JSON.parse(raw);
@@ -270,6 +344,48 @@ export class FakeProvider {
       source,
       value,
       browserError,
+      screenshotMime: filePart && typeof filePart.mime === 'string' ? filePart.mime : null,
+      screenshotName: filePart && typeof filePart.name === 'string' ? filePart.name : null,
+      screenshotDataUri: filePart && typeof filePart.uri === 'string' ? filePart.uri : null,
+    });
+  }
+
+  /** Record a tool step whose media OpenCode moved into a synthetic user
+   *  message. The untrusted text wrapper stays behind in the tool message —
+   *  the extraction moves only the file parts — so the wrapper is read from
+   *  the last tool message, and the image is recovered from the serialized
+   *  user message, where the OpenAI-compatible shape carries it as a
+   *  data-URI `image_url` (a shape this fixture must not over-specify). */
+  private record_media_extraction(messages: Array<Record<string, unknown>>, serialized: string): void {
+    const step = this.plan[this.cursor];
+    if (!step) return;
+    let raw = '';
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]!;
+      if (message.role === 'tool' && typeof message.content === 'string') {
+        raw = message.content;
+        break;
+      }
+    }
+    let source: string | null = null;
+    try {
+      const parsed = JSON.parse(raw) as { source?: unknown };
+      if (typeof parsed.source === 'string') source = parsed.source;
+    } catch {
+      /* An unparseable wrapper records as null; the data URI is the evidence. */
+    }
+    const dataUri = /data:image\/[a-z+]+;base64,[A-Za-z0-9+/=]+/.exec(serialized)?.[0] ?? null;
+    const mime = dataUri?.slice(5, dataUri.indexOf(';')) ?? null;
+    this.toolResults.push({
+      tool: step.tool,
+      raw,
+      parsed: null,
+      source,
+      value: undefined,
+      browserError: null,
+      screenshotMime: mime,
+      screenshotName: null,
+      screenshotDataUri: dataUri,
     });
   }
 }
@@ -384,4 +500,17 @@ function safeStringify(value: unknown): string {
   } catch {
     return '';
   }
+}
+
+/** The synthetic user message OpenCode builds when it extracts a tool
+ *  result's media for a provider without media-in-tool-result support: a
+ *  content array of `image_url` parts carrying data: URIs, and nothing a
+ *  human typed. A plain prompt string never matches. */
+function isMediaExtractionMessage(message: Record<string, unknown>): boolean {
+  if (!Array.isArray(message.content)) return false;
+  const parts = message.content as Array<Record<string, unknown>>;
+  return parts.some(part => {
+    const url = (part?.image_url as { url?: unknown } | undefined)?.url;
+    return part?.type === 'image_url' && typeof url === 'string' && url.startsWith('data:');
+  });
 }

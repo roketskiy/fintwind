@@ -16,7 +16,7 @@ use uuid::Uuid;
 use fintwind_protocol::MAX_WIRE_MESSAGE_BYTES;
 use fintwind_protocol::browser::{
     BrowserAction, BrowserRequest, BrowserResult, BrowserScope, BrowserShare,
-    MAX_BROWSER_PAGES_PER_CONNECTION, MAX_BROWSER_RESULT_BYTES, MAX_BROWSER_TITLE_BYTES,
+    MAX_BROWSER_PAGES_PER_CONNECTION, MAX_BROWSER_TITLE_BYTES,
 };
 use fintwind_protocol::{
     ClientMessage, Command, PROTOCOL_VERSION, ReplayCursor, Request, ResponseOutcome,
@@ -259,14 +259,15 @@ impl DaemonClient {
     /// Answer a daemon-delivered browser request. Only the connection that
     /// published the page may answer; the daemon refuses anything else. An
     /// oversized result fails here instead of being silently truncated
-    /// somewhere else on the wire.
+    /// somewhere else on the wire. JSON results share the small budget; a
+    /// media result (a screenshot) carries its own larger, still-fixed one.
     pub fn complete_browser_request(
         &self,
         request_id: Uuid,
         result: BrowserResult,
     ) -> anyhow::Result<()> {
         match serde_json::to_vec(&result) {
-            Ok(bytes) if bytes.len() <= MAX_BROWSER_RESULT_BYTES => {}
+            Ok(bytes) if bytes.len() <= result.wire_budget() => {}
             _ => anyhow::bail!("a browser result exceeds the size limit"),
         }
         self.send_browser_message(ClientMessage::BrowserResult { request_id, result })

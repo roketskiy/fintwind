@@ -39,8 +39,12 @@ pub(crate) fn handle(
     shutdown: Arc<AtomicBool>,
 ) -> anyhow::Result<()> {
     socket.set_config(|config| {
-        config.max_message_size = Some(MAX_BROWSER_TOOL_MESSAGE_BYTES);
-        config.max_frame_size = Some(MAX_BROWSER_TOOL_MESSAGE_BYTES);
+        // Large enough for a media reply (a screenshot) in either direction.
+        // Plugin -> daemon messages stay structurally small — the grammar is
+        // deny_unknown_fields with per-field bounds — so the read-side
+        // exposure is bounded by message shape, not just by this limit.
+        config.max_message_size = Some(fintwind_protocol::browser::MAX_BROWSER_MEDIA_RESULT_BYTES);
+        config.max_frame_size = Some(fintwind_protocol::browser::MAX_BROWSER_MEDIA_RESULT_BYTES);
     });
     let first = socket.read()?;
     let id = match first {
@@ -90,6 +94,18 @@ pub(crate) fn handle(
         }
         match socket.read() {
             Ok(Message::Text(text)) => {
+                // Commands are structurally small; a bigger one is not a
+                // browser tool message. (The socket frame limit is larger
+                // only so media replies can be written back.)
+                if text.len() > MAX_BROWSER_TOOL_MESSAGE_BYTES {
+                    write(
+                        &mut socket,
+                        &BrowserToolReply::Rejected {
+                            message: "browser tool message exceeds the size limit".into(),
+                        },
+                    )?;
+                    break;
+                }
                 let command = match serde_json::from_str::<BrowserToolMessage>(&text) {
                     Ok(command) => command,
                     Err(_) => {
@@ -239,8 +255,7 @@ pub(crate) fn handle(
 fn write(socket: &mut WebSocket<TcpStream>, reply: &BrowserToolReply) -> anyhow::Result<()> {
     let reply = match reply {
         BrowserToolReply::Result { request_id, result }
-            if serde_json::to_vec(result)?.len()
-                > fintwind_protocol::browser::MAX_BROWSER_RESULT_BYTES =>
+            if serde_json::to_vec(result)?.len() > result.wire_budget() =>
         {
             BrowserToolReply::Result {
                 request_id: *request_id,

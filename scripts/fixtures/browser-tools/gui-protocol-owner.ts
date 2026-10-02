@@ -6,8 +6,10 @@
  * It exists to keep the tool path real while the GUI is not. The real parts in
  * the acceptance chain are the daemon, the OpenCode driver, the private
  * `/v1/browser-tools` channel and the broker. This fixture only plays the page
- * owner: it publishes shared pages, answers snapshot/click/fill/scroll/navigate
- * over the real `browserPublish`/`browserRequest`/`browserResult` protocol, and
+ * owner: it publishes shared pages and answers every action kind the wire
+ * defines (snapshot, click, fill, doubleClick, hover, press, select, navigate,
+ * scroll, screenshot, evaluate, clickAt, drag, close) over the real
+ * `browserPublish`/`browserRequest`/`browserResult` protocol, and
  * keeps a per-page mutation ledger so the run can prove a mutation reached the
  * owner only after approval.
  *
@@ -32,19 +34,36 @@
 
 import { randomUUID } from 'node:crypto';
 
+/** A real, decodable 1x1 transparent PNG — the well-known minimal one — not a
+ *  placeholder: the media path must hand the model bytes an image decoder
+ *  accepts, so the runner can assert this exact base64 survives end to end. */
+export const PNG_1X1_TRANSPARENT_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
 type Uuid = string;
 type Scope = { sessionId: Uuid; runtimeId: Uuid; pageId: Uuid; grantId: Uuid };
-/** One action as it crosses the wire. `click`/`fill` address one element with
+/** One action as it crosses the wire. The element-addressing kinds (`click`,
+ *  `fill`, `doubleClick`, `hover`, `press`, `select`) address one element with
  *  the wire's single `selector` field: either an opaque snapshot ref
  *  (`ref:UUID:ordinal`), which the native owner resolves to the exact element
  *  the last snapshot observed, or a CSS selector. `ref` is kept here only so a
- *  recorded action can be inspected either way; nothing sends it. */
+ *  recorded action can be inspected either way; the plugin normalizes it into
+ *  `selector` before anything hits the wire, so nothing sends it. */
 export type BrowserAction =
   | { kind: 'snapshot' }
   | { kind: 'click'; ref?: string; selector?: string }
   | { kind: 'fill'; ref?: string; selector?: string; text: string }
+  | { kind: 'doubleClick'; ref?: string; selector?: string }
+  | { kind: 'hover'; ref?: string; selector?: string }
+  | { kind: 'press'; ref?: string; selector?: string; key: string }
+  | { kind: 'select'; ref?: string; selector?: string; value: string }
   | { kind: 'navigate'; url: string }
-  | { kind: 'scroll'; deltaY: number };
+  | { kind: 'scroll'; deltaY: number }
+  | { kind: 'screenshot'; fullPage: boolean }
+  | { kind: 'evaluate'; expression: string }
+  | { kind: 'clickAt'; x: number; y: number }
+  | { kind: 'drag'; from: string; to: string }
+  | { kind: 'close' };
 
 type GuiPage = {
   scope: Scope;
@@ -216,7 +235,35 @@ export class GuiProtocolOwner {
         // value echoes the action that was actually applied.
         if (page) page.appliedCount += 1;
         this.answer(action.requestId, { kind: 'ok', value: { kind: 'scroll', deltaY: action.action.deltaY } });
+      } else if (action.action.kind === 'screenshot') {
+        // An approved screenshot observes the page without mutating it: it
+        // answers with a media result and moves no ledger, but the policy
+        // still gates it like any non-snapshot action, so a held one stays
+        // pending. The bytes are the fixture's known-good PNG, so the runner
+        // can assert the exact image the model receives.
+        this.answer(action.requestId, { kind: 'media', mime: 'image/png', data: PNG_1X1_TRANSPARENT_BASE64 });
+      } else if (action.action.kind === 'evaluate') {
+        // The simulated owner does not run JavaScript: the echo only proves
+        // the approved action crossed the bridge, so the model never sees a
+        // computed page value from this fixture.
+        if (page) page.appliedCount += 1;
+        this.answer(action.requestId, { kind: 'ok', value: { kind: 'evaluate', issued: true } });
+      } else if (action.action.kind === 'press') {
+        if (page) page.appliedCount += 1;
+        this.answer(action.requestId, { kind: 'ok', value: { kind: 'press', key: action.action.key } });
+      } else if (action.action.kind === 'select') {
+        if (page) page.appliedCount += 1;
+        this.answer(action.requestId, { kind: 'ok', value: { kind: 'select', value: action.action.value } });
+      } else if (action.action.kind === 'clickAt') {
+        if (page) page.appliedCount += 1;
+        this.answer(action.requestId, { kind: 'ok', value: { kind: 'clickAt', x: action.action.x, y: action.action.y } });
+      } else if (action.action.kind === 'close') {
+        if (page) page.appliedCount += 1;
+        this.answer(action.requestId, { kind: 'ok', value: { closed: true } });
       } else {
+        // click, fill, doubleClick, hover and drag apply like any other
+        // element mutation: the generic applied echo, exactly once, after
+        // approval.
         if (page) page.appliedCount += 1;
         this.answer(action.requestId, { kind: 'ok', value: { applied: true } });
       }
@@ -226,7 +273,13 @@ export class GuiProtocolOwner {
     return carried;
   }
 
-  private answer(requestId: Uuid, result: { kind: 'ok'; value: unknown } | { kind: 'error'; message: string }): void {
+  /** One result exactly as the wire defines it: `ok` echoes the applied
+   *  action's value, `media` carries one base64 image with its MIME type, and
+   *  `error` is the only shape that must never follow an applied action. */
+  private answer(requestId: Uuid, result:
+    | { kind: 'ok'; value: unknown }
+    | { kind: 'error'; message: string }
+    | { kind: 'media'; mime: string; data: string }): void {
     this.socket?.send(JSON.stringify({ type: 'browserResult', requestId, result }));
   }
 
@@ -237,5 +290,9 @@ export class GuiProtocolOwner {
       /* Already closed. */
     }
     this.connected = false;
+    // The pending requests died with the connection — the broker already
+    // failed them to their callers. Keeping them would let a later policy
+    // answer ghosts, moving a ledger that no live request backs.
+    this.pending.clear();
   }
 }

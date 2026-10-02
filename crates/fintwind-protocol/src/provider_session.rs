@@ -5,6 +5,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{AgentTurn, Message, ProviderResumeCursor, TranscriptBlock};
 
+/// Expected native selection, used as a read-only guard, never an override.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct SessionGenerationModel {
+    pub model: String,
+    pub variant: Option<String>,
+}
+
 /// Daemon-host native-session operation used when no live driver can act.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "provider", rename_all = "camelCase")]

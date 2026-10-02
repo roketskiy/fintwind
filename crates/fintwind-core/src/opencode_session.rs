@@ -5,6 +5,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 use std::process::{Child, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -824,6 +825,7 @@ fn http_request(
         timeout,
         directory_header,
         usize::MAX,
+        None,
     )
 }
 
@@ -835,8 +837,33 @@ pub(crate) fn request_json_on_port_bounded(
     timeout: Duration,
     max_bytes: usize,
 ) -> anyhow::Result<Value> {
-    let response = http_request_with_limit(port, "GET", path, None, timeout, None, max_bytes)?;
+    let response =
+        http_request_with_limit(port, "GET", path, None, timeout, None, max_bytes, None)?;
     serde_json::from_slice(&response).context("OpenCode returned invalid reconciliation JSON")
+}
+
+/// A cancellable one-shot request. Polling is on a daemon worker, never a UI
+/// frame; dropping the socket abandons generation without `/interrupt`.
+pub(crate) fn request_json_on_port_cancellable(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: Option<&Value>,
+    timeout: Duration,
+    cancelled: &AtomicBool,
+) -> anyhow::Result<Value> {
+    let body = body.map(serde_json::to_vec).transpose()?;
+    let response = http_request_with_limit(
+        port,
+        method,
+        path,
+        body.as_deref(),
+        timeout,
+        None,
+        8 * 1024 * 1024,
+        Some(cancelled),
+    )?;
+    serde_json::from_slice(&response).context("OpenCode returned invalid generation JSON")
 }
 
 fn http_request_with_limit(
@@ -847,7 +874,11 @@ fn http_request_with_limit(
     timeout: Duration,
     directory_header: Option<&str>,
     max_bytes: usize,
+    cancelled: Option<&AtomicBool>,
 ) -> anyhow::Result<Vec<u8>> {
+    if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        bail!(tr!("btw.cancelled"));
+    }
     let deadline = Instant::now() + timeout;
     let mut stream =
         TcpStream::connect_timeout(&std::net::SocketAddr::from(([127, 0, 0, 1], port)), timeout)
@@ -874,6 +905,9 @@ fn http_request_with_limit(
     let mut response = Vec::new();
     let mut buffer = [0_u8; 8 * 1024];
     loop {
+        if cancelled.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            bail!(tr!("btw.cancelled"));
+        }
         // HTTP/1.1 connections are allowed to stay alive after a complete
         // response, even when the client asks to close. Waiting for EOF made a
         // valid OpenCode response end as macOS EAGAIN once the socket timeout
@@ -886,11 +920,25 @@ fn http_request_with_limit(
             if remaining.is_zero() {
                 bail!("OpenCode reconciliation HTTP deadline exceeded");
             }
-            stream.set_read_timeout(Some(remaining))?;
+            stream.set_read_timeout(Some(if cancelled.is_some() {
+                remaining.min(Duration::from_millis(100))
+            } else {
+                remaining
+            }))?;
         }
-        let read = stream
-            .read(&mut buffer)
-            .with_context(|| format!("failed reading OpenCode response for {method} {path}"))?;
+        let read = match stream.read(&mut buffer) {
+            Err(error)
+                if cancelled.is_some()
+                    && matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+            {
+                continue;
+            }
+            result => result
+                .with_context(|| format!("failed reading OpenCode response for {method} {path}"))?,
+        };
         if read == 0 {
             break;
         }

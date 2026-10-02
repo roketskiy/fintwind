@@ -1,4 +1,21 @@
 _version: 1
+btw.command_description: 会話に追加せずに補足質問する
+btw.argument_hint: 質問
+btw.question_required: /btw の後に質問を入力してください。
+btw.attachments_unsupported: /btw は既存の会話を参照し、新しい添付ファイルは使えません。入力は保持されています。
+btw.session_required: 補足質問の前に会話を開始してください。
+btw.unavailable: この会話の OpenCode に接続できません。
+btw.model_not_synced: 選択したモデルまたは推論設定はまだ OpenCode に適用されていません。通常のメッセージを送信して適用してから、補足質問を再試行してください。
+btw.invalid_response: OpenCode が無効な補足回答を返しました。
+btw.empty_answer: モデルがテキストを返しませんでした。補足質問ではツールを実行できません。質問を言い換えてください。
+btw.cancelled: 補足質問をキャンセルしました。メインタスクは中断されていません。
+btw.working: 補足質問に回答中…
+btw.cancel: 補足質問をキャンセル
+btw.failed: この補足質問に回答できませんでした
+btw.retry: 再試行
+btw.copy: 回答をコピー
+btw.copied: 回答をコピーしました
+btw.transient: 一時的な回答 · 会話には追加されません
 submission.preparing: 保存して送信を準備中
 submission.dispatching: 送信中、受信確認待ち
 submission.accepted: サーバーが受信済み

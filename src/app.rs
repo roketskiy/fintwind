@@ -559,6 +559,7 @@ fn fitted_panel_widths(
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum RightPanelSurface {
     Context,
+    Btw,
     Browser(Uuid),
     Terminal(Uuid),
     BackgroundWork {
@@ -1567,6 +1568,9 @@ pub struct Fintwind {
     panel_resize_drag: Option<PanelResizeDrag>,
     right_panel_session_states: HashMap<Uuid, RightPanelSessionState>,
     context_summary_ids: HashMap<Uuid, Option<Uuid>>,
+    btw_states: HashMap<Uuid, btw::BtwState>,
+    /// Changed selections that a normal provider start still needs to apply.
+    btw_options_pending: HashSet<Uuid>,
     right_panel_surfaces: Vec<RightPanelSurface>,
     right_panel_active_surface: Option<usize>,
     right_panel_tabs_scroll_handle: ScrollHandle,
@@ -2059,6 +2063,7 @@ mod autocomplete;
 mod background_work;
 mod branches;
 mod browser_collaboration;
+mod btw;
 mod command_palette;
 mod commit_dialog;
 mod components;
@@ -2092,6 +2097,7 @@ pub use autocomplete::init as init_composer_autocomplete;
 use background_work::{
     BackgroundWorkRegistry, work_kind_icon, work_status_color, work_status_label,
 };
+pub use btw::init as init_btw_keys;
 pub use command_palette::init as init_command_palette;
 pub use commit_dialog::init as init_commit_dialog_keys;
 use components::*;
@@ -2762,9 +2768,9 @@ impl Fintwind {
                 |this: &mut Self, _, event: &ComposerEvent, cx| match event {
                     ComposerEvent::Submit(prompt) => {
                         if let Some(session_id) = this.selected_session().and_then(|session| {
-                            this.response_fork_preparations
-                                .contains_key(&session.id)
-                                .then_some(session.id)
+                            (btw::question(prompt).is_none()
+                                && this.response_fork_preparations.contains_key(&session.id))
+                            .then_some(session.id)
                         }) {
                             this.defer_restore_composer_after_fork(session_id, prompt.clone(), cx);
                         } else if let Some(submission) =
@@ -2775,9 +2781,9 @@ impl Fintwind {
                     }
                     ComposerEvent::SubmitSteer(prompt) => {
                         if let Some(session_id) = this.selected_session().and_then(|session| {
-                            this.response_fork_preparations
-                                .contains_key(&session.id)
-                                .then_some(session.id)
+                            (btw::question(prompt).is_none()
+                                && this.response_fork_preparations.contains_key(&session.id))
+                            .then_some(session.id)
                         }) {
                             this.defer_restore_composer_after_fork(session_id, prompt.clone(), cx);
                         } else if let Some(submission) =
@@ -3298,6 +3304,8 @@ impl Fintwind {
                 panel_resize_drag: None,
                 right_panel_session_states: HashMap::new(),
                 context_summary_ids: HashMap::new(),
+                btw_states: HashMap::new(),
+                btw_options_pending: HashSet::new(),
                 right_panel_surfaces: Vec::new(),
                 right_panel_active_surface: None,
                 right_panel_tabs_scroll_handle: ScrollHandle::new(),

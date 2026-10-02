@@ -42,6 +42,7 @@ pub mod opencode_pool;
 pub mod opencode_session;
 pub mod persistence;
 pub mod projectless;
+mod session_generation;
 pub mod settings;
 pub mod skills;
 pub mod terminal;

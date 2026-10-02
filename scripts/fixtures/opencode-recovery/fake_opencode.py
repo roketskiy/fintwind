@@ -184,6 +184,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_create_session()
         if path.endswith("/prompt"):
             return self.handle_prompt(body)
+        if path.endswith("/generate"):
+            return self.handle_generate(body)
         if path.endswith("/agent"):
             return self._empty(200)
         if path.endswith("/model"):
@@ -204,6 +206,22 @@ class Handler(BaseHTTPRequestHandler):
         if "form" in path and path.endswith("/reply"):
             return self._empty(200)
         return self._empty(200)
+
+    def handle_generate(self, body):
+        payload = json.loads(body)
+        question = payload.get("prompt", "")
+        log({"event": "generation", "session_id": self._session_id(), "body": payload})
+        with LOCK:
+            STATE.setdefault("generation_questions", []).append(question)
+            LOCK.notify_all()
+        response = next((item for item in BEHAVIOR.get("generations", [])
+                         if item["match"] in question), {})
+        time.sleep(response.get("delay_ms", 0) / 1000.0)
+        try:
+            return self._json(response.get("status", 200),
+                              response.get("body", {"data": {"text": "Side answer"}}))
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            log({"event": "generation_disconnected", "session_id": self._session_id()})
 
     def do_PATCH(self):
         if not self._require_auth():
@@ -333,6 +351,8 @@ class Handler(BaseHTTPRequestHandler):
             "time": {"created": 1700000000000, "idle": idle},
             "outcome": outcome,
         }
+        if "session_model" in BEHAVIOR:
+            data["model"] = BEHAVIOR["session_model"]
         return self._json(200, {"data": data})
 
     def handle_create_session(self):
@@ -578,6 +598,15 @@ class Handler(BaseHTTPRequestHandler):
         sid = STATE["session_id"] or "ses_fake"
         for step in steps or []:
             asst = step.get("assistant_msg_id", turn.get("assistant_msg_id", "msg_asst"))
+            if "await_generation" in step:
+                deadline = time.time() + 10.0
+                with LOCK:
+                    while not any(step["await_generation"] in value
+                                  for value in STATE.get("generation_questions", [])):
+                        remaining = deadline - time.time()
+                        if remaining <= 0:
+                            return True
+                        LOCK.wait(remaining)
             if "sleep_ms" in step:
                 time.sleep(step["sleep_ms"] / 1000.0)
             if "event" in step:

@@ -440,6 +440,17 @@ impl Fintwind {
                     })
                     .flatten()
             })
+            .or_else(|| {
+                (self.right_panel_visible
+                    && self.active_right_panel_surface() == Some(&RightPanelSurface::Btw))
+                .then(|| {
+                    self.state
+                        .selected_session
+                        .and_then(|id| self.btw_states.get(&id))
+                        .and_then(btw::BtwState::selected_text)
+                })
+                .flatten()
+            })
             .or_else(|| self.toast_selection.selection.borrow().selected_text())
             .or_else(|| self.skills_selection.selection.borrow().selected_text())
             .or_else(|| self.transcript_selection.selection.borrow().selected_text());

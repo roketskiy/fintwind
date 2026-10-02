@@ -2522,8 +2522,12 @@ impl Fintwind {
             self.submission_preparations.contains(&session.id)
                 || self.response_fork_preparations.contains_key(&session.id)
         });
-        let submit_action =
-            composer_submit_action(session.map(|session| session.status), preparing);
+        let side_question = super::btw::question(self.composer.read(cx).content()).is_some();
+        let submit_action = if side_question {
+            ComposerSubmitAction::Send
+        } else {
+            composer_submit_action(session.map(|session| session.status), preparing)
+        };
         let escape_stop_armed = session.is_some_and(|session| {
             self.escape_stop_confirmation
                 .is_armed_for(EscapeStopTarget::for_session(session), Instant::now())

@@ -56,6 +56,286 @@ const DAEMON_TOKEN: &str = "opencode-recovery-e2e-token";
 
 #[test]
 #[ignore = "owns a private daemon/pool; run separately from the recovery matrix"]
+fn opencode_btw() {
+    let run = Run::new();
+    let workspace = run.workspace("btw");
+    let fixture = build_fixture(
+        &run,
+        "btw",
+        &json!({
+            "session_id": "ses_btw_main",
+            "session_model": {"providerID": "fake", "id": "model-a", "variant": "high"},
+            "generations": [
+                {"match": "slow", "delay_ms": 5000},
+                {"match": "empty", "body": {"data": {"text": "  "}}},
+                {"match": "invalid", "body": {"data": {"text": 42}}},
+                {"match": "failure", "status": 503, "body": {"error": "provider unavailable"}},
+                {"match": "missing", "status": 404, "body": {"error": "not found"}},
+                {"match": "question", "body": {"data": {"text": "The **main task** keeps running."}}}
+            ],
+            "turns": [{"active": true,
+                "durable_messages": settled_history("msg_user", "msg_answer", 1700000000000, "Existing context", "succeeded"),
+                "sse": [
+                    {"step_started": true, "text_started": true},
+                    {"await_generation": "slow", "delta": "Main task output"}
+                ]}]
+        }),
+    );
+    let harness = start_harness(&run.root);
+    let (session, runtime) = (Uuid::new_v4(), Uuid::new_v4());
+    harness
+        .client
+        .request(
+            session,
+            runtime,
+            Command::Start {
+                options: start_options(&fixture.bin, &workspace),
+            },
+        )
+        .unwrap();
+    let events = harness.client.subscribe(session, runtime);
+    harness
+        .client
+        .request(
+            session,
+            runtime,
+            Command::Prompt {
+                prompt: "main task".into(),
+                files: vec![],
+            },
+        )
+        .unwrap();
+    let fetch = || match harness
+        .client
+        .request(
+            Uuid::nil(),
+            Uuid::nil(),
+            Command::FetchNativeTranscript {
+                binary: fixture.bin.clone(),
+                directory: workspace.clone(),
+                session_id: "ses_btw_main".into(),
+            },
+        )
+        .unwrap()
+    {
+        ResponsePayload::NativeTranscript { transcript } => {
+            // Import assigns fresh desktop UUIDs on every fetch. Compare the
+            // actual transcript contents/status, not those projection IDs.
+            let mut value = serde_json::to_value(transcript).unwrap();
+            for key in ["messages", "turns"] {
+                for item in value[key].as_array_mut().unwrap() {
+                    let item = item.as_object_mut().unwrap();
+                    item.remove("id");
+                    item.remove("turn_id");
+                }
+            }
+            value
+        }
+        _ => panic!("expected native transcript"),
+    };
+    let before = fetch();
+    let command = |generation_id, native: &str, question: &str| Command::GenerateSessionText {
+        generation_id,
+        binary: fixture.bin.clone(),
+        directory: workspace.clone(),
+        session_id: native.into(),
+        question: question.into(),
+        model: Some(
+            fintwind_protocol::provider_session::SessionGenerationModel {
+                model: "fake/model-a".into(),
+                variant: Some("high".into()),
+            },
+        ),
+    };
+    let answer = harness
+        .client
+        .request(
+            session,
+            Uuid::nil(),
+            command(Uuid::new_v4(), "ses_btw_main", "question"),
+        )
+        .unwrap();
+    assert!(
+        matches!(answer, ResponsePayload::SessionTextGenerated { ref text } if text.contains("**main task**"))
+    );
+    let other = harness
+        .client
+        .request(
+            session,
+            Uuid::nil(),
+            command(Uuid::new_v4(), "ses_btw_other", "other"),
+        )
+        .unwrap();
+    assert!(matches!(
+        other,
+        ResponsePayload::SessionTextGenerated { .. }
+    ));
+    let mut errors = Vec::new();
+    for (model, variant) in [("fake/model-b", "high"), ("fake/model-a", "low")] {
+        let mut request = command(Uuid::new_v4(), "ses_btw_main", "unsynchronized selection");
+        if let Command::GenerateSessionText {
+            model: selected, ..
+        } = &mut request
+        {
+            *selected = Some(
+                fintwind_protocol::provider_session::SessionGenerationModel {
+                    model: model.into(),
+                    variant: Some(variant.into()),
+                },
+            );
+        }
+        let result = harness
+            .client
+            .request(session, Uuid::nil(), request)
+            .unwrap();
+        assert!(matches!(
+            result,
+            ResponsePayload::SessionGenerationModelNotSynced
+        ));
+        errors.push(json!({"model": model, "variant": variant, "rejectedBeforeGeneration": true}));
+    }
+    for question in ["empty", "invalid", "failure", "missing", "  "] {
+        let error = harness
+            .client
+            .request(
+                session,
+                Uuid::nil(),
+                command(Uuid::new_v4(), "ses_btw_main", question),
+            )
+            .unwrap_err();
+        errors.push(json!({"question": question, "error": error.to_string()}));
+    }
+    let generation_id = Uuid::new_v4();
+    let slow = command(generation_id, "ses_btw_main", "slow");
+    let client = harness.client.clone();
+    let pending = std::thread::spawn(move || client.request(session, Uuid::nil(), slow));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !read_jsonl(&fixture.server_log).iter().any(|row| {
+        row["event"] == "generation"
+            && row["body"]["prompt"]
+                .as_str()
+                .is_some_and(|s| s.contains("slow"))
+    }) {
+        assert!(
+            Instant::now() < deadline,
+            "slow generation was not received"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut collected = Collected::default();
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !collected.delta_text.contains("Main task output") && Instant::now() < deadline {
+        if let Ok(event) = events.recv_timeout(Duration::from_millis(50)) {
+            collected.absorb(&event);
+        }
+    }
+    assert!(
+        collected.delta_text.contains("Main task output"),
+        "main task must emit while the side question is running"
+    );
+    assert!(
+        !pending.is_finished(),
+        "side generation must still be pending when main output arrives"
+    );
+    let cancel_started = Instant::now();
+    harness
+        .client
+        .request(
+            session,
+            Uuid::nil(),
+            Command::CancelSessionGeneration { generation_id },
+        )
+        .unwrap();
+    assert!(pending.join().unwrap().is_err());
+    let cancellation_ms = cancel_started.elapsed().as_millis();
+    assert!(
+        cancellation_ms < 1500,
+        "cancellation must not wait for the model's answer"
+    );
+    // Replacement/retry remains usable after cancellation.
+    harness
+        .client
+        .request(
+            session,
+            Uuid::nil(),
+            command(Uuid::new_v4(), "ses_btw_main", "question retry"),
+        )
+        .unwrap();
+    let early = Uuid::new_v4();
+    harness
+        .client
+        .request(
+            session,
+            Uuid::nil(),
+            Command::CancelSessionGeneration {
+                generation_id: early,
+            },
+        )
+        .unwrap();
+    assert!(
+        harness
+            .client
+            .request(
+                session,
+                Uuid::nil(),
+                command(early, "ses_btw_main", "early cancellation")
+            )
+            .is_err()
+    );
+    let after = fetch();
+    let logs = read_jsonl(&fixture.server_log);
+    let artifact = run.root.join("result-btw.json");
+    fs::write(
+        &artifact,
+        serde_json::to_vec_pretty(&json!({
+            "historyUnchanged": before == after, "before": before, "after": after,
+            "historyComparison": "semantic transcript projection, excluding fresh desktop UUIDs",
+            "mainOutputDuringGeneration": true,
+            "errors": errors, "cancellationMs": cancellation_ms,
+            "mainTaskOutput": collected.delta_text, "requests": logs,
+            "spawn": read_jsonl(&fixture.spawn_log),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    eprintln!("btw artifact: {}", artifact.display());
+    assert_eq!(
+        before, after,
+        "side questions must not mutate native history"
+    );
+    assert!(collected.delta_text.contains("Main task output"));
+    assert_eq!(logs.iter().filter(|r| r["event"] == "prompt").count(), 1);
+    assert!(!logs.iter().any(|r| r["event"] == "auth_fail"));
+    assert!(!logs.iter().any(|r| {
+        r["event"] == "post"
+            && r["path"]
+                .as_str()
+                .is_some_and(|p| p.ends_with("/interrupt") || p.ends_with("/fork"))
+    }));
+    let generations: Vec<_> = logs.iter().filter(|r| r["event"] == "generation").collect();
+    assert!(
+        !generations.iter().any(|r| r["body"]["prompt"]
+            .as_str()
+            .is_some_and(|p| p.contains("unsynchronized selection"))),
+        "model/variant mismatch must fail before a paid generation"
+    );
+    assert!(
+        generations
+            .iter()
+            .any(|r| r["session_id"] == "ses_btw_other")
+    );
+    assert!(generations.iter().all(|r| {
+        r["body"]
+            .as_object()
+            .is_some_and(|body| body.len() == 1 && body.contains_key("prompt"))
+            && r["body"]["prompt"]
+                .as_str()
+                .is_some_and(|p| p.contains("Do not call any tools"))
+    }));
+}
+
+#[test]
+#[ignore = "owns a private daemon/pool; run separately from the recovery matrix"]
 fn opencode_session_moves() {
     let run = Run::new();
     let source = run.workspace("move-source");

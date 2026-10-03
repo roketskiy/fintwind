@@ -3474,7 +3474,35 @@ fn handle_event(
                 .or_else(|| payload.get("message"))
                 .and_then(Value::as_str)
                 .unwrap_or("OpenCode reported an error");
-            let _ = events.send(DriverEvent::Error(message.to_owned()));
+            // OpenCode v2.0.20+ keeps the provider's own response body on the
+            // structured error (`response.body`). It is often the only place
+            // the real rejection reason lives — quota, key, model name — so
+            // quote it under the server's message. Capped: the body can be a
+            // whole HTML error page, and the transcript error row compacts
+            // further on top of this.
+            const MAX_PROVIDER_BODY_CHARS: usize = 1200;
+            let message = match payload
+                .pointer("/error/response/body")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|body| !body.is_empty())
+            {
+                Some(body) => {
+                    let quoted: String =
+                        body.chars().take(MAX_PROVIDER_BODY_CHARS).collect();
+                    let quoted = if quoted.len() < body.len() {
+                        format!("{quoted}…")
+                    } else {
+                        quoted
+                    };
+                    format!(
+                        "{message}\n{}",
+                        tr!("errors.provider_response_body", body = quoted)
+                    )
+                }
+                None => message.to_owned(),
+            };
+            let _ = events.send(DriverEvent::Error(message));
         }
         "session.renamed" => {
             let title = payload

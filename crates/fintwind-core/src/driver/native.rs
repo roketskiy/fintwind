@@ -1495,29 +1495,65 @@ pub(crate) fn list_integrations(
     let rows = integration_rows(&response);
     Ok(rows
         .iter()
-        .map(|row| IntegrationSummary {
-            id: row
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            name: row
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned(),
-            supports_key: row
-                .get("methods")
-                .and_then(Value::as_array)
-                .is_some_and(|methods| {
-                    methods
-                        .iter()
-                        .any(|method| method.get("type").and_then(Value::as_str) == Some("key"))
-                }),
-            connected: row
+        .map(|row| {
+            let connections: &[Value] = row
                 .get("connections")
                 .and_then(Value::as_array)
-                .is_some_and(|connections| !connections.is_empty()),
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            // OpenCode v2.0.20+ tags a connection whose credential was
+            // rejected with `status: {status: "needs_auth", ...}`. The
+            // integration is only unusable when *every* connection failed —
+            // one healthy credential still answers requests.
+            let auth_states = connections
+                .iter()
+                .filter_map(|connection| {
+                    connection
+                        .get("status")
+                        .and_then(|status| status.get("status"))
+                        .and_then(Value::as_str)
+                })
+                .collect::<Vec<_>>();
+            IntegrationSummary {
+                id: row
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                name: row
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
+                supports_key: row
+                    .get("methods")
+                    .and_then(Value::as_array)
+                    .is_some_and(|methods| {
+                        methods
+                            .iter()
+                            .any(|method| method.get("type").and_then(Value::as_str) == Some("key"))
+                    }),
+                connected: !connections.is_empty(),
+                needs_auth: !connections.is_empty()
+                    && auth_states.len() == connections.len()
+                    && auth_states.iter().all(|state| *state == "needs_auth"),
+                auth_url: connections
+                    .iter()
+                    .filter(|connection| {
+                        connection
+                            .get("status")
+                            .and_then(|status| status.get("status"))
+                            .and_then(Value::as_str)
+                            == Some("needs_auth")
+                    })
+                    .find_map(|connection| {
+                        connection
+                            .get("status")
+                            .and_then(|status| status.get("url"))
+                            .and_then(Value::as_str)
+                    })
+                    .map(str::to_owned),
+            }
         })
         .collect())
 }

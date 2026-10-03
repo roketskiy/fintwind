@@ -871,13 +871,17 @@ impl Fintwind {
 
     // ── Page ───────────────────────────────────────────────────────────────
 
-    pub(super) fn render_mcp_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_mcp_page(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Theme::current(cx);
         div()
             .size_full()
             .min_h_0()
             .flex()
-            .child(self.render_mcp_list_pane(&theme, cx))
+            .child(self.render_mcp_list_pane(&theme, window, cx))
             .child(
                 div()
                     .flex_1()
@@ -889,7 +893,12 @@ impl Fintwind {
             .into_any_element()
     }
 
-    fn render_mcp_list_pane(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    fn render_mcp_list_pane(
+        &self,
+        theme: &Theme,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let accent = mcp_accent(theme);
         let query = self.mcp_search.read(cx).content().trim().to_lowercase();
 
@@ -919,7 +928,7 @@ impl Fintwind {
             for server in matches {
                 any_row = true;
                 let selected = selected_name.as_deref() == Some(server.name.as_str());
-                rows = rows.child(self.render_mcp_list_row(server, selected, theme, accent, cx));
+                rows = rows.child(self.render_mcp_list_row(server, selected, theme, accent, window, cx));
             }
         }
         rows = rows.child(self.render_add_mcp_row(theme, cx));
@@ -1013,6 +1022,7 @@ impl Fintwind {
         selected: bool,
         theme: &Theme,
         accent: Hsla,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let name = server.name.clone();
@@ -1103,6 +1113,7 @@ impl Fintwind {
                         enabled,
                         false,
                         *theme,
+                        window,
                         cx,
                         move |this, _, cx| {
                             this.toggle_mcp_server_enabled(toggle_name.clone(), cx);

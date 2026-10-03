@@ -219,7 +219,7 @@ impl Fintwind {
         cx.notify();
     }
 
-    pub(super) fn render_settings(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
 
         div()
@@ -448,7 +448,7 @@ impl Fintwind {
             )
     }
 
-    fn render_settings_content(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+    fn render_settings_content(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let page = self.settings_page.unwrap_or(SettingsPage::General);
         let right_window_controls = self.render_client_window_controls(
@@ -484,8 +484,8 @@ impl Fintwind {
                         .child(controls)
                 }))
                 .child(div().flex_1().min_h_0().child(match page {
-                    SettingsPage::Skills => self.render_skills_settings(cx),
-                    SettingsPage::McpServers => self.render_mcp_page(cx),
+                    SettingsPage::Skills => self.render_skills_settings(window, cx),
+                    SettingsPage::McpServers => self.render_mcp_page(window, cx),
                     SettingsPage::McpMarket => self.render_mcp_market_page(cx),
                     _ => self.render_providers_page(cx),
                 }));
@@ -517,10 +517,10 @@ impl Fintwind {
                     }),
             )
             .child(match page {
-                SettingsPage::General => self.render_general_settings(cx),
+                SettingsPage::General => self.render_general_settings(window, cx),
                 SettingsPage::Providers => self.render_providers_page(cx),
-                SettingsPage::Skills => self.render_skills_settings(cx),
-                SettingsPage::McpServers => self.render_mcp_page(cx),
+                SettingsPage::Skills => self.render_skills_settings(window, cx),
+                SettingsPage::McpServers => self.render_mcp_page(window, cx),
                 SettingsPage::McpMarket => self.render_mcp_market_page(cx),
                 SettingsPage::Usage => self.render_usage_page(cx),
                 SettingsPage::Appearance => self.render_appearance_settings(cx),
@@ -567,7 +567,7 @@ impl Fintwind {
             )
     }
 
-    fn render_general_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn render_general_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         div()
             .child(
@@ -631,6 +631,7 @@ impl Fintwind {
                         self.state.browser_tools_enabled,
                         false,
                         theme,
+                        window,
                         cx,
                         move |this: &mut Self, _, cx| {
                             this.set_browser_tools_enabled(

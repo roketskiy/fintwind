@@ -343,7 +343,11 @@ impl Fintwind {
 
     // ── Page ───────────────────────────────────────────────────────────────
 
-    pub(super) fn render_skills_settings(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_skills_settings(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Theme::current(cx);
         let catalog = self.skills_catalog.clone();
         let query = self.skills_search.read(cx).content().trim().to_lowercase();
@@ -390,7 +394,7 @@ impl Fintwind {
                 .iter()
                 .find(|skill| &skill.primary().dir == dir)
         }) {
-            self.render_skill_detail_pane(skill, &theme, cx)
+            self.render_skill_detail_pane(skill, &theme, window, cx)
                 .into_any_element()
         } else {
             skills_detail_placeholder(&theme).into_any_element()
@@ -859,6 +863,7 @@ impl Fintwind {
         &self,
         skill: &SkillEntry,
         theme: &Theme,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
         let dir = skill.primary().dir.clone();
@@ -872,40 +877,20 @@ impl Fintwind {
         };
         let caption = format!("{} · {}", skill.sources_label(), scope_caption);
 
-        let toggle = div()
-            .id(SharedString::from(format!(
-                "skill-enabled-{}",
-                skill.row_key
-            )))
-            .tab_index(0)
-            .focus_visible(|style| style.border_color(theme.accent))
-            .w(px(40.0))
-            .h(px(22.0))
-            .p(px(3.0))
-            .flex_none()
-            .rounded_full()
-            .cursor_default()
-            .bg(if enabled { theme.inverse } else { theme.inset })
-            .border_1()
-            .border_color(if enabled {
-                theme.inverse
-            } else {
-                theme.border_strong
-            })
-            .flex()
-            .items_center()
-            .when(enabled, |element| element.justify_end())
-            .child(div().w(px(16.0)).h(px(16.0)).rounded_full().bg(if enabled {
-                theme.on_inverse
-            } else {
-                theme.text_tertiary
-            }))
-            .on_click(cx.listener({
+        let toggle = toggle_switch(
+            SharedString::from(format!("skill-enabled-{}", skill.row_key)),
+            enabled,
+            false,
+            *theme,
+            window,
+            cx,
+            {
                 let dir = dir.clone();
-                move |this, _, _, cx| {
+                move |this: &mut Self, _, cx| {
                     this.toggle_skill_enabled(dir.clone(), !enabled, cx);
                 }
-            }));
+            },
+        );
 
         let mut contents = Vec::new();
         if skill.supporting_files == 1 {

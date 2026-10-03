@@ -34,11 +34,22 @@ release was not code-signed. Choose **More info → Run anyway**.
 
 ## Updating
 
-fintwind does not update itself. When a new release ships, download its
-installer (or zip) from the
-[GitHub release](https://github.com/roketskiy/fintwind/releases) and run it.
-Installing over the existing copy replaces it in place and keeps all of your
-data — see the next section.
+An installed copy updates itself. When fintwind starts it checks the
+[GitHub release](https://github.com/roketskiy/fintwind/releases) page, and the
+notice it shows carries **Update now**: fintwind downloads the installer for
+your architecture, checks it against the digest published with the release,
+and installs it silently. No UAC prompt, because the installer is per-user.
+fintwind closes while it installs and comes back by itself. **Go to Release to
+download** stays on the card if you would rather do it by hand.
+
+The update installs through the same installer a manual download runs, so it
+only applies to an installed copy. A copy unpacked from the portable zip has no
+installer record to update, and pointing one at the installer would install a
+second copy in `%LOCALAPPDATA%\Programs` instead of replacing it — so a portable
+copy is only ever offered the release page.
+
+Either way your data is untouched: installing over an existing copy replaces the
+executables in place — see the next section.
 
 ## Where fintwind keeps its data
 

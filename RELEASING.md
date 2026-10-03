@@ -3,8 +3,12 @@
 Users download a per-user **`fintwind-<version>-<arch>-Setup.exe`** (or the
 portable zip) from the
 [GitHub Releases](https://github.com/roketskiy/fintwind/releases) page. The app
-checks that page for a newer version and offers a button that opens it; it
-does not install the update itself.
+checks that page for a newer version and can install it itself: an installed
+copy offers **Update now** on the update notice, which downloads the installer
+for the running architecture, verifies it against the asset's `digest`, and runs
+it silently. That makes both release files load-bearing — a release without its
+installer leaves installed copies with no in-app update, only the manual
+download row.
 
 Fintwind versions live in the root `Cargo.toml` and are **independent of
 waku**. Development happens on `main`. Never reuse a published `v*` tag, and

@@ -388,6 +388,12 @@ providers.logged_out_toast:
   en: Provider logged out
 providers.logout:
   en: Log out
+providers.env_badge:
+  en: Env variable
+providers.env_note:
+  en: "This provider's credential comes from the environment variable %{vars}. Env credentials are managed by the system — the key is never shown here, and logging out cannot remove the connection."
+providers.env_logout_toast:
+  en: "This provider stays connected through the environment variable %{vars}. Env credentials cannot be removed by logging out — delete the variable from your system environment and restart to disconnect."
 providers.builtin_key_hidden:
   en: The API key is stored in OpenCode's own credential store and managed by the opencode CLI; it is never shown here.
 providers.builtin_no_endpoint:

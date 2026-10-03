@@ -139,6 +139,17 @@ impl Fintwind {
         self.providers_auth_urls.get(id).map(String::as_str)
     }
 
+    /// The environment variable names the server reports as env-backed
+    /// connections for `id`. Env credentials are not stored in the server's
+    /// credential store — no logout can remove them — so the page badges
+    /// such providers and its logout explains instead of pretending.
+    pub(super) fn provider_env_names(&self, id: &str) -> &[String] {
+        self.providers_env_names
+            .get(id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
     /// Whether the server offers `id` a plain API-key connect method. The
     /// integration list answers when loaded; until then the catalog's
     /// endpoint field approximates it, so the roster does not flash the
@@ -1279,6 +1290,10 @@ impl Fintwind {
         let accent = providers_accent(theme);
         let authorized = self.provider_is_authorized(&provider.id);
         let needs_auth = authorized && self.provider_needs_auth(&provider.id);
+        // Env-backed connections: the credential lives in the process
+        // environment, not the server's credential store, so the page badges
+        // it and logout explains instead of pretending to remove it.
+        let env_names = self.provider_env_names(&provider.id);
 
         let state = self.providers_builtin_catalog_check.as_ref().filter(|_| {
             self.providers_builtin_catalog_check_id.as_deref() == Some(provider.id.as_str())
@@ -1461,6 +1476,18 @@ impl Fintwind {
                                     tr!("providers.unauthorized_badge")
                                 }),
                         )
+                        .when(!env_names.is_empty(), |element| {
+                            element.child(
+                                div()
+                                    .px(px(7.0))
+                                    .py(px(2.0))
+                                    .rounded_full()
+                                    .text_size(ui_px(9.5))
+                                    .text_color(theme.text_secondary)
+                                    .bg(theme.overlay_strong)
+                                    .child(tr!("providers.env_badge")),
+                            )
+                        })
                         .child(logout_button),
                 )
                 .when_some(provider.api.clone(), |element, api| {
@@ -1491,6 +1518,13 @@ impl Fintwind {
                                 None => tr!("providers.needs_auth_hint"),
                             };
                             element.child(info_note(theme, "icons/info.svg", hint))
+                        })
+                        .when(!env_names.is_empty(), |element| {
+                            element.child(info_note(
+                                theme,
+                                "icons/info.svg",
+                                tr!("providers.env_note", vars = env_names.join(", ")),
+                            ))
                         }),
                 )
                 .child(info_note(

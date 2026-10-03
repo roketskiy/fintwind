@@ -705,6 +705,11 @@ impl Fintwind {
                     .map(|url| (integration.id.clone(), url))
             })
             .collect();
+        self.providers_env_names = integrations
+            .iter()
+            .filter(|integration| !integration.env_names.is_empty())
+            .map(|integration| (integration.id.clone(), integration.env_names.clone()))
+            .collect();
     }
 
     /// The workspace the page's server RPCs anchor to: the probed OpenCode
@@ -826,7 +831,20 @@ impl Fintwind {
                             this.providers_builtin_catalog_check = None;
                             this.providers_builtin_catalog_check_id = None;
                         }
-                        this.show_success_toast(tr!("providers.logged_out_toast"));
+                        // Env-backed connections are not stored state: the
+                        // delete ran (or found nothing stored), but the
+                        // provider stays connected until the variable leaves
+                        // the environment. Say so rather than a plain success
+                        // the next integration refresh would contradict.
+                        let env_names = this.provider_env_names(provider_id.as_str()).to_vec();
+                        if env_names.is_empty() {
+                            this.show_success_toast(tr!("providers.logged_out_toast"));
+                        } else {
+                            this.show_toast(tr!(
+                                "providers.env_logout_toast",
+                                vars = env_names.join(", ")
+                            ));
+                        }
                         this.refresh_integrations(cx);
                     }
                     Err(error) => this

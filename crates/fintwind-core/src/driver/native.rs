@@ -1514,6 +1514,16 @@ pub(crate) fn list_integrations(
                         .and_then(Value::as_str)
                 })
                 .collect::<Vec<_>>();
+            // An env connection carries the variable's name (`{"type": "env",
+            // "name": "DEEPSEEK_API_KEY"}`). These credentials are not stored
+            // in the server's credential store, so the page can badge them and
+            // its logout can explain why they survive it.
+            let env_names: Vec<String> = connections
+                .iter()
+                .filter(|connection| connection.get("type").and_then(Value::as_str) == Some("env"))
+                .filter_map(|connection| connection.get("name").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect();
             IntegrationSummary {
                 id: row
                     .get("id")
@@ -1537,6 +1547,7 @@ pub(crate) fn list_integrations(
                 needs_auth: !connections.is_empty()
                     && auth_states.len() == connections.len()
                     && auth_states.iter().all(|state| *state == "needs_auth"),
+                env_names,
                 auth_url: connections
                     .iter()
                     .filter(|connection| {

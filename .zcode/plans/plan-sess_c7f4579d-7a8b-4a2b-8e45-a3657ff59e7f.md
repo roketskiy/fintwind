@@ -1,59 +1,40 @@
-# fintwind 浏览器协作扩展：Playwright 式操作面 + 截图 + 坐标 + evaluate + 多标签
+# 通用设置新增「浏览器工具」开关：默认关闭，开启后向模型注入 16 个工具与说明
 
-## 已确认的决策
-- **录制暂缓**，本轮不做（选型问题留待单独一轮）。
-- **evaluate 与其他变更动作同等授权**：手动分享模式逐次审批（审批条预览表达式前缀），全权自动模式直通。
-- **截图走 data URI 内嵌**：新增有界 `Media` 结果通道，本地/远程 daemon 均可用。
-- **新动作全清单**：press、select、hover、double_click、drag、click_at、screenshot、evaluate、close。
-- 保持原设计思想：失败关闭、scope 四元组处处校验、数据有界、输出标记不可信、人为接管即撤销。
+## 设计决策
+- **默认关闭**：开箱/升级后不注入任何浏览器工具与 BROWSER_INSTRUCTION，节省上下文；需要时在通用设置手动开启。设置缺失/非法值一律视为关闭（省上下文是基线，开启是显式动作）。
+- **开关语义**：只控「模型侧浏览器工具」（16 个 fintwind_browser_* + 说明）。WebView2 浏览器面板、手动分享、全权模式 UI 不动——不占模型上下文。
+- **即时生效，不重启**：插件文件照常注入 OpenCode 常驻进程，daemon 在插件连接建立与设置变更时**推送开关状态**，插件据此 inert 化（context hook 移除工具 + 不注入说明）。避免常驻进程换血，切换立即对下一轮请求生效。
+- 双保险：插件侧各工具 execute 在关闭态返回受控错误（提示到设置中开启）。
 
-## 1. 协议层 `crates/fintwind-protocol/src/browser.rs`
-- 新常量：`MAX_BROWSER_EXPRESSION_BYTES = 32KiB`、`MAX_BROWSER_MEDIA_BYTES = 3MiB`（原图）、`MAX_BROWSER_MEDIA_RESULT_BYTES = 5MiB`（序列化 Media）、`MAX_BROWSER_COORDINATE = 8192`、`MAX_BROWSER_KEY_BYTES = 32`。
-- `BrowserAction` 新变体（serde 形态与现有一致）：`Screenshot { full_page }`、`Evaluate { expression }`、`ClickAt { x, y }`、`DoubleClick { selector }`、`Press { selector, key }`、`Hover { selector }`、`Select { selector, value }`、`Drag { from, to }`、`Close`。
-- `validate()`：表达式非空 ≤32KiB；坐标 0..=8192；key 走白名单校验函数 `validate_key`（功能键/方向键/单个可打印 ASCII/Control|Shift|Alt 组合）；selector 类字段复用既有规则；Select value ≤ 8KiB。
-- `requires_approval()` 不变（仅 Snapshot 免审批，新动作默认需审批）。
-- `BrowserResult` 新增 `Media { mime, data }`（base64）。
-- 修订模块文档注释：「绝不传输原始脚本」改为受控策略——Evaluate 是显式授权的页面 JS 能力（隔离世界、有界、审批门控、输出不可信），仍拒绝任意 CDP 方法名与 cookie 专递。
+## 1. 协议层
+- `crates/fintwind-protocol/src/browser_tools.rs`：`BrowserToolReply` 新增 `ToolsState { enabled: bool }`（serde 风格与现有一致）。
+- `crates/fintwind-protocol/src/settings.rs`：`DaemonSettings::browser_tools_enabled() -> bool` 访问器，读 extra 布尔键 `browser_tools_enabled`，缺省/非布尔 → **false**。
 
-## 2. 大小上限贯通（三处强制点变 Media 感知）
-- `crates/fintwind-client/src/client.rs:263` `complete_browser_request`：Ok/Error 保持 32KiB，Media ≤ 5MiB。
-- `crates/fintwind-core/src/browser_broker.rs:939` `enforce_result_bound`：同规则。
-- `crates/fintwind-core/src/browser_tools_transport.rs:42,241`：读路径（插件→daemon）保持 32KiB；daemon→插件回复按结果类型放宽（实现时验证 tungstenite 写路径不受 max_frame_size 限制，若受则单独调帧上限并在读侧用结构校验兜底）。
+## 2. daemon 注册表与传输 `crates/fintwind-core`
+- `browser_tools.rs`：state 增加 `enabled: AtomicBool`（初始即按设置置位）与 `outgoing: HashMap<u64, Sender<BrowserToolReply>>`；`set_enabled(bool)` 存值并向所有连接推送 ToolsState（发送失败惰性清理）；transport 注册/断开时维护 outgoing；单元测试覆盖「注册 sender → set_enabled(false/true) → 收到推送」。
+- `browser_tools_transport.rs`：connect 成功后注册 outgoing channel，**先发一条当前 ToolsState**，select 循环同时读 socket 与 channel 并转发到 socket。
+- `daemon.rs`：启动初始化与 `Command::UpdateSettings`（:707 现只落盘）两处调用 `browser_tools.set_enabled(settings.browser_tools_enabled())`。serve/attach/browser_tools 挂载链路不动。
 
-## 3. GUI 执行层 `src/browser/collaboration.rs`
-- 审批摘要 match（813-830）补全，新增 tr! 键（见 §7）。
-- `execute()`（1171-1241）新增实现：
-  - **Screenshot**：新辅助 `cdp_capture`（超时 10s、字节上限 6MiB）调 `Page.captureScreenshot {format:"png", captureBeyondViewport}`；解码后 >3MiB 降级 JPEG q=80 重截，仍超报错（无新依赖）；返回 `Media`。
-  - **Evaluate**：隔离世界 `Runtime.evaluate`（awaitPromise、returnByValue、3s 超时、128KiB 结果守卫、exceptionDetails→受控错误）。
-  - **ClickAt**：先取 `{innerWidth,innerHeight}` 校验坐标在视口内（否则明确报错），再 `Input.dispatchMouseEvent` press/release（Issued 完成语义）。
-  - **DoubleClick**：复用 click 目标解析 JS，一次 press/release clickCount:2。
-  - **Press**：目标解析 + focus（照 fill 的 focus 步骤），key 查表映射 (key, code, windowsVirtualKeyCode, modifiers)，input_pair keyDown/keyUp。
-  - **Hover**：目标解析后单发 mouseMoved。
-  - **Select**：隔离世界 evaluate：解析目标（ref/CSS 同一约定）、须为非禁用 `<select>`、按 value 匹配 option（找不到报错）、赋值并派发 input+change。
-  - **Drag**：解析 from/to 两点，press(from)→插值 mouseMoved→release(to)，全程 guard 检查，Issued 完成。
-  - **Close**：execute 层拒绝（app 层拦截，同 Open 的分工）。
+## 3. 设置持久化与 UI
+- `crates/fintwind-client/src/persistence.rs`：`PersistedState` 加 `browser_tools_enabled: bool`（serde default false、`empty()` 给 false），补进 `app_settings()` 投影与 `apply_app_settings`；`daemon_settings()`（:460）在 extra 里覆盖写入该键——app 字段是真源，覆盖 daemon 文件回读值。
+- `src/app/settings.rs`：`render_general_settings`（:570，现为空壳）加一行，抄 Appearance 行布局（:846-877）+ `ui::toggle_switch`（mcp_page.rs:1101 用法）；`set_browser_tools_enabled`：判等短路 → 改 state → `self.save()`（Fintwind::save 已会经 DaemonSupervisor 推送 daemon 设置）→ `cx.notify()`。
+- `locales/app.yml`、`zh-CN.yml`、`ja.yml`：`settings.browser_tools` 标题与描述三语，文案说明「默认关闭；开启后向模型提供内置浏览器操作工具，会占用少量上下文」。
 
-## 4. 应用层 `src/app/browser_collaboration.rs`
-- `dispatch_browser_request`（640-715）在 Open 特例后加 **Close** 特例：校验 scope/页/授权匹配 + `browser_full_access()` + 页面属于 `automation_pages`；手动模式完成错误「仅自动打开的页可由会话关闭」；通过则**先** `complete_browser_request(Ok)`、从 `automation_pages` 移除（避免触发 forget 的 pause 分支），再按 page_id 复用 `close_right_panel_surface` 拆除（既有实体移除 + 分享集重发布即撤销）。
+## 4. 插件 `resources/opencode-browser-plugin.ts`
+- onmessage 处理新 `toolsState` 消息；本地 `bridgeToolsEnabled` **默认 false**（未收到 daemon 状态前不注入）。
+- context hook：disabled 时从 `event.tools` 移除全部 fintwind_browser_*（OpenCode 内置浏览器工具 id 照旧无条件移除，防止改用不受控的内置浏览器栈）且不 push BROWSER_INSTRUCTION；enabled 行为与现状完全一致。
+- 每个 execute 入口：disabled 时返回受控错误。
 
-## 5. 插件 `resources/opencode-browser-plugin.ts`
-- 新工具（保持 codemode:false、warning 前缀、ref|selector 单字段约定）：`fintwind_browser_screenshot`、`_evaluate`、`_press`、`_select`、`_hover`、`_double_click`、`_drag`、`_click_at`、`_close`；`FINTWIND_BROWSER_TOOL_NAMES` 扩展为 16 个。
-- `request()` 返回完整结果对象；`createTool` 组装 content：普通结果 JSON 字符串；Media 结果 `content: [{type:"text",text:...},{type:"file",uri:"data:<mime>;base64,...",mime,name}]`（已验证 v2.016 支持 FileContent，模型可见图像）。
-- `onmessage` 大小分叉：文本回复 36KiB，Media 回复 ~5MiB。
-- `BROWSER_INSTRUCTION` 增补：evaluate 审批与 cookie 可读性明示、截图为视觉观察、close 仅自动打开页、坐标点击前先快照确认。
+## 5. e2e 与收尾
+- `scripts/browser-tools-opencode.ts`：**setup 阶段先发 `UpdateSettings{browser_tools_enabled:true}`**（默认关闭下现有 25 项场景才能看到工具），再跑全部既有场景；末尾新增开关场景（EXPECTED_CHECKS 25→26）：关闭 → 断言下一轮请求 toolNames 无任何 fintwind_browser_* 且 BROWSER_INSTRUCTION 标记为 false → 重新开启 → 工具与说明回归。这是「上下文确实省了」的真实行为断言。恢复设置为关闭，不污染后续运行。
+- `CHANGELOG.md` unreleased 新增一条（独立新特性）。
 
-## 6. PoC 与 e2e
-- `src/browser_poc.rs:941` kind 映射补全（browser-poc feature）。
-- `crates/fintwind-core/examples/browser_tools_e2e.rs:422` wire kind 映射补全；新增行为测试：validate 边界（表达式超限/坐标越界/非法 key）、Media 大小感知 bound、Media 结果经 transport 回显不截断。
-- `scripts/browser-tools-opencode.ts` / `browser-tools-native.ts` 增加 evaluate/screenshot/press 场景。
-
-## 7. 本地化（app.yml + zh-CN.yml + ja.yml，三语全上）
-新键：`browser_collaboration.{screenshot_summary, evaluate_summary, click_at_summary, double_click_summary, press_summary, hover_summary, select_summary, drag_summary}`。
-
-## 8. 依赖与验证
-- 零新增依赖（base64 0.22 已直接依赖；截图降级用 CDP 侧 JPEG）。
-- `cargo build --locked` + `cargo test -p fintwind-protocol -p fintwind-core`（新校验为真实行为缺口，符合 AGENTS.md 测试观）。
-- 手动验证（用户侧，dev watcher 应用内）：全权会话跑 open→snapshot→evaluate→screenshot→press→close 序列，确认审批文案、截图在对话中可见、close 后分享集撤销；手动分享模式确认 evaluate 审批条出现。
+## 验证
+- `cargo check --workspace` + `-p fintwind --features browser-poc`；`cargo test -p fintwind-protocol -p fintwind-core`（含已知无关失败 resume_location_rules）。
+- bun e2e 全量 26/26。
+- 用户侧手动：默认无浏览器工具 → 设置开启 → 新消息工具列表与系统提示立即出现；关闭后立即消失（无需重启会话/应用）。
 
 ## 明确不做
-录制（暂缓）、文件上传、networkidle、console 监听、视口设置、截图落盘目录。
+- 不隐藏/禁用浏览器面板、手动分享、全权模式 UI（不占上下文）。
+- 不做 daemon 重启、OpenCode 常驻进程驱逐。
+- 不动 serve()/pool/driver 挂载链路（插件永远加载，靠状态位 inert 化）。

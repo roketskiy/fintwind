@@ -4208,19 +4208,32 @@ mod tests {
     /// trailing-separator difference is not a different workspace.
     #[test]
     fn resume_location_rules() {
-        let cwd = Path::new("E:\\work\\fintwind");
-        let recorded = json!({"data": {"location": {"directory": "E:\\work\\fintwind"}}});
+        // A directory that exists, so the comparison runs the normalization
+        // `canonicalize` performs. A path that does not exist normalizes
+        // nothing — it falls back to echoing the input, where a trailing
+        // separator is never folded away and this test only ever passed its
+        // first assertion by the two spellings being identical.
+        // `CARGO_MANIFEST_DIR` is absolute and present on every checkout.
+        let cwd = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cwd_text = cwd.to_string_lossy();
+        let recorded = json!({"data": {"location": {"directory": &cwd_text}}});
         assert!(verify_resume_location(&recorded, cwd, "ses_1").is_ok());
         // A trailing separator is the same directory.
-        let trailing = json!({"location": {"directory": "E:\\work\\fintwind\\"}});
+        let trailing = json!({"data": {"location": {"directory": format!("{cwd_text}{}", std::path::MAIN_SEPARATOR)}}});
         assert!(verify_resume_location(&trailing, cwd, "ses_1").is_ok());
         // No recorded location: an old session stays resumable.
         assert!(verify_resume_location(&json!({"data": {}}), cwd, "ses_1").is_ok());
         assert!(verify_resume_location(&json!({}), cwd, "ses_1").is_ok());
         // Another workspace's session must be refused outright.
-        let other = json!({"data": {"location": {"directory": "E:\\work\\other"}}});
-        let error = verify_resume_location(&other, cwd, "ses_1").unwrap_err();
-        assert!(error.to_string().contains("E:\\work\\other"));
+        let other = cwd.parent().expect("the crate directory has a parent");
+        let other_text = other.to_string_lossy();
+        let error = verify_resume_location(
+            &json!({"data": {"location": {"directory": &other_text}}}),
+            cwd,
+            "ses_1",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(&*other_text));
     }
 
     #[test]

@@ -1720,6 +1720,11 @@ pub struct Fintwind {
     /// Per needs-auth provider id, the sign-back-in URL the server names,
     /// when it does. Feeds the page's re-auth hint.
     providers_auth_urls: std::collections::HashMap<String, String>,
+    /// Per provider id, the environment variable names the server reports as
+    /// env-backed connections. Env credentials are not stored in the server's
+    /// credential store — no logout can remove them — so the page badges such
+    /// providers and its logout explains instead of pretending.
+    providers_env_names: std::collections::HashMap<String, Vec<String>>,
     /// The integration ids the server offers a plain API-key connect method
     /// for. Everything else in the roster authorizes through OAuth, an env
     /// var, or a command — never through this app's key form.
@@ -3394,6 +3399,7 @@ impl Fintwind {
                 providers_authorized: HashSet::new(),
                 providers_needs_auth: HashSet::new(),
                 providers_auth_urls: HashMap::new(),
+                providers_env_names: HashMap::new(),
                 providers_key_methods: HashSet::new(),
                 providers_auth_loading: false,
                 providers_builtin_catalog_check: None,

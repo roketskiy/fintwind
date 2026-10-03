@@ -204,6 +204,9 @@ providers.unauthorized_badge: 未認証
 providers.authorized_toast: プロバイダーを認証しました
 providers.logged_out_toast: プロバイダーからログアウトしました
 providers.logout: ログアウト
+providers.env_badge: 環境変数
+providers.env_note: "このプロバイダーの資格情報は環境変数 %{vars} から提供されています。環境変数はシステム側で管理されており、ここにキーは表示されず、ログアウトでも接続を解除できません。"
+providers.env_logout_toast: "このプロバイダーは環境変数 %{vars} で接続を維持しています。環境変数の資格情報はログアウトでは削除できません。切断するには、システムの環境変数から該当変数を削除し、アプリを再起動してください。"
 providers.builtin_key_hidden: API Key は OpenCode 独自の認証ストアに保存され、opencode CLI が管理します。ここでは表示されません。
 providers.builtin_no_endpoint: このプロバイダーは API Key でのサインインに対応していません（OAuth・環境変数・opencode CLI を使用）。ここでテストできる接続がありません。
 providers.builtin_models_truncated: 他 %{count} 件のモデルは表示されていません

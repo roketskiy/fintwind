@@ -127,6 +127,14 @@ pub struct IntegrationSummary {
     /// credential.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth_url: Option<String>,
+    /// Environment variable names the server reports as live env connections
+    /// for this integration (OpenCode projects a provider's declared env vars
+    /// — e.g. `DEEPSEEK_API_KEY` — as connections when they are set). Env
+    /// credentials are not stored in the server's credential store, so no
+    /// logout can remove them; the page badges such providers and its logout
+    /// explains instead of pretending.
+    #[serde(default)]
+    pub env_names: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

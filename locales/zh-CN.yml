@@ -196,6 +196,9 @@ providers.unauthorized_badge: 未授权
 providers.authorized_toast: 供应商已授权
 providers.logged_out_toast: 供应商已登出
 providers.logout: 登出
+providers.env_badge: 环境变量
+providers.env_note: "该供应商的凭据来自环境变量 %{vars}。环境变量由系统管理，此处不会显示密钥，登出也无法移除该连接。"
+providers.env_logout_toast: "该供应商仍通过环境变量 %{vars} 保持连接。环境变量凭据无法通过登出移除；如需断开，请从系统环境变量中删除该变量，然后重启应用。"
 providers.builtin_key_hidden: API Key 保存在 OpenCode 自己的凭据库中，由 opencode CLI 管理，此处不会显示。
 providers.builtin_no_endpoint: 该供应商不支持 API Key 登录（走 OAuth、环境变量或 opencode CLI），此处没有可测试的连接。
 providers.builtin_models_truncated: 还有 %{count} 个模型未显示

@@ -1,11 +1,15 @@
 //! Non-modal startup update notice. Release fetching and Markdown preparation
 //! run off-thread; the floating card only reads the resulting in-memory state.
+//!
+//! The card also owns the in-app update: it asks `crate::update` to download the
+//! installer for this architecture and verify it, and only then hands it to a
+//! silent install. No step of that runs on the thread that draws the card.
 
 use gpui::{KeyBinding, actions};
 
 use crate::md::virtualized::ReasoningView;
 use crate::ui::ActivationExt;
-use crate::update::ReleaseInfo;
+use crate::update::{ReleaseAsset, ReleaseInfo};
 
 use super::*;
 
@@ -18,19 +22,47 @@ pub fn init(cx: &mut App) {
     ]);
 }
 
+/// What the one-click update is doing. A card the user walks away from is
+/// abandoned rather than paused, which is why the phase drops back to idle on
+/// dismiss and the in-flight transfer is stranded by its generation instead.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum UpdatePhase {
+    /// Waiting for the user to ask for it.
+    Idle,
+    /// The installer is being downloaded and checked against the release.
+    Downloading,
+    /// The installer is running; this process is on its way out.
+    Installing,
+}
+
 pub(super) struct UpdateCard {
     pub(super) release: ReleaseInfo,
+    /// Whether this copy was installed rather than unpacked from the portable
+    /// archive. Only an installed copy can be updated in place, so a portable
+    /// one is offered the release page instead of a button that would quietly
+    /// install a second copy beside it.
+    installed: bool,
     visible: bool,
+    phase: UpdatePhase,
+    /// Bumped whenever the card is dismissed, which strands a transfer still in
+    /// flight: it may finish downloading, but it may not install, because the
+    /// card that asked for it is gone.
+    generation: u64,
+    /// The generation of the download in flight, if any. Held apart from
+    /// `generation` so a stranded transfer cannot be mistaken for the current
+    /// one.
+    running: Option<u64>,
     notes: Option<Entity<ReasoningView>>,
     selection: TranscriptSelection,
     focus: FocusHandle,
     close_focus: FocusHandle,
     download_focus: FocusHandle,
+    update_focus: FocusHandle,
     previous_focus: Option<FocusHandle>,
 }
 
 impl UpdateCard {
-    pub(super) fn new(release: ReleaseInfo, cx: &mut Context<Fintwind>) -> Self {
+    pub(super) fn new(release: ReleaseInfo, installed: bool, cx: &mut Context<Fintwind>) -> Self {
         let selection = TranscriptSelection::default();
         let notes = (!release.notes.trim().is_empty()).then(|| {
             cx.new(|cx| {
@@ -48,12 +80,17 @@ impl UpdateCard {
         });
         Self {
             release,
+            installed,
             visible: true,
+            phase: UpdatePhase::Idle,
+            generation: 0,
+            running: None,
             notes,
             selection,
             focus: cx.focus_handle(),
             close_focus: cx.focus_handle(),
             download_focus: cx.focus_handle(),
+            update_focus: cx.focus_handle(),
             previous_focus: None,
         }
     }
@@ -62,6 +99,11 @@ impl UpdateCard {
     /// global copy action.
     pub(super) fn selected_text(&self) -> Option<String> {
         self.selection.selection.borrow().selected_text()
+    }
+
+    /// Whether a transfer the user has not walked away from owns the controls.
+    fn busy(&self) -> bool {
+        !matches!(self.phase, UpdatePhase::Idle)
     }
 }
 
@@ -134,6 +176,11 @@ impl Fintwind {
             return;
         };
         card.visible = false;
+        // An update the user walks away from is abandoned, not paused: the
+        // controls come back, and a download that is still running is stranded
+        // by the generation it no longer matches.
+        card.phase = UpdatePhase::Idle;
+        card.generation = card.generation.wrapping_add(1);
         card.selection.selection.borrow_mut().clear();
         card.selection.registry.borrow_mut().clear();
         let restore_focus = card.focus.contains_focused(window, cx);
@@ -149,6 +196,152 @@ impl Fintwind {
             window.focus(&focus, cx);
         }
         cx.notify();
+    }
+
+    /// Downloads the release installer and hands it to a silent install.
+    ///
+    /// Everything that touches the network or the disk runs on the background
+    /// executor, and the result is only ever read as a phase the next frame can
+    /// draw. The one thing that happens on this thread is starting the
+    /// installer, which is a fork-exec and not a wait.
+    pub(super) fn start_update(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(card) = self.latest_available.as_mut() else {
+            return;
+        };
+        // The button is unmounted or inert while anything is in flight, so this
+        // is belt and braces: a stranded transfer is still a transfer, and two
+        // of them would write the same file.
+        if card.running.is_some() || card.busy() {
+            return;
+        }
+        let Some(asset) = card.release.installer().cloned() else {
+            return;
+        };
+        card.phase = UpdatePhase::Downloading;
+        card.generation = card.generation.wrapping_add(1);
+        let generation = card.generation;
+        card.running = Some(generation);
+        let version = card.release.version.clone();
+        let destination = crate::update::installer_download_path(&version);
+        let installer = destination.clone();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let downloaded = cx
+                .background_executor()
+                .spawn(async move { crate::update::download_installer(&asset, &destination) })
+                .await;
+            let Ok(installing) = this.update(cx, |this, cx| {
+                let Some(card) = this.latest_available.as_mut() else {
+                    return false;
+                };
+                card.running = None;
+                if card.generation != generation {
+                    // Dismissed while this downloaded. The file is on disk and
+                    // verified, but nothing asked for it anymore.
+                    return false;
+                }
+                match downloaded {
+                    Ok(()) => {
+                        card.phase = UpdatePhase::Installing;
+                        cx.notify();
+                        // Setup cannot replace this executable while it runs, so
+                        // the app has to be out of the way: `on_app_quit` has
+                        // already flushed state and stopped the daemon by the
+                        // time the process is gone. The installer's `[Run]`
+                        // entry launches the newly installed executable.
+                        if let Err(error) = crate::update::launch_installer(&installer) {
+                            card.phase = UpdatePhase::Idle;
+                            this.show_toast_with_tone(
+                                tr!("update.install_failed", reason = format!("{error:#}")),
+                                ToastTone::Alert,
+                            );
+                            cx.notify();
+                            return false;
+                        }
+                        true
+                    }
+                    Err(error) => {
+                        card.phase = UpdatePhase::Idle;
+                        this.show_toast_with_tone(
+                            tr!("update.download_failed", reason = format!("{error:#}")),
+                            ToastTone::Alert,
+                        );
+                        cx.notify();
+                        false
+                    }
+                }
+            }) else {
+                return;
+            };
+            if installing {
+                cx.update(|cx| cx.quit());
+            }
+        })
+        .detach();
+    }
+
+    /// The one-click update control, or `None` when this copy of fintwind
+    /// cannot be updated in place. It is the same element throughout an update,
+    /// so focus and its focus ring survive: an in-flight update takes away the
+    /// pointer and the accent fill, never the control.
+    fn render_update_action(
+        &self,
+        card: &UpdateCard,
+        asset: &ReleaseAsset,
+        theme: Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let busy = card.busy();
+        let (label, glyph) = match card.phase {
+            UpdatePhase::Idle => (
+                tr!("update.install"),
+                icon("icons/download.svg", 14.0, theme.on_accent).into_any_element(),
+            ),
+            UpdatePhase::Downloading => (
+                tr!("update.downloading", size = asset.size_label()),
+                motion::spin_slow(icon("icons/loader-circle.svg", 14.0, theme.text_secondary)),
+            ),
+            UpdatePhase::Installing => (
+                tr!("update.installing"),
+                motion::spin_slow(icon("icons/loader-circle.svg", 14.0, theme.text_secondary)),
+            ),
+        };
+        div()
+            .id("install-update")
+            .track_focus(&card.update_focus)
+            .tab_index(0)
+            .w_full()
+            .min_w_0()
+            .h(px(34.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(7.0))
+            .rounded(px(7.0))
+            .text_size(ui_px(12.5))
+            .font_weight(FontWeight::MEDIUM)
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+            // Attached in both states: an in-flight update must swallow the key
+            // rather than let Enter and Space fall through to whatever owns the
+            // window, and `start_update` ignores them anyway.
+            .on_activation(cx, Self::start_update)
+            .when(busy, |element| {
+                element
+                    .bg(theme.overlay)
+                    .text_color(theme.text_secondary)
+                    .cursor_default()
+            })
+            .when(!busy, |element| {
+                element
+                    .bg(theme.accent_fill)
+                    .text_color(theme.on_accent)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(theme.accent_text))
+                    .tooltip(Tooltip::text(tr!("update.install_tooltip")))
+            })
+            .child(glyph)
+            .child(label)
+            .into_any_element()
     }
 
     pub(super) fn render_update_card(
@@ -177,6 +370,8 @@ impl Fintwind {
             .tooltip(Tooltip::text(tr!("update.dismiss")))
             .on_activation(cx, Self::dismiss_update_card);
 
+        // The release page stays reachable: it is the only way forward for a
+        // portable copy, and a fallback when the download itself fails.
         let download = div()
             .id("download-update")
             .track_focus(&card.download_focus)
@@ -197,7 +392,7 @@ impl Fintwind {
                     .gap(px(7.0))
                     .text_color(theme.link)
                     .font_weight(FontWeight::MEDIUM)
-                    .child(icon("icons/download.svg", 14.0, theme.link))
+                    .child(icon("icons/external-link.svg", 14.0, theme.link))
                     .child(tr!("update.download")),
             )
             .child(
@@ -213,6 +408,24 @@ impl Fintwind {
                     cx.open_url(&card.release.url);
                 }
             });
+
+        let installer = card
+            .installed
+            .then(|| card.release.installer())
+            .flatten()
+            .cloned();
+        let actions = div()
+            .flex_none()
+            .p(px(10.0))
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .children(
+                installer
+                    .as_ref()
+                    .map(|asset| self.render_update_action(card, asset, theme, cx)),
+            )
+            .child(download);
 
         Some(
             div()
@@ -317,7 +530,7 @@ impl Fintwind {
                             )
                         }),
                 )
-                .child(div().flex_none().p(px(10.0)).child(download))
+                .child(actions)
                 .child(selection_input)
                 .into_any_element(),
         )

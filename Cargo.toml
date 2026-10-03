@@ -61,6 +61,10 @@ ratex-types = "=0.1.14"
 ratex-svg = { version = "=0.1.14", features = ["embed-fonts"] }
 regex = "1"
 rust-i18n = "4"
+# Verifies a downloaded update installer against the digest GitHub publishes
+# with the release asset, so an update never runs something the API did not
+# attest to. Already in the graph through fintwind-core.
+sha2 = "0.10"
 smol = "2"
 ropey = "=2.0.0-beta.1"
 futures-lite = "2"

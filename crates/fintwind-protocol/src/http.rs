@@ -4,6 +4,7 @@
 //! a background executor.
 
 use std::io::{BufRead, BufReader, Read, Write as _};
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
@@ -36,27 +37,95 @@ pub fn http_get(
         .stderr(Stdio::piped())
         .spawn()
         .context("could not run curl")?;
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| anyhow!("curl stdin is unavailable"))?;
-        for header in headers {
-            writeln!(stdin, "header = \"{header}\"").context("could not configure curl")?;
-        }
-    }
+    take_stdin(&mut child, headers)?;
     let output = child.wait_with_output().context("curl did not finish")?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let error = stderr
-            .lines()
-            .last()
-            .map(str::trim)
-            .filter(|error| !error.is_empty())
-            .unwrap_or("curl failed");
-        return Err(anyhow!("{error}"));
+        return Err(curl_error(&output.stderr));
     }
     split_status_and_body(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// One HTTPS download written straight to `destination`, returning the number
+/// of bytes curl reported. [`http_get`] decodes its body into a `String`, which
+/// is both lossy and memory-hungry for a binary this size, so an installer
+/// needs a helper of its own. `-L` follows the redirect a release asset URL
+/// answers with, and `--fail` turns an HTTP error status into a non-zero exit
+/// so an error page can never be mistaken for the installer. The parent of
+/// `destination` has to exist. Blocking.
+pub fn http_download(
+    url: &str,
+    headers: &[String],
+    destination: &Path,
+    max_time_secs: u64,
+) -> anyhow::Result<u64> {
+    // curl writes the file itself, so a transfer that dies halfway would leave
+    // something that looks like a complete installer. Download beside it and
+    // rename only once curl reports success.
+    let partial = partial_path(destination);
+    let mut child = curl_command()
+        .arg("-sS")
+        .arg("-L")
+        .arg("--fail")
+        .arg("--max-time")
+        .arg(max_time_secs.to_string())
+        .args(["-K", "-"])
+        .arg("-o")
+        .arg(&partial)
+        .arg(url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("could not run curl")?;
+    take_stdin(&mut child, headers)?;
+    let output = child.wait_with_output().context("curl did not finish")?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&partial);
+        return Err(curl_error(&output.stderr));
+    }
+    std::fs::rename(&partial, destination).with_context(|| {
+        format!(
+            "could not move the downloaded file to {}",
+            destination.display()
+        )
+    })?;
+    Ok(std::fs::metadata(destination)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0))
+}
+
+fn partial_path(destination: &Path) -> PathBuf {
+    let mut partial = destination.as_os_str().to_owned();
+    partial.push(".part");
+    PathBuf::from(partial)
+}
+
+/// Hand the child its `-K -` config, which is what keeps a credential out of a
+/// process list. curl starts the transfer only once the config reaches EOF, so
+/// taking the pipe and dropping it here is what releases the request rather
+/// than a detail of the call site.
+fn take_stdin(child: &mut std::process::Child, headers: &[String]) -> anyhow::Result<()> {
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("curl stdin is unavailable"))?;
+    for header in headers {
+        writeln!(stdin, "header = \"{header}\"").context("could not configure curl")?;
+    }
+    Ok(())
+}
+
+/// curl's own diagnosis, which is the only explanation there is for a status
+/// `0` or a failed transfer: its last stderr line names the cause.
+fn curl_error(stderr: &[u8]) -> anyhow::Error {
+    let stderr = String::from_utf8_lossy(stderr);
+    let error = stderr
+        .lines()
+        .last()
+        .map(str::trim)
+        .filter(|error| !error.is_empty())
+        .unwrap_or("curl failed");
+    anyhow!("{error}")
 }
 
 /// What one streaming POST found. `first_data` carries the first SSE `data:`
@@ -105,18 +174,9 @@ pub fn http_post_stream(
         .stderr(Stdio::piped())
         .spawn()
         .context("could not run curl")?;
-    {
-        let stdin = child
-            .stdin
-            .as_mut()
-            .ok_or_else(|| anyhow!("curl stdin is unavailable"))?;
-        for header in headers {
-            writeln!(stdin, "header = \"{header}\"").context("could not configure curl")?;
-        }
-    }
     // curl starts the transfer only once the config reaches EOF; holding the
-    // write end would stall it forever.
-    drop(child.stdin.take());
+    // write end would stall it forever, so `take_stdin` drops it for us.
+    take_stdin(&mut child, headers)?;
 
     let mut reader = BufReader::new(
         child

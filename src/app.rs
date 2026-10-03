@@ -2215,15 +2215,23 @@ impl Fintwind {
 
     fn check_for_update(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
-            let latest = cx
+            // Both probes in one background turn. The install layout decides
+            // whether the card can offer an in-app update at all, and it is
+            // filesystem work the frame that builds the card must not do.
+            let probed = cx
                 .background_executor()
-                .spawn(async { crate::update::fetch_newer_release() })
+                .spawn(async {
+                    (
+                        crate::update::fetch_newer_release(),
+                        crate::update::is_installed_copy(),
+                    )
+                })
                 .await;
-            let Some(release) = latest else {
+            let (Some(release), installed) = probed else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.latest_available = Some(update_card::UpdateCard::new(release, cx));
+                this.latest_available = Some(update_card::UpdateCard::new(release, installed, cx));
                 cx.notify();
             });
         })

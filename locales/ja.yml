@@ -151,6 +151,12 @@ update.latest_version: 最新バージョン %{version}
 update.release_notes: リリースノート
 update.no_release_notes: このバージョンにはリリースノートがありません。
 update.download: Release ページでダウンロード
+update.install: 今すぐ更新
+update.install_tooltip: インストーラーをダウンロードしてその場で更新します
+update.downloading: 更新をダウンロード中…（%{size}）
+update.installing: インストール中…
+update.download_failed: 更新をダウンロードできませんでした：%{reason}
+update.install_failed: 更新を開始できませんでした：%{reason}
 update.dismiss: 更新通知を閉じる
 
 settings.local_by_default: デフォルトでローカルに保存

@@ -148,6 +148,7 @@ update.download: 前往 Release 下载
 update.install: 一键更新
 update.install_tooltip: 下载安装包并原地完成更新
 update.downloading: "正在下载 %{size}…"
+update.selecting_source: "正在选择下载源…"
 update.installing: "正在安装…"
 update.download_failed: "下载更新失败：%{reason}"
 update.install_failed: "启动更新失败：%{reason}"

@@ -42,6 +42,14 @@ and installs it silently. No UAC prompt, because the installer is per-user.
 fintwind closes while it installs and comes back by itself. **Go to Release to
 download** stays on the card if you would rather do it by hand.
 
+GitHub resolves to several addresses, and some of them are unreachable from
+some networks — so before downloading, fintwind measures the publisher's own
+host and two public relays of the release asset, and uses whichever answers
+fastest. The card shows that measurement as **Choosing a download source…**.
+This costs nothing in trust: every download is still checked against the
+digest the release published, so a relay that served anything else is refused
+before the installer is ever launched.
+
 The update installs through the same installer a manual download runs, so it
 only applies to an installed copy. A copy unpacked from the portable zip has no
 installer record to update, and pointing one at the installer would install a

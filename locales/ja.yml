@@ -154,6 +154,7 @@ update.download: Release ページでダウンロード
 update.install: 今すぐ更新
 update.install_tooltip: インストーラーをダウンロードしてその場で更新します
 update.downloading: 更新をダウンロード中…（%{size}）
+update.selecting_source: ダウンロード元を選定しています…
 update.installing: インストール中…
 update.download_failed: 更新をダウンロードできませんでした：%{reason}
 update.install_failed: 更新を開始できませんでした：%{reason}

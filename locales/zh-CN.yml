@@ -189,6 +189,9 @@ providers.oauth_badge: OAuth
 providers.authorize_action: 授权
 providers.update_key: 更新密钥
 providers.authorized_badge: 已授权
+providers.needs_auth_badge: 需要重新登录
+providers.needs_auth_hint: 供应商拒绝了已保存的凭据。请重新登录（在终端运行 opencode auth login、在 TUI 中登录，或在此更新密钥），然后刷新此页面。
+providers.needs_auth_hint_url: "供应商拒绝了已保存的凭据。请到 %{url} 重新登录，然后刷新此页面。"
 providers.unauthorized_badge: 未授权
 providers.authorized_toast: 供应商已授权
 providers.logged_out_toast: 供应商已登出
@@ -813,6 +816,7 @@ errors.change_provider_thinking: "无法更改 %{provider} 的思考强度：%{e
 errors.open_provider_session: "无法打开 %{provider} 会话：%{error}"
 errors.select_model: "无法选择模型：%{error}"
 errors.read_provider_event_stream: "无法读取 %{provider} 事件流：%{error}"
+errors.provider_response_body: "供应商响应：%{body}"
 errors.answer_provider_permission: "无法响应 %{provider} 的权限请求：%{error}"
 errors.answer_provider_question: "无法回答 %{provider} 的问题：%{error}"
 errors.provider_receive_prompt: "%{provider} 未能接收消息"

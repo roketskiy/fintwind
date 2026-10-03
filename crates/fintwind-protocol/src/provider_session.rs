@@ -116,6 +116,17 @@ pub struct IntegrationSummary {
     pub supports_key: bool,
     /// Whether at least one credential is connected for it.
     pub connected: bool,
+    /// Every connected credential reports it needs re-auth (OpenCode v2.0.20+
+    /// `connection.status`), so requests through this integration fail until
+    /// the user signs in again. One healthy connection keeps this false —
+    /// the server still has a usable credential. Servers older than v2.0.20
+    /// never set it.
+    #[serde(default)]
+    pub needs_auth: bool,
+    /// Where to sign back in, when the server names one for the failed
+    /// credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

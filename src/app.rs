@@ -1712,6 +1712,14 @@ pub struct Fintwind {
     /// not any file, is the source of truth: it counts credentials made
     /// here, in the CLI, and in the TUI alike.
     providers_authorized: std::collections::HashSet<String>,
+    /// The authorized provider ids whose every credential the server reports
+    /// as needing re-auth (OpenCode v2.0.20+ `connection.status`). They stay
+    /// in the authorized set — the credentials exist — but requests through
+    /// them fail until the user signs in again, so the page marks them.
+    providers_needs_auth: std::collections::HashSet<String>,
+    /// Per needs-auth provider id, the sign-back-in URL the server names,
+    /// when it does. Feeds the page's re-auth hint.
+    providers_auth_urls: std::collections::HashMap<String, String>,
     /// The integration ids the server offers a plain API-key connect method
     /// for. Everything else in the roster authorizes through OAuth, an env
     /// var, or a command — never through this app's key form.
@@ -3384,6 +3392,8 @@ impl Fintwind {
                 providers_builtin: None,
                 providers_builtin_loading: false,
                 providers_authorized: HashSet::new(),
+                providers_needs_auth: HashSet::new(),
+                providers_auth_urls: HashMap::new(),
                 providers_key_methods: HashSet::new(),
                 providers_auth_loading: false,
                 providers_builtin_catalog_check: None,

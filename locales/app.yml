@@ -291,6 +291,18 @@ update.no_release_notes:
   en: No release notes were provided for this version.
 update.download:
   en: Go to Release to download
+update.install:
+  en: Update now
+update.install_tooltip:
+  en: Download the installer and install it in place
+update.downloading:
+  en: "Downloading %{size}…"
+update.installing:
+  en: "Installing…"
+update.download_failed:
+  en: "Could not download the update: %{reason}"
+update.install_failed:
+  en: "Could not start the update: %{reason}"
 update.dismiss:
   en: Dismiss update notice
 

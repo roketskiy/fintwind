@@ -145,6 +145,12 @@ update.latest_version: 最新版本 %{version}
 update.release_notes: 更新日志
 update.no_release_notes: 此版本未提供更新日志。
 update.download: 前往 Release 下载
+update.install: 一键更新
+update.install_tooltip: 下载安装包并原地完成更新
+update.downloading: "正在下载 %{size}…"
+update.installing: "正在安装…"
+update.download_failed: "下载更新失败：%{reason}"
+update.install_failed: "启动更新失败：%{reason}"
 update.dismiss: 关闭更新提示
 settings.local_by_default: 默认存储在本地
 settings.local_by_default_description: 项目、对话和设置均存储在这台电脑上

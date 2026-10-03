@@ -240,6 +240,9 @@ pub struct AppSettings {
     pub code_text_scale: f32,
     pub ui_font_family: String,
     pub code_font_family: String,
+    /// Off by default: browser tools cost model context, so enabling them
+    /// is an explicit act.
+    pub browser_tools_enabled: bool,
 }
 
 impl Default for AppSettings {
@@ -253,6 +256,7 @@ impl Default for AppSettings {
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
+            browser_tools_enabled: false,
         }
     }
 }
@@ -322,6 +326,10 @@ pub struct PersistedState {
     pub ui_font_family: String,
     #[serde(default = "default_code_font_family")]
     pub code_font_family: String,
+    /// Off by default: browser tools cost model context, so enabling them
+    /// is an explicit act.
+    #[serde(default)]
+    pub browser_tools_enabled: bool,
     #[serde(default = "default_sidebar_visibility")]
     pub sidebar_visible: bool,
     #[serde(default = "default_right_panel_visibility")]
@@ -375,6 +383,7 @@ impl PersistedState {
             code_text_scale: DEFAULT_CODE_TEXT_SCALE,
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
+            browser_tools_enabled: false,
             sidebar_visible: true,
             right_panel_visible: false,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -458,9 +467,14 @@ impl PersistedState {
     }
 
     pub fn daemon_settings(&self) -> DaemonSettings {
-        DaemonSettings {
-            extra: self.daemon_settings_extra.clone(),
-        }
+        let mut extra = self.daemon_settings_extra.clone();
+        // The app-side toggle is the source of truth: whatever the daemon
+        // file round-tripped back must not override the user's choice.
+        extra.insert(
+            fintwind_protocol::settings::BROWSER_TOOLS_ENABLED_KEY.to_owned(),
+            serde_json::Value::Bool(self.browser_tools_enabled),
+        );
+        DaemonSettings { extra }
     }
 
     pub fn apply_daemon_settings(&mut self, settings: DaemonSettings) {
@@ -477,6 +491,7 @@ impl PersistedState {
             code_text_scale: self.code_text_scale,
             ui_font_family: self.ui_font_family.clone(),
             code_font_family: self.code_font_family.clone(),
+            browser_tools_enabled: self.browser_tools_enabled,
         }
     }
 
@@ -508,6 +523,7 @@ impl PersistedState {
         self.code_text_scale = settings.code_text_scale;
         self.ui_font_family = settings.ui_font_family;
         self.code_font_family = settings.code_font_family;
+        self.browser_tools_enabled = settings.browser_tools_enabled;
     }
 
     fn apply_app_state(&mut self, app_state: AppState) {

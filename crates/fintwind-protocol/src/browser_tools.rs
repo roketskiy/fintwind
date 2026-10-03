@@ -79,4 +79,10 @@ pub enum BrowserToolReply {
         request_id: Uuid,
         result: BrowserResult,
     },
+    /// The daemon-side browser-tools setting changed (or is being stated for
+    /// a fresh connection). While disabled the plugin must keep its tools and
+    /// instruction out of model context entirely.
+    ToolsState {
+        enabled: bool,
+    },
 }

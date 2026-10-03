@@ -97,6 +97,9 @@ type CapturedRequest = {
   messageCount: number;
   lastRole: string;
   hasToolResults: boolean;
+  /** Whether the armed turn marker is in this request's messages, independent
+   *  of tool presence. */
+  carriesMarker: boolean;
   real: boolean;
   /** Names of the tools OpenCode declared in this request (what the model could call). */
   toolNames: string[];
@@ -242,6 +245,9 @@ export class FakeProvider {
       messageCount: messages.length,
       lastRole: typeof last?.role === 'string' ? last.role : 'none',
       hasToolResults: messages.some(message => message.role === 'tool'),
+      // Independent of `real`: the marker identifies the request under test
+      // even when a disabled plugin leaves the request with no tools at all.
+      carriesMarker: serialized.includes(this.marker),
       real,
       toolNames,
       fintwindBrowserInstruction: instruction,

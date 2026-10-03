@@ -5,17 +5,18 @@
 //! after disconnect, and credentials escaping through Debug or persisted state.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Weak};
 
 use anyhow::{Context as _, bail};
+use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 use subtle::ConstantTimeEq as _;
 use uuid::Uuid;
 
 use crate::browser_broker::BrowserBroker;
 use fintwind_protocol::browser::{BrowserAction, BrowserResult, BrowserScope};
-use fintwind_protocol::browser_tools::BrowserToolPage;
+use fintwind_protocol::browser_tools::{BrowserToolPage, BrowserToolReply};
 
 const MAX_TOOL_SERVERS: usize = 32;
 const MAX_TOOL_SESSIONS: usize = 1024;
@@ -30,6 +31,7 @@ struct State {
     broker: Weak<BrowserBroker>,
     servers: HashMap<Uuid, Server>,
     connections: HashMap<u64, Connection>,
+    outgoing: HashMap<u64, Sender<BrowserToolReply>>,
 }
 
 struct Connection {
@@ -54,6 +56,9 @@ struct Mapping {
 /// the GUI; only the backend and its owned OpenCode processes issue mappings.
 #[derive(Default)]
 pub struct BrowserTools {
+    /// Off until the settings say otherwise: browser tools cost model
+    /// context, so enabling them is an explicit act.
+    enabled: AtomicBool,
     state: Mutex<State>,
 }
 
@@ -95,6 +100,33 @@ impl BrowserTools {
         let mut state = self.state.lock();
         state.address = Some(address);
         state.broker = Arc::downgrade(broker);
+    }
+
+    /// Apply the browser-tools setting and push the new state to every
+    /// connected plugin. A dead sender is dropped lazily here; a connection
+    /// between its hello and its registration is covered by the initial
+    /// state [`Self::register_outgoing`] sends.
+    pub fn set_enabled(&self, enabled: bool) {
+        self.enabled.store(enabled, Ordering::Release);
+        let mut state = self.state.lock();
+        state
+            .outgoing
+            .retain(|_, sender| sender.send(BrowserToolReply::ToolsState { enabled }).is_ok());
+    }
+
+    /// Hand the transport's reply channel for one connection to the registry
+    /// so setting changes can be pushed to the plugin. The current state is
+    /// stated on the same lock that serializes [`Self::set_enabled`] pushes,
+    /// so the plugin can never observe the two reordered.
+    pub(crate) fn register_outgoing(&self, connection: u64, sender: Sender<BrowserToolReply>) {
+        let enabled = self.enabled.load(Ordering::Acquire);
+        let mut state = self.state.lock();
+        if sender
+            .send(BrowserToolReply::ToolsState { enabled })
+            .is_ok()
+        {
+            state.outgoing.insert(connection, sender);
+        }
     }
 
     /// Issued only when a private OpenCode process starts, never from a
@@ -163,6 +195,7 @@ impl BrowserTools {
     pub(crate) fn disconnect(&self, connection: u64) {
         let mut state = self.state.lock();
         state.connections.remove(&connection);
+        state.outgoing.remove(&connection);
         if let Some(broker) = state.broker.upgrade() {
             broker.remove_connection(connection);
         }
@@ -205,11 +238,22 @@ impl BrowserTools {
         ))
     }
 
+    /// Every capability except a cancel is refused while the setting is off:
+    /// the plugin already keeps the tools out of model context, and this is
+    /// the enforcement point that makes a stale plugin state harmless.
+    fn ensure_enabled(&self) -> anyhow::Result<()> {
+        if !self.enabled.load(Ordering::Acquire) {
+            bail!("browser tools are disabled in Fintwind's settings");
+        }
+        Ok(())
+    }
+
     pub(crate) fn list(
         &self,
         connection: u64,
         native_session: &str,
     ) -> anyhow::Result<Vec<BrowserToolPage>> {
+        self.ensure_enabled()?;
         let (broker, mapping) = self.resolve(connection, native_session)?;
         Ok(broker
             .list_for_caller(mapping.session_id, mapping.runtime_id, connection)?
@@ -232,6 +276,9 @@ impl BrowserTools {
         grant_id: Uuid,
         action: BrowserAction,
     ) -> BrowserResult {
+        if let Err(error) = self.ensure_enabled() {
+            return BrowserResult::error(error.to_string());
+        }
         let (broker, mapping) = match self.resolve(connection, native_session) {
             Ok(bound) => bound,
             Err(error) => return BrowserResult::error(error.to_string()),
@@ -261,6 +308,9 @@ impl BrowserTools {
         request_id: Uuid,
         url: &str,
     ) -> BrowserResult {
+        if let Err(error) = self.ensure_enabled() {
+            return BrowserResult::error(error.to_string());
+        }
         let (broker, mapping) = match self.resolve(connection, native_session) {
             Ok(bound) => bound,
             Err(error) => return BrowserResult::error(error.to_string()),
@@ -398,5 +448,34 @@ fn retire_binding_connections(state: &mut State, binding_id: Uuid) {
         if let Some(broker) = state.broker.upgrade() {
             broker.remove_connection(connection);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossbeam_channel::unbounded;
+
+    // The push contract the plugin depends on: a connection hears the state
+    // it registered under, then every later change, in order.
+    #[test]
+    fn tools_state_reaches_registered_connections() {
+        let tools = BrowserTools::default();
+        let (sender, receiver) = unbounded();
+        tools.register_outgoing(1, sender);
+        assert!(matches!(
+            receiver.recv(),
+            Ok(BrowserToolReply::ToolsState { enabled: false })
+        ));
+        tools.set_enabled(true);
+        assert!(matches!(
+            receiver.recv(),
+            Ok(BrowserToolReply::ToolsState { enabled: true })
+        ));
+        tools.set_enabled(false);
+        assert!(matches!(
+            receiver.recv(),
+            Ok(BrowserToolReply::ToolsState { enabled: false })
+        ));
     }
 }

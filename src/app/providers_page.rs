@@ -126,6 +126,19 @@ impl Fintwind {
         self.providers_authorized.contains(id)
     }
 
+    /// Whether the server reports every credential of `id` as needing
+    /// re-auth — the connection exists but requests fail until the user
+    /// signs in again. Only set by OpenCode v2.0.20+ servers.
+    pub(super) fn provider_needs_auth(&self, id: &str) -> bool {
+        self.providers_needs_auth.contains(id)
+    }
+
+    /// The sign-back-in URL the server names for `id`'s failed credential,
+    /// when it does.
+    pub(super) fn provider_auth_url(&self, id: &str) -> Option<&str> {
+        self.providers_auth_urls.get(id).map(String::as_str)
+    }
+
     /// Whether the server offers `id` a plain API-key connect method. The
     /// integration list answers when loaded; until then the catalog's
     /// endpoint field approximates it, so the roster does not flash the
@@ -1265,6 +1278,7 @@ impl Fintwind {
     ) -> AnyElement {
         let accent = providers_accent(theme);
         let authorized = self.provider_is_authorized(&provider.id);
+        let needs_auth = authorized && self.provider_needs_auth(&provider.id);
 
         let state = self.providers_builtin_catalog_check.as_ref().filter(|_| {
             self.providers_builtin_catalog_check_id.as_deref() == Some(provider.id.as_str())
@@ -1428,13 +1442,20 @@ impl Fintwind {
                                 .py(px(2.0))
                                 .rounded_full()
                                 .text_size(ui_px(9.5))
-                                .when(authorized, |element| {
+                                .when(needs_auth, |element| {
+                                    element
+                                        .text_color(theme.warning_text)
+                                        .bg(theme.warning.opacity(0.14))
+                                })
+                                .when(authorized && !needs_auth, |element| {
                                     element.text_color(accent).bg(accent.opacity(0.14))
                                 })
                                 .when(!authorized, |element| {
                                     element.text_color(theme.text_tertiary).bg(theme.overlay)
                                 })
-                                .child(if authorized {
+                                .child(if needs_auth {
+                                    tr!("providers.needs_auth_badge")
+                                } else if authorized {
                                     tr!("providers.authorized_badge")
                                 } else {
                                     tr!("providers.unauthorized_badge")
@@ -1461,7 +1482,16 @@ impl Fintwind {
                         .flex()
                         .flex_col()
                         .gap(px(14.0))
-                        .child(catalog_check),
+                        .child(catalog_check)
+                        .when(needs_auth, |element| {
+                            let hint = match self.provider_auth_url(&provider.id) {
+                                Some(url) => {
+                                    tr!("providers.needs_auth_hint_url", url = url)
+                                }
+                                None => tr!("providers.needs_auth_hint"),
+                            };
+                            element.child(info_note(theme, "icons/info.svg", hint))
+                        }),
                 )
                 .child(info_note(
                     theme,
@@ -2323,7 +2353,9 @@ impl Fintwind {
                     Some(provider.id.clone()),
                     provider.name.clone(),
                     provider_icon(&provider.name),
-                    if authorized {
+                    if authorized && self.provider_needs_auth(&provider.id) {
+                        Some(tr!("providers.needs_auth_badge"))
+                    } else if authorized {
                         Some(tr!("providers.authorized_badge"))
                     } else if is_oauth {
                         Some(tr!("providers.oauth_badge"))

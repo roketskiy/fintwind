@@ -374,6 +374,12 @@ providers.update_key:
   en: Update key
 providers.authorized_badge:
   en: Authorized
+providers.needs_auth_badge:
+  en: Re-login needed
+providers.needs_auth_hint:
+  en: The provider rejected the stored credential. Sign in again — in the CLI (opencode auth login), the TUI, or by updating the key here — then refresh this page.
+providers.needs_auth_hint_url:
+  en: The provider rejected the stored credential. Sign in again at %{url}, then refresh this page.
 providers.unauthorized_badge:
   en: Not authorized
 providers.authorized_toast:
@@ -1615,6 +1621,8 @@ errors.select_model:
   en: "Could not select the model: %{error}"
 errors.read_provider_event_stream:
   en: "Could not read the %{provider} event stream: %{error}"
+errors.provider_response_body:
+  en: "Provider response: %{body}"
 errors.answer_provider_permission:
   en: "Could not answer %{provider}'s permission request: %{error}"
 errors.answer_provider_question:

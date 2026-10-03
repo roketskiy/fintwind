@@ -673,9 +673,10 @@ impl Fintwind {
         }
     }
 
-    /// Store one integration fetch: the authorized set and the key-method
-    /// set. A integration row whose id the catalog does not know still
-    /// counts as authorized — the roster must not hide a working credential.
+    /// Store one integration fetch: the authorized set, the key-method set,
+    /// and the needs-re-auth subset with its sign-back-in URLs. A integration
+    /// row whose id the catalog does not know still counts as authorized —
+    /// the roster must not hide a working credential.
     fn apply_integrations(
         &mut self,
         integrations: Vec<fintwind_protocol::provider_session::IntegrationSummary>,
@@ -689,6 +690,20 @@ impl Fintwind {
             .iter()
             .filter(|integration| integration.supports_key)
             .map(|integration| integration.id.clone())
+            .collect();
+        self.providers_needs_auth = integrations
+            .iter()
+            .filter(|integration| integration.connected && integration.needs_auth)
+            .map(|integration| integration.id.clone())
+            .collect();
+        self.providers_auth_urls = integrations
+            .iter()
+            .filter_map(|integration| {
+                integration
+                    .auth_url
+                    .clone()
+                    .map(|url| (integration.id.clone(), url))
+            })
             .collect();
     }
 

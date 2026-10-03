@@ -197,6 +197,9 @@ providers.oauth_badge: OAuth
 providers.authorize_action: 認証
 providers.update_key: キーを更新
 providers.authorized_badge: 認証済み
+providers.needs_auth_badge: 再ログインが必要
+providers.needs_auth_hint: プロバイダーが保存済みの資格情報を拒否しました。再度サインインし（CLI の opencode auth login、TUI、またはここでキーを更新）、このページを更新してください。
+providers.needs_auth_hint_url: "プロバイダーが保存済みの資格情報を拒否しました。%{url} で再度サインインしてから、このページを更新してください。"
 providers.unauthorized_badge: 未認証
 providers.authorized_toast: プロバイダーを認証しました
 providers.logged_out_toast: プロバイダーからログアウトしました
@@ -848,6 +851,7 @@ errors.change_provider_thinking: "%{provider} の思考レベルを変更でき�
 errors.open_provider_session: "%{provider} のセッションを開けませんでした：%{error}"
 errors.select_model: "モデルを選択できませんでした：%{error}"
 errors.read_provider_event_stream: "%{provider} のイベントストリームを読み取れませんでした：%{error}"
+errors.provider_response_body: "プロバイダーの応答: %{body}"
 errors.answer_provider_permission: "%{provider} の権限リクエストに回答できませんでした：%{error}"
 errors.answer_provider_question: "%{provider} の質問に回答できませんでした：%{error}"
 errors.provider_receive_prompt: "%{provider} はプロンプトを受信できませんでした"

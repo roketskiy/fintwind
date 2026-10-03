@@ -13,8 +13,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, App, EntityId, Global, IntoElement, RenderOnce, Svg, Transformation, Window,
-    ease_out_quint, percentage,
+    AnyElement, App, ElementId, EntityId, Global, Hsla, IntoElement, RenderOnce, Rgba, Svg,
+    Transformation, Window, ease_out_quint, percentage,
 };
 
 /// Repeat-tick interval (~30 fps): visually equivalent for these chunky
@@ -204,6 +204,11 @@ impl RenderOnce for Pulse {
 /// settled before the pointer arrives anywhere else.
 pub const PANEL_SLIDE: Duration = Duration::from_millis(200);
 
+/// How long the shared switch's thumb takes to cross its rail. Ely's motion
+/// base (`src/motion/curve.rs` `BASE`), the same duration, so a flipped
+/// switch lands about as fast as a panel settles.
+pub const SWITCH_SLIDE: Duration = Duration::from_millis(200);
+
 /// A one-shot width slide, evaluated from `render` instead of wrapped around
 /// an element.
 ///
@@ -241,6 +246,79 @@ impl WidthTween {
 fn width_at(from: f32, target: f32, elapsed: Duration) -> Option<f32> {
     let progress = elapsed.as_secs_f32() / PANEL_SLIDE.as_secs_f32();
     (progress < 1.0).then(|| from + (target - from) * ease_out_quint()(progress.max(0.0)))
+}
+
+pub fn lerp(from: f32, to: f32, t: f32) -> f32 {
+    from + (to - from) * t
+}
+
+/// Damped spring, ported from Ely's motion kit (`src/motion/curve.rs`):
+/// overshoots the target by a few percent past the middle of the travel and
+/// then settles, which is what gives a slider thumb its landing. `t >= 1.0`
+/// pins to exactly 1.0 so the held final frame sits precisely on target.
+pub fn spring(t: f32) -> f32 {
+    const DAMPING: f32 = 0.75;
+    const OMEGA: f32 = 6.91 / DAMPING;
+
+    if t >= 1.0 {
+        return 1.0;
+    }
+    let damped = OMEGA * (1.0 - DAMPING * DAMPING).sqrt();
+    let decay = (-DAMPING * OMEGA * t).exp();
+    1.0 - decay * ((damped * t).cos() + DAMPING * OMEGA / damped * (damped * t).sin())
+}
+
+/// Color cross-fade, ported from Ely's `Mix for Hsla`
+/// (`src/theme/palette.rs`): interpolate in RGB, not in HSL. Component-wise
+/// HSL lerp sweeps the hue from one end's to the other's — a neutral gray
+/// (h = 0) crossing to the blue accent (h ≈ 0.6) flashes a green nobody
+/// picked — while RGB keeps the midpoints as plain blends of the two ends.
+/// The ends clamp so a held final frame is the exact target color.
+pub fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
+    if t <= 0.0 {
+        return from;
+    }
+    if t >= 1.0 {
+        return to;
+    }
+    let (a, b) = (from.to_rgb(), to.to_rgb());
+    let lerp = |x: f32, y: f32| x + (y - x) * t;
+    Rgba {
+        r: lerp(a.r, b.r),
+        g: lerp(a.g, b.g),
+        b: lerp(a.b, b.b),
+        a: lerp(a.a, b.a),
+    }
+    .into()
+}
+
+/// How often `value` changed since `id` first rendered, keyed per window.
+/// Keying an animation on the returned count replays it per change while a
+/// first mount stays static: zero means the value arrived with the element,
+/// so there is nothing to animate from. Ported from Ely's motion kit
+/// (`src/motion/changes.rs`). Must run during a frame's build or paint.
+pub fn changes(
+    id: impl Into<ElementId>,
+    value: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> usize {
+    struct Changes {
+        last: bool,
+        count: usize,
+    }
+
+    let state = window.use_keyed_state(id, cx, |_, _| Changes {
+        last: value,
+        count: 0,
+    });
+    if state.read(cx).last != value {
+        state.update(cx, |state, _| {
+            state.last = value;
+            state.count += 1;
+        });
+    }
+    state.read(cx).count
 }
 
 #[cfg(test)]

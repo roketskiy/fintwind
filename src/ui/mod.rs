@@ -3,9 +3,10 @@ use crate::theme::ui_px;
 use std::time::Duration;
 
 use gpui::{
-    AnyElement, App, Context, Div, ElementId, Hsla, Img, InteractiveElement, Interactivity,
-    KeyDownEvent, ParentElement, PathBuilder, Pixels, RenderOnce, SharedString, Stateful,
-    StyleRefinement, Styled, Svg, Window, canvas, div, img, point, prelude::*, px, rgb, svg,
+    Animation, AnimationExt, AnyElement, App, BoxShadow, Context, Div, ElementId, Hsla, Img,
+    InteractiveElement, Interactivity, KeyDownEvent, ParentElement, PathBuilder, Pixels,
+    RenderOnce, Role, SharedString, Stateful, StyleRefinement, Styled, Svg, Window, canvas, div,
+    img, point, prelude::*, px, rgb, svg, transparent_black,
 };
 
 pub mod menu;
@@ -114,6 +115,13 @@ impl ActivationExt for Stateful<Div> {
 
 /// The shared pill switch used by settings and automation forms.
 ///
+/// Ported from Ely's `Switch` (Ely-GPUI-Components `src/forms/switch.rs`):
+/// a 32×18 rail whose fill cross-fades between a strong-border gray and the
+/// accent while a shadowed square thumb springs across with a small
+/// overshoot. Focus paints as a ring on the switch's own border. A switch
+/// mounting with its current value paints settled; only a real flip keys a
+/// fresh animation, so lists that rebuild rows never replay the slide.
+///
 /// `activate` is ignored while `disabled` is true, but the control remains in
 /// the tab order so a pending operation does not move focus unexpectedly.
 pub fn toggle_switch<E>(
@@ -121,38 +129,103 @@ pub fn toggle_switch<E>(
     on: bool,
     disabled: bool,
     theme: Theme,
+    window: &mut Window,
     cx: &mut Context<E>,
     activate: impl Fn(&mut E, &mut Window, &mut Context<E>) + 'static,
 ) -> Stateful<Div>
 where
     E: 'static,
 {
-    let base = div()
-        .id(id)
-        .tab_index(0)
-        .focus_visible(|style| style.border_color(theme.accent))
-        .w(px(42.0))
-        .h(px(24.0))
-        .p(px(3.0))
+    let id = id.into();
+    // Ely's geometry: a 32×18 rail with a 2px inset. The thumb fills the
+    // inset height as a square and travels the rail's height difference, so
+    // the switched-on frame lands flush against the far edge.
+    let (rail_w, rail_h, inset) = (px(32.0), px(18.0), px(2.0));
+    let travel = rail_w - rail_h;
+    // Off is a strong-border rail carrying a muted thumb; on fills with the
+    // accent and carries the accent's own foreground. Ely's
+    // `border_strong`/`fg_muted`/`accent`/`on_accent` map onto Fintwind's
+    // same-named or nearest tokens.
+    let (rail_off, rail_on) = (theme.border_strong, theme.accent);
+    let (thumb_off, thumb_on) = (theme.text_tertiary, theme.on_accent);
+    let (from, to, rail_from, rail_to, thumb_from, thumb_to) = if on {
+        (0.0, 1.0, rail_off, rail_on, thumb_off, thumb_on)
+    } else {
+        (1.0, 0.0, rail_on, rail_off, thumb_on, thumb_off)
+    };
+    // Zero changes means `on` arrived with this mount — paint the switch
+    // settled on its current end. Any real flip increments the count, and
+    // keying the animations on it restarts the slide from where the thumb
+    // actually was.
+    let changes = motion::changes(
+        SharedString::from(format!("{id}-changes")),
+        on,
+        window,
+        cx,
+    );
+    let thumb_animation_id = SharedString::from(format!("switch-thumb-{id}-{changes}"));
+    let fill_animation_id = SharedString::from(format!("switch-fill-{id}-{changes}"));
+
+    let thumb = div()
+        .h_full()
+        .aspect_square()
         .flex_none()
         .rounded_full()
-        .cursor_default()
-        .when(disabled, |element| element.opacity(0.55))
-        .bg(if on { theme.inverse } else { theme.inset })
-        .border_1()
-        .border_color(if on {
-            theme.inverse
-        } else {
-            theme.border_strong
-        })
+        .bg(thumb_to)
+        .shadow(vec![BoxShadow::new(
+            px(0.0),
+            px(1.0),
+            Hsla {
+                h: 0.0,
+                s: 0.0,
+                l: 0.0,
+                a: if theme.is_dark { 0.4 } else { 0.25 },
+            },
+        )
+        .blur_radius(px(2.0))]);
+
+    let rail = div()
         .flex()
+        .flex_none()
         .items_center()
-        .when(on, |element| element.justify_end())
-        .child(div().w(px(18.0)).h(px(18.0)).rounded_full().bg(if on {
-            theme.on_inverse
-        } else {
-            theme.text_tertiary
-        }));
+        .w(rail_w)
+        .h(rail_h)
+        .p(inset)
+        .rounded_full()
+        .border_1()
+        .border_color(transparent_black())
+        .bg(rail_to);
+    let rail = if changes == 0 {
+        rail.child(thumb.ml(travel * to)).into_any_element()
+    } else {
+        rail.child(thumb.with_animation(
+            thumb_animation_id,
+            Animation::new(motion::SWITCH_SLIDE),
+            move |thumb, t| {
+                thumb
+                    .ml(travel * motion::lerp(from, to, motion::spring(t)))
+                    .bg(motion::mix(thumb_from, thumb_to, t))
+            },
+        ))
+        .with_animation(
+            fill_animation_id,
+            Animation::new(motion::SWITCH_SLIDE),
+            move |rail, t| rail.bg(motion::mix(rail_from, rail_to, t)),
+        )
+        .into_any_element()
+    };
+
+    let base = div()
+        .id(id)
+        .role(Role::Switch)
+        .aria_toggled(on.into())
+        .tab_index(0)
+        .border_1()
+        .border_color(transparent_black())
+        .focus_visible(|style| style.border_color(theme.accent_focus))
+        .cursor_default()
+        .when(disabled, |element| element.opacity(0.5))
+        .child(rail);
 
     if disabled {
         base

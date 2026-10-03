@@ -10,7 +10,7 @@ agent's replies, reasoning, and tool activity in one window.
 [Website](https://fintwind.xyz) · [Downloads](https://github.com/roketskiy/fintwind/releases/latest) · [Changelog](CHANGELOG.md)
 
 > [!IMPORTANT]
-> **fintwind 0.2.3 supports OpenCode 2.0.19.** OpenCode 2 is still evolving;
+> **fintwind 0.2.4 supports OpenCode 2.0.20.** OpenCode 2 is still evolving;
 > compatibility with newer versions is not guaranteed. Use the pinned version
 > below rather than installing the latest CLI without checking compatibility.
 > OpenCode 1 is not the supported backend.
@@ -29,13 +29,13 @@ Choose **one** of these commands in PowerShell:
 With [Node.js and npm](https://nodejs.org/):
 
 ```powershell
-npm install -g @opencode/cli@2.0.19
+npm install -g @opencode/cli@2.0.20
 ```
 
 Or with [Bun](https://bun.sh/):
 
 ```powershell
-bun install -g --trust @opencode/cli@2.0.19
+bun install -g --trust @opencode/cli@2.0.20
 ```
 
 The Bun `--trust` flag allows the package's required install script.
@@ -49,7 +49,7 @@ opencode --version
 opencode
 ```
 
-Check that the version is `2.0.19`. In the OpenCode terminal interface, use
+Check that the version is `2.0.20`. In the OpenCode terminal interface, use
 `/connect` to connect a model provider, or use your existing provider configuration.
 fintwind uses OpenCode's models, provider credentials, and MCP configuration.
 You do not need to start `opencode serve` yourself: fintwind starts its own
@@ -70,8 +70,11 @@ For the portable version, extract the release `.zip` and run `fintwind.exe`.
 **Keep `fintwind.exe` and `fintwind-daemon.exe` in the same folder** — the app
 launches the daemon from its own directory.
 
-When a newer release is available, the **Update** button opens its release page.
-fintwind does not download or install updates automatically. See
+When a newer release is available, the update card can install it in one
+click: fintwind downloads the installer for your architecture, verifies it
+against the sha256 published with the release, installs silently without
+administrator rights, and restarts into the new version. Portable installs have
+no install record, so their update entry still opens the release page. See
 [Windows setup and troubleshooting](docs/windows.md) for SmartScreen, CLI
 detection, data locations, and WebView2 details.
 
@@ -81,22 +84,33 @@ detection, data locations, and WebView2 details.
   sessions in one window, with tab reordering and unread indicators.
 - **Session controls.** Switch model, reasoning effort where supported, and
   access mode (Ask, Auto-accept edits, Full access). Queue or steer a follow-up
-  while the agent works, and use OpenCode's native revert and restore for
-  eligible Git-backed turns.
+  while the agent works and reorder queued messages by dragging. Use OpenCode's
+  native revert and restore for eligible Git-backed turns. `/btw` asks a
+  one-off side question from the session's settled context without disturbing
+  the task in progress.
 - **Readable agent activity.** View streaming replies, reasoning, tool calls,
   subagent activity, and nested Code Mode calls with OpenCode's tool names.
-  Transcripts and reasoning use virtualized lists to limit per-frame work.
+  Background shell commands surface as capsules on the session card, and
+  finished activity groups fold away on their own. Transcripts and reasoning
+  use virtualized lists to limit per-frame work.
 - **Files and Git.** Browse workspace files, open multiple file tabs, inspect
-  diffs, and view Git commit history. Attach files from the composer or by
-  dropping them onto the conversation; images and PDFs are sent inline to OpenCode.
+  diffs, and read Git commit history laid out as a commit graph. Attach files
+  from the composer or by dropping them onto the conversation; images and PDFs
+  are sent inline to OpenCode.
 - **Terminal and browser.** Work in a built-in terminal or the optional
-  WebView2 browser panel. The session interface itself remains native GPUI.
+  WebView2 browser panel. Enable the browser tools in settings (off by
+  default) and the agent can operate browser tabs you share with the session —
+  open, observe, click, fill, scroll, navigate, screenshot — within the
+  session's access mode. The session interface itself remains native GPUI.
 - **Appearance settings.** Choose Fintwind or one of 12 additional theme
   families, select light/dark/system mode, and customize UI and code fonts and
   text sizes. Animations honor the system's reduce-motion preference.
 - **Usage statistics.** Explore local OpenCode session history through an
   activity heatmap, daily and hourly charts, and model/provider rankings,
   including subagent usage. Displayed costs are estimates, not billing records.
+- **Provider management.** Sign in and out of built-in providers, see at a
+  glance which connections need re-login, and read the provider's own rejection
+  reason (quota, key, or model) when a request fails.
 - **MCP management.** Browse the MCP marketplace, add remote servers, complete
   OAuth login, and check connection status.
 - **Native math.** Typeset inline and display formulas, including `\(…\)` and

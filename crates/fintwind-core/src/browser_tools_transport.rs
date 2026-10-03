@@ -87,6 +87,10 @@ pub(crate) fn handle(
         .get_mut()
         .set_write_timeout(Some(Duration::from_secs(3)))?;
     let (outgoing, inbox) = unbounded();
+    // Registration also states the current setting, so the plugin knows
+    // whether it may expose tools before its first request; later changes
+    // arrive through this channel and leave on the existing drain below.
+    tools.register_outgoing(id, outgoing.clone());
     let active = Arc::new(AtomicUsize::new(0));
     while !shutdown.load(Ordering::Acquire) && tools.is_connected(id) {
         while let Ok(reply) = inbox.try_recv() {

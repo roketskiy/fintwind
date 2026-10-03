@@ -39,4 +39,16 @@ impl DaemonSettings {
             self.extra.remove(key);
         }
     }
+
+    /// Whether the daemon lets the browser plugin expose its tools to models.
+    /// The default is off: browser tools cost model context, so enabling them
+    /// is an explicit act. A missing or non-boolean value reads as off.
+    pub fn browser_tools_enabled(&self) -> bool {
+        self.extra
+            .get(BROWSER_TOOLS_ENABLED_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
 }
+
+pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";

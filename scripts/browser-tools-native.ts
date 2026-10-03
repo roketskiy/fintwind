@@ -396,6 +396,15 @@ try {
   report.versions.daemon = client.hello?.daemonVersion ?? '';
   report.startup.push({ step: 'daemon', status: 'ok', details: `${daemonAddress} (version ${report.versions.daemon})` });
 
+  // Browser tools ship disabled by default; this run exists to exercise them,
+  // so opt in through the same command the settings UI uses. Before the first
+  // start, so the plugin's first observed state is enabled.
+  {
+    const outcome = await client.request(sessionId, runtimeId,
+      { type: 'updateSettings', settings: { browser_tools_enabled: true } });
+    assert(outcome.status === 'ok', `this run must be able to enable browser tools: ${JSON.stringify(outcome)}`);
+  }
+
   // ---- Start the real Step runtime (this is the first real model surface). -----
   await check(`the private Step runtime starts with ${MODEL_REF} (${VARIANT})`, 'real private OpenCode + real driver; tool execution not yet proven', async () => {
     const outcome = await client!.request(sessionId, runtimeId, { type: 'start', options: wireStartOptions({ binary: OPENCODE_BINARY, cwd: paths.workspace, model: MODEL_REF, reasoningEffort: VARIANT }) }, randomUUID(), 120_000);

@@ -58,8 +58,12 @@ impl FintwindBackend {
                 .unwrap_or_else(|| std::path::Path::new("."))
                 .join("attachments"),
         );
+        let browser_tools = Arc::new(crate::browser_tools::BrowserTools::default());
+        // Seed from the persisted setting so a daemon that comes up before
+        // the app connects already exposes the right state to plugins.
+        browser_tools.set_enabled(settings.get().browser_tools_enabled());
         Ok(Self {
-            browser_tools: Arc::default(),
+            browser_tools,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             terminals: Mutex::new(HashMap::new()),
             settings,
@@ -706,6 +710,10 @@ impl Backend for FintwindBackend {
             }),
             Command::UpdateSettings { settings } => {
                 self.settings.replace(settings)?;
+                // Persisting alone keeps the plugin on its previous state;
+                // apply it so the change reaches models on the next request.
+                self.browser_tools
+                    .set_enabled(self.settings.get().browser_tools_enabled());
                 Ok(ResponsePayload::Ack)
             }
             Command::ProbeProvider {

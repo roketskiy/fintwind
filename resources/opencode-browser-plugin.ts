@@ -76,6 +76,12 @@ const token = capability?.token;
 delete process.env.FINTWIND_BROWSER_TOOL_ADDRESS;
 delete process.env.FINTWIND_BROWSER_TOOL_TOKEN;
 
+// The daemon-side setting, received over the state socket opened in setup().
+// Off until the daemon says otherwise: browser tools cost model context, so
+// enabling them is an explicit act. While false, every model request leaves
+// the tools and the instruction out, and a stray call is refused here too.
+let toolsEnabled = false;
+
 const uuid = { type: "string", format: "uuid" };
 const page = { pageId: uuid, grantId: uuid };
 // An opaque element reference from a snapshot. It names one observed element
@@ -205,6 +211,9 @@ function verifyBridge(): Promise<void> {
 type BrowserResult = { kind: "ok"; value: unknown } | { kind: "media"; mime: string; data: string };
 
 function request(command: Input, context: Execution, sessions: Set<AbortController>): Promise<BrowserResult> {
+  if (!toolsEnabled) {
+    return Promise.reject(new Error("Browser tools are disabled in Fintwind's settings."));
+  }
   if (!address || !token || !/^ws:\/\/127\.0\.0\.1:\d+\/v1\/browser-tools$/.test(address)) {
     return Promise.reject(new Error("Fintwind browser tools are unavailable in this process."));
   }
@@ -301,6 +310,9 @@ function request(command: Input, context: Execution, sessions: Set<AbortControll
           socket.send(message);
           return;
         }
+        // The daemon states the setting on every new connection; it is not
+        // this call's reply, and the state socket owns the value.
+        if (reply.type === "toolsState") return;
         if (!authenticated || reply.type !== "result" || reply.requestId !== requestId || !reply.result) {
           throw new Error("Browser bridge rejected the call or returned an invalid response.");
         }
@@ -385,6 +397,36 @@ export default {
       return stop;
     }
 
+    // One long-lived socket exists only to hear the daemon-side setting: it
+    // states the current value on connect and pushes every later change, so
+    // the context hook below can keep the tools out of requests the moment
+    // the user turns them off. Closing it without a replacement fails toward
+    // not exposing tools; a deliberate unload must not flip the shared flag,
+    // so its close handler is detached first.
+    const stateSocket = new WebSocket(address!);
+    stateSocket.onopen = () => {
+      // The transport answers only after a hello; without it the connection
+      // never learns the current setting and this socket stays mute forever.
+      stateSocket.send(JSON.stringify({ type: "hello", version: 1, token }));
+    };
+    stateSocket.onmessage = (event) => {
+      try {
+        const reply = JSON.parse(String(event.data));
+        if (reply.type === "toolsState" && typeof reply.enabled === "boolean") {
+          toolsEnabled = reply.enabled;
+        }
+      } catch {
+        // Not a state message; nothing to apply.
+      }
+    };
+    stateSocket.onclose = () => { toolsEnabled = false; };
+    const stopStateSocket = () => {
+      stateSocket.onclose = null;
+      try { stateSocket.close(); } catch {
+        // Already closed.
+      }
+    };
+
     const define = (name: string, description: string, properties: Input, required: string[], command: (input: Input) => Input) =>
       createTool(name, description, properties, required, command, sessions);
     const tools = [
@@ -467,12 +509,20 @@ export default {
     // The transform removal is order-dependent; this per-request hook is not.
     // Even if a later reload re-adds a built-in definition, no model request
     // may ever declare it, and every request carries the instruction above.
+    // The built-ins stay excluded regardless of the setting — OpenCode's own
+    // browser stack is not what Fintwind governs — while this plugin's tools
+    // and instruction appear only while the setting is on.
     const contextRegistration = await ctx.session.hook("context", (event) => {
-      event.system.push({ type: "text", text: BROWSER_INSTRUCTION });
       for (const id of BUILTIN_BROWSER_TOOL_IDS) delete event.tools[id];
+      if (!toolsEnabled) {
+        for (const name of FINTWIND_BROWSER_TOOL_NAMES) delete event.tools[name];
+        return;
+      }
+      event.system.push({ type: "text", text: BROWSER_INSTRUCTION });
     });
     return () => {
       stop();
+      stopStateSocket();
       // OpenCode unload already disposes registrations; disposing here as
       // well keeps an explicit unload path from leaking either of them.
       void toolRegistration.dispose().catch(() => {});

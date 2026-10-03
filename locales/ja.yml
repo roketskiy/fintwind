@@ -155,6 +155,8 @@ update.dismiss: 更新通知を閉じる
 
 settings.local_by_default: デフォルトでローカルに保存
 settings.local_by_default_description: プロジェクト、会話、設定はこのコンピューターに保存されます
+settings.browser_tools: ブラウザツール
+settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します
 settings.app_version: fintwind %{version}
 
 providers.coding_agents: コーディングエージェント

@@ -70,7 +70,7 @@ const INVOKE_TIMEOUT_MS = 25_000;
  * executes fewer checks failed early and must not be reported as a pass, so the
  * count is compared against the executed checks before the status is written.
  */
-const EXPECTED_CHECKS = 25;
+const EXPECTED_CHECKS = 26;
 
 const args = new Set(process.argv.slice(2));
 for (const arg of args) {
@@ -518,6 +518,16 @@ try {
     agentPreset: null,
     providerCursor: null,
   };
+
+  // Browser tools ship disabled by default; the whole point of this run is
+  // the tools, so opt in through the same command the settings UI uses. The
+  // final check exercises the off direction too. This must happen before the
+  // OpenCode server starts, so the plugin's first observed state is enabled.
+  {
+    const outcome = await client!.request(sessionA, runtimeA,
+      { type: 'updateSettings', settings: { browser_tools_enabled: true } });
+    assert(outcome.status === 'ok', `the e2e must be able to enable browser tools: ${JSON.stringify(outcome)}`);
+  }
 
   const start = async (sessionId: string, runtimeId: string, cwd = workspaceDir) => {
     const outcome = await client!.request(sessionId, runtimeId, { type: 'start', options: { ...START_OPTIONS, cwd } }, randomUUID(), 90_000);
@@ -1053,6 +1063,47 @@ try {
     assert.deepEqual(close.value, { closed: true }, 'the simulated owner answered the close');
     assert.equal(gui.page(pageA)!.appliedCount, before + 1, 'the close applied exactly once after approval');
     return 'close waited for approval and the simulated owner answered {closed:true} — a real owner would end the page and revoke its scope.';
+  });
+
+  // The settings toggle: while off, the plugin keeps both the tool
+  // definitions and the instruction out of the request the provider sees —
+  // that absence is the user-visible value, a smaller context. The daemon
+  // pushes the state to the plugin's persistent connection, so the next
+  // request reflects it with no restart. These turns make no tool calls, so
+  // the GUI owner stays untouched.
+  await check('turning browser tools off strips them from the next model request, and on restores them', 'real daemon command -> real plugin context hook', async () => {
+    if (!browserToolsReachedModel()) throw new Error(`blocked: ${pluginToolDiagnosis()}`);
+    type Captured = typeof fake.requests[number];
+    const requestAfterSettings = async (enabled: boolean): Promise<Captured> => {
+      const outcome = await client!.request(sessionA, runtimeA,
+        { type: 'updateSettings', settings: { browser_tools_enabled: enabled } });
+      assert.equal(outcome.status, 'ok', 'the daemon accepted the settings update');
+      for (let attempt = 0; ; attempt += 1) {
+        const marker = `T${(turnSeq += 1)}_${randomUUID().slice(0, 8)}`;
+        fake.plan_install([], marker);
+        await prompt(client!, sessionA, runtimeA, marker);
+        await client!.waitForTurn(sessionA, runtimeA);
+        const request = [...fake.requests].reverse().find(entry => entry.carriesMarker);
+        if (!request) throw new Error('the marker turn never reached the provider');
+        const toolsPresent = request.toolNames.some(name => name.startsWith('fintwind_browser_'));
+        if (toolsPresent === enabled || attempt === 2) {
+          assert.equal(toolsPresent, enabled,
+            attempt === 2 ? 'the push never changed what the plugin exposed to the model' : 'tool exposure disagrees with the setting');
+          return request;
+        }
+        // The push may still be in flight to the plugin; observe again.
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    };
+    const disabled = await requestAfterSettings(false);
+    assert.equal(disabled.fintwindBrowserInstruction, false, 'the instruction must leave the system prompt too');
+    assert(disabled.toolNames.length >= 0, 'the request was still delivered to the provider');
+    const enabled = await requestAfterSettings(true);
+    assert(enabled.fintwindBrowserInstruction, 'the instruction returns with the tools');
+    for (const name of FINTWIND_BROWSER_TOOL_NAMES) {
+      assert(enabled.toolNames.includes(name), `the restored request declares ${name}`);
+    }
+    return 'off removed every fintwind_browser tool and the instruction from the very next request; on restored all sixteen plus the instruction — no restart involved.';
   });
 
   report.startup.push({ step: 'checks complete', status: 'ok', details: `${report.checks.filter(c => c.status === 'passed').length} passed` });

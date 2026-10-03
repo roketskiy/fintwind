@@ -298,6 +298,10 @@ settings.local_by_default:
   en: Local by default
 settings.local_by_default_description:
   en: Projects, conversations, and settings are stored on this computer
+settings.browser_tools:
+  en: Browser tools
+settings.browser_tools_description:
+  en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context
 settings.app_version:
   en: fintwind %{version}
 

@@ -341,6 +341,9 @@ fn refused_message(result: &BrowserResult) -> anyhow::Result<String> {
     match result {
         BrowserResult::Ok { value } => bail!("expected a refusal, got the success {value}"),
         BrowserResult::Error { message } => Ok(message.clone()),
+        BrowserResult::Media { mime, .. } => {
+            bail!("expected a refusal, got a {mime} media result")
+        }
     }
 }
 
@@ -362,6 +365,9 @@ fn expect_ok(result: &BrowserResult) -> anyhow::Result<Value> {
         BrowserResult::Error { message } => {
             bail!("expected a success, got the refusal `{message}`")
         }
+        BrowserResult::Media { mime, .. } => {
+            bail!("expected a JSON success, got a {mime} media result")
+        }
     }
 }
 
@@ -380,6 +386,9 @@ fn terminal_outcome(result: anyhow::Result<BrowserResult>) -> anyhow::Result<Str
             bail!("expected a terminal outcome, got the success {value}")
         }
         Ok(BrowserResult::Error { message }) => Ok(message),
+        Ok(BrowserResult::Media { mime, .. }) => {
+            bail!("expected a terminal outcome, got a {mime} media result")
+        }
         Err(error) => match error.downcast_ref::<ToolConnectionClosed>() {
             Some(closed) => Ok(closed.to_string()),
             None => bail!("the call failed, but not with a proven connection close: {error:#}"),
@@ -847,6 +856,20 @@ fn tool_probe(url: &str, token: &str, messages: &[Value]) -> anyhow::Result<(Vec
         }
         ReadOutcome::Timeout => bail!("the browser tool endpoint did not answer the probe hello"),
         ReadOutcome::Closed => bail!("the browser tool endpoint closed before the probe hello"),
+    }
+    // Every new connection is stated the current browser-tools setting right
+    // after its hello. Consume it here so the reads below pair one-to-one
+    // with the probe messages again.
+    match read_text(&mut socket, Duration::from_secs(10))? {
+        ReadOutcome::Text(text) => {
+            let reply: BrowserToolReply = serde_json::from_str(&text)
+                .with_context(|| format!("unreadable browser tool state reply: {text}"))?;
+            if !matches!(reply, BrowserToolReply::ToolsState { .. }) {
+                bail!("the browser tool endpoint answered a fresh connection with {reply:?}");
+            }
+        }
+        ReadOutcome::Timeout => bail!("the browser tool endpoint did not state its setting"),
+        ReadOutcome::Closed => bail!("the browser tool endpoint closed before stating its setting"),
     }
     let mut closed = false;
     for message in messages {
@@ -1473,6 +1496,14 @@ impl Backend for E2EBackend {
             Command::Start { .. } => Ok(ResponsePayload::Started {
                 supports_steer: false,
             }),
+            // The production backend applies this through its settings store;
+            // here the command's effect on the registry is the behavior under
+            // test, so it forwards straight to the tools.
+            Command::UpdateSettings { settings } => {
+                self.tools
+                    .set_enabled(settings.browser_tools_enabled());
+                Ok(ResponsePayload::Ack)
+            }
             other => bail!("the browser tools e2e backend does not implement {other:?}"),
         }
     }
@@ -1557,6 +1588,9 @@ fn build_harness(report: &mut Report, dir: &PathBuf) -> anyhow::Result<Harness> 
         .to_string();
     let daemon_token = Uuid::new_v4().simple().to_string();
     let registry: Arc<BrowserTools> = Arc::new(BrowserTools::default());
+    // The production daemon seeds this from the persisted setting; this
+    // harness exercises the tools themselves, so it opts in directly.
+    registry.set_enabled(true);
     let backend: Arc<dyn Backend> = Arc::new(E2EBackend {
         tools: registry.clone(),
     });

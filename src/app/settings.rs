@@ -597,6 +597,52 @@ impl Fintwind {
             .child(
                 div()
                     .mt(px(12.0))
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .rounded(px(13.0))
+                    .bg(theme.raised)
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.browser_tools")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.browser_tools_description")),
+                            ),
+                    )
+                    .child(toggle_switch(
+                        "browser-tools-toggle",
+                        self.state.browser_tools_enabled,
+                        false,
+                        theme,
+                        cx,
+                        move |this: &mut Self, _, cx| {
+                            this.set_browser_tools_enabled(
+                                !this.state.browser_tools_enabled,
+                                cx,
+                            );
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .mt(px(12.0))
                     .text_size(ui_px(12.0))
                     .text_color(theme.text_tertiary)
                     .child(tr!(
@@ -1067,6 +1113,18 @@ impl Fintwind {
                     .child(code_font_selector),
             )
             .into_any_element()
+    }
+
+    /// While off, the plugin keeps its tools and instruction out of model
+    /// context entirely. Saving pushes the daemon setting, which forwards the
+    /// new state to connected plugins in time for the next request.
+    fn set_browser_tools_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.state.browser_tools_enabled == enabled {
+            return;
+        }
+        self.state.browser_tools_enabled = enabled;
+        self.save();
+        cx.notify();
     }
 
     /// Switch the whole chrome to `scale`. A window refresh re-renders every

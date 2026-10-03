@@ -116,7 +116,18 @@ HTTP API 面**：v2.0.16 的 113 条 openapi 路径中没有任何 media 路由�
   `usage_page` 的热力图 / 日柱 / 模型排行不再本地全量解析历史，
   省掉子进程与文件遍历（符合 AGENTS.md 性能原则）。
 - **后台化工具** —— `POST /api/session/{id}/background`（#058）：
-  前台长工具转后台观察，配合多会话视图。
+  前台长工具转后台观察，配合多会话视图。该端点本身尚未对接；
+  但 shell 工具自带的 `background` 参数（v2.0.6+）已在 2026-10
+  落地：命令进入 location 的 shell 服务后，
+  `GET /api/shell/:id/output` 按 cursor 增量拉取输出，
+  `DELETE /api/shell/:id` 停止，`shell.exited/deleted` 事件驱动
+  状态。会话胶囊「后台」区据此显示命令、实时输出、退出码与
+  停止按钮（`driver/opencode/shell_work.rs`）。
+  归属判定不依赖 listing：前台命令与后台命令在 wire 上完全同形，
+  因此只有工具结果里的 `shellID`（或重启后从会话转写里扫到的同一
+  标记）才把 shell 记为后台工作；`shell.created` 不作为发现路径，
+  前台 shell 仍只进 transcript，不进胶囊后台区。子代理会话启动的
+  后台 shell 按 `metadata.sessionID` 归属子会话，暂不并入父会话胶囊。
 - **revert 清除** —— `DELETE /api/session/{id}/revert`（#073）补齐
   revert 流程的「取消暂存」操作。
 

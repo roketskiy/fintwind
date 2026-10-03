@@ -25,7 +25,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -37,6 +37,10 @@ use fintwind_protocol::submission::{SubmissionRecord, SubmissionState};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
+use self::shell_work::{
+    ShellWorkTracker, observe_deleted_shell, observe_exited_shell, reconcile_shells,
+    restore_backgrounded_shells, tool_shell_id,
+};
 use super::activity;
 use crate::driver::{
     DriverControl, DriverEventSender, DriverEventSink, DriverStartOptions, SessionOptions,
@@ -54,6 +58,7 @@ use crate::opencode_session::{
 };
 
 mod recovery;
+mod shell_work;
 
 /// How often the permission poll scans the server's pending requests. The
 /// endpoint answers instantly when nothing is pending and opencode does not
@@ -592,6 +597,13 @@ pub struct OpenCodeDriver {
     events: DriverEventSender,
     background_refresh_generation: Arc<AtomicU64>,
     background_transcript_hydrations: Arc<Mutex<HashSet<String>>>,
+    /// This session's detached shell commands, shared between the event
+    /// thread (which observes their lifecycle) and the background refresh
+    /// (which reconciles status and pages output).
+    background_shells: Arc<ShellWorkTracker>,
+    /// Whether the one-shot transcript scan for shells backgrounded before
+    /// this driver attached has run.
+    background_restore_attempted: Arc<AtomicBool>,
     commands: Sender<CommandMessage>,
     permissions: Arc<Mutex<OpenCodePermissionState>>,
     forms: Arc<Mutex<OpenCodeFormState>>,
@@ -906,6 +918,8 @@ impl OpenCodeDriver {
         let turn_active = Arc::new(Mutex::new(false));
         let permissions = Arc::new(Mutex::new(OpenCodePermissionState::default()));
         let forms = Arc::new(Mutex::new(OpenCodeFormState::default()));
+        let background_shells = Arc::new(ShellWorkTracker::default());
+        let background_restore_attempted = Arc::new(AtomicBool::new(false));
         // One shared SSE connection per server port: the hub fans the
         // server-wide stream out to every driver on it, and this driver
         // filters its own session family. It returns before the stream is
@@ -1028,6 +1042,7 @@ impl OpenCodeDriver {
         let stream_forms = Arc::clone(&forms);
         let stream_feed = Arc::clone(&event_feed);
         let stream_family = Arc::clone(&session_family);
+        let stream_background_shells = Arc::clone(&background_shells);
         let stream_liveness = server.liveness();
         let cwd = Arc::new(Mutex::new(cwd));
         let stream_cwd = Arc::clone(&cwd);
@@ -1042,6 +1057,7 @@ impl OpenCodeDriver {
                     forms: stream_forms,
                     ..OpenCodeStreamState::default()
                 };
+                state.shells = Arc::clone(&stream_background_shells);
                 // SSE loss is a transport fault, not process exit. The hub
                 // reconnects; durable reconciliation runs off this consumer.
                 loop {
@@ -1532,6 +1548,8 @@ impl OpenCodeDriver {
             events: stream_events,
             background_refresh_generation,
             background_transcript_hydrations: Arc::new(Mutex::new(HashSet::new())),
+            background_shells,
+            background_restore_attempted,
             commands,
             permissions,
             forms,
@@ -1596,10 +1614,34 @@ impl DriverControl for OpenCodeDriver {
         let events = self.events.clone();
         let generation_guard = Arc::clone(&self.background_refresh_generation);
         let transcript_hydrations = Arc::clone(&self.background_transcript_hydrations);
+        let shells = Arc::clone(&self.background_shells);
+        let restore_attempted = Arc::clone(&self.background_restore_attempted);
         let _ = thread::Builder::new()
             .name("fintwind-opencode-subagents-refresh".into())
             .spawn(move || {
                 let directory = opencode_location_directory(&cwd);
+                // A shell backgrounded before this driver attached lives only
+                // in the session's stored transcript: one bounded scan
+                // restores it, so an app restart under a shared server does
+                // not leave a running command invisible to the capsule.
+                if !restore_attempted.swap(true, Ordering::AcqRel) {
+                    restore_backgrounded_shells(port, &parent_id, &shells, &events);
+                }
+                // Background shells reconcile on their own: they depend only
+                // on the shell registry, so a session-roster read that fails
+                // must not also freeze their output. Their reconcile is the
+                // process-scoped one, which never touches subagent rows.
+                let shell_items = reconcile_shells(
+                    port,
+                    &directory,
+                    &parent_id,
+                    &shells,
+                    || generation_guard.load(Ordering::Acquire) != generation,
+                    &events,
+                );
+                let _ = events.send(DriverEvent::BackgroundWork(
+                    BackgroundWorkEvent::ReconcileProcesses { items: shell_items },
+                ));
                 // A server shared across workspaces must only see this
                 // directory's sessions. New servers filter by parent before
                 // paging; old ones may ignore or reject the parameter. Page
@@ -1690,7 +1732,7 @@ impl DriverControl for OpenCodeDriver {
                 if generation_guard.load(Ordering::Acquire) != generation {
                     return;
                 }
-                let items = sessions
+                let child_items = sessions
                     .into_iter()
                     .filter_map(|payload| {
                         let child_id = payload.get("id").and_then(Value::as_str)?;
@@ -1719,12 +1761,12 @@ impl DriverControl for OpenCodeDriver {
                         })
                     })
                     .collect::<Vec<_>>();
-                let child_ids = items
+                let child_ids = child_items
                     .iter()
                     .map(|item| item.key.provider_id.clone())
                     .collect::<Vec<_>>();
                 let _ = events.send(DriverEvent::BackgroundWork(
-                    BackgroundWorkEvent::ReconcileLive { items },
+                    BackgroundWorkEvent::ReconcileLive { items: child_items },
                 ));
                 for child_id in child_ids {
                     if !transcript_hydrations.lock().insert(child_id.clone()) {
@@ -1757,39 +1799,90 @@ impl DriverControl for OpenCodeDriver {
     }
 
     fn stop_background_work(&self, key: BackgroundWorkKey, control_id: String) {
-        if key.kind != BackgroundWorkKind::Subagent {
-            return;
-        }
         let Some(server) = self.server.as_ref() else {
             return;
         };
         let port = server.port;
         let events = self.events.clone();
-        let _ = thread::Builder::new()
-            .name("fintwind-opencode-subagent-stop".into())
-            .spawn(move || {
-                let path = format!(
-                    "/api/session/{}/interrupt",
-                    encode_path_segment(&control_id)
-                );
-                match crate::opencode_session::request_json_on_port(
-                    port,
-                    "POST",
-                    &path,
-                    None,
-                    Duration::from_secs(10),
-                ) {
-                    Ok(_) => emit_stopped_subagent(&events, key),
-                    Err(error) => {
-                        let _ = events.send(DriverEvent::BackgroundWork(
-                            BackgroundWorkEvent::StopFailed {
-                                key,
-                                message: error.to_string(),
-                            },
-                        ));
-                    }
-                }
-            });
+        let shells = Arc::clone(&self.background_shells);
+        match key.kind {
+            BackgroundWorkKind::Subagent => {
+                let _ = thread::Builder::new()
+                    .name("fintwind-opencode-subagent-stop".into())
+                    .spawn(move || {
+                        let path = format!(
+                            "/api/session/{}/interrupt",
+                            encode_path_segment(&control_id)
+                        );
+                        match crate::opencode_session::request_json_on_port(
+                            port,
+                            "POST",
+                            &path,
+                            None,
+                            Duration::from_secs(10),
+                        ) {
+                            Ok(_) => emit_stopped_subagent(&events, key),
+                            Err(error) => {
+                                let _ = events.send(DriverEvent::BackgroundWork(
+                                    BackgroundWorkEvent::StopFailed {
+                                        key,
+                                        message: error.to_string(),
+                                    },
+                                ));
+                            }
+                        }
+                    });
+            }
+            // A detached shell stops by removing it from the shell registry,
+            // which terminates the process and drops its captured output.
+            BackgroundWorkKind::Process | BackgroundWorkKind::Monitor => {
+                let cwd = self.cwd.lock().clone();
+                let _ = thread::Builder::new()
+                    .name("fintwind-opencode-shell-stop".into())
+                    .spawn(move || {
+                        let directory = opencode_location_directory(&cwd);
+                        let path = format!(
+                            "/api/shell/{}?directory={}",
+                            encode_path_segment(&control_id),
+                            encode_path_segment(&directory)
+                        );
+                        match crate::opencode_session::request_json_on_port_with_directory(
+                            port,
+                            "DELETE",
+                            &path,
+                            None,
+                            Duration::from_secs(10),
+                            Some(&directory),
+                        ) {
+                            // The shell is gone: settle the row from what the
+                            // tracker last saw rather than leaving the
+                            // optimistic Stopping state in place.
+                            Ok(_) => {
+                                shells.untrack(&control_id);
+                                let mut item = BackgroundWorkItem::new(
+                                    key.kind,
+                                    control_id.clone(),
+                                    String::new(),
+                                    BackgroundWorkStatus::Stopped,
+                                );
+                                item.background = true;
+                                item.updated_at_ms = unix_time_millis();
+                                let _ = events.send(DriverEvent::BackgroundWork(
+                                    BackgroundWorkEvent::Upsert(item),
+                                ));
+                            }
+                            Err(error) => {
+                                let _ = events.send(DriverEvent::BackgroundWork(
+                                    BackgroundWorkEvent::StopFailed {
+                                        key,
+                                        message: error.to_string(),
+                                    },
+                                ));
+                            }
+                        }
+                    });
+            }
+        }
     }
 
     fn supports_steer(&self) -> bool {
@@ -1868,6 +1961,13 @@ struct PendingSubagent {
 #[derive(Default)]
 struct OpenCodeStreamState {
     tools: HashMap<String, (ActivityKind, String)>,
+    /// The command and workdir a shell tool call is running, keyed by call
+    /// id. The success event names the detached shell but not the command
+    /// that produced it, so the capsule's process row keeps what the call
+    /// already announced.
+    shell_commands: HashMap<String, (String, Option<String>)>,
+    /// This session's detached shells, shared with the refresh thread.
+    shells: Arc<ShellWorkTracker>,
     pending_subagents: VecDeque<PendingSubagent>,
     children: HashMap<String, OpenCodeChildSession>,
     usage_metadata: Arc<OpenCodeUsageMetadata>,
@@ -2656,6 +2756,33 @@ fn child_update(
     )));
 }
 
+/// Routes one shell lifecycle event onto this session's background work.
+///
+/// The shell service publishes `shell.created` / `shell.exited` /
+/// `shell.deleted` for every location on the shared server, with no session
+/// on the event itself. `shell.created` is deliberately not a discovery
+/// path: a foreground shell and a detached one carry the same row, so a
+/// shell becomes background work only when a tool result names it (or the
+/// stored transcript does). The terminal events therefore act solely on
+/// shells already tracked as this session's work — an untracked id is some
+/// other client's command.
+fn handle_shell_lifecycle_event(
+    kind: &str,
+    payload: &Value,
+    shells: &ShellWorkTracker,
+    events: &impl DriverEventSink,
+) {
+    match kind {
+        "shell.exited" => observe_exited_shell(shells, payload, events),
+        "shell.deleted" => {
+            if let Some(id) = payload.get("id").and_then(Value::as_str) {
+                observe_deleted_shell(shells, id, events);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn dispatch_server_event(
     value: &Value,
     root: &str,
@@ -2681,6 +2808,13 @@ fn dispatch_server_event(
                 native_session_id: native_session_id.to_owned(),
             });
         }
+        return;
+    }
+    // Shell lifecycle events name no session: the shell row's own metadata
+    // says which session started it. They route before the session filter,
+    // and act only on shells already confirmed as this session's work.
+    if matches!(kind, "shell.exited" | "shell.deleted") {
+        handle_shell_lifecycle_event(kind, event_payload(value), &state.shells, events);
         return;
     }
     let lifecycle = matches!(
@@ -3509,9 +3643,13 @@ fn handle_event(
             let _ = events.send(DriverEvent::NativeSessionsChanged);
         }
         "session.tool.success" => {
+            observe_background_shell_tool(payload, events, state);
             tool_finished(payload, events, state, false);
         }
         "session.tool.error" | "session.tool.failed" => {
+            // A backgrounded command can outlive a tool that reports failure
+            // after it, so the shell still becomes tracked background work.
+            observe_background_shell_tool(payload, events, state);
             tool_finished(payload, events, state, true);
         }
         _ if kind.starts_with("permission.") => {
@@ -3713,7 +3851,70 @@ fn tool_called(payload: &Value, events: &impl DriverEventSink, state: &mut OpenC
         false,
         false,
     );
+    // The `shell` tool's result names the detached shell but not the command
+    // behind it; remember what this call announced so a backgrounded command
+    // keeps its command line in the capsule.
+    if stored
+        .as_ref()
+        .is_some_and(|(kind, _)| *kind == ActivityKind::Command)
+        && let Some(command) = arguments
+            .and_then(|input| input.get("command"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .filter(|command| !command.trim().is_empty())
+    {
+        let workdir = arguments
+            .and_then(|input| input.get("workdir").or_else(|| input.get("cwd")))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        state
+            .shell_commands
+            .insert(id.to_owned(), (command, workdir));
+    }
     let _ = events.send(DriverEvent::RichActivity(item));
+}
+
+/// A `shell` tool result that moved its command to the background returns
+/// immediately carrying a `shellID`: the command left the turn, so the
+/// capsule must show it from the shell registry instead of losing it with
+/// the completed activity. A foreground result carries no `shellID` and is
+/// untouched — a foreground command belongs in the transcript, and the
+/// registry's own foreground rules keep it out of the background section.
+fn observe_background_shell_tool(
+    payload: &Value,
+    events: &impl DriverEventSink,
+    state: &mut OpenCodeStreamState,
+) {
+    let Some(id) = payload.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(shell_id) = tool_shell_id(payload.get("metadata")) else {
+        return;
+    };
+    let (command, workdir) = state
+        .shell_commands
+        .remove(id)
+        .unwrap_or_else(|| (String::new(), None));
+    let mut item = BackgroundWorkItem::new(
+        BackgroundWorkKind::Process,
+        shell_id,
+        command.clone(),
+        BackgroundWorkStatus::Running,
+    );
+    item.command = Some(command);
+    item.cwd = workdir;
+    item.control_id = Some(shell_id.to_owned());
+    item.can_stop = true;
+    // The result itself is the confirmation: this row is background work
+    // from the moment it is published, before the tracker ever projects it.
+    item.background = true;
+    item.origin_activity_ids = vec![id.to_owned()];
+    // Tracking marks the shell detached: the tracker owns that sticky flag
+    // and applies it to every later projection of this shell.
+    state.shells.track(item.clone());
+    let _ = events.send(DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(
+        item,
+    )));
 }
 
 fn tool_progress(payload: &Value, events: &impl DriverEventSink, state: &mut OpenCodeStreamState) {
@@ -3782,6 +3983,7 @@ fn clear_foreground_turn_state(state: &mut OpenCodeStreamState, events: &impl Dr
     flush_turn_stats(state, events);
     state.permissions.lock().pending.clear();
     state.tools.clear();
+    state.shell_commands.clear();
     state.pending_subagents.clear();
     disarm_child_resumes(state);
 }
@@ -7883,5 +8085,406 @@ mod tests {
         let permissions = permissions.lock();
         assert!(!permissions.pending.contains_key("per_matching"));
         assert!(permissions.pending.contains_key("per_other"));
+    }
+
+    /// A `shell` tool result that detached its command carries a `shellID`:
+    /// the command left the turn, so it must surface as background work
+    /// instead of disappearing with the completed activity.
+    #[test]
+    fn a_backgrounded_shell_tool_registers_as_background_process_work() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        handle_event(
+            &json!({
+                "type": "session.tool.input.started",
+                "data": {"sessionID": "ses_1", "id": "call_1", "name": "shell"}
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.tool.called",
+                "data": {
+                    "sessionID": "ses_1",
+                    "id": "call_1",
+                    "input": {"command": "cargo check --workspace", "workdir": "E:/work/fintwind"}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        handle_event(
+            &json!({
+                "type": "session.tool.success",
+                "data": {
+                    "sessionID": "ses_1",
+                    "id": "call_1",
+                    "content": [{"type": "text", "text": "Command moved to the background (shell ID: sh_live)."}],
+                    "metadata": {"status": "running", "shellID": "sh_live", "truncated": false}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+
+        let seen = event_rx.try_iter().collect::<Vec<_>>();
+        let registered = seen.iter().find_map(|event| match event {
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)) => Some(item),
+            _ => None,
+        });
+        let Some(item) = registered else {
+            panic!("the detached shell must become background work: {seen:?}");
+        };
+        assert_eq!(item.key.kind, BackgroundWorkKind::Process);
+        assert_eq!(item.key.provider_id, "sh_live");
+        assert_eq!(item.status, BackgroundWorkStatus::Running);
+        assert!(item.background);
+        assert!(item.can_stop);
+        assert_eq!(item.control_id.as_deref(), Some("sh_live"));
+        assert_eq!(item.command.as_deref(), Some("cargo check --workspace"));
+        assert_eq!(item.cwd.as_deref(), Some("E:/work/fintwind"));
+        assert_eq!(item.origin_activity_ids, ["call_1"]);
+        assert!(state.shells.get("sh_live").is_some());
+
+        // A foreground result carries no shellID and registers nothing —
+        // the completed tool still lands as its transcript activity.
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        handle_event(
+            &json!({
+                "type": "session.tool.success",
+                "data": {
+                    "sessionID": "ses_1",
+                    "id": "call_2",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "metadata": {"status": "completed", "truncated": false}
+                }
+            }),
+            &events,
+            &commands,
+            &turn,
+            0,
+            "ses_1",
+            false,
+            &mut state,
+        );
+        assert!(event_rx.try_recv().is_ok(), "the activity still closes");
+        assert!(event_rx.try_recv().is_err(), "no background work for it");
+        assert!(state.shells.ids().is_empty());
+    }
+
+    /// Shell lifecycle events name no session, so they route ahead of the
+    /// session filter — but only terminal events act, and only on shells
+    /// already confirmed as this session's background work. A `shell.created`
+    /// row says nothing about detachment: a foreground shell and a background
+    /// one are identical on the wire, so discovery stays with the tool
+    /// result that carries the shell id.
+    #[test]
+    fn shell_lifecycle_events_act_only_on_confirmed_background_work() {
+        let (events, event_rx, commands, _command_rx, turn, mut state) = harness();
+        let shells = Arc::new(ShellWorkTracker::default());
+        state.shells = Arc::clone(&shells);
+        let family = SessionFamily::new("ses_parent".into());
+        let dispatch = |value: &Value, state: &mut OpenCodeStreamState| {
+            dispatch_server_event(
+                value,
+                "ses_parent",
+                &events,
+                &commands,
+                &turn,
+                0,
+                false,
+                state,
+                &family,
+            );
+        };
+        let confirm = |value: &Value, state: &mut OpenCodeStreamState| {
+            handle_event(
+                value,
+                &events,
+                &commands,
+                &turn,
+                0,
+                "ses_parent",
+                false,
+                state,
+            );
+        };
+
+        // Neither a created row for this session nor one for another client's
+        // session becomes background work: only the tool result confirms it.
+        dispatch(
+            &json!({
+                "type": "shell.created",
+                "data": {"info": {
+                    "id": "sh_mine",
+                    "status": "running",
+                    "command": "cargo check",
+                    "cwd": "E:/work/fintwind",
+                    "metadata": {"sessionID": "ses_parent"},
+                    "time": {"started": 1_788_253_280_000_u64}
+                }}
+            }),
+            &mut state,
+        );
+        dispatch(
+            &json!({
+                "type": "shell.created",
+                "data": {"info": {
+                    "id": "sh_theirs",
+                    "status": "running",
+                    "command": "rm -rf build",
+                    "metadata": {"sessionID": "ses_other"},
+                    "time": {"started": 1_788_253_280_000_u64}
+                }}
+            }),
+            &mut state,
+        );
+        assert!(
+            event_rx.try_recv().is_err(),
+            "a shell row is not a confirmation"
+        );
+        assert!(!shells.is_tracked("sh_mine"));
+        assert!(!shells.is_tracked("sh_theirs"));
+
+        // The tool result that moved the command off the turn confirms it.
+        confirm(
+            &json!({
+                "type": "session.tool.input.started",
+                "data": {"sessionID": "ses_parent", "id": "call_1", "name": "shell"}
+            }),
+            &mut state,
+        );
+        confirm(
+            &json!({
+                "type": "session.tool.called",
+                "data": {
+                    "sessionID": "ses_parent",
+                    "id": "call_1",
+                    "input": {"command": "cargo check", "workdir": "E:/work/fintwind"}
+                }
+            }),
+            &mut state,
+        );
+        confirm(
+            &json!({
+                "type": "session.tool.success",
+                "data": {
+                    "sessionID": "ses_parent",
+                    "id": "call_1",
+                    "content": [{"type": "text", "text": "Command moved to the background (shell ID: sh_mine)."}],
+                    "metadata": {"status": "running", "shellID": "sh_mine", "truncated": false}
+                }
+            }),
+            &mut state,
+        );
+        match event_rx.try_iter().find_map(|event| match event {
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)) => Some(item),
+            _ => None,
+        }) {
+            Some(item) => {
+                assert_eq!(item.key.provider_id, "sh_mine");
+                assert_eq!(item.status, BackgroundWorkStatus::Running);
+            }
+            None => panic!("the detached shell must become background work"),
+        }
+
+        // The terminal row settles the item; a settled shell's deletion
+        // simply stops the tracking.
+        dispatch(
+            &json!({"type": "shell.exited", "data": {"id": "sh_mine", "exit": 0, "status": "exited"}}),
+            &mut state,
+        );
+        match event_rx.try_iter().find_map(|event| match event {
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)) => Some(item),
+            _ => None,
+        }) {
+            Some(item) => assert_eq!(item.status, BackgroundWorkStatus::Completed),
+            None => panic!("the terminal row must settle the shell"),
+        }
+        dispatch(
+            &json!({"type": "shell.deleted", "data": {"id": "sh_mine"}}),
+            &mut state,
+        );
+        assert!(event_rx.try_recv().is_err());
+        assert!(shells.get("sh_mine").is_none());
+
+        // A confirmed shell still live when it disappears is Lost, not
+        // silently dropped.
+        confirm(
+            &json!({
+                "type": "session.tool.input.started",
+                "data": {"sessionID": "ses_parent", "id": "call_2", "name": "shell"}
+            }),
+            &mut state,
+        );
+        confirm(
+            &json!({
+                "type": "session.tool.called",
+                "data": {
+                    "sessionID": "ses_parent",
+                    "id": "call_2",
+                    "input": {"command": "sleep 600"}
+                }
+            }),
+            &mut state,
+        );
+        confirm(
+            &json!({
+                "type": "session.tool.success",
+                "data": {
+                    "sessionID": "ses_parent",
+                    "id": "call_2",
+                    "content": [{"type": "text", "text": "Command moved to the background (shell ID: sh_gone)."}],
+                    "metadata": {"status": "running", "shellID": "sh_gone", "truncated": false}
+                }
+            }),
+            &mut state,
+        );
+        let _ = event_rx.try_iter().count();
+        dispatch(
+            &json!({"type": "shell.deleted", "data": {"id": "sh_gone"}}),
+            &mut state,
+        );
+        match event_rx.try_recv().unwrap() {
+            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)) => {
+                assert_eq!(item.status, BackgroundWorkStatus::Lost);
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    /// End-to-end against a real `opencode serve`: a command the agent moves
+    /// to the background must surface as the capsule's background work,
+    /// stream its captured output through the refresh, and stop on request.
+    ///
+    /// Ignored by default — it needs a real opencode binary, provider
+    /// credentials, and `FINTWIND_TEST_MODEL`. Run it with
+    /// `cargo test --package fintwind-core --lib background_shell_work -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "requires opencode, credentials and FINTWIND_TEST_MODEL"]
+    fn background_shell_work_appears_streams_output_and_stops() {
+        let cwd = std::env::temp_dir().join(format!("fintwind-bg-shell-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&cwd).unwrap();
+        let (events, event_rx) = crate::driver::test_event_channel();
+        let driver = OpenCodeDriver::start(
+            DriverStartOptions {
+                binary: crate::command_env::find_executable("opencode").unwrap(),
+                cwd: cwd.clone(),
+                mode: RuntimeMode::FullAccess,
+                interaction_mode: InteractionMode::Build,
+                model: Some(std::env::var("FINTWIND_TEST_MODEL").expect("set a test model")),
+                reasoning_effort: None,
+                service_tier: None,
+                context_window: None,
+                agent_preset: None,
+                provider_cursor: None,
+                task_id: None,
+            },
+            events,
+        )
+        .unwrap();
+        assert!(matches!(
+            event_rx
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .unwrap(),
+            DriverEvent::Connected { .. }
+        ));
+        // A command that reports progress for a few seconds and then idles
+        // forever: exactly the dev-server shape backgrounding exists for.
+        let command = if cfg!(windows) {
+            "powershell -NoProfile -Command \"1..3 | ForEach-Object { Write-Host tick-$_; Start-Sleep -Seconds 1 }; Start-Sleep -Seconds 300\""
+        } else {
+            "for i in 1 2 3; do echo \"tick $i\"; sleep 1; done; sleep 300"
+        };
+        driver.prompt(
+            format!(
+                "Use the shell tool exactly once with background: true to run this command: {command}. \
+                 Then reply DONE. Do not run any other shell command."
+            ),
+            Vec::new(),
+        );
+
+        let began = std::time::Instant::now();
+        let mut running: Option<(BackgroundWorkKey, BackgroundWorkItem)> = None;
+        let mut saw_output = false;
+        while began.elapsed() < std::time::Duration::from_secs(120) {
+            driver.refresh_background_work();
+            match event_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                Ok(DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)))
+                    if item.key.kind == BackgroundWorkKind::Process
+                        && item.background
+                        && item.status.is_live() =>
+                {
+                    eprintln!(
+                        "background process: {:?}",
+                        item.command.as_deref().unwrap_or_default()
+                    );
+                    running = Some((item.key.clone(), item));
+                }
+                Ok(DriverEvent::BackgroundWork(BackgroundWorkEvent::OutputDelta {
+                    delta, ..
+                })) => {
+                    eprintln!("output delta: {delta:?}");
+                    saw_output = true;
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+            if running.is_some() && saw_output {
+                break;
+            }
+        }
+        let Some((key, item)) = running else {
+            driver.cancel();
+            panic!("the backgrounded command never surfaced as background work");
+        };
+        assert!(saw_output, "the background shell's output must stream");
+        assert_eq!(item.status, BackgroundWorkStatus::Running);
+        assert!(item.can_stop);
+        assert!(
+            item.command
+                .as_deref()
+                .is_some_and(|command| command.contains("tick") || command.contains("sleep")),
+            "the process row names its command: {:?}",
+            item.command
+        );
+
+        // Stopping must retire the row rather than leave it optimistically
+        // stopping.
+        let control_id = item
+            .control_id
+            .clone()
+            .expect("a stoppable shell names its control id");
+        driver.stop_background_work(key.clone(), control_id);
+        let mut stopped = false;
+        while began.elapsed() < std::time::Duration::from_secs(180) {
+            match event_rx.recv_timeout(std::time::Duration::from_secs(2)) {
+                Ok(DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)))
+                    if item.key == key && !item.status.is_live() =>
+                {
+                    stopped = true;
+                    break;
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        assert!(stopped, "stopping must settle the background row");
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }

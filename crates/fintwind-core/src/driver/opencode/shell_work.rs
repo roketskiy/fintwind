@@ -19,6 +19,14 @@
 //! The shells themselves are the server's: Fintwind only observes, pages,
 //! and stops them through `GET /api/shell`, `GET /api/shell/:id`,
 //! `GET /api/shell/:id/output`, and `DELETE /api/shell/:id`.
+//!
+//! Two lifecycle rules complete the picture. A shell named only by history
+//! (the app restarted under a shared server) becomes visible only while the
+//! server still runs it, so a command that finished before this driver
+//! attached never appears at all. And a shell that ends leaves the capsule
+//! the moment it settles: the transcript card and the completion
+//! notification are its record, and the capsule's background section lists
+//! live work rather than a command history.
 
 use std::collections::{HashMap, HashSet};
 
@@ -432,18 +440,20 @@ pub(super) fn observe_deleted_shell(
 }
 
 /// Reconciles this session's background shells against the server and
-/// returns the items for the caller's process reconcile.
+/// returns the items for the caller's reconcile.
 ///
-/// Only tracked shells are reconciled: a shell becomes this session's
-/// background work when a tool result names it, or when the session's stored
-/// transcript shows it was backgrounded before this driver attached — never
-/// by appearing in a listing, where a foreground shell is indistinguishable
-/// from a detached one.
+/// Only tracked shells are reconciled, plus any `restore_ids` the caller
+/// recovered from the stored transcript: a shell becomes this session's
+/// background work when a tool result names it, or when the session's
+/// history shows it was backgrounded before this driver attached and the
+/// server still runs it. A shell is never adopted from a listing alone —
+/// a foreground shell is indistinguishable from a detached one there.
 ///
 /// A tracked shell the listing no longer runs has terminated or been
-/// removed: its own row settles the status, and its output pages forward
-/// until caught up, at which point the tracker stops watching it while the
-/// registry keeps the settled row.
+/// removed: its own row settles the status after one final output page —
+/// the server reports a terminal row only once the output file is closed —
+/// and the tracker then stops watching it. The registry drops the settled
+/// row: a detached command that ended belongs to the transcript.
 ///
 /// A failed listing proves nothing, so the tracked shells then ride the
 /// reconcile exactly as they are: a flaky read cannot retire live work.
@@ -454,6 +464,7 @@ pub(super) fn reconcile_shells(
     directory: &str,
     parent_id: &str,
     tracker: &ShellWorkTracker,
+    restore_ids: &HashSet<String>,
     stale: impl Fn() -> bool,
     events: &impl DriverEventSink,
 ) -> Vec<BackgroundWorkItem> {
@@ -489,13 +500,20 @@ pub(super) fn reconcile_shells(
         let Some(id) = info.get("id").and_then(Value::as_str) else {
             continue;
         };
-        if !tracker.is_tracked(id) {
-            continue;
-        }
         let Some(item) = shell_work_item(info) else {
             continue;
         };
-        if !tracker.refresh_item(item) {
+        if tracker.is_tracked(id) {
+            if !tracker.refresh_item(item) {
+                continue;
+            }
+        } else if restore_ids.contains(id) {
+            // A tool result (or history) confirmed this shell, and the
+            // server still runs it: it is this session's background work.
+            tracker.track(item);
+        } else {
+            // A foreground shell of this session, or another client's: it
+            // stays out of the capsule.
             continue;
         }
         page_tracked_output(port, directory, id, tracker, events);
@@ -517,8 +535,11 @@ pub(super) fn reconcile_shells(
                 if !tracker.refresh_item(item) {
                     continue;
                 }
-                let drained = page_tracked_output(port, directory, &id, tracker, events);
-                if !settled.is_live() && drained {
+                // The server reports a terminal row only after the output
+                // file is closed, so one final page lands the last of the
+                // output before the row leaves the capsule.
+                page_tracked_output(port, directory, &id, tracker, events);
+                if !settled.is_live() {
                     settle_tracked_shell(tracker, &id, settled, exit_code, events);
                 }
             }
@@ -541,28 +562,23 @@ pub(super) fn reconcile_shells(
 }
 
 /// Pages one tracked shell's new output, claiming the read so two
-/// overlapping refresh rounds never emit the same page. Returns whether the
-/// shell's captured output is fully paged.
+/// overlapping refresh rounds never emit the same page.
 fn page_tracked_output(
     port: u16,
     directory: &str,
     id: &str,
     tracker: &ShellWorkTracker,
     events: &impl DriverEventSink,
-) -> bool {
+) {
     let Some(cursor) = tracker.begin_output_read(id) else {
         // Another round holds the claim; it will page this cursor.
-        return false;
+        return;
     };
     match emit_shell_output(port, directory, id, cursor, events) {
-        Some((cursor, size)) => {
-            tracker.end_output_read(id, cursor);
-            cursor >= size
-        }
-        None => {
-            tracker.end_output_read(id, cursor);
-            false
-        }
+        Some((cursor, _)) => tracker.end_output_read(id, cursor),
+        // The read failed: releasing with the cursor it started from retries
+        // this page next round rather than skipping it.
+        None => tracker.end_output_read(id, cursor),
     }
 }
 
@@ -575,7 +591,7 @@ const RESTORE_SCAN_PAGES: usize = 25;
 const RESTORE_PAGE_LIMIT: usize = 200;
 
 /// Pages the session's stored messages for tool parts the provider
-/// backgrounded, tracking those shells and publishing them.
+/// backgrounded, and names those shells.
 ///
 /// The live wire only tells a driver about shells it observes itself, so a
 /// shell still running from before this driver attached (the app restarted
@@ -583,12 +599,12 @@ const RESTORE_PAGE_LIMIT: usize = 200;
 /// history invisible to the capsule. A stored tool part's result metadata
 /// names its shell id, which is the same confirmation the live tool result
 /// carries.
-pub(super) fn restore_backgrounded_shells(
-    port: u16,
-    session_id: &str,
-    tracker: &ShellWorkTracker,
-    events: &impl DriverEventSink,
-) {
+///
+/// The scan is side-effect free: a candidate becomes background work only
+/// when the caller's reconcile finds the server still running it, so a
+/// command that finished before this driver attached never appears at all.
+pub(super) fn restore_backgrounded_shells(port: u16, session_id: &str) -> Vec<String> {
+    let mut found = Vec::new();
     let mut cursor: Option<String> = None;
     for _ in 0..RESTORE_SCAN_PAGES {
         let mut path = format!(
@@ -606,10 +622,10 @@ pub(super) fn restore_backgrounded_shells(
             None,
             REQUEST_TIMEOUT,
         ) else {
-            return;
+            return found;
         };
         let Some(rows) = response.get("data").and_then(Value::as_array) else {
-            return;
+            return found;
         };
         let empty = rows.is_empty();
         for row in rows {
@@ -620,41 +636,9 @@ pub(super) fn restore_backgrounded_shells(
                 if part.get("type").and_then(Value::as_str) != Some("tool") {
                     continue;
                 }
-                let Some(shell_id) = tool_shell_id(part.pointer("/state/metadata")) else {
-                    continue;
-                };
-                if tracker.is_tracked(shell_id) {
-                    continue;
+                if let Some(shell_id) = tool_shell_id(part.pointer("/state/metadata")) {
+                    found.push(shell_id.to_owned());
                 }
-                let command = part
-                    .pointer("/state/input/command")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                let workdir = part
-                    .pointer("/state/input/workdir")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                let mut item = BackgroundWorkItem::new(
-                    BackgroundWorkKind::Process,
-                    shell_id,
-                    command.clone(),
-                    BackgroundWorkStatus::Running,
-                );
-                item.command = Some(command);
-                item.cwd = workdir;
-                item.control_id = Some(shell_id.to_owned());
-                item.can_stop = true;
-                // The stored result is the confirmation, exactly as the live
-                // one is: this row is background work as published.
-                item.background = true;
-                if let Some(part_id) = part.get("id").and_then(Value::as_str) {
-                    item.origin_activity_ids = vec![part_id.to_owned()];
-                }
-                tracker.track(item.clone());
-                let _ = events.send(DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(
-                    item,
-                )));
             }
         }
         let next = response.pointer("/cursor/next").and_then(Value::as_str);
@@ -662,9 +646,10 @@ pub(super) fn restore_backgrounded_shells(
             Some(next) if !empty && cursor.as_deref() != Some(next) => {
                 cursor = Some(next.to_owned());
             }
-            _ => return,
+            _ => return found,
         }
     }
+    found
 }
 
 #[cfg(test)]
@@ -911,13 +896,15 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_pages_only_tracked_shells_and_never_adopts_a_listing_row() {
+    fn reconcile_pages_tracked_shells_adopts_running_restores_and_ignores_the_rest() {
         let port = serve_shell_routes(vec![
             (
                 "/api/shell".to_owned(),
                 200,
                 json!({"data": [
                     shell_row("sh_mine", "running", "ses_1"),
+                    // Confirmed by history, still running: restored.
+                    shell_row("sh_restored", "running", "ses_1"),
                     // This session's own foreground shell: identical on the
                     // wire to a detached one, so it must never be adopted.
                     shell_row("sh_foreground", "running", "ses_1"),
@@ -931,39 +918,80 @@ mod tests {
                 json!({"data": {"output": "Checking fintwind v0.1.0\n", "cursor": 27, "size": 27}})
                     .to_string(),
             ),
+            (
+                "/api/shell/sh_restored/output".to_owned(),
+                200,
+                json!({"data": {"output": "restored\n", "cursor": 9, "size": 9}}).to_string(),
+            ),
         ]);
         let (events, event_rx) = crate::driver::test_event_channel();
         let tracker = ShellWorkTracker::default();
         let mut confirmed = shell_work_item(&shell_row("sh_mine", "running", "ses_1")).unwrap();
         confirmed.background = true;
         tracker.track(confirmed);
+        let restores = HashSet::from([String::from("sh_restored")]);
 
         let items = reconcile_shells(
             port,
             "E:/work/fintwind",
             "ses_1",
             &tracker,
+            &restores,
             || false,
             &events,
         );
 
-        assert_eq!(items.len(), 1, "only the confirmed shell is this work");
+        let mut items = items;
+        items.sort_by(|left, right| left.key.provider_id.cmp(&right.key.provider_id));
+        assert_eq!(items.len(), 2, "only the confirmed and restored shells");
         assert_eq!(items[0].key.provider_id, "sh_mine");
-        assert_eq!(items[0].status, BackgroundWorkStatus::Running);
         assert!(items[0].background);
+        assert_eq!(items[1].key.provider_id, "sh_restored");
+        assert!(items[1].background, "a restored shell is detached work");
         assert_eq!(tracker.get("sh_mine").unwrap().cursor, 27);
+        assert_eq!(tracker.get("sh_restored").unwrap().cursor, 9);
         assert!(
             !tracker.is_tracked("sh_foreground"),
             "a foreground shell in the listing must not become background work"
         );
         assert!(!tracker.is_tracked("sh_theirs"));
-        match event_rx.try_recv().unwrap() {
-            DriverEvent::BackgroundWork(BackgroundWorkEvent::OutputDelta { key, delta }) => {
-                assert_eq!(key.provider_id, "sh_mine");
-                assert_eq!(delta, "Checking fintwind v0.1.0\n");
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
+        let deltas = event_rx
+            .try_iter()
+            .filter_map(|event| match event {
+                DriverEvent::BackgroundWork(BackgroundWorkEvent::OutputDelta { delta, .. }) => {
+                    Some(delta)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(deltas, ["Checking fintwind v0.1.0\n", "restored\n"]);
+    }
+
+    /// A shell the history says was backgrounded but the server no longer
+    /// runs finished before this driver attached: it must never appear.
+    #[test]
+    fn a_restored_candidate_that_already_finished_never_appears() {
+        let port = serve_shell_routes(vec![(
+            "/api/shell".to_owned(),
+            200,
+            json!({"data": []}).to_string(),
+        )]);
+        let (events, event_rx) = crate::driver::test_event_channel();
+        let tracker = ShellWorkTracker::default();
+        let restores = HashSet::from([String::from("sh_finished")]);
+
+        let items = reconcile_shells(
+            port,
+            "E:/work/fintwind",
+            "ses_1",
+            &tracker,
+            &restores,
+            || false,
+            &events,
+        );
+
+        assert!(items.is_empty());
+        assert!(!tracker.is_tracked("sh_finished"));
         assert!(event_rx.try_recv().is_err());
     }
 
@@ -1000,6 +1028,7 @@ mod tests {
             "E:/work/fintwind",
             "ses_1",
             &tracker,
+            &HashSet::new(),
             || false,
             &events,
         );
@@ -1044,6 +1073,7 @@ mod tests {
             "E:/work/fintwind",
             "ses_1",
             &tracker,
+            &HashSet::new(),
             || false,
             &events,
         );
@@ -1074,6 +1104,7 @@ mod tests {
             "E:/work/fintwind",
             "ses_1",
             &tracker,
+            &HashSet::new(),
             || false,
             &events,
         );
@@ -1122,6 +1153,7 @@ mod tests {
             "E:/work/fintwind",
             "ses_1",
             &tracker,
+            &HashSet::new(),
             || {
                 checks.set(checks.get() + 1);
                 checks.get() > 1
@@ -1152,7 +1184,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_tracks_shells_the_stored_transcript_backgrounded() {
+    fn the_stored_transcript_names_shells_it_backgrounded() {
         let port = serve_message_page(
             json!({"data": [
                 {"type": "user", "content": [{"type": "text", "text": "build it"}]},
@@ -1162,7 +1194,7 @@ mod tests {
                         "metadata": {"status": "running", "shellID": "sh_restored"}
                     }}
                 ]},
-                // A foreground tool result carries no shellID and must be ignored.
+                // A foreground tool result carries no shellID and is not named.
                 {"type": "assistant", "content": [
                     {"type": "tool", "id": "call_2", "name": "shell", "state": {
                         "input": {"command": "ls"},
@@ -1172,75 +1204,23 @@ mod tests {
             ]})
             .to_string(),
         );
-        let (events, event_rx) = crate::driver::test_event_channel();
-        let tracker = ShellWorkTracker::default();
 
-        restore_backgrounded_shells(port, "ses_1", &tracker, &events);
-
-        assert!(tracker.is_tracked("sh_restored"));
-        let projected = tracker.items();
-        assert_eq!(projected.len(), 1);
-        assert_eq!(projected[0].key.provider_id, "sh_restored");
+        // The scan is a pure query: it names candidates and touches nothing,
+        // so a candidate the server no longer runs never appears at all.
         assert_eq!(
-            projected[0].command.as_deref(),
-            Some("cargo check --workspace")
+            restore_backgrounded_shells(port, "ses_1"),
+            ["sh_restored".to_owned()]
         );
-        assert_eq!(projected[0].cwd.as_deref(), Some("E:/work/fintwind"));
-        assert_eq!(projected[0].control_id.as_deref(), Some("sh_restored"));
-        assert!(projected[0].background);
-        assert_eq!(projected[0].origin_activity_ids, ["call_1"]);
-        match event_rx.try_recv().unwrap() {
-            DriverEvent::BackgroundWork(BackgroundWorkEvent::Upsert(item)) => {
-                assert_eq!(item.key.provider_id, "sh_restored");
-                assert_eq!(item.status, BackgroundWorkStatus::Running);
-                assert!(item.can_stop);
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
-        assert!(event_rx.try_recv().is_err());
     }
 
     #[test]
-    fn restore_is_idempotent_across_two_runs() {
-        let port = serve_message_page(
-            json!({"data": [
-                {"type": "assistant", "content": [
-                    {"type": "tool", "id": "call_1", "name": "shell", "state": {
-                        "input": {"command": "sleep 600"},
-                        "metadata": {"shellID": "sh_restored"}
-                    }}
-                ]}
-            ]})
-            .to_string(),
-        );
-        let (events, event_rx) = crate::driver::test_event_channel();
-        let tracker = ShellWorkTracker::default();
-
-        restore_backgrounded_shells(port, "ses_1", &tracker, &events);
-        assert!(tracker.begin_output_read("sh_restored").is_some());
-        tracker.end_output_read("sh_restored", 16);
-        let _ = event_rx.try_recv().unwrap();
-
-        // A second scan (another driver round) must not restart the cursor
-        // or publish the row twice.
-        restore_backgrounded_shells(port, "ses_1", &tracker, &events);
-        assert_eq!(tracker.get("sh_restored").unwrap().cursor, 16);
-        assert!(event_rx.try_recv().is_err());
-    }
-
-    #[test]
-    fn a_failed_restore_read_tracks_nothing() {
-        // Nothing listening: the scan proves nothing and stays silent.
+    fn a_failed_restore_read_names_nothing() {
+        // Nothing listening: the scan proves nothing and names nothing.
         let dead = {
             let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
             listener.local_addr().unwrap().port()
         };
-        let (events, event_rx) = crate::driver::test_event_channel();
-        let tracker = ShellWorkTracker::default();
 
-        restore_backgrounded_shells(dead, "ses_1", &tracker, &events);
-
-        assert!(tracker.ids().is_empty());
-        assert!(event_rx.try_recv().is_err());
+        assert!(restore_backgrounded_shells(dead, "ses_1").is_empty());
     }
 }

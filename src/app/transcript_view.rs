@@ -2486,6 +2486,7 @@ impl Fintwind {
                                 session_id,
                                 item.key.clone(),
                                 item.status,
+                                item.background,
                                 item.title.clone(),
                                 item.model.clone(),
                             )
@@ -2497,6 +2498,12 @@ impl Fintwind {
             .as_ref()
             .filter(|(_, key, ..)| key.kind == BackgroundWorkKind::Subagent)
             .cloned();
+        // The badge says what a live command is doing, so it needs the
+        // detached flag next to the status: a command that left its turn
+        // reads as background work, not as a foreground spinner.
+        let detached = background_work
+            .as_ref()
+            .is_some_and(|(_, _, _, detached, ..)| *detached);
         let background_badge = background_work
             .clone()
             .map(|(session_id, key, status, ..)| {
@@ -2521,7 +2528,7 @@ impl Fintwind {
                     .focus_visible(|style| style.border_color(theme.accent))
                     .hover(|style| style.bg(theme.overlay_strong))
                     .active(|style| style.bg(theme.overlay_strong).opacity(0.8))
-                    .child(work_status_label(status))
+                    .child(background_work_status_label(status, detached))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(move |this, _, _, cx| {
                         cx.stop_propagation();
@@ -2555,7 +2562,7 @@ impl Fintwind {
         if row_detail.trim().is_empty() {
             row_detail = preview;
         }
-        if let Some((_, _, _, title, _)) = subagent_work.as_ref() {
+        if let Some((_, _, _, _, title, _)) = subagent_work.as_ref() {
             let title = title.trim();
             if !title.is_empty() {
                 row_detail = title.to_owned();
@@ -2683,7 +2690,7 @@ impl Fintwind {
                     .when_some(
                         subagent_work
                             .as_ref()
-                            .and_then(|(_, _, _, _, model)| model.as_deref())
+                            .and_then(|(_, _, _, _, _, model)| model.as_deref())
                             .map(str::trim)
                             .filter(|model| !model.is_empty())
                             .map(str::to_owned),

@@ -1621,27 +1621,32 @@ impl DriverControl for OpenCodeDriver {
             .spawn(move || {
                 let directory = opencode_location_directory(&cwd);
                 // A shell backgrounded before this driver attached lives only
-                // in the session's stored transcript: one bounded scan
-                // restores it, so an app restart under a shared server does
-                // not leave a running command invisible to the capsule.
-                if !restore_attempted.swap(true, Ordering::AcqRel) {
-                    restore_backgrounded_shells(port, &parent_id, &shells, &events);
-                }
-                // Background shells reconcile on their own: they depend only
-                // on the shell registry, so a session-roster read that fails
-                // must not also freeze their output. Their reconcile is the
-                // process-scoped one, which never touches subagent rows.
+                // in the session's stored transcript: one bounded scan names
+                // them, and the reconcile below adopts the ones the server
+                // still runs. The scan itself publishes nothing, so a command
+                // that already finished before this driver attached never
+                // appears at all.
+                let restore_ids = if restore_attempted.swap(true, Ordering::AcqRel) {
+                    HashSet::new()
+                } else {
+                    restore_backgrounded_shells(port, &parent_id)
+                        .into_iter()
+                        .collect::<HashSet<_>>()
+                };
+                // Background shells reconcile first: they depend only on the
+                // shell registry, so a session-roster read that fails must not
+                // also freeze their output. Exactly one reconcile is
+                // published per round below, so a row can never be retired by
+                // a sibling reconcile that did not list it.
                 let shell_items = reconcile_shells(
                     port,
                     &directory,
                     &parent_id,
                     &shells,
+                    &restore_ids,
                     || generation_guard.load(Ordering::Acquire) != generation,
                     &events,
                 );
-                let _ = events.send(DriverEvent::BackgroundWork(
-                    BackgroundWorkEvent::ReconcileProcesses { items: shell_items },
-                ));
                 // A server shared across workspaces must only see this
                 // directory's sessions. New servers filter by parent before
                 // paging; old ones may ignore or reject the parameter. Page
@@ -1705,8 +1710,14 @@ impl DriverControl for OpenCodeDriver {
                 if generation_guard.load(Ordering::Acquire) != generation {
                     return;
                 }
-                // A failed/partial listing is not evidence of missing children.
+                // The roster is unreadable: a failed/partial listing is not
+                // evidence of missing children, so they keep their state and
+                // the shells ride the process-scoped reconcile, which cannot
+                // retire a subagent row.
                 let Some(sessions) = sessions else {
+                    let _ = events.send(DriverEvent::BackgroundWork(
+                        BackgroundWorkEvent::ReconcileProcesses { items: shell_items },
+                    ));
                     return;
                 };
                 // V2 session rows are durable history, not execution status.
@@ -1727,6 +1738,9 @@ impl DriverControl for OpenCodeDriver {
                     .and_then(|response| response.get("data"))
                     .and_then(Value::as_object)
                 else {
+                    let _ = events.send(DriverEvent::BackgroundWork(
+                        BackgroundWorkEvent::ReconcileProcesses { items: shell_items },
+                    ));
                     return;
                 };
                 if generation_guard.load(Ordering::Acquire) != generation {
@@ -1765,8 +1779,13 @@ impl DriverControl for OpenCodeDriver {
                     .iter()
                     .map(|item| item.key.provider_id.clone())
                     .collect::<Vec<_>>();
+                // One reconcile lists every live row this round observed —
+                // subagents and detached shells together — so neither kind
+                // can retire the other.
+                let mut items = child_items;
+                items.extend(shell_items);
                 let _ = events.send(DriverEvent::BackgroundWork(
-                    BackgroundWorkEvent::ReconcileLive { items: child_items },
+                    BackgroundWorkEvent::ReconcileLive { items },
                 ));
                 for child_id in child_ids {
                     if !transcript_hydrations.lock().insert(child_id.clone()) {

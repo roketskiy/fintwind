@@ -1922,6 +1922,8 @@ background.status.starting:
   en: Starting
 background.status.running:
   en: Running
+background.status.background:
+  en: Running in background
 background.status.monitoring:
   en: Monitoring
 background.status.stopping:

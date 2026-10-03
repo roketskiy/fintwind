@@ -1004,6 +1004,7 @@ background.agent_count: "サブエージェント %{count} 件"
 background.agent_count_one: サブエージェント 1 件
 background.status.starting: 起動中
 background.status.running: 実行中
+background.status.background: バックグラウンド実行
 background.status.monitoring: 監視中
 background.status.stopping: 停止中
 background.status.completed: 完了

@@ -122,7 +122,11 @@ HTTP API 面**：v2.0.16 的 113 条 openapi 路径中没有任何 media 路由�
   `GET /api/shell/:id/output` 按 cursor 增量拉取输出，
   `DELETE /api/shell/:id` 停止，`shell.exited/deleted` 事件驱动
   状态。会话胶囊「后台」区据此显示命令、实时输出、退出码与
-  停止按钮（`driver/opencode/shell_work.rs`）。
+  停止按钮（`driver/opencode/shell_work.rs`）；运行中显示「后台
+  运行」，进程结束后条目即离开胶囊（记录留在转写卡片与完成
+  通知里），重启后由一次转写扫描恢复仍在运行的命令。
+  两个 reconcile 按 kind 分管：子代理名册走 `ReconcileLive`，
+  已分离终端走 `ReconcileProcesses`，互不退休对方的行。
   归属判定不依赖 listing：前台命令与后台命令在 wire 上完全同形，
   因此只有工具结果里的 `shellID`（或重启后从会话转写里扫到的同一
   标记）才把 shell 记为后台工作；`shell.created` 不作为发现路径，

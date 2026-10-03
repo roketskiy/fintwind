@@ -20,6 +20,10 @@
 ## 新模型信息
 - 详见docs/model-info-sources.md
 
+## network
+- 当发现有网络连接问题时，走7897端口代理重试
+
+
 ## 官网 / 落地页
 
 - 落地页是独立仓库：https://github.com/roketskiy/fintwind-website （本地在 fintwind

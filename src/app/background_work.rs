@@ -132,21 +132,16 @@ impl BackgroundWorkRegistry {
 
     fn upsert(&mut self, mut incoming: BackgroundWorkItem) {
         let key = incoming.key.clone();
-        // Short foreground commands belong in the transcript. Show them while
-        // running, then remove them instead of turning this surface into a
-        // duplicate command history.
-        let already_background = self
-            .items
-            .get(&incoming.key)
-            .is_some_and(|item| item.background);
-        if !incoming.background
-            && !already_background
-            && !incoming.status.is_live()
-            && matches!(
-                incoming.key.kind,
-                BackgroundWorkKind::Process | BackgroundWorkKind::Monitor
-            )
-        {
+        // A terminal that has left the turn belongs in the transcript, not in
+        // this surface: short foreground commands are removed the moment they
+        // settle, and a detached shell command is removed the moment its
+        // process ends — the completion notification and the tool card keep
+        // its record. This section lists live work, not a command history.
+        let already_terminal_kind = matches!(
+            incoming.key.kind,
+            BackgroundWorkKind::Process | BackgroundWorkKind::Monitor
+        );
+        if already_terminal_kind && !incoming.status.is_live() {
             self.remove(&incoming.key);
             return;
         }
@@ -477,6 +472,15 @@ impl BackgroundWorkRegistry {
             .collect::<HashSet<_>>();
         let now = unix_time_millis();
         for item in self.items.values_mut() {
+            // A live roster governs the subagent rows it carries — nothing
+            // else. A detached terminal is reconciled by
+            // `reconcile_processes`, whose list carries only terminals, so
+            // the two reconciles can never retire each other's rows: a
+            // terminal that merely missed one roster read stays Running
+            // instead of flickering to Lost.
+            if item.key.kind != BackgroundWorkKind::Subagent {
+                continue;
+            }
             if item.background && item.status.is_live() && !present.contains(&item.key) {
                 item.status = BackgroundWorkStatus::Lost;
                 item.can_stop = false;
@@ -762,6 +766,18 @@ pub(super) fn work_status_label(status: BackgroundWorkStatus) -> String {
         BackgroundWorkStatus::Failed => tr!("background.status.failed"),
         BackgroundWorkStatus::Stopped => tr!("background.status.stopped"),
         BackgroundWorkStatus::Lost => tr!("background.status.lost"),
+    }
+}
+
+/// The label for one row's status, knowing whether the row is detached
+/// background work. A command that left its turn and is still running reads
+/// as background work rather than as a foreground spinner — "running" alone
+/// reads like something the user is waiting on in place.
+pub(super) fn background_work_status_label(status: BackgroundWorkStatus, detached: bool) -> String {
+    if detached && status == BackgroundWorkStatus::Running {
+        tr!("background.status.background")
+    } else {
+        work_status_label(status)
     }
 }
 
@@ -1469,7 +1485,10 @@ impl Fintwind {
                                             9.0,
                                             status_color,
                                         ))
-                                        .child(work_status_label(item.status)),
+                                        .child(background_work_status_label(
+                                            item.status,
+                                            item.background,
+                                        )),
                                 ),
                         )
                         .when_some(stop, |header, stop| header.child(stop)),
@@ -1588,7 +1607,10 @@ impl Fintwind {
                                         9.0,
                                         status_color,
                                     ))
-                                    .child(work_status_label(item.status))
+                                    .child(background_work_status_label(
+                                        item.status,
+                                        item.background,
+                                    ))
                                     .child("·")
                                     .child(work_elapsed(item)),
                             ),
@@ -2611,6 +2633,58 @@ mod tests {
             registry.items[&BackgroundWorkKey::new(BackgroundWorkKind::Process, "one")].status,
             BackgroundWorkStatus::Lost
         );
+    }
+
+    /// A detached shell rides the process reconcile, not the subagent roster.
+    /// The roster must not retire it: a command still streaming its output
+    /// read as "disconnected" while running whenever a round listed only
+    /// subagents.
+    #[test]
+    fn a_live_reconcile_of_subagents_leaves_detached_shells_running() {
+        let mut registry = BackgroundWorkRegistry::default();
+        let shell = BackgroundWorkKey::new(BackgroundWorkKind::Process, "sh_live");
+        let child = BackgroundWorkKey::new(BackgroundWorkKind::Subagent, "ses_child");
+        registry.upsert(item("sh_live", BackgroundWorkStatus::Running, true));
+        registry.upsert(subagent_item("ses_child", BackgroundWorkStatus::Running));
+
+        registry.reconcile_live(vec![subagent_item(
+            "ses_child",
+            BackgroundWorkStatus::Running,
+        )]);
+
+        assert_eq!(registry.items[&shell].status, BackgroundWorkStatus::Running);
+        assert_eq!(registry.items[&child].status, BackgroundWorkStatus::Running);
+
+        // A child the roster dropped is still retired: the roster governs
+        // exactly the rows it carries.
+        registry.reconcile_live(Vec::new());
+        assert_eq!(registry.items[&child].status, BackgroundWorkStatus::Lost);
+        assert_eq!(
+            registry.items[&shell].status,
+            BackgroundWorkStatus::Running,
+            "the shell is the process reconcile's row, not the roster's"
+        );
+    }
+
+    /// A detached command that ended leaves the surface: its record is the
+    /// transcript card and the completion notification, and this section
+    /// lists live work rather than a command history.
+    #[test]
+    fn settled_background_commands_leave_the_registry() {
+        let mut registry = BackgroundWorkRegistry::default();
+        registry.upsert(item("sh_live", BackgroundWorkStatus::Running, true));
+        assert!(registry.has_live());
+        registry.upsert(item("sh_live", BackgroundWorkStatus::Completed, true));
+        assert!(registry.items.is_empty());
+
+        // A stop that fails keeps the row live, so it can be retried.
+        let mut registry = BackgroundWorkRegistry::default();
+        registry.upsert(item("sh_live", BackgroundWorkStatus::Running, true));
+        registry.apply(BackgroundWorkEvent::StopFailed {
+            key: BackgroundWorkKey::new(BackgroundWorkKind::Process, "sh_live"),
+            message: "the server refused".into(),
+        });
+        assert!(registry.has_live(), "a failed stop leaves the work running");
     }
 
     #[test]

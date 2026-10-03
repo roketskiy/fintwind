@@ -2101,7 +2101,7 @@ mod window_chrome;
 
 pub use autocomplete::init as init_composer_autocomplete;
 use background_work::{
-    BackgroundWorkRegistry, work_kind_icon, work_status_color, work_status_label,
+    BackgroundWorkRegistry, background_work_status_label, work_kind_icon, work_status_color,
 };
 pub use btw::init as init_btw_keys;
 pub use command_palette::init as init_command_palette;

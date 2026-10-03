@@ -29,6 +29,8 @@ pub fn init(cx: &mut App) {
 pub(super) enum UpdatePhase {
     /// Waiting for the user to ask for it.
     Idle,
+    /// Measuring which source will relay the installer fastest.
+    Selecting,
     /// The installer is being downloaded and checked against the release.
     Downloading,
     /// The installer is running; this process is on its way out.
@@ -217,7 +219,7 @@ impl Fintwind {
         let Some(asset) = card.release.installer().cloned() else {
             return;
         };
-        card.phase = UpdatePhase::Downloading;
+        card.phase = UpdatePhase::Selecting;
         card.generation = card.generation.wrapping_add(1);
         let generation = card.generation;
         card.running = Some(generation);
@@ -226,9 +228,39 @@ impl Fintwind {
         let installer = destination.clone();
         cx.notify();
         cx.spawn(async move |this, cx| {
+            // Two background turns, so the card can say which step it is on:
+            // the choice of source first, then the transfer it made. Splitting
+            // them is also what keeps the sample a source is measured with from
+            // being mistaken for the installer.
+            let chosen = cx
+                .background_executor()
+                .spawn({
+                    let asset = asset.clone();
+                    let destination = destination.clone();
+                    async move { crate::update::pick_source(&asset, &destination) }
+                })
+                .await;
+            let Ok(still_current) = this.update(cx, |this, cx| {
+                let Some(card) = this.latest_available.as_mut() else {
+                    return false;
+                };
+                if card.generation != generation || card.running != Some(generation) {
+                    return false;
+                }
+                card.phase = UpdatePhase::Downloading;
+                cx.notify();
+                true
+            }) else {
+                return;
+            };
+            if !still_current {
+                return;
+            }
             let downloaded = cx
                 .background_executor()
-                .spawn(async move { crate::update::download_installer(&asset, &destination) })
+                .spawn(
+                    async move { crate::update::download_installer(&asset, &chosen, &destination) },
+                )
                 .await;
             let Ok(installing) = this.update(cx, |this, cx| {
                 let Some(card) = this.latest_available.as_mut() else {
@@ -296,6 +328,10 @@ impl Fintwind {
             UpdatePhase::Idle => (
                 tr!("update.install"),
                 icon("icons/download.svg", 14.0, theme.on_accent).into_any_element(),
+            ),
+            UpdatePhase::Selecting => (
+                tr!("update.selecting_source"),
+                motion::spin_slow(icon("icons/loader-circle.svg", 14.0, theme.text_secondary)),
             ),
             UpdatePhase::Downloading => (
                 tr!("update.downloading", size = asset.size_label()),

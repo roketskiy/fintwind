@@ -2226,6 +2226,23 @@ impl Fintwind {
         }
     }
 
+    /// Removes the installer this version was updated from, if it is still on
+    /// disk. An in-app update installs by handing the installer to Setup.exe
+    /// and then quitting, so the process that downloaded it is gone before the
+    /// install finishes — the freshly started app is the only one left that
+    /// could clean up, and the version it now runs is exactly the version that
+    /// installer carried, which names the file.
+    ///
+    /// Setup may still hold the installer open when this runs, and deleting a
+    /// file another process has open fails on a sharing violation. That is left
+    /// to fail: the next launch tries again, and no installer that is still in
+    /// use is ever named here.
+    fn discard_downloaded_installer(&self, cx: &mut Context<Self>) {
+        cx.background_executor()
+            .spawn(async { crate::update::discard_downloaded_installer() })
+            .detach();
+    }
+
     fn check_for_update(&self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             // Both probes in one background turn. The install layout decides
@@ -3635,6 +3652,7 @@ impl Fintwind {
             // sidebar must reconcile with what the CLI and TUI left there.
             // It retries once the provider probe finds the binary.
             this.schedule_native_session_reconcile(cx);
+            this.discard_downloaded_installer(cx);
             this.check_for_update(cx);
         });
         entity

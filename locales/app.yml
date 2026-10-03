@@ -297,6 +297,8 @@ update.install_tooltip:
   en: Download the installer and install it in place
 update.downloading:
   en: "Downloading %{size}…"
+update.selecting_source:
+  en: "Choosing a download source…"
 update.installing:
   en: "Installing…"
 update.download_failed:

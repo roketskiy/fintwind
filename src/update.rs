@@ -9,6 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
+use std::time::Duration;
 
 use anyhow::{Context as _, bail};
 use serde::Deserialize;
@@ -28,6 +29,26 @@ const INSTALLER_ARCH: &str = std::env::consts::ARCH;
 /// megabytes and deserves a budget a slow link can still finish inside.
 const RELEASE_API_MAX_TIME_SECS: u64 = 15;
 const INSTALLER_MAX_TIME_SECS: u64 = 600;
+
+/// Mirrors that will relay a GitHub release asset, in the order a probe sees
+/// them. They are community-run, which is exactly why the download is verified
+/// against the digest the release published: a mirror serving anything else
+/// fails that check before the installer is launched, so a mirror can cost time
+/// and nothing more.
+///
+/// Ordered by measured throughput on a mainland connection: gh-proxy.com
+/// delivered the 12 MB installer in about a second and ghfast.top in three and
+/// a half. A source that answers a probe and then stalls mid-download is left
+/// out on purpose — a slow success costs less than a dead one.
+const ASSET_MIRRORS: &[&str] = &["https://gh-proxy.com/", "https://ghfast.top/"];
+
+/// How much of the installer a source has to prove it will relay. Enough that
+/// the transfer is real, small enough to be cheap on every candidate.
+const PROBE_RANGE: &str = "0-65535";
+const PROBE_MAX_TIME_SECS: u64 = 6;
+/// Below this a 200 carried no installer, only an error page, so the source
+/// must not win the choice.
+const PROBE_MIN_BYTES: u64 = 4096;
 
 #[derive(Clone, Debug)]
 pub struct ReleaseInfo {
@@ -152,25 +173,57 @@ pub fn installer_download_path(version: &str) -> PathBuf {
         .join(format!("fintwind-{version}-{INSTALLER_ARCH}-Setup.exe"))
 }
 
-/// Downloads `asset` to `destination` and refuses to leave a file behind that
-/// is not the one the release published, so nothing gets executed without
-/// having been checked. Blocking; run on a background executor.
-pub fn download_installer(asset: &ReleaseAsset, destination: &Path) -> anyhow::Result<()> {
+/// Removes the installer this version was updated from, and any half-written
+/// transfer the last attempt left behind.
+///
+/// Nothing else can do it: the app hands the installer to Setup.exe and quits,
+/// so the process that downloaded it is gone before the install finishes. The
+/// version now running is exactly the version that installer carried, which is
+/// what makes the path nameable here. Every other leftover — a failed download,
+/// a killed process — is either removed by its own failure path or overwritten
+/// by the next attempt at the same version, so this closes the only case that
+/// accumulates: one installer per successful update.
+///
+/// A delete of a file Setup.exe still has open fails on a sharing violation,
+/// which is left to fail; the next launch tries again. Blocking, so it belongs
+/// on a background executor.
+pub fn discard_downloaded_installer() {
+    let installer = installer_download_path(APP_VERSION);
+    let mut partial = installer.as_os_str().to_owned();
+    partial.push(".part");
+    for path in [PathBuf::from(partial), installer] {
+        if path.is_file() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// Downloads `asset` from `source` and refuses to leave a file behind that is
+/// not the one the release published, so nothing gets executed without having
+/// been checked. Blocking; run on a background executor.
+pub fn download_installer(
+    asset: &ReleaseAsset,
+    source: &DownloadSource,
+    destination: &Path,
+) -> anyhow::Result<()> {
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("could not create {}", parent.display()))?;
     }
-    let headers = [
-        format!("User-Agent: fintwind/{APP_VERSION}"),
-        "Accept: application/octet-stream".to_string(),
-    ];
+    let headers = asset_headers();
     let written = fintwind_protocol::http::http_download(
-        &asset.url,
+        &source.url,
         &headers,
         destination,
         INSTALLER_MAX_TIME_SECS,
     )
-    .with_context(|| format!("could not download {}", asset.name))?;
+    .with_context(|| {
+        format!(
+            "could not download {} via {}",
+            asset.name,
+            source.describe()
+        )
+    })?;
     // Hashing a 20 MB file is only worth it when the release published a
     // digest to compare it with.
     let digest = match asset.sha256.as_deref().and_then(sha256_digest) {
@@ -180,6 +233,120 @@ pub fn download_installer(asset: &ReleaseAsset, destination: &Path) -> anyhow::R
     verify_installer(asset, written, digest.as_deref()).inspect_err(|_| {
         let _ = std::fs::remove_file(destination);
     })
+}
+
+/// One place the installer can be fetched from.
+#[derive(Clone, Debug)]
+pub struct DownloadSource {
+    /// The URL to fetch.
+    pub url: String,
+    /// `None` when this is the publisher's own host.
+    pub mirror: Option<String>,
+}
+
+impl DownloadSource {
+    /// Where the download came from, in a form a person can read in an error.
+    pub fn describe(&self) -> String {
+        self.mirror
+            .clone()
+            .unwrap_or_else(|| RELEASES_LATEST_URL.to_owned())
+    }
+}
+
+/// Measures every source and returns the fastest that will actually relay the
+/// installer, falling back to the publisher's own host when none answered — a
+/// dead network fails there as it would anywhere, and no third party is
+/// involved in that attempt.
+///
+/// The probes run concurrently, so choosing costs about one round trip rather
+/// than one per source. Blocking; run on a background executor.
+pub fn pick_source(asset: &ReleaseAsset, destination: &Path) -> DownloadSource {
+    let candidates = candidate_sources(asset);
+    let headers = asset_headers();
+    let measured: Vec<Option<(Duration, u64)>> = std::thread::scope(|scope| {
+        let handles: Vec<_> = candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| {
+                let headers = &headers;
+                let url = candidate.url.clone();
+                let probe = probe_path(destination, index);
+                scope.spawn(move || {
+                    fintwind_protocol::http::http_probe(
+                        &url,
+                        headers,
+                        PROBE_RANGE,
+                        &probe,
+                        PROBE_MAX_TIME_SECS,
+                    )
+                    .ok()
+                    .map(|probed| (probed.elapsed, probed.bytes))
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap_or(None))
+            .collect()
+    });
+    // Each probe left its sample on disk; the real download writes its own path.
+    for index in 0..candidates.len() {
+        let _ = std::fs::remove_file(probe_path(destination, index));
+    }
+    match fastest_of(&measured) {
+        Some(index) => candidates
+            .into_iter()
+            .nth(index)
+            .expect("a measured index is a candidate"),
+        None => candidates
+            .into_iter()
+            .next()
+            .expect("the publisher's own host is always a candidate"),
+    }
+}
+
+/// Every source that could serve `asset`, the publisher's own host first so a
+/// tie in the measurement prefers it.
+fn candidate_sources(asset: &ReleaseAsset) -> Vec<DownloadSource> {
+    let mut candidates = vec![DownloadSource {
+        url: asset.url.clone(),
+        mirror: None,
+    }];
+    candidates.extend(ASSET_MIRRORS.iter().map(|mirror| DownloadSource {
+        url: format!("{mirror}{}", asset.url),
+        mirror: Some((*mirror).to_owned()),
+    }));
+    candidates
+}
+
+fn asset_headers() -> [String; 2] {
+    [
+        format!("User-Agent: fintwind/{APP_VERSION}"),
+        "Accept: application/octet-stream".to_string(),
+    ]
+}
+
+/// A disposable filename for one source's sample, so candidates measured at the
+/// same time do not write the same file.
+fn probe_path(destination: &Path, index: usize) -> PathBuf {
+    let mut probe = destination.as_os_str().to_owned();
+    probe.push(format!(".probe{index}"));
+    PathBuf::from(probe)
+}
+
+/// The index of the fastest source that answered, or `None` when none did. A
+/// tie keeps the earlier candidate, which is the publisher's own host. Pure, so
+/// the ranking is testable without a network.
+fn fastest_of(measured: &[Option<(Duration, u64)>]) -> Option<usize> {
+    measured
+        .iter()
+        .enumerate()
+        .filter_map(|(index, measured)| {
+            let (elapsed, bytes) = (*measured)?;
+            (bytes >= PROBE_MIN_BYTES).then_some((index, elapsed))
+        })
+        .min_by(|(_, left), (_, right)| left.cmp(right))
+        .map(|(index, _)| index)
 }
 
 /// Rejects an installer that is not the one the release published. The byte
@@ -352,6 +519,40 @@ mod tests {
     fn an_installer_that_matches_its_published_digest_is_accepted() {
         let asset = asset("fintwind-0.2.4-x86_64-Setup.exe", 30, Some(SHA256));
         assert!(verify_installer(&asset, 30, Some(SHA256_HEX)).is_ok());
+    }
+
+    #[test]
+    fn the_fastest_source_that_answered_wins() {
+        let measured = [
+            Some((Duration::from_millis(900), PROBE_MIN_BYTES)),
+            Some((Duration::from_millis(200), PROBE_MIN_BYTES)),
+            None,
+        ];
+        // Index 1 answered fastest, so the publisher's own host loses to it.
+        assert_eq!(fastest_of(&measured), Some(1));
+    }
+
+    #[test]
+    fn a_source_that_answered_with_no_installer_never_wins() {
+        let measured = [
+            None,
+            // A 200 that carried an error page: fast, but not a transfer.
+            Some((Duration::from_millis(10), PROBE_MIN_BYTES - 1)),
+            Some((Duration::from_millis(400), PROBE_MIN_BYTES)),
+        ];
+        assert_eq!(fastest_of(&measured), Some(2));
+    }
+
+    #[test]
+    fn a_tie_keeps_the_publishers_own_host() {
+        let both = Some((Duration::from_millis(300), PROBE_MIN_BYTES));
+        assert_eq!(fastest_of(&[both, both]), Some(0));
+    }
+
+    #[test]
+    fn no_source_that_answered_leaves_the_choice_empty() {
+        assert_eq!(fastest_of(&[None, None]), None);
+        assert_eq!(fastest_of(&[]), None);
     }
 
     #[test]

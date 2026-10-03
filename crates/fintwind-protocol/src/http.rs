@@ -100,6 +100,82 @@ fn partial_path(destination: &Path) -> PathBuf {
     PathBuf::from(partial)
 }
 
+/// What one probe of a URL measured.
+pub struct Probed {
+    /// How long the first bytes took to arrive.
+    pub elapsed: Duration,
+    /// How many bytes arrived, so a caller can tell a real transfer from a
+    /// short answer that merely carried a 200.
+    pub bytes: u64,
+}
+
+/// Measures how long the first `range` bytes of `url` take. A caller choosing
+/// between sources uses this instead of committing a whole download to a host
+/// that only answers slowly.
+///
+/// The body goes to `destination` because it is binary, which also leaves
+/// stdout carrying nothing but the `-w` report — written to the same stream the
+/// two would concatenate and the time could not be read back. curl formats its
+/// report with the current locale's decimal separator, so a comma is accepted
+/// too. Blocking.
+pub fn http_probe(
+    url: &str,
+    headers: &[String],
+    range: &str,
+    destination: &Path,
+    max_time_secs: u64,
+) -> anyhow::Result<Probed> {
+    let mut child = curl_command()
+        .arg("-sS")
+        .arg("-L")
+        .arg("--fail")
+        .arg("--max-time")
+        .arg(max_time_secs.to_string())
+        .arg("--range")
+        .arg(range)
+        .args(["-K", "-"])
+        .arg("-o")
+        .arg(destination)
+        .arg("-w")
+        .arg("%{time_total} %{size_download}")
+        .arg(url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("could not run curl")?;
+    take_stdin(&mut child, headers)?;
+    let output = child.wait_with_output().context("curl did not finish")?;
+    if !output.status.success() {
+        let _ = std::fs::remove_file(destination);
+        return Err(curl_error(&output.stderr));
+    }
+    let report = String::from_utf8_lossy(&output.stdout);
+    let (seconds, bytes) = parse_probe_report(&report)?;
+    Ok(Probed {
+        elapsed: Duration::from_secs_f64(seconds),
+        bytes,
+    })
+}
+
+/// The `-w` report is `<seconds> <bytes>` on a line of its own, because the
+/// body went to a file and not to stdout. curl formats the time with the
+/// current locale's decimal separator, so a comma is accepted too. Pure, so the
+/// shape is testable without a network.
+fn parse_probe_report(report: &str) -> anyhow::Result<(f64, u64)> {
+    let mut fields = report.split_whitespace();
+    let seconds = fields.next().unwrap_or_default();
+    let bytes = fields.next().unwrap_or_default();
+    let seconds: f64 = seconds
+        .replace(',', ".")
+        .parse()
+        .map_err(|_| anyhow!("curl reported an unreadable transfer time {seconds:?}"))?;
+    let bytes: u64 = bytes
+        .parse()
+        .map_err(|_| anyhow!("curl reported an unreadable transfer size {bytes:?}"))?;
+    Ok((seconds, bytes))
+}
+
 /// Hand the child its `-K -` config, which is what keeps a credential out of a
 /// process list. curl starts the transfer only once the config reaches EOF, so
 /// taking the pipe and dropping it here is what releases the request rather
@@ -410,5 +486,32 @@ mod tests {
         let raw = Cursor::new("curl: (7) Failed to connect");
         let mut reader = BufReader::new(raw);
         assert_eq!(read_response_status(&mut reader).unwrap(), 0);
+    }
+
+    /// The shape the Windows system curl actually wrote for a 64 KB probe, as
+    /// observed on the command line.
+    #[test]
+    fn a_probe_report_carries_the_time_then_the_byte_count() {
+        assert_eq!(
+            parse_probe_report("0.769708 65536\n").unwrap(),
+            (0.769708, 65536)
+        );
+        assert_eq!(parse_probe_report("  0.120730 0  ").unwrap(), (0.120730, 0));
+    }
+
+    #[test]
+    fn a_probe_report_in_a_comma_decimal_locale_still_parses() {
+        assert_eq!(
+            parse_probe_report("1,250500 65536").unwrap(),
+            (1.2505, 65536)
+        );
+    }
+
+    #[test]
+    fn a_probe_report_without_both_numbers_is_refused() {
+        assert!(parse_probe_report("").is_err());
+        assert!(parse_probe_report("0.769708").is_err());
+        assert!(parse_probe_report("fast 65536").is_err());
+        assert!(parse_probe_report("0.769708 plenty").is_err());
     }
 }

@@ -14,10 +14,11 @@ TS_RS_LARGE_INT = "number"
 # arm64 machine almost never has the arm64 redistributable already, so a
 # dynamically linked build dies at startup on `VCRUNTIME140.dll`.
 #
-# Link with the toolchain-bundled rust-lld instead of MSVC link.exe: faster
-# final links on incremental rebuilds, and no external LLVM install needed.
+# Use the default MSVC link.exe. A custom linker here (rust-lld) made every
+# rustc invocation uncacheable for mbx, the local Cargo build cache, so all
+# compilations bypassed the shared cache and worktrees could not reuse work.
 [target.'cfg(target_os = "windows")']
-rustflags = ["-C", "target-feature=+crt-static", "-C", "linker=rust-lld"]
+rustflags = ["-C", "target-feature=+crt-static"]
 
 [build]
 jobs = 4

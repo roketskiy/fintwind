@@ -42,7 +42,7 @@ impl Fintwind {
             .flex_none()
             .flex()
             .items_center()
-            .bg(theme.sidebar)
+            .bg(theme.rail)
             .border_b_1()
             .border_color(theme.sidebar_border)
             // macOS draws its traffic lights over the bar's left edge; the

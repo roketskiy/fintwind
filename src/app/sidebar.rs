@@ -258,7 +258,7 @@ impl Fintwind {
             .flex_none()
             .flex()
             .flex_col()
-            .bg(theme.sidebar)
+            .bg(theme.rail)
             .border_r_1()
             .border_color(theme.sidebar_border)
             // The strip above the entries drags the window; with the second

@@ -265,6 +265,8 @@ impl Render for Fintwind {
         let permission = self.render_permission(cx);
         let command_palette = self.render_command_palette(window, cx);
         let commit_dialog = self.render_commit_dialog(cx);
+        let discard_dialog = self.render_source_control_discard_dialog(cx);
+        let review_commit_dialog = self.render_source_control_commit_dialog(cx);
         let toast = self.render_active_toast(cx);
 
         // The main area: the session view, the settings page body, or the
@@ -489,6 +491,8 @@ impl Render for Fintwind {
             .children(toast)
             .children(command_palette)
             .children(commit_dialog)
+            .children(discard_dialog)
+            .children(review_commit_dialog)
             .children(image_preview)
             .into_any_element();
 

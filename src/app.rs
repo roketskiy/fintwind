@@ -1643,6 +1643,21 @@ pub struct Fintwind {
     /// Deliberately in-memory only: a restart falls back to following, since
     /// a persisted path may no longer exist.
     review_workspace_override: Option<PathBuf>,
+    /// The write action in flight (staging, discarding, fetch, …). Blocks
+    /// re-entry while set and names the action on the toolbar.
+    source_control_busy: Option<SharedString>,
+    /// A discard awaiting confirmation: the workspace it targets and the
+    /// tracked/untracked split the daemon expects.
+    source_control_discard: Option<source_control::DiscardRequest>,
+    /// The commit message input of the source-control page's commit area.
+    source_control_commit_input: Entity<ComposerInput>,
+    /// Local branches of the pinned-or-followed workspace, for the branch
+    /// menu. Refreshed alongside each status query; `None` until one lands.
+    source_control_branches: Option<Arc<fintwind_client::git::BranchSnapshot>>,
+    /// The name input of the branch menu's create row.
+    source_control_branch_create_input: Entity<ComposerInput>,
+    /// Whether the review page's commit dialog is open.
+    source_control_commit_dialog: bool,
     /// A file the second column asked to see. Honored once the matching
     /// diff snapshot lands, so a click that also switches sources still
     /// ends on the clicked file.
@@ -2586,6 +2601,8 @@ impl Fintwind {
                 .placeholder(tr!("mcp.url_placeholder"))
         });
         let session_rename_input = cx.new(|cx| ComposerInput::new(window, cx).search_field());
+        let source_control_branch_create_input =
+            cx.new(|cx| ComposerInput::new(window, cx).search_field());
         let right_panel_diff_filter = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
@@ -3173,6 +3190,18 @@ impl Fintwind {
                 },
             )
             .detach();
+            cx.subscribe(
+                &source_control_branch_create_input,
+                |this: &mut Self, _, event: &ComposerEvent, cx| {
+                    if let ComposerEvent::Submit(name) = event {
+                        let name = name.trim().to_owned();
+                        if !name.is_empty() {
+                            this.checkout_source_control_branch(name, true, cx);
+                        }
+                    }
+                },
+            )
+            .detach();
 
             // Like T3 Code's adapter subscriptions feeding its ingestion
             // worker, provider threads push an edge into this bounded wake
@@ -3437,6 +3466,16 @@ impl Fintwind {
                 source_control_list_state: ListState::new(0, ListAlignment::Top, px(28.0)),
                 source_control_scrollbar: ScrollbarState::new(),
                 review_workspace_override: None,
+                source_control_busy: None,
+                source_control_discard: None,
+                source_control_commit_input: cx.new(|cx| {
+                    ComposerInput::new(window, cx)
+                        .code_editor(None)
+                        .placeholder(tr!("commit.message_placeholder"))
+                }),
+                source_control_branches: None,
+                source_control_branch_create_input,
+                source_control_commit_dialog: false,
                 review_pending_file_focus: None,
                 right_panel_working_tree: Vec::new(),
                 working_trees: QueryCache::new(MAX_CACHED_WORKSPACES),

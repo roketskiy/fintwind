@@ -2,9 +2,9 @@ use crate::theme::{code_px, ui_px};
 
 use gpui::{Context, Div, IntoElement, Window, div, prelude::*, px};
 
-use super::*;
 use super::right_panel::file_icon_for_path;
 use super::sidebar::localized_session_title;
+use super::*;
 
 /// The source-control mode: the standalone review page that used to live in
 /// the right panel, plus its second column of workspace context. The mode is
@@ -29,11 +29,7 @@ impl Fintwind {
     /// Show `source` in the source-control mode. Every entry point funnels
     /// here: the toolbar's source menu, the turn review entry, and the
     /// workspace actions elsewhere in the app.
-    pub(super) fn open_review_page(
-        &mut self,
-        source: ReviewDiffSource,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn open_review_page(&mut self, source: ReviewDiffSource, cx: &mut Context<Self>) {
         if self.right_panel_diff_source != source {
             self.reset_review_diff_state(source);
         }
@@ -167,6 +163,7 @@ impl Fintwind {
                         }
                     }
                     fintwind.sync_source_control_rows(cx);
+                    fintwind.refresh_source_control_branches(cx);
                     cx.notify();
                 })
                 .ok();
@@ -197,6 +194,491 @@ impl Fintwind {
         self.refresh_source_control_status(cx);
         self.refresh_review_diff(cx);
         cx.notify();
+    }
+
+    /// Whether Git write actions may run right now: a history snapshot is
+    /// read-only, and one action runs at a time.
+    fn source_control_allows_writes(&self) -> bool {
+        !self.review_is_history_snapshot() && self.source_control_busy.is_none()
+    }
+
+    /// Runs one source-control write against the workspace it names. One
+    /// action at a time; landing refreshes the cached status and the open
+    /// diff, and failures surface as a toast with the Git message.
+    fn run_source_control_mutation(
+        &mut self,
+        label: SharedString,
+        operation: fintwind_client::WorkspaceOperation,
+        success_toast: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.source_control_busy.is_some() {
+            return;
+        }
+        self.source_control_busy = Some(label);
+        cx.notify();
+        let client = fintwind_client::WorkspaceClient::new(self.daemon.client());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { client.request(operation) })
+                .await;
+            this.update(cx, |this, cx| {
+                this.source_control_busy = None;
+                match result {
+                    Ok(fintwind_client::WorkspaceResult::Ack) => {
+                        if let Some(message) = success_toast {
+                            this.show_toast(message);
+                        }
+                    }
+                    Ok(_) => this.show_toast(tr!("source_control.action_failed")),
+                    Err(error) => this.show_toast(error.to_string()),
+                }
+                this.refresh_source_control_status(cx);
+                this.refresh_review_diff(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// The paths of the cached status that carry an unstaged side, including
+    /// untracked files: everything one "stage all" would add.
+    fn source_control_unstaged_paths(&self) -> Vec<String> {
+        self.source_control_status
+            .as_ref()
+            .map(|status| {
+                status
+                    .entries
+                    .iter()
+                    .filter(|entry| source_control_entry_is_unstaged(entry))
+                    .map(|entry| entry.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The paths of the cached status that carry a staged side: everything
+    /// one "unstage all" would reset.
+    fn source_control_staged_paths(&self) -> Vec<String> {
+        self.source_control_status
+            .as_ref()
+            .map(|status| {
+                status
+                    .entries
+                    .iter()
+                    .filter(|entry| source_control_entry_is_staged(entry))
+                    .map(|entry| entry.path.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(super) fn stage_source_control_paths(
+        &mut self,
+        paths: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.source_control_allows_writes() || paths.is_empty() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        self.run_source_control_mutation(
+            tr!("source_control.staging").into(),
+            fintwind_client::WorkspaceOperation::StagePaths {
+                cwd: workspace,
+                paths,
+            },
+            None,
+            cx,
+        );
+    }
+
+    pub(super) fn unstage_source_control_paths(
+        &mut self,
+        paths: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.source_control_allows_writes() || paths.is_empty() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        self.run_source_control_mutation(
+            tr!("source_control.unstaging").into(),
+            fintwind_client::WorkspaceOperation::UnstagePaths {
+                cwd: workspace,
+                paths,
+            },
+            None,
+            cx,
+        );
+    }
+
+    /// Opens the discard confirmation for one file's unstaged side. An
+    /// untracked file gets the deletion warning; a tracked one restores from
+    /// the index and keeps its staged side.
+    pub(super) fn request_discard_source_control_file(
+        &mut self,
+        path: String,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.source_control_allows_writes() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        let Some(entry) = self
+            .source_control_status
+            .as_ref()
+            .and_then(|status| status.entries.iter().find(|entry| entry.path == path))
+        else {
+            return;
+        };
+        let untracked = entry.worktree_status == '?';
+        self.source_control_discard = Some(DiscardRequest {
+            workspace,
+            tracked: if untracked {
+                Vec::new()
+            } else {
+                vec![path.clone()]
+            },
+            untracked: if untracked { vec![path] } else { Vec::new() },
+        });
+        cx.notify();
+    }
+
+    pub(super) fn confirm_source_control_discard(&mut self, cx: &mut Context<Self>) {
+        if self.source_control_busy.is_some() {
+            return;
+        }
+        let Some(request) = self.source_control_discard.take() else {
+            return;
+        };
+        self.run_source_control_mutation(
+            tr!("source_control.discarding").into(),
+            fintwind_client::WorkspaceOperation::DiscardWorktreePaths {
+                cwd: request.workspace,
+                tracked: request.tracked,
+                untracked: request.untracked,
+            },
+            None,
+            cx,
+        );
+    }
+
+    pub(super) fn cancel_source_control_discard(&mut self, cx: &mut Context<Self>) {
+        if self.source_control_discard.take().is_some() {
+            cx.notify();
+        }
+    }
+
+    /// Opens the discard confirmation for every unstaged change of the
+    /// workspace — tracked restores and untracked deletions both, split so
+    /// the dialog can warn about the latter.
+    pub(super) fn request_discard_source_control_all(&mut self, cx: &mut Context<Self>) {
+        if !self.source_control_allows_writes() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        let mut tracked = Vec::new();
+        let mut untracked = Vec::new();
+        if let Some(status) = self.source_control_status.as_ref() {
+            for entry in &status.entries {
+                if entry.worktree_status == ' ' {
+                    continue;
+                }
+                if entry.worktree_status == '?' {
+                    untracked.push(entry.path.clone());
+                } else {
+                    tracked.push(entry.path.clone());
+                }
+            }
+        }
+        if tracked.is_empty() && untracked.is_empty() {
+            return;
+        }
+        self.source_control_discard = Some(DiscardRequest {
+            workspace,
+            tracked,
+            untracked,
+        });
+        cx.notify();
+    }
+
+    pub(super) fn open_source_control_commit_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.source_control_commit_dialog {
+            return;
+        }
+        self.source_control_commit_dialog = true;
+        cx.notify();
+    }
+
+    pub(super) fn close_source_control_commit_dialog(&mut self, cx: &mut Context<Self>) {
+        if self.source_control_commit_dialog {
+            self.source_control_commit_dialog = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn fetch_source_control(&mut self, cx: &mut Context<Self>) {
+        if !self.source_control_allows_writes() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        self.run_source_control_mutation(
+            tr!("source_control.fetching").into(),
+            fintwind_client::WorkspaceOperation::FetchRemote { cwd: workspace },
+            Some(tr!("source_control.fetch_done")),
+            cx,
+        );
+    }
+
+    pub(super) fn pull_source_control(&mut self, cx: &mut Context<Self>) {
+        if !self.source_control_allows_writes() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        self.run_source_control_mutation(
+            tr!("source_control.pulling").into(),
+            fintwind_client::WorkspaceOperation::PullFastForward { cwd: workspace },
+            Some(tr!("source_control.pull_done")),
+            cx,
+        );
+    }
+
+    pub(super) fn push_source_control(&mut self, cx: &mut Context<Self>) {
+        if !self.source_control_allows_writes() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        self.run_source_control_mutation(
+            tr!("source_control.pushing").into(),
+            fintwind_client::WorkspaceOperation::Push { cwd: workspace },
+            Some(tr!("source_control.push_done")),
+            cx,
+        );
+    }
+
+    /// Switches the pinned-or-followed workspace to `branch`, creating it
+    /// first when asked. Git's own guard against switching with conflicting
+    /// uncommitted changes is never bypassed.
+    pub(super) fn checkout_source_control_branch(
+        &mut self,
+        branch: String,
+        create: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.source_control_allows_writes() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        let label = tr!("source_control.switching", branch = branch.clone());
+        self.run_source_control_mutation(
+            label.into(),
+            fintwind_client::WorkspaceOperation::CheckoutBranch {
+                cwd: workspace,
+                branch,
+                create,
+            },
+            None,
+            cx,
+        );
+    }
+
+    /// Commits the staged content of the pinned-or-followed workspace. The
+    /// staged set is the scope — nothing unstaged rides along — except the
+    /// explicit "stage all and commit" shortcut, which stages first.
+    pub(super) fn commit_source_control(
+        &mut self,
+        stage_all: bool,
+        push: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.source_control_allows_writes() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        let message = self
+            .source_control_commit_input
+            .read(cx)
+            .content()
+            .trim()
+            .to_owned();
+        if message.is_empty() {
+            self.show_toast(tr!("source_control.commit_empty_message"));
+            return;
+        }
+        let staged_paths = self.source_control_staged_paths();
+        if !stage_all && staged_paths.is_empty() {
+            self.show_toast(tr!("source_control.commit_nothing_staged"));
+            return;
+        }
+        let unstaged_paths = if stage_all {
+            self.source_control_unstaged_paths()
+        } else {
+            Vec::new()
+        };
+        self.source_control_busy = Some(
+            if push {
+                tr!("source_control.committing_and_pushing")
+            } else {
+                tr!("source_control.committing")
+            }
+            .into(),
+        );
+        cx.notify();
+        let client = fintwind_client::WorkspaceClient::new(self.daemon.client());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    if !unstaged_paths.is_empty() {
+                        client.request(fintwind_client::WorkspaceOperation::StagePaths {
+                            cwd: workspace.clone(),
+                            paths: unstaged_paths,
+                        })?;
+                    }
+                    client.request(fintwind_client::WorkspaceOperation::Commit {
+                        cwd: workspace,
+                        message,
+                        include_unstaged: false,
+                        push,
+                    })
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.source_control_busy = None;
+                match result {
+                    Ok(_) => {
+                        this.source_control_commit_dialog = false;
+                        this.source_control_commit_input.update(cx, |input, cx| {
+                            input.clear(cx);
+                        });
+                        this.show_toast(if push {
+                            tr!("source_control.commit_push_done")
+                        } else {
+                            tr!("source_control.commit_done")
+                        });
+                    }
+                    Err(error) => this.show_toast(error.to_string()),
+                }
+                this.refresh_source_control_status(cx);
+                this.refresh_review_diff(cx);
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fills the commit input from the staged diff via the session's coding
+    /// agent. Needs a selected session — the invocation is its model setup.
+    pub(super) fn generate_source_control_commit_message(&mut self, cx: &mut Context<Self>) {
+        if !self.source_control_allows_writes() {
+            return;
+        }
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            return;
+        };
+        if self.source_control_staged_paths().is_empty() {
+            self.show_toast(tr!("source_control.commit_nothing_staged"));
+            return;
+        }
+        let Some(session) = self.selected_session() else {
+            self.show_toast(tr!("commit.no_task"));
+            return;
+        };
+        let Some(invocation) = self
+            .provider_probe()
+            .and_then(|probe| probe.path.clone())
+            .map(|binary| crate::git_commit::AgentInvocation {
+                binary,
+                model: self.model_for_session(session).map(str::to_owned),
+                reasoning_effort: session.reasoning_effort.clone(),
+            })
+        else {
+            self.show_toast(tr!("commit.no_provider"));
+            return;
+        };
+        self.source_control_busy = Some(tr!("source_control.generating_message").into());
+        cx.notify();
+        let client = fintwind_client::WorkspaceClient::new(self.daemon.client());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    client.request(fintwind_client::WorkspaceOperation::GenerateCommitMessage {
+                        cwd: workspace,
+                        include_unstaged: false,
+                        invocation,
+                    })
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                this.source_control_busy = None;
+                match result {
+                    Ok(fintwind_client::WorkspaceResult::CommitMessage { message }) => {
+                        this.source_control_commit_input.update(cx, |input, cx| {
+                            input.set_content(message, cx);
+                        });
+                    }
+                    Ok(_) => this.show_toast(tr!("source_control.action_failed")),
+                    Err(error) => this.show_toast(error.to_string()),
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Fetches the pinned-or-followed workspace's local branches for the
+    /// branch menu, in the background alongside the status query.
+    pub(super) fn refresh_source_control_branches(&mut self, cx: &mut Context<Self>) {
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            self.source_control_branches = None;
+            return;
+        };
+        let client = fintwind_client::WorkspaceClient::new(self.daemon.client());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    client.request(fintwind_client::WorkspaceOperation::InspectBranches {
+                        cwd: workspace,
+                    })
+                })
+                .await;
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(fintwind_client::WorkspaceResult::Branches { snapshot }) => {
+                        this.source_control_branches = snapshot.map(Arc::new);
+                    }
+                    _ => this.source_control_branches = None,
+                }
+                cx.notify();
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// The directories the workspace menu offers: the selected session's
@@ -234,18 +716,6 @@ impl Fintwind {
             targets.push((Some(path.clone()), format!("{branch} · {leaf}")));
         }
         targets
-    }
-
-    /// Drops the manual pin so the mode follows the selected session's
-    /// workspace again.
-    pub(super) fn follow_source_control_session(&mut self, cx: &mut Context<Self>) {
-        if self.review_workspace_override.take().is_none() {
-            return;
-        }
-        self.review_pending_file_focus = None;
-        self.refresh_source_control_status(cx);
-        self.refresh_review_diff(cx);
-        cx.notify();
     }
 
     /// Flattens the cached status into the virtualized list's rows: one
@@ -403,6 +873,60 @@ impl Fintwind {
             .bg(theme.sidebar)
             .child(self.render_source_control_workspace_block(cx))
             .child(self.render_source_control_file_list(cx))
+            .child(self.render_source_control_commit_bar(cx))
+    }
+
+    /// The action bar below the file groups: the commit button, which opens
+    /// the commit dialog. Disabled while nothing is staged or a write is in
+    /// flight.
+    fn render_source_control_commit_bar(&self, cx: &mut Context<Self>) -> Div {
+        let theme = Theme::current(cx);
+        let writable = !self.review_is_history_snapshot();
+        let ready = writable
+            && self.source_control_busy.is_none()
+            && !self.source_control_staged_paths().is_empty();
+        div()
+            .flex_none()
+            .px(px(10.0))
+            .py(px(8.0))
+            .border_t_1()
+            .border_color(theme.sidebar_border)
+            .flex()
+            .items_center()
+            .child(
+                div()
+                    .id("source-control-commit-open")
+                    .tab_index(0)
+                    .h(px(28.0))
+                    .w_full()
+                    .rounded(px(6.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .gap(px(5.0))
+                    .text_size(ui_px(11.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .when(ready, |button| {
+                        button
+                            .bg(theme.inverse)
+                            .text_color(theme.on_inverse)
+                            .cursor_default()
+                            .hover(|button| button.opacity(0.9))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.open_source_control_commit_dialog(cx);
+                            }))
+                    })
+                    .when(!ready, |button| {
+                        button.bg(theme.overlay_strong).text_color(theme.text_ghost)
+                    })
+                    .child(icon(
+                        "icons/git-commit-horizontal.svg",
+                        13.0,
+                        theme.on_inverse,
+                    ))
+                    .child(tr!("source_control.commit")),
+            )
     }
 
     /// The workspace block: project, directory, branch, and the workspace
@@ -428,46 +952,6 @@ impl Fintwind {
             .gap(px(6.0))
             .border_b_1()
             .border_color(theme.sidebar_border)
-            // Title row with the manual refresh control.
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(4.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_size(ui_px(11.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(theme.text_tertiary)
-                            .child(tr!("source_control.workspace")),
-                    )
-                    .child(
-                        div()
-                            .id("source-control-refresh")
-                            .tab_index(0)
-                            .w(px(22.0))
-                            .h(px(22.0))
-                            .flex_none()
-                            .rounded(px(6.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .cursor_default()
-                            .hover(|element| element.bg(theme.overlay))
-                            .active(|element| element.bg(theme.overlay_strong))
-                            .focus_visible(|element| {
-                                element.border_1().border_color(theme.accent_focus)
-                            })
-                            .tooltip(Tooltip::text(tr!("source_control.refresh")))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.stop_propagation();
-                                this.refresh_source_control_status(cx);
-                                this.refresh_review_diff(cx);
-                            }))
-                            .child(icon("icons/rotate-cw.svg", 13.0, theme.text_tertiary)),
-                    ),
-            )
             // Loading, error, and "not a repository" states keep the block
             // honest instead of showing a stale branch over a dead path.
             .when_some(self.source_control_status_error.clone(), |column, error| {
@@ -504,23 +988,163 @@ impl Fintwind {
                 )
             })
             .when(status.is_some(), |column| {
-                column.child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(5.0))
-                        .child(icon("icons/git-branch.svg", 12.0, theme.text_tertiary))
-                        .child(
-                            div()
-                                .text_size(ui_px(11.5))
-                                .text_color(theme.text_secondary)
-                                .child(branch_label),
-                        ),
-                )
+                column.child(self.render_source_control_branch_row(branch_label, cx))
             })
             // The workspace picker doubles as the follow/pin indicator: its
             // label states the mode, so no separate status row is needed.
             .child(self.render_source_control_workspace_menu(cx))
+    }
+
+    /// The branch row: the branch menu (list + create) beside the three
+    /// remote actions. Disabled while a history snapshot is on screen or a
+    /// write is in flight.
+    fn render_source_control_branch_row(
+        &self,
+        branch_label: String,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let enabled = !self.review_is_history_snapshot() && self.source_control_busy.is_none();
+
+        div()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(self.render_source_control_branch_menu(branch_label, enabled, cx))
+            .child(div().flex_1())
+            .child(self.render_source_control_action_button(
+                "source-control-refresh",
+                "icons/rotate-cw.svg",
+                tr!("source_control.refresh"),
+                enabled,
+                |this, cx| {
+                    this.refresh_source_control_status(cx);
+                    this.refresh_review_diff(cx);
+                },
+                cx,
+            ))
+            .child(self.render_source_control_action_button(
+                "source-control-pull",
+                "icons/arrow-down.svg",
+                tr!("source_control.pull"),
+                enabled,
+                Self::pull_source_control,
+                cx,
+            ))
+            .child(self.render_source_control_action_button(
+                "source-control-push",
+                "icons/arrow-up.svg",
+                tr!("source_control.push"),
+                enabled,
+                Self::push_source_control,
+                cx,
+            ))
+    }
+
+    /// One small icon button of the branch row. `action` is the plain
+    /// method it fires.
+    fn render_source_control_action_button(
+        &self,
+        id: &'static str,
+        path: &'static str,
+        label: String,
+        enabled: bool,
+        action: fn(&mut Self, &mut Context<Self>),
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        div()
+            .id(id)
+            .tab_index(0)
+            .size(px(22.0))
+            .rounded(px(5.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(enabled, |button| {
+                button
+                    .cursor_default()
+                    .hover(|button| button.bg(theme.overlay))
+                    .active(|button| button.bg(theme.overlay_strong))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        action(this, cx);
+                    }))
+            })
+            .when(!enabled, |button| button.opacity(0.4))
+            .tooltip(Tooltip::text(label))
+            .child(icon(path, 12.0, theme.text_tertiary))
+    }
+
+    /// The branch menu: the current branch on the chip, the local branches
+    /// beneath it, and a create row (type a name, press Enter) that
+    /// switches to a fresh branch.
+    fn render_source_control_branch_menu(
+        &self,
+        branch_label: String,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = Theme::current(cx);
+        let handle = self.menu_handle("source-control-branch", cx);
+        let snapshot = self.source_control_branches.clone();
+        let weak = cx.entity().downgrade();
+        let create_input = self.source_control_branch_create_input.clone();
+        dropdown_menu(
+            MenuChip::new("source-control-branch")
+                .icon("icons/git-branch.svg", theme.text_tertiary)
+                .label(branch_label)
+                .max_label_width(110.0)
+                .height(px(22.0))
+                .background(theme.sidebar)
+                .caret(true)
+                .disabled(!enabled)
+                .selected(enabled && handle.is_open()),
+            "source-control-branch-menu",
+            &handle,
+            MenuAlign::BelowLeft,
+            move |_| {
+                let mut items = Vec::new();
+                // The create row: the name goes in, Enter switches. The
+                // Submit subscription on the input runs the checkout.
+                items.push(MenuItem::custom({
+                    let input = create_input.clone();
+                    move |_window, _cx| {
+                        let input = input.clone();
+                        div()
+                            .px(px(8.0))
+                            .py(px(6.0))
+                            .child(
+                                TextField::new("source-control-branch-create", input)
+                                    .icon("icons/plus.svg", 11.0)
+                                    .w_full(),
+                            )
+                            .into_any_element()
+                    }
+                }));
+                items.push(MenuItem::Separator);
+                if let Some(snapshot) = snapshot.as_ref() {
+                    for branch in &snapshot.branches {
+                        let weak = weak.clone();
+                        let name = branch.name.clone();
+                        items.push(
+                            MenuItem::new(name.clone(), move |_, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.checkout_source_control_branch(name.clone(), false, cx)
+                                });
+                            })
+                            .selected(snapshot.current.as_deref() == Some(branch.name.as_str())),
+                        );
+                    }
+                }
+                items.push(MenuItem::Separator);
+                let fetch_weak = weak.clone();
+                items.push(MenuItem::new(tr!("source_control.fetch"), move |_, cx| {
+                    let _ = fetch_weak.update(cx, |this, cx| this.fetch_source_control(cx));
+                }));
+                items
+            },
+        )
     }
 
     /// The workspace picker: a menu of Fintwind's recorded directories —
@@ -669,20 +1293,24 @@ impl Fintwind {
             })
     }
 
-    /// One flattened row: a group header, or a clickable file row with its
-    /// colored status letter.
+    /// One flattened row: a group header with its group-wide actions, or a
+    /// clickable file row with its colored status letter. Per-file actions
+    /// live beside the file name in the diff reader's header, not here.
     fn render_source_control_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let Some(row) = self.source_control_rows.borrow().get(index).cloned() else {
             return div().into_any_element();
         };
+        let writable = !self.review_is_history_snapshot();
         match row {
             SourceControlRow::Header { staged, count } => div()
                 .h(px(28.0))
                 .flex_none()
-                .px(px(12.0))
+                .pl(px(12.0))
+                .pr(px(8.0))
                 .flex()
                 .items_center()
+                .gap(px(6.0))
                 .text_size(ui_px(11.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text_tertiary)
@@ -691,12 +1319,51 @@ impl Fintwind {
                 } else {
                     tr!("source_control.unstaged", count = count)
                 })
+                .child(div().flex_1())
+                // One click moves the whole group across the staging line;
+                // discard exists on the unstaged side only and confirms first.
+                .when(writable, |header| {
+                    if staged {
+                        header.child(self.render_source_control_text_action(
+                            "source-control-unstage-all",
+                            tr!("source_control.unstage_all"),
+                            cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                let paths = this.source_control_staged_paths();
+                                this.unstage_source_control_paths(paths, cx);
+                            }),
+                            cx,
+                        ))
+                    } else {
+                        header
+                            .child(self.render_source_control_text_action(
+                                "source-control-stage-all",
+                                tr!("source_control.stage_all"),
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    let paths = this.source_control_unstaged_paths();
+                                    this.stage_source_control_paths(paths, cx);
+                                }),
+                                cx,
+                            ))
+                            .child(self.render_source_control_text_action(
+                                "source-control-discard-all",
+                                tr!("source_control.discard_all"),
+                                cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    this.request_discard_source_control_all(cx);
+                                }),
+                                cx,
+                            ))
+                    }
+                })
                 .into_any_element(),
             SourceControlRow::File {
                 staged,
                 path,
                 title,
                 letter,
+                ..
             } => {
                 let element_id = SharedString::from(format!(
                     "source-control-file-{}-{path}",
@@ -710,7 +1377,8 @@ impl Fintwind {
                     .tab_index(0)
                     .h(px(28.0))
                     .flex_none()
-                    .px(px(12.0))
+                    .pl(px(12.0))
+                    .pr(px(8.0))
                     .flex()
                     .items_center()
                     .gap(px(8.0))
@@ -744,6 +1412,392 @@ impl Fintwind {
                     .into_any_element()
             }
         }
+    }
+
+    /// One small text action of a group header. Muted until hovered, so the
+    /// header stays readable.
+    fn render_source_control_text_action(
+        &self,
+        id: &'static str,
+        label: String,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        div()
+            .id(id)
+            .tab_index(0)
+            .h(px(20.0))
+            .px(px(4.0))
+            .rounded(px(4.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .font_weight(FontWeight::MEDIUM)
+            .cursor_default()
+            .text_size(ui_px(10.5))
+            .text_color(theme.text_tertiary)
+            .hover(|button| {
+                button
+                    .bg(theme.overlay_strong)
+                    .text_color(theme.text_secondary)
+            })
+            .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
+            .on_click(on_click)
+            .child(label)
+    }
+
+    /// The commit dialog: the message input, the AI shortcut, and the two
+    /// commit scopes — staged only, or stage everything first. Esc or the
+    /// scrim closes it.
+    pub(super) fn render_source_control_commit_dialog(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        if !self.source_control_commit_dialog {
+            return None;
+        }
+        let theme = Theme::current(cx);
+        let busy = self.source_control_busy.is_some();
+        let branch = self
+            .source_control_status
+            .as_ref()
+            .and_then(|status| status.branch.clone())
+            .unwrap_or_else(|| tr!("source_control.detached_head"));
+        let staged = !self.source_control_staged_paths().is_empty();
+        let has_message = !self
+            .source_control_commit_input
+            .read(cx)
+            .content()
+            .trim()
+            .is_empty();
+        let has_session = self.selected_session().is_some();
+        let has_provider = self.provider_probe().is_some();
+        let can_generate = !busy && staged && has_session && has_provider;
+        let can_commit = !busy && staged && has_message;
+        let weak = cx.entity().downgrade();
+        let message = self.source_control_commit_input.clone();
+
+        let action_row = |id: &'static str,
+                          label: String,
+                          primary: bool,
+                          enabled: bool,
+                          action: fn(&mut Self, &mut Context<Self>)|
+         -> Stateful<Div> {
+            let weak = weak.clone();
+            div()
+                .id(id)
+                .tab_index(0)
+                .h(px(28.0))
+                .px(px(12.0))
+                .rounded(px(6.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .text_size(ui_px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .when(enabled, |button| {
+                    button.cursor_default().on_click(move |_, _, cx| {
+                        let _ = weak.update(cx, action);
+                    })
+                })
+                .when(primary && enabled, |button| {
+                    button
+                        .bg(theme.inverse)
+                        .text_color(theme.on_inverse)
+                        .hover(|button| button.opacity(0.9))
+                })
+                .when(!primary && enabled, |button| {
+                    button
+                        .text_color(theme.text_secondary)
+                        .hover(|button| button.bg(theme.overlay))
+                })
+                .when(!enabled, |button| {
+                    button.bg(theme.overlay_strong).text_color(theme.text_ghost)
+                })
+                .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
+                .child(label)
+        };
+
+        let card = div()
+            .w(px(420.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(theme.border_strong)
+            .bg(theme.surface)
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .px(px(16.0))
+                    .pt(px(14.0))
+                    .pb(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(icon("icons/git-commit-horizontal.svg", 14.0, theme.text))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(ui_px(13.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(tr!("source_control.commit_to", branch = branch)),
+                    ),
+            )
+            .child(
+                div()
+                    .mx(px(8.0))
+                    .h(px(96.0))
+                    .overflow_hidden()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.composer)
+                    .child(message),
+            )
+            .child(
+                div()
+                    .p(px(8.0))
+                    .pt(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .id("source-control-commit-generate")
+                            .tab_index(0)
+                            .size(px(28.0))
+                            .rounded(px(6.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when(can_generate, |button| {
+                                button
+                                    .cursor_default()
+                                    .hover(|button| button.bg(theme.overlay))
+                            })
+                            .when(!can_generate, |button| button.opacity(0.4))
+                            .tooltip(Tooltip::text(tr!("source_control.generate_message")))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.generate_source_control_commit_message(cx);
+                            }))
+                            .child(icon("icons/sparkle.svg", 13.0, theme.text_tertiary)),
+                    )
+                    .child(div().flex_1())
+                    .child(action_row(
+                        "source-control-commit-stage-all-run",
+                        tr!("source_control.stage_all_commit"),
+                        false,
+                        can_commit,
+                        |this, cx| {
+                            this.close_source_control_commit_dialog(cx);
+                            this.commit_source_control(true, false, cx);
+                        },
+                    ))
+                    .child(action_row(
+                        "source-control-commit-run",
+                        tr!("source_control.commit"),
+                        true,
+                        can_commit,
+                        |this, cx| {
+                            this.close_source_control_commit_dialog(cx);
+                            this.commit_source_control(false, false, cx);
+                        },
+                    )),
+            );
+        let scrim = if theme.is_dark {
+            gpui::hsla(0.0, 0.0, 0.0, 0.34)
+        } else {
+            gpui::hsla(0.0, 0.0, 0.0, 0.16)
+        };
+        let layer = div()
+            .id("source-control-commit-layer")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(scrim)
+            .p(px(24.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.close_source_control_commit_dialog(cx)),
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    this.close_source_control_commit_dialog(cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(card);
+        Some(gpui::deferred(layer).with_priority(4).into_any_element())
+    }
+
+    /// The discard confirmation: what would be restored, and — for
+    /// untracked files — the warning that Git cannot bring them back.
+    pub(super) fn render_source_control_discard_dialog(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let request = self.source_control_discard.as_ref()?;
+        let theme = Theme::current(cx);
+        let total = request.total();
+        let busy = self.source_control_busy.is_some();
+        let weak = cx.entity().downgrade();
+        let cancel = {
+            let weak = weak.clone();
+            div()
+                .id("source-control-discard-cancel")
+                .tab_index(0)
+                .h(px(28.0))
+                .px(px(12.0))
+                .rounded(px(6.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .cursor_default()
+                .text_size(ui_px(11.5))
+                .text_color(theme.text_secondary)
+                .hover(|button| button.bg(theme.overlay))
+                .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
+                .child(tr!("source_control.discard_cancel"))
+                .on_click(move |_, _, cx| {
+                    let _ = weak.update(cx, |this, cx| this.cancel_source_control_discard(cx));
+                })
+        };
+        let confirm = {
+            let weak = weak.clone();
+            div()
+                .id("source-control-discard-confirm")
+                .tab_index(0)
+                .h(px(28.0))
+                .px(px(12.0))
+                .rounded(px(6.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap(px(4.0))
+                .when(!busy, |button| {
+                    button
+                        .cursor_default()
+                        .bg(theme.danger)
+                        .text_color(theme.on_inverse)
+                        .hover(|button| button.opacity(0.9))
+                })
+                .when(busy, |button| button.opacity(0.5))
+                .text_size(ui_px(11.5))
+                .font_weight(FontWeight::MEDIUM)
+                .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
+                .child(tr!("source_control.discard_confirm", count = total))
+                .on_click(move |_, _, cx| {
+                    let _ = weak.update(cx, |this, cx| this.confirm_source_control_discard(cx));
+                })
+        };
+        let card = div()
+            .w(px(360.0))
+            .rounded(px(10.0))
+            .border_1()
+            .border_color(theme.border_strong)
+            .bg(theme.surface)
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .px(px(16.0))
+                    .pt(px(14.0))
+                    .pb(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(icon("icons/alert.svg", 14.0, theme.danger))
+                    .child(
+                        div()
+                            .text_size(ui_px(13.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(theme.text)
+                            .child(tr!("source_control.discard_title")),
+                    ),
+            )
+            .child(
+                div()
+                    .px(px(16.0))
+                    .pb(px(10.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.0))
+                    .when(!request.tracked.is_empty(), |column| {
+                        column.child(
+                            div()
+                                .text_size(ui_px(11.5))
+                                .line_height(ui_px(16.0))
+                                .text_color(theme.text_secondary)
+                                .child(tr!(
+                                    "source_control.discard_tracked",
+                                    count = request.tracked.len()
+                                )),
+                        )
+                    })
+                    .when(!request.untracked.is_empty(), |column| {
+                        column.child(
+                            div()
+                                .text_size(ui_px(11.5))
+                                .line_height(ui_px(16.0))
+                                .text_color(theme.danger_text)
+                                .child(tr!(
+                                    "source_control.discard_untracked_note",
+                                    count = request.untracked.len()
+                                )),
+                        )
+                    }),
+            )
+            .child(div().mx(px(8.0)).h(px(1.0)).bg(theme.border))
+            .child(
+                div()
+                    .p(px(8.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .justify_end()
+                    .child(cancel)
+                    .child(confirm),
+            );
+        let scrim = if theme.is_dark {
+            gpui::hsla(0.0, 0.0, 0.0, 0.34)
+        } else {
+            gpui::hsla(0.0, 0.0, 0.0, 0.16)
+        };
+        let layer = div()
+            .id("source-control-discard-layer")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .bg(scrim)
+            .p(px(24.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.cancel_source_control_discard(cx)),
+            )
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if event.keystroke.key == "escape" {
+                    this.cancel_source_control_discard(cx);
+                    cx.stop_propagation();
+                }
+            }))
+            .child(card);
+        Some(gpui::deferred(layer).with_priority(4).into_any_element())
     }
 
     /// The name above the directory: the pinned workspace's project when one
@@ -1038,6 +2092,19 @@ impl Fintwind {
             Some((folder, name)) => (Some(folder.to_owned()), name.to_owned()),
             None => (None, path.clone()),
         };
+        // Per-file actions sit beside the file name: stage and discard exist
+        // only for files with an unstaged side, unstage only for files with
+        // a staged one. A history snapshot is read-only, so none render.
+        let entry = self
+            .source_control_status
+            .as_ref()
+            .and_then(|status| status.entries.iter().find(|entry| entry.path == path));
+        let has_unstaged = entry.is_some_and(|entry| entry.worktree_status != ' ');
+        let has_staged = entry.is_some_and(source_control_entry_is_staged);
+        let writable = !self.review_is_history_snapshot() && self.source_control_busy.is_none();
+        let can_stage = writable && has_unstaged;
+        let can_discard = writable && has_unstaged;
+        let can_unstage = writable && has_staged;
 
         div()
             .h(px(36.0))
@@ -1083,7 +2150,87 @@ impl Fintwind {
             })
             .child(render_diff_stat(additions, deletions, &theme))
             .child(div().flex_1())
+            .when(can_stage, |header| {
+                header.child(self.render_source_control_file_action(
+                    "source-control-file-header-stage",
+                    tr!("source_control.stage"),
+                    cx.listener(|this, _, _, cx| {
+                        let path = this.source_control_selected_path();
+                        if let Some(path) = path {
+                            this.stage_source_control_paths(vec![path], cx);
+                        }
+                    }),
+                    cx,
+                ))
+            })
+            .when(can_discard, |header| {
+                header.child(self.render_source_control_file_action(
+                    "source-control-file-header-discard",
+                    tr!("source_control.discard"),
+                    cx.listener(|this, _, _, cx| {
+                        let path = this.source_control_selected_path();
+                        if let Some(path) = path {
+                            this.request_discard_source_control_file(path, cx);
+                        }
+                    }),
+                    cx,
+                ))
+            })
+            .when(can_unstage, |header| {
+                header.child(self.render_source_control_file_action(
+                    "source-control-file-header-unstage",
+                    tr!("source_control.unstage"),
+                    cx.listener(|this, _, _, cx| {
+                        let path = this.source_control_selected_path();
+                        if let Some(path) = path {
+                            this.unstage_source_control_paths(vec![path], cx);
+                        }
+                    }),
+                    cx,
+                ))
+            })
             .child(self.render_source_control_layout_toggle(cx))
+    }
+
+    /// The path of the file the reader is focused on, from the cached
+    /// snapshot.
+    fn source_control_selected_path(&self) -> Option<String> {
+        self.right_panel_diff_selected_file
+            .and_then(|index| {
+                self.right_panel_diff_snapshot
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.files.get(index))
+            })
+            .map(|file| file.path.clone())
+    }
+
+    /// One bordered text action beside the file name in the reader's header.
+    fn render_source_control_file_action(
+        &self,
+        id: &'static str,
+        label: String,
+        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        div()
+            .id(id)
+            .tab_index(0)
+            .h(px(22.0))
+            .px(px(8.0))
+            .rounded(px(5.0))
+            .border_1()
+            .border_color(theme.border)
+            .flex_none()
+            .flex()
+            .items_center()
+            .cursor_default()
+            .text_size(ui_px(10.5))
+            .text_color(theme.text_secondary)
+            .hover(|button| button.bg(theme.overlay).text_color(theme.text))
+            .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
+            .on_click(on_click)
+            .child(label)
     }
 
     /// The unified/side-by-side switch, drawn as two small adjoining
@@ -1187,9 +2334,8 @@ impl Fintwind {
                     let choice_weak = weak.clone();
                     items.push(
                         MenuItem::new(label, move |_, cx| {
-                            let _ = choice_weak.update(cx, |this, cx| {
-                                this.set_review_diff_source(choice, cx)
-                            });
+                            let _ = choice_weak
+                                .update(cx, |this, cx| this.set_review_diff_source(choice, cx));
                         })
                         .selected(choice == selected),
                     );
@@ -1202,9 +2348,8 @@ impl Fintwind {
                     let choice_weak = weak.clone();
                     items.push(
                         MenuItem::new(label, move |_, cx| {
-                            let _ = choice_weak.update(cx, |this, cx| {
-                                this.set_review_diff_source(choice, cx)
-                            });
+                            let _ = choice_weak
+                                .update(cx, |this, cx| this.set_review_diff_source(choice, cx));
                         })
                         .selected(choice == selected),
                     );
@@ -1580,8 +2725,8 @@ impl Fintwind {
                         }
                         gutter
                     });
-                let label_focus = self
-                    .transcript_control_focus(format!("review-diff-gap-{}-label", gap.id), cx);
+                let label_focus =
+                    self.transcript_control_focus(format!("review-diff-gap-{}-label", gap.id), cx);
                 let label = div()
                     .id(SharedString::from(format!(
                         "review-diff-gap-{}-label",
@@ -1731,8 +2876,10 @@ impl Fintwind {
             crate::review_diff::ExpansionDirection::Both => "both",
             crate::review_diff::ExpansionDirection::All => "all",
         };
-        let focus = self
-            .transcript_control_focus(format!("review-diff-gap-{gap_id}-button-{direction_name}"), cx);
+        let focus = self.transcript_control_focus(
+            format!("review-diff-gap-{gap_id}-button-{direction_name}"),
+            cx,
+        );
         div()
             .id(SharedString::from(format!(
                 "review-diff-gap-{gap_id}-button-{direction_name}"
@@ -2007,9 +3154,25 @@ impl Fintwind {
         })
         .detach();
     }
-
 }
 
+/// A discard awaiting the user's confirmation: the workspace it targets and
+/// the tracked/untracked split the daemon expects. The dialog shows both
+/// sides, because deleting untracked files cannot be undone by Git.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct DiscardRequest {
+    pub(super) workspace: PathBuf,
+    /// Tracked files that restore from the index; the staged side survives.
+    pub(super) tracked: Vec<String>,
+    /// Untracked files deletion would erase — Git cannot bring them back.
+    pub(super) untracked: Vec<String>,
+}
+
+impl DiscardRequest {
+    fn total(&self) -> usize {
+        self.tracked.len() + self.untracked.len()
+    }
+}
 
 /// One rendered row of the source-control page's single-file diff reader.
 /// Rows are flattened out of the snapshot ahead of time so the virtualized
@@ -2087,10 +3250,7 @@ fn source_control_split_rows(
                 }
                 at += deletions + additions;
             }
-            LineKind::FileHeader
-            | LineKind::HunkHeader
-            | LineKind::Gap(_)
-            | LineKind::Meta => {
+            LineKind::FileHeader | LineKind::HunkHeader | LineKind::Gap(_) | LineKind::Meta => {
                 rows.push(SourceControlDiffRow::Line(at));
                 at += 1;
             }
@@ -2101,7 +3261,8 @@ fn source_control_split_rows(
 
 /// One flattened row of the source-control second column: a group header, or
 /// a file from the staged/unstaged side. `title` carries the rename form
-/// `origin → path` when Git detected a rename.
+/// `origin → path` when Git detected a rename; `untracked` marks an entry
+/// Git has no record of, whose discard deletes the file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum SourceControlRow {
     Header {
@@ -2113,6 +3274,7 @@ pub(super) enum SourceControlRow {
         path: String,
         title: String,
         letter: char,
+        untracked: bool,
     },
 }
 
@@ -2132,6 +3294,7 @@ impl SourceControlRow {
             path: entry.path.clone(),
             title,
             letter,
+            untracked: entry.worktree_status == '?',
         }
     }
 }
@@ -2477,9 +3640,7 @@ mod tests {
         }
     }
 
-    fn split_test_snapshot(
-        lines: Vec<crate::review_diff::Line>,
-    ) -> crate::review_diff::Snapshot {
+    fn split_test_snapshot(lines: Vec<crate::review_diff::Line>) -> crate::review_diff::Snapshot {
         crate::review_diff::Snapshot {
             source: crate::review_diff::Source::default(),
             files: vec![review_file("a.rs")],
@@ -2504,10 +3665,8 @@ mod tests {
             split_test_line(0, Context),
             split_test_line(0, Addition),
         ]);
-        let rows = source_control_split_rows(
-            &snapshot,
-            source_control_file_line_range(&snapshot, 0),
-        );
+        let rows =
+            source_control_split_rows(&snapshot, source_control_file_line_range(&snapshot, 0));
         assert_eq!(
             rows,
             vec![
@@ -2575,7 +3734,8 @@ mod tests {
     }
 
     #[test]
-    fn review_render_path_only_reads_the_in_memory_snapshot() {        let source = include_str!("source_control.rs");
+    fn review_render_path_only_reads_the_in_memory_snapshot() {
+        let source = include_str!("source_control.rs");
         let start = source
             .find("\n    fn render_review_diff_body(")
             .expect("review render fn");

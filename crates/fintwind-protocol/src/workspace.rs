@@ -111,6 +111,33 @@ pub enum WorkspaceOperation {
     InspectStatus {
         cwd: PathBuf,
     },
+    /// Stages files by literal repository-relative path.
+    StagePaths {
+        cwd: PathBuf,
+        paths: Vec<String>,
+    },
+    /// Unstages files without touching the worktree.
+    UnstagePaths {
+        cwd: PathBuf,
+        paths: Vec<String>,
+    },
+    /// Discards unstaged worktree changes: tracked files restore from the
+    /// index, untracked files are deleted from disk (irrecoverable — the UI
+    /// confirms first).
+    DiscardWorktreePaths {
+        cwd: PathBuf,
+        tracked: Vec<String>,
+        untracked: Vec<String>,
+    },
+    /// Fetches every remote and prunes stale tracking refs.
+    FetchRemote {
+        cwd: PathBuf,
+    },
+    /// Pulls with fast-forward only; a diverged branch is an error, never an
+    /// automatic merge.
+    PullFastForward {
+        cwd: PathBuf,
+    },
     GenerateCommitMessage {
         cwd: PathBuf,
         include_unstaged: bool,
@@ -180,6 +207,8 @@ pub enum WorkspaceOperation {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum WorkspaceResult {
+    /// A mutation that only reports success; failures arrive as transport or
+    /// daemon errors carrying the Git message.
     Ack,
     WorkingTree {
         entries: Vec<WorkingTreeEntry>,

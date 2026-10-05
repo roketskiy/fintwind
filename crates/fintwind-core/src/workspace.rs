@@ -122,6 +122,30 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
         WorkspaceOperation::InspectStatus { cwd } => WorkspaceResult::WorktreeStatus {
             status: crate::git_status::inspect(&cwd)?,
         },
+        WorkspaceOperation::StagePaths { cwd, paths } => {
+            crate::git_actions::stage(&cwd, &paths)?;
+            WorkspaceResult::Ack
+        }
+        WorkspaceOperation::UnstagePaths { cwd, paths } => {
+            crate::git_actions::unstage(&cwd, &paths)?;
+            WorkspaceResult::Ack
+        }
+        WorkspaceOperation::DiscardWorktreePaths {
+            cwd,
+            tracked,
+            untracked,
+        } => {
+            crate::git_actions::discard_worktree(&cwd, &tracked, &untracked)?;
+            WorkspaceResult::Ack
+        }
+        WorkspaceOperation::FetchRemote { cwd } => {
+            crate::git_actions::fetch(&cwd)?;
+            WorkspaceResult::Ack
+        }
+        WorkspaceOperation::PullFastForward { cwd } => {
+            crate::git_actions::pull_fast_forward(&cwd)?;
+            WorkspaceResult::Ack
+        }
         WorkspaceOperation::GenerateCommitMessage {
             cwd,
             include_unstaged,

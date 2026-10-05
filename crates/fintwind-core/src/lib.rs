@@ -28,6 +28,7 @@ pub mod command_env;
 pub mod composer_complete;
 pub mod daemon;
 pub mod driver;
+pub mod git_actions;
 pub mod git_branch;
 pub mod git_commit;
 pub mod git_log;

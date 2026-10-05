@@ -288,6 +288,12 @@ impl Fintwind {
                         "icons/source-control.svg",
                         WorkspaceMode::SourceControl,
                         cx,
+                    ))
+                    .child(self.render_mode_rail_entry(
+                        "rail-usage",
+                        "icons/chart-column.svg",
+                        WorkspaceMode::Usage,
+                        cx,
                     )),
             )
             .child(div().flex_1())
@@ -323,6 +329,7 @@ impl Fintwind {
         let label = match mode {
             WorkspaceMode::Sessions => tr!("rail.sessions"),
             WorkspaceMode::SourceControl => tr!("rail.source_control"),
+            WorkspaceMode::Usage => tr!("settings.usage"),
             WorkspaceMode::Settings => tr!("common.settings"),
         };
         let group = SharedString::from(format!("rail-{id}"));
@@ -340,11 +347,15 @@ impl Fintwind {
             .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
             .tooltip(Tooltip::text(label))
             .child(
-                icon(icon_path, 20.0, if active {
-                    theme.text
-                } else {
-                    theme.text_tertiary
-                })
+                icon(
+                    icon_path,
+                    20.0,
+                    if active {
+                        theme.text
+                    } else {
+                        theme.text_tertiary
+                    },
+                )
                 .group_hover(group, |style| style.text_color(theme.text)),
             )
             .when(active, |entry| {
@@ -357,16 +368,12 @@ impl Fintwind {
                         .flex()
                         .items_center()
                         .child(
-                            div()
-                                .h(px(20.0))
-                                .w(px(2.0))
-                                .bg(theme.text)
-                                .with_animation(
-                                    SharedString::from(format!("rail-mark-{id}")),
-                                    Animation::new(NAVIGATION_RAIL_ANIMATION_DURATION)
-                                        .with_easing(ease_out_quint()),
-                                    |mark, delta| mark.h(px(20.0 * delta)),
-                                ),
+                            div().h(px(20.0)).w(px(2.0)).bg(theme.text).with_animation(
+                                SharedString::from(format!("rail-mark-{id}")),
+                                Animation::new(NAVIGATION_RAIL_ANIMATION_DURATION)
+                                    .with_easing(ease_out_quint()),
+                                |mark, delta| mark.h(px(20.0 * delta)),
+                            ),
                         ),
                 )
             })
@@ -447,7 +454,10 @@ impl Fintwind {
     /// each mode brings its own on-enter side effects.
     fn activate_mode(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
         if self.mode == mode {
-            self.set_sidebar_visible(!self.sidebar_visible, cx);
+            // Usage has no second column; there is nothing to collapse.
+            if mode != WorkspaceMode::Usage {
+                self.set_sidebar_visible(!self.sidebar_visible, cx);
+            }
             return;
         }
         match mode {
@@ -457,6 +467,7 @@ impl Fintwind {
             }
             WorkspaceMode::Settings => self.open_settings_page(self.settings_page, cx),
             WorkspaceMode::SourceControl => self.open_source_control(cx),
+            WorkspaceMode::Usage => self.open_usage_page(cx),
         }
         if !self.sidebar_visible {
             self.set_sidebar_visible(true, cx);

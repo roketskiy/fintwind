@@ -95,10 +95,7 @@ impl Fintwind {
                     .when(self.fps_counter_visible, |group| {
                         group.child(self.render_fps_counter(cx))
                     })
-                    .child(self.render_right_panel_toggle(
-                        self.mode == WorkspaceMode::Sessions,
-                        cx,
-                    ))
+                    .child(self.render_right_panel_toggle(self.mode == WorkspaceMode::Sessions, cx))
                     .children(self.render_client_window_controls(window, cx)),
             )
     }
@@ -110,7 +107,8 @@ impl Fintwind {
     /// applies, rather than disappearing.
     fn render_top_bar_reveal_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = Theme::current(cx);
-        let enabled = self.mode != WorkspaceMode::Settings && self.selected_workspace_path().is_some();
+        let enabled = !matches!(self.mode, WorkspaceMode::Settings | WorkspaceMode::Usage)
+            && self.selected_workspace_path().is_some();
         let focus = cx.focus_handle();
         div()
             .id("top-bar-reveal-project")

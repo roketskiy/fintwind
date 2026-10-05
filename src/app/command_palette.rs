@@ -108,6 +108,7 @@ enum PaletteAction {
     UndoLastTurn,
     RedoUndoneTurn,
     OpenSettings(SettingsPage),
+    OpenUsage,
     SelectTask(Uuid),
 }
 
@@ -688,12 +689,6 @@ impl Fintwind {
                 "icons/sparkle.svg",
                 "settings preferences mcp marketplace smithery web search academic code install",
             ),
-            (
-                SettingsPage::Usage,
-                "settings.usage",
-                "icons/chart-column.svg",
-                "settings preferences usage statistics tokens heatmap chart models daily activity",
-            ),
         ] {
             commands.push(CommandPaletteItem::command(
                 PaletteSection::Settings,
@@ -705,6 +700,15 @@ impl Fintwind {
                 next(),
             ));
         }
+        commands.push(CommandPaletteItem::command(
+            PaletteSection::Settings,
+            tr!("settings.usage"),
+            "icons/chart-column.svg",
+            None,
+            PaletteAction::OpenUsage,
+            "usage statistics tokens heatmap chart models daily activity",
+            next(),
+        ));
         commands
     }
 
@@ -950,6 +954,7 @@ impl Fintwind {
                 self.open_settings_action(&OpenSettings, window, cx);
                 self.open_settings_page(page, cx);
             }
+            PaletteAction::OpenUsage => self.open_usage_page(cx),
             PaletteAction::SelectTask(session_id) => {
                 self.mode = WorkspaceMode::Sessions;
                 self.select_session(session_id, cx);

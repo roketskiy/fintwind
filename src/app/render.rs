@@ -176,15 +176,13 @@ impl Fintwind {
     ) -> AnyElement {
         let (sidebar_width, _) = self.effective_panel_widths(window);
         match self.mode {
-            WorkspaceMode::Sessions => {
-                self.render_sidebar(sidebar_width, cx).into_any_element()
-            }
-            WorkspaceMode::Settings => {
-                self.render_settings_secondary(cx).into_any_element()
-            }
+            WorkspaceMode::Sessions => self.render_sidebar(sidebar_width, cx).into_any_element(),
+            WorkspaceMode::Settings => self.render_settings_secondary(cx).into_any_element(),
             WorkspaceMode::SourceControl => self
                 .render_source_control_secondary(sidebar_width, cx)
                 .into_any_element(),
+            // Usage has no second column: the page fills the main area.
+            WorkspaceMode::Usage => div().into_any_element(),
         }
     }
 
@@ -329,40 +327,66 @@ impl Render for Fintwind {
                     })
                     .into_any_element()
             }
-            WorkspaceMode::Settings => {
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
-                    .relative()
-                    .flex()
-                    .child(self.render_settings_content(window, cx))
-                    .when(self.sidebar_visible, |element| {
-                        element.child(self.render_panel_resize_handle(
-                            "sidebar-resize-handle",
-                            PanelResizeTarget::Sidebar,
-                            cx,
-                        ))
-                    })
-                    .into_any_element()
-            }
-            WorkspaceMode::SourceControl => {
-                div()
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
-                    .relative()
-                    .flex()
-                    .child(self.render_source_control_page(window, cx))
-                    .when(self.sidebar_visible, |element| {
-                        element.child(self.render_panel_resize_handle(
-                            "sidebar-resize-handle",
-                            PanelResizeTarget::Sidebar,
-                            cx,
-                        ))
-                    })
-                    .into_any_element()
-            }
+            WorkspaceMode::Settings => div()
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .relative()
+                .flex()
+                .child(self.render_settings_content(window, cx))
+                .when(self.sidebar_visible, |element| {
+                    element.child(self.render_panel_resize_handle(
+                        "sidebar-resize-handle",
+                        PanelResizeTarget::Sidebar,
+                        cx,
+                    ))
+                })
+                .into_any_element(),
+            WorkspaceMode::SourceControl => div()
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .relative()
+                .flex()
+                .child(self.render_source_control_page(window, cx))
+                .when(self.sidebar_visible, |element| {
+                    element.child(self.render_panel_resize_handle(
+                        "sidebar-resize-handle",
+                        PanelResizeTarget::Sidebar,
+                        cx,
+                    ))
+                })
+                .into_any_element(),
+            WorkspaceMode::Usage => div()
+                .id("usage-page-scroll")
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .relative()
+                .flex()
+                .flex_col()
+                .overflow_y_scroll()
+                .track_scroll(&self.settings_scroll)
+                .border_l_1()
+                .border_color(theme.sidebar_border)
+                .bg(theme.surface)
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(settings::SETTINGS_CONTENT_MAX_WIDTH))
+                        .mx_auto()
+                        .child(
+                            div()
+                                .pt(px(2.0))
+                                .flex_none()
+                                .text_size(ui_px(18.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text)
+                                .child(tr!("settings.usage")),
+                        )
+                        .child(self.render_usage_page(cx)),
+                )
+                .into_any_element(),
         };
 
         let content = div()
@@ -440,9 +464,7 @@ impl Render for Fintwind {
                                 .h_full()
                                 .flex_none()
                                 .w(px(panels.sidebar))
-                                .when(panels.sidebar_sliding, |element| {
-                                    element.overflow_hidden()
-                                })
+                                .when(panels.sidebar_sliding, |element| element.overflow_hidden())
                                 .child(
                                     self.sidebar_pane.clone().cached(
                                         StyleRefinement::default()

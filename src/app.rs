@@ -276,7 +276,6 @@ enum SettingsPage {
     Skills,
     McpServers,
     McpMarket,
-    Usage,
     Appearance,
 }
 
@@ -289,6 +288,7 @@ enum WorkspaceMode {
     #[default]
     Sessions,
     SourceControl,
+    Usage,
     Settings,
 }
 

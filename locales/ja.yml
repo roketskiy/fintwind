@@ -84,7 +84,6 @@ settings.appearance_keywords: 外観 テーマ システム ライト ダーク 
 settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
 settings.skills: スキル
 settings.skills_keywords: スキル ライブラリ エージェント 無効 有効 削除 claude codex cursor opencode pi amp 共有
-settings.usage_keywords: 使用状況 トークン コスト 支出 キャッシュ 日別 グラフ モデル 内訳 履歴 claude codex
 settings.search: 設定を検索
 settings.mcp_servers: MCPサーバー
 settings.mcp_servers_keywords: MCP サーバー ツール stdio http sse ローカル リモート npx 環境変数 ヘッダー

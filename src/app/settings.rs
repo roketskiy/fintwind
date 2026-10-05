@@ -7,7 +7,9 @@ use super::*;
 
 actions!(fintwind_settings, [ClearSearch]);
 
-const SETTINGS_CONTENT_MAX_WIDTH: f32 = 760.0;
+/// The settings and usage pages share one content width so both read as the
+/// same document column.
+pub(super) const SETTINGS_CONTENT_MAX_WIDTH: f32 = 760.0;
 
 /// Key context the settings sidebar declares around its search field.
 const SETTINGS_SIDEBAR_CONTEXT: &str = "SettingsSidebar";
@@ -21,7 +23,7 @@ const SETTINGS_SEARCH_CONTEXT: &str = "SettingsSidebar > ComposerInput";
 
 /// The sidebar's rows in display order, each with the keyword haystack the
 /// search field filters against.
-const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
+const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 6] = [
     (
         SettingsPage::General,
         "settings.general",
@@ -57,12 +59,6 @@ const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
         "settings.mcp_market",
         "icons/sparkle.svg",
         "settings.mcp_market_keywords",
-    ),
-    (
-        SettingsPage::Usage,
-        "settings.usage",
-        "icons/chart-column.svg",
-        "settings.usage_keywords",
     ),
 ];
 
@@ -211,14 +207,16 @@ impl Fintwind {
             self.mcp_detail_scroll.set_offset(gpui::Point::default());
             self.load_mcp_servers_from_config(cx);
         }
-        if page == SettingsPage::Usage {
-            // A stored scan inside the staleness window serves immediately;
-            // an expired one refreshes in the background. While the page
-            // stays open it re-checks on its own, so a session running
-            // elsewhere shows up without a manual refresh.
-            self.ensure_usage_stats(false, cx);
-            self.start_usage_auto_refresh(cx);
-        }
+        cx.notify();
+    }
+
+    /// The usage page as its own rail mode: on entry it serves a fresh
+    /// scan inside the staleness window and keeps the page auto-refreshing
+    /// while it stays open.
+    pub(super) fn open_usage_page(&mut self, cx: &mut Context<Self>) {
+        self.mode = WorkspaceMode::Usage;
+        self.ensure_usage_stats(false, cx);
+        self.start_usage_auto_refresh(cx);
         cx.notify();
     }
 
@@ -346,7 +344,11 @@ impl Fintwind {
         self.open_settings_page(pages[next], cx);
     }
 
-    pub(super) fn render_settings_content(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_settings_content(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let theme = Theme::current(cx);
         let page = self.settings_page;
         // The Skills, Providers, and MCP pages are mail-style splits that own
@@ -397,7 +399,6 @@ impl Fintwind {
                         SettingsPage::Skills => tr!("settings.skills"),
                         SettingsPage::McpServers => tr!("settings.mcp_servers"),
                         SettingsPage::McpMarket => tr!("settings.mcp_market"),
-                        SettingsPage::Usage => tr!("settings.usage"),
                         SettingsPage::Appearance => tr!("settings.appearance"),
                     }),
             )
@@ -407,7 +408,6 @@ impl Fintwind {
                 SettingsPage::Skills => self.render_skills_settings(window, cx),
                 SettingsPage::McpServers => self.render_mcp_page(window, cx),
                 SettingsPage::McpMarket => self.render_mcp_market_page(cx),
-                SettingsPage::Usage => self.render_usage_page(cx),
                 SettingsPage::Appearance => self.render_appearance_settings(cx),
             });
 
@@ -521,10 +521,7 @@ impl Fintwind {
                         window,
                         cx,
                         move |this: &mut Self, _, cx| {
-                            this.set_browser_tools_enabled(
-                                !this.state.browser_tools_enabled,
-                                cx,
-                            );
+                            this.set_browser_tools_enabled(!this.state.browser_tools_enabled, cx);
                         },
                     )),
             )

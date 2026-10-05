@@ -2666,8 +2666,6 @@ usage_error.curl_failed:
 
 settings.usage:
   en: Usage
-settings.usage_keywords:
-  en: usage statistics tokens heatmap daily chart models activity cache
 
 usage_page.range_all:
   en: All time

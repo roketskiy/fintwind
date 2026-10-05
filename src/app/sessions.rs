@@ -921,6 +921,7 @@ impl Fintwind {
             WorkspaceMode::Sessions => self.sidebar_width,
             WorkspaceMode::SourceControl => self.source_control_width,
             WorkspaceMode::Settings => self.settings_width,
+            WorkspaceMode::Usage => 0.0,
         }
     }
 
@@ -929,6 +930,7 @@ impl Fintwind {
             WorkspaceMode::Sessions => self.sidebar_width = width,
             WorkspaceMode::SourceControl => self.source_control_width = width,
             WorkspaceMode::Settings => self.settings_width = width,
+            WorkspaceMode::Usage => {}
         }
     }
 

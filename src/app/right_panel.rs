@@ -2079,18 +2079,13 @@ impl Fintwind {
                                 cx,
                             )),
                     )
-                    .child(
-                        div()
-                            .mt(px(8.0))
-                            .w_full()
-                            .flex()
-                            .gap(px(8.0))
-                            .child(self.render_right_panel_card(
-                                RightPanelSurface::Files,
-                                tr!("right_panel.files_description"),
-                                cx,
-                            )),
-                    ),
+                    .child(div().mt(px(8.0)).w_full().flex().gap(px(8.0)).child(
+                        self.render_right_panel_card(
+                            RightPanelSurface::Files,
+                            tr!("right_panel.files_description"),
+                            cx,
+                        ),
+                    )),
             )
     }
 
@@ -2950,5 +2945,4 @@ impl Fintwind {
             }
         }
     }
-
 }

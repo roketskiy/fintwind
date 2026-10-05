@@ -138,6 +138,7 @@ bun scripts/bundle-windows.ts
 - [Ely GPUI Components](https://github.com/ZacharyZhang-NY/Ely-GPUI-Components)
   是往后 UI 实现的参考之一。[在线展示](https://ely-gpui.zacharyzhang.com)
   用于了解组件效果;仓库的 `src/` 用于查阅具体实现。
+- 本地源码 （E:/work/Opencode-Desktop/Ely-GPUI-Components）
 - 用户已明确:只作为组件参考,不是正式接入组件库。“引入 Ely”在这里指登记
   参考来源,不意味着添加 `ely-gpui-component` Cargo 依赖或迁移应用框架。
 - 新建或改进具体组件时,可按需参考其布局、间距、视觉层级、交互状态和 GPUI

@@ -352,7 +352,9 @@ impl Fintwind {
                 cx.background_executor().timer(AUTO_REFRESH).await;
                 let still_open = this
                     .update(cx, |this, cx| {
-                        if this.settings_page != Some(SettingsPage::Usage) {
+                        if this.mode != WorkspaceMode::Settings
+                            || this.settings_page != SettingsPage::Usage
+                        {
                             // Release the guard from inside: a later visit must
                             // be able to start a fresh loop.
                             this.usage_refresh_running = false;

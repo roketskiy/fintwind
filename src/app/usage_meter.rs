@@ -17,7 +17,7 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_page.is_some() || !self.usage_meter_available() {
+        if self.mode == WorkspaceMode::Settings || !self.usage_meter_available() {
             return;
         }
         self.toggle_context_panel(window, cx);

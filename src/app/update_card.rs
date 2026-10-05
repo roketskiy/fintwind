@@ -189,7 +189,7 @@ impl Fintwind {
         let previous_focus = card.previous_focus.take();
         if restore_focus {
             let focus = previous_focus.unwrap_or_else(|| {
-                if self.settings_page.is_some() {
+                if self.mode == WorkspaceMode::Settings {
                     self.settings_focus.clone()
                 } else {
                     self.composer_focus(cx)

@@ -81,7 +81,6 @@ settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key
 settings.skills: 技能
 settings.skills_keywords: 技能 技能库 智能体 禁用 启用 删除 claude codex cursor opencode pi amp 共享
 settings.usage_keywords: 用量 令牌 费用 支出 缓存 每日 图表 模型 明细 历史 claude codex
-settings.back: 返回
 settings.search: 搜索设置
 settings.mcp_servers: MCP 服务器
 settings.mcp_servers_keywords: MCP 服务器 工具 stdio http sse 本地 远程 npx 环境变量 请求头
@@ -399,7 +398,10 @@ common.remove: 移除
 common.rename: 重命名
 session.new_task: 新任务
 session.reveal_project_folder: 在文件管理器中显示项目文件夹
+session.reveal_project_folder_unavailable: 当前页面没有可打开的文件夹
 sidebar.search: 搜索
+rail.sessions: 会话
+rail.source_control: 源代码管理
 sidebar.update: 更新
 sidebar.update_tooltip: 有新版本 %{version}
 sidebar.working: 工作中 · %{elapsed}
@@ -850,15 +852,14 @@ session.rewound_with_stale_refs: "已回退到第 %{turn} 轮任务之前，但�
 right_panel.browser: 浏览器
 right_panel.terminal: 终端
 right_panel.files: 文件
-right_panel.diff: 审阅
 right_panel.history: 历史
 right_panel.toggle: 显示或隐藏右侧面板
+right_panel.toggle_unavailable: 右侧面板仅在会话页面可用
 right_panel.open_surface: 打开一个面板
 right_panel.choose_surface: 选择要在右侧面板中显示的内容
 right_panel.browser_description: 打开本地应用或网址
 right_panel.terminal_description: 在此工作区中启动 Shell
 right_panel.files_description: 浏览并阅读工作区文件
-right_panel.diff_description: 审阅文件更改
 right_panel.terminal_unavailable: 终端不可用
 right_panel.terminal_unavailable_description: 请重新打开终端面板以启动 Shell
 right_panel.resize: 调整右侧面板宽度
@@ -1026,6 +1027,14 @@ file_picker.open: 打开
 file_picker.folder: 文件夹
 file_picker.file: 文件
 file_picker.typed_file: "%{type} 文件"
+source_control.title: 源代码管理
+source_control.workspace: 工作区
+review.turn_label: 第 %{turn} 轮
+review.readonly: 历史快照 · 只读
+review.snapshot: 轮次 Diff — %{turn}
+review.snapshot_from_session: 来自“%{title}”的轮次 Diff — %{turn}
+review.view_workspace: 查看当前工作区
+review.back_to_session: 返回会话
 diff.no_changes: 没有更改
 diff.no_changes_description: 此来源没有可审阅的文件更改
 diff.filter_files: 筛选文件…

@@ -24,7 +24,6 @@ use super::{
     transcript_row_kinds, transcript_row_splice, transcript_rows_fingerprint,
     transcript_rows_fingerprint_with_retry, turn_stats_line, turn_tokens_per_second,
     upsert_compaction_transcript, widened_panel_width_for_file_editor,
-    widened_panel_width_for_review,
 };
 use crate::git_branch::BranchEntry;
 use crate::model::{
@@ -605,12 +604,6 @@ fn first_file_editor_opening_reserves_500_pixels() {
     assert_eq!(widened_panel_width_for_file_editor(460.0, 184.0), 684.0);
     assert_eq!(widened_panel_width_for_file_editor(720.0, 184.0), 720.0);
     assert_eq!(widened_panel_width_for_file_editor(460.0, 360.0), 860.0);
-}
-
-#[test]
-fn first_review_opening_reserves_diff_and_tree_space() {
-    assert_eq!(widened_panel_width_for_review(460.0), 820.0);
-    assert_eq!(widened_panel_width_for_review(920.0), 920.0);
 }
 
 #[test]

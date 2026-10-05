@@ -85,7 +85,6 @@ settings.providers_keywords: プロバイダー エージェント モデル カ
 settings.skills: スキル
 settings.skills_keywords: スキル ライブラリ エージェント 無効 有効 削除 claude codex cursor opencode pi amp 共有
 settings.usage_keywords: 使用状況 トークン コスト 支出 キャッシュ 日別 グラフ モデル 内訳 履歴 claude codex
-settings.back: 戻る
 settings.search: 設定を検索
 settings.mcp_servers: MCPサーバー
 settings.mcp_servers_keywords: MCP サーバー ツール stdio http sse ローカル リモート npx 環境変数 ヘッダー
@@ -410,8 +409,11 @@ common.rename: 名前を変更
 session.new_task: 新規タスク
 
 session.reveal_project_folder: ファイルマネージャーでプロジェクトフォルダを表示
+session.reveal_project_folder_unavailable: この画面で開けるフォルダはありません
 
 sidebar.search: 検索
+rail.sessions: セッション
+rail.source_control: ソース管理
 sidebar.update: 更新
 sidebar.update_tooltip: バージョン %{version} が利用可能です
 sidebar.working: 作業中 · %{elapsed}
@@ -887,15 +889,14 @@ session.rewound_with_stale_refs: "タスクをターン %{turn} の前まで巻�
 right_panel.browser: ブラウザ
 right_panel.terminal: ターミナル
 right_panel.files: ファイル
-right_panel.diff: レビュー
 right_panel.history: 履歴
 right_panel.toggle: 右パネルの表示を切り替える
+right_panel.toggle_unavailable: 右パネルはセッション表示でのみ使用できます
 right_panel.open_surface: パネルを開く
 right_panel.choose_surface: 右パネルに表示する内容を選択します
 right_panel.browser_description: ローカルアプリまたは URL を開きます
 right_panel.terminal_description: このワークスペースでシェルを起動します
 right_panel.files_description: ワークスペースのファイルを閲覧します
-right_panel.diff_description: ファイルの変更をレビューします
 right_panel.terminal_unavailable: ターミナルを利用できません
 right_panel.terminal_unavailable_description: ターミナルパネルをもう一度開くとシェルが起動します
 right_panel.resize: 右パネルの幅を変更
@@ -1068,6 +1069,14 @@ file_picker.folder: フォルダ
 file_picker.file: ファイル
 file_picker.typed_file: "%{type} ファイル"
 
+source_control.title: ソース管理
+source_control.workspace: ワークスペース
+review.turn_label: 第%{turn}ターン
+review.readonly: 履歴スナップショット · 読み取り専用
+review.snapshot: ターン差分 — %{turn}
+review.snapshot_from_session: "「%{title}」のターン差分 — %{turn}"
+review.view_workspace: 現在のワークスペースを表示
+review.back_to_session: セッションに戻る
 diff.no_changes: 変更はありません
 diff.no_changes_description: このソースにはレビューするファイル変更がありません
 diff.filter_files: ファイルを絞り込む…

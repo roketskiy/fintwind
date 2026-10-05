@@ -183,9 +183,12 @@ pub(super) fn visible_settings_pages(
 }
 
 impl Fintwind {
-    /// Switch the settings view to `page`.
+    /// Switch the workspace to the settings mode and show `page` in it.
+    /// Every entry point — the rail, the shortcut, the command palette —
+    /// funnels through here, so the mode is the single navigation state.
     pub(super) fn open_settings_page(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
-        self.settings_page = Some(page);
+        self.mode = WorkspaceMode::Settings;
+        self.settings_page = page;
         // Each page starts at its own top; a scroll position carried over
         // from the previous page would land mid-content.
         self.settings_scroll.set_offset(gpui::Point::default());
@@ -219,38 +222,14 @@ impl Fintwind {
         cx.notify();
     }
 
-    pub(super) fn render_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    /// The settings mode's second column: search field plus the category
+    /// list. The window's main area renders the selected page's content; the
+    /// fixed mode rail is the way back to the session, so there is no
+    /// separate back button here, and the unified top bar owns the window
+    /// chrome above.
+    pub(super) fn render_settings_secondary(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
-
-        div()
-            .key_context("Fintwind")
-            .track_focus(&self.settings_focus)
-            .on_action(|_: &CloseWindow, window, _| crate::platform::hide_window(window))
-            .on_action(cx.listener(Self::new_session_action))
-            .on_action(cx.listener(Self::new_project_action))
-            .on_action(cx.listener(Self::open_settings_action))
-            .on_action(cx.listener(Self::toggle_sidebar_action))
-            .on_action(cx.listener(Self::toggle_right_panel_action))
-            .on_action(cx.listener(Self::toggle_command_palette_action))
-            .on_action(cx.listener(Self::toggle_fps_counter_action))
-            .on_action(cx.listener(Self::navigate_back_action))
-            .on_action(cx.listener(Self::navigate_forward_action))
-            .on_action(cx.listener(Self::focus_composer_action))
-            .on_action(cx.listener(Self::cancel_turn_action))
-            .capture_any_mouse_down(cx.listener(Self::navigation_mouse_down))
-            .size_full()
-            .flex()
-            .bg(theme.canvas)
-            .text_color(theme.text)
-            .font_family(crate::theme::ui_font_family())
-            .child(self.render_settings_sidebar(window, cx))
-            .child(self.render_settings_content(window, cx))
-            .into_any_element()
-    }
-
-    fn render_settings_sidebar(&self, window: &Window, cx: &mut Context<Self>) -> Div {
-        let theme = Theme::current(cx);
-        let current_page = self.settings_page.unwrap_or(SettingsPage::General);
+        let current_page = self.settings_page;
         let query = self.settings_search_query(cx);
         let mut navigation = div().flex().flex_col().gap(px(3.0));
 
@@ -308,6 +287,7 @@ impl Fintwind {
 
         div()
             .key_context(SETTINGS_SIDEBAR_CONTEXT)
+            .track_focus(&self.settings_focus)
             .on_action(cx.listener(|this, _: &SelectNextEntry, _, cx| {
                 this.cycle_settings_page("down", cx);
             }))
@@ -323,53 +303,14 @@ impl Fintwind {
                 // that into the notify that re-expands the filtered list.
                 this.settings_search.update(cx, |input, cx| input.clear(cx));
             }))
-            .w(px(DEFAULT_SIDEBAR_WIDTH))
+            .w(px(self.settings_width))
             .h_full()
             .flex_none()
             .flex()
             .flex_col()
             .bg(theme.sidebar)
-            .child(self.render_settings_sidebar_titlebar(window, cx))
             .child(
-                div().px(px(12.0)).child(
-                    div()
-                        .id("settings-back")
-                        .tab_index(0)
-                        .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
-                        .h(px(36.0))
-                        .px(px(9.0))
-                        .rounded(px(8.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(9.0))
-                        .cursor_default()
-                        .text_size(ui_px(13.5))
-                        .text_color(theme.text_secondary)
-                        .hover(|element| element.bg(theme.overlay))
-                        .active(|element| element.bg(theme.overlay_strong))
-                        .child(icon("icons/arrow-left.svg", 16.0, theme.text_tertiary))
-                        .child(tr!("settings.back"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.settings_page = None;
-                            let focus_handle = this.composer_focus(cx);
-                            window.focus(&focus_handle, cx);
-                            cx.notify();
-                        }))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if !event.keystroke.modifiers.modified()
-                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                            {
-                                this.settings_page = None;
-                                let focus_handle = this.composer_focus(cx);
-                                window.focus(&focus_handle, cx);
-                                cx.notify();
-                                cx.stop_propagation();
-                            }
-                        })),
-                ),
-            )
-            .child(
-                div().px(px(12.0)).pt(px(8.0)).child(
+                div().px(px(12.0)).pt(px(12.0)).child(
                     TextField::new("settings-search-field", self.settings_search.clone())
                         .icon("icons/search.svg", 13.0),
                 ),
@@ -397,7 +338,7 @@ impl Fintwind {
         let pages = visible_settings_pages(&query)
             .map(|(page, ..)| page)
             .collect::<Vec<_>>();
-        let current_page = self.settings_page.unwrap_or(SettingsPage::General);
+        let current_page = self.settings_page;
         let current = pages.iter().position(|page| *page == current_page);
         let Some(next) = next_picker_highlight(current, pages.len(), key) else {
             return;
@@ -405,61 +346,12 @@ impl Fintwind {
         self.open_settings_page(pages[next], cx);
     }
 
-    fn render_settings_sidebar_titlebar(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let left_window_controls = self.render_client_window_controls(
-            super::window_chrome::WindowControlSide::Left,
-            window,
-            cx,
-        );
-        // Windows keeps all three caption buttons on the far side, so this
-        // strip is only somewhere to drag the window by — the content
-        // column's own titlebar carries the rest of that job.
-        let height = if left_window_controls.is_some() {
-            48.0
-        } else {
-            12.0
-        };
-
-        div()
-            .id("settings-sidebar-titlebar")
-            .h(px(height))
-            .flex_none()
-            .flex()
-            .items_center()
-            .children(left_window_controls)
-            .child(
-                self.window_drag_region(
-                    div()
-                        .id("settings-sidebar-traffic-light-drag-region")
-                        .w(px(TRAFFIC_LIGHT_CLEARANCE))
-                        .h_full()
-                        .flex_none(),
-                    cx,
-                ),
-            )
-            .child(
-                self.render_settings_drag_region("settings-sidebar-titlebar-drag-region", cx)
-                    .h(px(height))
-                    .flex_1(),
-            )
-    }
-
-    fn render_settings_content(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_settings_content(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
-        let page = self.settings_page.unwrap_or(SettingsPage::General);
-        let right_window_controls = self.render_client_window_controls(
-            super::window_chrome::WindowControlSide::Right,
-            window,
-            cx,
-        );
+        let page = self.settings_page;
         // The Skills, Providers, and MCP pages are mail-style splits that own
         // the whole content column — no page title, no titlebar strip, no
-        // width cap, no card. Window dragging stays with the sidebar's own
-        // titlebar region.
+        // width cap, no card. Window chrome stays in the unified top bar.
         if matches!(
             page,
             SettingsPage::Skills
@@ -476,13 +368,6 @@ impl Fintwind {
                 .border_l_1()
                 .border_color(theme.sidebar_border)
                 .bg(theme.surface)
-                .children(right_window_controls.map(|controls| {
-                    self.render_settings_drag_region("settings-split-titlebar", cx)
-                        .flex()
-                        .items_center()
-                        .justify_end()
-                        .child(controls)
-                }))
                 .child(div().flex_1().min_h_0().child(match page {
                     SettingsPage::Skills => self.render_skills_settings(window, cx),
                     SettingsPage::McpServers => self.render_mcp_page(window, cx),
@@ -490,9 +375,9 @@ impl Fintwind {
                     _ => self.render_providers_page(cx),
                 }));
         }
-        // The titlebar strip is transparent; once content slides under it, a
-        // hairline marks the boundary so the clip edge reads as a header
-        // rather than a glitch.
+        // Once content scrolls under the unified top bar, a hairline marks
+        // the boundary so the clip edge reads as a header rather than a
+        // glitch.
         let content_scrolled = self.settings_scroll.offset().y < px(-1.0);
 
         let inner = div()
@@ -530,21 +415,23 @@ impl Fintwind {
             .flex_1()
             .h_full()
             .min_w_0()
+            .relative()
             .flex()
             .flex_col()
             .border_l_1()
             .border_color(theme.sidebar_border)
             .bg(theme.surface)
-            .child(
-                self.render_settings_drag_region("settings-content-titlebar", cx)
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .children(right_window_controls)
-                    .when(content_scrolled, |element| {
-                        element.border_b_1().border_color(theme.border)
-                    }),
-            )
+            .when(content_scrolled, |element| {
+                element.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .h(px(1.0))
+                        .bg(theme.border),
+                )
+            })
             .child(
                 div()
                     .flex_1()
@@ -1179,47 +1066,6 @@ impl Fintwind {
         self.save();
         window.refresh();
         cx.notify();
-    }
-
-    fn render_settings_drag_region(
-        &self,
-        id: &'static str,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let region = div().id(id);
-        // Windows drags from the hit test rather than a mouse-move handler.
-        #[cfg(target_os = "windows")]
-        let region = region.window_control_area(gpui::WindowControlArea::Drag);
-
-        region
-            .h(px(48.0))
-            .flex_none()
-            .on_click(|event, window, _| {
-                if event.click_count() == 2 {
-                    crate::platform::titlebar_double_click(window);
-                }
-            })
-            .on_mouse_down_out(cx.listener(|this, _, _, _| {
-                this.header_drag_armed = false;
-            }))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    this.header_drag_armed = true;
-                }),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                cx.listener(|this, _, _, _| {
-                    this.header_drag_armed = false;
-                }),
-            )
-            .on_mouse_move(cx.listener(|this, _, window, _| {
-                if this.header_drag_armed {
-                    this.header_drag_armed = false;
-                    crate::platform::start_window_move(window);
-                }
-            }))
     }
 
     fn set_theme_preference(

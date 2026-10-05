@@ -83,6 +83,16 @@ const BRANCH_PICKER_MENU_ID: &str = "workspace-branch-picker";
 const BRANCH_PICKER_ROW_HEIGHT: f32 = 30.0;
 const SIDEBAR_MIN_WIDTH: f32 = 180.0;
 const SIDEBAR_MAX_WIDTH: f32 = 420.0;
+/// The fixed first column: mode entries (sessions, source control, settings)
+/// that never hide, so a narrow window can still switch modes. Ely's
+/// ActivityBar metric.
+const MODE_RAIL_WIDTH: f32 = 48.0;
+/// The unified top bar across the whole window. Window controls, layout
+/// toggles, and history live here; Ely's titlebar metric.
+const TOPBAR_HEIGHT: f32 = 38.0;
+/// Second-column defaults and bounds. Each mode remembers its own width.
+const SOURCE_CONTROL_DEFAULT_WIDTH: f32 = 260.0;
+const SETTINGS_DEFAULT_WIDTH: f32 = 252.0;
 const RIGHT_PANEL_MIN_WIDTH: f32 = 280.0;
 const RIGHT_PANEL_MAX_WIDTH: f32 = 1000.0;
 const DEFAULT_FILE_TREE_WIDTH: f32 = 184.0;
@@ -90,7 +100,6 @@ const FILE_TREE_MIN_WIDTH: f32 = 140.0;
 const FILE_TREE_MAX_WIDTH: f32 = 360.0;
 const FILE_EDITOR_MIN_WIDTH: f32 = 140.0;
 const FILE_EDITOR_INITIAL_WIDTH: f32 = 500.0;
-const REVIEW_INITIAL_WIDTH: f32 = 820.0;
 const MAIN_PANEL_MIN_WIDTH: f32 = 360.0;
 const FOLLOWUP_TURN_TOP_GAP: f32 = 48.0;
 const NAVIGATION_RAIL_WIDTH: f32 = 44.0;
@@ -269,6 +278,18 @@ enum SettingsPage {
     McpMarket,
     Usage,
     Appearance,
+}
+
+/// Which page the workspace shows. The fixed first column (mode rail)
+/// switches between these; the second column and the main area both follow
+/// the mode. Switching modes never closes the session, stops a running turn,
+/// or drops the composer draft.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum WorkspaceMode {
+    #[default]
+    Sessions,
+    SourceControl,
+    Settings,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -486,16 +507,6 @@ fn widened_panel_width_for_file_editor(panel_width: f32, file_tree_width: f32) -
         .min(RIGHT_PANEL_MAX_WIDTH)
 }
 
-fn widened_panel_width_for_review(panel_width: f32) -> f32 {
-    sanitize_panel_width(
-        panel_width,
-        DEFAULT_RIGHT_PANEL_WIDTH,
-        RIGHT_PANEL_MIN_WIDTH,
-        RIGHT_PANEL_MAX_WIDTH,
-    )
-    .max(REVIEW_INITIAL_WIDTH)
-}
-
 fn fitted_panel_widths(
     viewport_width: f32,
     sidebar_visible: bool,
@@ -567,7 +578,6 @@ enum RightPanelSurface {
         title: String,
     },
     Files,
-    Diff,
     History,
     File(String),
 }
@@ -774,10 +784,6 @@ struct RightPanelSessionState {
     expanded_paths: HashSet<PathBuf>,
     file_tree_width: f32,
     file_editors: HashMap<String, RightPanelFileEditor>,
-    diff_source: ReviewDiffSource,
-    diff_snapshot: Option<Arc<ReviewDiffSnapshot>>,
-    diff_selected_file: Option<usize>,
-    diff_expanded_paths: HashSet<String>,
 }
 
 impl RightPanelSessionState {
@@ -791,10 +797,6 @@ impl RightPanelSessionState {
             expanded_paths: HashSet::new(),
             file_tree_width: DEFAULT_FILE_TREE_WIDTH,
             file_editors: HashMap::new(),
-            diff_source: ReviewDiffSource::default(),
-            diff_snapshot: None,
-            diff_selected_file: None,
-            diff_expanded_paths: HashSet::new(),
         }
     }
 
@@ -1552,6 +1554,11 @@ pub struct Fintwind {
     sidebar_expanded_groups: HashSet<Uuid>,
     sidebar_visible: bool,
     sidebar_width: f32,
+    /// Second-column width memory for the source-control and settings modes.
+    /// The sessions mode keeps `sidebar_width` so existing persisted state
+    /// carries over.
+    source_control_width: f32,
+    settings_width: f32,
     right_panel_visible: bool,
     right_panel_width: f32,
     /// The show/hide slide each panel is in the middle of, if any. Driven by
@@ -1604,6 +1611,10 @@ pub struct Fintwind {
     /// the primary find shortcut and kept for the window's lifetime so the
     /// query and toggles survive closing the bar; `open` says whether it shows.
     file_search: Option<file_search::FileSearch>,
+    /// The source-control review page's state. The fields keep their
+    /// historical `right_panel_diff_*` names — the reader moved out of the
+    /// right panel into the review page, but the state stayed app-level: one
+    /// source, one snapshot, one selection, guarded by one generation.
     right_panel_diff_source: ReviewDiffSource,
     right_panel_diff_snapshot: Option<Arc<ReviewDiffSnapshot>>,
     right_panel_diff_loading: bool,
@@ -1611,7 +1622,7 @@ pub struct Fintwind {
     right_panel_diff_generation: u64,
     right_panel_diff_selected_file: Option<usize>,
     right_panel_diff_expanded_paths: HashSet<String>,
-    right_panel_diff_tree_rows: RefCell<Vec<right_panel::ReviewDiffTreeRow>>,
+    right_panel_diff_tree_rows: RefCell<Vec<source_control::ReviewDiffTreeRow>>,
     right_panel_diff_tree_cursor: Option<usize>,
     /// The working tree as currently drawn. Held so a refresh can redraw the
     /// previous listing instead of blanking the panel.
@@ -1635,7 +1646,10 @@ pub struct Fintwind {
     /// When the overlay could not be enabled, the browser falls back to
     /// swapping in frozen page pixels while an overlay is open.
     scene_overlay_enabled: bool,
-    settings_page: Option<SettingsPage>,
+    mode: WorkspaceMode,
+    /// The settings category shown while the workspace is in the settings
+    /// mode. It survives leaving and re-entering settings.
+    settings_page: SettingsPage,
     /// The Skills page's library snapshot, scanned off-thread. Frames read
     /// only this; `None` means the first scan has not landed yet.
     skills_catalog: Option<Rc<crate::skills::SkillsCatalog>>,
@@ -2095,6 +2109,7 @@ mod sessions;
 mod settings;
 mod sidebar;
 mod skills_page;
+mod source_control;
 mod streaming;
 mod tabs;
 mod transcript;
@@ -2578,6 +2593,18 @@ impl Fintwind {
             SIDEBAR_MIN_WIDTH,
             SIDEBAR_MAX_WIDTH,
         );
+        let source_control_width = sanitize_panel_width(
+            state.source_control_width,
+            SOURCE_CONTROL_DEFAULT_WIDTH,
+            SIDEBAR_MIN_WIDTH,
+            SIDEBAR_MAX_WIDTH,
+        );
+        let settings_width = sanitize_panel_width(
+            state.settings_width,
+            SETTINGS_DEFAULT_WIDTH,
+            SIDEBAR_MIN_WIDTH,
+            SIDEBAR_MAX_WIDTH,
+        );
         let right_panel_width = sanitize_panel_width(
             state.right_panel_width,
             DEFAULT_RIGHT_PANEL_WIDTH,
@@ -2585,6 +2612,8 @@ impl Fintwind {
             RIGHT_PANEL_MAX_WIDTH,
         );
         state.sidebar_width = sidebar_width;
+        state.source_control_width = source_control_width;
+        state.settings_width = settings_width;
         state.right_panel_width = right_panel_width;
         // First launch has no persisted frame yet; seed from the freshly
         // opened window so an immediate zoom or fullscreen still has a
@@ -2772,7 +2801,9 @@ impl Fintwind {
                     this.invalidate_workspace_queries(cx);
                     // Skill files are routinely edited in another app; coming
                     // back to the window is the moment to re-read them.
-                    if this.settings_page == Some(SettingsPage::Skills) {
+                    if this.mode == WorkspaceMode::Settings
+                        && this.settings_page == SettingsPage::Skills
+                    {
                         this.ensure_skills_catalog(true, cx);
                     }
                     // And the OpenCode server may have gained, renamed, or
@@ -3113,7 +3144,7 @@ impl Fintwind {
                 &right_panel_diff_filter,
                 |this: &mut Self, _, event: &ComposerEvent, cx| {
                     if matches!(event, ComposerEvent::Edited) {
-                        this.sync_right_panel_diff_tree_rows(cx);
+                        this.sync_review_diff_tree_rows(cx);
                         cx.notify();
                     }
                 },
@@ -3326,6 +3357,8 @@ impl Fintwind {
                 sidebar_expanded_groups,
                 sidebar_visible,
                 sidebar_width,
+                source_control_width,
+                settings_width,
                 right_panel_visible,
                 right_panel_width,
                 sidebar_slide: None,
@@ -3385,7 +3418,8 @@ impl Fintwind {
                 right_panel_pending_browser_focus: None,
                 browser_collaboration: browser_collaboration::AppBrowserCollaborationState::new(),
                 scene_overlay_enabled,
-                settings_page: None,
+                mode: WorkspaceMode::default(),
+                settings_page: SettingsPage::General,
                 skills_catalog: None,
                 skills_scan_generation: 0,
                 skills_scan_pending: false,

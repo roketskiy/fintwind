@@ -113,7 +113,7 @@ impl Fintwind {
     /// Open a new session as a tab — the tab strip's "+" semantics, shared by
     /// the NewSession action and the last-tab-closed follow-through.
     pub(super) fn open_new_session_tab(&mut self, cx: &mut Context<Self>) {
-        self.settings_page = None;
+        self.mode = WorkspaceMode::Sessions;
         if let Some(session_id) = self
             .session_navigation
             .remembered_new_task(&self.state.sessions)
@@ -781,9 +781,21 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings_page = Some(SettingsPage::General);
-        self.settings_scroll.set_offset(gpui::Point::default());
+        self.open_settings_page(self.settings_page, cx);
         window.focus(&self.settings_focus, cx);
+    }
+
+    /// Leave whatever non-session mode is showing and land back on the
+    /// session. This is the effect behind the rail's sessions entry, Escape,
+    /// and the mouse back button; the selection and the composer draft are
+    /// untouched.
+    pub(super) fn return_to_sessions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mode == WorkspaceMode::Sessions {
+            return;
+        }
+        self.mode = WorkspaceMode::Sessions;
+        let focus_handle = self.composer_focus(cx);
+        window.focus(&focus_handle, cx);
         cx.notify();
     }
 
@@ -852,6 +864,8 @@ impl Fintwind {
         self.state.sidebar_visible = self.sidebar_visible;
         self.state.right_panel_visible = self.right_panel_visible;
         self.state.sidebar_width = self.sidebar_width;
+        self.state.source_control_width = self.source_control_width;
+        self.state.settings_width = self.settings_width;
         self.state.right_panel_width = self.right_panel_width;
         self.save();
     }
@@ -891,12 +905,31 @@ impl Fintwind {
     /// [`Fintwind::sidebar_rendered_width`] / [`Fintwind::right_panel_rendered_width`].
     pub(super) fn effective_panel_widths(&self, window: &Window) -> (f32, f32) {
         fitted_panel_widths(
-            f32::from(window.viewport_size().width),
+            f32::from(window.viewport_size().width) - MODE_RAIL_WIDTH,
             self.sidebar_visible || self.sidebar_slide.is_some(),
             self.right_panel_visible || self.right_panel_slide.is_some(),
-            self.sidebar_width,
+            self.secondary_width(),
             self.right_panel_width,
         )
+    }
+
+    /// The second column's width for the current mode. Each mode remembers
+    /// its own width, so tuning the settings column never moves the session
+    /// list's.
+    pub(super) fn secondary_width(&self) -> f32 {
+        match self.mode {
+            WorkspaceMode::Sessions => self.sidebar_width,
+            WorkspaceMode::SourceControl => self.source_control_width,
+            WorkspaceMode::Settings => self.settings_width,
+        }
+    }
+
+    fn set_secondary_width(&mut self, width: f32) {
+        match self.mode {
+            WorkspaceMode::Sessions => self.sidebar_width = width,
+            WorkspaceMode::SourceControl => self.source_control_width = width,
+            WorkspaceMode::Settings => self.settings_width = width,
+        }
     }
 
     pub(super) fn begin_panel_resize(
@@ -912,7 +945,7 @@ impl Fintwind {
         let start_width = match target {
             PanelResizeTarget::Sidebar => {
                 self.sidebar_slide = None;
-                self.sidebar_width = sidebar_width;
+                self.set_secondary_width(sidebar_width);
                 crate::platform::set_sidebar_material_width(window, sidebar_width);
                 sidebar_width
             }
@@ -951,14 +984,18 @@ impl Fintwind {
         let delta = f32::from(event.position.x) - drag.start_mouse_x;
         match drag.target {
             PanelResizeTarget::Sidebar => {
+                // The fixed mode rail takes its slice first; the draggable
+                // column and the main panel share what remains.
                 let maximum = SIDEBAR_MAX_WIDTH
-                    .min(viewport_width - MAIN_PANEL_MIN_WIDTH - right_panel_width)
+                    .min(
+                        viewport_width - MODE_RAIL_WIDTH - MAIN_PANEL_MIN_WIDTH - right_panel_width,
+                    )
                     .max(SIDEBAR_MIN_WIDTH);
                 let width = (drag.start_width + delta).clamp(SIDEBAR_MIN_WIDTH, maximum);
-                if (self.sidebar_width - width).abs() < 0.5 {
+                if (self.secondary_width() - width).abs() < 0.5 {
                     return;
                 }
-                self.sidebar_width = width;
+                self.set_secondary_width(width);
                 crate::platform::set_sidebar_material_width(window, width);
             }
             PanelResizeTarget::RightPanel => {
@@ -1007,10 +1044,8 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_page.take().is_some() {
-            let focus_handle = self.composer_focus(cx);
-            window.focus(&focus_handle, cx);
-            cx.notify();
+        if self.mode != WorkspaceMode::Sessions {
+            self.return_to_sessions(window, cx);
             return;
         }
 
@@ -1018,7 +1053,6 @@ impl Fintwind {
             return;
         };
         if let Some(target) = self.session_navigation.back_target() {
-            self.settings_page = None;
             // History jumps land on tabs like every other entry point.
             self.open_session_tab(target);
             self.request_session_activation(
@@ -1035,7 +1069,7 @@ impl Fintwind {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_page.is_some() {
+        if self.mode != WorkspaceMode::Sessions {
             return;
         }
 
@@ -1043,7 +1077,6 @@ impl Fintwind {
             return;
         };
         if let Some(target) = self.session_navigation.forward_target() {
-            self.settings_page = None;
             // History jumps land on tabs like every other entry point.
             self.open_session_tab(target);
             self.request_session_activation(
@@ -1079,7 +1112,7 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings_page = None;
+        self.return_to_sessions(window, cx);
         let focus_handle = self.composer_focus(cx);
         window.focus(&focus_handle, cx);
         cx.notify();
@@ -1095,10 +1128,8 @@ impl Fintwind {
             cx.stop_propagation();
             return;
         }
-        if self.settings_page.take().is_some() {
-            let focus_handle = self.composer_focus(cx);
-            window.focus(&focus_handle, cx);
-            cx.notify();
+        if self.mode != WorkspaceMode::Sessions {
+            self.return_to_sessions(window, cx);
             return;
         }
         if self.message_edit.is_some() {
@@ -1298,7 +1329,7 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.settings_page.is_some() {
+        if self.mode != WorkspaceMode::Sessions {
             return;
         }
         if !self

@@ -162,8 +162,6 @@ settings.skills:
   en: Skills
 settings.skills_keywords:
   en: skills skill library agent disable enable delete claude codex cursor opencode pi amp shared
-settings.back:
-  en: Back
 settings.search:
   en: Search Settings
 settings.mcp_servers:
@@ -794,6 +792,13 @@ session.new_task:
 
 session.reveal_project_folder:
   en: Show project folder in file manager
+session.reveal_project_folder_unavailable:
+  en: No folder to open in this view
+
+rail.sessions:
+  en: Sessions
+rail.source_control:
+  en: Source control
 
 sidebar.search:
   en: Search
@@ -1691,8 +1696,6 @@ right_panel.terminal:
   en: Terminal
 right_panel.files:
   en: Files
-right_panel.diff:
-  en: Review
 right_panel.history:
   en: History
 right_panel.toggle:
@@ -1707,8 +1710,6 @@ right_panel.terminal_description:
   en: Start a shell in this workspace
 right_panel.files_description:
   en: Browse and read workspace files
-right_panel.diff_description:
-  en: Review file changes
 right_panel.terminal_unavailable:
   en: Terminal unavailable
 right_panel.terminal_unavailable_description:
@@ -2049,6 +2050,22 @@ file_picker.file:
 file_picker.typed_file:
   en: "%{type} file"
 
+source_control.title:
+  en: Source control
+source_control.workspace:
+  en: Workspace
+review.turn_label:
+  en: turn %{turn}
+review.readonly:
+  en: Read-only snapshot
+review.snapshot:
+  en: Turn diff — %{turn}
+review.snapshot_from_session:
+  en: Turn diff from “%{title}” — %{turn}
+review.view_workspace:
+  en: View current workspace
+review.back_to_session:
+  en: Back to session
 diff.no_changes:
   en: No changes
 diff.no_changes_description:

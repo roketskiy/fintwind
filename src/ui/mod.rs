@@ -873,6 +873,8 @@ mod tests {
             "icons/package.svg",
             "icons/trash.svg",
             "icons/provider-opencode.svg",
+            "icons/message-square-text.svg",
+            "icons/source-control.svg",
         ];
         // Every branch of `provider_icon` must resolve to an embedded asset,
         // so a renamed letter glyph fails this test instead of vanishing from

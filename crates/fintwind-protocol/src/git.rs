@@ -25,6 +25,34 @@ impl BranchSnapshot {
     }
 }
 
+/// One changed file as `git status --porcelain` reports it. `index_status`
+/// is the staged side (X), `worktree_status` the unstaged side (Y); `' '`
+/// means that side carries no change. A file can appear in both the staged
+/// and the unstaged grouping when it is partially staged.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorktreeStatusEntry {
+    /// Path relative to the repository root, forward-slash separated. For a
+    /// rename this is the new path.
+    pub path: String,
+    /// The rename/copy source when Git detected one.
+    #[serde(default)]
+    pub origin_path: Option<String>,
+    pub index_status: char,
+    pub worktree_status: char,
+}
+
+/// The live worktree status of one repository: the checked-out branch and
+/// every changed file. `branch` is `None` on a detached HEAD — the worktree
+/// still has a status, just no branch name.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WorktreeStatus {
+    pub branch: Option<String>,
+    pub upstream: Option<String>,
+    pub ahead: u64,
+    pub behind: u64,
+    pub entries: Vec<WorktreeStatusEntry>,
+}
+
 /// One `%D` decoration of a commit, split into its own label. `remote` marks
 /// decorations that point at a remote-tracking ref, e.g. `origin/main`;
 /// `head` marks the decoration `HEAD` points at (`HEAD` itself when

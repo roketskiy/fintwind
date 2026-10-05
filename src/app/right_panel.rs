@@ -1143,7 +1143,6 @@ impl Fintwind {
             session_id,
         );
         self.replace_active_right_panel_state(state);
-        self.sync_review_diff_tree_rows(cx);
         // A read in flight when this session was switched away from had its
         // result dropped, and the flag it left behind would stop the editor
         // ever asking again. Clear it and read afresh, which also picks up
@@ -1159,8 +1158,13 @@ impl Fintwind {
         self.state.right_panel_visible = self.right_panel_visible;
         // The review page follows the selected session: a switch re-runs the
         // query for the new session's workspace (unless a turn snapshot of a
-        // specific session is on screen — that one is pinned to its source).
+        // specific session is on screen — that one is pinned to its source),
+        // and the second column's status follows too, but only while it is
+        // following — a manual workspace pin outlives session switches.
         if self.mode == WorkspaceMode::SourceControl && self.review_follows_selected_session() {
+            if self.review_workspace_override.is_none() {
+                self.refresh_source_control_status(cx);
+            }
             self.refresh_review_diff(cx);
         }
         if matches!(

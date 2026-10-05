@@ -1598,8 +1598,6 @@ pub struct Fintwind {
     /// Selection spans and visible glyph geometry for the Review surface.
     /// Kept separate from the transcript because both surfaces paint at once.
     right_panel_diff_selection: TranscriptSelection,
-    right_panel_diff_tree_list_state: ListState,
-    right_panel_diff_tree_scrollbar: Rc<ScrollbarState>,
     right_panel_editor_scroll_handle: ScrollHandle,
     right_panel_editor_scrollbar: Rc<ScrollbarState>,
     right_panel_pending_tab_reveal: Option<usize>,
@@ -1621,9 +1619,34 @@ pub struct Fintwind {
     right_panel_diff_error: Option<String>,
     right_panel_diff_generation: u64,
     right_panel_diff_selected_file: Option<usize>,
-    right_panel_diff_expanded_paths: HashSet<String>,
-    right_panel_diff_tree_rows: RefCell<Vec<source_control::ReviewDiffTreeRow>>,
-    right_panel_diff_tree_cursor: Option<usize>,
+    /// The source-control page's diff layout: unified rows, or side-by-side
+    /// pairs of the old and new sides.
+    source_control_diff_split: bool,
+    /// Flattened rows of the source-control page's single-file diff reader:
+    /// one entry per rendered row, rebuilt when the snapshot, selected file,
+    /// or layout changes. Unified rows point at snapshot lines; split rows
+    /// carry a left/right pair of snapshot line indexes. Render reads only
+    /// this cache.
+    source_control_diff_rows: RefCell<Vec<source_control::SourceControlDiffRow>>,
+    /// The source-control second column's live worktree status: branch plus
+    /// every staged, unstaged, and untracked file. One cached snapshot with
+    /// its own generation; the virtualized list draws flattened rows from it.
+    source_control_status: Option<Arc<fintwind_client::git::WorktreeStatus>>,
+    source_control_status_loading: bool,
+    source_control_status_error: Option<String>,
+    source_control_status_generation: u64,
+    source_control_rows: RefCell<Vec<source_control::SourceControlRow>>,
+    source_control_list_state: ListState,
+    source_control_scrollbar: Rc<ScrollbarState>,
+    /// The workspace the source-control mode is pinned to. `None` follows
+    /// the selected session's actual directory — including its worktree.
+    /// Deliberately in-memory only: a restart falls back to following, since
+    /// a persisted path may no longer exist.
+    review_workspace_override: Option<PathBuf>,
+    /// A file the second column asked to see. Honored once the matching
+    /// diff snapshot lands, so a click that also switches sources still
+    /// ends on the clicked file.
+    review_pending_file_focus: Option<String>,
     /// The working tree as currently drawn. Held so a refresh can redraw the
     /// previous listing instead of blanking the panel.
     right_panel_working_tree: Vec<right_panel::WorkingTreeEntry>,
@@ -3144,7 +3167,7 @@ impl Fintwind {
                 &right_panel_diff_filter,
                 |this: &mut Self, _, event: &ComposerEvent, cx| {
                     if matches!(event, ComposerEvent::Edited) {
-                        this.sync_review_diff_tree_rows(cx);
+                        this.sync_source_control_rows(cx);
                         cx.notify();
                     }
                 },
@@ -3390,9 +3413,6 @@ impl Fintwind {
                 right_panel_diff_list_state: ListState::new(0, ListAlignment::Top, px(512.0)),
                 right_panel_diff_scrollbar: ScrollbarState::new(),
                 right_panel_diff_selection: TranscriptSelection::default(),
-                right_panel_diff_tree_list_state: ListState::new(0, ListAlignment::Top, px(180.0))
-                    .with_uniform_item_height(px(30.0)),
-                right_panel_diff_tree_scrollbar: ScrollbarState::new(),
                 right_panel_editor_scroll_handle: ScrollHandle::new(),
                 right_panel_editor_scrollbar: ScrollbarState::new(),
                 right_panel_pending_tab_reveal: None,
@@ -3407,9 +3427,17 @@ impl Fintwind {
                 right_panel_diff_error: None,
                 right_panel_diff_generation: 0,
                 right_panel_diff_selected_file: None,
-                right_panel_diff_expanded_paths: HashSet::new(),
-                right_panel_diff_tree_rows: RefCell::new(Vec::new()),
-                right_panel_diff_tree_cursor: None,
+                source_control_diff_split: false,
+                source_control_diff_rows: RefCell::new(Vec::new()),
+                source_control_status: None,
+                source_control_status_loading: false,
+                source_control_status_error: None,
+                source_control_status_generation: 0,
+                source_control_rows: RefCell::new(Vec::new()),
+                source_control_list_state: ListState::new(0, ListAlignment::Top, px(28.0)),
+                source_control_scrollbar: ScrollbarState::new(),
+                review_workspace_override: None,
+                review_pending_file_focus: None,
                 right_panel_working_tree: Vec::new(),
                 working_trees: QueryCache::new(MAX_CACHED_WORKSPACES),
                 workspace_queries_stale: false,

@@ -1071,6 +1071,20 @@ file_picker.typed_file: "%{type} ファイル"
 
 source_control.title: ソース管理
 source_control.workspace: ワークスペース
+source_control.loading: Git ステータスを読み込み中…
+source_control.refresh: 更新
+source_control.follow_session: セッションに追従
+source_control.pinned: 固定中
+source_control.staged: ステージ済み %{count}
+source_control.unstaged: 未ステージ %{count}
+source_control.clean: 未コミットの変更はありません
+source_control.not_a_repository: このディレクトリは Git リポジトリではありません
+source_control.no_directory: 表示できるワークスペースがありません
+source_control.detached_head: デタッチされた HEAD
+source_control.status_failed: Git ステータスの読み込みに失敗しました
+diff.view_unified: 統一
+diff.view_split: 並列
+review.file_position: "%{index} / %{total}"
 review.turn_label: 第%{turn}ターン
 review.readonly: 履歴スナップショット · 読み取り専用
 review.snapshot: ターン差分 — %{turn}

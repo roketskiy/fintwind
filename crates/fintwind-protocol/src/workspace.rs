@@ -105,6 +105,12 @@ pub enum WorkspaceOperation {
     InspectCommit {
         cwd: PathBuf,
     },
+    /// The live worktree status of a workspace: branch plus every staged,
+    /// unstaged, and untracked file. `WorkspaceResult::WorktreeStatus` with
+    /// `None` means `cwd` is not inside a Git repository.
+    InspectStatus {
+        cwd: PathBuf,
+    },
     GenerateCommitMessage {
         cwd: PathBuf,
         include_unstaged: bool,
@@ -215,6 +221,10 @@ pub enum WorkspaceResult {
     },
     CommitSnapshot {
         snapshot: CommitSnapshot,
+    },
+    WorktreeStatus {
+        /// `None` means `cwd` is not inside a Git repository.
+        status: Option<crate::git::WorktreeStatus>,
     },
     CommitMessage {
         message: String,

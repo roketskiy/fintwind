@@ -2054,6 +2054,34 @@ source_control.title:
   en: Source control
 source_control.workspace:
   en: Workspace
+source_control.loading:
+  en: Reading Git status…
+source_control.refresh:
+  en: Refresh
+source_control.follow_session:
+  en: Following session
+source_control.pinned:
+  en: Pinned
+source_control.staged:
+  en: Staged %{count}
+source_control.unstaged:
+  en: Unstaged %{count}
+source_control.clean:
+  en: No uncommitted changes
+source_control.not_a_repository:
+  en: This directory is not a Git repository
+source_control.no_directory:
+  en: No workspace to inspect yet
+source_control.detached_head:
+  en: Detached HEAD
+source_control.status_failed:
+  en: Could not read the Git status
+diff.view_unified:
+  en: Unified
+diff.view_split:
+  en: Split
+review.file_position:
+  en: "%{index} of %{total}"
 review.turn_label:
   en: turn %{turn}
 review.readonly:

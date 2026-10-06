@@ -117,14 +117,12 @@ impl Fintwind {
             self.right_panel_slide = None;
         }
         let (sidebar_content, right_panel_content) = self.effective_panel_widths(window);
-        let sidebar = slide_width(
-            &mut self.sidebar_slide,
-            if self.sidebar_visible {
-                sidebar_content
-            } else {
-                0.0
-            },
-        );
+        let sidebar_target = if self.sidebar_visible && self.has_secondary_column() {
+            sidebar_content
+        } else {
+            0.0
+        };
+        let sidebar = slide_width(&mut self.sidebar_slide, sidebar_target);
         let right_panel = slide_width(
             &mut self.right_panel_slide,
             if self.right_panel_visible {
@@ -367,8 +365,6 @@ impl Render for Fintwind {
                 .flex_col()
                 .overflow_y_scroll()
                 .track_scroll(&self.settings_scroll)
-                .border_l_1()
-                .border_color(theme.sidebar_border)
                 .bg(theme.surface)
                 .child(
                     div()

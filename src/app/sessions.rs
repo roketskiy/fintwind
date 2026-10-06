@@ -906,7 +906,7 @@ impl Fintwind {
     pub(super) fn effective_panel_widths(&self, window: &Window) -> (f32, f32) {
         fitted_panel_widths(
             f32::from(window.viewport_size().width) - MODE_RAIL_WIDTH,
-            self.sidebar_visible || self.sidebar_slide.is_some(),
+            (self.sidebar_visible && self.has_secondary_column()) || self.sidebar_slide.is_some(),
             self.right_panel_visible || self.right_panel_slide.is_some(),
             self.secondary_width(),
             self.right_panel_width,
@@ -923,6 +923,15 @@ impl Fintwind {
             WorkspaceMode::Settings => self.settings_width,
             WorkspaceMode::Usage => 0.0,
         }
+    }
+
+    /// Whether the current mode has a second column at all. Usage renders a
+    /// full-width page, so the panel system must treat its column as closed
+    /// even while the session list's visibility toggle stays on — otherwise
+    /// the width sanitizer clamps the zero up to the default width and an
+    /// empty column shows.
+    pub(super) fn has_secondary_column(&self) -> bool {
+        !matches!(self.mode, WorkspaceMode::Usage)
     }
 
     fn set_secondary_width(&mut self, width: f32) {

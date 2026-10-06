@@ -421,7 +421,7 @@ impl Fintwind {
         let right_panel_width = px(right_panel_width);
         let content_width =
             (window.viewport_size().width - sidebar_width - right_panel_width - px(40.0))
-                .clamp(px(1.0), px(CONTENT_MAX_WIDTH));
+                .clamp(px(1.0), px(crate::theme::transcript_width()));
         let previous = self.transcript_layout_width.replace(content_width);
         if previous > Pixels::ZERO && (previous - content_width).abs() < px(1.0) {
             return false;
@@ -669,8 +669,9 @@ pub(super) fn should_show_navigation_rail(
     transcript_scrollable: bool,
     turn_count: usize,
     chat_viewport_width: f32,
+    content_max_width: f32,
 ) -> bool {
-    let content_left = ((chat_viewport_width - CONTENT_MAX_WIDTH) / 2.0).max(20.0);
+    let content_left = ((chat_viewport_width - content_max_width) / 2.0).max(20.0);
     let rail_right = NAVIGATION_RAIL_LEFT + NAVIGATION_RAIL_WIDTH;
     transcript_scrollable
         && turn_count >= 2

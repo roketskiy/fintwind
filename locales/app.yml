@@ -155,7 +155,7 @@ settings.providers:
 settings.general_keywords:
   en: general local projects conversations privacy version
 settings.appearance_keywords:
-  en: appearance theme system light dark language english chinese simplified text size font code interface
+  en: appearance theme system light dark language english chinese simplified text size font code interface width conversation
 settings.providers_keywords:
   en: providers agents models custom add api key base url endpoint cli version install detect fetch models.dev connectivity test latency first token modality responses claude codex cursor opencode amp grok pi
 settings.skills:
@@ -240,6 +240,18 @@ settings.text_size_extra_large:
   en: Extra large
 settings.text_size_huge:
   en: Huge
+settings.transcript_width:
+  en: Conversation width
+settings.transcript_width_description:
+  en: Set how wide messages and the composer can grow on large screens.
+settings.transcript_width_compact:
+  en: Compact
+settings.transcript_width_default:
+  en: Default
+settings.transcript_width_wide:
+  en: Wide
+settings.transcript_width_extra_wide:
+  en: Extra wide
 settings.theme_system:
   en: System
 settings.theme_light:

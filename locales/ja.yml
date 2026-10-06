@@ -80,7 +80,7 @@ settings.appearance: 外観
 settings.providers: プロバイダー
 settings.usage: 使用状況
 settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン
-settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語 文字サイズ コード フォント
+settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語 文字サイズ コード フォント 幅 会話 メッセージ
 settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
 settings.skills: スキル
 settings.skills_keywords: スキル ライブラリ エージェント 無効 有効 削除 claude codex cursor opencode pi amp 共有
@@ -123,6 +123,12 @@ settings.text_size_default: デフォルト
 settings.text_size_large: 大
 settings.text_size_extra_large: 特大
 settings.text_size_huge: 超大
+settings.transcript_width: 会話の幅
+settings.transcript_width_description: 大画面でのメッセージと入力欄の最大幅を設定します。
+settings.transcript_width_compact: コンパクト
+settings.transcript_width_default: デフォルト
+settings.transcript_width_wide: ワイド
+settings.transcript_width_extra_wide: 特大
 settings.theme_system: システム
 settings.theme_light: ライト
 settings.theme_dark: ダーク

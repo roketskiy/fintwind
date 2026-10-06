@@ -279,7 +279,6 @@ impl Fintwind {
                 .get_mut(&session_id)
                 .map(|state| {
                     state.expanded_paths.clear();
-                    state.diff_snapshot = None;
                     &mut state.file_editors
                 })
         };

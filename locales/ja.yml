@@ -84,8 +84,6 @@ settings.appearance_keywords: 外観 テーマ システム ライト ダーク 
 settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
 settings.skills: スキル
 settings.skills_keywords: スキル ライブラリ エージェント 無効 有効 削除 claude codex cursor opencode pi amp 共有
-settings.usage_keywords: 使用状況 トークン コスト 支出 キャッシュ 日別 グラフ モデル 内訳 履歴 claude codex
-settings.back: 戻る
 settings.search: 設定を検索
 settings.mcp_servers: MCPサーバー
 settings.mcp_servers_keywords: MCP サーバー ツール stdio http sse ローカル リモート npx 環境変数 ヘッダー
@@ -410,8 +408,11 @@ common.rename: 名前を変更
 session.new_task: 新規タスク
 
 session.reveal_project_folder: ファイルマネージャーでプロジェクトフォルダを表示
+session.reveal_project_folder_unavailable: この画面で開けるフォルダはありません
 
 sidebar.search: 検索
+rail.sessions: セッション
+rail.source_control: レビュー
 sidebar.update: 更新
 sidebar.update_tooltip: バージョン %{version} が利用可能です
 sidebar.working: 作業中 · %{elapsed}
@@ -887,15 +888,14 @@ session.rewound_with_stale_refs: "タスクをターン %{turn} の前まで巻�
 right_panel.browser: ブラウザ
 right_panel.terminal: ターミナル
 right_panel.files: ファイル
-right_panel.diff: レビュー
 right_panel.history: 履歴
 right_panel.toggle: 右パネルの表示を切り替える
+right_panel.toggle_unavailable: 右パネルはセッション表示でのみ使用できます
 right_panel.open_surface: パネルを開く
 right_panel.choose_surface: 右パネルに表示する内容を選択します
 right_panel.browser_description: ローカルアプリまたは URL を開きます
 right_panel.terminal_description: このワークスペースでシェルを起動します
 right_panel.files_description: ワークスペースのファイルを閲覧します
-right_panel.diff_description: ファイルの変更をレビューします
 right_panel.terminal_unavailable: ターミナルを利用できません
 right_panel.terminal_unavailable_description: ターミナルパネルをもう一度開くとシェルが起動します
 right_panel.resize: 右パネルの幅を変更
@@ -969,6 +969,7 @@ commit.committing: コミット中…
 commit.committing_and_pushing: コミットしてプッシュ中…
 commit.pushing: プッシュ中…
 commit.no_task: コミットできるタスクがありません
+commit.no_provider: メッセージを書けるコーディングエージェントがありません
 commit.no_workspace: このタスクにはワークスペースがありません
 commit.no_changes: コミットする変更はありません
 commit.agent_unavailable: 現在のエージェント CLI を利用できないため、コミットメッセージを生成できません
@@ -1068,6 +1069,64 @@ file_picker.folder: フォルダ
 file_picker.file: ファイル
 file_picker.typed_file: "%{type} ファイル"
 
+source_control.title: レビュー
+source_control.loading: Git ステータスを読み込み中…
+source_control.refresh: 更新
+source_control.follow_session: セッションに追従
+source_control.staged: ステージ済み %{count}
+source_control.unstaged: 未ステージ %{count}
+source_control.clean: 未コミットの変更はありません
+source_control.not_a_repository: このディレクトリは Git リポジトリではありません
+source_control.no_directory: 表示できるワークスペースがありません
+source_control.detached_head: デタッチされた HEAD
+source_control.status_failed: Git ステータスの読み込みに失敗しました
+source_control.fetch: Fetch
+source_control.pull: Pull（早送りのみ）
+source_control.push: Push
+source_control.staging: ステージ中…
+source_control.unstaging: ステージ解除中…
+source_control.discarding: 破棄中…
+source_control.fetching: Fetch 中…
+source_control.pulling: Pull 中…
+source_control.pushing: Push 中…
+source_control.switching: "%{branch} に切り替え中…"
+source_control.committing: コミット中…
+source_control.committing_and_pushing: コミットとプッシュ中…
+source_control.generating_message: コミットメッセージを生成中…
+source_control.stage: ステージ
+source_control.unstage: ステージ解除
+source_control.discard: 未ステージの変更を破棄
+source_control.discard_untracked: 未追跡ファイルを削除
+source_control.stage_all: すべてステージ
+source_control.unstage_all: すべてステージ解除
+source_control.discard_all: すべて破棄
+source_control.fetch_done: Fetch が完了しました
+source_control.pull_done: Pull が完了しました
+source_control.push_done: Push が完了しました
+source_control.action_failed: Git 操作に失敗しました
+source_control.commit: コミット
+source_control.commit_hint: ステージ済みの変更をコミット
+source_control.stage_all_commit: すべてステージしてコミット
+source_control.commit_empty_message: まずコミットメッセージを入力してください
+source_control.commit_nothing_staged: コミットできるステージ済みの変更がありません
+source_control.commit_done: コミットしました
+source_control.commit_push_done: コミットしてプッシュしました
+source_control.generate_message: ステージ済みの内容からコミットメッセージを生成
+source_control.branch_create: 新しいブランチ名、Enter で切り替え…
+source_control.discard_title: 変更を破棄しますか？
+source_control.discard_tracked: "%{count} 件の追跡ファイルはインデックスから復元されます。ステージ済みの内容は維持されます。"
+source_control.discard_untracked_note: "%{count} 件の未追跡ファイルは削除されます。Git では復元できません。"
+source_control.discard_cancel: キャンセル
+source_control.discard_confirm: "%{count} 件を破棄"
+diff.view_unified: 統一
+diff.view_split: 並列
+review.file_position: "%{index} / %{total}"
+review.turn_label: 第%{turn}ターン
+review.readonly: 履歴スナップショット · 読み取り専用
+review.snapshot: ターン差分 — %{turn}
+review.snapshot_from_session: "「%{title}」のターン差分 — %{turn}"
+review.view_workspace: 現在のワークスペースを表示
+review.back_to_session: セッションに戻る
 diff.no_changes: 変更はありません
 diff.no_changes_description: このソースにはレビューするファイル変更がありません
 diff.filter_files: ファイルを絞り込む…

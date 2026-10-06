@@ -928,7 +928,8 @@ impl Fintwind {
             for server in matches {
                 any_row = true;
                 let selected = selected_name.as_deref() == Some(server.name.as_str());
-                rows = rows.child(self.render_mcp_list_row(server, selected, theme, accent, window, cx));
+                rows = rows
+                    .child(self.render_mcp_list_row(server, selected, theme, accent, window, cx));
             }
         }
         rows = rows.child(self.render_add_mcp_row(theme, cx));

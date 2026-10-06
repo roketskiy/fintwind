@@ -213,7 +213,7 @@ impl Fintwind {
     }
     // ── Sidebar ────────────────────────────────────────────────────────────
 
-    fn render_fps_counter(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_fps_counter(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let fps = self.fps_value;
         let dot = if fps == 0 {
@@ -243,7 +243,238 @@ impl Fintwind {
             )
     }
 
-    fn render_sidebar_toggle(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+    /// The fixed first column, modeled on Ely's `ActivityBar`: full-height
+    /// 48px hit areas, 20px icons, and a 2px indicator that grows in on the
+    /// active entry. The active entry reads through the indicator plus the
+    /// icon color — never a filled background. Sessions and source control
+    /// sit on top, settings (and the update entry when one exists) at the
+    /// bottom. The rail never leaves the tree, so every mode stays reachable
+    /// even with the second column collapsed or a very narrow window.
+    pub(super) fn render_mode_rail(&self, cx: &mut Context<Self>) -> Div {
+        let theme = Theme::current(cx);
+        div()
+            .w(px(MODE_RAIL_WIDTH))
+            .h_full()
+            .flex_none()
+            .flex()
+            .flex_col()
+            .bg(theme.rail)
+            .border_r_1()
+            .border_color(theme.sidebar_border)
+            // The strip above the entries drags the window; with the second
+            // column collapsed this is the only top-left drag surface.
+            .child(
+                self.window_drag_region(
+                    div()
+                        .id("mode-rail-drag-region")
+                        .w_full()
+                        .h(px(TOPBAR_HEIGHT))
+                        .flex_none(),
+                    cx,
+                ),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(self.render_mode_rail_entry(
+                        "rail-sessions",
+                        "icons/message-square-text.svg",
+                        WorkspaceMode::Sessions,
+                        cx,
+                    ))
+                    .child(self.render_mode_rail_entry(
+                        "rail-source-control",
+                        "icons/source-control.svg",
+                        WorkspaceMode::SourceControl,
+                        cx,
+                    ))
+                    .child(self.render_mode_rail_entry(
+                        "rail-usage",
+                        "icons/chart-column.svg",
+                        WorkspaceMode::Usage,
+                        cx,
+                    )),
+            )
+            .child(div().flex_1())
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .when_some(self.latest_available.as_ref(), |footer, update| {
+                        footer.child(self.render_mode_rail_update(update, cx))
+                    })
+                    .child(self.render_mode_rail_entry(
+                        "rail-settings",
+                        "icons/settings.svg",
+                        WorkspaceMode::Settings,
+                        cx,
+                    )),
+            )
+            .pb(px(4.0))
+    }
+
+    /// One rail entry, following Ely's `ActivityBar`: a full 48px square hit
+    /// area, a 20px icon that brightens on hover, and — when active — a 2px
+    /// indicator bar on the left edge that grows in with a short ease-out.
+    fn render_mode_rail_entry(
+        &self,
+        id: &'static str,
+        icon_path: &'static str,
+        mode: WorkspaceMode,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        let active = self.mode == mode;
+        let label = match mode {
+            WorkspaceMode::Sessions => tr!("rail.sessions"),
+            WorkspaceMode::SourceControl => tr!("rail.source_control"),
+            WorkspaceMode::Usage => tr!("settings.usage"),
+            WorkspaceMode::Settings => tr!("common.settings"),
+        };
+        let group = SharedString::from(format!("rail-{id}"));
+        div()
+            .id(id)
+            .group(group.clone())
+            .relative()
+            .w(px(MODE_RAIL_WIDTH))
+            .h(px(MODE_RAIL_WIDTH))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_default()
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+            .tooltip(Tooltip::text(label))
+            .child(
+                icon(
+                    icon_path,
+                    20.0,
+                    if active {
+                        theme.text
+                    } else {
+                        theme.text_tertiary
+                    },
+                )
+                .group_hover(group, |style| style.text_color(theme.text)),
+            )
+            .when(active, |entry| {
+                entry.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .flex()
+                        .items_center()
+                        .child(
+                            div().h(px(20.0)).w(px(2.0)).bg(theme.text).with_animation(
+                                SharedString::from(format!("rail-mark-{id}")),
+                                Animation::new(NAVIGATION_RAIL_ANIMATION_DURATION)
+                                    .with_easing(ease_out_quint()),
+                                |mark, delta| mark.h(px(20.0 * delta)),
+                            ),
+                        ),
+                )
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(move |this, _, _, cx| {
+                cx.stop_propagation();
+                this.activate_mode(mode, cx);
+            }))
+            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                if !event.keystroke.modifiers.modified()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    this.activate_mode(mode, cx);
+                    cx.stop_propagation();
+                }
+            }))
+    }
+
+    /// The rail's update entry, in the same full-square shape as the mode
+    /// entries. A small badge dot keeps the offer visible without a text
+    /// label; clicking opens the same update card as before.
+    fn render_mode_rail_update(
+        &self,
+        update: &update_card::UpdateCard,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        div()
+            .id("rail-update")
+            .track_focus(&self.update_button_focus)
+            .tab_index(0)
+            .relative()
+            .w(px(MODE_RAIL_WIDTH))
+            .h(px(MODE_RAIL_WIDTH))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_default()
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+            .tooltip(Tooltip::text(tr!(
+                "sidebar.update_tooltip",
+                version = update.release.version
+            )))
+            .child(icon("icons/download.svg", 20.0, theme.text_tertiary))
+            .child(
+                div()
+                    .absolute()
+                    .top(px(10.0))
+                    .right(px(10.0))
+                    .size(px(7.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(theme.sidebar)
+                    .bg(theme.accent),
+            )
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(|this, _, window, cx| {
+                cx.stop_propagation();
+                this.open_update_card(window, cx);
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                if !event.keystroke.modifiers.modified()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    this.open_update_card(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
+    }
+
+    /// Rail clicks. Switching modes keeps the second column open — a mode
+    /// switch that visibly changes nothing reads as a dead control — and
+    /// each mode brings its own on-enter side effects.
+    fn activate_mode(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
+        if self.mode == mode {
+            // Usage has no second column; there is nothing to collapse.
+            if mode != WorkspaceMode::Usage {
+                self.set_sidebar_visible(!self.sidebar_visible, cx);
+            }
+            return;
+        }
+        match mode {
+            WorkspaceMode::Sessions => {
+                self.mode = WorkspaceMode::Sessions;
+                cx.notify();
+            }
+            WorkspaceMode::Settings => self.open_settings_page(self.settings_page, cx),
+            WorkspaceMode::SourceControl => self.open_source_control(cx),
+            WorkspaceMode::Usage => self.open_usage_page(cx),
+        }
+        if !self.sidebar_visible {
+            self.set_sidebar_visible(true, cx);
+        }
+    }
+
+    pub(super) fn render_sidebar_toggle(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = Theme::current(cx);
         div()
             .id("toggle-sidebar")
@@ -336,111 +567,14 @@ impl Fintwind {
             .child(icon(icon_path, 15.0, theme.text_tertiary))
     }
 
-    /// The right-side header button that shows the selected session's project
-    /// folder in the desktop file manager. Absent while no session is
-    /// selected — there is no folder to offer before the first task exists.
-    fn render_reveal_project_button(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.selected_workspace_path()?;
-        let theme = Theme::current(cx);
-        let focus = cx.focus_handle();
-        Some(
-            div()
-                .id("reveal-project-folder")
-                .track_focus(&focus)
-                .tab_index(0)
-                .tab_stop(true)
-                .w(px(28.0))
-                .h(px(28.0))
-                .flex_none()
-                .rounded(px(7.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .cursor_default()
-                .focus_visible(|style| style.border_1().border_color(theme.accent))
-                .hover(|element| element.bg(theme.overlay))
-                .active(|element| element.bg(theme.overlay_strong))
-                .child(icon("icons/folder.svg", 15.0, theme.text_tertiary))
-                .tooltip(|window, cx| {
-                    Tooltip::new(tr!("session.reveal_project_folder")).build(window, cx)
-                })
-                .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                    cx.stop_propagation();
-                })
-                .on_click(cx.listener(|this, _, _, cx| {
-                    cx.stop_propagation();
-                    this.reveal_selected_project_folder(cx);
-                }))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
-                    if !event.keystroke.modifiers.modified()
-                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                    {
-                        this.reveal_selected_project_folder(cx);
-                        cx.stop_propagation();
-                    }
-                }))
-                .into_any_element(),
-        )
-    }
-
     /// Opens the selected session's workspace folder on the desktop.
-    fn reveal_selected_project_folder(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn reveal_selected_project_folder(&mut self, cx: &mut Context<Self>) {
         if let Some(path) = self
             .selected_workspace_path()
             .map(|path| path.to_path_buf())
         {
             self.open_host_path(&path, cx);
         }
-    }
-
-    fn render_sidebar_titlebar(&self, window: &Window, cx: &mut Context<Self>) -> Stateful<Div> {
-        div()
-            .id("sidebar-titlebar")
-            .h(px(48.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .children(self.render_client_window_controls(
-                super::window_chrome::WindowControlSide::Left,
-                window,
-                cx,
-            ))
-            .child(
-                self.window_drag_region(
-                    div()
-                        .id("sidebar-traffic-light-drag-region")
-                        .w(px(TRAFFIC_LIGHT_CLEARANCE))
-                        .h_full()
-                        .flex_none(),
-                    cx,
-                ),
-            )
-            .child(self.render_sidebar_toggle(cx))
-            .child(
-                div()
-                    .ml(px(6.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(2.0))
-                    .child(self.render_history_button(
-                        "navigate-back",
-                        "icons/arrow-left.svg",
-                        !self.session_navigation.back.is_empty(),
-                        true,
-                        cx,
-                    ))
-                    .child(self.render_history_button(
-                        "navigate-forward",
-                        "icons/arrow-right.svg",
-                        !self.session_navigation.forward.is_empty(),
-                        false,
-                        cx,
-                    )),
-            )
-            .child(self.window_drag_region(
-                div().id("sidebar-titlebar-drag-region").h_full().flex_1(),
-                cx,
-            ))
     }
 
     /// The sidebar's "add project" row. It keeps opening a project reachable
@@ -548,86 +682,7 @@ impl Fintwind {
             .child(search)
     }
 
-    fn render_sidebar_footer(&self, cx: &mut Context<Self>) -> Div {
-        let theme = Theme::current(cx);
-        div()
-            .flex_none()
-            .h(px(40.0))
-            .px(px(10.0))
-            .flex()
-            .items_center()
-            .gap(px(4.0))
-            .child(
-                div()
-                    .id("open-settings")
-                    .tab_index(0)
-                    .focus_visible(|style| style.border_1().border_color(theme.accent))
-                    .h(px(32.0))
-                    .px(px(10.0))
-                    .flex_none()
-                    .rounded(px(8.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(7.0))
-                    .text_size(ui_px(13.0))
-                    .text_color(theme.text_secondary)
-                    .cursor_default()
-                    .hover(|element| element.bg(theme.overlay))
-                    .active(|element| element.bg(theme.overlay_strong))
-                    .tooltip(Tooltip::text(tr_cow!("common.settings")))
-                    .child(icon("icons/settings.svg", 15.0, theme.text_tertiary))
-                    .child(tr_cow!("common.settings"))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.open_settings_action(&OpenSettings, window, cx);
-                    })),
-            )
-            .when_some(self.latest_available.as_ref(), |footer, update| {
-                footer.child(
-                    div()
-                        .id("open-update")
-                        .track_focus(&self.update_button_focus)
-                        .tab_index(0)
-                        .focus_visible(|style| style.border_1().border_color(theme.accent))
-                        .h(px(32.0))
-                        .px(px(10.0))
-                        .flex_none()
-                        .rounded(px(8.0))
-                        .flex()
-                        .items_center()
-                        .gap(px(7.0))
-                        .text_size(ui_px(13.0))
-                        .text_color(theme.text_secondary)
-                        .cursor_default()
-                        .hover(|element| element.bg(theme.overlay))
-                        .active(|element| element.bg(theme.overlay_strong))
-                        .tooltip(Tooltip::text(tr!(
-                            "sidebar.update_tooltip",
-                            version = update.release.version
-                        )))
-                        .child(icon("icons/download.svg", 15.0, theme.text_tertiary))
-                        .child(tr_cow!("sidebar.update"))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.open_update_card(window, cx);
-                        }))
-                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                            if !event.keystroke.modifiers.modified()
-                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
-                            {
-                                this.open_update_card(window, cx);
-                                cx.stop_propagation();
-                            }
-                        })),
-                )
-            })
-            .child(div().flex_1())
-    }
-
-    pub(super) fn render_sidebar(
-        &self,
-        width: f32,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> Div {
+    pub(super) fn render_sidebar(&self, width: f32, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let is_resizing = self
             .panel_resize_drag
@@ -650,7 +705,6 @@ impl Fintwind {
             } else {
                 theme.sidebar
             })
-            .child(self.render_sidebar_titlebar(window, cx))
             .child(
                 div()
                     .flex_none()
@@ -705,7 +759,6 @@ impl Fintwind {
                         )
                     }),
             )
-            .child(self.render_sidebar_footer(cx))
     }
 
     /// The sidebar row snapshot, rebuilt only when its inputs move.
@@ -1100,7 +1153,7 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.settings_page = None;
+        self.mode = WorkspaceMode::Sessions;
         self.select_project(project_id, cx);
         let focus = self.composer_focus(cx);
         window.focus(&focus, cx);
@@ -1542,145 +1595,30 @@ impl Fintwind {
 
     // ── Header ─────────────────────────────────────────────────────────────
 
-    pub(super) fn render_header(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
+    /// The session tab row beneath the unified top bar. Window controls,
+    /// layout toggles, history, and the reveal-folder action moved up into
+    /// the top bar; this row keeps only the tabs — at their existing height,
+    /// scroll, and cached-isolation behavior — and only when tabs exist, so
+    /// a single-task window keeps a clean column under the bar.
+    pub(super) fn render_session_tabs_row(
+        &mut self,
+        _window: &Window,
+        _cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let theme = Theme::current(cx);
-        let session = self.selected_session();
-        let title = session
-            .map(localized_session_title)
-            .unwrap_or_else(|| tr!("session.new_task"));
-        let left_window_controls = (!self.sidebar_visible)
-            .then(|| {
-                self.render_client_window_controls(
-                    super::window_chrome::WindowControlSide::Left,
-                    window,
-                    cx,
-                )
-            })
-            .flatten();
-        let right_window_controls = (!self.right_panel_visible)
-            .then(|| {
-                self.render_client_window_controls(
-                    super::window_chrome::WindowControlSide::Right,
-                    window,
-                    cx,
-                )
-            })
-            .flatten();
         div()
-            .id("window-header")
+            .id("session-tabs-row")
             .h(px(48.0))
             .flex_none()
             .flex()
             .items_center()
             .gap(px(8.0))
-            .children(left_window_controls)
-            // The header starts where the sidebar ends, so until the sidebar
-            // is wide enough to host the traffic lights itself the header has
-            // to clear them. Steady state with the sidebar open adds nothing;
-            // a sidebar sliding in shrinks the inset as it takes the lights
-            // over, which is what keeps the title from passing under them.
-            .pl(if self.sidebar_visible {
-                px(14.0 + (TRAFFIC_LIGHT_CLEARANCE - self.sidebar_rendered_width).max(0.0))
-            } else {
-                px(0.0)
-            })
-            // Caption buttons sit on the window edge; Win11 chrome has no inset.
-            .pr(if right_window_controls.is_some() {
-                px(0.0)
-            } else {
-                px(14.0)
-            })
-            .when(!self.sidebar_visible, |element| {
-                element
-                    .child(
-                        self.window_drag_region(
-                            div()
-                                .id("header-traffic-light-drag-region")
-                                .w(px(TRAFFIC_LIGHT_CLEARANCE - 8.0))
-                                .h_full()
-                                .flex_none(),
-                            cx,
-                        ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.0))
-                            .child(self.render_sidebar_toggle(cx))
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(2.0))
-                                    .child(self.render_history_button(
-                                        "navigate-back",
-                                        "icons/arrow-left.svg",
-                                        !self.session_navigation.back.is_empty(),
-                                        true,
-                                        cx,
-                                    ))
-                                    .child(self.render_history_button(
-                                        "navigate-forward",
-                                        "icons/arrow-right.svg",
-                                        !self.session_navigation.forward.is_empty(),
-                                        false,
-                                        cx,
-                                    )),
-                            ),
-                    )
-            })
-            .when(!self.open_tabs.is_empty(), |element| {
-                // The tab strip is a cached island of its own, so the working
-                // spinners inside it never price a pulse tick at the window.
-                element.child(
-                    self.session_tabs_pane
-                        .clone()
-                        .cached(StyleRefinement::default().flex_1().min_w(px(0.0)).h_full()),
-                )
-            })
-            .when(self.open_tabs.is_empty(), |element| {
-                element
-                    .child(
-                        self.window_drag_region(
-                            div()
-                                .id("header-title-drag-region")
-                                .h_full()
-                                .min_w_0()
-                                .flex_shrink(1.0)
-                                .flex()
-                                .items_center()
-                                .gap(px(7.0))
-                                .child(
-                                    div()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_size(ui_px(13.0))
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text)
-                                        .child(SharedString::from(title)),
-                                ),
-                            cx,
-                        ),
-                    )
-                    .child(self.window_drag_region(
-                        div().id("header-center-drag-region").h_full().flex_1(),
-                        cx,
-                    ))
-            })
-            .children(self.render_reveal_project_button(cx))
-            .when(!self.right_panel_visible, |element| {
-                element
-                    .when(self.fps_counter_visible, |element| {
-                        element.child(self.render_fps_counter(cx))
-                    })
-                    .child(self.render_right_panel_toggle(cx))
-            })
-            .children(right_window_controls)
+            // The tab strip is a cached island of its own, so the working
+            // spinners inside it never price a pulse tick at the window.
+            .child(
+                self.session_tabs_pane
+                    .clone()
+                    .cached(StyleRefinement::default().flex_1().min_w(px(0.0)).h_full()),
+            )
     }
 
     // ── Empty states ───────────────────────────────────────────────────────

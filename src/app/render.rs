@@ -108,22 +108,21 @@ impl Fintwind {
     /// pane islands — which render later, during layout — have to agree with.
     fn settle_panel_slides(&mut self, window: &Window) -> PanelFrame {
         let was_sliding = self.panels_sliding();
-        if self.settings_page.is_some() {
-            // Settings covers the workspace, so there is no edge on screen to
-            // move. Retire the slide rather than animate a layout nobody can
-            // see; reopening the workspace finds the panels where they belong.
+        if self.mode != WorkspaceMode::Sessions {
+            // Only the session mode shows the panels; a mode switch covers
+            // the workspace, so there is no edge on screen to move. Retire
+            // the slide rather than animate a layout nobody can see;
+            // returning to the session finds the panels where they belong.
             self.sidebar_slide = None;
             self.right_panel_slide = None;
         }
         let (sidebar_content, right_panel_content) = self.effective_panel_widths(window);
-        let sidebar = slide_width(
-            &mut self.sidebar_slide,
-            if self.sidebar_visible {
-                sidebar_content
-            } else {
-                0.0
-            },
-        );
+        let sidebar_target = if self.sidebar_visible && self.has_secondary_column() {
+            sidebar_content
+        } else {
+            0.0
+        };
+        let sidebar = slide_width(&mut self.sidebar_slide, sidebar_target);
         let right_panel = slide_width(
             &mut self.right_panel_slide,
             if self.right_panel_visible {
@@ -159,19 +158,30 @@ impl Fintwind {
     /// mid-slide matches the column it is laid out in.
     pub(super) fn chat_viewport_width(&self, window: &Window) -> f32 {
         f32::from(window.viewport_size().width)
+            - MODE_RAIL_WIDTH
             - self.sidebar_rendered_width
             - self.right_panel_rendered_width
     }
 
-    /// [`FintwindPane`] delegate for the sidebar island.
+    /// [`FintwindPane`] delegate for the second column. Which column this is
+    /// follows the workspace mode: the session list, the source-control
+    /// workspace, or the settings categories. Each mode keeps its own list
+    /// state, so scroll positions never mix.
     pub(super) fn sidebar_pane_content(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let (sidebar_width, _) = self.effective_panel_widths(window);
-        self.render_sidebar(sidebar_width, window, cx)
-            .into_any_element()
+        match self.mode {
+            WorkspaceMode::Sessions => self.render_sidebar(sidebar_width, cx).into_any_element(),
+            WorkspaceMode::Settings => self.render_settings_secondary(cx).into_any_element(),
+            WorkspaceMode::SourceControl => self
+                .render_source_control_secondary(sidebar_width, cx)
+                .into_any_element(),
+            // Usage has no second column: the page fills the main area.
+            WorkspaceMode::Usage => div().into_any_element(),
+        }
     }
 
     /// [`FintwindPane`] delegate for the transcript island.
@@ -239,35 +249,145 @@ impl Render for Fintwind {
         }
         let image_preview = self.render_image_preview(cx);
         let update_card = self.render_update_card(window, cx);
-        if self.settings_page.is_some() {
-            let command_palette = self.render_command_palette(window, cx);
-            let commit_dialog = self.render_commit_dialog(cx);
-            let toast = self.render_active_toast(cx);
-            let content = div()
-                .relative()
-                .size_full()
-                .on_action(cx.listener(Self::toggle_command_palette_action))
-                .child(self.render_settings(window, cx))
-                .children(toast)
-                .children(update_card)
-                .children(command_palette)
-                .children(commit_dialog)
-                .children(image_preview)
-                .into_any_element();
-            return self.render_window_frame(content, window, cx);
-        }
         // Re-armed every frame this window shows time labels; parks while
-        // settings covers them and while the window isn't drawing at all.
-        self.schedule_time_label_wake(cx);
+        // another mode covers the workspace and while the window isn't
+        // drawing at all.
+        if self.mode == WorkspaceMode::Sessions {
+            self.schedule_time_label_wake(cx);
+        }
 
         let theme = Theme::current(cx);
         let empty = should_render_empty_state(self.selected_session());
         let permission = self.render_permission(cx);
         let command_palette = self.render_command_palette(window, cx);
         let commit_dialog = self.render_commit_dialog(cx);
+        let discard_dialog = self.render_source_control_discard_dialog(cx);
+        let review_commit_dialog = self.render_source_control_commit_dialog(cx);
         let toast = self.render_active_toast(cx);
+
+        // The main area: the session view, the settings page body, or the
+        // source-control review page. All three fill the space between the
+        // second column and the window's right edge.
+        let main_area = match self.mode {
+            WorkspaceMode::Sessions => {
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .bg(theme.surface)
+                    // External-path drops bubble from descendants, so handle
+                    // them once on the chat column rather than also on the
+                    // composer card. The same column is the drop group the
+                    // card highlights against, so a drag over the transcript
+                    // lights the composer before the pointer reaches it.
+                    // Keep the receiver absent when there is no project or
+                    // composer to own the resulting attachments.
+                    .when(self.selected_project().is_some(), |element| {
+                        element
+                            .group(super::composer::CHAT_FILE_DROP_GROUP)
+                            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                                this.stage_dropped_files(paths, window, cx);
+                            }))
+                    })
+                    .when(panels.sidebar > 0.0, |element| {
+                        element.border_l_1().border_color(theme.sidebar_border)
+                    })
+                    .when(!self.open_tabs.is_empty(), |element| {
+                        element.child(self.render_session_tabs_row(window, cx))
+                    })
+                    .child(if empty {
+                        self.render_empty_state(cx).into_any_element()
+                    } else {
+                        self.transcript_pane
+                            .clone()
+                            .cached(StyleRefinement::default().flex_1().min_h(px(0.0)).w_full())
+                            .into_any_element()
+                    })
+                    .children(permission)
+                    .when(self.selected_project().is_some(), |element| {
+                        element
+                            .children(self.render_queued_messages(cx))
+                            .child(self.render_composer(window, cx))
+                            .child(self.render_workspace_footer(cx))
+                    })
+                    .relative()
+                    .when(!empty, |element| {
+                        element.child(self.render_task_capsule(cx))
+                    })
+                    .when(self.sidebar_visible, |element| {
+                        element.child(self.render_panel_resize_handle(
+                            "sidebar-resize-handle",
+                            PanelResizeTarget::Sidebar,
+                            cx,
+                        ))
+                    })
+                    .into_any_element()
+            }
+            WorkspaceMode::Settings => div()
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .relative()
+                .flex()
+                .child(self.render_settings_content(window, cx))
+                .when(self.sidebar_visible, |element| {
+                    element.child(self.render_panel_resize_handle(
+                        "sidebar-resize-handle",
+                        PanelResizeTarget::Sidebar,
+                        cx,
+                    ))
+                })
+                .into_any_element(),
+            WorkspaceMode::SourceControl => div()
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .relative()
+                .flex()
+                .child(self.render_source_control_page(window, cx))
+                .when(self.sidebar_visible, |element| {
+                    element.child(self.render_panel_resize_handle(
+                        "sidebar-resize-handle",
+                        PanelResizeTarget::Sidebar,
+                        cx,
+                    ))
+                })
+                .into_any_element(),
+            WorkspaceMode::Usage => div()
+                .id("usage-page-scroll")
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .relative()
+                .flex()
+                .flex_col()
+                .overflow_y_scroll()
+                .track_scroll(&self.settings_scroll)
+                .bg(theme.surface)
+                .child(
+                    div()
+                        .w_full()
+                        .max_w(px(settings::SETTINGS_CONTENT_MAX_WIDTH))
+                        .mx_auto()
+                        .child(
+                            div()
+                                .pt(px(2.0))
+                                .flex_none()
+                                .text_size(ui_px(18.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(theme.text)
+                                .child(tr!("settings.usage")),
+                        )
+                        .child(self.render_usage_page(cx)),
+                )
+                .into_any_element(),
+        };
+
         let content = div()
             .key_context("Fintwind")
+            .on_action(|_: &CloseWindow, window, _| crate::platform::hide_window(window))
             .on_action(cx.listener(Self::close_window_or_right_panel_tab_action))
             .on_action(cx.listener(Self::close_active_session_tab_action))
             .on_action(cx.listener(Self::next_session_tab_action))
@@ -308,112 +428,89 @@ impl Render for Fintwind {
             .size_full()
             .relative()
             .flex()
+            .flex_col()
             .text_color(theme.text)
             .font_family(crate::theme::ui_font_family())
-            // Both panels slide through a container that narrows while their
-            // content keeps its full width and is clipped: the sidebar list
-            // and the right panel's surfaces never reflow on the way in or
-            // out, and their bounds stay put so only the clip moves.
-            .when(panels.sidebar > 0.0, |root| {
-                root.child(
-                    div()
-                        .h_full()
-                        .flex_none()
-                        .w(px(panels.sidebar))
-                        .when(panels.sidebar_sliding, |element| element.overflow_hidden())
-                        .child(
-                            self.sidebar_pane.clone().cached(
-                                StyleRefinement::default()
-                                    .w(px(panels.sidebar_content))
-                                    .h_full()
-                                    .flex_none(),
-                            ),
-                        ),
-                )
-            })
+            // The unified top bar spans the whole window: layout controls and
+            // history on the left, an empty drag region in the middle, and
+            // the FPS readout, right-panel toggle, and window buttons on the
+            // right. Exactly one set of window controls exists — here.
+            .child(self.render_top_bar(window, cx))
+            // Below the bar: the fixed first column, the mode's second
+            // column, the main area, and the session mode's right panel.
+            // The first column shares the bar's background, so the two read
+            // as one L-shaped frame; the vertical separators start below it.
             .child(
                 div()
                     .flex_1()
-                    .h_full()
-                    .min_w_0()
+                    .min_h_0()
                     .flex()
-                    .flex_col()
-                    .bg(theme.surface)
-                    // External-path drops bubble from descendants, so handle
-                    // them once on the chat column rather than also on the
-                    // composer card. The same column is the drop group the
-                    // card highlights against, so a drag over the transcript
-                    // lights the composer before the pointer reaches it.
-                    // Keep the receiver absent when there is no project or
-                    // composer to own the resulting attachments.
-                    .when(self.selected_project().is_some(), |element| {
-                        element
-                            .group(super::composer::CHAT_FILE_DROP_GROUP)
-                            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
-                                this.stage_dropped_files(paths, window, cx);
-                            }))
+                    // The fixed first column. It never leaves the tree, so
+                    // every mode stays one click away no matter how narrow
+                    // the window is.
+                    .child(self.render_mode_rail(cx))
+                    // Both panels slide through a container that narrows while
+                    // their content keeps its full width and is clipped: the
+                    // sidebar list and the right panel's surfaces never reflow
+                    // on the way in or out, and their bounds stay put so only
+                    // the clip moves.
+                    .when(panels.sidebar > 0.0, |row| {
+                        row.child(
+                            div()
+                                .h_full()
+                                .flex_none()
+                                .w(px(panels.sidebar))
+                                .when(panels.sidebar_sliding, |element| element.overflow_hidden())
+                                .child(
+                                    self.sidebar_pane.clone().cached(
+                                        StyleRefinement::default()
+                                            .w(px(panels.sidebar_content))
+                                            .h_full()
+                                            .flex_none(),
+                                    ),
+                                ),
+                        )
                     })
-                    .when(panels.sidebar > 0.0, |element| {
-                        element.border_l_1().border_color(theme.sidebar_border)
-                    })
-                    .child(self.render_header(window, cx))
-                    .child(if empty {
-                        self.render_empty_state(cx).into_any_element()
-                    } else {
-                        self.transcript_pane
-                            .clone()
-                            .cached(StyleRefinement::default().flex_1().min_h(px(0.0)).w_full())
-                            .into_any_element()
-                    })
-                    .children(permission)
-                    .when(self.selected_project().is_some(), |element| {
-                        element
-                            .children(self.render_queued_messages(cx))
-                            .child(self.render_composer(window, cx))
-                            .child(self.render_workspace_footer(cx))
-                    })
-                    .relative()
-                    .when(!empty, |element| {
-                        element.child(self.render_task_capsule(cx))
-                    })
-                    .children(toast)
-                    .when(self.sidebar_visible, |element| {
-                        element.child(self.render_panel_resize_handle(
-                            "sidebar-resize-handle",
-                            PanelResizeTarget::Sidebar,
-                            cx,
-                        ))
-                    }),
+                    .child(main_area)
+                    // The right panel belongs to the session mode only; the
+                    // other modes hide it without dropping its tabs or
+                    // background state.
+                    .when(
+                        self.mode == WorkspaceMode::Sessions && panels.right_panel > 0.0,
+                        |row| {
+                            row.child(
+                                div()
+                                    .h_full()
+                                    .flex_none()
+                                    .w(px(panels.right_panel))
+                                    .flex()
+                                    .relative()
+                                    .when(panels.right_panel_sliding, |element| {
+                                        element.overflow_hidden()
+                                    })
+                                    // Pinned to the window's right edge, so the
+                                    // panel is uncovered from that edge inward
+                                    // rather than dragged across the screen.
+                                    .child(
+                                        self.right_panel_pane.clone().cached(
+                                            StyleRefinement::default()
+                                                .absolute()
+                                                .top_0()
+                                                .right_0()
+                                                .w(px(panels.right_panel_content))
+                                                .h_full(),
+                                        ),
+                                    ),
+                            )
+                        },
+                    ),
             )
-            .when(panels.right_panel > 0.0, |root| {
-                root.child(
-                    div()
-                        .h_full()
-                        .flex_none()
-                        .w(px(panels.right_panel))
-                        .flex()
-                        .relative()
-                        .when(panels.right_panel_sliding, |element| {
-                            element.overflow_hidden()
-                        })
-                        // Pinned to the window's right edge, so the panel is
-                        // uncovered from that edge inward rather than dragged
-                        // across the screen.
-                        .child(
-                            self.right_panel_pane.clone().cached(
-                                StyleRefinement::default()
-                                    .absolute()
-                                    .top_0()
-                                    .right_0()
-                                    .w(px(panels.right_panel_content))
-                                    .h_full(),
-                            ),
-                        ),
-                )
-            })
             .children(update_card)
+            .children(toast)
             .children(command_palette)
             .children(commit_dialog)
+            .children(discard_dialog)
+            .children(review_commit_dialog)
             .children(image_preview)
             .into_any_element();
 

@@ -80,8 +80,6 @@ settings.appearance_keywords: 外观 主题 系统 浅色 深色 语言 英语 �
 settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key Base URL 端点 模型列表 命令行 版本 安装 检测 获取模型 models.dev 连通 测试 延迟 首字 模态 responses claude codex cursor opencode amp grok pi
 settings.skills: 技能
 settings.skills_keywords: 技能 技能库 智能体 禁用 启用 删除 claude codex cursor opencode pi amp 共享
-settings.usage_keywords: 用量 令牌 费用 支出 缓存 每日 图表 模型 明细 历史 claude codex
-settings.back: 返回
 settings.search: 搜索设置
 settings.mcp_servers: MCP 服务器
 settings.mcp_servers_keywords: MCP 服务器 工具 stdio http sse 本地 远程 npx 环境变量 请求头
@@ -399,7 +397,10 @@ common.remove: 移除
 common.rename: 重命名
 session.new_task: 新任务
 session.reveal_project_folder: 在文件管理器中显示项目文件夹
+session.reveal_project_folder_unavailable: 当前页面没有可打开的文件夹
 sidebar.search: 搜索
+rail.sessions: 会话
+rail.source_control: 审阅
 sidebar.update: 更新
 sidebar.update_tooltip: 有新版本 %{version}
 sidebar.working: 工作中 · %{elapsed}
@@ -850,15 +851,14 @@ session.rewound_with_stale_refs: "已回退到第 %{turn} 轮任务之前，但�
 right_panel.browser: 浏览器
 right_panel.terminal: 终端
 right_panel.files: 文件
-right_panel.diff: 审阅
 right_panel.history: 历史
 right_panel.toggle: 显示或隐藏右侧面板
+right_panel.toggle_unavailable: 右侧面板仅在会话页面可用
 right_panel.open_surface: 打开一个面板
 right_panel.choose_surface: 选择要在右侧面板中显示的内容
 right_panel.browser_description: 打开本地应用或网址
 right_panel.terminal_description: 在此工作区中启动 Shell
 right_panel.files_description: 浏览并阅读工作区文件
-right_panel.diff_description: 审阅文件更改
 right_panel.terminal_unavailable: 终端不可用
 right_panel.terminal_unavailable_description: 请重新打开终端面板以启动 Shell
 right_panel.resize: 调整右侧面板宽度
@@ -930,6 +930,7 @@ commit.committing: 正在提交…
 commit.committing_and_pushing: 正在提交并推送…
 commit.pushing: 正在推送…
 commit.no_task: 没有可提交的任务
+commit.no_provider: 没有可用来撰写提交信息的编码代理
 commit.no_workspace: 当前任务没有工作区
 commit.no_changes: 没有可提交的更改
 commit.agent_unavailable: 当前智能体命令行不可用，无法生成提交信息
@@ -1026,6 +1027,65 @@ file_picker.open: 打开
 file_picker.folder: 文件夹
 file_picker.file: 文件
 file_picker.typed_file: "%{type} 文件"
+source_control.title: 审阅
+source_control.loading: 正在读取 Git 状态…
+source_control.refresh: 刷新
+source_control.follow_session: 跟随会话
+source_control.staged: 已暂存 %{count}
+source_control.unstaged: 未暂存 %{count}
+source_control.clean: 没有未提交的更改
+source_control.not_a_repository: 当前目录不是 Git 仓库
+source_control.no_directory: 暂无可查看的工作目录
+source_control.detached_head: 分离 HEAD
+source_control.status_failed: 读取 Git 状态失败
+source_control.fetch: Fetch
+source_control.pull: Pull（仅快进）
+source_control.push: Push
+source_control.staging: 正在暂存…
+source_control.unstaging: 正在取消暂存…
+source_control.discarding: 正在丢弃…
+source_control.fetching: 正在 Fetch…
+source_control.pulling: 正在 Pull…
+source_control.pushing: 正在 Push…
+source_control.switching: 正在切换到 %{branch}…
+source_control.committing: 正在提交…
+source_control.committing_and_pushing: 正在提交并推送…
+source_control.generating_message: 正在生成提交信息…
+source_control.stage: 暂存
+source_control.unstage: 取消暂存
+source_control.discard: 丢弃未暂存的修改
+source_control.discard_untracked: 删除未跟踪文件
+source_control.stage_all: 全部暂存
+source_control.unstage_all: 全部取消暂存
+source_control.discard_all: 全部丢弃
+source_control.fetch_done: Fetch 完成
+source_control.pull_done: Pull 完成
+source_control.push_done: Push 完成
+source_control.action_failed: Git 操作失败
+source_control.commit: 提交
+source_control.commit_to: 提交到 %{branch}
+source_control.commit_hint: 提交已暂存的更改
+source_control.stage_all_commit: 暂存全部并提交
+source_control.commit_empty_message: 请先输入提交信息
+source_control.commit_nothing_staged: 没有已暂存的更改可提交
+source_control.commit_done: 已提交
+source_control.commit_push_done: 已提交并推送
+source_control.generate_message: 根据已暂存内容生成提交信息
+source_control.branch_create: 新分支名，回车切换…
+source_control.discard_title: 丢弃更改？
+source_control.discard_tracked: "%{count} 个已跟踪文件将从暂存区恢复，已暂存的内容保持不变。"
+source_control.discard_untracked_note: "%{count} 个未跟踪文件将被删除，Git 无法找回。"
+source_control.discard_cancel: 取消
+source_control.discard_confirm: 丢弃 %{count} 个
+diff.view_unified: 统一
+diff.view_split: 并排
+review.file_position: 第 %{index} 个，共 %{total} 个
+review.turn_label: 第 %{turn} 轮
+review.readonly: 历史快照 · 只读
+review.snapshot: 轮次 Diff — %{turn}
+review.snapshot_from_session: 来自“%{title}”的轮次 Diff — %{turn}
+review.view_workspace: 查看当前工作区
+review.back_to_session: 返回会话
 diff.no_changes: 没有更改
 diff.no_changes_description: 此来源没有可审阅的文件更改
 diff.filter_files: 筛选文件…

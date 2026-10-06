@@ -1,33 +1,168 @@
-use gpui::{
-    AnyElement, BoxShadow, Context, Decorations, Div, Hsla, IntoElement, KeyDownEvent, MouseButton,
-    ResizeEdge, Tiling, Window, WindowButton, WindowControlArea, div, hsla, prelude::*, px, rgb,
-    transparent_black, white,
-};
-
 use super::Fintwind;
+use super::{MODE_RAIL_WIDTH, TOPBAR_HEIGHT, TRAFFIC_LIGHT_CLEARANCE, WorkspaceMode};
 use crate::theme::Theme;
 use crate::ui::{icon, tooltip::Tooltip};
+
+use gpui::{
+    AnyElement, BoxShadow, Context, Decorations, Div, Hsla, IntoElement, KeyDownEvent, MouseButton,
+    ResizeEdge, Stateful, Tiling, Window, WindowButton, WindowControlArea, div, prelude::*, px,
+    rgb, transparent_black, white,
+};
 
 const CLIENT_FRAME_INSET: f32 = 10.0;
 const CLIENT_FRAME_ROUNDING: f32 = 10.0;
 
 /// Windows 11 caption-button metrics. These are OS chrome, not app theme.
-/// Height matches the 48px titlebars that host these controls — `h_full()`
-/// collapses to zero in those `items_center` rows.
+/// Ely's baseline: one top bar of [`TOPBAR_HEIGHT`], each button one pixel
+/// short of it, so the buttons read as part of the bar without overflowing.
 const CAPTION_BUTTON_WIDTH: f32 = 46.0;
-const CAPTION_BUTTON_HEIGHT: f32 = 48.0;
+const CAPTION_BUTTON_HEIGHT: f32 = TOPBAR_HEIGHT - 1.0;
 const CAPTION_ICON_SIZE: f32 = 10.0;
 const CLOSE_HOVER_BG: u32 = 0xC4_2B_1C;
 const CLOSE_PRESSED_BG: u32 = 0xB1_1A_10;
 const CLOSE_GROUP: &str = "client-window-close";
 
-#[derive(Clone, Copy)]
-pub(super) enum WindowControlSide {
-    Left,
-    Right,
-}
-
 impl Fintwind {
+    /// The unified top bar across the whole window. One bar serves every
+    /// mode: layout toggles and history on the left, a real empty drag
+    /// region in the middle, and the optional FPS readout, right-panel
+    /// toggle, and window buttons on the right. The bar shares the first
+    /// column's background, so the two read as one L-shaped frame, and the
+    /// window buttons keep their corner no matter what the panels do.
+    pub(super) fn render_top_bar(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+
+        div()
+            .id("top-bar")
+            .h(px(TOPBAR_HEIGHT))
+            .flex_none()
+            .flex()
+            .items_center()
+            .bg(theme.rail)
+            .border_b_1()
+            .border_color(theme.sidebar_border)
+            // macOS draws its traffic lights over the bar's left edge; the
+            // clearance keeps the first control out from under them.
+            // Elsewhere the controls start at the rail's width so the first
+            // button lines up with the second column's left edge below.
+            .when(cfg!(target_os = "macos"), |bar| {
+                bar.pl(px(TRAFFIC_LIGHT_CLEARANCE))
+            })
+            .when(!cfg!(target_os = "macos"), |bar| {
+                bar.pl(px(MODE_RAIL_WIDTH))
+            })
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(self.render_sidebar_toggle(cx))
+                    .child(self.render_history_button(
+                        "navigate-back",
+                        "icons/arrow-left.svg",
+                        !self.session_navigation.back.is_empty(),
+                        true,
+                        cx,
+                    ))
+                    .child(self.render_history_button(
+                        "navigate-forward",
+                        "icons/arrow-right.svg",
+                        !self.session_navigation.forward.is_empty(),
+                        false,
+                        cx,
+                    ))
+                    .child(self.render_top_bar_reveal_button(cx)),
+            )
+            .child(
+                self.window_drag_region(
+                    div()
+                        .id("top-bar-drag-region")
+                        .h_full()
+                        .flex_1()
+                        // A narrow window squeezes the drag region before it
+                        // may squeeze the layout controls or the caption
+                        // buttons; the strip never disappears entirely.
+                        .min_w(px(48.0)),
+                    cx,
+                ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .when(self.fps_counter_visible, |group| {
+                        group.child(self.render_fps_counter(cx))
+                    })
+                    .child(self.render_right_panel_toggle(self.mode == WorkspaceMode::Sessions, cx))
+                    .children(self.render_client_window_controls(window, cx)),
+            )
+    }
+
+    /// The top bar's "open folder" control. It follows the mode's effective
+    /// context — the session's actual workspace, or the directory the review
+    /// page is pointed at (the same selection until the worktree picker
+    /// lands) — and reports disabled with a reason where no directory
+    /// applies, rather than disappearing.
+    fn render_top_bar_reveal_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        let enabled = !matches!(self.mode, WorkspaceMode::Settings | WorkspaceMode::Usage)
+            && self.selected_workspace_path().is_some();
+        let focus = cx.focus_handle();
+        div()
+            .id("top-bar-reveal-project")
+            .track_focus(&focus)
+            .tab_index(0)
+            .tab_stop(true)
+            .w(px(28.0))
+            .h(px(28.0))
+            .flex_none()
+            .rounded(px(7.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_default()
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .opacity(if enabled { 1.0 } else { 0.35 })
+            .tooltip(move |window, cx| {
+                let label = if enabled {
+                    tr!("session.reveal_project_folder")
+                } else {
+                    tr!("session.reveal_project_folder_unavailable")
+                };
+                Tooltip::new(label).build(window, cx)
+            })
+            .when(enabled, |button| {
+                button
+                    .hover(|element| element.bg(theme.overlay))
+                    .active(|element| element.bg(theme.overlay_strong))
+                    .child(icon("icons/folder.svg", 15.0, theme.text_tertiary))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                        cx.stop_propagation();
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.reveal_selected_project_folder(cx);
+                    }))
+                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                        if !event.keystroke.modifiers.modified()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            this.reveal_selected_project_folder(cx);
+                            cx.stop_propagation();
+                        }
+                    }))
+            })
+            .when(!enabled, |button| {
+                button.child(icon("icons/folder.svg", 15.0, theme.text_tertiary))
+            })
+    }
+
     /// Draw the frame when GPUI falls back to client-side decorations.
     /// Server-decorated windows pass through untouched.
     pub(super) fn render_window_frame(
@@ -106,16 +241,13 @@ impl Fintwind {
     }
 
     /// Render the window controls Fintwind owns. Windows keeps all three on the
-    /// right, in this order, and has no per-user layout preference to read.
+    /// right of the unified top bar, in this order, and has no per-user
+    /// layout preference to read.
     pub(super) fn render_client_window_controls(
         &self,
-        side: WindowControlSide,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        if !matches!(side, WindowControlSide::Right) {
-            return None;
-        }
         let buttons = [
             WindowButton::Minimize,
             WindowButton::Maximize,
@@ -187,16 +319,8 @@ fn client_window_button(
     } else {
         theme.text_tertiary
     };
-    let hover_fill = if theme.is_dark {
-        hsla(0.0, 0.0, 1.0, 0.06)
-    } else {
-        hsla(0.0, 0.0, 0.0, 0.0578)
-    };
-    let pressed_fill = if theme.is_dark {
-        hsla(0.0, 0.0, 1.0, 0.04)
-    } else {
-        hsla(0.0, 0.0, 0.0, 0.0373)
-    };
+    let hover_fill = theme.overlay;
+    let pressed_fill = theme.overlay_strong;
 
     // Windows hit-tests the caption before it dispatches a mouse event.
     // Claiming the button's area here is also what lets the maximize control

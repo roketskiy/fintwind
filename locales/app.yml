@@ -162,8 +162,6 @@ settings.skills:
   en: Skills
 settings.skills_keywords:
   en: skills skill library agent disable enable delete claude codex cursor opencode pi amp shared
-settings.back:
-  en: Back
 settings.search:
   en: Search Settings
 settings.mcp_servers:
@@ -794,6 +792,13 @@ session.new_task:
 
 session.reveal_project_folder:
   en: Show project folder in file manager
+session.reveal_project_folder_unavailable:
+  en: No folder to open in this view
+
+rail.sessions:
+  en: Sessions
+rail.source_control:
+  en: Review
 
 sidebar.search:
   en: Search
@@ -1691,8 +1696,6 @@ right_panel.terminal:
   en: Terminal
 right_panel.files:
   en: Files
-right_panel.diff:
-  en: Review
 right_panel.history:
   en: History
 right_panel.toggle:
@@ -1707,8 +1710,6 @@ right_panel.terminal_description:
   en: Start a shell in this workspace
 right_panel.files_description:
   en: Browse and read workspace files
-right_panel.diff_description:
-  en: Review file changes
 right_panel.terminal_unavailable:
   en: Terminal unavailable
 right_panel.terminal_unavailable_description:
@@ -1853,6 +1854,8 @@ commit.pushing:
   en: Pushing…
 commit.no_task:
   en: No task is available to commit
+commit.no_provider:
+  en: No coding agent is available to write the message
 commit.no_workspace:
   en: This task has no workspace
 commit.no_changes:
@@ -2049,6 +2052,122 @@ file_picker.file:
 file_picker.typed_file:
   en: "%{type} file"
 
+source_control.title:
+  en: Source control
+source_control.loading:
+  en: Reading Git status…
+source_control.refresh:
+  en: Refresh
+source_control.follow_session:
+  en: Following session
+source_control.staged:
+  en: Staged %{count}
+source_control.unstaged:
+  en: Unstaged %{count}
+source_control.clean:
+  en: No uncommitted changes
+source_control.not_a_repository:
+  en: This directory is not a Git repository
+source_control.no_directory:
+  en: No workspace to inspect yet
+source_control.detached_head:
+  en: Detached HEAD
+source_control.status_failed:
+  en: Could not read the Git status
+source_control.fetch:
+  en: Fetch
+source_control.pull:
+  en: Pull (fast-forward only)
+source_control.push:
+  en: Push
+source_control.staging:
+  en: Staging…
+source_control.unstaging:
+  en: Unstaging…
+source_control.discarding:
+  en: Discarding…
+source_control.fetching:
+  en: Fetching…
+source_control.pulling:
+  en: Pulling…
+source_control.pushing:
+  en: Pushing…
+source_control.switching:
+  en: Switching to %{branch}…
+source_control.committing:
+  en: Committing…
+source_control.committing_and_pushing:
+  en: Committing and pushing…
+source_control.generating_message:
+  en: Generating commit message…
+source_control.stage:
+  en: Stage
+source_control.unstage:
+  en: Unstage
+source_control.discard:
+  en: Discard unstaged changes
+source_control.discard_untracked:
+  en: Delete untracked file
+source_control.stage_all:
+  en: Stage all
+source_control.unstage_all:
+  en: Unstage all
+source_control.discard_all:
+  en: Discard all
+source_control.fetch_done:
+  en: Fetch complete
+source_control.pull_done:
+  en: Pull complete
+source_control.push_done:
+  en: Push complete
+source_control.action_failed:
+  en: The Git action failed
+source_control.commit:
+  en: Commit
+source_control.commit_to:
+  en: Commit to %{branch}
+source_control.commit_hint:
+  en: Commit the staged changes
+source_control.commit_empty_message:
+  en: Enter a commit message first
+source_control.commit_nothing_staged:
+  en: There are no staged changes to commit
+source_control.commit_done:
+  en: Committed
+source_control.commit_push_done:
+  en: Committed and pushed
+source_control.generate_message:
+  en: Generate a commit message from the staged diff
+source_control.branch_create:
+  en: New branch name, Enter to switch…
+source_control.discard_title:
+  en: Discard changes?
+source_control.discard_tracked:
+  en: "%{count} tracked file(s) will be restored from the index. Staged changes stay staged."
+source_control.discard_untracked_note:
+  en: "%{count} untracked file(s) will be deleted. Git cannot recover them."
+source_control.discard_cancel:
+  en: Cancel
+source_control.discard_confirm:
+  en: Discard %{count}
+diff.view_unified:
+  en: Unified
+diff.view_split:
+  en: Split
+review.file_position:
+  en: "%{index} of %{total}"
+review.turn_label:
+  en: turn %{turn}
+review.readonly:
+  en: Read-only snapshot
+review.snapshot:
+  en: Turn diff — %{turn}
+review.snapshot_from_session:
+  en: Turn diff from “%{title}” — %{turn}
+review.view_workspace:
+  en: View current workspace
+review.back_to_session:
+  en: Back to session
 diff.no_changes:
   en: No changes
 diff.no_changes_description:
@@ -2545,8 +2664,6 @@ usage_error.curl_failed:
 
 settings.usage:
   en: Usage
-settings.usage_keywords:
-  en: usage statistics tokens heatmap daily chart models activity cache
 
 usage_page.range_all:
   en: All time

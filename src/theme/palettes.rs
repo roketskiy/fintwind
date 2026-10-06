@@ -68,6 +68,19 @@ fn color(hex: u32) -> gpui::Hsla {
     rgb(hex).into()
 }
 
+/// The L-shaped frame's fill, derived from the second column's so the two
+/// layers separate by a hair. Dark palettes step down a touch in lightness;
+/// light ones step down further, where small deltas stay visible.
+fn frame_from(sidebar: gpui::Hsla, is_dark: bool) -> gpui::Hsla {
+    let mut rail = sidebar;
+    rail.l = if is_dark {
+        (rail.l - 0.016).max(0.0)
+    } else {
+        (rail.l - 0.031).max(0.0)
+    };
+    rail
+}
+
 impl Theme {
     /// Build one family palette: the light/dark base plus the seed's
     /// overrides. `on_accent` is paired with both `accent_fill` and
@@ -118,6 +131,7 @@ impl Theme {
         // Uniformly derived chrome: the transcript reads as one surface while
         // the sidebar stays its own, and interaction chrome tracks the accent.
         theme.surface = theme.canvas;
+        theme.rail = frame_from(theme.sidebar, is_dark);
         theme.sidebar_drag_background = theme.sidebar;
         theme.sidebar_border = theme.border;
         theme.resize_handle = theme.accent_focus;

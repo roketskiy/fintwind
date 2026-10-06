@@ -108,6 +108,7 @@ enum PaletteAction {
     UndoLastTurn,
     RedoUndoneTurn,
     OpenSettings(SettingsPage),
+    OpenUsage,
     SelectTask(Uuid),
 }
 
@@ -348,7 +349,7 @@ impl Fintwind {
         // durable surface instead of remembering that soon-detached handle.
         self.command_palette.previous_focus = if open_menus.is_empty() {
             window.focused(cx)
-        } else if self.settings_page.is_some() {
+        } else if self.mode == WorkspaceMode::Settings {
             Some(self.settings_focus.clone())
         } else {
             Some(self.composer_focus(cx))
@@ -688,12 +689,6 @@ impl Fintwind {
                 "icons/sparkle.svg",
                 "settings preferences mcp marketplace smithery web search academic code install",
             ),
-            (
-                SettingsPage::Usage,
-                "settings.usage",
-                "icons/chart-column.svg",
-                "settings preferences usage statistics tokens heatmap chart models daily activity",
-            ),
         ] {
             commands.push(CommandPaletteItem::command(
                 PaletteSection::Settings,
@@ -705,6 +700,15 @@ impl Fintwind {
                 next(),
             ));
         }
+        commands.push(CommandPaletteItem::command(
+            PaletteSection::Settings,
+            tr!("settings.usage"),
+            "icons/chart-column.svg",
+            None,
+            PaletteAction::OpenUsage,
+            "usage statistics tokens heatmap chart models daily activity",
+            next(),
+        ));
         commands
     }
 
@@ -950,8 +954,9 @@ impl Fintwind {
                 self.open_settings_action(&OpenSettings, window, cx);
                 self.open_settings_page(page, cx);
             }
+            PaletteAction::OpenUsage => self.open_usage_page(cx),
             PaletteAction::SelectTask(session_id) => {
-                self.settings_page = None;
+                self.mode = WorkspaceMode::Sessions;
                 self.select_session(session_id, cx);
                 let focus = self.composer_focus(cx);
                 window.focus(&focus, cx);
@@ -975,9 +980,9 @@ impl Fintwind {
             }
             PaletteAction::ChooseModel | PaletteAction::ToggleUsage => {
                 // These popovers are rendered by the composer. If the command
-                // came from Settings, reveal one normal app frame first so its
-                // persistent menu handle and anchor bounds are current.
-                self.settings_page = None;
+                // came from another mode, reveal one normal app frame first
+                // so its persistent menu handle and anchor bounds are current.
+                self.mode = WorkspaceMode::Sessions;
                 let focus = self.composer_focus(cx);
                 window.focus(&focus, cx);
                 let weak = cx.entity().downgrade();

@@ -34,6 +34,10 @@ const APP_STATE_VERSION: u32 = 1;
 
 pub const DEFAULT_SIDEBAR_WIDTH: f32 = 252.0;
 pub const DEFAULT_RIGHT_PANEL_WIDTH: f32 = 460.0;
+/// Second-column defaults for the source-control and settings modes. Each
+/// mode remembers its own width; the sessions mode uses DEFAULT_SIDEBAR_WIDTH.
+pub const DEFAULT_SOURCE_CONTROL_WIDTH: f32 = 260.0;
+pub const DEFAULT_SETTINGS_WIDTH: f32 = 252.0;
 /// UI text scale at which every chrome text measurement renders at its
 /// designed size. Serde default for the persisted setting.
 pub const DEFAULT_UI_TEXT_SCALE: f32 = 1.0;
@@ -59,6 +63,14 @@ fn default_provider() -> String {
 
 fn default_sidebar_width() -> f32 {
     DEFAULT_SIDEBAR_WIDTH
+}
+
+fn default_source_control_width() -> f32 {
+    DEFAULT_SOURCE_CONTROL_WIDTH
+}
+
+fn default_settings_width() -> f32 {
+    DEFAULT_SETTINGS_WIDTH
 }
 
 fn default_ui_text_scale() -> f32 {
@@ -286,6 +298,10 @@ struct AppState {
     right_panel_visible: bool,
     #[serde(default = "default_sidebar_width")]
     sidebar_width: f32,
+    #[serde(default = "default_source_control_width")]
+    source_control_width: f32,
+    #[serde(default = "default_settings_width")]
+    settings_width: f32,
     #[serde(default = "default_right_panel_width")]
     right_panel_width: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -336,6 +352,10 @@ pub struct PersistedState {
     pub right_panel_visible: bool,
     #[serde(default = "default_sidebar_width")]
     pub sidebar_width: f32,
+    #[serde(default = "default_source_control_width")]
+    pub source_control_width: f32,
+    #[serde(default = "default_settings_width")]
+    pub settings_width: f32,
     #[serde(default = "default_right_panel_width")]
     pub right_panel_width: f32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,6 +407,8 @@ impl PersistedState {
             sidebar_visible: true,
             right_panel_visible: false,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
+            source_control_width: DEFAULT_SOURCE_CONTROL_WIDTH,
+            settings_width: DEFAULT_SETTINGS_WIDTH,
             right_panel_width: DEFAULT_RIGHT_PANEL_WIDTH,
             window_state: None,
             daemon_settings_extra: BTreeMap::new(),
@@ -509,6 +531,8 @@ impl PersistedState {
             sidebar_visible: self.sidebar_visible,
             right_panel_visible: self.right_panel_visible,
             sidebar_width: self.sidebar_width,
+            source_control_width: self.source_control_width,
+            settings_width: self.settings_width,
             right_panel_width: self.right_panel_width,
             window_state: self.window_state,
         }
@@ -538,6 +562,8 @@ impl PersistedState {
         self.sidebar_visible = app_state.sidebar_visible;
         self.right_panel_visible = app_state.right_panel_visible;
         self.sidebar_width = app_state.sidebar_width;
+        self.source_control_width = app_state.source_control_width;
+        self.settings_width = app_state.settings_width;
         self.right_panel_width = app_state.right_panel_width;
         self.window_state = app_state.window_state;
     }

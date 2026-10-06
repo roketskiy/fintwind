@@ -1,6 +1,6 @@
 use crate::theme::{code_px, ui_px};
 
-use super::right_panel::{DiffRowStyle, render_diff_code_row};
+use super::source_control::{DiffRowStyle, render_diff_code_row};
 use super::*;
 use base64::Engine as _;
 
@@ -403,11 +403,7 @@ impl Fintwind {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let reviewing_diff = self.right_panel_visible
-            && self
-                .right_panel_active_surface
-                .and_then(|index| self.right_panel_surfaces.get(index))
-                .is_some_and(|surface| matches!(surface, RightPanelSurface::Diff));
+        let reviewing_diff = self.mode == WorkspaceMode::SourceControl;
         let reviewing_background_work = self.right_panel_visible
             && self
                 .right_panel_active_surface

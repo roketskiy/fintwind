@@ -2180,7 +2180,7 @@ fn render_git_tools_section(
             changes_handle.close(window, cx);
             window.refresh();
             let _ = changes_weak.update(cx, |this, cx| {
-                this.set_right_panel_diff_source(ReviewDiffSource::Uncommitted, cx);
+                this.open_review_page(ReviewDiffSource::Uncommitted, cx);
             });
         },
     );
@@ -2249,7 +2249,7 @@ fn render_git_tools_section(
             compare_handle.close(window, cx);
             window.refresh();
             let _ = compare_weak.update(cx, |this, cx| {
-                this.set_right_panel_diff_source(ReviewDiffSource::Branch, cx);
+                this.open_review_page(ReviewDiffSource::Branch, cx);
             });
         },
     );

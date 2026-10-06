@@ -190,6 +190,10 @@ pub struct Theme {
     pub scheme: ThemeScheme,
     pub canvas: Hsla,
     pub sidebar: Hsla,
+    /// The L-shaped outer frame — the top bar and the mode rail — one step
+    /// off the second column, so the layered layout reads without a heavier
+    /// divider. Derived from `sidebar` in every palette.
+    pub rail: Hsla,
     pub sidebar_drag_background: Hsla,
     pub sidebar_item_background: Hsla,
     pub surface: Hsla,
@@ -274,6 +278,7 @@ impl Theme {
             scheme: ThemeScheme::Default,
             canvas: rgb(0x1A1A1A).into(),
             sidebar: rgb(0x181818).into(),
+            rail: rgb(0x141414).into(),
             sidebar_drag_background: rgb(0x181818).into(),
             sidebar_item_background: hsla(0.0, 0.0, 0.941, 0.06),
             surface: rgb(0x1A1A1A).into(),
@@ -333,6 +338,7 @@ impl Theme {
             scheme: ThemeScheme::Default,
             canvas: rgb(0xFFFFFF).into(),
             sidebar: rgb(0xF9F9F9).into(),
+            rail: rgb(0xF1F1F1).into(),
             sidebar_drag_background: rgb(0xF9F9F9).into(),
             sidebar_item_background: hsla(0.0, 0.0, 0.078, 0.10),
             surface: rgb(0xFFFFFF).into(),

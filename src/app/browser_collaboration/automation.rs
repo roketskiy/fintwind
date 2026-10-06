@@ -342,7 +342,11 @@ impl Fintwind {
             );
             return;
         }
-        if !self.browser_collaboration.automation_pages.contains(&page_id) {
+        if !self
+            .browser_collaboration
+            .automation_pages
+            .contains(&page_id)
+        {
             let _ = client.complete_browser_request(
                 request.request_id,
                 BrowserResult::error(
@@ -351,10 +355,9 @@ impl Fintwind {
             );
             return;
         }
-        let surface_index = self
-            .right_panel_surfaces
-            .iter()
-            .position(|surface| matches!(surface, RightPanelSurface::Browser(id) if *id == page_id));
+        let surface_index = self.right_panel_surfaces.iter().position(
+            |surface| matches!(surface, RightPanelSurface::Browser(id) if *id == page_id),
+        );
         if surface_index.is_none() && !self.right_panel_browsers.contains_key(&page_id) {
             // Nothing is left to announce the change, so any lingering grant
             // is revoked here by publishing the cache minus this page.

@@ -252,6 +252,31 @@ const TEXT_FONTS: &[&[u8]] = &[
     include_bytes!("../assets/fonts/JetBrainsMono-BoldItalic.ttf"),
 ];
 
+/// The app logo in its light- and dark-theme variants, rendered with `img`
+/// because the logo is polychrome — GPUI's `svg()` element can only tint a
+/// single alpha mask. The dark variant inverts the mark's ink so it keeps
+/// its contrast on the rail background; the mask inside stays untouched.
+const LOGOS: &[(&str, &[u8])] = &[
+    (
+        "logos/fi-logo.svg",
+        include_bytes!("../assets/logos/fi-logo.svg").as_slice(),
+    ),
+    (
+        "logos/fi-logo-dark.svg",
+        include_bytes!("../assets/logos/fi-logo-dark.svg").as_slice(),
+    ),
+];
+
+/// The logo asset matching the current theme: the authored light mark on
+/// light themes, the inverted mark on dark ones.
+pub fn logo_asset_for_theme(is_dark: bool) -> &'static str {
+    if is_dark {
+        "logos/fi-logo-dark.svg"
+    } else {
+        "logos/fi-logo.svg"
+    }
+}
+
 /// Symbols-only icon face resolved via CoreText cascade (`FontFallbacks`),
 /// never as a primary GPUI family; see `register_fonts_with_coretext`.
 const SYMBOLS_FONT: &[u8] = include_bytes!("../assets/fonts/SymbolsNerdFontMono-Regular.ttf");
@@ -273,6 +298,7 @@ impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         Ok(ICONS
             .iter()
+            .chain(LOGOS.iter())
             .find(|(name, _)| *name == path)
             .map(|(_, bytes)| Cow::Borrowed(*bytes)))
     }
@@ -280,6 +306,7 @@ impl AssetSource for Assets {
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         Ok(ICONS
             .iter()
+            .chain(LOGOS.iter())
             .filter(|(name, _)| name.starts_with(path))
             .map(|(name, _)| SharedString::from(*name))
             .collect())

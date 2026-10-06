@@ -1,12 +1,13 @@
 use super::Fintwind;
 use super::{MODE_RAIL_WIDTH, TOPBAR_HEIGHT, TRAFFIC_LIGHT_CLEARANCE, WorkspaceMode};
+use crate::assets::logo_asset_for_theme;
 use crate::theme::Theme;
 use crate::ui::{icon, tooltip::Tooltip};
 
 use gpui::{
     AnyElement, BoxShadow, Context, Decorations, Div, Hsla, IntoElement, KeyDownEvent, MouseButton,
-    ResizeEdge, Stateful, Tiling, Window, WindowButton, WindowControlArea, div, prelude::*, px,
-    rgb, transparent_black, white,
+    ResizeEdge, Stateful, Tiling, Window, WindowButton, WindowControlArea, div, img, prelude::*,
+    px, rgb, transparent_black, white,
 };
 
 const CLIENT_FRAME_INSET: f32 = 10.0;
@@ -46,15 +47,14 @@ impl Fintwind {
             .border_b_1()
             .border_color(theme.sidebar_border)
             // macOS draws its traffic lights over the bar's left edge; the
-            // clearance keeps the first control out from under them.
-            // Elsewhere the controls start at the rail's width so the first
-            // button lines up with the second column's left edge below.
+            // clearance keeps the logo out from under them.
             .when(cfg!(target_os = "macos"), |bar| {
                 bar.pl(px(TRAFFIC_LIGHT_CLEARANCE))
             })
-            .when(!cfg!(target_os = "macos"), |bar| {
-                bar.pl(px(MODE_RAIL_WIDTH))
-            })
+            // The logo sits in the first column's width and the layout
+            // controls start right after it, so the first button keeps
+            // lining up with the second column's left edge below.
+            .child(self.render_top_bar_logo(cx))
             .child(
                 div()
                     .flex_none()
@@ -101,6 +101,32 @@ impl Fintwind {
                     })
                     .child(self.render_right_panel_toggle(self.mode == WorkspaceMode::Sessions, cx))
                     .children(self.render_client_window_controls(window, cx)),
+            )
+    }
+
+    /// The app logo at the bar's left corner, inside the first column's
+    /// width. The mark is polychrome, so it renders as an image and follows
+    /// the theme's light or dark variant.
+    fn render_top_bar_logo(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex_none()
+            .h_full()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(cfg!(target_os = "macos"), |slot| {
+                // Keep clear of the traffic lights drawn over the corner.
+                slot.ml(px(72.0))
+            })
+            .when(!cfg!(target_os = "macos"), |slot| {
+                slot.w(px(MODE_RAIL_WIDTH))
+            })
+            .child(
+                div()
+                    .size(px(22.0))
+                    .rounded(px(6.0))
+                    .overflow_hidden()
+                    .child(img(logo_asset_for_theme(Theme::current(cx).is_dark)).size_full()),
             )
     }
 

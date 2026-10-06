@@ -238,6 +238,8 @@ settings.text_size_large:
   en: Large
 settings.text_size_extra_large:
   en: Extra large
+settings.text_size_huge:
+  en: Huge
 settings.theme_system:
   en: System
 settings.theme_light:

@@ -380,7 +380,7 @@ impl Render for Fintwind {
                                 .text_color(theme.text)
                                 .child(tr!("settings.usage")),
                         )
-                        .child(self.render_usage_page(cx)),
+                        .child(self.render_usage_page(window, cx)),
                 )
                 .into_any_element(),
         };

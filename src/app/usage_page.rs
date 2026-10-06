@@ -16,6 +16,7 @@ use crate::theme::ui_px;
 use crate::usage::{cache_hit_percent, format_percent, format_tokens};
 use fintwind_client::models_dev::{self, ModelsDevTable};
 
+use super::usage_treemap::{TreemapTile, usage_treemap};
 use super::*;
 use crate::ui::ActivationExt;
 use fintwind_client::provider_session::{UsageDayShare, UsageEntry, UsageStats};
@@ -37,7 +38,7 @@ const HEAT_LABEL_PX: f32 = 14.0;
 const HEAT_LABEL_GAP_PX: f32 = 4.0;
 /// Chart scrubbing restarts the tooltip timer on every bar, so the framework
 /// default of 500ms feels stuck. Zero still waits one timer tick.
-const CHART_TOOLTIP_DELAY: Duration = Duration::from_millis(0);
+pub(super) const CHART_TOOLTIP_DELAY: Duration = Duration::from_millis(0);
 /// A stored scan older than this is refreshed silently on page open; within
 /// it, reopening the page costs no server traversal.
 const STALE_AFTER: Duration = Duration::from_secs(60);
@@ -401,7 +402,11 @@ impl Fintwind {
         cx.notify();
     }
 
-    pub(super) fn render_usage_page(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_usage_page(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Theme::current(cx);
         let first_load = self.usage_stats.is_none();
         let no_workspace =
@@ -496,7 +501,7 @@ impl Fintwind {
                     } else {
                         self.render_usage_daily(views, &theme).into_any_element()
                     })
-                    .child(self.render_usage_models(views, &theme))
+                    .child(self.render_usage_models(window, cx, views, &theme))
                     .child(self.render_usage_providers(views, &theme))
                     .child(self.render_usage_projects(views, &theme));
             }
@@ -998,53 +1003,60 @@ impl Fintwind {
             })
     }
 
-    fn render_usage_models(&self, views: &UsageViews, theme: &Theme) -> Div {
-        let rows: Vec<UsageRankRow> = views
+    /// Where the store's tokens went by model, as a treemap: one tile per
+    /// model, its area its share. A ranked list answered "which model is
+    /// biggest"; the area answers that and "how much bigger" in the same
+    /// glance, which is what a share question is actually about.
+    fn render_usage_models(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+        views: &UsageViews,
+        theme: &Theme,
+    ) -> Div {
+        let tiles: Vec<TreemapTile> = views
             .models
             .iter()
-            .enumerate()
-            .map(|(index, row)| {
-                let (display, full, icon_path) = match &row.model {
+            .map(|row| {
+                // The tile carries the model id; the tooltip carries the
+                // whole `provider/model`, because two providers can serve the
+                // same id and the bare one cannot tell them apart.
+                let (name, qualified) = match &row.model {
                     Some(model) => match model.split_once('/') {
-                        Some((provider, id)) => {
-                            (id.to_owned(), model.clone(), model_icon(id, id, provider))
-                        }
-                        None => (
-                            model.clone(),
-                            model.clone(),
-                            model_icon(model, model, "opencode"),
-                        ),
+                        Some((_, id)) => (id.to_owned(), model.clone()),
+                        None => (model.clone(), model.clone()),
                     },
-                    None => (
-                        tr!("usage_page.unknown_model").to_owned(),
-                        String::new(),
-                        "icons/bot.svg",
-                    ),
+                    None => (tr!("usage_page.unknown_model").to_owned(), String::new()),
                 };
-                UsageRankRow {
-                    id: format!("usage-model-{index}"),
-                    icon_path,
-                    // Hover shows the whole `provider/model`: two providers can
-                    // serve the same model name, and the bare id cannot tell
-                    // them apart.
-                    tooltip: if full.is_empty() {
-                        display.clone()
-                    } else {
-                        full
-                    },
-                    display,
+                TreemapTile {
+                    name,
+                    qualified,
                     count_label: tr!("usage_page.model_sessions", count = row.sessions),
                     total: row.total,
                     cost: row.cost,
                 }
             })
             .collect();
-        usage_ranking_card(
-            tr!("usage_page.models_title"),
-            tr!("usage_page.models_caption", count = views.model_count),
-            rows,
-            theme,
-        )
+        let card = div()
+            .w_full()
+            .px(px(16.0))
+            .py(px(14.0))
+            .rounded(px(13.0))
+            .bg(theme.raised)
+            .flex()
+            .flex_col()
+            .gap(px(10.0))
+            .child(usage_card_header(
+                tr!("usage_page.models_title"),
+                tr!("usage_page.models_caption", count = views.model_count),
+                theme,
+            ));
+        // Nothing to divide: every model in view spent no tokens, so the card
+        // keeps its header rather than an empty field.
+        if tiles.is_empty() {
+            return card;
+        }
+        card.child(usage_treemap(window, cx, &tiles, theme))
     }
 
     /// The per-provider ranking: where the store's usage actually went.
@@ -1145,7 +1157,9 @@ struct UsagePlotPoint {
     cost: f64,
 }
 
-fn plot_colors(theme: &Theme) -> [Hsla; 5] {
+/// The hue series every chart on this page draws from. The treemap borrows it
+/// so the page keeps one palette instead of two.
+pub(super) fn plot_colors(theme: &Theme) -> [Hsla; 5] {
     let colors = if theme.is_dark {
         [0x60a5fa, 0x4ade80, 0xfb923c, 0xc084fc, 0xfb7185]
     } else {
@@ -1393,6 +1407,29 @@ struct UsageRankRow {
     cost: f64,
 }
 
+/// The titled line every card on this page opens with: the name on the left,
+/// the count on the right.
+fn usage_card_header(title: String, caption: String, theme: &Theme) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(8.0))
+        .child(
+            div()
+                .text_size(ui_px(13.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text)
+                .child(title),
+        )
+        .child(div().flex_1().min_w_0())
+        .child(
+            div()
+                .text_size(ui_px(10.5))
+                .text_color(theme.text_tertiary)
+                .child(caption),
+        )
+}
+
 /// A ranking card: a titled list of rows, each a label, a share bar scaled to
 /// the busiest row, and a token total. Rows are keyboard-reachable in the
 /// order they are drawn.
@@ -1412,26 +1449,7 @@ fn usage_ranking_card(
         .flex()
         .flex_col()
         .gap(px(4.0))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .text_size(ui_px(13.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(theme.text)
-                        .child(title),
-                )
-                .child(div().flex_1().min_w_0())
-                .child(
-                    div()
-                        .text_size(ui_px(10.5))
-                        .text_color(theme.text_tertiary)
-                        .child(caption),
-                ),
-        );
+        .child(usage_card_header(title, caption, theme));
 
     for (index, row) in rows.iter().enumerate() {
         let share = if max_total > 0 {
@@ -2635,7 +2653,7 @@ fn format_day_label(date: NaiveDate) -> String {
 
 /// The server's cost estimates are US dollars; two decimals read naturally
 /// from cents up to hundreds of dollars, which is where stores max out.
-fn format_cost(cost: f64) -> String {
+pub(super) fn format_cost(cost: f64) -> String {
     format!("${cost:.2}")
 }
 

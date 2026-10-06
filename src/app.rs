@@ -2155,6 +2155,7 @@ mod transcript_view;
 mod update_card;
 mod usage_meter;
 mod usage_page;
+mod usage_treemap;
 mod window_chrome;
 
 pub use autocomplete::init as init_composer_autocomplete;

@@ -18,6 +18,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- 用量页「模型用量」改为矩形树图：每个模型一块瓦片，面积即该模型的 token 占比，取代原来的条形排行；Provider 与项目两张排行保持原样
+
 ## [0.2.6]
 
 - 全新双层侧栏：最左侧为固定图标栏（会话、审阅、设置），第二栏随模式切换；窗口顶部新增贯穿全宽的顶栏，窗口控件固定贴右，不再与会话标签争抢宽度

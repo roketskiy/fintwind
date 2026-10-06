@@ -118,6 +118,7 @@ settings.text_size_small: 小
 settings.text_size_default: 默认
 settings.text_size_large: 大
 settings.text_size_extra_large: 特大
+settings.text_size_huge: 超大
 settings.theme_system: 跟随系统
 settings.theme_light: 浅色
 settings.theme_dark: 深色

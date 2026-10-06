@@ -121,10 +121,17 @@ pub enum TextSizePreset {
     Default,
     Large,
     ExtraLarge,
+    Huge,
 }
 
 impl TextSizePreset {
-    pub const ALL: [Self; 4] = [Self::Small, Self::Default, Self::Large, Self::ExtraLarge];
+    pub const ALL: [Self; 5] = [
+        Self::Small,
+        Self::Default,
+        Self::Large,
+        Self::ExtraLarge,
+        Self::Huge,
+    ];
 
     pub fn scale(self) -> f32 {
         match self {
@@ -132,6 +139,7 @@ impl TextSizePreset {
             Self::Default => 1.0,
             Self::Large => 1.1,
             Self::ExtraLarge => 1.25,
+            Self::Huge => 1.5,
         }
     }
 
@@ -141,6 +149,7 @@ impl TextSizePreset {
             Self::Default => "settings.text_size_default",
             Self::Large => "settings.text_size_large",
             Self::ExtraLarge => "settings.text_size_extra_large",
+            Self::Huge => "settings.text_size_huge",
         };
         crate::i18n::translate(key)
     }

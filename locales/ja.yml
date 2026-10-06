@@ -122,6 +122,7 @@ settings.text_size_small: 小
 settings.text_size_default: デフォルト
 settings.text_size_large: 大
 settings.text_size_extra_large: 特大
+settings.text_size_huge: 超大
 settings.theme_system: システム
 settings.theme_light: ライト
 settings.theme_dark: ダーク

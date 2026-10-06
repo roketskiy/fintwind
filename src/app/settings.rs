@@ -687,6 +687,35 @@ impl Fintwind {
             },
         );
 
+        let selected_transcript_width = self.state.transcript_width;
+        let weak = cx.entity().downgrade();
+        let transcript_width_handle = self.menu_handle("transcript-width-selector", cx);
+        let transcript_width_selector = dropdown_menu(
+            MenuChip::new("transcript-width-selector")
+                .label(TranscriptWidthPreset::for_width(selected_transcript_width).label())
+                .outlined()
+                .selected(transcript_width_handle.is_open())
+                .w(px(116.0))
+                .justify_between(),
+            "transcript-width-selector-menu",
+            &transcript_width_handle,
+            MenuAlign::BelowRight,
+            move |_| {
+                TranscriptWidthPreset::ALL
+                    .into_iter()
+                    .map(|preset| {
+                        let weak = weak.clone();
+                        MenuItem::new(preset.label(), move |window, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.set_transcript_width(preset.width(), window, cx);
+                            });
+                        })
+                        .selected(preset.width() == selected_transcript_width)
+                    })
+                    .collect()
+            },
+        );
+
         let selected_ui_font = self.state.ui_font_family.clone();
         let weak = cx.entity().downgrade();
         let ui_font_handle = self.menu_handle("ui-font-selector", cx);
@@ -997,6 +1026,38 @@ impl Fintwind {
                     )
                     .child(code_font_selector),
             )
+            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+            .child(
+                div()
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.transcript_width")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.transcript_width_description")),
+                            ),
+                    )
+                    .child(transcript_width_selector),
+            )
             .into_any_element()
     }
 
@@ -1033,6 +1094,20 @@ impl Fintwind {
         }
         self.state.code_text_scale = scale;
         crate::theme::set_code_text_scale(scale);
+        self.save();
+        window.refresh();
+        cx.notify();
+    }
+
+    /// Switch the transcript column width. Every centered column reads the
+    /// published value, so a refresh reflows the transcript and composer to
+    /// the new width in one frame.
+    fn set_transcript_width(&mut self, width: f32, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state.transcript_width == width {
+            return;
+        }
+        self.state.transcript_width = width;
+        crate::theme::set_transcript_width(width);
         self.save();
         window.refresh();
         cx.notify();

@@ -48,6 +48,23 @@ pub const DEFAULT_CODE_TEXT_SCALE: f32 = 1.0;
 pub const DEFAULT_UI_FONT_FAMILY: &str = ".SystemUIFont";
 /// Bundled monospace face used for code until the user picks another.
 pub const DEFAULT_CODE_FONT_FAMILY: &str = "JetBrains Mono";
+/// Bounds and default for the transcript content width in logical pixels. The
+/// appearance page offers presets inside this range; a hand-edited value is
+/// clamped and snapped to `TRANSCRIPT_WIDTH_STEP` on load.
+pub const TRANSCRIPT_WIDTH_MIN: f32 = 560.0;
+pub const TRANSCRIPT_WIDTH_MAX: f32 = 1200.0;
+pub const DEFAULT_TRANSCRIPT_WIDTH: f32 = 736.0;
+pub const TRANSCRIPT_WIDTH_STEP: f32 = 16.0;
+/// The "Wide" preset, between the default and the ceiling.
+pub const TRANSCRIPT_WIDTH_WIDE: f32 = 960.0;
+
+/// Clamp a stored transcript width into range and snap it to the step so a
+/// hand-edited setting lands on a value the presets can label.
+pub fn normalize_transcript_width(width: f32) -> f32 {
+    let clamped = width.clamp(TRANSCRIPT_WIDTH_MIN, TRANSCRIPT_WIDTH_MAX);
+    TRANSCRIPT_WIDTH_MIN
+        + ((clamped - TRANSCRIPT_WIDTH_MIN) / TRANSCRIPT_WIDTH_STEP).round() * TRANSCRIPT_WIDTH_STEP
+}
 
 fn default_sidebar_visibility() -> bool {
     true
@@ -87,6 +104,10 @@ fn default_ui_font_family() -> String {
 
 fn default_code_font_family() -> String {
     DEFAULT_CODE_FONT_FAMILY.to_owned()
+}
+
+fn default_transcript_width() -> f32 {
+    DEFAULT_TRANSCRIPT_WIDTH
 }
 
 fn default_right_panel_width() -> f32 {
@@ -255,6 +276,7 @@ pub struct AppSettings {
     /// Off by default: browser tools cost model context, so enabling them
     /// is an explicit act.
     pub browser_tools_enabled: bool,
+    pub transcript_width: f32,
 }
 
 impl Default for AppSettings {
@@ -269,6 +291,7 @@ impl Default for AppSettings {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
+            transcript_width: DEFAULT_TRANSCRIPT_WIDTH,
         }
     }
 }
@@ -346,6 +369,8 @@ pub struct PersistedState {
     /// is an explicit act.
     #[serde(default)]
     pub browser_tools_enabled: bool,
+    #[serde(default = "default_transcript_width")]
+    pub transcript_width: f32,
     #[serde(default = "default_sidebar_visibility")]
     pub sidebar_visible: bool,
     #[serde(default = "default_right_panel_visibility")]
@@ -404,6 +429,7 @@ impl PersistedState {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
+            transcript_width: DEFAULT_TRANSCRIPT_WIDTH,
             sidebar_visible: true,
             right_panel_visible: false,
             sidebar_width: DEFAULT_SIDEBAR_WIDTH,
@@ -514,6 +540,7 @@ impl PersistedState {
             ui_font_family: self.ui_font_family.clone(),
             code_font_family: self.code_font_family.clone(),
             browser_tools_enabled: self.browser_tools_enabled,
+            transcript_width: self.transcript_width,
         }
     }
 
@@ -548,6 +575,7 @@ impl PersistedState {
         self.ui_font_family = settings.ui_font_family;
         self.code_font_family = settings.code_font_family;
         self.browser_tools_enabled = settings.browser_tools_enabled;
+        self.transcript_width = settings.transcript_width;
     }
 
     fn apply_app_state(&mut self, app_state: AppState) {
@@ -596,6 +624,7 @@ impl PersistedState {
     }
 
     fn migrate_loaded(&mut self) {
+        self.transcript_width = normalize_transcript_width(self.transcript_width);
         for session in &mut self.sessions {
             let checkpoint_totals_current = session.turns.iter().all(|turn| {
                 turn.checkpoint
@@ -1420,6 +1449,19 @@ mod tests {
         let settings: AppSettings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
         assert_eq!(settings.ui_font_family, DEFAULT_UI_FONT_FAMILY);
         assert_eq!(settings.code_font_family, DEFAULT_CODE_FONT_FAMILY);
+    }
+
+    #[test]
+    fn transcript_width_defaults_when_absent_and_normalizes_persisted_values() {
+        let settings: AppSettings = serde_json::from_str(r#"{"theme":"dark"}"#).unwrap();
+        assert_eq!(settings.transcript_width, DEFAULT_TRANSCRIPT_WIDTH);
+
+        // A value below the floor snaps up to it, one above the ceiling snaps
+        // down, and an in-range value snaps to the nearest step.
+        assert_eq!(normalize_transcript_width(100.0), TRANSCRIPT_WIDTH_MIN);
+        assert_eq!(normalize_transcript_width(5000.0), TRANSCRIPT_WIDTH_MAX);
+        assert_eq!(normalize_transcript_width(800.0), 800.0);
+        assert_eq!(normalize_transcript_width(801.0), 800.0);
     }
 }
 

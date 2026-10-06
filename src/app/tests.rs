@@ -459,10 +459,10 @@ fn task_notification_tags_route_to_the_corresponding_task() {
 
 #[test]
 fn conversation_navigation_rail_visibility_uses_all_three_gates() {
-    assert!(should_show_navigation_rail(true, 2, 872.0));
-    assert!(!should_show_navigation_rail(false, 2, 872.0));
-    assert!(!should_show_navigation_rail(true, 1, 872.0));
-    assert!(!should_show_navigation_rail(true, 2, 871.0));
+    assert!(should_show_navigation_rail(true, 2, 872.0, 720.0));
+    assert!(!should_show_navigation_rail(false, 2, 872.0, 720.0));
+    assert!(!should_show_navigation_rail(true, 1, 872.0, 720.0));
+    assert!(!should_show_navigation_rail(true, 2, 871.0, 720.0));
 }
 
 #[test]

@@ -307,6 +307,7 @@ impl Fintwind {
                 transcript_scrollable,
                 navigation_turns.len(),
                 chat_viewport_width,
+                crate::theme::transcript_width(),
             );
             let scroll_top_row = transcript_rows.logical_scroll_top().item_ix;
             let turn_rows = navigation_turns
@@ -1560,7 +1561,7 @@ impl Fintwind {
             .child(
                 div()
                     .w_full()
-                    .max_w(px(CONTENT_MAX_WIDTH))
+                    .max_w(px(crate::theme::transcript_width()))
                     .min_w_0()
                     .child(inner),
             )

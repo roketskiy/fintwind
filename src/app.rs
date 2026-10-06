@@ -58,7 +58,7 @@ use crate::persistence::{
 use crate::query::{Query, QueryCache};
 use crate::review_diff::{Snapshot as ReviewDiffSnapshot, Source as ReviewDiffSource};
 use crate::terminal::TerminalView;
-use crate::theme::{TextSizePreset, Theme, ThemePreference};
+use crate::theme::{TextSizePreset, Theme, ThemePreference, TranscriptWidthPreset};
 use crate::ui::text_field::TextField;
 use crate::ui::{
     MenuChip, ProjectNameSelector, activity_noun, chip_width, contain_scroll, file_icon, icon,
@@ -75,7 +75,6 @@ use crate::{
 };
 
 const TRAFFIC_LIGHT_CLEARANCE: f32 = 8.0;
-const CONTENT_MAX_WIDTH: f32 = 720.0;
 /// Menu-registry id of the composer's model picker, shared by its render site
 /// and the primary-modifier `/` toggle action.
 const MODEL_PICKER_MENU_ID: &str = "provider-model-picker";
@@ -2459,6 +2458,7 @@ impl Fintwind {
         crate::i18n::set_language(state.language);
         crate::theme::set_ui_text_scale(state.ui_text_scale);
         crate::theme::set_code_text_scale(state.code_text_scale);
+        crate::theme::set_transcript_width(state.transcript_width);
         crate::theme::set_ui_font_family(state.ui_font_family.clone());
         crate::theme::set_code_font_family(state.code_font_family.clone());
 

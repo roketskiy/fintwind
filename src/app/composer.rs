@@ -453,7 +453,7 @@ impl Fintwind {
             div().px(px(20.0)).pb(px(8.0)).child(
                 div()
                     .w_full()
-                    .max_w(px(CONTENT_MAX_WIDTH))
+                    .max_w(px(crate::theme::transcript_width()))
                     .mx_auto()
                     .p(px(12.0))
                     .rounded(px(12.0))
@@ -759,7 +759,7 @@ impl Fintwind {
             div()
                 .id(SharedString::from(format!("user-input-{request_id}")))
                 .w_full()
-                .max_w(px(CONTENT_MAX_WIDTH))
+                .max_w(px(crate::theme::transcript_width()))
                 .mx_auto()
                 .px(px(14.0))
                 .pt(px(12.0))
@@ -2431,7 +2431,7 @@ impl Fintwind {
             div().flex_none().px(px(20.0)).child(
                 div()
                     .w_full()
-                    .max_w(px(CONTENT_MAX_WIDTH))
+                    .max_w(px(crate::theme::transcript_width()))
                     .mx_auto()
                     .px(px(14.0))
                     .child(
@@ -2510,7 +2510,7 @@ impl Fintwind {
         // and leaving it out would let the row overrun it by a pixel.
         let available =
             (self.chat_viewport_width(window) - 2.0 * CARD_GUTTER_X - CHAT_COLUMN_BORDER)
-                .min(CONTENT_MAX_WIDTH)
+                .min(crate::theme::transcript_width())
                 - fixed;
         composer_row_plan(available, widths)
     }
@@ -2552,7 +2552,7 @@ impl Fintwind {
         div().flex_none().px(px(20.0)).child(
             div()
                 .w_full()
-                .max_w(px(CONTENT_MAX_WIDTH))
+                .max_w(px(crate::theme::transcript_width()))
                 .mx_auto()
                 .rounded(px(13.0))
                 .border_1()
@@ -3312,7 +3312,7 @@ impl Fintwind {
             .child(
                 div()
                     .w_full()
-                    .max_w(px(CONTENT_MAX_WIDTH))
+                    .max_w(px(crate::theme::transcript_width()))
                     .mx_auto()
                     .h(px(32.0))
                     // The chip contributes 9px, lining its icon up with the

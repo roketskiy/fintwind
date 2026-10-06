@@ -6,8 +6,9 @@ use parking_lot::Mutex;
 mod palettes;
 
 pub use fintwind_client::persistence::{
-    DEFAULT_CODE_FONT_FAMILY, DEFAULT_CODE_TEXT_SCALE, DEFAULT_UI_FONT_FAMILY,
-    DEFAULT_UI_TEXT_SCALE,
+    DEFAULT_CODE_FONT_FAMILY, DEFAULT_CODE_TEXT_SCALE, DEFAULT_TRANSCRIPT_WIDTH,
+    DEFAULT_UI_FONT_FAMILY, DEFAULT_UI_TEXT_SCALE, TRANSCRIPT_WIDTH_MAX, TRANSCRIPT_WIDTH_MIN,
+    TRANSCRIPT_WIDTH_WIDE, normalize_transcript_width,
 };
 pub use fintwind_client::theme::{ThemePreference, ThemeScheme};
 
@@ -18,6 +19,10 @@ pub use fintwind_client::theme::{ThemePreference, ThemeScheme};
 static UI_TEXT_SCALE: AtomicU32 = AtomicU32::new(0);
 /// The user's code text scale, stored as raw f32 bits.
 static CODE_TEXT_SCALE: AtomicU32 = AtomicU32::new(0);
+/// The transcript column's maximum content width in logical pixels, stored as
+/// raw f32 bits. Read by the composer, transcript rows, and the navigation
+/// rail so one setting keeps every centered column aligned.
+static TRANSCRIPT_WIDTH: AtomicU32 = AtomicU32::new(0);
 /// Current UI font family. Mutex rather than a GPUI global for the same
 /// reason as the text scales: flatteners deep in the tree read this without
 /// an App.
@@ -50,6 +55,25 @@ pub fn code_text_scale() -> f32 {
     let bits = CODE_TEXT_SCALE.load(Ordering::Relaxed);
     if bits == 0 {
         DEFAULT_CODE_TEXT_SCALE
+    } else {
+        f32::from_bits(bits)
+    }
+}
+
+/// Publish the transcript width preference so every later frame centers its
+/// content column to it. The value is normalized into the presets' range and
+/// snapped to the step, so the getter never reports an out-of-range width.
+/// Call again after the user changes the setting.
+pub fn set_transcript_width(width: f32) {
+    TRANSCRIPT_WIDTH.store(normalize_transcript_width(width).to_bits(), Ordering::Relaxed);
+}
+
+/// The current transcript column maximum content width, in the presets' range.
+/// Falls back to the default before any setting is published.
+pub fn transcript_width() -> f32 {
+    let bits = TRANSCRIPT_WIDTH.load(Ordering::Relaxed);
+    if bits == 0 {
+        DEFAULT_TRANSCRIPT_WIDTH
     } else {
         f32::from_bits(bits)
     }
@@ -163,6 +187,54 @@ impl TextSizePreset {
                 (a.scale() - scale)
                     .abs()
                     .partial_cmp(&(b.scale() - scale).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .unwrap_or(Self::Default)
+    }
+}
+
+/// The transcript-width presets the appearance page offers. Values sit inside
+/// the persisted range and are multiples of `TRANSCRIPT_WIDTH_STEP` so a
+/// hand-edited width can be labelled with its closest preset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TranscriptWidthPreset {
+    Compact,
+    Default,
+    Wide,
+    ExtraWide,
+}
+
+impl TranscriptWidthPreset {
+    pub const ALL: [Self; 4] = [Self::Compact, Self::Default, Self::Wide, Self::ExtraWide];
+
+    pub fn width(self) -> f32 {
+        match self {
+            Self::Compact => TRANSCRIPT_WIDTH_MIN,
+            Self::Default => DEFAULT_TRANSCRIPT_WIDTH,
+            Self::Wide => TRANSCRIPT_WIDTH_WIDE,
+            Self::ExtraWide => TRANSCRIPT_WIDTH_MAX,
+        }
+    }
+
+    pub fn label(self) -> String {
+        let key = match self {
+            Self::Compact => "settings.transcript_width_compact",
+            Self::Default => "settings.transcript_width_default",
+            Self::Wide => "settings.transcript_width_wide",
+            Self::ExtraWide => "settings.transcript_width_extra_wide",
+        };
+        crate::i18n::translate(key)
+    }
+
+    /// The preset a stored width was picked from, so the chip can label a
+    /// hand-edited setting with the closest option instead of an odd number.
+    pub fn for_width(width: f32) -> Self {
+        Self::ALL
+            .into_iter()
+            .min_by(|a, b| {
+                (a.width() - width)
+                    .abs()
+                    .partial_cmp(&(b.width() - width).abs())
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .unwrap_or(Self::Default)

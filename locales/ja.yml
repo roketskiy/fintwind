@@ -1073,7 +1073,6 @@ source_control.title: レビュー
 source_control.loading: Git ステータスを読み込み中…
 source_control.refresh: 更新
 source_control.follow_session: セッションに追従
-source_control.pinned: 固定中
 source_control.staged: ステージ済み %{count}
 source_control.unstaged: 未ステージ %{count}
 source_control.clean: 未コミットの変更はありません

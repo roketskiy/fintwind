@@ -929,13 +929,11 @@ impl Fintwind {
             )
     }
 
-    /// The workspace block: project, directory, branch, and the workspace
-    /// picker that doubles as the follow/pin indicator.
+    /// The workspace block: the workspace picker (which shows the current
+    /// directory and opens the switcher) above the branch row.
     fn render_source_control_workspace_block(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
-        let workspace = self.review_workspace_path().map(Path::to_path_buf);
         let status = self.source_control_status.as_ref();
-        let project_name = self.source_control_project_name();
         let branch_label = match status.map(|status| status.branch.as_deref()) {
             Some(Some(branch)) => branch.to_owned(),
             Some(None) => tr!("source_control.detached_head"),
@@ -970,28 +968,9 @@ impl Fintwind {
                         .child(tr!("source_control.loading")),
                 )
             })
-            .child(
-                div()
-                    .text_size(ui_px(13.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.text)
-                    .child(project_name),
-            )
-            .when_some(workspace.as_deref(), |column, path| {
-                column.child(
-                    div()
-                        .id("source-control-workspace-path")
-                        .text_size(ui_px(11.0))
-                        .text_color(theme.text_tertiary)
-                        .tooltip(Tooltip::text(path.to_string_lossy().to_string()))
-                        .child(compact_path(path)),
-                )
-            })
             .when(status.is_some(), |column| {
                 column.child(self.render_source_control_branch_row(branch_label, cx))
             })
-            // The workspace picker doubles as the follow/pin indicator: its
-            // label states the mode, so no separate status row is needed.
             .child(self.render_source_control_workspace_menu(cx))
     }
 
@@ -1171,15 +1150,7 @@ impl Fintwind {
                         theme.text_tertiary
                     },
                 )
-                .label(format!(
-                    "{} · {}",
-                    if pinned {
-                        tr!("source_control.pinned")
-                    } else {
-                        tr!("source_control.follow_session")
-                    },
-                    current
-                ))
+                .label(current)
                 .max_label_width(160.0)
                 .height(px(24.0))
                 .background(theme.sidebar)
@@ -1798,37 +1769,6 @@ impl Fintwind {
             }))
             .child(card);
         Some(gpui::deferred(layer).with_priority(4).into_any_element())
-    }
-
-    /// The name above the directory: the pinned workspace's project when one
-    /// matches, its folder name otherwise, or the followed session's project.
-    fn source_control_project_name(&self) -> String {
-        if let Some(override_path) = self.review_workspace_override.as_deref() {
-            if let Some(project) = self
-                .state
-                .projects
-                .iter()
-                .find(|project| project.path == override_path)
-            {
-                if project.is_projectless() {
-                    return tr!("project.without_a_project");
-                }
-                return project.display_name().to_string();
-            }
-            return override_path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| tr!("sidebar.unknown_project"));
-        }
-        self.selected_project()
-            .map(|project| {
-                if project.is_projectless() {
-                    tr!("project.without_a_project")
-                } else {
-                    project.display_name().to_string()
-                }
-            })
-            .unwrap_or_else(|| tr!("sidebar.unknown_project"))
     }
 
     /// The mode's main area: the read-only history banner when a turn diff

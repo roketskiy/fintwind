@@ -2060,8 +2060,6 @@ source_control.refresh:
   en: Refresh
 source_control.follow_session:
   en: Following session
-source_control.pinned:
-  en: Pinned
 source_control.staged:
   en: Staged %{count}
 source_control.unstaged:

@@ -1,5 +1,5 @@
 use super::Fintwind;
-use super::{TOPBAR_HEIGHT, TRAFFIC_LIGHT_CLEARANCE, WorkspaceMode};
+use super::{MODE_RAIL_WIDTH, TOPBAR_HEIGHT, TRAFFIC_LIGHT_CLEARANCE, WorkspaceMode};
 use crate::theme::Theme;
 use crate::ui::{icon, tooltip::Tooltip};
 
@@ -47,10 +47,14 @@ impl Fintwind {
             .border_color(theme.sidebar_border)
             // macOS draws its traffic lights over the bar's left edge; the
             // clearance keeps the first control out from under them.
+            // Elsewhere the controls start at the rail's width so the first
+            // button lines up with the second column's left edge below.
             .when(cfg!(target_os = "macos"), |bar| {
                 bar.pl(px(TRAFFIC_LIGHT_CLEARANCE))
             })
-            .when(!cfg!(target_os = "macos"), |bar| bar.pl(px(10.0)))
+            .when(!cfg!(target_os = "macos"), |bar| {
+                bar.pl(px(MODE_RAIL_WIDTH))
+            })
             .child(
                 div()
                     .flex_none()

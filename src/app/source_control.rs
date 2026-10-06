@@ -877,14 +877,13 @@ impl Fintwind {
     }
 
     /// The action bar below the file groups: the commit button, which opens
-    /// the commit dialog. Disabled while nothing is staged or a write is in
-    /// flight.
+    /// the commit dialog. The dialog decides what is possible from there —
+    /// plain commit needs staged content, "stage all and commit" only needs
+    /// a dirty tree — so the bar itself only gates on writes in flight.
     fn render_source_control_commit_bar(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let writable = !self.review_is_history_snapshot();
-        let ready = writable
-            && self.source_control_busy.is_none()
-            && !self.source_control_staged_paths().is_empty();
+        let ready = writable && self.source_control_busy.is_none();
         div()
             .flex_none()
             .px(px(10.0))
@@ -1446,6 +1445,10 @@ impl Fintwind {
         let has_provider = self.provider_probe().is_some();
         let can_generate = !busy && staged && has_session && has_provider;
         let can_commit = !busy && staged && has_message;
+        // "Stage all and commit" brings its own changes, so it only needs a
+        // dirty tree — staged or not — plus a message.
+        let can_stage_all_commit =
+            !busy && has_message && (staged || !self.source_control_unstaged_paths().is_empty());
         let weak = cx.entity().downgrade();
         let message = self.source_control_commit_input.clone();
 
@@ -1529,6 +1532,11 @@ impl Fintwind {
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.composer)
+                    // Code-mode editors inherit the caller's text metrics;
+                    // pin them to the app's standard so the message does not
+                    // render at the root default size.
+                    .text_size(ui_px(13.5))
+                    .line_height(ui_px(22.0))
                     .child(message),
             )
             .child(
@@ -1566,7 +1574,7 @@ impl Fintwind {
                         "source-control-commit-stage-all-run",
                         tr!("source_control.stage_all_commit"),
                         false,
-                        can_commit,
+                        can_stage_all_commit,
                         |this, cx| {
                             this.close_source_control_commit_dialog(cx);
                             this.commit_source_control(true, false, cx);

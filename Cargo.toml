@@ -19,6 +19,10 @@ members = [
     "crates/fintwind-core",
     "crates/fintwind-daemon",
     "crates/fintwind-protocol",
+    "crates/fintwind-relay",
+    "crates/fintwind-remote-crypto",
+    "crates/fintwind-remote-host",
+    "crates/fintwind-remote-protocol",
 ]
 default-members = [
     ".",
@@ -26,6 +30,10 @@ default-members = [
     "crates/fintwind-core",
     "crates/fintwind-daemon",
     "crates/fintwind-protocol",
+    "crates/fintwind-relay",
+    "crates/fintwind-remote-crypto",
+    "crates/fintwind-remote-host",
+    "crates/fintwind-remote-protocol",
 ]
 resolver = "2"
 

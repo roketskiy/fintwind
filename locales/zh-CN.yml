@@ -764,6 +764,7 @@ session.stopped: 已停止
 session.turn_completed: 本轮已完成
 session.stopped_before_response: 智能体在返回回复前停止了
 session.provider_disconnected: 与提供方的连接在返回回复前中断了
+session.turn_failed: 本轮未返回响应即告结束
 session.steer_rejected: 无法向智能体补充指示（%{error}）；消息已排队，将作为后续消息发送
 session.steer_rejected_plain: 无法向智能体补充指示；消息已排队，将作为后续消息发送
 session.compaction_requested: 已请求压缩上下文：提供方将在下一个安全节点开始总结

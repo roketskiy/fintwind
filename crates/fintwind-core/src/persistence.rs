@@ -1886,6 +1886,7 @@ mod tests {
         ComposerDraft {
             text: text.to_owned(),
             attachments: Vec::new(),
+            references: Vec::new(),
         }
     }
 
@@ -2047,6 +2048,7 @@ mod tests {
                 is_image: true,
                 blob_reference: None,
             }],
+            references: Vec::new(),
         };
         let mut drafts = ComposerDrafts::default();
         drafts.set(ComposerDraftKey::NewSession(project_id), draft.clone());
@@ -2414,6 +2416,7 @@ mod tests {
                     is_image: true,
                     blob_reference: Some(reference),
                 }],
+                references: Vec::new(),
             },
         );
         ComposerDraftStore::for_state_path(&directory.join("app.db"))
@@ -3057,6 +3060,49 @@ mod tests {
         assert!(snippet.ends_with('…'));
         assert!(snippet.contains("100%_needle"));
         assert!(snippet.chars().count() <= SESSION_SEARCH_SNIPPET_CHARS);
+    }
+
+    #[test]
+    fn a_recorded_session_error_survives_a_restart() {
+        // The whole point of writing an error into the transcript: a reader
+        // who was away from the machine still finds the reason after a quit
+        // and relaunch, where the toast would have been long gone.
+        let directory = temporary_directory();
+        let store = store_in(&directory);
+        let mut state = PersistedState::fresh(PathBuf::from("/tmp/project"));
+        state.sessions[0].begin_turn("Do the work");
+        state.sessions[0].push_message(MessageRole::User, "Do the work");
+        state.sessions[0].finish_active_turn(crate::model::TurnStatus::Completed);
+        let session_id = state.sessions[0].id;
+        // What `record_session_error` leaves behind: a system notice at the
+        // tail of the conversation.
+        state
+            .session_mut(session_id)
+            .unwrap()
+            .push_message(MessageRole::System, "The provider connection was lost");
+        store.save(&mut state).unwrap();
+
+        let mut reopened = store_in(&directory).load().unwrap();
+        let reopened_session = reopened
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .expect("the session survived");
+        store.hydrate(reopened_session).unwrap();
+
+        let notices = reopened_session
+            .messages
+            .iter()
+            .filter(|message| message.role == MessageRole::System)
+            .map(|message| message.content.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(notices, vec!["The provider connection was lost"]);
+        assert_eq!(
+            reopened_session.messages.last().map(|m| m.role),
+            Some(MessageRole::System),
+            "the notice stays at the tail, where the failure happened"
+        );
+        fs::remove_dir_all(directory).ok();
     }
 
     #[test]

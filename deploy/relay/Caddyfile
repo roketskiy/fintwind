@@ -1,0 +1,30 @@
+# relay.fintwind.xyz — public TLS edge for the Fintwind remote-control relay.
+#
+# Deployment mode: Cloudflare Proxied (orange cloud). Cloudflare terminates
+# the client-facing TLS; this file points Caddy at the Cloudflare Origin CA
+# certificate for the Cloudflare-to-origin hop. SSL/TLS mode in the
+# Cloudflare dashboard MUST be "Full (strict)".
+#
+# Trust note (architecture document, 隐私与数据最小化): with the proxy on,
+# Cloudflare is a second TLS terminator and metadata observer. It sees the
+# outer wire frames (ciphertext + routing metadata) but never the
+# end-to-end plaintext, and it never holds host/device private keys.
+# Recorded in docs/remote-control-m0-freeze.md, 部署锚点.
+
+relay.fintwind.xyz {
+	encode zstd gzip
+
+	# Cloudflare Origin CA: issued in the dashboard (SSL/TLS -> Origin
+	# Server), 15-year validity, renewed manually. ACME is deliberately
+	# not used here — HTTP-01 cannot reach the origin through the proxy.
+	tls /etc/ssl/fintwind/origin-cert.pem /etc/ssl/fintwind/origin-key.pem
+
+	# The relay answers on loopback only; this file is the only public door.
+	reverse_proxy 127.0.0.1:8090
+
+	header {
+		Strict-Transport-Security "max-age=31536000; include-subdomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+	}
+}

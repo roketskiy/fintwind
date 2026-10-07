@@ -1055,6 +1055,30 @@ fn message_menu_items(
         },
     ));
 
+    // A quote keeps what was read — the selection when one covers part of the
+    // message, the whole message otherwise — and stages it as a chip instead
+    // of replacing what the composer already holds, which is what
+    // "copy to composer" is for.
+    let quote_text = selection
+        .selection
+        .borrow()
+        .selected_text()
+        .unwrap_or_else(|| content.to_owned());
+    if !quote_text.trim().is_empty() {
+        let fintwind = fintwind.clone();
+        let role = message_role_label(role);
+        items.push(MenuItem::new(
+            tr!("quote.quote_message"),
+            move |window, cx| {
+                let reference = quote::message_reference(&role, &quote_text);
+                let _ = fintwind.update(cx, |this, cx| {
+                    this.stage_composer_reference_with_focus(reference, window, cx);
+                });
+            },
+        )
+        .icon("icons/message-square-text.svg"));
+    }
+
     if role == MessageRole::User && user_message_rewind.ready().is_none() {
         let composer = composer.clone();
         let edit_content = content.to_owned();
@@ -1127,6 +1151,17 @@ fn message_menu_items(
     }
 
     items
+}
+
+/// The attribution a quoted message carries into the prompt. A reader already
+/// sees these words in the transcript, so the chip says who spoke rather than
+/// exposing a protocol name.
+fn message_role_label(role: MessageRole) -> String {
+    match role {
+        MessageRole::User => tr!("quote.role_user"),
+        MessageRole::Assistant => tr!("quote.role_assistant"),
+        _ => String::new(),
+    }
 }
 
 pub(super) fn fenced_code(content: &str) -> Option<String> {

@@ -14,8 +14,7 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
     ScrollHandle, SharedString, StyledText, Subscription, Task, TextLayout, TextRun,
     UTF16Selection, UnderlineStyle, Window, actions, div, fill, point, prelude::*, px, size,
-};
-use unicode_segmentation::UnicodeSegmentation;
+};use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::Theme;
 
@@ -561,6 +560,11 @@ pub struct ComposerInput {
     history: EditHistory,
     external_context_menu_focus_holds: usize,
     context_menu: ContextMenuHandle,
+    /// Quotes the selection into the composer, set only on code-mode fields
+    /// that sit in the right panel. The text field owns context menus, but the
+    /// composer state it feeds lives on the root entity, so the callback is
+    /// supplied by whoever builds the editor rather than wired inside.
+    quote_selection: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     blink_cursor: Entity<BlinkCursor>,
     _subscriptions: Vec<Subscription>,
 }
@@ -626,6 +630,7 @@ impl ComposerInput {
             selected_word_range: None,
             history: EditHistory::default(),
             external_context_menu_focus_holds: 0,
+            quote_selection: None,
             context_menu: {
                 // The menu takes real focus while open, so the composer holds
                 // its caret visible for the duration — otherwise right-clicking
@@ -723,6 +728,15 @@ impl ComposerInput {
     /// attachments outside the text decide whether that blank prompt is real.
     pub fn submit_empty(mut self) -> Self {
         self.submit_empty = true;
+        self
+    }
+
+    /// Quote the selection into the composer, as the code editor's context
+    /// menu item does. Set only where the text field sits over a real file the
+    /// composer can reference; the quote target lives on the root entity, so
+    /// the field only forwards the request.
+    pub fn quote_selection(mut self, handler: impl Fn(&mut Window, &mut App) + 'static) -> Self {
+        self.quote_selection = Some(Rc::new(handler));
         self
     }
 
@@ -2395,6 +2409,7 @@ impl Render for ComposerInput {
             })
             .child(InputElement { input });
 
+        let quote_selection = self.quote_selection.clone();
         context_menu(
             div().w_full().child(field).children(scrollbar),
             "composer-context-menu",
@@ -2413,6 +2428,20 @@ impl Render for ComposerInput {
                     .read_from_clipboard()
                     .and_then(|item| item.text())
                     .is_some();
+
+                // A code editor over a real file offers quoting the selection
+                // into the composer; every other field keeps the plain menu.
+                // The item only appears when a target is wired, so the plain
+                // composer's menu is exactly what it was.
+                let quote_item = quote_selection.as_ref().map(|quote| {
+                    let quote = quote.clone();
+                    MenuItem::new(
+                        tr!("quote.quote_selection"),
+                        move |window, cx| quote(window, cx),
+                    )
+                    .icon("icons/file-bottom-left-arrow.svg")
+                    .disabled(!has_selection)
+                });
 
                 // Call the editing methods directly rather than dispatching the
                 // actions: by the time an item runs, focus is still unwinding
@@ -2462,6 +2491,9 @@ impl Render for ComposerInput {
                     )
                     .disabled(!has_content || all_selected),
                 ]
+                .into_iter()
+                .chain(quote_item)
+                .collect()
             },
         )
     }

@@ -465,6 +465,13 @@ common.copy_selection: 選択範囲をコピー
 common.copy_to_composer: 入力欄にコピー
 common.copy_code: コードをコピー
 common.copy_expression: 数式をコピー
+quote.add_title: 参照を追加
+quote.add_file: ファイルを参照…
+quote.add_file_prompt: 参照するファイルを選択
+quote.quote_selection: 選択範囲を引用
+quote.quote_message: 入力欄に引用
+quote.role_user: ユーザー
+quote.role_assistant: アシスタント
 common.cancel: キャンセル
 common.send: 送信
 

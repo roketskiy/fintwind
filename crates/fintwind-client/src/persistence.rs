@@ -26,7 +26,7 @@ use fintwind_protocol::theme::{ThemePreference, ThemeScheme};
 
 pub use fintwind_protocol::persistence::{
     ComposerDraft, ComposerDraftAttachment, ComposerDraftChange, ComposerDraftKey,
-    ComposerDraftTarget, ComposerDrafts, SessionMessageMatch,
+    ComposerDraftReference, ComposerDraftTarget, ComposerDrafts, SessionMessageMatch,
 };
 
 const STATE_VERSION: u32 = 5;

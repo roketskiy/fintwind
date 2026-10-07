@@ -1444,6 +1444,11 @@ pub struct Fintwind {
     /// Files dropped onto the composer, drawn as chips above the input and
     /// drained into the next submission.
     composer_attachments: Vec<ComposerAttachment>,
+    /// Quotes of selected code, chat messages and files, drawn as chips above
+    /// the input and folded into the next submission's prompt text. Unlike
+    /// attachments these never leave on the `files` channel: a reference is
+    /// attributed text the provider reads, not an upload.
+    composer_references: Vec<quote::ComposerReference>,
     /// Window-modal expansion of an image attachment. The path is already
     /// cached attachment metadata; render never probes the filesystem.
     image_preview: Option<image_preview::ImagePreviewState>,
@@ -2139,6 +2144,7 @@ mod mcp_page;
 mod native_sessions;
 mod providers_fetch;
 mod providers_page;
+mod quote;
 mod render;
 mod right_panel;
 mod runtime;
@@ -2758,6 +2764,7 @@ impl Fintwind {
         let crate::persistence::ComposerDraft {
             text: initial_composer_text,
             attachments: initial_composer_attachments,
+            references: initial_composer_references,
         } = initial_composer_draft;
         if !initial_composer_text.is_empty() {
             composer.update(cx, |input, cx| input.set_content(initial_composer_text, cx));
@@ -2765,6 +2772,10 @@ impl Fintwind {
         let composer_attachments = initial_composer_attachments
             .into_iter()
             .map(ComposerAttachment::from)
+            .collect();
+        let composer_references = initial_composer_references
+            .iter()
+            .map(quote::ComposerReference::from)
             .collect();
         let probes = vec![ProviderProbe {
             installed: false,
@@ -3321,6 +3332,8 @@ impl Fintwind {
                 composer_drafts,
                 composer_draft_store,
                 composer_draft_save_generation: 0,
+                composer_attachments,
+                composer_references,
                 command_palette: command_palette::CommandPaletteUi::new(command_palette_search),
                 model_search,
                 branch_search,
@@ -3380,7 +3393,6 @@ impl Fintwind {
                 mention_file_index_path: None,
                 composer_sources_stale: false,
                 composer_autocomplete: autocomplete::AutocompleteUi::new(),
-                composer_attachments,
                 image_preview: None,
                 image_preview_generation: 0,
                 remote_images: RefCell::new(HashMap::new()),

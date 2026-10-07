@@ -97,7 +97,7 @@ pub(super) fn selection_reference(
     };
     ComposerReference {
         kind: ReferenceKind::Selection,
-        label: SharedString::from(format!("引用代码 · {path} {span}")),
+        label: SharedString::from(format!("{path} {span}")),
         block: format!("引用代码 {path}（{span}）：\n```{language}\n{text}\n```\n"),
     }
 }
@@ -105,10 +105,9 @@ pub(super) fn selection_reference(
 /// A quote of a transcript message — its whole visible text or the part the
 /// reader selected — attributed with the speaker's role.
 pub(super) fn message_reference(role: &str, text: &str) -> ComposerReference {
-    let preview = first_line(text);
     ComposerReference {
         kind: ReferenceKind::Message,
-        label: SharedString::from(format!("引用{role}消息 · {preview}")),
+        label: SharedString::from(message_preview(text)),
         block: message_block(role, text),
     }
 }
@@ -118,7 +117,7 @@ pub(super) fn message_reference(role: &str, text: &str) -> ComposerReference {
 pub(super) fn file_reference(path: &str) -> ComposerReference {
     ComposerReference {
         kind: ReferenceKind::File,
-        label: SharedString::from(format!("引用文件 · {path}")),
+        label: SharedString::from(path),
         block: format!("引用文件 {path}\n"),
     }
 }
@@ -143,6 +142,22 @@ fn message_block(role: &str, text: &str) -> String {
         block.push('\n');
     }
     block
+}
+
+/// A chip labels a message quote with its opening words, clipped so one long
+/// paragraph cannot widen the row. The chip's icon already says it is a
+/// message; the label only has to say which one.
+fn message_preview(text: &str) -> String {
+    const PREVIEW_CHARS: usize = 24;
+    let line = first_line(text).trim();
+    let clipped: String = line.chars().take(PREVIEW_CHARS + 1).collect();
+    if clipped.chars().count() > PREVIEW_CHARS {
+        let mut preview: String = clipped.chars().take(PREVIEW_CHARS).collect();
+        preview.push('…');
+        preview
+    } else {
+        clipped
+    }
 }
 
 /// The first line of a quote, for a chip label that previews the source
@@ -191,14 +206,14 @@ mod tests {
     #[test]
     fn selection_reference_attributes_file_language_and_lines() {
         let single = selection_reference("src/build.rs", "rust", (8, 8), "fn main() {}");
-        assert_eq!(single.label.as_ref(), "引用代码 · src/build.rs 第 8 行");
+        assert_eq!(single.label.as_ref(), "src/build.rs 第 8 行");
         assert_eq!(
             single.block,
             "引用代码 src/build.rs（第 8 行）：\n```rust\nfn main() {}\n```\n"
         );
 
         let span = selection_reference("app.py", "python", (10, 13), "a = 1\nb = 2");
-        assert_eq!(span.label.as_ref(), "引用代码 · app.py 第 10–13 行");
+        assert_eq!(span.label.as_ref(), "app.py 第 10–13 行");
         assert_eq!(
             span.block,
             "引用代码 app.py（第 10–13 行）：\n```python\na = 1\nb = 2\n```\n"
@@ -208,20 +223,28 @@ mod tests {
     #[test]
     fn message_reference_quotes_every_line_with_role_attribution() {
         let reference = message_reference("用户", "你好\n请引用这段");
-        assert_eq!(reference.label.as_ref(), "引用用户消息 · 你好");
+        assert_eq!(reference.label.as_ref(), "你好");
         assert_eq!(reference.block, "引用用户消息：\n> 你好\n> 请引用这段\n");
+    }
+
+    #[test]
+    fn message_reference_label_clips_a_long_first_line() {
+        let long = "一".repeat(80);
+        let reference = message_reference("助手", &long);
+        assert_eq!(reference.label.chars().count(), 25);
+        assert!(reference.label.ends_with('…'));
     }
 
     #[test]
     fn message_reference_label_skips_blank_leading_lines() {
         let reference = message_reference("助手", "\n\n  正文");
-        assert_eq!(reference.label.as_ref(), "引用助手消息 ·   正文");
+        assert_eq!(reference.label.as_ref(), "正文");
     }
 
     #[test]
     fn file_reference_names_the_path_only() {
         let reference = file_reference("src/main.rs");
-        assert_eq!(reference.label.as_ref(), "引用文件 · src/main.rs");
+        assert_eq!(reference.label.as_ref(), "src/main.rs");
         assert_eq!(reference.block, "引用文件 src/main.rs\n");
     }
 

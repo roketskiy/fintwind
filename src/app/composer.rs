@@ -1934,10 +1934,27 @@ impl Fintwind {
             .drain(..)
             .map(MessageAttachment::from)
             .collect::<Vec<_>>();
-        let Some(prompt) = submission_text(prompt, attachments.len()) else {
+        // Quotes ride in the prompt text, ahead of what was typed: the provider
+        // reads one attributed block per chip, then the instruction itself.
+        let references_block = quote::references_block(&self.composer_references);
+        let references_count = self.composer_references.len();
+        self.composer_references.clear();
+        // The typed text decides whether there is anything to send; a staged
+        // chip alone can carry a submission, the same way an attachment does.
+        // Written as a `let-else` rather than `?` because this is the point
+        // where an empty composer is refused, not a plumbing early-exit.
+        #[allow(clippy::question_mark)]
+        let Some(prompt) = submission_text(prompt, attachments.len() + references_count) else {
             return None;
         };
         self.discard_current_composer_draft(cx);
+        let prompt = if references_block.is_empty() {
+            prompt
+        } else if prompt.is_empty() {
+            references_block
+        } else {
+            format!("{references_block}\n\n{prompt}")
+        };
         Some(ComposerSubmission {
             prompt,
             display_content: None,
@@ -1965,8 +1982,7 @@ impl Fintwind {
     /// The staged-attachment chips above the input: a thumbnail tile per
     /// image, a file-type icon and basename for everything else, each with a
     /// floating remove button — T3 Code's attachment row in graphite.
-    fn render_composer_attachments(&self, cx: &mut Context<Self>) -> Div {
-        let theme = Theme::current(cx);
+    fn render_composer_attachments(&self, cx: &mut Context<Self>) -> Div {        let theme = Theme::current(cx);
         let mut row = div()
             .px(px(14.0))
             .pt(px(2.0))
@@ -2140,7 +2156,271 @@ impl Fintwind {
         row
     }
 
+    /// Stage one quote as a chip above the input. Identical sources collapse
+    /// into one chip — re-selecting the same lines quotes it once — and the
+    /// stage is refused while a turn is still starting so a chip cannot be
+    /// captured by a submission that has not reached the provider yet.
+    pub(super) fn stage_composer_reference(&mut self, reference: quote::ComposerReference) -> bool {
+        if self.composer_references.contains(&reference) {
+            return false;
+        }
+        self.composer_references.push(reference);
+        true
+    }
+
+    /// Stage one quote, then carry the composer's focus so the next keystroke
+    /// lands where the reader just quoted from. Menu paths build the chip and
+    /// call this instead of staging and focusing separately.
+    pub(super) fn stage_composer_reference_with_focus(
+        &mut self,
+        reference: quote::ComposerReference,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.stage_composer_reference(reference) {
+            let focus_handle = self.composer.read(cx).focus();
+            window.focus(&focus_handle, cx);
+            cx.notify();
+        }
+    }
+
+    /// Whether the visible editor holds a selection a code quote can carry.
+    /// Read from cached editor state, so opening the quote menu never touches
+    /// the filesystem or spawns a read.
+    pub(super) fn has_quotable_editor_selection(&self, cx: &App) -> bool {
+        self.visible_right_panel_file_path()
+            .and_then(|path| self.right_panel_file_editors.get(&path))
+            .is_some_and(|editor| {
+                let editor = editor.state.read(cx);
+                !editor.content().is_empty() && !editor.selected_range().is_empty()
+            })
+    }
+
+    /// Quote the given editor's current selection as a chip, attributed with
+    /// its file and the 1-based line span the range covers. The path is
+    /// explicit so a context menu opened on a background file quotes that
+    /// file, not whichever one the panel last showed.
+    pub(super) fn quote_editor_selection(
+        &mut self,
+        relative_path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(editor) = self.right_panel_file_editors.get(relative_path) else {
+            return false;
+        };
+        let (text, range, content) = {
+            let editor = editor.state.read(cx);
+            let range = editor.selected_range();
+            if range.is_empty() {
+                return false;
+            }
+            (
+                editor.content()[range.clone()].to_owned(),
+                range,
+                editor.content().to_owned(),
+            )
+        };
+        if text.trim().is_empty() {
+            return false;
+        }
+        let language = super::right_panel::file_highlighter_language(relative_path);
+        let lines = quote::line_span(&content, &range);
+        let reference = quote::selection_reference(relative_path, language, lines, &text);
+        let staged = self.stage_composer_reference(reference);
+        if staged {
+            self.schedule_composer_draft_save(cx);
+            let focus = self.composer.read(cx).focus();
+            window.focus(&focus, cx);
+            cx.notify();
+        }
+        staged
+    }
+
+    /// The composer's quote entry: a plus chip opening the quote menu, the
+    /// affordance Ely's PromptInput gives its paperclip. A quote names a file
+    /// or carries a selection as text — it never uploads bytes, so this menu
+    /// stages reference chips instead of copying files into the daemon store.
+    fn render_composer_quote_entry(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let weak = cx.entity().downgrade();
+        let handle = self.menu_handle("composer-quote", cx);
+        let quotable = self.has_quotable_editor_selection(cx);
+        let chip = MenuChip::new("composer-quote")
+            .icon("icons/plus.svg", theme.text_tertiary)
+            .label(String::new())
+            .caret(false)
+            .icon_only(true)
+            .tooltip(tr!("quote.add_title"))
+            .selected(handle.is_open());
+        dropdown_menu(
+            chip,
+            "composer-quote-menu",
+            &handle,
+            MenuAlign::AboveLeft,
+            move |_| {
+                let quote_file = weak.clone();
+                let quote_selection = weak.clone();
+                vec![
+                    MenuItem::new(tr!("quote.add_file"), move |window, cx| {
+                        let _ = quote_file.update(cx, |this, cx| {
+                            this.quote_file_from_picker(window, cx);
+                        });
+                    })
+                    .icon("icons/file.svg"),
+                    MenuItem::Separator,
+                    MenuItem::new(tr!("quote.quote_selection"), move |window, cx| {
+                        let _ = quote_selection.update(cx, |this, cx| {
+                            this.quote_visible_editor_selection(window, cx);
+                        });
+                    })
+                    .icon("icons/file-bottom-left-arrow.svg")
+                    .disabled(!quotable),
+                ]
+            },
+        )
+    }
+
+    /// Open the system file picker and quote every path it returns. The quote
+    /// names the file and the agent reads it, so no bytes cross the wire here.
+    pub(super) fn quote_file_from_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: true,
+            multiple: true,
+            prompt: Some(tr!("quote.add_file_prompt").into()),
+        });
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(Some(paths))) = receiver.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| this.stage_file_references(&paths, cx));
+        })
+        .detach();
+        let focus = self.composer.read(cx).focus();
+        window.focus(&focus, cx);
+    }
+
+    /// Stage one file reference per picked path, attributed with its name
+    /// relative to the workspace so a quoted path reads the way the file tree
+    /// shows it.
+    pub(super) fn stage_file_references(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        let root = self.selected_workspace_path().map(std::path::Path::to_path_buf);
+        let mut staged = false;
+        for path in paths {
+            let mention = root
+                .as_deref()
+                .and_then(|root| path.strip_prefix(root).ok())
+                .filter(|relative| !relative.as_os_str().is_empty())
+                .unwrap_or(path)
+                .display()
+                .to_string();
+            staged |= self.stage_composer_reference(quote::file_reference(&mention));
+        }
+        if staged {
+            self.schedule_composer_draft_save(cx);
+            cx.notify();
+        }
+    }
+
+    /// The quote menu's code entry: quote whatever the right panel's active
+    /// editor is showing, so the menu needs no file of its own.
+    fn quote_visible_editor_selection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(relative_path) = self.visible_right_panel_file_path() else {
+            return;
+        };
+        self.quote_editor_selection(&relative_path, window, cx);
+    }
+
+    /// The staged-reference chips above the input: one pill per quote, each
+    /// with a source icon, a truncated label and a remove button — Ely's
+    /// PromptInput context row, with the palette's own chip geometry.
+    fn render_composer_references(&self, cx: &mut Context<Self>) -> Div {
+        let theme = Theme::current(cx);
+        let mut row = div()
+            .px(px(14.0))
+            .pt(px(2.0))
+            .pb(px(8.0))
+            .flex()
+            .flex_wrap()
+            .gap(px(6.0));
+        for (index, reference) in self.composer_references.iter().enumerate() {
+            let menu = self.menu_handle(format!("composer-reference-{index}-menu"), cx);
+            let chip = div()
+                .id(SharedString::from(format!("composer-reference-{index}")))
+                .h(px(24.0))
+                .max_w(px(320.0))
+                .pl(px(8.0))
+                .pr(px(4.0))
+                .rounded(px(6.0))
+                .border_1()
+                .border_color(theme.border)
+                .bg(theme.inset)
+                .flex()
+                .items_center()
+                .gap(px(6.0))
+                .track_focus(menu.trigger_focus_handle())
+                .tab_index(0)
+                .focus_visible(|style| style.border_color(theme.accent))
+                .tooltip(Tooltip::text(reference.label.clone()))
+                .child(icon(reference.kind.icon(), 12.0, theme.text_tertiary))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .text_size(ui_px(11.5))
+                        .line_height(ui_px(14.0))
+                        .text_color(theme.text_secondary)
+                        .child(reference.label.clone()),
+                )
+                .child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "composer-reference-remove-{index}"
+                        )))
+                        .size(px(18.0))
+                        .rounded(px(5.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor_default()
+                        .tab_index(0)
+                        .focus_visible(|style| style.border_1().border_color(theme.accent))
+                        .hover(|element| element.bg(theme.overlay))
+                        .active(|element| element.bg(theme.overlay_strong))
+                        .child(icon("icons/x.svg", 9.0, theme.text_tertiary))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.remove_composer_reference(index, cx);
+                            cx.stop_propagation();
+                        }))
+                        .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                            if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                this.remove_composer_reference(index, cx);
+                                cx.stop_propagation();
+                            }
+                        })),
+                );
+            row = row.child(chip);
+        }
+        row
+    }
+
+    /// Drop one staged reference and persist the shorter set. A stale index is
+    /// ignored, so a double click across a re-render cannot remove a
+    /// different chip than the one that was aimed at.
+    pub(super) fn remove_composer_reference(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.composer_references.len() {
+            self.composer_references.remove(index);
+            self.schedule_composer_draft_save(cx);
+            cx.notify();
+        }
+    }
+
     /// The pending follow-up queue between the transcript and the composer: a
+    /// single card tucked against the composer's top edge, one row per queued
+    /// message. A row pulls its text back into the composer on click and
+    /// carries steer/remove/more controls on the right.    /// The pending follow-up queue between the transcript and the composer: a
     /// single card tucked against the composer's top edge, one row per queued
     /// message. A row pulls its text back into the composer on click and
     /// carries steer/remove/more controls on the right.
@@ -2533,9 +2813,9 @@ impl Fintwind {
                 .is_armed_for(EscapeStopTarget::for_session(session), Instant::now())
         });
         let has_draft = !self.composer.read(cx).content().trim().is_empty()
-            || !self.composer_attachments.is_empty();
-        // Stop stands in for send, and with a draft waiting it is a pair of
-        // buttons — the row's budget has to pay for whichever it draws.
+            || !self.composer_attachments.is_empty()
+            || !self.composer_references.is_empty();
+        // Stop stands in for send, and with a draft waiting it is a pair of        // buttons — the row's budget has to pay for whichever it draws.
         let paired_send = matches!(submit_action, ComposerSubmitAction::Stop) && has_draft;
         let traits = self.model_traits_for_session();
         let plan = self.composer_row_plan(window, traits.as_ref(), paired_send);
@@ -2596,6 +2876,9 @@ impl Fintwind {
                 .when(!self.composer_attachments.is_empty(), |card| {
                     card.child(self.render_composer_attachments(cx))
                 })
+                .when(!self.composer_references.is_empty(), |card| {
+                    card.child(self.render_composer_references(cx))
+                })
                 .child(div().pt(px(2.0)).child(self.composer.clone()))
                 .child(
                     div()
@@ -2620,6 +2903,7 @@ impl Fintwind {
                         ))
                         .child(self.render_access_control(plan.access_label, cx))
                         .child(self.render_interaction_mode_control(plan.interaction_label, cx))
+                        .child(self.render_composer_quote_entry(cx))
                         .child(div().flex_1())
                         .child(match submit_action {
                             ComposerSubmitAction::Preparing => div()

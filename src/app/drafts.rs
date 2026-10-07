@@ -79,6 +79,11 @@ impl Fintwind {
                 .iter()
                 .map(crate::persistence::ComposerDraftAttachment::from)
                 .collect(),
+            references: self
+                .composer_references
+                .iter()
+                .map(crate::persistence::ComposerDraftReference::from)
+                .collect(),
         }
     }
 
@@ -169,6 +174,11 @@ impl Fintwind {
             .attachments
             .into_iter()
             .map(ComposerAttachment::from)
+            .collect();
+        self.composer_references = draft
+            .references
+            .iter()
+            .map(quote::ComposerReference::from)
             .collect();
         self.composer
             .update(cx, |input, cx| input.set_content(draft.text, cx));

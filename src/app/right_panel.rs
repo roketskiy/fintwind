@@ -445,8 +445,9 @@ fn visible_working_tree_entries(
 }
 
 /// The language name for a file, as understood by [`crate::md::highlight`].
-/// Names the lexer does not know simply render unhighlighted.
-fn file_highlighter_language(relative_path: &str) -> &'static str {
+/// Names the lexer does not know simply render unhighlighted. Shared with the
+/// quote chip's code fence so a quoted block renders in the same language.
+pub(super) fn file_highlighter_language(relative_path: &str) -> &'static str {
     let path = Path::new(relative_path);
     let file_name = path
         .file_name()
@@ -2407,10 +2408,21 @@ impl Fintwind {
         // starts empty and locked, and `read_right_panel_file_into_editor`
         // fills it in from the background executor a frame or two later.
         let language = file_highlighter_language(relative_path);
+        // Quoting a selection into the composer is the one context-menu action
+        // that reaches outside this panel, so the editor hands it to the root
+        // entity: the composer state it stages onto lives there, beside the
+        // attachments and drafts.
+        let quote_target = cx.entity().downgrade();
+        let quoted_path = relative_path.to_owned();
         let state = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .code_editor(Some(language))
                 .read_only(true)
+                .quote_selection(move |window, cx| {
+                    let _ = quote_target.update(cx, |this, cx| {
+                        this.quote_editor_selection(&quoted_path, window, cx);
+                    });
+                })
         });
 
         self.right_panel_file_editors.insert(

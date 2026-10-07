@@ -903,6 +903,20 @@ common.copy_code:
   en: Copy Code
 common.copy_expression:
   en: Copy Expression
+quote.add_title:
+  en: Add reference
+quote.add_file:
+  en: Reference a file…
+quote.add_file_prompt:
+  en: Choose files to reference
+quote.quote_selection:
+  en: Quote selection
+quote.quote_message:
+  en: Quote to composer
+quote.role_user:
+  en: user
+quote.role_assistant:
+  en: assistant
 common.cancel:
   en: Cancel
 common.send:

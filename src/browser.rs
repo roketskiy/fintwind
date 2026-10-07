@@ -978,12 +978,13 @@ mod host {
 
         let webview = unsafe { controller.CoreWebView2() }?;
         // The toolbar has a devtools button, so make sure the runtime agrees
-        // they are available. Everything else stays at WebView2's defaults,
-        // including the status bar: it draws inside the page raster, so the
-        // portal clips it along with everything else, and a link preview on
-        // hover is worth having.
+        // they are available. The status bar is off: it is not part of the page
+        // raster but a native popup the renderer places against the host
+        // window's lower-left corner, so the portal clip never reaches it and
+        // it bleeds over Fintwind's own sidebar on every hovered link.
         if let Ok(settings) = unsafe { webview.Settings() } {
             let _ = unsafe { settings.SetAreDevToolsEnabled(true) };
+            let _ = unsafe { settings.SetIsStatusBarEnabled(false) };
         }
 
         let Callbacks {

@@ -17,17 +17,34 @@ pub struct ComposerDraftAttachment {
     pub blob_reference: Option<String>,
 }
 
+/// A staged quote chip, persisted with the draft so a session switch does
+/// not lose what the reader referenced. The chip's attribution text is
+/// stored whole; the submission rebuilds its prompt text from it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ComposerDraftReference {
+    /// Chip label: the file path, `path:lines` for code, or a message preview.
+    pub label: String,
+    /// The attributed text the submission sends, including its fences.
+    pub block: String,
+    /// Reference kind: `selection`, `message` or `file`. Drafts written
+    /// before this field existed restore as file references.
+    #[serde(default)]
+    pub kind: String,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ComposerDraft {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<ComposerDraftAttachment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub references: Vec<ComposerDraftReference>,
 }
 
 impl ComposerDraft {
     pub fn is_empty(&self) -> bool {
-        self.text.is_empty() && self.attachments.is_empty()
+        self.text.is_empty() && self.attachments.is_empty() && self.references.is_empty()
     }
 }
 

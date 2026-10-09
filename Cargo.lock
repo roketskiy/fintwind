@@ -2142,6 +2142,8 @@ dependencies = [
  "embed-resource",
  "fintwind-client",
  "fintwind-protocol",
+ "fintwind-remote-host",
+ "fintwind-remote-protocol",
  "futures",
  "futures-lite",
  "gpui",
@@ -2149,6 +2151,7 @@ dependencies = [
  "nucleo-matcher",
  "parking_lot",
  "pulldown-cmark",
+ "qrcode",
  "ratex-layout",
  "ratex-parser",
  "ratex-svg",
@@ -2285,6 +2288,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "fintwind-remote-crypto-wasm"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "fintwind-remote-crypto",
+ "fintwind-remote-protocol",
+ "js-sys",
+ "serde_json",
+ "uuid",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "fintwind-remote-host"
 version = "0.1.0"
 dependencies = [
@@ -2296,6 +2312,7 @@ dependencies = [
  "fintwind-protocol",
  "fintwind-remote-crypto",
  "fintwind-remote-protocol",
+ "libc",
  "log",
  "parking_lot",
  "rand 0.8.7",
@@ -2306,6 +2323,7 @@ dependencies = [
  "sha2 0.10.9",
  "tungstenite",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5191,6 +5209,12 @@ checksum = "7f6d64c71eb498fe9eae14ce4ec935c555749aef511cca85b5568910d6e48001"
 dependencies = [
  "bytemuck",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

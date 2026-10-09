@@ -22,7 +22,13 @@ use uuid::Uuid;
 
 /// Explicit remote-control protocol version. Both ends must agree during
 /// the handshake; there is no compatibility fallback.
-pub const REMOTE_PROTOCOL_VERSION: u32 = 1;
+///
+/// v2 adds [`crate::MessageBody::QueryOperationResult`]: a device asks the
+/// host for the recorded outcome of one operation id instead of blindly
+/// retrying a side-effecting operation whose result was lost with the
+/// link. A peer speaking v1 is refused, never downgraded — the relay, the
+/// host and the PWA must all move together.
+pub const REMOTE_PROTOCOL_VERSION: u32 = 2;
 
 /// Upper bound for one wire frame, ciphertext included (M0 resource-table
 /// initial value). The relay enforces this before parsing; endpoints
@@ -92,6 +98,19 @@ pub enum FrameRole {
     Device,
 }
 
+/// What one authenticated connection is for. A host keeps a long-lived
+/// business session and, while pairing, one extra short-lived pairing
+/// channel; the relay keeps the two in separate slots so a pairing can
+/// never displace (or be displaced by) the business session. Absent on
+/// the wire means `session`, which keeps older clients valid.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ConnectionPurpose {
+    #[default]
+    Session,
+    Pairing,
+}
+
 /// Which Noise handshake a `Frame::Handshake` belongs to. Pairing runs
 /// XX once per device; every (re)connect runs KK as a fresh key period.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -142,6 +161,9 @@ pub enum Frame {
         /// unset one must be `None`.
         host_id: Option<Uuid>,
         device_id: Option<Uuid>,
+        /// Which slot this connection occupies. Absent means `session`.
+        #[serde(default)]
+        purpose: ConnectionPurpose,
         /// The one-time challenge exactly as the relay issued it.
         challenge: Base64Bytes,
         /// Ed25519 signature over `challenge`.
@@ -167,7 +189,10 @@ pub enum Frame {
     /// Noise transport of the current key period). The relay preserves
     /// per-direction `seq` order and acks it, but endpoints never trust
     /// `seq` for replay protection: that lives in the Noise session and
-    /// in operation ids.
+    /// in operation ids. The payload repeats `seq` as the authenticated
+    /// `transport_seq`, and a receiver that finds the two disagreeing
+    /// closes the channel — the relay can drop or delay frames, but it
+    /// cannot renumber them undetected.
     Sealed {
         seq: u64,
         host_id: Uuid,
@@ -230,6 +255,49 @@ pub struct PairingInvite {
     pub expires_at_ms: u64,
 }
 
+/// Which relay rule refused a frame.
+///
+/// A refusal is a *routing* fact about one frame, never an endpoint result:
+/// the frame did not reach its endpoint, so nothing was executed, accepted
+/// or acknowledged there.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum RejectedFrameReason {
+    /// The endpoint's relay-side queue was full. The frame was dropped
+    /// before delivery and must be re-derived, never replayed.
+    QueueFull,
+    /// The endpoint is not connected at all.
+    EndpointOffline,
+    /// The routing link for this pair no longer exists.
+    Unlinked,
+    /// The frame exceeded the relay's own size ceiling.
+    Oversized,
+    /// The frame was malformed at the relay.
+    Malformed,
+    /// The relay refused it for a reason it did not classify.
+    Other,
+}
+
+/// The exact frame a relay refused.
+///
+/// A sequence number alone cannot identify a frame: several devices behind
+/// one host each number their own frames, so two devices can hold the same
+/// `seq` at once. The pair is what makes the reference unambiguous — and it
+/// is why the refusal carries a structured reference instead of a suffix
+/// inside a human-readable message that no endpoint may parse.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RejectedFrame {
+    /// The host the refused frame was addressed to.
+    pub host_id: Uuid,
+    /// The device the refused frame was addressed to, when the relay could
+    /// attribute it. `None` means the frame named no endpoint device.
+    pub device_id: Option<Uuid>,
+    /// The refused frame's own relay-visible sequence number.
+    pub seq: u64,
+    pub reason: RejectedFrameReason,
+}
+
 /// Relay-visible control semantics. A `RelayAck` proves the relay received
 /// the frame and nothing more — it is never an endpoint confirmation and
 /// never releases endpoint-side recovery records (architecture: layered
@@ -240,7 +308,15 @@ pub enum ControlFrame {
     RelayAck { acked_seq: u64 },
     Ping { sent_at_ms: u64 },
     Pong { sent_at_ms: u64 },
-    Rejected { code: RejectCode, message: String },
+    Rejected {
+        code: RejectCode,
+        /// Human-readable summary for logs. Never parsed for routing: the
+        /// structured `frame` below is the only authoritative reference.
+        message: String,
+        /// The frame that was refused, when the relay could identify it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame: Option<RejectedFrame>,
+    },
     /// The relay recorded the host's `LinkDevice` declaration. The grant
     /// file on the host stays the source of trust; this only says the
     /// routing link now exists.

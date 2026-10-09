@@ -47,6 +47,9 @@ export const sessions = sqliteTable(
     updatedAt: integer("updated_at").notNull(),
     /** Completion of the most recent assistant turn, unix seconds. */
     lastReplyAt: integer("last_reply_at"),
+    /** Tidied out of the active list; written by its own statement so an
+     *  older projection can never wipe it (0005). */
+    archived: integer("archived", { mode: "boolean" }).notNull().default(false),
   },
   (table) => [
     index("sessions_by_project").on(table.projectId, table.updatedAt),
@@ -106,4 +109,60 @@ export const submissions = sqliteTable(
     data: text("data").notNull(),
   },
   (table) => [index("submissions_by_session").on(table.sessionId)],
+);
+
+/**
+ * The daemon's durable half of the remote queue (0005, 0006).
+ *
+ * One row is one admitted prompt: the operation id the phone knows, the
+ * submission id the submission store knows, and where the prompt belongs.
+ * The prompt text itself lives here and is read only by the daemon at
+ * dispatch; the host and the phone never see it through this table.
+ *
+ * `cancelOperationId` / `cancelState` are the durable cancel binding: a
+ * cancellation the host answered `Accepted` is recorded on the row so a
+ * crash cannot turn it back into a dispatch. `cancelState` is `pending`
+ * until the wait resolves.
+ */
+export const remotePrompts = sqliteTable(
+  "remote_prompts",
+  {
+    operationId: text("operation_id").primaryKey(),
+    submissionId: text("submission_id").notNull(),
+    sessionId: text("session_id").notNull(),
+    deviceId: text("device_id").notNull(),
+    state: text("state").notNull(),
+    summary: text("summary").notNull(),
+    prompt: text("prompt").notNull(),
+    enqueuedAtMs: integer("enqueued_at_ms").notNull(),
+    expiresAtMs: integer("expires_at_ms").notNull(),
+    hostId: text("host_id").notNull().default(""),
+    grantVersion: integer("grant_version").notNull().default(0),
+    cancelOperationId: text("cancel_operation_id"),
+    cancelState: text("cancel_state"),
+  },
+  (table) => [index("remote_prompts_by_session").on(table.sessionId)],
+);
+
+/**
+ * How one prompt's cancellation ended, kept after the prompt row is gone
+ * (0007).
+ *
+ * The prompt row is temporary; an answered cancellation must stay
+ * answerable. The record carries only the ending and the provenance it was
+ * admitted under — never any prompt text.
+ */
+export const remoteCancelTerms = sqliteTable(
+  "remote_cancel_terms",
+  {
+    cancelOperationId: text("cancel_operation_id").primaryKey(),
+    promptOperationId: text("prompt_operation_id").notNull(),
+    submissionId: text("submission_id").notNull(),
+    hostId: text("host_id").notNull(),
+    deviceId: text("device_id").notNull(),
+    grantVersion: integer("grant_version").notNull(),
+    state: text("state").notNull(),
+    settledAtMs: integer("settled_at_ms").notNull(),
+  },
+  (table) => [index("remote_cancel_terms_by_prompt").on(table.promptOperationId)],
 );

@@ -147,6 +147,14 @@ impl DaemonProcess {
         self.client.clone()
     }
 
+    /// The loopback address and bearer token of a daemon this supervisor
+    /// spawned. Another local process that needs to drive the daemon —
+    /// the remote-control host, for one — authenticates with these; the
+    /// token never leaves this process pair.
+    pub fn endpoint(&self) -> (String, String) {
+        (self.client_address.clone(), self.token.clone())
+    }
+
     fn token(&self) -> &str {
         &self.token
     }
@@ -382,6 +390,20 @@ impl DaemonSupervisor {
 
     pub fn client(&self) -> DaemonClient {
         self.inner.target.lock().client()
+    }
+
+    /// Address and token of a daemon this supervisor spawned, for another
+    /// local process (the remote-control host) to authenticate with.
+    /// `None` for an externally managed daemon — its operator supplies
+    /// the endpoint out of band.
+    pub fn local_endpoint(&self) -> Option<(String, String)> {
+        let target = self.inner.target.lock();
+        match &*target {
+            DaemonTarget::Local(process) => Some(process.endpoint()),
+            // A restarting daemon will re-publish through subscribe_clients;
+            // the remote host starts against a settled daemon.
+            DaemonTarget::Remote(_) | DaemonTarget::Restarting(_) => None,
+        }
     }
 
     /// Subscribe to the active daemon connection. The current client is sent

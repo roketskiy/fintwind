@@ -1047,7 +1047,8 @@ impl StateStore {
         let mut sessions = connection
             .prepare(
                 "SELECT id, project_id, title, auto_title, provider, model, status,
-                        imported, native_session_id, created_at, updated_at, last_reply_at
+                        imported, native_session_id, created_at, updated_at, last_reply_at,
+                        archived
                  FROM sessions ORDER BY updated_at",
             )
             .map_err(to_io_error)?;
@@ -1067,6 +1068,7 @@ impl StateStore {
                     row.get::<_, i64>(9)?,
                     row.get::<_, i64>(10)?,
                     row.get::<_, Option<i64>>(11)?,
+                    row.get::<_, bool>(12)?,
                 ))
             })
             .map_err(to_io_error)?
@@ -1169,6 +1171,10 @@ impl StateStore {
         session.context_usage = stored.context_usage;
         session.compaction = stored.compaction;
         session.runtime_event_cursor = stored.runtime_event_cursor;
+        // Tidy-up state survives hydration: an archived session that is
+        // opened still reports as archived, so restoring it is a decision
+        // rather than a side effect of reading it.
+        session.archived = stored.archived;
 
         let mut statement = connection
             .prepare(
@@ -1202,7 +1208,7 @@ impl StateStore {
     /// Persists whatever the app marked as changed, so a streaming turn writes
     /// one session row and a selection change writes no rows at all.
     pub fn save(&self, state: &mut PersistedState) -> io::Result<()> {
-        self.save_with_submission(state, None)
+        self.save_state(state, None, None)
     }
 
     /// The submission and its visible input share the same commit boundary.
@@ -1210,6 +1216,28 @@ impl StateStore {
         &self,
         state: &mut PersistedState,
         submission: Option<&fintwind_protocol::submission::SubmissionRecord>,
+    ) -> io::Result<()> {
+        self.save_state(state, submission, None)
+    }
+
+    /// The submission, the session rows and the remote-queue row share one
+    /// commit. A prompt is "accepted" only when all three are durable
+    /// together, so a crash can never leave a prompt the host believes is
+    /// queued while the daemon has no record of it.
+    pub(crate) fn save_with_submission_and_remote(
+        &self,
+        state: &mut PersistedState,
+        submission: Option<&fintwind_protocol::submission::SubmissionRecord>,
+        remote: Option<&RemotePromptRow>,
+    ) -> io::Result<()> {
+        self.save_state(state, submission, remote)
+    }
+
+    fn save_state(
+        &self,
+        state: &mut PersistedState,
+        submission: Option<&fintwind_protocol::submission::SubmissionRecord>,
+        remote: Option<&RemotePromptRow>,
     ) -> io::Result<()> {
         // Only changed sessions can hold a new inline payload, so the blob walk
         // follows the same set rather than every transcript on every save.
@@ -1377,6 +1405,14 @@ impl StateStore {
                     params![key],
                 )
                 .map_err(to_io_error)?;
+            // A deleted session's queued prompts go with it: nothing that
+            // belonged to it may run anywhere afterwards.
+            transaction
+                .execute(
+                    "DELETE FROM remote_prompts WHERE session_id = ?1",
+                    params![key],
+                )
+                .map_err(to_io_error)?;
             persisted_sessions.remove(id);
         }
 
@@ -1389,6 +1425,35 @@ impl StateStore {
                         submission.session_id.to_string(),
                         tag_of(submission.receipt.state),
                         serde_json::to_string(submission).map_err(to_io_error)?,
+                    ],
+                )
+                .map_err(to_io_error)?;
+        }
+        if let Some(row) = remote {
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO remote_prompts(
+                        operation_id, submission_id, session_id, device_id, state,
+                        summary, prompt, enqueued_at_ms, expires_at_ms,
+                        host_id, grant_version, cancel_operation_id, cancel_state
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    params![
+                        row.operation_id.to_string(),
+                        row.submission_id.to_string(),
+                        row.session_id.to_string(),
+                        row.device_id.to_string(),
+                        row.state,
+                        row.summary,
+                        row.prompt,
+                        row.enqueued_at_ms as i64,
+                        row.expires_at_ms as i64,
+                        row.host_id.to_string(),
+                        row.grant_version as i64,
+                        // The cancel binding is carried, never reset: a
+                        // re-write of the row must not drop a cancellation
+                        // the host already answered `Accepted` for.
+                        row.cancel_operation_id.map(|id| id.to_string()),
+                        row.cancel_state,
                     ],
                 )
                 .map_err(to_io_error)?;
@@ -1489,6 +1554,406 @@ impl StateStore {
         Ok(())
     }
 
+    /// Every remote-admitted prompt still on the books, oldest first.
+    ///
+    /// This is the recovery read: a host that restarts rebuilds its view from
+    /// the daemon's rows instead of trusting its own memory, so a queued
+    /// prompt survives the host going away.
+    pub(crate) fn remote_prompts(&self) -> io::Result<Vec<RemotePromptRow>> {
+        let connection = self.open()?;
+        let mut statement = connection
+            .prepare(
+                "SELECT operation_id, submission_id, session_id, device_id, state,
+                        summary, prompt, enqueued_at_ms, expires_at_ms,
+                        host_id, grant_version, cancel_operation_id, cancel_state
+                 FROM remote_prompts ORDER BY enqueued_at_ms",
+            )
+            .map_err(to_io_error)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok(RemotePromptRow {
+                    operation_id: parse_uuid(&row.get::<_, String>(0)?),
+                    submission_id: parse_uuid(&row.get::<_, String>(1)?),
+                    session_id: parse_uuid(&row.get::<_, String>(2)?),
+                    device_id: parse_uuid(&row.get::<_, String>(3)?),
+                    state: row.get(4)?,
+                    summary: row.get(5)?,
+                    prompt: row.get(6)?,
+                    enqueued_at_ms: row.get::<_, i64>(7)? as u64,
+                    expires_at_ms: row.get::<_, i64>(8)? as u64,
+                    host_id: row.get::<_, String>(9)?,
+                    grant_version: row.get::<_, i64>(10)? as u64,
+                    cancel_operation_id: row
+                        .get::<_, Option<String>>(11)?
+                        .map(|text| parse_uuid(&text)),
+                    cancel_state: row.get(12)?,
+                })
+            })
+            .map_err(to_io_error)?;
+        rows.map(|row| row.map_err(to_io_error)).collect()
+    }
+
+    /// Insert one admitted prompt. Full synchronous durability: this row is
+
+    /// Compare-and-swap a prompt's queue state, so a stale tick cannot
+    /// resurrect one that was cancelled or dispatched meanwhile.
+    pub(crate) fn transition_remote_prompt(
+        &self,
+        operation_id: Uuid,
+        from: &str,
+        to: &str,
+    ) -> io::Result<bool> {
+        let connection = self.open()?;
+        let changed = connection
+            .execute(
+                "UPDATE remote_prompts SET state = ?1 WHERE operation_id = ?2 AND state = ?3",
+                params![to, operation_id.to_string(), from],
+            )
+            .map_err(to_io_error)?;
+        Ok(changed == 1)
+    }
+
+    /// Record that a device's cancel is waiting on this prompt, durably.
+    ///
+    /// This is what makes a cancel survive a host crash: the host answered
+    /// the device `Accepted`, and the binding now lives on the row the
+    /// daemon already owns, so a restart cannot dispatch a prompt whose
+    /// cancellation was promised.
+    ///
+    /// Idempotent for the same cancel operation — a retry of the same
+    /// request records nothing new and reports success — and refuses a
+    /// *different* cancel operation, so two devices cannot both believe
+    /// they hold this prompt's cancellation.
+    pub(crate) fn record_cancel_intent(
+        &self,
+        operation_id: Uuid,
+        cancel_operation_id: Option<Uuid>,
+    ) -> io::Result<CancelIntentOutcome> {
+        // `None` is a host releasing a row on its own initiative: the row
+        // still must not run, but no device operation awaits an outcome, so
+        // the binding is recorded with an empty operation rather than a
+        // borrowed id.
+        let stored = cancel_operation_id
+            .map(|id| id.to_string())
+            .unwrap_or_default();
+        let connection = self.open()?;
+        let existing: Option<Option<String>> = connection
+            .query_row(
+                "SELECT cancel_operation_id FROM remote_prompts WHERE operation_id = ?1",
+                params![operation_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(to_io_error)?;
+        let Some(existing) = existing else {
+            return Ok(CancelIntentOutcome::RowMissing);
+        };
+        if let Some(stored_existing) = existing {
+            // A recorded cancel that is still waiting blocks a different
+            // one; the same one is a retry and succeeds.
+            if stored_existing != stored {
+                return Ok(CancelIntentOutcome::Conflict);
+            }
+            return Ok(CancelIntentOutcome::Recorded);
+        }
+        let changed = connection
+            .execute(
+                "UPDATE remote_prompts SET cancel_operation_id = ?1, cancel_state = 'pending'
+                  WHERE operation_id = ?2 AND cancel_operation_id IS NULL",
+                params![stored, operation_id.to_string()],
+            )
+            .map_err(to_io_error)?;
+        if changed == 1 {
+            Ok(CancelIntentOutcome::Recorded)
+        } else {
+            // Lost a race with a concurrent recorder; read who won.
+            let winner: Option<Option<String>> = connection
+                .query_row(
+                    "SELECT cancel_operation_id FROM remote_prompts WHERE operation_id = ?1",
+                    params![operation_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(to_io_error)?;
+            match winner.flatten() {
+                Some(winner) if winner == stored => Ok(CancelIntentOutcome::Recorded),
+                Some(_) => Ok(CancelIntentOutcome::Conflict),
+                None => Ok(CancelIntentOutcome::RowMissing),
+            }
+        }
+    }
+
+    /// The cancel waiting on one prompt, if any, as the daemon recorded it.
+    ///
+    /// The operation is `None` when the host released the row on its own
+    /// initiative, so no device operation is awaiting an answer.
+    pub(crate) fn cancel_intent(
+        &self,
+        operation_id: Uuid,
+    ) -> io::Result<Option<(Option<Uuid>, String)>> {
+        let connection = self.open()?;
+        let row: Option<(Option<String>, Option<String>)> = connection
+            .query_row(
+                "SELECT cancel_operation_id, cancel_state FROM remote_prompts WHERE operation_id = ?1",
+                params![operation_id.to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(to_io_error)?;
+        Ok(row.and_then(|(operation, state)| {
+            let operation = operation?;
+            let state = state.unwrap_or_else(|| "pending".to_owned());
+            let operation = (!operation.is_empty()).then(|| parse_uuid(&operation));
+            Some((operation, state))
+        }))
+    }
+
+    /// The recorded ending of the cancellation about one prompt, if any.
+    ///
+    /// A device may only remember the prompt's operation id — that is what
+    /// it sent — so the term record is reachable from that side too. The
+    /// newest ending wins, so a prompt cancelled twice reports the one that
+    /// counted.
+    pub(crate) fn cancel_term_by_prompt(
+        &self,
+        prompt_operation_id: Uuid,
+    ) -> io::Result<Option<CancelTerm>> {
+        let connection = self.open()?;
+        let row: Option<CancelTermColumns> = connection
+            .query_row(
+                "SELECT cancel_operation_id, prompt_operation_id, submission_id,
+                        host_id, device_id, grant_version, settled_at_ms, state
+                   FROM remote_cancel_terms WHERE prompt_operation_id = ?1
+                  ORDER BY settled_at_ms DESC LIMIT 1",
+                params![prompt_operation_id.to_string()],
+                row_to_term_columns,
+            )
+            .optional()
+            .map_err(to_io_error)?;
+        Ok(row.map(term_from_row))
+    }
+
+    /// The recorded ending of one exact cancellation, if any.
+    ///
+    /// One prompt may carry more than one cancellation over its life, and
+    /// "the newest ending" answers a different question than "what happened
+    /// to *this* cancellation". This reads by the cancel operation's own id
+    /// and demands that the record also belongs to the named prompt, so a
+    /// query about one cancellation can never be answered with another's
+    /// fate. Purely a read: nothing is written, settled, or re-sent here.
+    pub(crate) fn cancel_term_by_id(
+        &self,
+        cancel_operation_id: Uuid,
+        prompt_operation_id: Uuid,
+    ) -> io::Result<Option<CancelTerm>> {
+        let connection = self.open()?;
+        let row: Option<CancelTermColumns> = connection
+            .query_row(
+                "SELECT cancel_operation_id, prompt_operation_id, submission_id,
+                        host_id, device_id, grant_version, settled_at_ms, state
+                   FROM remote_cancel_terms
+                  WHERE cancel_operation_id = ?1 AND prompt_operation_id = ?2",
+                params![
+                    cancel_operation_id.to_string(),
+                    prompt_operation_id.to_string()
+                ],
+                row_to_term_columns,
+            )
+            .optional()
+            .map_err(to_io_error)?;
+        Ok(row.map(term_from_row))
+    }
+
+    /// Settle a prompt's cancel and delete the row in **one** transaction.
+    ///
+    /// These three writes — the durable term, the cleared binding, and the
+    /// row's deletion — used to be three separate transactions. A crash
+    /// between them left a middle state that every later reader had to
+    /// guess about: a term without a binding, or a binding on a row whose
+    /// fate had already been decided elsewhere. Now the row and its binding
+    /// are read, the term is written, and the row is deleted under one
+    /// write lock: either all of it happened or none of it did.
+    ///
+    /// Returns the cancel operation this ending was recorded for, if one
+    /// was bound. The caller has usually already settled the submission by
+    /// the time it calls here — the submission's own truth decides `state`,
+    /// and it is never the other way round.
+    pub(crate) fn settle_cancel_and_delete_row(
+        &self,
+        operation_id: Uuid,
+        state: &str,
+    ) -> io::Result<Option<Uuid>> {
+        let mut connection = self.open()?;
+        connection.execute_batch("PRAGMA synchronous = FULL;").map_err(to_io_error)?;
+        // Reserve the writer before reading the binding. A streaming save
+        // may commit concurrently; a deferred read snapshot cannot then be
+        // upgraded to a writer in WAL mode (SQLITE_BUSY_SNAPSHOT).
+        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(to_io_error)?;
+        let row: Option<(String, String, String, i64, Option<String>)> = transaction
+            .query_row(
+                "SELECT submission_id, host_id, device_id, grant_version, cancel_operation_id
+                   FROM remote_prompts WHERE operation_id = ?1",
+                params![operation_id.to_string()],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(to_io_error)?;
+        let Some((submission_id, host_id, device_id, grant_version, cancel_operation_id)) = row
+        else {
+            // The row is already gone. Nothing is inferred from that: a
+            // missing row is not a cancellation, and no term is written
+            // from its absence.
+            transaction.commit().map_err(to_io_error)?;
+            return Ok(None);
+        };
+        // A `None` binding was stored as the empty string when the host
+        // released the row on its own initiative; that is a binding with no
+        // device operation behind it, so no term is written for it.
+        let waiting = cancel_operation_id
+            .filter(|text| !text.is_empty())
+            .map(|text| parse_uuid(&text));
+        if let Some(cancel_operation_id) = waiting {
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO remote_cancel_terms(
+                        cancel_operation_id, prompt_operation_id, submission_id,
+                        host_id, device_id, grant_version, state, settled_at_ms
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        cancel_operation_id.to_string(),
+                        operation_id.to_string(),
+                        submission_id,
+                        host_id,
+                        device_id,
+                        grant_version,
+                        state,
+                        crate::model::unix_time_millis() as i64,
+                    ],
+                )
+                .map_err(to_io_error)?;
+        }
+        transaction
+            .execute(
+                "DELETE FROM remote_prompts WHERE operation_id = ?1",
+                params![operation_id.to_string()],
+            )
+            .map_err(to_io_error)?;
+        transaction.commit().map_err(to_io_error)?;
+        Ok(waiting)
+    }
+
+    /// Record a prompt's cancel ending and clear the binding in **one**
+    /// transaction, keeping the row.
+    ///
+    /// The dispatch path uses this once the prompt has reached the driver:
+    /// the row stays (its own state was already moved to `dispatched` by
+    /// the caller, and the record is what a query after a crash reads), but
+    /// the term and the cleared binding must not be separable — a crash
+    /// between them used to leave a term that a later resolve could
+    /// overwrite, or a binding that looked still-waiting on a prompt that
+    /// had already run.
+    pub(crate) fn settle_cancel_term_and_clear(
+        &self,
+        operation_id: Uuid,
+        state: &str,
+    ) -> io::Result<Option<Uuid>> {
+        let mut connection = self.open()?;
+        connection.execute_batch("PRAGMA synchronous = FULL;").map_err(to_io_error)?;
+        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(to_io_error)?;
+        let row: Option<(String, String, String, i64, Option<String>, Option<String>)> =
+            transaction
+                .query_row(
+                    "SELECT submission_id, host_id, device_id, grant_version,
+                            cancel_operation_id, cancel_state
+                       FROM remote_prompts WHERE operation_id = ?1",
+                    params![operation_id.to_string()],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    },
+                )
+                .optional()
+                .map_err(to_io_error)?;
+        let Some((submission_id, host_id, device_id, grant_version, cancel_operation_id, _)) = row
+        else {
+            transaction.commit().map_err(to_io_error)?;
+            return Ok(None);
+        };
+        let waiting = cancel_operation_id
+            .filter(|text| !text.is_empty())
+            .map(|text| parse_uuid(&text));
+        if let Some(cancel_operation_id) = waiting {
+            transaction
+                .execute(
+                    "INSERT OR REPLACE INTO remote_cancel_terms(
+                        cancel_operation_id, prompt_operation_id, submission_id,
+                        host_id, device_id, grant_version, state, settled_at_ms
+                     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        cancel_operation_id.to_string(),
+                        operation_id.to_string(),
+                        submission_id,
+                        host_id,
+                        device_id,
+                        grant_version,
+                        state,
+                        crate::model::unix_time_millis() as i64,
+                    ],
+                )
+                .map_err(to_io_error)?;
+        }
+        transaction
+            .execute(
+                "UPDATE remote_prompts SET cancel_operation_id = NULL, cancel_state = ?2
+                  WHERE operation_id = ?1",
+                params![operation_id.to_string(), state],
+            )
+            .map_err(to_io_error)?;
+        transaction.commit().map_err(to_io_error)?;
+        Ok(waiting)
+    }
+
+    /// Forget one prompt entirely, once its outcome is settled and reported.
+    pub(crate) fn delete_remote_prompt(&self, operation_id: Uuid) -> io::Result<()> {
+        let connection = self.open()?;
+        connection
+            .execute(
+                "DELETE FROM remote_prompts WHERE operation_id = ?1",
+                params![operation_id.to_string()],
+            )
+            .map_err(to_io_error)?;
+        Ok(())
+    }
+
+    /// Bind an operation to the submission id the admission created. The
+    /// host's operation id is what the phone knows; the submission id is
+    /// what the submission store knows, and only the daemon can mint one.
+    /// own state, not a projection a phone or an old build may overwrite.
+    pub(crate) fn set_session_archived(&self, session_id: Uuid, archived: bool) -> io::Result<bool> {
+        let connection = self.open()?;
+        let changed = connection
+            .execute(
+                "UPDATE sessions SET archived = ?1 WHERE id = ?2",
+                params![archived as i64, session_id.to_string()],
+            )
+            .map_err(to_io_error)?;
+        Ok(changed == 1)
+    }
+
     /// Builds a blob sweep.
     ///
     /// Both halves are filesystem and database work, so the whole thing runs on
@@ -1535,6 +2000,128 @@ impl StateStore {
     }
 }
 
+/// One remote-admitted prompt as the daemon holds it durably.
+///
+/// The prompt text lives here, not in the host: the host asks the daemon to
+/// admit a prompt, and the daemon's row is the durable receipt. A host that
+/// restarts reads these rows back rather than trusting its own memory.
+#[derive(Clone, Debug)]
+pub(crate) struct RemotePromptRow {
+    pub operation_id: Uuid,
+    pub submission_id: Uuid,
+    pub session_id: Uuid,
+    pub device_id: Uuid,
+    pub state: String,
+    pub summary: String,
+    pub prompt: String,
+    pub enqueued_at_ms: u64,
+    pub expires_at_ms: u64,
+    /// Who asked, as the host's own IPC verified it.
+    pub host_id: String,
+    pub grant_version: u64,
+    /// The device's cancel operation awaiting an outcome for this prompt.
+    ///
+    /// Durable on the row so a host crash cannot lose a cancellation the
+    /// host already answered `Accepted` for: the row survives, and the wait
+    /// is resolved by whichever state transition the row makes next.
+    pub cancel_operation_id: Option<Uuid>,
+    /// How that wait ended: `pending`, `cancelled`, `dispatched` or
+    /// `unknown`.
+    pub cancel_state: Option<String>,
+}
+
+/// What happened when a cancel intent was recorded on a prompt row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CancelIntentOutcome {
+    /// The cancel is now durably waiting on this prompt.
+    Recorded,
+    /// A *different* cancel operation already waits on this prompt, so this
+    /// one was refused: two devices cannot both hold one prompt's
+    /// cancellation.
+    Conflict,
+    /// The prompt row no longer exists, so there is nothing to wait on.
+    RowMissing,
+}
+
+/// How one prompt's cancellation ended, kept after the prompt row is gone.
+///
+/// The prompt row is temporary; this is not. It carries no prompt text —
+/// only the ending and the provenance needed to answer the device that
+/// asked, so a query after a crash gets a recorded fact instead of a guess.
+#[derive(Clone, Debug)]
+pub(crate) struct CancelTerm {
+    /// The cancellation this ending answers.
+    pub cancel_operation_id: Uuid,
+    /// The prompt this ending is about — the key it is read back by.
+    #[allow(dead_code)]
+    pub prompt_operation_id: Uuid,
+    /// The submission the daemon minted for that prompt.
+    pub submission_id: Uuid,
+    pub host_id: String,
+    pub device_id: Uuid,
+    pub grant_version: u64,
+    /// When the ending was recorded. Part of the record's identity — the
+    /// daemon orders by it to report the ending that counted.
+    #[allow(dead_code)]
+    pub settled_at_ms: u64,
+    /// `cancelled`, `dispatched`, `expired`, `notSent` or `unknown`.
+    pub state: String,
+}
+
+/// The column order a cancel-term read maps from, spelled once so the two
+/// readers and the builder cannot drift apart.
+type CancelTermColumns = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    i64,
+    i64,
+    String,
+);
+
+fn row_to_term_columns(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<CancelTermColumns> {
+    Ok((
+        row.get(0)?,
+        row.get(1)?,
+        row.get(2)?,
+        row.get(3)?,
+        row.get(4)?,
+        row.get(5)?,
+        row.get(6)?,
+        row.get(7)?,
+    ))
+}
+
+fn term_from_row(columns: CancelTermColumns) -> CancelTerm {
+    let (
+        cancel_operation_id,
+        prompt_operation_id,
+        submission_id,
+        host_id,
+        device_id,
+        grant_version,
+        settled_at_ms,
+        state,
+    ) = columns;
+    CancelTerm {
+        cancel_operation_id: parse_uuid(&cancel_operation_id),
+        prompt_operation_id: parse_uuid(&prompt_operation_id),
+        submission_id: parse_uuid(&submission_id),
+        host_id,
+        device_id: parse_uuid(&device_id),
+        grant_version: grant_version.max(0) as u64,
+        settled_at_ms: settled_at_ms.max(0) as u64,
+        state,
+    }
+}
+
+fn parse_uuid(text: &str) -> Uuid {
+    Uuid::parse_str(text).unwrap_or_default()
+}
 type SessionColumns = (
     String,
     String,
@@ -1548,6 +2135,7 @@ type SessionColumns = (
     i64,
     i64,
     Option<i64>,
+    bool,
 );
 
 /// Builds a list-only session from its columns. `messages`,
@@ -1569,6 +2157,7 @@ fn session_skeleton(row: SessionColumns) -> Option<AgentSession> {
         created_at,
         updated_at,
         last_reply_at,
+        archived,
     ) = row;
     Some(AgentSession {
         id: Uuid::parse_str(&id).ok()?,
@@ -1598,6 +2187,7 @@ fn session_skeleton(row: SessionColumns) -> Option<AgentSession> {
         imported,
         native_session_id,
         provider_session_id: None,
+        archived,
         messages: Vec::new(),
         transcript_blocks: Vec::new(),
         turns: Vec::new(),
@@ -1801,8 +2391,8 @@ fn message_fingerprint(message: &Message, position: usize) -> u64 {
 /// listing sessions never has to deserialize a transcript.
 const UPSERT_SESSION: &str = "INSERT INTO sessions(
          id, project_id, title, auto_title, provider, model, status, imported,
-         native_session_id, created_at, updated_at, last_reply_at
-     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+         native_session_id, created_at, updated_at, last_reply_at, archived
+     ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
      ON CONFLICT(id) DO UPDATE SET
          project_id        = excluded.project_id,
          title             = excluded.title,
@@ -1814,7 +2404,8 @@ const UPSERT_SESSION: &str = "INSERT INTO sessions(
          native_session_id = excluded.native_session_id,
          created_at        = excluded.created_at,
          updated_at        = excluded.updated_at,
-         last_reply_at     = excluded.last_reply_at";
+         last_reply_at     = excluded.last_reply_at,
+         archived          = excluded.archived";
 
 const INSERT_PROJECT: &str = "INSERT INTO projects(id, name, path, position, created_at)
      VALUES(?1, ?2, ?3, ?4, ?5)
@@ -1858,6 +2449,7 @@ fn session_params(session: &AgentSession) -> Vec<rusqlite::types::Value> {
         session
             .last_reply_at
             .map_or(Value::Null, |at| Value::Integer(at as i64)),
+        Value::Integer(session.archived as i64),
     ]
 }
 
@@ -1897,6 +2489,7 @@ mod tests {
         ComposerDraft {
             text: text.to_owned(),
             attachments: Vec::new(),
+            references: Vec::new(),
         }
     }
 
@@ -2050,6 +2643,7 @@ mod tests {
         let project_id = Uuid::new_v4();
         let draft = ComposerDraft {
             text: "compare these".to_owned(),
+            references: Vec::new(),
             attachments: vec![ComposerDraftAttachment {
                 path: PathBuf::from("/tmp/reference image.png"),
                 mention: "/tmp/reference image.png".to_owned(),
@@ -2417,6 +3011,7 @@ mod tests {
             ComposerDraftKey::NewSession(project_id),
             ComposerDraft {
                 text: String::new(),
+                references: Vec::new(),
                 attachments: vec![ComposerDraftAttachment {
                     path: path.clone(),
                     mention: path.display().to_string(),

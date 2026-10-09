@@ -1,11 +1,11 @@
 //! Local device-grant record: the paired-device file this host trusts.
 //!
-//! Phase one is single-device (M0 scope), so the file holds exactly one
-//! grant. The pairing flow (M3) will create and revoke these files; for
-//! now they are provisioned by hand, and every field the M3 flow needs is
-//! already here: the device's routing id, its Noise static public key,
-//! the grant version the pairing confirmed, and the scope text the host
-//! operator accepted on the confirmation dialog.
+//! The pairing flow (M3) creates and revokes these rows. Each row carries
+//! the device's routing id, the name the operator saw on the confirmation
+//! dialog, its Noise static public key, the grant version the pairing
+//! confirmed, and the revocation state. The confirmation dialog shows the
+//! fingerprint derived from the stored public key, so what the operator
+//! approved is exactly what every later handshake pins.
 
 use std::fs;
 use std::path::Path;
@@ -14,16 +14,27 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Scope text shown verbatim on the pairing confirmation dialog (architecture
-/// document, 配对授权范围): the device may manage every session and history of
-/// this host and read files, diffs and task output in already-registered
-/// projects. Keeping it in the grant file binds what was confirmed to what
-/// is enforced.
-pub const GRANT_SCOPE_TEXT: &str = "该设备可读取和管理这台 host 的全部会话及其历史，包括之后创建的会话，并查看本机已有项目中的文件、diff 与任务输出。";
+/// document, 配对授权范围, and E39: the grant must not be dressed up as
+/// read-only): the device may view and manage every session and history of
+/// this host — including sessions created later — run the agent and answer
+/// its approvals, and read files, diffs and task output in already-registered
+/// projects. The agent itself acts under this computer's own permissions.
+/// Keeping it in the grant file binds what was confirmed to what is enforced.
+///
+/// This constant is the canonical Chinese wording, shared by the CLI. The
+/// desktop dialog shows the same scope through the localized
+/// `settings.devices_grant_scope` keys, which must be kept in sync with it.
+pub const GRANT_SCOPE_TEXT: &str = "允许查看和管理此电脑的全部现有及后续会话与历史，运行 agent 并回复审批，读取已有项目的文件、差异和输出。agent 可按本机权限修改文件或执行命令。";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceGrant {
     pub device_id: String,
+    /// What the host operator saw on the confirmation dialog. Self-reported
+    /// by the device, so it is a label for humans, never an authorization
+    /// input; the fingerprint is what identifies the device.
+    #[serde(default)]
+    pub device_name: Option<String>,
     /// Noise static public key (base64 standard). KK handshake fails the
     /// connection unless the peer presents exactly this key.
     pub device_public_key: String,
@@ -31,6 +42,36 @@ pub struct DeviceGrant {
     pub granted_at_ms: u64,
     #[serde(default)]
     pub revoked_at_ms: Option<u64>,
+}
+
+impl DeviceGrant {
+    /// Hex of the first 16 bytes of SHA-256(public key) — the same digest
+    /// the pairing dialog and the check-code flow show, so the list, the
+    /// confirmation, and the grant all name one identity.
+    pub fn fingerprint(&self) -> String {
+        fingerprint_of(&self.device_public_key)
+    }
+
+    /// What the device list shows: the confirmed name when there is one,
+    /// a short fingerprint otherwise. A UUID is never the human label.
+    pub fn display_label(&self) -> String {
+        match self.device_name.as_deref().map(str::trim) {
+            Some(name) if !name.is_empty() => name.to_owned(),
+            _ => self.fingerprint(),
+        }
+    }
+}
+
+/// The fingerprint of a base64-encoded Noise static public key. An
+/// unreadable key hashes to a stable placeholder rather than panicking:
+/// a broken grant row must still render, and the handshake refuses it.
+pub fn fingerprint_of(public_key_b64: &str) -> String {
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(public_key_b64)
+        .unwrap_or_default();
+    let digest = Sha256::digest(&bytes);
+    digest[..16].iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

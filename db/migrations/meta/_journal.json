@@ -36,6 +36,27 @@
       "when": 1790918707290,
       "tag": "0004_icy_tusk",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1791568981000,
+      "tag": "0005_remote_control_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1791568982000,
+      "tag": "0006_remote_cancel_intent",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1791568983000,
+      "tag": "0007_remote_cancel_terms",
+      "breakpoints": true
     }
   ]
 }

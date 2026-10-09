@@ -258,11 +258,7 @@ impl Store {
     /// with this host? Used for every sealed and handshake frame, not
     /// just at connect time (architecture: 统一路由层逐消息检查). A
     /// store error fails the caller closed.
-    pub fn device_paired_with_host(
-        &self,
-        host_id: &str,
-        device_id: &str,
-    ) -> anyhow::Result<bool> {
+    pub fn device_paired_with_host(&self, host_id: &str, device_id: &str) -> anyhow::Result<bool> {
         let connection = self.connection.lock();
         let linked: Option<i64> = connection
             .query_row(
@@ -294,7 +290,11 @@ impl Store {
     /// Atomically consume a pairing nonce. Exactly one caller ever sees
     /// `Consumed` — the conditional SQL update is the single point of
     /// serialization, so a replay after a crash cannot resurrect the nonce.
-    pub fn consume_pairing_nonce(&self, host_id: &str, nonce: &str) -> anyhow::Result<NonceOutcome> {
+    pub fn consume_pairing_nonce(
+        &self,
+        host_id: &str,
+        nonce: &str,
+    ) -> anyhow::Result<NonceOutcome> {
         let nonce_hash = hash_token(nonce);
         let mut connection = self.connection.lock();
         let tx = connection.transaction()?;

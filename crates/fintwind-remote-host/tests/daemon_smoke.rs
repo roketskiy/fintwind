@@ -364,6 +364,7 @@ fn device_auth(socket: &mut DeviceSocket, device_id: &str, signing: &SigningKey)
         role: FrameRole::Device,
         host_id: None,
         device_id: Some(device_id.parse().expect("device uuid")),
+            purpose: fintwind_remote_protocol::ConnectionPurpose::Session,
         challenge: Base64Bytes(challenge_bytes),
         signature: Base64Bytes(signature),
     };
@@ -417,7 +418,7 @@ fn device_handshake(
                         ..
                     } => return initiator.finish(&payload.0).expect("kk completes"),
                     Frame::Control {
-                        frame: ControlFrame::Rejected { code, message },
+                        frame: ControlFrame::Rejected { code, message, frame: _ },
                     } => panic!("relay rejected handshake: {code:?} {message}"),
                     _ => continue,
                 }
@@ -441,8 +442,12 @@ fn send_sealed(
     device_id: &str,
     body: MessageBody,
 ) {
+    // The authenticated delivery sequence: the envelope repeats the frame's
+    // seq so the host can check the two agree.
+    let seq = now_ms();
     let sealed = SealedMessage {
         protocol_version: REMOTE_PROTOCOL_VERSION,
+        transport_seq: seq,
         host_id: host_id.parse().expect("host uuid"),
         device_id: device_id.parse().expect("device uuid"),
         sent_at_ms: now_ms(),
@@ -451,7 +456,7 @@ fn send_sealed(
     let plaintext = serde_json::to_string(&sealed).expect("sealed json");
     let ciphertext = channel.encrypt(plaintext.as_bytes()).expect("encrypt");
     let frame = Frame::Sealed {
-        seq: now_ms(),
+        seq,
         host_id: host_id.parse().expect("host uuid"),
         device_id: None,
         ciphertext: Base64Bytes(ciphertext),

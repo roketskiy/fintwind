@@ -145,15 +145,20 @@ const installer = join(
   `fintwind-${version}-${architecture}-Setup.exe`,
 );
 
-await $`cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon`;
+await $`cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon --package fintwind-remote-host --bin fintwind-remote-host`;
 
 const staging = await mkdtemp(join(tmpdir(), "fintwind-bundle-"));
 try {
-  // Both executables stay side by side: the app resolves the daemon next to
-  // itself, so the layout is what makes an extracted zip runnable in place.
+  // All executables stay side by side: the app resolves the daemon and the
+  // remote-host beside itself, so the layout is what makes an extracted zip
+  // runnable in place.
   const packageDirectory = join(staging, packageDirectoryName);
   await mkdir(packageDirectory, { recursive: true });
-  for (const file of ["fintwind.exe", "fintwind-daemon.exe"]) {
+  for (const file of [
+    "fintwind.exe",
+    "fintwind-daemon.exe",
+    "fintwind-remote-host.exe",
+  ]) {
     await copyFile(join(releaseDirectory, file), join(packageDirectory, file));
   }
   await copyFile(join(projectRoot, "LICENSE"), join(packageDirectory, "LICENSE"));
@@ -172,6 +177,7 @@ try {
     await sign(signtool, certificate, certificatePassword, [
       join(packageDirectory, "fintwind.exe"),
       join(packageDirectory, "fintwind-daemon.exe"),
+      join(packageDirectory, "fintwind-remote-host.exe"),
     ]);
   } else {
     console.log("No WINDOWS_CERTIFICATE set; packaging unsigned binaries.");

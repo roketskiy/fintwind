@@ -1,5 +1,6 @@
 use std::io::Write as _;
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -23,9 +24,6 @@ fn main() -> anyhow::Result<()> {
         protocol_version: PROTOCOL_VERSION,
         pid: std::process::id(),
     };
-    println!("{}", serde_json::to_string(&ready)?);
-    std::io::stdout().flush()?;
-
     let shutdown = Arc::new(AtomicBool::new(false));
     if let Some(parent_pid) = arguments.parent_pid {
         let monitor_shutdown = shutdown.clone();
@@ -42,19 +40,36 @@ fn main() -> anyhow::Result<()> {
             })?;
     }
 
-    let task_path = fintwind_core::persistence::StateStore::default_path();
-    let settings = fintwind_core::DaemonSettingsStore::open_with_legacy(
-        fintwind_core::DaemonSettings::default_path(),
-        [task_path.with_file_name("settings.json")],
-    )
-    .context("could not load daemon settings")?;
+    // Failure modes for isolated E2E: the task database was relocated but
+    // settings/legacy migration still read the real user profile, or a failed
+    // isolated directory silently fell back to the default. An explicit data
+    // directory owns both paths and never consults legacy profile settings.
+    let (task_path, settings) = if let Some(directory) = arguments.data_dir.as_ref() {
+        std::fs::create_dir_all(directory).context("could not create daemon data directory")?;
+        (
+            directory.join("app.db"),
+            fintwind_core::DaemonSettingsStore::open(directory.join("daemon.json"))
+                .context("could not load isolated daemon settings")?,
+        )
+    } else {
+        let task_path = fintwind_core::persistence::StateStore::default_path();
+        let settings = fintwind_core::DaemonSettingsStore::open_with_legacy(
+            fintwind_core::DaemonSettings::default_path(),
+            [task_path.with_file_name("settings.json")],
+        )
+        .context("could not load daemon settings")?;
+        (task_path, settings)
+    };
     let task_store = fintwind_core::persistence::StateStore::daemon(task_path);
+    let backend = Arc::new(fintwind_core::daemon::FintwindBackend::new(settings, task_store)?);
+    // Readiness means the isolated stores and backend actually opened. A failed
+    // data directory must neither fall back nor announce a usable daemon.
+    println!("{}", serde_json::to_string(&ready)?);
+    std::io::stdout().flush()?;
     fintwind_core::serve(
         listener,
         token,
-        Arc::new(fintwind_core::daemon::FintwindBackend::new(
-            settings, task_store,
-        )?),
+        backend,
         shutdown,
         fintwind_core::ServerOptions {
             allow_shutdown: arguments.parent_pid.is_some(),
@@ -65,12 +80,14 @@ fn main() -> anyhow::Result<()> {
 struct Arguments {
     bind: String,
     parent_pid: Option<u32>,
+    data_dir: Option<PathBuf>,
 }
 
 impl Arguments {
     fn parse(arguments: impl IntoIterator<Item = String>) -> anyhow::Result<Self> {
         let mut bind = "127.0.0.1:0".to_owned();
         let mut parent_pid = None;
+        let mut data_dir = None;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
@@ -88,9 +105,18 @@ impl Arguments {
                             .context("--parent-pid is not a valid process id")?,
                     );
                 }
+                "--data-dir" => {
+                    let directory = PathBuf::from(
+                        arguments.next().ok_or_else(|| anyhow!("--data-dir requires a directory"))?,
+                    );
+                    if !directory.is_absolute() {
+                        bail!("--data-dir must be an absolute directory");
+                    }
+                    data_dir = Some(directory);
+                }
                 "--help" | "-h" => {
                     println!(
-                        "usage: {} [--bind ADDRESS] [--parent-pid PID]",
+                        "usage: {} [--bind ADDRESS] [--parent-pid PID] [--data-dir DIRECTORY]",
                         env!("CARGO_BIN_NAME")
                     );
                     std::process::exit(0);
@@ -98,7 +124,7 @@ impl Arguments {
                 unknown => bail!("unknown argument {unknown:?}"),
             }
         }
-        Ok(Self { bind, parent_pid })
+        Ok(Self { bind, parent_pid, data_dir })
     }
 }
 

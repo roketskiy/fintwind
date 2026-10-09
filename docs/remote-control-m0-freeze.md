@@ -202,3 +202,21 @@ relay 侧旧 host 记录标记退役并保留审计元数据；不提供"恢复�
   不再需要 ACME），22 维持现状；3389 模板默认项已删。
 - 2G 内存无 swap：已配置 2G swap（部署时落地）。
 - 配对 QR 与 host enroll 配置中的 relay 地址一律使用该域名，不用裸 IP。
+
+## 实施修订：手机身份存储与发布隔离（2026-10-08）
+
+Rust `snow` 的 Noise 私钥必须在端点 WASM 内存中可用，不能直接用浏览器的
+不可导出 X25519 `CryptoKey` 代替。实际持久化采用独立身份库：不可导出的
+Web Crypto AES-GCM 包装密钥和密封的 Rust 身份保存到 IndexedDB；连接时仅在
+内存中解封，退出清理身份使用会话。不再把原始身份 JSON 写入 localStorage。
+旧身份只在加密存储事务成功、能够解封核对后删除，存储失败不能生成替代身份。
+
+这保护的是浏览器静态存储中的原始私钥，不是硬件密钥隔离。同源恶意脚本仍能
+调用包装密钥或读取连接时的身份，不能声称 Noise 私钥在所有执行路径都不可导出。
+业务内容、队列和操作结果仍禁止持久化到 IndexedDB 或其他浏览器业务缓存。
+
+手机页面拟迁移到 `remote.fintwind.xyz` 的 Cloudflare Pages；中继仍位于
+`relay.fintwind.xyz` 的 UCloud。Pages 发布秘密不放在 UCloud，旧中继来源在
+迁移验收后停止提供手机代码。仅不同子域名不够，必须落实独立发布权限和流程。
+两者由同一 Cloudflare 账号管理的风险仍披露，不声称独立账户级隔离。
+迁移操作与验收见 `deploy/pwa/README.md`，完成状态见 `remote-control-progress.md`。

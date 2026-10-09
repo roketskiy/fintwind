@@ -35,6 +35,16 @@ pub struct FintwindBackend {
     task_state: Arc<Mutex<PersistedState>>,
     removed_session_ids: Mutex<HashSet<Uuid>>,
     removed_project_ids: Mutex<HashSet<Uuid>>,
+    /// Prompts whose dispatch this process currently holds a claim on.
+    ///
+    /// A queued row can also be `dispatching` because a crash left it there,
+    /// and a cancel arriving at that row must be able to tell the two apart:
+    /// converging a cancel against a dispatch that is still in flight would
+    /// cancel a live request. An operation is inserted when its compare-and-
+    /// swap claim succeeds and removed when this call returns, by whichever
+    /// exit it takes, so membership is proof of "another connection is
+    /// driving this right now" and absence is proof of "no one is".
+    live_dispatches: Mutex<HashSet<Uuid>>,
     active_preparations: Mutex<HashMap<Uuid, EventSink>>,
     native_transcript_generations: Mutex<HashMap<String, u64>>,
     side_generations: crate::session_generation::SessionGenerations,
@@ -42,6 +52,39 @@ pub struct FintwindBackend {
     attachments: AttachmentStore,
     checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
     default_cwd: std::path::PathBuf,
+}
+
+/// Whether the turn one admitted prompt runs in could be opened.
+///
+/// The three answers are deliberately not one error: a prompt that found
+/// the session busy is still queued and is retried, while one whose session
+/// disappeared is answered from the record and never retried. Collapsing
+/// them would report a merely-busy session as an unknown outcome.
+enum MaterializedTurn {
+    /// The turn is open; the value is its ordinal.
+    Opened(usize),
+    /// Another submission opened a turn first. This prompt did not run and
+    /// stays queued.
+    Busy,
+    /// The session was removed or archived while this ran, and its rows
+    /// were settled by that path.
+    Gone,
+}
+
+/// Removes a dispatch's live marking on every exit path, including `?`.
+///
+/// Membership in `live_dispatches` is the proof that another connection is
+/// driving this prompt right now; the guard is what keeps that proof true
+/// no matter how the dispatch ends.
+struct LiveDispatchGuard<'a> {
+    live: &'a Mutex<HashSet<Uuid>>,
+    operation_id: Uuid,
+}
+
+impl Drop for LiveDispatchGuard<'_> {
+    fn drop(&mut self) {
+        self.live.lock().remove(&self.operation_id);
+    }
 }
 
 impl FintwindBackend {
@@ -71,6 +114,7 @@ impl FintwindBackend {
             task_state: Arc::new(Mutex::new(task_state)),
             removed_session_ids: Mutex::new(HashSet::new()),
             removed_project_ids: Mutex::new(HashSet::new()),
+            live_dispatches: Mutex::new(HashSet::new()),
             active_preparations: Mutex::new(HashMap::new()),
             native_transcript_generations: Mutex::new(HashMap::new()),
             side_generations: Default::default(),
@@ -439,6 +483,1444 @@ fn migrate_projectless_state(
             .context("could not persist migrated projectless workspace")?;
     }
     Ok(())
+}
+
+impl FintwindBackend {
+    // ---- remote control: daemon-owned task, queue and tidy state ----
+
+    /// Admit one remote prompt: write its submission record and its queue
+    /// row durably, and open no turn.
+    ///
+    /// Lock discipline is the point of the shape below. `task_state` is a
+    /// non-reentrant mutex and every helper this path needs takes it, so
+    /// the live guard is released before any of them runs: the target is
+    /// validated under one short lock, and the commit takes its own.
+    ///
+    /// Admission deliberately does **not** open a turn. A queued prompt is
+    /// a record, not a claim on the transcript: opening one here would hand
+    /// a busy session a second running turn, and the turn that actually ran
+    /// would then never settle. The turn is opened at dispatch, by
+    /// `materialize_remote_turn`, once, and only when the session is idle.
+    /// A refused admission therefore leaves the live session exactly as it
+    /// was — busy or idle — with nothing to roll back.
+    ///
+    /// A prompt whose operation id is already on the books is answered from
+    /// that row instead of admitting a second one: an identical retry gets
+    /// the recorded truth, and a *different* request reusing the id is
+    /// refused rather than silently replacing what was already accepted.
+    fn admit_remote_prompt(
+        &self,
+        provenance: fintwind_protocol::submission::RemoteProvenance,
+        session_id: Uuid,
+        operation_id: Uuid,
+        prompt: &str,
+        expires_at_ms: u64,
+        summary: &str,
+    ) -> anyhow::Result<ResponsePayload> {
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            bail!("a remote prompt may not be empty");
+        }
+        // Idempotency by the caller's own operation id, before anything is
+        // reserved: a retry must never create a second turn.
+        //
+        // Every field of the admitted request is part of the identity, the
+        // prompt text included. Two requests sharing an operation id are the
+        // same request only when they are identical; a different prompt under
+        // the same id is refused rather than silently answered from the first
+        // one's record — otherwise a retry could learn the state of a prompt
+        // it did not send. The host's own dedup answers a retry before it
+        // reaches here, so this is the backstop for a host that lost its
+        // record, and the daemon compares what it durably holds.
+        if let Some(existing) = self
+            .task_store
+            .remote_prompts()?
+            .into_iter()
+            .find(|row| row.operation_id == operation_id)
+        {
+            if existing.session_id != session_id
+                || existing.device_id != provenance.device_id
+                || existing.host_id != provenance.host_id.to_string()
+                || existing.grant_version != provenance.grant_version
+                || existing.summary != summary
+                || existing.prompt != prompt
+            {
+                bail!("operation id is already used by a different request");
+            }
+            return Ok(ResponsePayload::RemotePromptState {
+                operation_id,
+                submission_id: existing.submission_id,
+                state: existing.state,
+            });
+        }
+
+        // ---- short lock: validate the target, reserve nothing ----
+        //
+        // No turn is opened here. A queued prompt is a durable record, not
+        // a claim on the transcript: opening a turn at admission would give
+        // a busy session a second running turn, and the event forwarder
+        // settles the *last* turn — the queued one — leaving the turn that
+        // actually ran unsettled and the session busy forever. The turn is
+        // opened at dispatch, by `materialize_remote_turn`, exactly once
+        // and only when the session is idle.
+        let project = {
+            let mut state = self.task_state.lock();
+            if self.removed_session_ids.lock().contains(&session_id) {
+                bail!("remote prompt target session was removed");
+            }
+            let Some(session) = state
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+            else {
+                bail!("remote prompt target session is unknown");
+            };
+            self.hydrate_submission_session(session)?;
+            if session.archived {
+                bail!("remote prompt target session is archived");
+            }
+            let project_id = session.project_id;
+            let project = state
+                .projects
+                .iter()
+                .find(|project| project.id == project_id)
+                .cloned()
+                .ok_or_else(|| anyhow!("remote prompt target project is unknown"))?;
+            project
+        };
+        // The submission id is chosen here and bound to the operation id in
+        // the same durable write, so a retry answers from the row rather
+        // than creating a second prompt.
+        let submission_id = Uuid::new_v4();
+        let record = fintwind_protocol::submission::SubmissionRecord::new(
+            session_id,
+            submission_id,
+            prompt.to_owned(),
+            Vec::new(),
+        );
+        let row = crate::persistence::RemotePromptRow {
+            operation_id,
+            submission_id,
+            session_id,
+            device_id: provenance.device_id,
+            state: fintwind_protocol::submission::RemotePromptState::Queued
+                .label()
+                .to_owned(),
+            summary: summary.to_owned(),
+            prompt: prompt.to_owned(),
+            enqueued_at_ms: crate::model::unix_time_millis(),
+            expires_at_ms,
+            host_id: provenance.host_id.to_string(),
+            grant_version: provenance.grant_version,
+            // A freshly admitted prompt has no cancel waiting on it yet.
+            cancel_operation_id: None,
+            cancel_state: None,
+        };
+        let response =
+            self.commit_remote_admission(&project, &record, &row, operation_id)?;
+        crate::opencode_diagnostics::record("remote_prompt_admitted", 0, 0);
+        Ok(response)
+    }
+
+    /// Write one admitted prompt durably: its submission record and its
+    /// remote-queue row, in one transaction, without touching the session's
+    /// transcript.
+    ///
+    /// The session itself is not rewritten — admission changes nothing a
+    /// reader of the transcript can see, so the commit carries the two rows
+    /// that do change and leaves the live state alone. A refused admission
+    /// therefore cannot leave a half-opened turn behind, on an idle or a
+    /// busy session alike.
+    fn commit_remote_admission(
+        &self,
+        project: &Project,
+        submission: &fintwind_protocol::submission::SubmissionRecord,
+        remote: &crate::persistence::RemotePromptRow,
+        operation_id: Uuid,
+    ) -> anyhow::Result<ResponsePayload> {
+        let session_id = submission.session_id;
+        if submission.receipt.state != SubmissionState::Preparing {
+            bail!("invalid submission identity");
+        }
+        let mut state = self.task_state.lock();
+        if self.removed_session_ids.lock().contains(&session_id)
+            || self.removed_project_ids.lock().contains(&project.id)
+        {
+            bail!("submission target was removed");
+        }
+        if !state
+            .sessions
+            .iter()
+            .any(|candidate| candidate.id == session_id)
+        {
+            bail!("remote prompt target session is unknown");
+        }
+        // A submission id that is already on the books is the same prompt
+        // arriving twice: the saved record is the answer, and a conflicting
+        // one is refused rather than replaced.
+        if let Some(saved) = self.task_store.submission(submission.receipt.id)? {
+            if saved.session_id != session_id
+                || saved.receipt.input_id != submission.receipt.input_id
+                || saved.prompt != submission.prompt
+                || serde_json::to_vec(&saved.files)? != serde_json::to_vec(&submission.files)?
+            {
+                bail!("submission ID conflicts with a saved input");
+            }
+            return Ok(ResponsePayload::RemotePromptAdmitted {
+                operation_id,
+                submission_id: saved.receipt.id,
+                state: serde_json::to_value(saved.receipt.state)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "unknown".to_owned()),
+            });
+        }
+        let mut next = state.clone();
+        if !next
+            .projects
+            .iter()
+            .any(|candidate| candidate.id == project.id)
+        {
+            next.projects.push(project.clone());
+        }
+        self.task_store
+            .save_with_submission_and_remote(&mut next, Some(submission), Some(remote))?;
+        *state = next;
+        // The daemon owns this preparation: no client going away may
+        // invalidate it, so the sink is detached from any subscriber.
+        self.active_preparations
+            .lock()
+            .insert(submission.receipt.id, EventSink::detached(session_id, Uuid::nil()));
+        crate::opencode_diagnostics::submission("saved", submission, 0, 0);
+        Ok(ResponsePayload::RemotePromptAdmitted {
+            operation_id,
+            submission_id: submission.receipt.id,
+            state: fintwind_protocol::submission::RemotePromptState::Queued
+                .label()
+                .to_owned(),
+        })
+    }
+
+    /// Prepare and dispatch one admitted prompt.
+    ///
+    /// Preparation is the daemon's own: the workspace is resolved from the
+    /// session's record, the turn-start checkpoint is captured here, and the
+    /// driver is started from the session's own options with a binary this
+    /// computer resolved. Only then is the submission claimed. A crash
+    /// anywhere before the claim leaves the prompt `NotSent` or `Unknown`,
+    /// and neither is ever resent automatically.
+    fn dispatch_remote_prompt(
+        &self,
+        provenance: fintwind_protocol::submission::RemoteProvenance,
+        operation_id: Uuid,
+        events: EventSink,
+    ) -> anyhow::Result<ResponsePayload> {
+        let row = self
+            .task_store
+            .remote_prompts()?
+            .into_iter()
+            .find(|row| row.operation_id == operation_id)
+            .ok_or_else(|| anyhow!("no queued prompt carries that operation id"))?;
+        // Provenance: only the device that asked, on the host it asked from,
+        // under the grant it held, may drive this prompt. A restored queue is
+        // re-checked rather than trusted.
+        //
+        // The grant version must match exactly, not merely be no older: a
+        // re-pairing gives the device a *newer* version, and `newer passes`
+        // would let it adopt and execute a prompt admitted under a grant it
+        // no longer holds. The host's cleanup paths are a different matter —
+        // they quote the version the row itself carries, so a revoked or
+        // re-paired device's rows are still released; see
+        // `HostState::cancel_remote_prompt_as_recorded`.
+        if row.device_id != provenance.device_id
+            || row.host_id != provenance.host_id.to_string()
+            || provenance.grant_version != row.grant_version
+        {
+            bail!("that prompt belongs to another device");
+        }        let state_now = fintwind_protocol::submission::RemotePromptState::parse(&row.state)
+            .unwrap_or(fintwind_protocol::submission::RemotePromptState::Unknown);
+        if !state_now.is_pending() {
+            // Already dispatched, cancelled or expired: the recorded state
+            // is the answer, and re-running is never attempted.
+            return Ok(ResponsePayload::RemotePromptState {
+                operation_id,
+                submission_id: row.submission_id,
+                state: row.state,
+            });
+        }
+        if row.expires_at_ms <= crate::model::unix_time_millis() {
+            self.task_store.delete_remote_prompt(operation_id)?;
+            return Ok(ResponsePayload::RemotePromptState {
+                operation_id,
+                submission_id: row.submission_id,
+                state: fintwind_protocol::submission::RemotePromptState::Expired
+                    .label()
+                    .to_owned(),
+            });
+        }
+        let session_id = row.session_id;
+        // A submission that already settled is answered from its record. A
+        // crash mid-dispatch leaves the row `dispatching`, and whether the
+        // driver ever received the prompt is a fact in the submission store,
+        // not a guess: only a prompt still `Preparing` — provably never
+        // handed to a driver — may be dispatched. Anything else is reported
+        // exactly as it stands and never re-run.
+        //
+        // This is also the authority a waiting cancel is measured against,
+        // and it is read *before* the cancel is settled. A row left
+        // `dispatching` by a crash that happened after `driver.submit` has a
+        // submission in `Dispatching`: the prompt ran, so cancelling it now
+        // would claim a cancellation for something that executed. A missing
+        // submission record is itself unknown evidence, never a pass.
+        let submission_state = match self.task_store.submission(row.submission_id)? {
+            Some(saved) => saved.receipt.state,
+            None => SubmissionState::Unknown,
+        };
+        // A cancel waiting on this prompt is settled before anything is
+        // dispatched. What it settles *to* is the submission's own truth, so
+        // a prompt that already reached the driver is reported as having
+        // run, and only one that provably never did is cancelled.
+        if self.task_store.cancel_intent(operation_id)?.is_some() {
+            // A dispatch this process still holds a claim on is deciding
+            // the prompt's fate right now. Converging the cancel against it
+            // could cancel a live request — the submission may still read
+            // `Preparing` while the driver call is under way — so the row
+            // is reported exactly as it stands. The in-flight dispatch
+            // settles the waiting cancel itself when its outcome lands.
+            if !self.live_dispatches.lock().contains(&operation_id) {
+                return self.converge_pending_cancel(
+                    operation_id,
+                    row.submission_id,
+                    session_id,
+                    submission_state,
+                );
+            }
+            return Ok(ResponsePayload::RemotePromptState {
+                operation_id,
+                submission_id: row.submission_id,
+                state: row.state.clone(),
+            });
+        }
+        if submission_state != SubmissionState::Preparing {
+            // Already handed to a driver, or its fate is otherwise decided:
+            // the recorded state is the answer, and re-running is never
+            // attempted.
+            return Ok(ResponsePayload::RemotePromptState {
+                operation_id,
+                submission_id: row.submission_id,
+                state: row.state,
+            });
+        }
+        // ---- short lock: snapshot, then release. Nothing below takes it. ----
+        let (project, workspace) = {
+            let mut state = self.task_state.lock();
+            if self.removed_session_ids.lock().contains(&session_id) {
+                self.task_store.delete_remote_prompt(operation_id)?;
+                bail!("the prompt's session was deleted");
+            }
+            let project_id = {
+                let Some(session) = state
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id == session_id)
+                else {
+                    self.task_store.delete_remote_prompt(operation_id)?;
+                    bail!("the prompt's session no longer exists");
+                };
+                self.hydrate_submission_session(session)?;
+                if session.archived {
+                    self.task_store.delete_remote_prompt(operation_id)?;
+                    bail!("the prompt's session was archived");
+                }
+                // A busy session never receives a queued prompt. The host's
+                // view of idle is not proof — it is learned from events — so
+                // the daemon checks its own state here. The row stays queued
+                // and a later tick takes it: an ordinary prompt waits its
+                // turn, and never steers the one already running.
+                if session.status.is_busy()
+                    || fintwind_protocol::submission::has_unsettled_submissions(session)
+                {
+                    return Ok(ResponsePayload::RemotePromptState {
+                        operation_id,
+                        submission_id: row.submission_id,
+                        state: fintwind_protocol::submission::RemotePromptState::Queued
+                            .label()
+                            .to_owned(),
+                    });
+                }
+                session.project_id
+            };
+            let project = state
+                .projects
+                .iter()
+                .find(|project| project.id == project_id)
+                .cloned()
+                .ok_or_else(|| anyhow!("the prompt's project is unknown"))?;
+            let workspace = {
+                let session = state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .ok_or_else(|| anyhow!("the prompt's session no longer exists"))?;
+                session.workspace.clone()
+            };
+            (project, workspace)
+        };
+
+        // Claim the dispatch before any side effect, so a crash mid-
+        // preparation is visible as `dispatching` rather than still-queued.
+        // The compare-and-swap is what stops a second caller from also
+        // claiming it.
+        let claimed = {
+            // Serialize the durable claim and its in-memory live marker
+            // with cancellation. No caller can observe a claimed-but-not-live
+            // operation and settle it as an abandoned request.
+            let mut live = self.live_dispatches.lock();
+            let claimed = self.task_store.transition_remote_prompt(
+            operation_id,
+            fintwind_protocol::submission::RemotePromptState::Queued.label(),
+            fintwind_protocol::submission::RemotePromptState::Dispatching.label(),
+            ).context("remote-dispatch-claim")?;
+            if claimed { live.insert(operation_id); }
+            claimed
+        };
+        if !claimed {
+            let row = self
+                .task_store
+                .remote_prompts()?
+                .into_iter()
+                .find(|row| row.operation_id == operation_id)
+                .ok_or_else(|| anyhow!("the queued prompt disappeared"))?;
+            return Ok(ResponsePayload::RemotePromptState {
+                operation_id,
+                submission_id: row.submission_id,
+                state: row.state,
+            });
+        }
+        // The claim is ours. From here until this call returns — by success,
+        // by every early return, and by every `?` — this operation counts
+        // as live: a cancel arriving on the row must not converge against a
+        // dispatch that is still being decided. The guard removes the
+        // marking on every exit path.
+        let _live = LiveDispatchGuard {
+            live: &self.live_dispatches,
+            operation_id,
+        };
+
+        // Re-check the target after the claim: a session deleted, archived or
+        // expired while this ran must never receive the prompt.
+        if self.remote_target_still_valid(session_id, operation_id).context("remote-dispatch-target")? {
+            // The turn opens first, so the checkpoint below addresses the
+            // turn it belongs to rather than the one before it. Opening it
+            // is also where the busy question is answered authoritatively:
+            // the local GUI can have committed a turn between the snapshot
+            // above and this point, and a queued prompt must never become a
+            // second running turn.
+            match self.materialize_remote_turn(session_id, row.submission_id, &row.prompt).context("remote-dispatch-materialize")? {
+                MaterializedTurn::Opened(turn_count) => {
+                    if let Ok(workspace) =
+                        self.prepare_remote_turn(&project, session_id, &workspace, turn_count)
+                    {
+                        let outcome = (|| -> anyhow::Result<ResponsePayload> {
+                            self.ensure_remote_runtime(session_id, &events)?;
+                            self.dispatch_submission_inner(
+                                session_id,
+                                row.submission_id,
+                                workspace,
+                            )
+                        })();
+                        if let Ok(ResponsePayload::SubmissionSaved { receipt }) = outcome
+                            && matches!(receipt.state, SubmissionState::Dispatching | SubmissionState::Accepted)
+                        {
+                            self.task_store.transition_remote_prompt(
+                                operation_id,
+                                fintwind_protocol::submission::RemotePromptState::Dispatching
+                                    .label(),
+                                fintwind_protocol::submission::RemotePromptState::Dispatched
+                                    .label(),
+                            ).context("remote-dispatch-commit")?;
+                            // The prompt reached the driver. A cancel that
+                            // arrived while this dispatch was in flight came
+                            // too late: it is settled as `dispatched`, never
+                            // as a cancellation, so no device is told its
+                            // prompt was stopped when it ran. The ending is
+                            // written to the durable term record so a query
+                            // after a crash still has it.
+                            self.settle_cancel_term(operation_id, "dispatched").context("remote-dispatch-cancel-settlement")?;
+                            crate::opencode_diagnostics::record(
+                                "remote_prompt_dispatched",
+                                0,
+                                0,
+                            );
+                            return Ok(ResponsePayload::RemotePromptState {
+                                operation_id,
+                                submission_id: row.submission_id,
+                                state: fintwind_protocol::submission::RemotePromptState::Dispatched.label().to_owned(),
+                            });
+                        }
+                    }
+                }
+                MaterializedTurn::Busy => {
+                    // The session became busy after this dispatch's snapshot.
+                    // The prompt did not run and is not lost: hand the claim
+                    // back so a later tick takes it. The original operation
+                    // id is kept, so a query still answers from this row
+                    // rather than looking like a new request.
+                    let reclaimed = self.task_store.transition_remote_prompt(
+                        operation_id,
+                        fintwind_protocol::submission::RemotePromptState::Dispatching.label(),
+                        fintwind_protocol::submission::RemotePromptState::Queued.label(),
+                    )?;
+                    if !reclaimed {
+                        // Someone else settled it while the claim was ours;
+                        // their recorded state is the answer.
+                        let settled = self
+                            .task_store
+                            .remote_prompts()?
+                            .into_iter()
+                            .find(|row| row.operation_id == operation_id);
+                        return Ok(ResponsePayload::RemotePromptState {
+                            operation_id,
+                            submission_id: row.submission_id,
+                            state: settled
+                                .map(|row| row.state)
+                                .unwrap_or_else(|| row.state.clone()),
+                        });
+                    }
+                    // The row is back to `queued`, so a cancel waiting on it
+                    // is settled right now rather than waiting for another
+                    // tick to come around. The submission is still
+                    // `Preparing` here — the driver was never reached — so
+                    // the cancellation holds.
+                    if self.task_store.cancel_intent(operation_id)?.is_some() {
+                        return self.converge_pending_cancel(
+                            operation_id,
+                            row.submission_id,
+                            session_id,
+                            SubmissionState::Preparing,
+                        );
+                    }
+                    return Ok(ResponsePayload::RemotePromptState {
+                        operation_id,
+                        submission_id: row.submission_id,
+                        state: fintwind_protocol::submission::RemotePromptState::Queued
+                            .label()
+                            .to_owned(),
+                    });
+                }
+                MaterializedTurn::Gone => {
+                    // The session was removed or archived while this ran, and
+                    // that path already settled this prompt's row. Nothing ran
+                    // and nothing will; the submission store holds the truth.
+                    let _ = self.abandon_remote_prompt(session_id, row.submission_id);
+                    self.delete_prompt_settling_cancel(operation_id, row.submission_id)?;
+                    return Ok(ResponsePayload::RemotePromptState {
+                        operation_id,
+                        submission_id: row.submission_id,
+                        state: fintwind_protocol::submission::RemotePromptState::Unknown
+                            .label()
+                            .to_owned(),
+                    });
+                }
+            }
+        }
+        // Nothing ran. The submission is abandoned and the row is dropped, so
+        // no later tick can retry it — an unknown outcome is only ever
+        // answered by an explicit query, never by a second send.
+        let _ = self.abandon_remote_prompt(session_id, row.submission_id);
+        self.delete_prompt_settling_cancel(operation_id, row.submission_id)?;
+        Ok(ResponsePayload::RemotePromptState {
+            operation_id,
+            submission_id: row.submission_id,
+            state: fintwind_protocol::submission::RemotePromptState::Unknown
+                .label()
+                .to_owned(),
+        })
+    }
+
+    /// Delete one claimed prompt's row, settling a waiting cancel first.
+    ///
+    /// A cancel that was bound while this dispatch was in flight must not
+    /// disappear with the row: the device was told the promise was durable,
+    /// and a deleted row with no recorded ending would leave it waiting
+    /// forever. The caller has just settled the submission, so the
+    /// submission store — never this row — says what the ending is: never
+    /// sent means the cancellation holds, already run means it came too
+    /// late, and exhausted evidence stays `unknown`. Reading the row's
+    /// binding, writing the ending, and deleting the row are one
+    /// transaction, and a row with no binding just goes away.
+    fn delete_prompt_settling_cancel(
+        &self,
+        operation_id: Uuid,
+        submission_id: Uuid,
+    ) -> anyhow::Result<()> {
+        let state = match self.task_store.submission(submission_id)? {
+            Some(saved) => match saved.receipt.state {
+                SubmissionState::NotSent | SubmissionState::Rejected => "cancelled",
+                SubmissionState::Dispatching | SubmissionState::Accepted => "dispatched",
+                // Still preparing after the caller's abandon, or evidence
+                // exhausted: the ending is not provable, so it is unknown —
+                // never upgraded into a cancellation.
+                SubmissionState::Preparing | SubmissionState::Unknown => "unknown",
+            },
+            None => "unknown",
+        };
+        let _ = self
+            .task_store
+            .settle_cancel_and_delete_row(operation_id, state)?;
+        Ok(())
+    }
+
+    /// Record the ending of a cancel that was waiting on this prompt, and
+    /// clear the binding.
+    ///
+    /// Used at the points where the prompt's own fate becomes known without
+    /// a cancel being the cause — a dispatch that reached the driver. The
+    /// ending lands in the durable term record, so a device asking after a
+    /// crash gets the fact rather than a guess, and the row can go away
+    /// without taking the answer with it.
+    ///
+    /// The term and the cleared binding are one transaction: a crash
+    /// between them used to leave a term that a later resolve could
+    /// overwrite, or a binding that looked still-waiting on a prompt that
+    /// had already run.
+    fn settle_cancel_term(&self, operation_id: Uuid, state: &str) -> anyhow::Result<()> {
+        self.task_store
+            .settle_cancel_term_and_clear(operation_id, state)?;
+        Ok(())
+    }
+
+    /// Settle a cancel that is waiting on this prompt, using the submission
+    /// store as the authority on whether the prompt ever ran.
+    ///
+    /// `submission_state` is `Preparing` only when the driver provably never
+    /// received the prompt — the one case in which cancelling is truthful.
+    /// Every other state means the prompt's fate is already decided, and the
+    /// cancel settles to that truth rather than to a cancellation.
+    ///
+    /// The ending is written to the durable cancel-term record in the same
+    /// breath, so a device can ask again after a crash and get the recorded
+    /// fact. Nothing is ever re-sent to reach it.
+    fn converge_pending_cancel(
+        &self,
+        operation_id: Uuid,
+        submission_id: Uuid,
+        session_id: Uuid,
+        submission_state: SubmissionState,
+    ) -> anyhow::Result<ResponsePayload> {
+        // The ending, decided by the submission's own truth — never by
+        // whether a row happens to still exist.
+        let (state, ran) = match submission_state {
+            // Provably never handed to a driver: the cancellation holds.
+            SubmissionState::Preparing => (
+                fintwind_protocol::submission::RemotePromptState::Cancelled
+                    .label()
+                    .to_owned(),
+                false,
+            ),
+            // The driver took it, or confirmed it. It ran, so the cancel came
+            // too late and is reported as such rather than as a cancellation.
+            SubmissionState::Dispatching | SubmissionState::Accepted => (
+                fintwind_protocol::submission::RemotePromptState::Dispatched
+                    .label()
+                    .to_owned(),
+                true,
+            ),
+            // Refused, or never sent: the prompt did not run.
+            SubmissionState::NotSent | SubmissionState::Rejected => (
+                fintwind_protocol::submission::RemotePromptState::Cancelled
+                    .label()
+                    .to_owned(),
+                false,
+            ),
+            // The evidence ran out. `unknown` is the honest ending and is
+            // never upgraded to a success by inference.
+            SubmissionState::Unknown => (
+                fintwind_protocol::submission::RemotePromptState::Unknown
+                    .label()
+                    .to_owned(),
+                false,
+            ),
+        };
+        // The submission is settled first, before any cancel bookkeeping:
+        // its own truth is what decided `state`, and the cancel's records
+        // never outrank it. Prompts that provably did not run are released
+        // here; prompts that ran keep the submission their driver holds.
+        if !ran {
+            let _ = self.abandon_remote_prompt(session_id, submission_id);
+        }
+        // The ending, the cleared binding, and the row's deletion are one
+        // transaction. They used to be three, and a crash between them
+        // left a middle state every later reader had to guess about — a
+        // term with a still-pending binding, or a deleted row whose ending
+        // had never been written.
+        let _ = self
+            .task_store
+            .settle_cancel_and_delete_row(operation_id, &state)?;
+        crate::opencode_diagnostics::record("remote_cancel_converged", 0, 0);
+        Ok(ResponsePayload::RemotePromptState {
+            operation_id,
+            submission_id,
+            state,
+        })
+    }
+
+    /// Whether one claimed prompt may still be dispatched: the session must
+    /// still exist, not be removed or archived, and the row must still be
+    /// the one this caller claimed.
+    fn remote_target_still_valid(
+        &self,
+        session_id: Uuid,
+        operation_id: Uuid,
+    ) -> anyhow::Result<bool> {
+        {
+            let state = self.task_state.lock();
+            if self.removed_session_ids.lock().contains(&session_id) {
+                return Ok(false);
+            }
+            let Some(session) = state
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+            else {
+                return Ok(false);
+            };
+            if session.archived {
+                return Ok(false);
+            }
+        }
+        let row = self
+            .task_store
+            .remote_prompts()?
+            .into_iter()
+            .find(|row| row.operation_id == operation_id);
+        Ok(row.is_some_and(|row| {
+            fintwind_protocol::submission::RemotePromptState::parse(&row.state)
+                .is_some_and(|state| state.is_pending())
+        }))
+    }
+
+    /// Resolve the workspace a turn runs in, creating a worktree when the
+    /// session asked for one, and capture its turn-start checkpoint.
+    ///
+    /// This is the daemon's own copy of the GUI's preparation step: same
+    /// workspace operation, same checkpoint, no client in the middle.
+    fn prepare_remote_turn(
+        &self,
+        project: &Project,
+        session_id: Uuid,
+        workspace: &crate::model::SessionWorkspace,
+        turn_count: usize,
+    ) -> anyhow::Result<crate::model::SessionWorkspace> {
+        use crate::{WorkspaceOperation, WorkspaceResult};
+        let workspace = match workspace {
+            crate::model::SessionWorkspace::NewWorktree { base_branch } => {
+                if project.is_projectless() {
+                    anyhow::bail!("a projectless task cannot create a Git worktree");
+                }
+                let created = crate::workspace::execute(WorkspaceOperation::CreateWorktree {
+                    project_path: project.path.clone(),
+                    project_id: project.id,
+                    session_id,
+                    prompt: project.name.clone(),
+                    base_branch: base_branch.clone(),
+                })?;
+                let WorkspaceResult::WorktreeCreated { worktree } = created else {
+                    anyhow::bail!("the daemon returned an invalid worktree response");
+                };
+                crate::model::SessionWorkspace::Worktree {
+                    path: worktree.path,
+                    branch: worktree.branch,
+                }
+            }
+            workspace => workspace.clone(),
+        };
+        let project_path = workspace
+            .path()
+            .unwrap_or(&project.path)
+            .to_path_buf();
+        // A checkpoint failure is reported, never fatal: the turn still runs,
+        // and the warning travels with the session's own record.
+        if let Err(error) = self.capture_turn_checkpoint(project_path, session_id, turn_count) {
+            eprintln!("remote turn checkpoint failed; session={session_id} error={error}");
+        }
+        Ok(workspace)
+    }
+
+    /// Start the session's driver when it has none, from the session's own
+    /// record and a binary this computer resolved.
+    ///
+    /// The binary comes from the daemon's trusted provider probe — the same
+    /// resolution its own drivers use — so an isolated or overridden
+    /// installation is honored and a remote caller can never name one.
+    ///
+    /// The requesting sink is carried through so the runtime this starts can
+    /// publish to the same hub a client-started runtime publishes to: the
+    /// request that asked for the dispatch cannot name the runtime it is
+    /// about to create, so the sink is rebound to the runtime's own
+    /// coordinates and that runtime is opened on the hub here.
+    fn ensure_remote_runtime(
+        &self,
+        session_id: Uuid,
+        publisher: &EventSink,
+    ) -> anyhow::Result<Uuid> {
+        if let Some((runtime_id, _)) = self.sessions.lock().get(&session_id) {
+            return Ok(*runtime_id);
+        }
+        let runtime_id = Uuid::new_v4();
+        let state = self.task_state.lock();
+        let session = state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .ok_or_else(|| anyhow!("the prompt's session no longer exists"))?;
+        let project = state
+            .projects
+            .iter()
+            .find(|project| project.id == session.project_id)
+            .ok_or_else(|| anyhow!("the prompt's project is unknown"))?;
+        let workspace_path = session
+            .workspace
+            .path()
+            .unwrap_or(&project.path)
+            .to_path_buf();
+        ensure_shell_environment();
+        let probe = crate::model::cached_provider_probe(None, Some(&workspace_path));
+        let binary = probe
+            .path
+            .clone()
+            .filter(|path| path.is_file())
+            .ok_or_else(|| anyhow!("this computer has no opencode binary to run the task"))?;
+        let options = crate::driver::DriverStartOptions {
+            binary,
+            cwd: workspace_path,
+            mode: session.runtime_mode,
+            interaction_mode: session.interaction_mode,
+            model: session.model.clone(),
+            reasoning_effort: session.reasoning_effort.clone(),
+            service_tier: session.service_tier.clone(),
+            context_window: session.context_window.clone(),
+            agent_preset: session.agent_preset.clone(),
+            provider_cursor: session.provider_cursor.clone(),
+            // The daemon keys runtimes by the task's own UUID, exactly as
+            // the GUI's start path does, so metadata written by the driver
+            // lands on the right task.
+            task_id: Some(session_id.to_string()),
+        };
+        drop(state);
+        // The runtime is opened on the hub before its first event exists, so
+        // the hub accepts what it publishes instead of dropping it.
+        let publisher = publisher.rebound(session_id, runtime_id);
+        publisher.open_runtime();
+        let (wake, _wake_events) = smol::channel::bounded(1);
+        let (event_sender, event_receiver) = crate::driver::event_channel(wake);
+        let handle = crate::driver::start_local(
+            options,
+            event_sender,
+            crate::browser_tools::BrowserToolRuntime {
+                registry: self.browser_tools.clone(),
+                session_id,
+                runtime_id,
+            },
+        )?;
+        self.spawn_remote_event_forwarder(session_id, runtime_id, event_receiver, publisher);
+        self.sessions
+            .lock()
+            .insert(session_id, (runtime_id, handle));
+        Ok(runtime_id)
+    }
+
+    /// Open the turn one admitted prompt runs in, once, with the id its
+    /// submission was bound to at admission, and return that turn's ordinal.
+    ///
+    /// The prompt's text travels from the daemon's own row, so a device
+    /// never supplies it twice and a retry after a crash finds the turn
+    /// already open and adds nothing. The receipt travels with the turn, so
+    /// a crash before the driver is reached settles the turn as never-sent
+    /// instead of leaving a running turn nobody can finish.
+    ///
+    /// The busy re-check is the point of the critical section. Between the
+    /// dispatch snapshot and here, this computer's own GUI may have
+    /// committed a running turn — its `AcceptSubmission` opens a turn in
+    /// the same `task_state` critical section it commits in, so a check
+    /// performed at the append point is authoritative: whatever opened a
+    /// turn before this lock is visible here, and whatever opens one after
+    /// sees the turn this call opened. The remote row's compare-and-swap
+    /// cannot provide this, because the local submission never touches the
+    /// remote row at all.
+    fn materialize_remote_turn(
+        &self,
+        session_id: Uuid,
+        submission_id: Uuid,
+        prompt: &str,
+    ) -> anyhow::Result<MaterializedTurn> {
+        let mut state = self.task_state.lock();
+        let Some(session) = state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        else {
+            return Ok(MaterializedTurn::Gone);
+        };
+        if session.archived {
+            return Ok(MaterializedTurn::Gone);
+        }
+        if let Some(turn) = session
+            .turns
+            .iter()
+            .find(|turn| turn.id == submission_id)
+        {
+            return Ok(MaterializedTurn::Opened(turn.turn_count));
+        }
+        self.hydrate_submission_session(session)?;
+        if self.removed_session_ids.lock().contains(&session_id) {
+            return Ok(MaterializedTurn::Gone);
+        }
+        // The authoritative re-check, at the append point: any turn already
+        // running, or any submission still unsettled, means this session is
+        // not free. Appending anyway would leave the session with two
+        // running turns, and the forwarder settles only the last.
+        if session.status.is_busy()
+            || session
+                .turns
+                .iter()
+                .any(|turn| turn.status == crate::model::TurnStatus::Running)
+            || fintwind_protocol::submission::has_unsettled_submissions(session)
+        {
+            return Ok(MaterializedTurn::Busy);
+        }
+        session.begin_turn_with_id(submission_id, prompt);
+        let receipt = self
+            .task_store
+            .submission(submission_id)?
+            .map(|saved| saved.receipt);
+        let Some(turn) = session
+            .turns
+            .iter_mut()
+            .find(|turn| turn.id == submission_id)
+        else {
+            bail!("the opened turn is missing");
+        };
+        turn.submission = receipt;
+        let turn_count = turn.turn_count;
+        state.mark_session_dirty(session_id);
+        self.task_store.save(&mut state)?;
+        Ok(MaterializedTurn::Opened(turn_count))
+    }
+
+    /// The dispatch half of the submission path, shared with the GUI's
+    /// `DispatchSubmission`: claim the saved submission once, then hand it
+    /// to the driver. A driver refusal settles the submission as `NotSent`
+    /// and never retries.
+    fn dispatch_submission_inner(
+        &self,
+        session_id: Uuid,
+        submission_id: Uuid,
+        workspace: crate::model::SessionWorkspace,
+    ) -> anyhow::Result<ResponsePayload> {
+        let runtime_id = self
+            .sessions
+            .lock()
+            .get(&session_id)
+            .map(|(runtime_id, _)| *runtime_id)
+            .ok_or_else(|| anyhow!("submission runtime is unavailable"))?;
+        let mut state = self.task_state.lock();
+        if let Some(session) = state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            self.hydrate_submission_session(session)?;
+        }
+        let saved = self
+            .task_store
+            .submission(submission_id)?
+            .ok_or_else(|| anyhow!("submission is missing"))?;
+        if saved.session_id != session_id {
+            bail!("submission belongs to another session");
+        }
+        if saved.receipt.state != SubmissionState::Preparing {
+            return Ok(ResponsePayload::SubmissionSaved {
+                receipt: saved.receipt,
+            });
+        }
+        let driver = {
+            let sessions = self.sessions.lock();
+            let (active_runtime_id, driver) = sessions
+                .get(&session_id)
+                .ok_or_else(|| anyhow!("submission runtime is unavailable"))?;
+            if *active_runtime_id != runtime_id {
+                bail!("submission runtime was replaced");
+            }
+            driver.clone()
+        };
+        let session = state
+            .sessions
+            .iter_mut()
+            .find(|candidate| candidate.id == session_id)
+            .ok_or_else(|| anyhow!("submission session is missing"))?;
+        if !session
+            .turns
+            .last()
+            .is_some_and(|turn| turn.id == submission_id)
+        {
+            bail!("submission turn was replaced");
+        }
+        session.workspace = workspace;
+        state.mark_session_dirty(session_id);
+        self.task_store.save(&mut state)?;
+        let Some(saved) = self.task_store.transition_submission(
+            submission_id,
+            SubmissionState::Preparing,
+            SubmissionState::Dispatching,
+            None,
+        )?
+        else {
+            let saved = self
+                .task_store
+                .submission(submission_id)?
+                .ok_or_else(|| anyhow!("submission is missing"))?;
+            return Ok(ResponsePayload::SubmissionSaved {
+                receipt: saved.receipt,
+            });
+        };
+        crate::opencode_diagnostics::submission("dispatching", &saved, 0, 0);
+        self.active_preparations.lock().remove(&submission_id);
+        if let Some(turn) = state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .and_then(|session| session.turns.last_mut())
+        {
+            turn.submission = Some(saved.receipt.clone());
+        }
+        if let Err(error) = driver.submit(saved.clone(), self.task_store.clone()) {
+            if let Some(saved) = self.task_store.transition_submission(
+                submission_id,
+                SubmissionState::Dispatching,
+                SubmissionState::NotSent,
+                None,
+            )? {
+                if let Some(session) = state
+                    .sessions
+                    .iter_mut()
+                    .find(|session| session.id == session_id)
+                {
+                    if let Some(turn) = session.turns.last_mut() {
+                        turn.submission = Some(saved.receipt.clone());
+                    }
+                    session.finish_active_turn(crate::model::TurnStatus::Failed);
+                    session.status = SessionStatus::Idle;
+                }
+                state.mark_session_dirty(session_id);
+                self.task_store.save(&mut state)?;
+                return Ok(ResponsePayload::SubmissionSaved {
+                    receipt: saved.receipt,
+                });
+            }
+            return Err(error);
+        }
+        Ok(ResponsePayload::SubmissionSaved {
+            receipt: saved.receipt,
+        })
+    }
+
+    /// Forward one daemon-owned driver's events: onto the task state, and
+    /// out to the hub, exactly the way the GUI's start path does.
+    ///
+    /// The two halves are both required. Without the task-state half the
+    /// turn never settles in the daemon's own record; without the hub half
+    /// no client ever sees the turn, so a host cannot learn the session went
+    /// busy and would dispatch the next queued prompt into a running turn.
+    fn spawn_remote_event_forwarder(
+        &self,
+        session_id: Uuid,
+        runtime_id: Uuid,
+        event_receiver: crossbeam_channel::Receiver<crate::model::DriverEvent>,
+        publisher: EventSink,
+    ) {
+        let task_state = self.task_state.clone();
+        let task_store = self.task_store.clone();
+        let active_runtimes = self.sessions.clone();
+        std::thread::Builder::new()
+            .name(format!("fintwind-daemon-remote-events-{session_id}"))
+            .spawn(move || {
+                while let Ok(event) = event_receiver.recv() {
+                    if let crate::model::DriverEvent::SubmissionUpdated(receipt) = &event {
+                        let mut state = task_state.lock();
+                        let current_runtime = active_runtimes
+                            .lock()
+                            .get(&session_id)
+                            .is_some_and(|(active, _)| *active == runtime_id);
+                        if let Some(turn) = state
+                            .sessions
+                            .iter_mut()
+                            .find(|session| session.id == session_id && current_runtime)
+                            .and_then(|session| {
+                                session.turns.iter_mut().find(|turn| turn.id == receipt.id)
+                            })
+                            && turn
+                                .submission
+                                .as_ref()
+                                .is_none_or(|previous| receipt.supersedes(previous))
+                        {
+                            turn.submission = Some(receipt.clone());
+                        }
+                    }
+                    if let crate::model::DriverEvent::TurnFinished { success, .. } = &event {
+                        let mut state = task_state.lock();
+                        let current_runtime = active_runtimes
+                            .lock()
+                            .get(&session_id)
+                            .is_some_and(|(active, _)| *active == runtime_id);
+                        if let Some(session) = state
+                            .sessions
+                            .iter_mut()
+                            .find(|session| session.id == session_id && current_runtime)
+                            && session
+                                .turns
+                                .last()
+                                .and_then(|turn| turn.submission.as_ref())
+                                .is_some_and(|receipt| {
+                                    matches!(
+                                        receipt.state,
+                                        SubmissionState::Accepted
+                                            | SubmissionState::Dispatching
+                                            | SubmissionState::Unknown
+                                            | SubmissionState::Rejected
+                                    )
+                                })
+                        {
+                            session.finish_active_turn(if *success {
+                                crate::model::TurnStatus::Completed
+                            } else {
+                                crate::model::TurnStatus::Failed
+                            });
+                            session.status = if *success {
+                                SessionStatus::Idle
+                            } else {
+                                SessionStatus::Failed
+                            };
+                            state.mark_session_dirty(session_id);
+                            let _ = task_store.save(&mut state);
+                        }
+                    }
+                    // Publish the verified boundary to subscribers before the
+                    // loop can take the next event, so a client never sees a
+                    // turn finish after its successor started.
+                    let wire = event_to_wire(event).unwrap_or_else(|error| {
+                        WireDriverEvent::new(
+                            "error",
+                            Value::String(format!("could not encode daemon event: {error}")),
+                        )
+                    });
+                    if publisher.send(wire).is_err() {
+                        break;
+                    }
+                }
+            })
+            .ok();
+    }
+
+    /// Abandon one admitted prompt's submission, so a failed preparation
+    /// leaves the turn settled rather than hanging as Running.
+    ///
+    /// A queued prompt usually has no turn yet — it is admitted as a record
+    /// — so this normally only settles the submission. When a turn was
+    /// already opened by a failed dispatch, that turn is settled as failed.
+    /// Either way the session's status is recomputed from what is actually
+    /// still unsettled: abandoning one queued prompt must never declare a
+    /// session idle while another turn is still running.
+    fn abandon_remote_prompt(
+        &self,
+        session_id: Uuid,
+        submission_id: Uuid,
+    ) -> anyhow::Result<()> {
+        self.active_preparations.lock().remove(&submission_id);
+        let mut state = self.task_state.lock();
+        if let Some(session) = state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        {
+            if let Some(turn) = session
+                .turns
+                .iter_mut()
+                .find(|turn| turn.id == submission_id)
+            {
+                turn.submission = None;
+                if turn.status == crate::model::TurnStatus::Running {
+                    turn.status = crate::model::TurnStatus::Failed;
+                    turn.completed_at = Some(crate::model::unix_time());
+                }
+            }
+            session.status = if fintwind_protocol::submission::has_unsettled_submissions(session) {
+                SessionStatus::Working
+            } else {
+                SessionStatus::Idle
+            };
+            state.mark_session_dirty(session_id);
+            self.task_store.save(&mut state)?;
+        }
+        let _ = self
+            .task_store
+            .transition_submission(
+                submission_id,
+                SubmissionState::Preparing,
+                SubmissionState::NotSent,
+                None,
+            )
+            .ok();
+        Ok(())
+    }
+
+    /// Cancel one admitted prompt that has not been dispatched yet.
+    ///
+    /// `cancel_operation_id` is the device's own cancel operation, and it is
+    /// what makes the promise durable: when the prompt is mid-dispatch the
+    /// cancel cannot be honoured yet, so it is recorded on the row under
+    /// this id, and the dispatch resolves it. Without it the host would have
+    /// nothing durable to answer a restart with.
+    fn cancel_remote_prompt(
+        &self,
+        provenance: &fintwind_protocol::submission::RemoteProvenance,
+        operation_id: Uuid,
+        cancel_operation_id: Option<Uuid>,
+    ) -> anyhow::Result<ResponsePayload> {
+        let _claim_gate = self.live_dispatches.lock();
+        let row = self
+            .task_store
+            .remote_prompts()?
+            .into_iter()
+            .find(|row| row.operation_id == operation_id)
+            .ok_or_else(|| anyhow!("no queued prompt carries that operation id"))?;
+        if row.device_id != provenance.device_id
+            || row.host_id != provenance.host_id.to_string()
+            || provenance.grant_version != row.grant_version
+        {
+            bail!("that prompt belongs to another device");
+        }
+        let state_now = fintwind_protocol::submission::RemotePromptState::parse(&row.state)
+            .unwrap_or(fintwind_protocol::submission::RemotePromptState::Unknown);
+        if !state_now.is_pending() {
+            return Ok(ResponsePayload::RemotePromptState {
+                operation_id,
+                submission_id: row.submission_id,
+                state: row.state,
+            });
+        }
+        // A prompt whose dispatch is being decided right now is not
+        // cancelled: claiming a cancellation for it would contradict the
+        // dispatch that is already under way. Instead the cancel is recorded
+        // durably on the row, so the promise survives a host crash, and the
+        // dispatch resolves it the moment its outcome is known.
+        if state_now == fintwind_protocol::submission::RemotePromptState::Dispatching {
+            match self
+                .task_store
+                .record_cancel_intent(operation_id, cancel_operation_id)?
+            {
+                crate::persistence::CancelIntentOutcome::Recorded => {
+                    crate::opencode_diagnostics::record("remote_cancel_pending", 0, 0);
+                }
+                crate::persistence::CancelIntentOutcome::Conflict => {
+                    // Another device's cancel already holds this prompt. Two
+                    // cancellations cannot both be the one that counted.
+                    bail!("another cancellation is already waiting on this prompt");
+                }
+                crate::persistence::CancelIntentOutcome::RowMissing => {
+                    bail!("no queued prompt carries that operation id");
+                }
+            }
+            return Ok(ResponsePayload::RemotePromptState {
+                operation_id,
+                submission_id: row.submission_id,
+                state: row.state,
+            });
+        }
+        match self.task_store.record_cancel_intent(operation_id, cancel_operation_id)? {
+            crate::persistence::CancelIntentOutcome::Recorded => {}
+            crate::persistence::CancelIntentOutcome::Conflict => bail!("another cancellation is already waiting on this prompt"),
+            crate::persistence::CancelIntentOutcome::RowMissing => bail!("no queued prompt carries that operation id"),
+        }
+        self.abandon_remote_prompt(row.session_id, row.submission_id)?;
+        self.task_store.settle_cancel_and_delete_row(operation_id, "cancelled")?;
+        crate::opencode_diagnostics::record("remote_prompt_cancelled", 0, 0);
+        Ok(ResponsePayload::RemotePromptState {
+            operation_id,
+            submission_id: row.submission_id,
+            state: fintwind_protocol::submission::RemotePromptState::Cancelled
+                .label()
+                .to_owned(),
+        })
+    }
+
+    /// Archive or restore one session.
+    ///
+    /// Archiving stops a running turn first, cancels every prompt still
+    /// queued for the session, and writes the flag through its own
+    /// statement. Restoring only clears the flag: it never starts a turn and
+    /// never widens what the session may reach.
+    ///
+    /// Nothing here holds the state guard across a driver call or across a
+    /// helper that takes the guard itself: the driver's threads take it, and
+    /// `abandon_remote_prompt` takes it, so both run with the guard
+    /// released.
+    fn archive_remote_session(
+        &self,
+        provenance: &fintwind_protocol::submission::RemoteProvenance,
+        session_id: Uuid,
+        archived: bool,
+    ) -> anyhow::Result<ResponsePayload> {
+        if archived {
+            // A busy task is stopped before it is tidied away: an archive
+            // that raced a running turn would hide a turn nobody can see.
+            // A stop that cannot even be attempted refuses the archive
+            // instead of recording a tidy state the turn then contradicts.
+            if !self.stop_remote_session_turn(session_id)? {
+                bail!("the task could not be stopped before archiving");
+            }
+            // Every prompt still waiting for this session is cancelled: an
+            // archived task never runs anything. The rows are read first,
+            // because each abandon takes the state guard itself.
+            let waiting: Vec<(Uuid, Uuid, String)> = self
+                .task_store
+                .remote_prompts()?
+                .into_iter()
+                .filter(|row| row.session_id == session_id)
+                .map(|row| (row.operation_id, row.submission_id, row.state))
+                .collect();
+            for (operation_id, submission_id, state) in waiting {
+                if fintwind_protocol::submission::RemotePromptState::parse(&state)
+                    .is_some_and(|state| state.is_pending())
+                {
+                    self.abandon_remote_prompt(session_id, submission_id)?;
+                }
+                self.task_store.delete_remote_prompt(operation_id)?;
+            }
+        }
+        let mut state = self.task_state.lock();
+        let Some(session) = state
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+        else {
+            bail!("the session is unknown to this computer");
+        };
+        self.hydrate_submission_session(session)?;
+        if session.archived == archived {
+            return Ok(ResponsePayload::Ack);
+        }
+        session.archived = archived;
+        state.mark_session_dirty(session_id);
+        self.task_store.save(&mut state)?;
+        drop(state);
+        // The column is written separately so a later client save that never
+        // mentioned the field cannot drop it.
+        self.task_store.set_session_archived(session_id, archived)?;
+        crate::opencode_diagnostics::record(
+            if archived {
+                "remote_session_archived"
+            } else {
+                "remote_session_restored"
+            },
+            0,
+            0,
+        );
+        let _ = provenance;
+        Ok(ResponsePayload::Ack)
+    }
+
+    /// Stop one session's running turn before it is archived.
+    ///
+    /// Returns whether the session is safe to archive: `false` when a turn
+    /// is running and this daemon holds no runtime that could stop it.
+    ///
+    /// The driver call runs with no state guard held — the driver's own
+    /// threads take that guard, so waiting on one while holding it is how a
+    /// daemon deadlocks. A cancel is fire-and-forget, so the turn is settled
+    /// by its own event rather than by this call returning; what this call
+    /// guarantees is that a stop was actually attempted on a runtime that
+    /// exists, never that one was confirmed.
+    fn stop_remote_session_turn(&self, session_id: Uuid) -> anyhow::Result<bool> {
+        let running = {
+            let mut state = self.task_state.lock();
+            let Some(session) = state
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+            else {
+                bail!("the session is unknown to this computer");
+            };
+            self.hydrate_submission_session(session)?;
+            session.status.is_busy()
+                || session
+                    .turns
+                    .last()
+                    .is_some_and(|turn| turn.status == crate::model::TurnStatus::Running)
+        };
+        if !running {
+            return Ok(true);
+        }
+        let Some((_, driver)) = self.sessions.lock().get(&session_id).cloned() else {
+            // A running turn with no runtime cannot be stopped from here.
+            return Ok(false);
+        };
+        driver.cancel();
+        Ok(true)
+    }
+
+    /// Persist one session's options on this computer.
+    ///
+    /// Every enum is decoded here, so a value the daemon does not know is
+    /// refused instead of being stored as if it applied. A live session also
+    /// gets the values through its driver; a session with no runtime yet
+    /// only records them, so its next turn starts with them.
+    fn set_remote_session_options(
+        &self,
+        provenance: &fintwind_protocol::submission::RemoteProvenance,
+        session_id: Uuid,
+        options: crate::WireSessionOptions,
+    ) -> anyhow::Result<ResponsePayload> {
+        let mode = decode_enum(&options.mode)?;
+        let interaction_mode = decode_enum(&options.interaction_mode)?;
+        let mut state = self.task_state.lock();
+        let recorded = {
+            let Some(session) = state
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+            else {
+                bail!("the session is unknown to this computer");
+            };
+            self.hydrate_submission_session(session)?;
+            session.runtime_mode = mode;
+            session.interaction_mode = interaction_mode;
+            session.model = options.model;
+            session.reasoning_effort = options.reasoning_effort;
+            session.service_tier = options.service_tier;
+            session.context_window = options.context_window;
+            crate::driver::SessionOptions {
+                mode,
+                interaction_mode,
+                model: session.model.clone(),
+                reasoning_effort: session.reasoning_effort.clone(),
+                service_tier: session.service_tier.clone(),
+                context_window: session.context_window.clone(),
+            }
+        };
+        state.mark_session_dirty(session_id);
+        self.task_store.save(&mut state)?;
+        drop(state);
+        let applied = self
+            .sessions
+            .lock()
+            .get(&session_id)
+            .map(|(_, driver)| driver.apply_options(recorded))
+            .unwrap_or(false);
+        crate::opencode_diagnostics::record("remote_session_options_set", 0, 0);
+        let _ = provenance;
+        Ok(ResponsePayload::OptionsApplied { applied })
+    }
 }
 
 impl Backend for FintwindBackend {
@@ -986,6 +2468,263 @@ impl Backend for FintwindBackend {
                 drop(removed);
                 Ok(ResponsePayload::Ack)
             }
+            // ---- remote control: daemon-owned task, queue and tidy state ----
+            //
+            // Every command below is addressed by ids this daemon already
+            // owns. None of them accepts a project, a session object, a
+            // driver-start payload, a binary or a working directory from the
+            // caller: the daemon resolves those from its own task state and
+            // its own provider probe, so a remote client can only ever name
+            // work this computer already has.
+            Command::CreateRemoteTask {
+                provenance,
+                project_id,
+            } => {
+                let mut state = self.task_state.lock();
+                if self.removed_project_ids.lock().contains(&project_id) {
+                    bail!("remote task target project was removed");
+                }
+                if !state
+                    .projects
+                    .iter()
+                    .any(|project| project.id == project_id)
+                {
+                    bail!("remote task target project is unknown");
+                }
+                // The computer's own new-task defaults, not a structural
+                // default chosen here: the remembered model and its traits,
+                // the same record a locally created task starts from.
+                let session = state.new_session(project_id);
+                let session_id = session.id;
+                state.sessions.push(session);
+                state.mark_session_dirty(session_id);
+                self.task_store.save(&mut state)?;
+                crate::opencode_diagnostics::record("remote_task_created", 0, 0);
+                let _ = provenance;
+                Ok(ResponsePayload::RemoteTaskCreated { session_id })
+            }
+            Command::AdmitRemotePrompt {
+                provenance,
+                session_id,
+                operation_id,
+                prompt,
+                expires_at_ms,
+                summary,
+            } => self.admit_remote_prompt(
+                provenance,
+                session_id,
+                operation_id,
+                &prompt,
+                expires_at_ms,
+                &summary,
+            ),
+            Command::DispatchRemotePrompt {
+                provenance,
+                operation_id,
+            } => self.dispatch_remote_prompt(provenance, operation_id, events.clone()),
+            Command::CancelRemotePrompt {
+                provenance,
+                operation_id,
+                cancel_operation_id,
+            } => self.cancel_remote_prompt(&provenance, operation_id, cancel_operation_id),            Command::ListRemotePrompts { provenance } => {
+                let prompts = self
+                    .task_store
+                    .remote_prompts()?
+                    .into_iter()
+                    .map(|row| fintwind_protocol::submission::RemotePromptRecord {
+                        operation_id: row.operation_id,
+                        submission_id: row.submission_id,
+                        session_id: row.session_id,
+                        device_id: row.device_id,
+                        state: row.state,
+                        summary: row.summary,
+                        enqueued_at_ms: row.enqueued_at_ms,
+                        expires_at_ms: row.expires_at_ms,
+                        grant_version: row.grant_version,
+                        // The durable cancel binding, so a host that restarts
+                        // knows a cancellation was promised instead of
+                        // dispatching the prompt.
+                        cancel_operation_id: row.cancel_operation_id,
+                        cancel_state: row.cancel_state,
+                    })
+                    .collect();
+                let _ = provenance;
+                Ok(ResponsePayload::RemotePrompts { prompts })
+            }
+            Command::QueryRemoteCancel {
+                provenance,
+                operation_id,
+                cancel_operation_id,
+            } => {
+                // The authoritative answer to "did my cancellation hold?".
+                // The prompt's own operation id is what is asked about — no
+                // new id is minted — and the daemon reports what it durably
+                // recorded rather than inferring an ending from whatever
+                // happens to still exist.
+                //
+                // A missing prompt row proves nothing on its own: rows are
+                // deleted when a session goes away and when a queue is
+                // swept, so reading `absent` as a cancellation would be a
+                // guess. The cancel-term record is the only thing that may
+                // supply an ending once the row is gone, and without one the
+                // honest answer is `unknown`.
+                let row = self
+                    .task_store
+                    .remote_prompts()?
+                    .into_iter()
+                    .find(|row| row.operation_id == operation_id);
+                if let Some(row) = row.as_ref()
+                    && (row.device_id != provenance.device_id
+                        || row.host_id != provenance.host_id.to_string()
+                        || provenance.grant_version != row.grant_version)
+                {
+                    bail!("that prompt belongs to another device");
+                }
+                // Naming a cancellation asks about *that* one. One prompt may
+                // carry more than one cancellation over its life, so the
+                // unnamed query reports whichever ended last — this one must
+                // never be answered with another's fate. The lookup is
+                // purely a read: nothing is settled, re-sent, or released by
+                // asking.
+                if let Some(asked) = cancel_operation_id {
+                    // Still waiting on the live row under exactly this id?
+                    if let Some((bound, bound_state)) =
+                        self.task_store.cancel_intent(operation_id)?
+                        && bound == Some(asked)
+                    {
+                        return Ok(ResponsePayload::RemoteCancelState {
+                            operation_id,
+                            submission_id: row.as_ref().map(|row| row.submission_id),
+                            cancel_operation_id: Some(asked),
+                            cancel_state: bound_state,
+                            host_id: row
+                                .as_ref()
+                                .and_then(|row| Uuid::parse_str(&row.host_id).ok()),
+                            device_id: row.as_ref().map(|row| row.device_id),
+                            grant_version: row.as_ref().map(|row| row.grant_version),
+                        });
+                    }
+                    // Otherwise its recorded ending — but only if the record
+                    // is about this prompt and belongs to the device asking,
+                    // under the grant it was admitted under. Another
+                    // device's ending is not this caller's business, and a
+                    // re-paired device's new grant does not own the old
+                    // cancellation either.
+                    let term =
+                        self.task_store
+                            .cancel_term_by_id(asked, operation_id)?;
+                    if let Some(term) = term.as_ref()
+                        && (term.device_id != provenance.device_id
+                            || term.host_id != provenance.host_id.to_string()
+                            || provenance.grant_version != term.grant_version)
+                    {
+                        return Ok(ResponsePayload::RemoteCancelState {
+                            operation_id,
+                            submission_id: row.as_ref().map(|row| row.submission_id),
+                            cancel_operation_id: Some(asked),
+                            cancel_state: "unknown".to_owned(),
+                            host_id: None,
+                            device_id: None,
+                            grant_version: None,
+                        });
+                    }
+                    if let Some(term) = term {
+                        return Ok(ResponsePayload::RemoteCancelState {
+                            operation_id,
+                            submission_id: Some(term.submission_id),
+                            cancel_operation_id: Some(term.cancel_operation_id),
+                            cancel_state: term.state,
+                            host_id: Uuid::parse_str(&term.host_id).ok(),
+                            device_id: Some(term.device_id),
+                            grant_version: Some(term.grant_version),
+                        });
+                    }
+                    // No binding and no recorded ending for this id. The
+                    // honest answer is `unknown`; a missing record never
+                    // becomes a cancellation.
+                    return Ok(ResponsePayload::RemoteCancelState {
+                        operation_id,
+                        submission_id: row.as_ref().map(|row| row.submission_id),
+                        cancel_operation_id: Some(asked),
+                        cancel_state: "unknown".to_owned(),
+                        host_id: row
+                            .as_ref()
+                            .and_then(|row| Uuid::parse_str(&row.host_id).ok()),
+                        device_id: row.as_ref().map(|row| row.device_id),
+                        grant_version: row.as_ref().map(|row| row.grant_version),
+                    });
+                }
+                match self.task_store.cancel_intent(operation_id)? {
+                    Some((cancel_operation_id, state)) => Ok(ResponsePayload::RemoteCancelState {
+                        operation_id,
+                        submission_id: row.as_ref().map(|row| row.submission_id),
+                        cancel_operation_id,
+                        cancel_state: state,
+                        // Still waiting, so the provenance is the live row's.
+                        host_id: row
+                            .as_ref()
+                            .and_then(|row| Uuid::parse_str(&row.host_id).ok()),
+                        device_id: row.as_ref().map(|row| row.device_id),
+                        grant_version: row.as_ref().map(|row| row.grant_version),
+                    }),
+                    None => {
+                        // Nothing is waiting on a live row. If this prompt's
+                        // cancellation already ended, that recorded ending is
+                        // the answer — provenance included, so the host can
+                        // confirm it still belongs to the device asking;
+                        // otherwise the row's own state is the truth about the
+                        // prompt, reported as such rather than dressed up as a
+                        // cancellation.
+                        let term = self.task_store.cancel_term_by_prompt(operation_id)?;
+                        let cancel_state = match term.as_ref() {
+                            Some(term) => term.state.clone(),
+                            None => row
+                                .as_ref()
+                                .map(|row| row.state.clone())
+                                .unwrap_or_else(|| "unknown".to_owned()),
+                        };
+                        Ok(ResponsePayload::RemoteCancelState {
+                            operation_id,
+                            submission_id: row
+                                .as_ref()
+                                .map(|row| row.submission_id)
+                                .or(term.as_ref().map(|term| term.submission_id)),
+                            cancel_operation_id: term
+                                .as_ref()
+                                .map(|term| term.cancel_operation_id),
+                            cancel_state,
+                            host_id: term
+                                .as_ref()
+                                .and_then(|term| Uuid::parse_str(&term.host_id).ok())
+                                .or_else(|| {
+                                    row.as_ref()
+                                        .and_then(|row| Uuid::parse_str(&row.host_id).ok())
+                                }),
+                            device_id: term
+                                .as_ref()
+                                .map(|term| term.device_id)
+                                .or_else(|| row.as_ref().map(|row| row.device_id)),
+                            grant_version: term
+                                .as_ref()
+                                .map(|term| term.grant_version)
+                                .or_else(|| row.as_ref().map(|row| row.grant_version)),
+                        })
+                    }
+                }
+            }
+            Command::ArchiveRemoteSession {
+                provenance,
+                session_id,
+            } => self.archive_remote_session(&provenance, session_id, true),
+            Command::RestoreRemoteSession {
+                provenance,
+                session_id,
+            } => self.archive_remote_session(&provenance, session_id, false),
+            Command::SetRemoteSessionOptions {
+                provenance,
+                session_id,
+                options,
+            } => self.set_remote_session_options(&provenance, session_id, options),
             Command::HydrateSession { session_id } => {
                 let mut state = self.task_state.lock();
                 let session = if let Some(session) = state
@@ -993,7 +2732,7 @@ impl Backend for FintwindBackend {
                     .iter_mut()
                     .find(|session| session.id == session_id)
                 {
-                    self.hydrate_submission_session(session)?;
+                    self.task_store.hydrate(session)?;
                     Some(session.clone())
                 } else {
                     None
@@ -1988,6 +3727,15 @@ fn handle_driver_command(
         | Command::ResizeTerminal { .. }
         | Command::CloseTerminal
         | Command::CloseSession
+        | Command::CreateRemoteTask { .. }
+        | Command::AdmitRemotePrompt { .. }
+        | Command::DispatchRemotePrompt { .. }
+        | Command::CancelRemotePrompt { .. }
+        | Command::ListRemotePrompts { .. }
+        | Command::ArchiveRemoteSession { .. }
+        | Command::RestoreRemoteSession { .. }
+        | Command::SetRemoteSessionOptions { .. }
+        | Command::QueryRemoteCancel { .. }
         | Command::BrowserList
         | Command::BrowserInvoke { .. } => {
             bail!("daemon received a command in the wrong dispatch path")

@@ -771,6 +771,15 @@ pub struct AgentSession {
     /// Read-only compatibility field for v1 state files. New saves omit it.
     #[serde(default, skip_serializing)]
     pub provider_session_id: Option<String>,
+    /// Kept out of the active task list by the daemon's own tidy-up state.
+    /// Archiving never deletes files and never touches the provider's own
+    /// session; restoring is tidy-up only and never starts a turn.
+    ///
+    /// Serialized only when set, so a client that predates the field writes
+    /// nothing rather than a `false` that would silently un-archive a task.
+    /// Only the daemon's explicit archive/restore commands clear it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
     /// Not stored in the session JSON — these are rows in the `messages`
     /// table, reattached when the session is hydrated.
     #[serde(default)]
@@ -832,6 +841,7 @@ impl AgentSession {
             imported: false,
             native_session_id: None,
             provider_session_id: None,
+            archived: false,
             messages: Vec::new(),
             transcript_blocks: Vec::new(),
             turns: Vec::new(),
@@ -872,6 +882,9 @@ impl AgentSession {
             imported: self.imported,
             native_session_id: self.native_session_id.clone(),
             provider_session_id: None,
+            // Tidy-up state is a list-level fact, not transcript detail, so
+            // a projection must not drop it.
+            archived: self.archived,
             messages: Vec::new(),
             transcript_blocks: Vec::new(),
             turns: Vec::new(),
@@ -1098,6 +1111,34 @@ impl AgentSession {
     #[doc(hidden)]
     pub fn begin_turn(&mut self, prompt: impl Into<String>) -> Uuid {
         self.begin_turn_with_presentation(prompt, None, Vec::new())
+    }
+
+    /// Open a turn whose id was already fixed by an earlier durable record.
+    ///
+    /// A queued prompt is admitted before any turn exists: the admission is
+    /// a record, not a claim on the transcript, and a busy session must not
+    /// grow a second running turn. The turn is opened here, at dispatch,
+    /// with the id the submission was bound to at admission — so the turn
+    /// and its submission are the same fact, opened exactly once.
+    #[doc(hidden)]
+    pub fn begin_turn_with_id(&mut self, id: Uuid, prompt: impl Into<String>) -> Uuid {
+        let now = unix_time();
+        self.turns.push(AgentTurn {
+            id,
+            submission: None,
+            turn_count: self.turns.len() + 1,
+            status: TurnStatus::Running,
+            provider_turn_started: false,
+            provider_resume_at: None,
+            provider_prompt: None,
+            started_at: now,
+            completed_at: None,
+            checkpoint: None,
+            stats: None,
+        });
+        self.messages.push(Message::new_for_turn(MessageRole::User, prompt, id));
+        self.last_reply_at = Some(now);
+        id
     }
 
     pub fn begin_turn_with_presentation(

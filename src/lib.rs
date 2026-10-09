@@ -203,6 +203,7 @@ impl FintwindApplicationExt for Application {
 pub fn run() {
     let daemon = crate::daemon::start_process()
         .unwrap_or_else(|error| panic!("failed to start fintwind daemon: {error:#}"));
+    crate::daemon::start_remote_host(&daemon);
     gpui_platform::application()
         .with_assets(crate::assets::Assets)
         .with_main_window_reopen()

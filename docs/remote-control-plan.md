@@ -11,6 +11,12 @@
 | 推进顺序 | 按架构文档推进路线全量推进 | relay → host → 配对 → PWA → 只读工作区 → 验收 |
 | PWA 技术栈 | React + Vite + TypeScript | 与 ZCode 手机端同栈，参考代码可直接对照 |
 | 端到端加密 | Noise Protocol Framework（Rust `snow`） | 响应架构文档未决问题 1；细节见下文，M0 冻结 |
+| 身份与登录 | 公钥注册 + 挑战签名，无账号、密码或长期 relay token | 以 `remote-control-m0-freeze.md` 的 2026-10-07 决策修订为准 |
+| 验证方式 | 大模块黑盒与 E2E，不新增单元测试 | 交付前验证真实公网中继链路；隔离工作区与身份，不使用用户业务数据 |
+
+本文较早里程碑中的账号、owner 与 token 表述已被上述身份决策替代：隔离按
+独立设备身份与逐 host 配对关系验证，撤销按本机 grant 与 relay 配对关系分别验证。
+当前工作进度与可重复验收记录见 [remote-control-progress.md](remote-control-progress.md)。
 
 ## 参考实现：ZCode 的取与舍
 
@@ -69,17 +75,18 @@ crates/
   fintwind-relay/             新  relay 二进制：身份库、路由、配对协调、有界队列
   fintwind-remote-host/       新  host 守护进程二进制：出站 WSS、适配层、去重、审批绑定
   fintwind-core/              少改 仅为适配层补充查询接口，白名单内
-  fintwind-daemon/            不动
+  fintwind-daemon/            少改 明确 data-dir 隔离，初始化成功后才宣告就绪
   fintwind-protocol/          不动
-fintwind-remote-pwa/          独立仓库  React + Vite + TS 控制端
+  ../fintwind-pwa/              独立仓库  React + Vite + TS 控制端（实际本地目录）
 src/                          后续 GUI：配对 QR 弹窗、设备管理页
 ```
 
 - **relay 与 host 的 WS 服务端沿用 `tungstenite` 手写风格**，与
   `fintwind-core/src/server.rs` 一致；TLS 由 Caddy 终结，relay 后端仅 loopback
   （部署清单既定），因此不引入 axum/tokio 之外的新 Web 框架依赖。
-- **PWA 独立仓库**：架构文档要求 PWA 发布方与 relay 运维隔离、发布流水线独立。
-  托管沿用 fintwind-website 的 Cloudflare 模式。协议类型一致性靠
+- **PWA 独立仓库**：实际目录为 `../fintwind-pwa/`，不是本仓库的 `page/`。
+  架构文档要求 PWA 发布方与 relay 运维隔离、发布流水线独立；手机页面部署到
+  独立 Cloudflare Pages 项目，流程见 `deploy/pwa/README.md`。协议类型一致性靠
   `fintwind-remote-protocol` 导出 JSON Schema 生成 TS 类型，CI 校验漂移。
 - **加密层 Rust 单实现 + wasm 出口**：PWA 侧不引入 JS Noise 实现——把
   `fintwind-remote-crypto` 编译为 wasm 供 PWA 调用，两端同一份可审计实现，
@@ -110,7 +117,7 @@ src/                          后续 GUI：配对 QR 弹窗、设备管理页
 | 心跳 | ping 10s / pong 超时 60s / idle 10 min | 架构文档候选值，目标网络实测后冻结 |
 | ack 超时 / 缓冲宽限 | 20s / 45s | ZCode PersistentProtocol 实测值，作为起点 |
 | 未认证连接 | 超时 10s，全局上限 64 | 架构文档"连接认证"节 |
-| 登录 / 配对限速 | 5 次/小时/账号 | 防爆破初值 |
+| 登录 / 配对限速 | 5 次/小时/身份 | 无账号方案，以独立身份和来源分别限速 |
 | 重连退避 | 数组 [1,2,4,8,15,30,60]s，超限判永久断开 | ZCode `RECONNECT_DELAYS` 模式 |
 
 ## 里程碑
@@ -122,14 +129,14 @@ src/                          后续 GUI：配对 QR 弹窗、设备管理页
 加密帧封套，含 `PROTOCOL_VERSION` 显式协商）；`fintwind-remote-crypto` Noise
 封装 API 定型；本表资源初值复核；`opencode_events` 重放能力核实结论
 （哪些事件可重放、快照如何生成，写入适配层设计）。
-**完成判据**：协议与加密 API 通过两端（Rust 单测 + TS schema 生成）编译消费；
+**完成判据**：协议与加密 API 通过两端编译消费及模块黑盒验证，TS schema 可生成；
 未决问题 1–4 各有书面结论，不再留"实现时再定"。
 
 ### M1 relay
 
-**范围**：账号（Argon2id）、device/host 身份库（SQLite）、连接注册表与角色固定、
-按 `host_id` 的逐消息路由校验、有界密文内存队列与投递序号、配对协调
-（owner 校验、nonce 消费、限速、token 签发）、版本协商、心跳、资源上限与限速、
+**范围**：公钥身份库（SQLite）、注册持钥证明与连接挑战签名、连接注册表与角色固定、
+按逐 host 配对关系的消息路由校验、有界密文内存队列与投递序号、配对协调
+（nonce 消费、限速、本机确认后的关系声明）、版本协商、心跳、资源上限与限速、
 最小化日志。
 **产出**：`fintwind-relay` 二进制 + 部署清单落地（Caddy、systemd、非 root）。
 **完成判据**：架构文档 A 组与 B 组中 relay 职责项在隔离环境通过；观察点验证
@@ -149,9 +156,9 @@ relay 断开时本机 agent 照常运行（优雅降级验证）。
 
 ### M3 配对与设备信任
 
-**范围**：八步配对流程全链路（host UI 的 QR 弹窗、手机扫码、XX 握手、校验码
+**范围**：无账号配对流程全链路（host UI 的 QR 弹窗、手机扫码、XX 握手、校验码
 核对、本机确认弹窗含授权范围全文、grant 持久化、确认回执）；撤销双通道
-（host 本机 grant 撤销 + relay token 撤销，语义分离）；GUI 设备管理页的
+（host 本机 grant 撤销 + relay 配对关系撤销，语义分离）；GUI 设备管理页的
 本机查看与撤销；配对 nonce 原子消费 + TTL。
 **产出**：GUI 配对弹窗与设备管理入口；`fintwind-remote-host` 的 grant 校验
 与撤销执行路径。
@@ -160,7 +167,7 @@ relay 断开时本机 agent 照常运行（优雅降级验证）。
 
 ### M4 PWA 控制端
 
-**范围**：登录与 host 发现；会话快照拉取 + 增量订阅（游标恢复）；第一阶段
+**范围**：设备身份解锁、配对与已配对 host 发现；会话快照拉取 + 增量订阅（游标恢复）；第一阶段
 能力清单的会话面——列表/搜索/筛选、创建（限已有项目）、整理、删除与批量
 （分级确认、先停再删、逐项结果）、任务控制（排队/显式中断/停止后继续）、
 用户问题回复、工具审批展示（完整参数 + 目标 + 风险，截断不可批准）、
@@ -182,7 +189,7 @@ relay 断开时本机 agent 照常运行（优雅降级验证）。
 
 ### M6 E2E 验收与外部试用准备
 
-**范围**：架构文档"E2E 验收产物"全部条目；隔离 E2E 含两个账号、两台 host、
+**范围**：架构文档“E2E 验收产物”全部条目；隔离 E2E 含独立身份、两台 host、
 两枚设备；脱敏时间线产物；部署清单全项；隐私说明与发布恢复流程成文
 （未决问题 5）。
 **完成判据**：验收产物可重复执行并留档；密码协议与实现审查完成前，

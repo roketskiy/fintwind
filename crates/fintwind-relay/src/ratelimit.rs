@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 
+/// Hard bound on limiter keys. Registration is open by design, so the
+/// key space is attacker-mintable; the map must not grow with it.
+pub const RATE_LIMIT_MAX_KEYS: usize = 8192;
+
 struct Window {
     /// Start of the current fixed window.
     started: Instant,
@@ -23,16 +27,22 @@ pub struct RateLimiter {
     windows: Arc<Mutex<HashMap<String, Window>>>,
     limit: u32,
     window: Duration,
+    max_keys: usize,
 }
 
 use std::sync::Arc;
 
 impl RateLimiter {
     pub fn new(limit: u32, window: Duration) -> Self {
+        Self::with_max_keys(limit, window, RATE_LIMIT_MAX_KEYS)
+    }
+
+    pub fn with_max_keys(limit: u32, window: Duration, max_keys: usize) -> Self {
         Self {
             windows: Arc::new(Mutex::new(HashMap::new())),
             limit,
             window,
+            max_keys: max_keys.max(1),
         }
     }
 
@@ -42,6 +52,18 @@ impl RateLimiter {
     pub fn admit(&self, key: &str) -> bool {
         let now = Instant::now();
         let mut windows = self.windows.lock();
+        if !windows.contains_key(key) {
+            // A brand-new key must not push a live counter out of the
+            // map: dropping expired entries first is free, and refusing
+            // afterwards never resets anyone's window (an eviction-based
+            // policy would hand an attacker a limit-bypass).
+            if windows.len() >= self.max_keys {
+                windows.retain(|_, window| now.duration_since(window.started) < self.window);
+                if windows.len() >= self.max_keys {
+                    return false;
+                }
+            }
+        }
         let entry = windows.entry(key.to_owned()).or_insert(Window {
             started: now,
             count: 0,
@@ -57,12 +79,15 @@ impl RateLimiter {
         true
     }
 
-    /// Drop entries whose window closed long enough ago. Called from the
-    /// periodic sweep so a flood of one-shot keys cannot grow the map
-    /// without bound.
+    /// Drop entries whose window has closed. Called from the periodic
+    /// sweep so a flood of one-shot keys cannot grow the map without
+    /// bound; retaining only in-window entries is what keeps the bound
+    /// self-healing inside one window.
     pub fn sweep(&self) {
-        let cutoff = Instant::now() - self.window * 2;
-        self.windows.lock().retain(|_, window| window.started > cutoff);
+        let now = Instant::now();
+        self.windows
+            .lock()
+            .retain(|_, window| now.duration_since(window.started) < self.window);
     }
 }
 

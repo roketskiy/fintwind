@@ -19,6 +19,10 @@ User=fintwind-relay
 Group=fintwind-relay
 ExecStart=/usr/local/bin/fintwind-relay --bind 127.0.0.1:8090 --db /var/lib/fintwind-relay/relay.sqlite3
 Environment=RUST_LOG=info
+# Exact independent PWA production origins. The relay origin must not serve
+# the controller's HTML/WASM after migration acceptance.
+# Add a dev origin here only through a drop-in override, never in prod.
+Environment=FINTWIND_RELAY_ORIGINS=https://remote.fintwind.xyz,https://fintwind-remote.pages.dev
 # The relay never handles signals itself; a stop is a kill, which is safe
 # because the store runs in WAL mode and queues are in-memory by design.
 KillMode=process

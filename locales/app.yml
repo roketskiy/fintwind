@@ -172,6 +172,66 @@ settings.mcp_market:
   en: MCP Marketplace
 settings.mcp_market_keywords:
   en: mcp marketplace smithery web search academic code install context7 github arxiv pubmed brave exa tavily
+settings.devices:
+  en: Devices
+settings.devices_keywords:
+  en: devices pairing phone mobile remote qr code link revoke trust
+settings.devices_pair_title:
+  en: Pair a new device
+settings.devices_pair_description:
+  en: Show the QR code to your phone. The invite is one-time and expires in five minutes; nothing is trusted until you confirm it here.
+settings.devices_pair_button:
+  en: Pair a phone
+settings.devices_scan_prompt:
+  en: Scan this QR code with your phone
+settings.devices_scan_hint:
+  en: Keep this window open and scan the QR code with your phone.
+settings.devices_cancel:
+  en: Cancel
+settings.devices_confirm_prompt:
+  en: A device wants to pair with this host.
+settings.devices_field_name:
+  en: Device
+settings.devices_confirm_yes:
+  en: Trust this device
+settings.devices_confirm_no:
+  en: Deny
+settings.devices_finishing:
+  en: Confirming the pairing link...
+settings.devices_list_title:
+  en: Paired devices
+settings.devices_loading:
+  en: Loading...
+settings.devices_empty:
+  en: No paired devices yet.
+settings.devices_revoked_tag:
+  en: revoked
+settings.devices_revoke:
+  en: Revoke
+settings.devices_revoking:
+  en: Revoking…
+settings.devices_unnamed:
+  en: unnamed device
+settings.devices_grant_scope:
+  en: This device may view and manage all current and future sessions and their history on this computer, run the agent and answer its approvals, and read files, diffs, and output of existing projects. The agent may modify files or run commands under this computer's own permissions.
+settings.devices_confirm_verify:
+  en: Check that the fingerprint and code match what the phone shows.
+settings.devices_check_code:
+  en: Code
+settings.devices_fingerprint:
+  en: Fingerprint
+settings.devices_qr_failed:
+  en: The pairing QR could not be generated; start pairing again.
+settings.devices_revoke_pending:
+  en: Revoked on this computer. The relay has not confirmed yet.
+settings.devices_host_stopped:
+  en: Remote control has stopped on this computer.
+settings.devices_host_not_started:
+  en: Remote control is not running on this computer.
+settings.devices_host_offline:
+  en: Remote control is not connected to the relay.
+settings.devices_host_unknown:
+  en: Remote control connection status is unknown.
 daemon.reveal_token:
   en: Reveal token
 daemon.hide_token:

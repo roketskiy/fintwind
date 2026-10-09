@@ -90,6 +90,41 @@ impl BoundedOutboundBuffer {
         }
     }
 
+    /// Whether one more frame of `bytes` still fits. The session loop
+    /// checks this *before* putting ciphertext on the wire: a full buffer
+    /// means the device stopped acknowledging, and the honest response is
+    /// to refuse and rebuild the link — never to push untracked frames the
+    /// ack tripwire can no longer cover.
+    pub fn has_room(&self, bytes: usize) -> bool {
+        self.queue.len() + 1 <= BUFFER_MAX_MESSAGES && self.bytes + bytes <= BUFFER_MAX_BYTES
+    }
+
+    /// Drop one frame the relay refused, by its delivery sequence.
+    ///
+    /// This is *not* an acknowledgement: nothing was delivered, so nothing
+    /// is confirmed. The ciphertext is destroyed rather than requeued,
+    /// because it belongs to a Noise period the device may already have
+    /// left, and re-sending it under a new one is forbidden. Recovery
+    /// re-derives the payload from host state instead.
+    ///
+    /// Returns whether this buffer still held that frame. A `false` answer
+    /// means the device already acknowledged it, or the sequence belongs to
+    /// another device's numbering — either way there is nothing to release.
+    pub fn release(&mut self, seq: u64) -> bool {
+        let Some(position) = self.queue.iter().position(|frame| frame.seq == seq) else {
+            return false;
+        };
+        if let Some(released) = self.queue.remove(position) {
+            self.bytes = self.bytes.saturating_sub(released.bytes);
+        }
+        true
+    }
+
+    /// Bytes currently held unacknowledged, for the host-wide cap.
+    pub fn unacked_bytes(&self) -> usize {
+        self.bytes
+    }
+
     /// The timeout verdict for the oldest unacked frame, if any.
     pub fn deadline_check(&self) -> Option<BufferVerdict> {
         let oldest = self.queue.front()?;

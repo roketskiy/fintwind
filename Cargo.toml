@@ -21,6 +21,7 @@ members = [
     "crates/fintwind-protocol",
     "crates/fintwind-relay",
     "crates/fintwind-remote-crypto",
+    "crates/fintwind-remote-crypto-wasm",
     "crates/fintwind-remote-host",
     "crates/fintwind-remote-protocol",
 ]
@@ -32,6 +33,7 @@ default-members = [
     "crates/fintwind-protocol",
     "crates/fintwind-relay",
     "crates/fintwind-remote-crypto",
+    "crates/fintwind-remote-crypto-wasm",
     "crates/fintwind-remote-host",
     "crates/fintwind-remote-protocol",
 ]
@@ -61,6 +63,11 @@ url = "2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-client = { path = "crates/fintwind-client" }
 fintwind-protocol = { path = "crates/fintwind-protocol" }
+fintwind-remote-host = { path = "crates/fintwind-remote-host" }
+fintwind-remote-protocol = { path = "crates/fintwind-remote-protocol" }
+# Pairing QR: matrix generation only (no image codecs); the UI draws the
+# modules itself.
+qrcode = { version = "0.14", default-features = false }
 pulldown-cmark = "0.13"
 # Native, offline math typesetting; all layout and raster work runs on workers.
 ratex-parser = "=0.1.14"

@@ -85,6 +85,36 @@ settings.mcp_servers: MCP 服务器
 settings.mcp_servers_keywords: MCP 服务器 工具 stdio http sse 本地 远程 npx 环境变量 请求头
 settings.mcp_market: MCP 市场
 settings.mcp_market_keywords: MCP 市场 smithery 网页搜索 学术 论文 代码 安装 context7 github arxiv pubmed brave exa tavily
+settings.devices: 设备
+settings.devices_keywords: 设备 配对 手机 远程 二维码 链接 撤销 信任
+settings.devices_pair_title: 配对新设备
+settings.devices_pair_description: 用手机扫描二维码。邀请一次性有效，五分钟后过期；在你于此确认之前，不会信任任何设备。
+settings.devices_pair_button: 配对新手机
+settings.devices_scan_prompt: 用手机扫描此二维码
+settings.devices_scan_hint: 保持此窗口打开，用手机扫描二维码。
+settings.devices_cancel: 取消
+settings.devices_confirm_prompt: 有设备请求与本机配对。
+settings.devices_field_name: 设备
+settings.devices_confirm_yes: 信任此设备
+settings.devices_confirm_no: 拒绝
+settings.devices_finishing: 正在确认配对链接...
+settings.devices_list_title: 已配对设备
+settings.devices_loading: 加载中...
+settings.devices_empty: 还没有已配对的设备。
+settings.devices_revoked_tag: 已撤销
+settings.devices_revoke: 撤销
+settings.devices_revoking: 撤销中…
+settings.devices_unnamed: 未命名设备
+settings.devices_grant_scope: 允许查看和管理此电脑的全部现有及后续会话与历史，运行 agent 并回复审批，读取已有项目的文件、差异和输出。agent 可按本机权限修改文件或执行命令。
+settings.devices_confirm_verify: 核对下面的指纹与校验码与手机显示的一致。
+settings.devices_check_code: 校验码
+settings.devices_fingerprint: 指纹
+settings.devices_qr_failed: 配对二维码生成失败，请重新开始配对。
+settings.devices_revoke_pending: 已在本机撤销，中继尚未确认。
+settings.devices_host_stopped: 本机远控已停止。
+settings.devices_host_not_started: 本机远控未运行。
+settings.devices_host_offline: 远控未连接到中继。
+settings.devices_host_unknown: 远控连接状态未知。
 daemon.reveal_token: 显示令牌
 daemon.hide_token: 隐藏令牌
 settings.theme: 主题

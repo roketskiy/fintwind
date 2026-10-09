@@ -14,11 +14,63 @@ use crate::{
     UserInputOffer,
 };
 
+/// Schemars 0.8 does not apply serde's `rename_all_fields` to fields of enum
+/// struct variants. Our wire contract uses camelCase throughout, but without
+/// this correction a generated schema says `operation_id` while serde accepts
+/// only `operationId`. Normalize schema property/required names, not arbitrary
+/// JSON payload maps or discriminator values. This is an export workaround;
+/// serde remains the authoritative runtime parser.
+pub fn wire_schema<T: JsonSchema>() -> RootSchema {
+    fn camel_case(name: &str) -> String {
+        let mut result = String::with_capacity(name.len());
+        let mut uppercase = false;
+        for character in name.chars() {
+            if character == '_' {
+                uppercase = true;
+            } else if uppercase {
+                result.extend(character.to_uppercase());
+                uppercase = false;
+            } else {
+                result.push(character);
+            }
+        }
+        result
+    }
+    fn normalize(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if let Some(serde_json::Value::Object(properties)) = object.get_mut("properties") {
+                    let previous = std::mem::take(properties);
+                    for (name, property) in previous {
+                        properties.insert(camel_case(&name), property);
+                    }
+                }
+                if let Some(serde_json::Value::Array(required)) = object.get_mut("required") {
+                    for name in required {
+                        if let Some(text) = name.as_str() {
+                            *name = serde_json::Value::String(camel_case(text));
+                        }
+                    }
+                }
+                for child in object.values_mut() { normalize(child); }
+            }
+            serde_json::Value::Array(items) => {
+                for child in items { normalize(child); }
+            }
+            _ => {}
+        }
+    }
+    let mut value = serde_json::to_value(schemars::schema_for!(T))
+        .expect("generated schema serializes");
+    normalize(&mut value);
+    serde_json::from_value(value).expect("property normalization preserves schema structure")
+}
+
 /// Every exported root schema, keyed by type name. Keep entries sorted;
 /// the dump is diffed in CI.
 pub fn exported_schemas() -> Vec<(&'static str, RootSchema)> {
     fn root<T: JsonSchema>() -> RootSchema {
-        schemars::schema_for!(T)
+        wire_schema::<T>()
     }
     vec![
         ("Frame", root::<Frame>()),

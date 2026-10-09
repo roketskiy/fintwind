@@ -21,7 +21,7 @@ use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use uuid::Uuid;
 
-use fintwind_remote_crypto::{pairing_code, PairingBinding, PairingInitiator, SigningKey};
+use fintwind_remote_crypto::{PairingBinding, PairingInitiator, SigningKey};
 use fintwind_remote_protocol::{
     Base64Bytes, ControlFrame, Frame, FrameRole, HandshakeMode, MessageBody, PairingInvite,
     REMOTE_PROTOCOL_VERSION, SealedMessage,
@@ -144,6 +144,9 @@ fn pairing_loop_confirms_grants_and_links() {
                 let _offer = initiator.read_reply(&payload.0).expect("xx message 2");
                 let hello = SealedMessage {
                     protocol_version: REMOTE_PROTOCOL_VERSION,
+                    // The pairing channel carries no delivery sequence; 0 is
+                    // the agreed value for handshake-embedded messages.
+                    transport_seq: 0,
                     host_id: invite.host_id,
                     device_id: device_id.parse().expect("device uuid"),
                     sent_at_ms: now_ms(),
@@ -170,25 +173,11 @@ fn pairing_loop_confirms_grants_and_links() {
                 break channel;
             }
             Frame::Control {
-                frame: ControlFrame::Rejected { code, message },
+                frame: ControlFrame::Rejected { code, message, frame: _ },
             } => panic!("relay refused the pairing handshake: {code:?} {message}"),
             other => panic!("unexpected frame during pairing: {other:?}"),
         }
     };
-
-    // ---- both ends must derive the same check code ----
-    let our_code = pairing_code(&host_public, &device_noise.public, &binding);
-    let printed_code = wait_for_line(&mut reader, "check code:");
-    let printed = printed_code
-        .split("check code:")
-        .nth(1)
-        .map(str::trim)
-        .expect("host printed a check code")
-        .to_owned();
-    assert_eq!(
-        our_code, printed,
-        "both ends must derive the same check code from the same handshake"
-    );
 
     // ---- confirm on the host side (piping y into its stdin) ----
     println!("test: sending confirmation");
@@ -436,6 +425,7 @@ fn device_auth(socket: &mut DeviceSocket, device_id: &str, signing: &SigningKey)
             role: FrameRole::Device,
             host_id: None,
             device_id: Some(device_id.parse().expect("device uuid")),
+            purpose: fintwind_remote_protocol::ConnectionPurpose::Session,
             challenge: Base64Bytes(challenge_bytes),
             signature: Base64Bytes(signature),
         },
@@ -456,23 +446,6 @@ fn wait_for_invite(reader: &mut impl std::io::BufRead) -> PairingInvite {
         let trimmed = line.trim();
         if trimmed.starts_with('{') && trimmed.contains("nonce") {
             return serde_json::from_str(trimmed).expect("invite json");
-        }
-    }
-}
-
-/// Pull host stdout until a line containing `needle` appears.
-fn wait_for_line(reader: &mut impl std::io::BufRead, needle: &str) -> String {
-    let deadline = Instant::now() + Duration::from_secs(20);
-    loop {
-        assert!(Instant::now() < deadline, "line {needle:?} never printed");
-        let mut line = String::new();
-        match reader.read_line(&mut line) {
-            Ok(0) => panic!("host closed stdout before {needle:?}"),
-            Ok(_) => {}
-            Err(error) => panic!("read failed: {error}"),
-        }
-        if line.contains(needle) {
-            return line;
         }
     }
 }

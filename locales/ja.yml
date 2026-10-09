@@ -89,6 +89,36 @@ settings.mcp_servers: MCPサーバー
 settings.mcp_servers_keywords: MCP サーバー ツール stdio http sse ローカル リモート npx 環境変数 ヘッダー
 settings.mcp_market: MCPマーケット
 settings.mcp_market_keywords: MCP マーケット smithery ウェブ検索 学術 論文 コード インストール context7 github arxiv pubmed brave exa tavily
+settings.devices: デバイス
+settings.devices_keywords: デバイス ペアリング スマホ リモート QR コード リンク 解除 信任
+settings.devices_pair_title: 新しいデバイスをペアリング
+settings.devices_pair_description: スマホで QR コードをスキャンしてください。招待は一度限りで、5 分後に失効します。ここで確認するまで、何も信頼されません。
+settings.devices_pair_button: スマートフォンをペアリング
+settings.devices_scan_prompt: スマートフォンでこの QR コードをスキャン
+settings.devices_scan_hint: このウィンドウを開いたまま、スマートフォンで QR コードをスキャンしてください。
+settings.devices_cancel: キャンセル
+settings.devices_confirm_prompt: デバイスがこのホストとのペアリングを要求しています。
+settings.devices_field_name: デバイス
+settings.devices_confirm_yes: このデバイスを信頼
+settings.devices_confirm_no: 拒否
+settings.devices_finishing: ペアリングリンクを確認中...
+settings.devices_list_title: ペアリング済みデバイス
+settings.devices_loading: 読み込み中...
+settings.devices_empty: ペアリング済みのデバイスはありません。
+settings.devices_revoked_tag: 解除済み
+settings.devices_revoke: 解除
+settings.devices_revoking: 解除中…
+settings.devices_unnamed: 名前のないデバイス
+settings.devices_grant_scope: この端末のすべての既存および将来のセッションと履歴の閲覧・管理、エージェントの実行と承認への回答、既存プロジェクトのファイル・差分・出力の読み取りを許可します。エージェントはこの端末の権限でファイルを変更したりコマンドを実行したりできます。
+settings.devices_confirm_verify: 以下のフィンガープリントとコードがスマートフォンの表示と一致することを確認してください。
+settings.devices_check_code: コード
+settings.devices_fingerprint: フィンガープリント
+settings.devices_qr_failed: ペアリング用 QR コードを生成できませんでした。ペアリングをやり直してください。
+settings.devices_revoke_pending: この端末では解除済みです。中継での確認はまだです。
+settings.devices_host_stopped: この端末でのリモート制御は停止しています。
+settings.devices_host_not_started: この端末でリモート制御は実行されていません。
+settings.devices_host_offline: リモート制御は中継に接続していません。
+settings.devices_host_unknown: リモート制御の接続状態は不明です。
 daemon.reveal_token: トークンを表示
 daemon.hide_token: トークンを隠す
 settings.theme: テーマ

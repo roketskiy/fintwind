@@ -26,12 +26,19 @@ mod message;
 pub mod schema;
 
 pub use frame::{
-    Base64Bytes, ControlFrame, Frame, FrameRole, HandshakeMode, PairingInvite, RejectCode,
-    MAX_FRAME_BYTES, REMOTE_PROTOCOL_VERSION,
+    Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, HandshakeMode, PairingInvite,
+    RejectCode, RejectedFrame, RejectedFrameReason, MAX_FRAME_BYTES, REMOTE_PROTOCOL_VERSION,
 };
 pub use message::{
-    DriverEventFrame, MessageBody, OperationKind, OperationOutcome, OperationRequest,
-    OperationState, PermissionDecision, PermissionOffer, PermissionOption, ResumeCursor,
-    SealedMessage, SessionSummary, UserInputAnswer, UserInputDecision, UserInputOffer,
-    UserInputQuestion,
+    AgentPresetEntry, DriverEventFrame, MessageBody, ModelOptionEntry, OperationKind,
+    OperationOutcome, OperationRequest, OperationState, PermissionDecision, PermissionOffer,
+    PermissionOption, ProjectSummary, QueueItemEntry, ResumeCursor, SealedMessage, SessionSummary,
+    TranscriptActivity, TranscriptMessage, TranscriptRole, TranscriptTurn, UserInputAnswer,
+    UserInputDecision, UserInputOffer, UserInputQuestion,
 };
+
+/// The largest plaintext one Noise transport message can carry. `snow`
+/// refuses a `write_message` whose `payload.len() + TAGLEN` exceeds this,
+/// so any sealed message whose JSON is bigger must be sent as
+/// [`MessageBody::Fragment`]s instead of whole.
+pub const MAX_SEALED_PLAINTEXT: usize = 65535 - 16;

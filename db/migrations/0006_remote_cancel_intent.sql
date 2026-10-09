@@ -1,0 +1,21 @@
+-- Durable cancel intent for the remote prompt queue.
+--
+-- A device's cancel is a promise the host makes the moment it answers
+-- `Accepted`: the intent is now on the record and cannot be lost to a
+-- crash. That is what this binding guarantees -- that the cancellation is
+-- still there to be resolved, and that a restart will not dispatch a prompt
+-- whose cancellation was already taken.
+--
+-- It is deliberately **not** a guarantee that the cancellation will succeed.
+-- A prompt that has already reached the driver has run, and the honest
+-- answer to its cancellation is that it came too late; a prompt whose
+-- evidence ran out ends as `unknown`. Neither is upgraded to a success by
+-- inference.
+--
+-- `cancel_operation_id` is the device's cancel operation awaiting an
+-- outcome; NULL means none is waiting. `cancel_state` is how that wait
+-- ended: `pending`, `cancelled`, `dispatched` (the prompt reached the
+-- driver, so the cancel came too late) or `unknown`.
+ALTER TABLE `remote_prompts` ADD COLUMN `cancel_operation_id` text;
+--> statement-breakpoint
+ALTER TABLE `remote_prompts` ADD COLUMN `cancel_state` text;

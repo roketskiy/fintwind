@@ -1,15 +1,21 @@
-# relay.fintwind.xyz — public TLS edge for the Fintwind remote-control relay.
+# relay.fintwind.xyz — public TLS edge for the Fintwind remote-control relay
+# and the home of the PWA itself.
 #
 # Deployment mode: Cloudflare Proxied (orange cloud). Cloudflare terminates
 # the client-facing TLS; this file points Caddy at the Cloudflare Origin CA
 # certificate for the Cloudflare-to-origin hop. SSL/TLS mode in the
 # Cloudflare dashboard MUST be "Full (strict)".
 #
-# Trust note (architecture document, 隐私与数据最小化): with the proxy on,
-# Cloudflare is a second TLS terminator and metadata observer. It sees the
-# outer wire frames (ciphertext + routing metadata) but never the
-# end-to-end plaintext, and it never holds host/device private keys.
-# Recorded in docs/remote-control-m0-freeze.md, 部署锚点.
+# Trust note (architecture document): with the proxy on, Cloudflare is a
+# second TLS terminator and metadata observer. It sees the outer wire
+# frames (ciphertext + routing metadata) but never the end-to-end
+# plaintext, and it never holds host/device private keys.
+#
+# One origin serves both halves: /api/* and /ws reverse-proxy to the
+# loopback relay, every other path serves the PWA build (uploaded to
+# /var/www/pwa by deploy/pwa/deploy-pwa.ps1). Same-origin means no CORS
+# surface in production, and the relay's browser-origin whitelist needs
+# exactly this origin.
 
 relay.fintwind.xyz {
 	encode zstd gzip
@@ -19,8 +25,21 @@ relay.fintwind.xyz {
 	# not used here — HTTP-01 cannot reach the origin through the proxy.
 	tls /etc/ssl/fintwind/origin-cert.pem /etc/ssl/fintwind/origin-key.pem
 
-	# The relay answers on loopback only; this file is the only public door.
-	reverse_proxy 127.0.0.1:8090
+	# The relay answers on loopback only; this is the only public door to it.
+	@api path /api/* /ws
+	handle @api {
+		reverse_proxy 127.0.0.1:8090
+	}
+
+	# The PWA: immutable hashed assets, no-cache shell and service worker,
+	# SPA fallback so /pair#… opens the app directly.
+	handle {
+		root * /var/www/pwa
+		header /assets/* Cache-Control "public, max-age=31536000, immutable"
+		try_files {path} /index.html
+		file_server
+		header Cache-Control "no-cache"
+	}
 
 	header {
 		Strict-Transport-Security "max-age=31536000; include-subdomains"

@@ -1,0 +1,28 @@
+[package]
+name = "fintwind-remote-crypto-wasm"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+base64 = "0.22"
+js-sys = "0.3"
+serde_json = "1.0"
+uuid = { version = "1.18", features = ["serde", "js"] }
+# Kept in lockstep with the wasm-bindgen CLI inside wasm-pack 0.15 so the
+# generated glue and the Rust-side macros can never drift apart. (The
+# earlier pairing panic came from consuming-`self` methods, fixed with
+# `&mut` + `Option::take` below - not from the version drift.)
+wasm-bindgen = "=0.2.126"
+
+fintwind-remote-crypto = { path = "../fintwind-remote-crypto" }
+fintwind-remote-protocol = { path = "../fintwind-remote-protocol" }
+
+[package.metadata.wasm-pack.profile.release]
+# Small and audit-friendly beats fast here; the crypto itself is constant-time.
+# wasm-opt's downloaded binary does not run on this machine; the size delta
+# is negligible for this bridge.
+wasm-opt = false

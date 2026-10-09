@@ -14,12 +14,18 @@
 //!   semantics as the desktop wire (`ResumeCursor` mirrors
 //!   `fintwind_protocol::ReplayCursor`), so snapshot-plus-increment never
 //!   bridges a gap silently.
+//! - **Authenticated delivery sequence.** The relay-visible `seq` is
+//!   repeated inside the encrypted payload as `transport_seq`, and the
+//!   two must agree; see [`SealedMessage`]. Ordering, replay detection
+//!   and the cumulative ack all key off the authenticated number.
 //! - **Approval binding.** Every offer binds one concrete underlying
 //!   action with a digest, a TTL, and a grant version, and has exactly
 //!   one terminal state. "Always"-style rules are never offered remotely.
 //! - **Operations.** Retries reuse one `operation_id` bound to a frozen
 //!   summary; the host keeps a bounded, restart-surviving record, and an
 //!   unknown id means "query first", never "blindly retry".
+//!   [`MessageBody::QueryOperationResult`] is that query: it reads the
+//!   record and executes nothing.
 //!
 //! [remote-control-relay.md]: ../../docs/remote-control-relay.md
 
@@ -27,12 +33,37 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::frame::Base64Bytes;
+
 /// One end-to-end encrypted message. Decrypting a `Frame::Sealed`
 /// ciphertext yields exactly this JSON.
+///
+/// `transport_seq` is the **authenticated delivery sequence**. The outer
+/// `Frame::Sealed.seq` is relay-visible and therefore tamperable; this
+/// field repeats it inside the integrity-protected payload, so the peer
+/// checks the two against each other and a relay that renumbers frames in
+/// transit is detected instead of silently corrupting ordering, replay
+/// detection, or the cumulative ack. Rules:
+///
+/// - A business-channel message carries the seq of the frame it rides in
+///   (`transport_seq == frame.seq`). A mismatch closes the channel.
+/// - A message embedded in the pairing handshake (`PairingHello`,
+///   `PairingDecision`) carries `0`: the pairing channel has no delivery
+///   sequence, and both sides agree on that by convention.
+/// - A `Fragment` carries its *own* physical frame seq, exactly like any
+///   other message. The logical message the fragments reassemble into is
+///   named by `MessageBody::Fragment::transport_seq`; the two are
+///   deliberately different numbers and must not be conflated.
+///
+/// The field is required and has no serde default: a peer that does not
+/// send it fails to parse, which is the fail-closed behaviour a security
+/// field must have.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SealedMessage {
     pub protocol_version: u32,
+    /// The authenticated delivery sequence; see the type docs.
+    pub transport_seq: u64,
     pub host_id: Uuid,
     pub device_id: Uuid,
     /// Sender clock in unix milliseconds. Advisory: TTL checks compare the
@@ -46,12 +77,46 @@ pub struct SealedMessage {
 pub enum MessageBody {
     /// End-to-end receive acknowledgement for sealed messages up to the
     /// named transport `seq`. Only this releases the sender's outbound
-    /// unacked buffer — never a `ControlFrame::RelayAck`.
+    /// unacked buffer — never a `ControlFrame::RelayAck`. `upto_seq` names
+    /// sequences the receiver *authenticated* (the inner `transport_seq`
+    /// it verified against the outer frame's `seq`), never the raw
+    /// relay-visible number. An acknowledgement is never itself queued for
+    /// delivery in the sender's unacked buffer: acking the ack would
+    /// recurse forever.
     Acknowledged { upto_seq: u64 },
+    /// One fragment of a sealed message whose JSON is too large for a
+    /// single Noise transport frame. Noise caps a transport message at
+    /// 65535 bytes, so a `SessionList` for a workspace with hundreds of
+    /// sessions cannot ride one frame. Fragments of one logical message
+    /// share `transport_seq` (the seq of the message they reassemble
+    /// into) and are numbered `index` of `of`; the receiver buffers them
+    /// and dispatches the reassembled body exactly as if it had arrived
+    /// whole. Each fragment rides its own frame and therefore carries its
+    /// own envelope `transport_seq` (its physical frame seq); this field
+    /// stays the logical message's seq.
+    Fragment {
+        /// The `seq` of the logical message these fragments reassemble into.
+        transport_seq: u64,
+        /// Zero-based position of this fragment.
+        index: u32,
+        /// Total fragment count for this `transport_seq`.
+        of: u32,
+        /// The fragment's raw JSON bytes, base64-encoded.
+        data: Base64Bytes,
+    },
     /// Device asks for an authoritative state snapshot. Sent on first
     /// connect, when the relay generation changed, or when held cursors
     /// fall outside the host's retention window.
     RequestSnapshot,
+    /// Device asks the host for the recorded outcome of one operation id.
+    /// The host answers from the same durable accept record that makes a
+    /// retry idempotent, and executes nothing to answer. An id this host
+    /// never accepted for this device — or one whose record aged out of
+    /// the bounded window — answers `Unknown`, which means "query or
+    /// verify first", never "retry the side effect". This is the recovery
+    /// path for a result that was lost with the link: the device re-asks
+    /// instead of re-executing.
+    QueryOperationResult { operation_id: Uuid },
     /// Device resumes event streams from cursors it already holds. The
     /// host replays from each cursor or answers with a fresh snapshot
     /// when the cursor can no longer be honored; it never bridges a gap
@@ -60,6 +125,26 @@ pub enum MessageBody {
     /// Host pushes the authoritative session list snapshot. `revision`
     /// changes whenever any listed session changes.
     SessionList { revision: u64, sessions: Vec<SessionSummary> },
+    /// Host pushes the project directory: ids and names, never paths. Sent
+    /// with every snapshot so a device can name a target for a new task or a
+    /// workspace read without rendering a UUID as a label.
+    ProjectList {
+        revision: u64,
+        projects: Vec<ProjectSummary>,
+    },
+    /// Host cannot serve the workspace right now (local daemon down or
+    /// not yet linked). The device shows the reason instead of spinning
+    /// on a list that will never arrive; the host pushes a fresh
+    /// `SessionList` the moment the workspace recovers.
+    WorkspaceUnavailable { reason: String },
+    /// Host pushes one session's rendered transcript snapshot: the linear
+    /// message list with each message's trailing tool activity already
+    /// interleaved. The device renders this as-is; live deltas arrive as
+    /// `DriverEvent`s and the next `Transcript` recalibrates after a turn.
+    Transcript {
+        session_id: Uuid,
+        messages: Vec<TranscriptMessage>,
+    },
     /// Host streams one sequenced driver event (transcript deltas,
     /// status, background work). Replayable desktop events only; live-only
     /// terminal output never enters this channel.
@@ -81,13 +166,39 @@ pub enum MessageBody {
     Operation(OperationRequest),
     /// Host reports acceptance or outcome for one operation id.
     OperationResult(OperationOutcome),
+    /// Host tells one device its cursor can no longer be honored — the
+    /// epoch changed (the session's runtime instance was replaced) or the
+    /// sequence fell out of the host's retention window. The device drops
+    /// its local projection for that session and re-attaches for a fresh
+    /// snapshot; it never bridges the gap by guessing. `session_id` is
+    /// `None` when the whole workspace view must be rebuilt.
+    Resync {
+        session_id: Option<Uuid>,
+        reason: String,
+    },
+    /// Host pushes the visible state of one session's prompt queue: what
+    /// is waiting, in what order, and whether it is still dispatchable.
+    /// A queued prompt is *accepted*, not executed — the device must not
+    /// render it as a completed turn.
+    SessionQueue {
+        session_id: Uuid,
+        items: Vec<QueueItemEntry>,
+    },
+    /// Host answers `LoadOptionsCatalog` with the options this session may
+    /// actually use. Anything the device names that is not in here is
+    /// refused, so an unknown id, an "always"-style rule, or a permission
+    /// field can never ride along inside an options change.
+    OptionsCatalog {
+        session_id: Uuid,
+        models: Vec<ModelOptionEntry>,
+        agent_presets: Vec<AgentPresetEntry>,
+    },
     /// Device's self-introduction inside a fresh pairing channel: the
     /// first sealed message after XX completes. The device fingerprint
     /// rides in the channel's remote static key; the routing id comes
     /// from the device's own relay registration, and the host binds the
     /// grant to the pair of them.
-    PairingHello {
-        /// The device's own routing id at the relay.
+    PairingHello {        /// The device's own routing id at the relay.
         device_id: Uuid,
         /// What the host shows the confirming user, e.g. "Pixel 9".
         device_name: Option<String>,
@@ -182,18 +293,131 @@ impl JsonSchema for DriverEventFrame {
     }
 }
 
+/// One queued prompt as the device sees it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueueItemEntry {
+    pub operation_id: Uuid,
+    /// Zero-based position in the session's queue.
+    pub position: usize,
+    /// `queued` (waiting), `dispatching` (handed to the driver), or
+    /// `expired` (its validity window elapsed; it will never run).
+    pub state: String,
+    /// The frozen human summary the device confirmed when it sent it.
+    pub summary: String,
+    pub enqueued_at_ms: u64,
+    pub expires_at_ms: u64,
+}
+
+/// One model the host's provider probe reported.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelOptionEntry {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+    /// Reasoning-effort / service-tier / context-window choices this model
+    /// exposes; empty when the provider exposes none.
+    pub reasoning_efforts: Vec<String>,
+    pub service_tiers: Vec<String>,
+    pub context_windows: Vec<String>,
+}
+
+/// One agent composition the host's provider probe reported.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentPresetEntry {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
 /// One row of the authoritative session snapshot.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SessionSummary {
     pub session_id: Uuid,
     pub project_id: Option<Uuid>,
+    /// The project's display name, resolved by the host. A device must never
+    /// have to render a project UUID as a label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
     pub title: String,
     /// The session status exactly as the desktop wire serializes it
     /// (`AgentSession::status`), so both ends share one vocabulary.
     pub status: String,
     pub updated_at_ms: u64,
     pub archived: bool,
+}
+
+/// One row of the host's project directory. Names only: a workspace path is
+/// the desktop's own business and never crosses the wire.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectSummary {
+    pub project_id: Uuid,
+    pub name: String,
+}
+
+/// The turn one transcript message belongs to, as this computer resolved it.
+///
+/// A device never counts messages or roles to work out which turn it is
+/// looking at: the host binds the message to the turn's own id and its own
+/// count, and says whether that turn may be branched or rewound to. The
+/// eligibility is computed from the desktop's own rules, so a device cannot
+/// offer an action this computer would refuse.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptTurn {
+    /// The desktop turn's own id. This, not a position, is what a branch or
+    /// rewind names.
+    pub turn_id: Uuid,
+    /// The desktop's own turn count for that turn, resolved here.
+    pub turn_count: usize,
+    /// A completed response this task may be branched from.
+    pub can_fork: bool,
+    /// A user message this task may be rewound to.
+    pub can_rewind: bool,
+}
+
+/// One rendered transcript message: the host maps the desktop's full
+/// NativeTranscript (messages, blocks, activities, turns) into this flat list
+/// so the device never reassembles a projection. Each entry carries the tool
+/// activity that trails it, so order is exact and nothing is dropped.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptMessage {
+    pub role: TranscriptRole,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub activities: Vec<TranscriptActivity>,
+    pub created_at_ms: u64,
+    /// The turn this message belongs to, when the host could bind one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<TranscriptTurn>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum TranscriptRole {
+    User,
+    Assistant,
+    System,
+    /// Provider-side context compaction; renders as a divider.
+    Compaction,
+}
+
+/// One condensed tool activity row. Arguments and outputs stay on the
+/// desktop; the device shows what happened, not the full payload.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TranscriptActivity {
+    /// The desktop `ActivityKind` string (`command`, `fileChange`, …).
+    pub kind: String,
+    pub title: String,
+    pub detail: Option<String>,
+    pub failed: bool,
+    pub complete: bool,
 }
 
 /// A tool-approval offer. Fields and rules follow the architecture
@@ -310,6 +534,9 @@ pub enum OperationKind {
     SendPrompt,
     /// Explicit interruption, reusing the desktop cancel path.
     CancelTurn,
+    /// Device closed a session view: stop streaming that session's events.
+    /// Purely a transport concern; it never touches the session itself.
+    DetachSession,
     CreateSession,
     AttachSession,
     RenameSession,
@@ -322,8 +549,17 @@ pub enum OperationKind {
     RewindToMessage,
     /// Read-only workspace reads; payload names project-scoped paths.
     ReadFile,
+    ReadDirectory,
     ReadDiff,
     ReadTaskOutput,
+    /// Cancel one queued prompt that has not been dispatched yet. A prompt
+    /// already handed to the driver is not cancellable this way — that is
+    /// `CancelTurn`, a different operation with different semantics.
+    CancelQueuedPrompt,
+    /// Ask the host for the session's available model and agent-preset
+    /// options. Read-only: the host answers from its own provider probe,
+    /// and the device may only name options that came back here.
+    LoadOptionsCatalog,
 }
 
 /// Acceptance and outcome for one operation id — the "host accepted" and
@@ -368,6 +604,7 @@ mod tests {
     fn sealed_message_roundtrips() {
         let message = SealedMessage {
             protocol_version: REMOTE_PROTOCOL_VERSION,
+            transport_seq: 7,
             host_id: Uuid::nil(),
             device_id: Uuid::max(),
             sent_at_ms: 1_000,

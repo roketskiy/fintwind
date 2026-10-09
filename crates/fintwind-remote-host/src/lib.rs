@@ -1,0 +1,25 @@
+//! Library half of `fintwind-remote-host`: pairing sessions, grants, host
+//! identity, and the relay session loop, shared between the daemon binary
+//! and the desktop app's device-management page.
+
+pub mod adapter;
+pub mod approvals;
+pub mod config;
+pub mod dedup;
+pub mod events;
+pub mod grants;
+pub mod identity;
+pub mod outbound;
+pub mod pair;
+pub mod pending;
+pub mod devices;
+pub mod queue;
+pub mod relay_session;
+pub mod state;
+pub mod workspace_reads;
+pub mod workspace_directory;
+pub mod workspace_diff;
+
+pub use config::HostConfig;
+pub use grants::{DeviceGrant, GrantFile, GRANT_SCOPE_TEXT};
+pub use identity::HostIdentity;

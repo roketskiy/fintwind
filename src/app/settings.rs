@@ -23,7 +23,7 @@ const SETTINGS_SEARCH_CONTEXT: &str = "SettingsSidebar > ComposerInput";
 
 /// The sidebar's rows in display order, each with the keyword haystack the
 /// search field filters against.
-const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 6] = [
+const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
     (
         SettingsPage::General,
         "settings.general",
@@ -59,6 +59,12 @@ const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 6] = [
         "settings.mcp_market",
         "icons/sparkle.svg",
         "settings.mcp_market_keywords",
+    ),
+    (
+        SettingsPage::Devices,
+        "settings.devices",
+        "icons/smartphone.svg",
+        "settings.devices_keywords",
     ),
 ];
 
@@ -206,6 +212,12 @@ impl Fintwind {
             self.mcp_list_scroll.set_offset(gpui::Point::default());
             self.mcp_detail_scroll.set_offset(gpui::Point::default());
             self.load_mcp_servers_from_config(cx);
+        }
+        if page == SettingsPage::Devices {
+            // The grant file is the shared source of truth; re-read on every
+            // visit so external changes (the CLI, a hand edit) show up.
+            self.devices_grants = None;
+            self.refresh_device_grants(cx);
         }
         cx.notify();
     }
@@ -400,6 +412,7 @@ impl Fintwind {
                         SettingsPage::McpServers => tr!("settings.mcp_servers"),
                         SettingsPage::McpMarket => tr!("settings.mcp_market"),
                         SettingsPage::Appearance => tr!("settings.appearance"),
+                        SettingsPage::Devices => tr!("settings.devices"),
                     }),
             )
             .child(match page {
@@ -409,6 +422,7 @@ impl Fintwind {
                 SettingsPage::McpServers => self.render_mcp_page(window, cx),
                 SettingsPage::McpMarket => self.render_mcp_market_page(cx),
                 SettingsPage::Appearance => self.render_appearance_settings(cx),
+                SettingsPage::Devices => devices_page::render_devices_page(self, window, cx),
             });
 
         div()

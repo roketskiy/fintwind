@@ -1079,7 +1079,7 @@ impl Fintwind {
             return;
         }
         if let Some(error) = error {
-            self.show_toast(tr!("session.undo_failed", error = error));
+            self.record_session_error(session_id, tr!("session.undo_failed", error = error), cx);
             // The marker never landed, so nothing is staged: messages queued
             // while the RPC was in flight can start as-is.
             self.drain_queued_message(session_id, cx);
@@ -1161,7 +1161,7 @@ impl Fintwind {
             return;
         }
         if let Some(error) = error {
-            self.show_toast(tr!("session.redo_failed", error = error));
+            self.record_session_error(session_id, tr!("session.redo_failed", error = error), cx);
             // The clear may or may not have landed; the refetch the queued
             // prompt's submission triggers (or the next reconcile) settles
             // whichever state the server holds.

@@ -2378,6 +2378,47 @@ fn a_busy_turn_pins_the_working_indicator_after_the_last_row() {
 }
 
 #[test]
+fn a_repeated_error_notice_is_not_written_twice() {
+    // One failure reported more than once must not stack up as a duplicate
+    // line: the reader counts notices, and two identical ones describe one
+    // breakdown.
+    let mut session = AgentSession::new(Uuid::new_v4());
+    session.begin_turn("Do the work");
+    session.push_message(MessageRole::User, "Do the work");
+    session.push_message(MessageRole::System, "The provider connection was lost");
+    assert!(super::session_repeats_latest_notice(
+        &session,
+        "The provider connection was lost"
+    ));
+
+    // A different reason is a different failure, even back to back.
+    assert!(!super::session_repeats_latest_notice(
+        &session,
+        "Context compaction failed"
+    ));
+
+    // The same reason recurring after real conversation happened is news:
+    // only the message immediately before is compared.
+    session.push_message(MessageRole::Assistant, "Recovered and answered");
+    assert!(!super::session_repeats_latest_notice(
+        &session,
+        "The provider connection was lost"
+    ));
+
+    // A session whose newest message is something else — the reader has
+    // moved on — records the same failure again rather than swallowing it.
+    session.push_message(MessageRole::User, "Try again");
+    assert!(!super::session_repeats_latest_notice(
+        &session,
+        "The provider connection was lost"
+    ));
+
+    // A session that has never recorded a notice never repeats one.
+    let fresh = AgentSession::new(Uuid::new_v4());
+    assert!(!super::session_repeats_latest_notice(&fresh, "anything"));
+}
+
+#[test]
 fn model_picker_highlight_wraps_at_both_ends() {
     // Nothing highlighted yet: down opens on the first row, up on the last.
     assert_eq!(next_picker_highlight(None, 3, "down"), Some(0));

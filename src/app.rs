@@ -2260,6 +2260,21 @@ fn migrate_legacy_projectless_projects(
     (changed, None)
 }
 
+/// Whether `message` repeats the session's newest notice, and so would be a
+/// duplicate line.
+///
+/// One failure can be reported more than once — a re-attached runtime
+/// replays its tail, and a backoff reports on every attempt — and a notice
+/// repeated back to back reads as two separate breakdowns. Only the message
+/// immediately before is consulted: once real conversation has happened in
+/// between, the same failure recurring is news and must be written down.
+fn session_repeats_latest_notice(session: &AgentSession, message: &str) -> bool {
+    session
+        .messages
+        .last()
+        .is_some_and(|latest| latest.role == MessageRole::System && latest.content == message)
+}
+
 impl Fintwind {
     pub(super) fn show_toast(&mut self, message: impl Into<String>) {
         self.show_toast_with_tone(message, ToastTone::Alert);
@@ -2267,6 +2282,51 @@ impl Fintwind {
 
     pub(super) fn show_success_toast(&mut self, message: impl Into<String>) {
         self.show_toast_with_tone(message, ToastTone::Success);
+    }
+
+    /// Records a session failure where the reader still finds it after the
+    /// toast is gone: a system message at the tail of that session's
+    /// transcript.
+    ///
+    /// A toast lives five seconds in a single slot, so the next notice
+    /// replaces it and a restart loses the rest. Anyone who stepped away from
+    /// the machine learns nothing at all — which is the whole complaint about
+    /// session errors today. The transcript is the record that stays: it is
+    /// ordered with the conversation, persisted with the session, and still
+    /// there tomorrow.
+    ///
+    /// The toast is kept for the moment it happens, and only for the session
+    /// on screen. A background session's failure must not take the surface,
+    /// but it must still be written down.
+    ///
+    /// An appended notice is invisible until the visible list is brought in
+    /// step, so the snapshot-and-splice pair the rest of the transcript
+    /// mutations already use runs here too.
+    pub(super) fn record_session_error(
+        &mut self,
+        session_id: Uuid,
+        message: impl Into<String>,
+        cx: &mut Context<Self>,
+    ) {
+        let message = message.into();
+        let recorded = self.state.session_mut(session_id).is_some_and(|session| {
+            if session_repeats_latest_notice(session, &message) {
+                return false;
+            }
+            session.push_message(MessageRole::System, message.clone());
+            true
+        });
+        if !recorded {
+            return;
+        }
+        if self.state.selected_session == Some(session_id) {
+            self.show_toast(message);
+        }
+        let previous_kinds = self.snapshot_selected_transcript_rows(session_id);
+        if let Some(previous_kinds) = previous_kinds.as_deref() {
+            self.splice_active_transcript_rows_after_visibility_change(previous_kinds);
+        }
+        cx.notify();
     }
 
     /// Opens a daemon-host path with its default application. A remote

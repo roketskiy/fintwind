@@ -729,9 +729,7 @@ impl Fintwind {
                         runtime.transcript_reconciliation_failed = true;
                         let error = tr!("errors.provider_transcript_reconcile_failed");
                         runtime.last_driver_error = Some(error.clone());
-                        if self.state.selected_session == Some(session_id) {
-                            self.show_toast(error);
-                        }
+                        self.record_session_error(session_id, error, cx);
                     }
                 }
             }
@@ -932,12 +930,11 @@ impl Fintwind {
                     .unwrap_or((false, false));
                 if busy {
                     self.enqueue_follow_up_submission(session_id, submission, cx);
-                    if self.state.selected_session == Some(session_id) {
-                        self.show_toast(tr!(
-                            "session.steer_rejected",
-                            error = compact_driver_error(&reason)
-                        ));
-                    }
+                    self.record_session_error(
+                        session_id,
+                        tr!("session.steer_rejected", error = compact_driver_error(&reason)),
+                        cx,
+                    );
                 } else if settled_cleanly {
                     // The turn settled before the steer arrived; run the
                     // message as a fresh turn instead of losing it. Submission
@@ -1069,7 +1066,11 @@ impl Fintwind {
                             self.show_toast(tr!("session.compaction_completed"));
                         }
                         CompactionStatus::Failed => {
-                            self.show_toast(tr!("session.compaction_failed"));
+                            self.record_session_error(
+                                session_id,
+                                tr!("session.compaction_failed"),
+                                cx,
+                            );
                         }
                         CompactionStatus::Running | CompactionStatus::Cancelled => {}
                     }
@@ -1093,6 +1094,20 @@ impl Fintwind {
                         BackgroundWorkStatus::Failed
                     },
                 );
+                // A turn the provider reported as failed is a session error in
+                // its own right: it is what a retry that ran out of attempts,
+                // or a stop the runtime could not classify, ends up as. The
+                // toast never appears for a session that is not on screen, and
+                // even for this one it is gone in five seconds.
+                if !success {
+                    self.record_session_error(
+                        session_id,
+                        summary
+                            .clone()
+                            .unwrap_or_else(|| tr!("session.turn_failed")),
+                        cx,
+                    );
+                }
                 let previous_kinds = self.snapshot_selected_transcript_rows(session_id);
                 runtime.last_driver_error = None;
                 if self
@@ -1197,9 +1212,11 @@ impl Fintwind {
                 self.provider_retries.remove(&session_id);
                 let error = compact_driver_error(&error);
                 runtime.last_driver_error = Some(error.clone());
-                if self.state.selected_session == Some(session_id) {
-                    self.show_toast(error.clone());
-                }
+                // Written into the transcript, not only toasted. The old gate
+                // appended it as an assistant message only while the turn had
+                // produced no text, so a mid-answer failure vanished with the
+                // toast and the reader was left staring at a truncated reply.
+                self.record_session_error(session_id, error.clone(), cx);
                 let has_active_turn = self
                     .state
                     .sessions
@@ -1216,17 +1233,11 @@ impl Fintwind {
                 if not_working {
                     self.drop_blank_assistant_messages(session_id);
                 }
-                let should_append =
-                    has_active_turn && not_working && !self.turn_has_assistant_message(session_id);
                 if let Some(session) = self.state.session_mut(session_id)
                     && has_active_turn
+                    && session.status != SessionStatus::Working
                 {
-                    if session.status != SessionStatus::Working {
-                        session.status = SessionStatus::Failed;
-                    }
-                    if should_append {
-                        session.push_message(MessageRole::Assistant, error);
-                    }
+                    session.status = SessionStatus::Failed;
                 }
                 if let Some(previous_kinds) = previous_kinds.as_deref() {
                     self.splice_active_transcript_rows_after_visibility_change(previous_kinds);
@@ -1248,11 +1259,14 @@ impl Fintwind {
                 runtime.pending_permission = None;
                 runtime.pending_user_input = None;
                 self.drop_blank_assistant_messages(session_id);
-                let needs_fallback = !self.turn_has_assistant_message(session_id);
                 let failure_message = runtime
                     .last_driver_error
                     .take()
                     .unwrap_or_else(|| tr!("session.provider_disconnected"));
+                // The reason belongs in the transcript whether or not the turn
+                // already produced text: a reader who arrives after the process
+                // died gets the transcript, never the toast.
+                self.record_session_error(session_id, failure_message, cx);
                 let should_finish_turn = if let Some(session) = self.state.session_mut(session_id)
                     && matches!(
                         session.status,
@@ -1260,9 +1274,6 @@ impl Fintwind {
                     ) {
                     session.status = SessionStatus::Failed;
                     session.updated_at = unix_time();
-                    if needs_fallback {
-                        session.push_message(MessageRole::Assistant, failure_message);
-                    }
                     true
                 } else {
                     false

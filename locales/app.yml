@@ -1579,6 +1579,8 @@ session.stopped_before_response:
   en: The agent stopped before returning a response
 session.provider_disconnected:
   en: The provider connection was lost before returning a response
+session.turn_failed:
+  en: The turn ended without a response
 session.steer_rejected:
   en: The agent couldn't be steered (%{error}); the message was queued as a follow-up
 session.steer_rejected_plain:

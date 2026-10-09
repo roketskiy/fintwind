@@ -1253,25 +1253,15 @@ impl Fintwind {
         // then costs no re-parse. Bounded so a long-running window cannot grow
         // without limit.
         let mut message_markdown = self.message_markdown.borrow_mut();
-        let cached_bytes: usize = message_markdown
-            .values()
-            .map(md::render::MarkdownView::source_len)
-            .sum();
-        if cached_bytes > MAX_CACHED_MESSAGE_SOURCE_BYTES {
-            message_markdown.clear();
-        }
         for id in streaming_messages {
             message_markdown
-                .entry(id)
-                .or_insert_with(MarkdownView::new)
+                .get_or_insert_with(id, 0, MarkdownView::new)
                 .seed_streaming_baseline();
         }
         drop(message_markdown);
         let mut activity_markdown = self.activity_markdown.borrow_mut();
         for id in live_reasoning {
-            activity_markdown
-                .entry(id)
-                .or_insert_with(MarkdownView::seeded);
+            activity_markdown.get_or_insert_with(id, 0, MarkdownView::seeded);
         }
     }
 

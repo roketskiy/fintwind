@@ -1065,7 +1065,8 @@ fn handle_request(
 fn task_catalog_action(command: &Command) -> TaskCatalogAction {
     match command {
         Command::LoadTaskState => TaskCatalogAction::Load,
-        Command::SaveTaskState { projects, .. } => TaskCatalogAction::Save {
+        Command::SaveTaskState { projects, .. }
+        | Command::SaveTaskStateCheckpoint { projects, .. } => TaskCatalogAction::Save {
             projects: projects.clone(),
         },
         Command::RemoveSession

@@ -2,6 +2,8 @@ use crate::theme::{code_px, ui_px};
 
 use super::transcript_view::{ActivityClusterContext, ActivitySurface};
 use super::*;
+use crate::ui::scrollbar::Scrollable;
+use gpui::FollowMode;
 
 const MAX_BACKGROUND_OUTPUT_BYTES: usize = 512 * 1024;
 const MAX_SETTLED_BACKGROUND_ITEMS: usize = 24;
@@ -27,7 +29,11 @@ pub(super) struct BackgroundWorkRegistry {
     /// Structured child-session transcript projections. Kept separate from
     /// terminal output so a subagent's live conversation can render through
     /// the same message/activity primitives as the main transcript.
-    transcripts: HashMap<BackgroundWorkKey, BackgroundWorkTranscript>,
+    pub(super) transcripts: HashMap<BackgroundWorkKey, BackgroundWorkTranscript>,
+    transcript_viewports: HashMap<BackgroundWorkKey, BackgroundTranscriptViewport>,
+    dirty_transcripts: HashSet<BackgroundWorkKey>,
+    reset_transcripts: HashSet<BackgroundWorkKey>,
+    activity_index: HashMap<String, BackgroundWorkKey>,
     last_output_cache_refresh: Option<Instant>,
     output_viewports: HashMap<BackgroundWorkKey, BackgroundOutputViewport>,
     /// Which of an item's transcript blocks have their activity cards open,
@@ -46,6 +52,48 @@ pub(super) struct BackgroundWorkRegistry {
 struct BackgroundOutputViewport {
     scroll_handle: ScrollHandle,
     scrollbar: Rc<ScrollbarState>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum BackgroundTranscriptRow {
+    Message(usize),
+    Block(usize),
+    Footer,
+}
+
+struct BackgroundTranscriptViewport {
+    list: ListState,
+    rows: Vec<BackgroundTranscriptRow>,
+    scrollbar: Rc<ScrollbarState>,
+}
+
+impl Default for BackgroundTranscriptViewport {
+    fn default() -> Self {
+        let list = ListState::new(0, ListAlignment::Top, px(160.0));
+        list.set_follow_mode(FollowMode::Tail);
+        Self {
+            list,
+            rows: Vec::new(),
+            scrollbar: ScrollbarState::new(),
+        }
+    }
+}
+
+impl BackgroundTranscriptViewport {
+    fn remeasure_block(&self, block_index: usize) {
+        if let Some(index) = self
+            .rows
+            .iter()
+            .position(|row| *row == BackgroundTranscriptRow::Block(block_index))
+        {
+            let anchor = self.list.logical_scroll_top();
+            let following = self.list.is_following_tail();
+            self.list.splice(index..index + 1, 1);
+            if !following {
+                self.list.scroll_to(anchor);
+            }
+        }
+    }
 }
 
 impl Default for BackgroundOutputViewport {
@@ -78,7 +126,7 @@ struct EnvironmentSummary {
 }
 
 impl BackgroundWorkRegistry {
-    fn from_snapshots(snapshots: &[BackgroundWorkSnapshot]) -> Self {
+    fn from_snapshots(snapshots: &[Arc<BackgroundWorkSnapshot>]) -> Self {
         let mut registry = Self::default();
         for snapshot in snapshots {
             registry.upsert(snapshot.item.clone());
@@ -86,6 +134,7 @@ impl BackgroundWorkRegistry {
                 .transcripts
                 .insert(snapshot.item.key.clone(), snapshot.transcript.clone());
         }
+        registry.refresh_transcript_viewports();
         registry
     }
 
@@ -191,7 +240,16 @@ impl BackgroundWorkRegistry {
             self.items.insert(incoming.key.clone(), incoming);
         }
         if output_changed {
-            self.dirty_output.insert(key);
+            self.dirty_output.insert(key.clone());
+        }
+        if let Some(item) = self.items.get(&key) {
+            for origin in &item.origin_activity_ids {
+                self.activity_index.insert(origin.clone(), key.clone());
+            }
+        }
+        if key.kind == BackgroundWorkKind::Subagent {
+            self.reset_transcripts.insert(key.clone());
+            self.dirty_transcripts.insert(key);
         }
     }
 
@@ -210,6 +268,36 @@ impl BackgroundWorkRegistry {
     }
 
     fn apply_transcript(&mut self, event: BackgroundWorkTranscriptEvent) {
+        let key = match &event {
+            BackgroundWorkTranscriptEvent::Started { key, .. }
+            | BackgroundWorkTranscriptEvent::TextDelta { key, .. }
+            | BackgroundWorkTranscriptEvent::ReasoningDelta { key, .. }
+            | BackgroundWorkTranscriptEvent::Activity { key, .. }
+            | BackgroundWorkTranscriptEvent::Snapshot { key, .. }
+            | BackgroundWorkTranscriptEvent::Finished { key, .. } => key.clone(),
+        };
+        if matches!(
+            &event,
+            BackgroundWorkTranscriptEvent::Started { .. }
+                | BackgroundWorkTranscriptEvent::Snapshot { .. }
+                | BackgroundWorkTranscriptEvent::Finished { .. }
+        ) {
+            self.reset_transcripts.insert(key.clone());
+        }
+        if let BackgroundWorkTranscriptEvent::Activity { activity, .. } = &event
+            && let Some(source) = activity.source_id.as_deref()
+            && let Some(transcript) = self.transcripts.get(&key)
+            && let Some(index) = transcript.transcript_blocks.iter().position(|block| {
+                block
+                    .activities
+                    .iter()
+                    .any(|existing| existing.source_id.as_deref() == Some(source))
+            })
+            && let Some(viewport) = self.transcript_viewports.get(&key)
+        {
+            viewport.remeasure_block(index);
+        }
+        self.dirty_transcripts.insert(key);
         match event {
             BackgroundWorkTranscriptEvent::Started { key, prompt } => {
                 let transcript = self.transcripts.entry(key).or_default();
@@ -282,6 +370,61 @@ impl BackgroundWorkRegistry {
                     self.transcripts.entry(key).or_default(),
                     success,
                 );
+            }
+        }
+    }
+
+    /// Build the lightweight row index once per event drain, never in a row
+    /// renderer. Transcript text stays in the registry; callbacks borrow only
+    /// the visible message or block, rather than cloning a child conversation.
+    fn refresh_transcript_viewports(&mut self) {
+        for key in self.dirty_transcripts.drain() {
+            let Some(transcript) = self.transcripts.get(&key) else {
+                continue;
+            };
+            let reset = self.reset_transcripts.remove(&key);
+            let viewport = self.transcript_viewports.entry(key).or_default();
+            let mut blocks_by_after: HashMap<usize, Vec<usize>> = HashMap::new();
+            for (index, block) in transcript.transcript_blocks.iter().enumerate() {
+                if !block.activities.is_empty() {
+                    blocks_by_after
+                        .entry(block.after_message)
+                        .or_default()
+                        .push(index);
+                }
+            }
+            let mut rows = Vec::with_capacity(
+                transcript.messages.len() + transcript.transcript_blocks.len() + 1,
+            );
+            for after_message in 0..=transcript.messages.len() {
+                for index in blocks_by_after.get(&after_message).into_iter().flatten() {
+                    rows.push(BackgroundTranscriptRow::Block(*index));
+                }
+                if after_message < transcript.messages.len() {
+                    rows.push(BackgroundTranscriptRow::Message(after_message));
+                }
+            }
+            rows.push(BackgroundTranscriptRow::Footer);
+            let anchor = viewport.list.logical_scroll_top();
+            let following = viewport.list.is_following_tail();
+            let stable_prefix = if reset {
+                0
+            } else {
+                viewport
+                    .rows
+                    .iter()
+                    .zip(&rows)
+                    .take_while(|(old, new)| old == new)
+                    .count()
+                    .min(viewport.rows.len().saturating_sub(3))
+            };
+            viewport.list.splice(
+                stable_prefix..viewport.rows.len(),
+                rows.len() - stable_prefix,
+            );
+            viewport.rows = rows;
+            if !following {
+                viewport.list.scroll_to(anchor);
             }
         }
     }
@@ -509,6 +652,10 @@ impl BackgroundWorkRegistry {
         self.rendered_output.remove(key);
         self.dirty_output.remove(key);
         self.output_viewports.remove(key);
+        self.transcript_viewports.remove(key);
+        self.dirty_transcripts.remove(key);
+        self.reset_transcripts.remove(key);
+        self.activity_index.retain(|_, entry| entry != key);
         self.activities_expanded
             .retain(|(entry, _), _| entry != key);
         self.order.retain(|entry| entry != key);
@@ -607,6 +754,7 @@ impl BackgroundWorkRegistry {
     }
 
     fn refresh_output_cache(&mut self) -> bool {
+        self.refresh_transcript_viewports();
         if self.dirty_output.is_empty()
             || self
                 .last_output_cache_refresh
@@ -619,8 +767,7 @@ impl BackgroundWorkRegistry {
             if let Some(output) = self.items.get(&key).and_then(|item| item.output.as_deref()) {
                 self.rendered_output
                     .insert(key.clone(), SharedString::from(strip_ansi(output)));
-                // A child transcript shares this viewport, but its position
-                // must not be driven by updates to the item's plain output.
+                // Child transcripts have their own virtualized viewport.
                 if key.kind != BackgroundWorkKind::Subagent
                     && let Some(viewport) = self.output_viewports.get(&key)
                 {
@@ -956,7 +1103,7 @@ impl Fintwind {
             session
                 .background_work
                 .retain(|stored| stored.item.key != snapshot.item.key);
-            session.background_work.push(snapshot);
+            session.background_work.push(Arc::new(snapshot));
             let excess = session
                 .background_work
                 .len()
@@ -1059,11 +1206,10 @@ impl Fintwind {
         session_id: Uuid,
         activity_id: &str,
     ) -> Option<&BackgroundWorkItem> {
-        self.background_work
-            .get(&session_id)?
+        let registry = self.background_work.get(&session_id)?;
+        registry
             .items
-            .values()
-            .find(|item| item.origin_activity_ids.iter().any(|id| id == activity_id))
+            .get(registry.activity_index.get(activity_id)?)
     }
 
     /// An item's stored cluster disclosure for one of its transcript blocks,
@@ -1334,7 +1480,7 @@ impl Fintwind {
     pub(super) fn render_background_work_surface(
         &self,
         key: &BackgroundWorkKey,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
@@ -1433,7 +1579,15 @@ impl Fintwind {
             })
         });
         if item.key.kind == BackgroundWorkKind::Subagent {
-            let transcript = registry.and_then(|registry| registry.transcripts.get(key));
+            let viewport = registry.and_then(|registry| registry.transcript_viewports.get(key));
+            let list_state = viewport
+                .map(|viewport| viewport.list.clone())
+                .unwrap_or_else(|| ListState::new(0, ListAlignment::Top, px(160.0)));
+            let scrollbar = viewport
+                .map(|viewport| viewport.scrollbar.clone())
+                .unwrap_or_else(ScrollbarState::new);
+            let row_key = key.clone();
+            let weak = cx.entity().downgrade();
             let scroll_id = format!(
                 "background-transcript-scroll-{}-{}",
                 item.key.provider_id, item.key.kind as u8
@@ -1505,57 +1659,68 @@ impl Fintwind {
                                 .track_focus(&scroll_focus)
                                 .tab_index(0)
                                 .size_full()
-                                .overflow_y_scroll()
-                                .track_scroll(&output_viewport.scroll_handle)
+                                .overflow_hidden()
                                 .focus_visible(|style| style.border_1().border_color(theme.accent))
                                 .on_scroll_wheel({
-                                    let scroll = output_viewport.scroll_handle.clone();
-                                    move |_, _, cx| contain_scroll(&scroll, cx)
+                                    let scroll = list_state.clone();
+                                    move |_, _, cx| {
+                                        if Scrollable::max_offset(&scroll) > px(0.5) {
+                                            cx.stop_propagation();
+                                        }
+                                    }
                                 })
                                 .on_key_down({
-                                    let scroll = output_viewport.scroll_handle.clone();
+                                    let scroll = list_state.clone();
                                     move |event: &KeyDownEvent, window, cx| {
                                         if !scroll_focus.is_focused(window)
                                             || event.keystroke.modifiers.modified()
                                         {
                                             return;
                                         }
-                                        let current = scroll.offset();
-                                        let limit = scroll.max_offset().y;
-                                        let page = scroll.bounds().size.height * 0.9;
-                                        let next = match event.keystroke.key.as_str() {
-                                            "up" => current.y + ui_px(24.0),
-                                            "down" => current.y - ui_px(24.0),
-                                            "pageup" => current.y + page,
-                                            "pagedown" => current.y - page,
-                                            "home" => px(0.0),
-                                            "end" => -limit,
+                                        let page = scroll.viewport_bounds().size.height * 0.9;
+                                        let distance = match event.keystroke.key.as_str() {
+                                            "up" => -ui_px(24.0),
+                                            "down" => ui_px(24.0),
+                                            "pageup" => -page,
+                                            "pagedown" => page,
+                                            "home" => {
+                                                scroll.pause_following_tail();
+                                                scroll.scroll_to(ListOffset::default());
+                                                px(0.0)
+                                            }
+                                            "end" => {
+                                                scroll.scroll_to_end();
+                                                px(0.0)
+                                            }
                                             _ => return,
                                         };
-                                        scroll.set_offset(point(
-                                            current.x,
-                                            next.clamp(-limit, px(0.0)),
-                                        ));
+                                        if distance != px(0.0) {
+                                            scroll.pause_following_tail();
+                                            scroll.scroll_by(distance);
+                                        }
                                         cx.stop_propagation();
                                         cx.notify(window.current_view());
                                     }
                                 })
-                                .px(px(16.0))
-                                .py(px(12.0))
-                                .children(transcript.map(|transcript| {
-                                    self.render_background_transcript(
-                                        item,
-                                        transcript,
-                                        selection.clone(),
-                                        window,
-                                        cx,
-                                    )
-                                })),
+                                .child(md::render::frame_reset(selection.clone()))
+                                .child(
+                                    list(list_state.clone(), move |index, window, cx| {
+                                        weak.update(cx, |this, cx| {
+                                            this.render_background_transcript_row(
+                                                &row_key, index, window, cx,
+                                            )
+                                        })
+                                        .unwrap_or_else(|_| div().into_any_element())
+                                    })
+                                    .size_full()
+                                    .py(px(8.0)),
+                                )
+                                .when(!self.update_card_visible(), |surface| {
+                                    surface
+                                        .child(background_work_selection_input(selection.clone()))
+                                }),
                         )
-                        .child(scrollbar::vertical(
-                            &output_viewport.scroll_handle,
-                            &output_viewport.scrollbar,
-                        )),
+                        .child(scrollbar::vertical(&list_state, &scrollbar)),
                 );
         }
         let card = div()
@@ -1763,90 +1928,103 @@ impl Fintwind {
         )
     }
 
-    fn render_background_transcript(
+    fn render_background_transcript_row(
         &self,
-        item: &BackgroundWorkItem,
-        transcript: &BackgroundWorkTranscript,
-        selection: TranscriptSelection,
+        key: &BackgroundWorkKey,
+        row_index: usize,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Div {
+    ) -> AnyElement {
+        let Some(registry) = self
+            .state
+            .selected_session
+            .and_then(|id| self.background_work.get(&id))
+        else {
+            return div().into_any_element();
+        };
+        let Some((item, transcript, row)) = registry
+            .items
+            .get(key)
+            .zip(registry.transcripts.get(key))
+            .zip(
+                registry
+                    .transcript_viewports
+                    .get(key)
+                    .and_then(|viewport| viewport.rows.get(row_index)),
+            )
+            .map(|((item, transcript), row)| (item, transcript, *row))
+        else {
+            return div().into_any_element();
+        };
+        let selection = registry.selection.clone();
         let theme = Theme::current(cx);
         let palette = MarkdownPalette::from_theme(&theme);
-        let mut content = div().w_full().min_w_0().flex().flex_col().gap(px(8.0));
-        let render_message_row = |message: &Message, cx: &mut Context<Self>| {
-            let ctx = MarkdownCtx::new(
-                format!("background-message-{}-{}", item.key.provider_id, message.id),
-                &palette,
-                if message.role == MessageRole::User {
-                    MarkdownMetrics::user_message()
-                } else {
-                    MarkdownMetrics::body()
-                },
-                selection.clone(),
-            )
-            .with_link_handler(self.markdown_link_handler.clone())
-            .with_streaming_animation(message.streaming && !cx.reduce_motion());
-            let menu = self.menu_handle(format!("background-message-{}", message.id), cx);
-            let mut markdown_views = self.message_markdown.borrow_mut();
-            let view = markdown_views.entry(message.id).or_default();
-            view.set_text(message.visible_content(), message.streaming);
-            render_message(
-                MessageRender {
-                    theme: &theme,
-                    message,
-                    assistant_footer_copy_content: None,
-                    assistant_footer_time: None,
-                    assistant_before_footer: None,
-                    assistant_turn_stats: None,
-                    copied: false,
-                    assistant_message_action: None,
-                    user_message_rewind: UserMessageRewind::Hidden,
-                    user_message_fill_width: true,
-                    message_edit_input: None,
-                    attachment_menus: Vec::new(),
-                    attachment_images: Vec::new(),
-                    attachments_can_reveal: false,
-                    markdown: Some(view),
-                    ctx: &ctx,
-                    compaction_expanded: false,
-                    compaction_focus: None,
-                    menu,
-                    fintwind: cx.entity().downgrade(),
-                    composer: self.composer.clone(),
-                },
-                cx,
-            )
-        };
-        // Group blocks by their anchor once per frame; the per-message filter
-        // below then costs one lookup instead of a full block scan. Each entry
-        // keeps the block's index in this transcript, which is what its
-        // disclosure state and control ids are scoped by.
-        let mut blocks_by_after: HashMap<usize, Vec<(usize, &TranscriptBlock)>> = HashMap::new();
-        for (block_index, block) in transcript.transcript_blocks.iter().enumerate() {
-            blocks_by_after
-                .entry(block.after_message)
-                .or_default()
-                .push((block_index, block));
-        }
-        // The item's own liveness: the same questions the session transcript
-        // asks of its runtime, answered from the background item instead. A
-        // live subagent's blocks name their newest activity; the newest group
-        // stays open until another group appears, as in the parent transcript.
-        let live_turn_id = (item.status.is_live())
-            .then(|| {
-                transcript
-                    .turns
-                    .last()
-                    .filter(|turn| turn.status == TurnStatus::Running)
-                    .map(|turn| turn.id)
-            })
-            .flatten();
-        for after_message in 0..=transcript.messages.len() {
-            for (block_index, block) in blocks_by_after.get(&after_message).into_iter().flatten() {
-                if block.activities.is_empty() {
-                    continue;
-                }
+        let content = match row {
+            BackgroundTranscriptRow::Message(index) => {
+                let Some(message) = transcript.messages.get(index) else {
+                    return div().into_any_element();
+                };
+                let ctx = MarkdownCtx::new(
+                    format!("background-message-{}-{}", item.key.provider_id, message.id),
+                    &palette,
+                    if message.role == MessageRole::User {
+                        MarkdownMetrics::user_message()
+                    } else {
+                        MarkdownMetrics::body()
+                    },
+                    selection.clone(),
+                )
+                .with_link_handler(self.markdown_link_handler.clone())
+                .with_streaming_animation(message.streaming && !cx.reduce_motion());
+                let menu = self.menu_handle(format!("background-message-{}", message.id), cx);
+                let mut markdown_views = self.message_markdown.borrow_mut();
+                let view = markdown_views.get_or_insert_with(
+                    message.id,
+                    message.visible_content().len(),
+                    MarkdownView::new,
+                );
+                view.set_text(message.visible_content(), message.streaming);
+                render_message(
+                    MessageRender {
+                        theme: &theme,
+                        message,
+                        assistant_footer_copy_content: None,
+                        assistant_footer_time: None,
+                        assistant_before_footer: None,
+                        assistant_turn_stats: None,
+                        copied: false,
+                        assistant_message_action: None,
+                        user_message_rewind: UserMessageRewind::Hidden,
+                        user_message_fill_width: true,
+                        message_edit_input: None,
+                        attachment_menus: Vec::new(),
+                        attachment_images: Vec::new(),
+                        attachments_can_reveal: false,
+                        markdown: Some(view),
+                        ctx: &ctx,
+                        compaction_expanded: false,
+                        compaction_focus: None,
+                        menu,
+                        fintwind: cx.entity().downgrade(),
+                        composer: self.composer.clone(),
+                    },
+                    cx,
+                )
+                .into_any_element()
+            }
+            BackgroundTranscriptRow::Block(block_index) => {
+                let Some(block) = transcript.transcript_blocks.get(block_index) else {
+                    return div().into_any_element();
+                };
+                let live_turn_id = (item.status.is_live())
+                    .then(|| {
+                        transcript
+                            .turns
+                            .last()
+                            .filter(|turn| turn.status == TurnStatus::Running)
+                            .map(|turn| turn.id)
+                    })
+                    .flatten();
                 let live_turn = live_turn_id.is_some_and(|turn_id| block.turn_id == Some(turn_id));
                 let live_reasoning_id = live_turn
                     .then(|| {
@@ -1858,40 +2036,65 @@ impl Fintwind {
                             .map(|activity| activity.id)
                     })
                     .flatten();
-                content = content.child(self.render_activity_cluster(
+                self.render_activity_cluster(
                     &block.activities,
                     ActivityClusterContext {
                         surface: ActivitySurface::Background(item.key.clone()),
-                        block_index: *block_index,
+                        block_index,
                         live_turn,
-                        latest_group: *block_index + 1 == transcript.transcript_blocks.len(),
+                        latest_group: block_index + 1 == transcript.transcript_blocks.len(),
                         live_reasoning_id,
                         selection: selection.clone(),
                     },
                     &theme,
                     window,
                     cx,
-                ));
+                )
+                .into_any_element()
             }
-            if let Some(message) = transcript.messages.get(after_message) {
-                content = content.child(render_message_row(message, cx));
+            BackgroundTranscriptRow::Footer => {
+                render_background_transcript_footer(item, transcript, &theme, |model| {
+                    self.model_display_name(Some(model))
+                })
+                .map(IntoElement::into_any_element)
+                .unwrap_or_else(|| div().into_any_element())
             }
+        };
+        div()
+            .w_full()
+            .min_w_0()
+            .px(px(16.0))
+            .py(px(4.0))
+            .child(content)
+            .into_any_element()
+    }
+
+    pub(super) fn remeasure_background_block(&self, key: &BackgroundWorkKey, block_index: usize) {
+        if let Some(viewport) = self
+            .state
+            .selected_session
+            .and_then(|id| self.background_work.get(&id))
+            .and_then(|registry| registry.transcript_viewports.get(key))
+        {
+            viewport.remeasure_block(block_index);
         }
-        // The closing line describes the conversation as a whole, so it belongs
-        // after the last message; the selection input still comes last below.
-        if let Some(footer) =
-            render_background_transcript_footer(item, transcript, &theme, |model| {
-                self.model_display_name(Some(model))
+    }
+
+    pub(super) fn remeasure_background_activity(&self, key: &BackgroundWorkKey, id: Uuid) {
+        if let Some(block_index) = self
+            .state
+            .selected_session
+            .and_then(|session| self.background_work.get(&session))
+            .and_then(|registry| registry.transcripts.get(key))
+            .and_then(|transcript| {
+                transcript
+                    .transcript_blocks
+                    .iter()
+                    .position(|block| block.activities.iter().any(|activity| activity.id == id))
             })
         {
-            content = content.child(footer);
+            self.remeasure_background_block(key, block_index);
         }
-        // While the update card is open, its own registry owns the drag
-        // gesture; this surface's window-level listeners stay uninstalled.
-        if !self.update_card_visible() {
-            content = content.child(background_work_selection_input(selection));
-        }
-        content
     }
 }
 
@@ -2920,7 +3123,7 @@ mod tests {
         });
         parent
             .background_work
-            .push(registry.snapshot(&key).unwrap());
+            .push(Arc::new(registry.snapshot(&key).unwrap()));
 
         let stored = serde_json::to_string(&parent).unwrap();
         let restored_session: AgentSession = serde_json::from_str(&stored).unwrap();

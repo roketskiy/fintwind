@@ -448,6 +448,12 @@ impl Backend for FintwindBackend {
     fn handle(&self, request: Request, events: EventSink) -> anyhow::Result<ResponsePayload> {
         let session_id = request.session_id;
         let runtime_id = request.runtime_id;
+        let checkpoint_skeletons = match &request.command {
+            Command::SaveTaskStateCheckpoint { skeleton_session_ids, .. } => {
+                Some(skeleton_session_ids.clone())
+            }
+            _ => None,
+        };
         match request.command {
             Command::AcceptSubmission {
                 project,
@@ -785,6 +791,11 @@ impl Backend for FintwindBackend {
                 projects,
                 live_session_ids: _,
                 sessions,
+            }
+            | Command::SaveTaskStateCheckpoint {
+                projects,
+                sessions,
+                ..
             } => {
                 let active_runtimes = self
                     .sessions
@@ -823,6 +834,14 @@ impl Backend for FintwindBackend {
                     .map(|session| session.id)
                     .collect::<Vec<_>>();
                 for mut session in sessions {
+                    if checkpoint_skeletons
+                        .as_ref()
+                        .is_some_and(|ids| ids.contains(&session.id))
+                    {
+                        // The process-local hydration marker is not serialized.
+                        // A list-only edit must not erase the stored transcript.
+                        session.detail_loaded = false;
+                    }
                     if let Some(existing) = state
                         .sessions
                         .iter_mut()
@@ -847,7 +866,14 @@ impl Backend for FintwindBackend {
                                         && incoming.status == crate::model::TurnStatus::Running
                                 })
                         });
-                        if preparing {
+                        if !session.detail_loaded {
+                            if session.updated_at >= existing.updated_at {
+                                existing.title = session.title;
+                                existing.auto_title = session.auto_title;
+                                existing.model = session.model;
+                                existing.updated_at = session.updated_at;
+                            }
+                        } else if preparing {
                             // Do not allow another client's workspace/options
                             // snapshot to change the already accepted input.
                             for queued in session.queued_messages {
@@ -915,7 +941,13 @@ impl Backend for FintwindBackend {
                             .sessions
                             .iter()
                             .find(|session| session.id == session_id)
-                            .cloned()
+                            .map(|session| {
+                                if checkpoint_skeletons.is_some() {
+                                    session.list_projection()
+                                } else {
+                                    session.clone()
+                                }
+                            })
                     })
                     .collect();
                 Ok(ResponsePayload::TaskStateSaved { sessions })
@@ -1918,6 +1950,7 @@ fn handle_driver_command(
         | Command::TrashSkills { .. }
         | Command::LoadTaskState
         | Command::SaveTaskState { .. }
+        | Command::SaveTaskStateCheckpoint { .. }
         | Command::RemoveSession
         | Command::RemoveProject { .. }
         | Command::HydrateSession { .. }

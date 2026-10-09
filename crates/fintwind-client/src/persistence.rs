@@ -11,6 +11,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 
+use crossbeam_channel::{Receiver, Sender, bounded};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -735,18 +736,54 @@ fn read_app_settings_source(
 }
 
 /// Desktop state store: app files stay local, task data crosses RPC.
+#[derive(Clone)]
 pub struct StateStore {
     path: PathBuf,
     app_state_path: PathBuf,
     app_settings_path: PathBuf,
     legacy_settings_paths: Vec<PathBuf>,
     daemon: DaemonSupervisor,
-    remote_default_cwd: Mutex<Option<PathBuf>>,
+    remote_default_cwd: Arc<Mutex<Option<PathBuf>>>,
     /// A task snapshot may only be written after this client has successfully
     /// loaded the daemon's authoritative state. Falling back to an empty UI
     /// after a transient RPC failure must never turn the next ordinary save
     /// into a destructive replacement of the daemon database.
-    task_state_loaded: AtomicBool,
+    task_state_loaded: Arc<AtomicBool>,
+    saves: Arc<DesktopSaves>,
+}
+
+struct DesktopSaves {
+    in_flight: AtomicBool,
+    completed_tx: Sender<SaveCompletion>,
+    completed: Receiver<SaveCompletion>,
+    wake: Mutex<Option<smol::channel::Sender<()>>>,
+    saved_files: Mutex<(Vec<u8>, Vec<u8>)>,
+}
+
+struct SaveCompletion {
+    dirty_ids: HashSet<Uuid>,
+    result: io::Result<()>,
+}
+
+struct DesktopSnapshot {
+    settings: AppSettings,
+    navigation: AppState,
+    daemon_settings: DaemonSettings,
+    command: Command,
+    dirty_ids: HashSet<Uuid>,
+}
+
+impl Default for DesktopSaves {
+    fn default() -> Self {
+        let (completed_tx, completed) = bounded(1);
+        Self {
+            in_flight: AtomicBool::new(false),
+            completed_tx,
+            completed,
+            wake: Mutex::new(None),
+            saved_files: Mutex::new((Vec::new(), Vec::new())),
+        }
+    }
 }
 
 impl StateStore {
@@ -773,9 +810,31 @@ impl StateStore {
             legacy_settings_paths: default_legacy_settings_paths(),
             path: Self::default_path(),
             daemon,
-            remote_default_cwd: Mutex::new(None),
-            task_state_loaded: AtomicBool::new(false),
+            remote_default_cwd: Arc::new(Mutex::new(None)),
+            task_state_loaded: Arc::new(AtomicBool::new(false)),
+            saves: Arc::new(DesktopSaves::default()),
         }
+    }
+
+    /// An explicit desktop data directory, also used by isolated black-box runs.
+    pub fn remote_in(daemon: DaemonSupervisor, directory: &Path) -> Self {
+        let mut store = Self::remote(daemon);
+        store.path = directory.join("app.db");
+        store.app_state_path = directory.join("state.json");
+        store.app_settings_path = directory.join("app.json");
+        store.legacy_settings_paths = Vec::new();
+        store
+    }
+
+    pub fn set_save_wake(&self, wake: smol::channel::Sender<()>) {
+        if !self.saves.completed.is_empty() {
+            let _ = wake.try_send(());
+        }
+        *self.saves.wake.lock() = Some(wake);
+    }
+
+    pub fn save_in_flight(&self) -> bool {
+        self.saves.in_flight.load(Ordering::Acquire)
     }
 
     pub fn session_message_search(
@@ -1252,9 +1311,7 @@ impl StateStore {
         }
     }
 
-    pub fn save(&self, state: &mut PersistedState) -> io::Result<()> {
-        self.write_app_settings(&state.app_settings())?;
-        self.write_app_state(&state.app_state())?;
+    fn snapshot(&self, state: &PersistedState) -> io::Result<DesktopSnapshot> {
         if !self.task_state_loaded.load(Ordering::Acquire) {
             return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -1268,21 +1325,122 @@ impl StateStore {
             .filter(|session| dirty_ids.contains(&session.id))
             .cloned()
             .collect();
-        let live_session_ids = state.sessions.iter().map(|session| session.id).collect();
-        self.daemon
-            .client()
-            .notify(
-                Uuid::nil(),
-                Uuid::nil(),
-                Command::SaveTaskState {
-                    projects: state.projects.clone(),
-                    live_session_ids,
-                    sessions,
-                },
-            )
-            .map_err(to_io_error)?;
+        Ok(DesktopSnapshot {
+            settings: state.app_settings(),
+            navigation: state.app_state(),
+            daemon_settings: state.daemon_settings(),
+            command: Command::SaveTaskStateCheckpoint {
+                projects: state.projects.clone(),
+                skeleton_session_ids: state
+                    .sessions
+                    .iter()
+                    .filter(|session| dirty_ids.contains(&session.id) && !session.detail_loaded)
+                    .map(|session| session.id)
+                    .collect(),
+                sessions,
+            },
+            dirty_ids,
+        })
+    }
+
+    /// One snapshot at a time, gated BEFORE cloning. Further attempts leave
+    /// dirty ids in the live model instead of queueing megabytes of history.
+    /// Returns false when the caller must retry after completion.
+    pub fn save(&self, state: &mut PersistedState) -> io::Result<bool> {
+        if self.saves.in_flight.swap(true, Ordering::AcqRel) {
+            return Ok(false);
+        }
+        let snapshot = match self.snapshot(state) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                self.saves.in_flight.store(false, Ordering::Release);
+                return Err(error);
+            }
+        };
+        let store = self.clone();
+        let result = std::thread::Builder::new()
+            .name("fintwind-desktop-save".into())
+            .spawn(move || {
+                let dirty_ids = snapshot.dirty_ids.clone();
+                let result = store.persist_snapshot(snapshot);
+                let _ = store
+                    .saves
+                    .completed_tx
+                    .send(SaveCompletion { dirty_ids, result });
+                if let Some(wake) = store.saves.wake.lock().as_ref() {
+                    let _ = wake.try_send(());
+                }
+            });
+        if let Err(error) = result {
+            self.saves.in_flight.store(false, Ordering::Release);
+            return Err(error);
+        }
+        state.dirty_sessions.clear();
+        Ok(true)
+    }
+
+    pub fn finish_save(&self, state: &mut PersistedState) -> Option<io::Result<()>> {
+        self.saves
+            .completed
+            .try_recv()
+            .ok()
+            .map(|completion| self.apply_completion(state, completion))
+    }
+
+    fn apply_completion(
+        &self,
+        state: &mut PersistedState,
+        completion: SaveCompletion,
+    ) -> io::Result<()> {
+        if completion.result.is_err() {
+            state.dirty_sessions.extend(completion.dirty_ids);
+        }
+        self.saves.in_flight.store(false, Ordering::Release);
+        completion.result
+    }
+
+    /// Quit-only barrier. Call off the UI thread with the final owned model.
+    /// The previous request is acknowledged before the last snapshot is sent.
+    pub fn flush(&self, state: &mut PersistedState) -> io::Result<()> {
+        if self.saves.in_flight.load(Ordering::Acquire) {
+            let completion = self.saves.completed.recv().map_err(to_io_error)?;
+            // Retry failed dirty ids in the final snapshot as well.
+            let _ = self.apply_completion(state, completion);
+        }
+        let snapshot = self.snapshot(state)?;
+        self.persist_snapshot(snapshot)?;
         state.dirty_sessions.clear();
         Ok(())
+    }
+
+    fn persist_snapshot(&self, snapshot: DesktopSnapshot) -> io::Result<()> {
+        let settings = serde_json::to_vec_pretty(&snapshot.settings).map_err(to_io_error)?;
+        let navigation = serde_json::to_vec_pretty(&snapshot.navigation).map_err(to_io_error)?;
+        {
+            let mut saved = self.saves.saved_files.lock();
+            if saved.0 != settings {
+                write_bytes_atomically(&self.app_settings_path, &settings)?;
+                saved.0 = settings;
+            }
+            if saved.1 != navigation {
+                write_bytes_atomically(&self.app_state_path, &navigation)?;
+                saved.1 = navigation;
+            }
+        }
+        self.daemon
+            .update_settings(snapshot.daemon_settings.clone())
+            .map_err(to_io_error)?;
+        // Waiting for the COMMIT, not merely a socket enqueue, is the memory
+        // bound. The response contains only lightweight catalog projections.
+        match self
+            .daemon
+            .client()
+            .checkpoint(snapshot.command)
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::TaskStateSaved { .. } => Ok(()),
+            _ => Err(io::Error::other("invalid task-state checkpoint response")),
+        }
     }
 
     pub fn remove_session(&self, session_id: Uuid) -> io::Result<()> {
@@ -1357,10 +1515,14 @@ pub fn hydrate_session(
 }
 
 fn write_json_atomically(path: &Path, value: &impl Serialize) -> io::Result<()> {
+    let data = serde_json::to_vec_pretty(value).map_err(to_io_error)?;
+    write_bytes_atomically(path, &data)
+}
+
+fn write_bytes_atomically(path: &Path, data: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let data = serde_json::to_vec_pretty(value).map_err(to_io_error)?;
     let temporary = path.with_extension("json.tmp");
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);

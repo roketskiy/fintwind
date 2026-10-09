@@ -781,6 +781,7 @@ struct Storage {
     /// wrote it, so a save only touches the messages that actually changed.
     /// See [`write_messages`].
     written_messages: HashMap<Uuid, HashMap<Uuid, u64>>,
+    saved_details: HashMap<Uuid, u64>,
     saved_projects: u64,
     saved_app_settings: u64,
     saved_app_state: u64,
@@ -1100,6 +1101,7 @@ impl StateStore {
             // A fresh connection has written nothing yet. Sessions loaded here
             // are skeletons anyway, so the first save of one is a full write.
             written_messages: HashMap::new(),
+            saved_details: HashMap::new(),
             saved_projects: 0,
             saved_app_settings: if app_settings_are_saved {
                 fingerprint(&serde_json::to_string(&app_settings).map_err(to_io_error)?)
@@ -1130,6 +1132,7 @@ impl StateStore {
                 connection: self.open()?,
                 persisted_sessions: HashSet::new(),
                 written_messages: HashMap::new(),
+                saved_details: HashMap::new(),
                 saved_projects: 0,
                 saved_app_settings: 0,
                 saved_app_state: 0,
@@ -1225,6 +1228,7 @@ impl StateStore {
                 connection: self.open()?,
                 persisted_sessions: HashSet::new(),
                 written_messages: HashMap::new(),
+                saved_details: HashMap::new(),
                 saved_projects: 0,
                 saved_app_settings: 0,
                 saved_app_state: 0,
@@ -1294,6 +1298,7 @@ impl StateStore {
         // does not leave this connection believing rows it never wrote are on
         // disk — which would make the next save skip them for good.
         let mut written_messages = Vec::new();
+        let mut saved_details = Vec::new();
         let mut persisted_sessions = storage.persisted_sessions.clone();
         for session in state
             .sessions
@@ -1323,15 +1328,19 @@ impl StateStore {
                 continue;
             }
             let data = session_data(session)?;
+            let detail_fingerprint = fingerprint(&data);
             transaction
                 .execute(
                     UPSERT_SESSION,
                     rusqlite::params_from_iter(session_params(session)),
                 )
                 .map_err(to_io_error)?;
-            transaction
-                .execute(UPSERT_SESSION_DETAIL, params![session.id.to_string(), data])
-                .map_err(to_io_error)?;
+            if storage.saved_details.get(&session.id) != Some(&detail_fingerprint) {
+                transaction
+                    .execute(UPSERT_SESSION_DETAIL, params![session.id.to_string(), data])
+                    .map_err(to_io_error)?;
+                saved_details.push((session.id, detail_fingerprint));
+            }
             written_messages.push((
                 session.id,
                 write_messages(
@@ -1389,11 +1398,13 @@ impl StateStore {
         storage.persisted_sessions = persisted_sessions;
         for id in removed {
             storage.written_messages.remove(&id);
+            storage.saved_details.remove(&id);
         }
         // Now that the rows are durable, and not before.
         for (session_id, fingerprints) in written_messages {
             storage.written_messages.insert(session_id, fingerprints);
         }
+        storage.saved_details.extend(saved_details);
         state.dirty_sessions.clear();
         if submission.is_some() {
             let _ = storage
@@ -2955,7 +2966,7 @@ mod tests {
         state.sessions[0].begin_turn("Parent prompt");
         state.sessions[0]
             .background_work
-            .push(BackgroundWorkSnapshot {
+            .push(std::sync::Arc::new(BackgroundWorkSnapshot {
                 item: BackgroundWorkItem::new(
                     BackgroundWorkKind::Subagent,
                     "child-session",
@@ -2970,7 +2981,7 @@ mod tests {
                     transcript_blocks: Vec::new(),
                     turns: Vec::new(),
                 },
-            });
+            }));
         store.save(&mut state).unwrap();
 
         let restored = load_hydrated(&store_in(&directory));

@@ -1152,20 +1152,12 @@ impl Fintwind {
 
     pub(super) fn save(&mut self) {
         self.last_stream_save = Instant::now();
-        let daemon_error = self
-            .daemon
-            .update_settings(self.state.daemon_settings())
-            .err()
-            .map(|error| error.to_string());
-        let app_error = self
-            .store
-            .save(&mut self.state)
-            .err()
-            .map(|error| error.to_string());
-        if let Some(error) = daemon_error.or(app_error) {
-            self.show_toast(tr!("errors.save_local_state", error = error));
-        } else {
-            self.stream_state_dirty = false;
+        match self.store.save(&mut self.state) {
+            Ok(accepted) => self.stream_state_dirty = !accepted,
+            Err(error) => {
+                self.stream_state_dirty = true;
+                self.show_toast(tr!("errors.save_local_state", error = error));
+            }
         }
     }
 
@@ -2889,6 +2881,20 @@ impl Fintwind {
     }
 
     pub(super) fn drain_event_pump(&mut self, cx: &mut Context<Self>) -> EventPumpSchedule {
+        if self.event_wake_tx.is_closed() {
+            return EventPumpSchedule::Idle;
+        }
+        if let Some(result) = self.store.finish_save(&mut self.state) {
+            match result {
+                Ok(()) if self.stream_state_dirty => self.save(),
+                Ok(()) => {}
+                Err(error) => {
+                    self.stream_state_dirty = true;
+                    self.show_toast(tr!("errors.save_local_state", error = error));
+                    cx.notify();
+                }
+            }
+        }
         // `|` on purpose: a busy provider must not starve the other result
         // queues just because its own drain reported a change first.
         let detection_changed = self.drain_provider_detection_events();
@@ -2924,6 +2930,12 @@ impl Fintwind {
             EventPumpSchedule::StreamFrame
         } else if let Some(delay) = self.background_output_refresh_delay() {
             EventPumpSchedule::BackgroundOutput(delay)
+        } else if self.stream_state_dirty && !self.store.save_in_flight() {
+            EventPumpSchedule::BackgroundOutput(
+                STREAM_SAVE_INTERVAL
+                    .saturating_sub(self.last_stream_save.elapsed())
+                    .max(Duration::from_millis(25)),
+            )
         } else {
             EventPumpSchedule::Idle
         }

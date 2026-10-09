@@ -308,6 +308,20 @@ impl DaemonClient {
         command: Command,
         timeout: Duration,
     ) -> anyhow::Result<ResponsePayload> {
+        self.request_inner(session_id, runtime_id, command, Some(timeout))
+    }
+
+    pub(crate) fn checkpoint(&self, command: Command) -> anyhow::Result<ResponsePayload> {
+        self.request_inner(Uuid::nil(), Uuid::nil(), command, None)
+    }
+
+    fn request_inner(
+        &self,
+        session_id: Uuid,
+        runtime_id: Uuid,
+        command: Command,
+        timeout: Option<Duration>,
+    ) -> anyhow::Result<ResponsePayload> {
         if self.inner.disconnected.load(Ordering::Acquire) {
             bail!("fintwind daemon is disconnected");
         }
@@ -333,7 +347,17 @@ impl DaemonClient {
             self.inner.pending.lock().remove(&request_id);
             bail!("fintwind daemon connection is closed");
         }
-        match response_rx.recv_timeout(timeout) {
+        // A desktop checkpoint is single-flight until the daemon commits or
+        // disconnects. Expiring only the waiter would allow the next checkpoint
+        // to queue behind a still-running old one every timeout interval.
+        let response = if let Some(timeout) = timeout {
+            response_rx
+                .recv_timeout(timeout)
+                .map_err(|error| error.to_string())
+        } else {
+            response_rx.recv().map_err(|error| error.to_string())
+        };
+        match response {
             Ok(Ok(payload)) => Ok(payload),
             Ok(Err(error)) => Err(anyhow!(error.message)),
             Err(error) => {

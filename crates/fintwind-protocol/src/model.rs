@@ -781,7 +781,7 @@ pub struct AgentSession {
     pub turns: Vec<AgentTurn>,
     /// Settled child-agent conversations retained with this parent session.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub background_work: Vec<BackgroundWorkSnapshot>,
+    pub background_work: Vec<std::sync::Arc<BackgroundWorkSnapshot>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub queued_messages: Vec<QueuedMessage>,
     /// Whether the transcript has been read from the database.

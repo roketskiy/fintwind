@@ -231,6 +231,9 @@ impl Fintwind {
 
 impl Render for Fintwind {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Both transcript panes share caches, so age them once per window
+        // frame, not once per pane (which would evict each other's rows).
+        self.begin_transcript_cache_frame();
         // Panel geometry first: the browser sync right below reads whether a
         // panel is mid-slide, and settling here rather than at the point of
         // use keeps the pane islands and the transcript on one set of widths.

@@ -962,9 +962,7 @@ impl Fintwind {
     /// Toggle one activity cluster's card list.
     ///
     /// The session transcript keeps the reader's place across the row's height
-    /// change; a background surface scrolls a plain div, so it only needs the
-    /// state flip — pinning or remeasuring session rows for a subagent's block
-    /// would move a transcript that has nothing to do with this disclosure.
+    /// change; a background surface remeasures its own independent list.
     pub(super) fn toggle_activity_cluster(
         &mut self,
         surface: ActivitySurface,
@@ -975,18 +973,36 @@ impl Fintwind {
         match surface {
             ActivitySurface::Session => self.toggle_block_disclosure(block_index, cx, |this| {
                 this.activities_expanded.insert(block_index, !current);
+                if current && let Some(block) = this.selected_transcript_blocks().get(block_index) {
+                    for activity in &block.activities {
+                        this.release_activity_item_caches(activity.id);
+                    }
+                }
             }),
             ActivitySurface::Background(key) => {
                 // Scoped to the item, not the registry: two subagents each hold
                 // a block 0 of their own transcript.
+                if current
+                    && let Some(transcript) = self
+                        .state
+                        .selected_session
+                        .and_then(|id| self.background_work.get(&id))
+                        .and_then(|registry| registry.transcripts.get(&key))
+                    && let Some(block) = transcript.transcript_blocks.get(block_index)
+                {
+                    for activity in &block.activities {
+                        self.release_activity_item_caches(activity.id);
+                    }
+                }
                 let session_id = self.state.selected_session;
                 if let Some(session_id) = session_id
                     && let Some(registry) = self.background_work.get_mut(&session_id)
                 {
                     registry
                         .activities_expanded
-                        .insert((key, block_index), !current);
+                        .insert((key.clone(), block_index), !current);
                 }
+                self.remeasure_background_block(&key, block_index);
                 cx.notify();
             }
         }
@@ -1015,14 +1031,13 @@ impl Fintwind {
                     }
                 });
             }
-            // A background surface scrolls a plain div, so there is no row to
-            // pin or remeasure. The shared per-item caches still drop when the
-            // card closes.
-            ActivitySurface::Background(_) => {
+            // Background disclosure remeasures the child list, not the parent.
+            ActivitySurface::Background(key) => {
                 self.expanded_activity_items.insert(id, !current);
                 if current {
                     self.release_activity_item_caches(id);
                 }
+                self.remeasure_background_activity(&key, id);
                 cx.notify();
             }
         }
@@ -1032,12 +1047,21 @@ impl Fintwind {
     /// alive: the rows would only be rebuilt from the same changes if it
     /// reopens, so do not hold them for every edit the session ever made.
     fn release_activity_item_caches(&self, id: Uuid) {
+        self.activity_markdown.borrow_mut().remove(&id);
+        self.reasoning_views.borrow_mut().remove(&id);
+        self.activity_scroll_viewports.borrow_mut().remove(&id);
         self.activity_diffs.borrow_mut().remove(&id);
         self.activity_diff_viewports.borrow_mut().remove(&id);
         self.activity_detail_viewports.borrow_mut().remove(&id);
         self.activity_section_viewports
             .borrow_mut()
             .retain(|(activity_id, _), _| *activity_id != id);
+    }
+
+    pub(super) fn begin_transcript_cache_frame(&self) {
+        self.message_markdown.borrow_mut().begin_frame();
+        self.activity_markdown.borrow_mut().begin_frame();
+        self.reasoning_views.borrow_mut().begin_frame();
     }
 
     /// Opens a file a tool changed in the right panel's viewer.
@@ -1473,7 +1497,11 @@ impl Fintwind {
                         MessageRole::User | MessageRole::Assistant | MessageRole::Compaction
                     )
                     .then(|| {
-                        let view = markdown.entry(message.id).or_default();
+                        let view = markdown.get_or_insert_with(
+                            message.id,
+                            message.visible_content().len(),
+                            MarkdownView::new,
+                        );
                         view.set_text(message.visible_content(), message.streaming);
                         &*view
                     });
@@ -2767,8 +2795,7 @@ impl Fintwind {
                 let view = self
                     .reasoning_views
                     .borrow_mut()
-                    .entry(id)
-                    .or_insert_with(|| {
+                    .get_or_insert_with(id, reasoning.content.len(), || {
                         cx.new(|cx| {
                             md::virtualized::ReasoningView::new(
                                 format!("reasoning-{id}"),
@@ -2821,7 +2848,7 @@ impl Fintwind {
                     .or_default()
                     .clone();
                 let mut views = self.activity_markdown.borrow_mut();
-                let view = views.entry(id).or_default();
+                let view = views.get_or_insert_with(id, reasoning.content.len(), MarkdownView::new);
                 view.set_text(&reasoning.content, reasoning_live);
                 let wheel_scroll = reasoning_viewport.scroll_handle.clone();
                 let wheel_follow_tail = reasoning_viewport.follow_tail.clone();

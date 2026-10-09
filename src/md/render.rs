@@ -486,19 +486,12 @@ impl MarkdownView {
         *self.veil.borrow_mut() = RowVeil::seeded();
     }
 
-    /// Point the view at `text`. `mend` closes hanging inline markers, which is
-    /// wanted while a response streams and not once it has settled.
-    /// Bytes of source this view retains. Parsed structures run to roughly
-    /// seventeen times this, so it is the honest unit for bounding a cache.
-    pub fn source_len(&self) -> usize {
-        self.parser.text().len()
-    }
-
     pub(super) fn invalidate_rows_from(&mut self, row: usize) {
         let ordinal = block_ordinal_base(row);
         self.flats.get_mut().retain(|key, _| *key < ordinal);
     }
 
+    /// Point the view at `text`; `mend` closes hanging streaming markers.
     pub fn set_text(&mut self, text: &str, mend: bool) {
         let was_streaming = self.streaming.replace(mend);
         if !mend && was_streaming {

@@ -167,13 +167,6 @@ fn signal_event_pump(wake: &smol::channel::Sender<()>) {
     let _ = wake.try_send(());
 }
 
-/// Source bytes of parsed messages kept across session switches.
-///
-/// Measured at ~17x expansion into parsed structures, plus flattened text and
-/// shaped runs on top, so this is bounded by source size rather than entry
-/// count — one long message costs far more than several short ones. 512 KB
-/// holds several sessions' transcripts for a few MB of structures.
-const MAX_CACHED_MESSAGE_SOURCE_BYTES: usize = 512 * 1024;
 /// Projects whose workspace lookups are remembered — branch, diff listing,
 /// working tree. A window rarely has more than a handful open, and the diff
 /// and tree caches are invalidated on every refresh, so they hold one entry in
@@ -1160,8 +1153,8 @@ struct SessionTabState {
     expanded_changed_files: HashSet<Uuid>,
     expanded_compactions: HashSet<Uuid>,
     expanded_provider_retries: HashSet<Uuid>,
-    activity_markdown: RefCell<HashMap<Uuid, MarkdownView>>,
-    reasoning_views: RefCell<HashMap<Uuid, Entity<md::virtualized::ReasoningView>>>,
+    activity_markdown: RefCell<md::cache::RenderCache<MarkdownView>>,
+    reasoning_views: RefCell<md::cache::RenderCache<Entity<md::virtualized::ReasoningView>>>,
     activity_scroll_viewports: RefCell<HashMap<Uuid, ActivityScrollViewport>>,
     activity_diffs: RefCell<HashMap<Uuid, Rc<activity_diff::Diff>>>,
     activity_diff_viewports: RefCell<HashMap<Uuid, ActivityScrollViewport>>,
@@ -1230,8 +1223,8 @@ impl SessionTabState {
             expanded_changed_files: HashSet::new(),
             expanded_compactions: HashSet::new(),
             expanded_provider_retries: HashSet::new(),
-            activity_markdown: RefCell::new(HashMap::new()),
-            reasoning_views: RefCell::new(HashMap::new()),
+            activity_markdown: RefCell::new(Default::default()),
+            reasoning_views: RefCell::new(Default::default()),
             activity_scroll_viewports: RefCell::new(HashMap::new()),
             activity_diffs: RefCell::new(HashMap::new()),
             activity_diff_viewports: RefCell::new(HashMap::new()),
@@ -2064,11 +2057,11 @@ pub struct Fintwind {
     transcript_layout_width: Cell<Pixels>,
     /// Parsed markdown per assistant message, keeping each response's
     /// incremental parse and flattened blocks alive across frames.
-    message_markdown: RefCell<HashMap<Uuid, MarkdownView>>,
+    message_markdown: RefCell<md::cache::RenderCache<MarkdownView>>,
     /// Parsed markdown for reasoning activities, keyed by stable activity id.
-    activity_markdown: RefCell<HashMap<Uuid, MarkdownView>>,
+    activity_markdown: RefCell<md::cache::RenderCache<MarkdownView>>,
     /// Full scrollback for long thoughts, with only visible fragments laid out.
-    reasoning_views: RefCell<HashMap<Uuid, Entity<md::virtualized::ReasoningView>>>,
+    reasoning_views: RefCell<md::cache::RenderCache<Entity<md::virtualized::ReasoningView>>>,
     /// Independent capped viewports for expanded thoughts and command output.
     /// Keeping these stable preserves scroll position through virtualization.
     activity_scroll_viewports: RefCell<HashMap<Uuid, ActivityScrollViewport>>,
@@ -2787,6 +2780,7 @@ impl Fintwind {
         let (provider_version_tx, provider_version_events) = unbounded();
         let (provider_detection_tx, provider_detection_events) = unbounded();
         let (event_wake_tx, event_wake_events) = smol::channel::bounded(1);
+        store.set_save_wake(event_wake_tx.clone());
         let (task_state_sync_tx, task_state_sync_events) = unbounded();
         let model_picker_tab = ModelPickerTab::Provider("OpenCode".into());
         let mut session_navigation = SessionNavigation::default();
@@ -2956,6 +2950,9 @@ impl Fintwind {
             // true app quit, persist the final state before stopping the
             // desktop-owned daemon and its OpenCode backend processes.
             cx.on_app_quit(|this, cx| {
+                // The detached pump must not consume the completion while the
+                // quit barrier owns the final model and waits for that save.
+                this.event_wake_tx.close();
                 this.capture_current_composer_draft(cx);
                 this.composer_draft_save_generation =
                     this.composer_draft_save_generation.saturating_add(1);
@@ -2963,8 +2960,12 @@ impl Fintwind {
                 let store = this.composer_draft_store.clone();
                 let drafts = this.composer_drafts.clone();
                 let daemon = this.daemon.clone();
-                this.save();
+                let task_store = this.store.clone();
+                let mut final_state = std::mem::replace(&mut this.state, PersistedState::empty());
                 let quit = cx.background_executor().spawn(async move {
+                    if let Err(error) = task_store.flush(&mut final_state) {
+                        eprintln!("could not flush final desktop state: {error}");
+                    }
                     let _ = store.save(drafts, generation);
                     daemon.shutdown();
                 });
@@ -3664,9 +3665,9 @@ impl Fintwind {
                     .transcript_scroll_to_bottom_visible,
                 transcript_scrollbar_dragging: transcript_view.transcript_scrollbar_dragging,
                 transcript_layout_width: Cell::new(Pixels::ZERO),
-                message_markdown: RefCell::new(HashMap::new()),
-                activity_markdown: RefCell::new(HashMap::new()),
-                reasoning_views: RefCell::new(HashMap::new()),
+                message_markdown: RefCell::new(Default::default()),
+                activity_markdown: RefCell::new(Default::default()),
+                reasoning_views: RefCell::new(Default::default()),
                 activity_scroll_viewports: RefCell::new(HashMap::new()),
                 activity_diffs: RefCell::new(HashMap::new()),
                 activity_diff_viewports: RefCell::new(HashMap::new()),

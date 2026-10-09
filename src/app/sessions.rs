@@ -355,7 +355,21 @@ impl Fintwind {
                         {
                             fintwind.pending_session_activation = None;
                         }
-                        fintwind.show_toast(tr!("errors.open_session", error = error));
+                        // The click asked for this session, so put it on
+                        // screen. Hydration only parks the selection, so
+                        // without this the failure lands on the previous
+                        // session's transcript — where nobody looking for it
+                        // will ever find it, and the only trace left is the
+                        // toast. A skeleton renders no empty placeholder, so
+                        // the notice below is the whole transcript.
+                        if fintwind.state.selected_session != Some(session_id) {
+                            fintwind.activate_session(session_id, cx);
+                        }
+                        fintwind.record_session_error(
+                            session_id,
+                            tr!("errors.open_session", error = error),
+                            cx,
+                        );
                     }
                 }
                 cx.notify();

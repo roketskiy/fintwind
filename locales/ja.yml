@@ -828,6 +828,7 @@ session.stopped: 停止しました
 session.turn_completed: ターンが完了しました
 session.stopped_before_response: エージェントは回答を返す前に停止しました
 session.provider_disconnected: プロバイダーとの接続が回答を返す前に切断されました
+session.turn_failed: ターンは応答なしに終了しました
 session.steer_rejected: エージェントに追加の指示を送れませんでした（%{error}）。メッセージはフォローアップとしてキューに追加されました
 session.steer_rejected_plain: エージェントに追加の指示を送れませんでした。メッセージはフォローアップとしてキューに追加されました
 session.compaction_requested: 圧縮を要求しました。プロバイダーは次の安全な区切りで要約を開始します

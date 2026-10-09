@@ -864,22 +864,48 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
             }
             column
         }
-        MessageRole::System => div().w_full().flex().justify_center().child(
-            div()
-                .px(px(10.0))
-                .py(px(4.0))
-                .rounded_full()
-                .bg(theme.overlay)
-                .text_size(ui_px(11.0))
-                .line_height(ui_px(16.0))
-                .child(md::render::plain_text(
-                    content.clone(),
-                    md::render::sans_family(),
-                    FontWeight::NORMAL,
-                    theme.text_tertiary,
-                    &ctx,
-                )),
-        ),
+        MessageRole::System => {
+            // A recorded session error. The role exists for exactly this, so
+            // it is styled as a notice rather than a neutral pill: an icon
+            // carries the meaning for anyone who cannot separate the colour,
+            // and the tinted surface keeps a long provider message readable
+            // instead of dissolving into the transcript.
+            div().w_full().flex().justify_center().child(
+                div()
+                    .max_w(px(560.0))
+                    .min_w_0()
+                    .px(px(10.0))
+                    .py(px(6.0))
+                    .rounded(px(8.0))
+                    .bg(theme.danger_soft)
+                    .border_1()
+                    .border_color(theme.danger)
+                    .flex()
+                    .items_start()
+                    .gap(px(7.0))
+                    .text_size(ui_px(11.5))
+                    .line_height(ui_px(16.0))
+                    .child(
+                        div()
+                            .flex_none()
+                            .pt(px(1.0))
+                            .child(icon("icons/alert.svg", 13.0, theme.danger_text)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .child(md::render::plain_text(
+                                content.clone(),
+                                md::render::sans_family(),
+                                FontWeight::NORMAL,
+                                theme.text,
+                                &ctx,
+                            )),
+                    ),
+            )
+        }
         MessageRole::Compaction => {
             // The settled summary is provider bookkeeping, not conversation:
             // it presents as one collapsed card styled after the tool

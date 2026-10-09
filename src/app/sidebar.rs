@@ -1347,6 +1347,7 @@ impl Fintwind {
             model_id,
             model_name,
             provider,
+            latest_error,
         ) = {
             let Some(session) = self
                 .state
@@ -1369,6 +1370,14 @@ impl Fintwind {
             };
             let model_id = self.model_for_session(session).map(str::to_owned);
             let model_name = self.model_display_name(model_id.as_deref());
+            // The newest recorded error, so the row's failure icon can say why
+            // without the reader having to open the session.
+            let latest_error = session
+                .messages
+                .iter()
+                .rev()
+                .find(|message| message.role == MessageRole::System)
+                .map(|message| message.content.clone());
             (
                 session.status,
                 matches!(
@@ -1382,6 +1391,7 @@ impl Fintwind {
                 model_id,
                 model_name,
                 session.provider.clone(),
+                latest_error,
             )
         };
         let branch = if let Some(branch) = stored_branch {
@@ -1471,7 +1481,22 @@ impl Fintwind {
                 element.child(icon("icons/alert.svg", 12.0, status_color(&theme, status)))
             })
             .when(status == SessionStatus::Failed, |element| {
-                element.child(icon("icons/x.svg", 12.0, status_color(&theme, status)))
+                // The icon alone says "something broke" and nothing more, so
+                // the recorded reason rides along: without it the reader has
+                // to open the session to learn what happened, which is the
+                // very thing a sidebar glance is for. `.tooltip` is a
+                // `StatefulInteractiveElement` method, so the icon carries an
+                // id in either case and the arms stay one type.
+                let failure_icon = div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .id(SharedString::from(format!("session-failure-{session_id}")))
+                    .child(icon("icons/x.svg", 12.0, status_color(&theme, status)));
+                element.child(match latest_error {
+                    Some(error) => failure_icon.tooltip(Tooltip::text(error)),
+                    None => failure_icon,
+                })
             });
         let has_meta = metadata_time.is_some() || branch.is_some();
         let meta_row = div()

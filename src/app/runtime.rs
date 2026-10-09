@@ -1288,10 +1288,11 @@ impl Fintwind {
                         let checkpoint = match captured {
                             Ok(checkpoint) => checkpoint,
                             Err(error) => {
-                                fintwind.show_toast(tr!(
-                                    "errors.capture_turn_checkpoint",
-                                    error = error
-                                ));
+                                fintwind.record_session_error(
+                                    session_id,
+                                    tr!("errors.capture_turn_checkpoint", error = error),
+                                    cx,
+                                );
                                 Checkpoint {
                                     turn_count,
                                     git_ref: checkpoint::checkpoint_ref(session_id, turn_count),
@@ -1367,7 +1368,7 @@ impl Fintwind {
             .find(|session| session.id == session_id)
             .cloned()
         else {
-            self.show_toast(tr!("session.response_unavailable"));
+            self.record_session_error(session_id, tr!("session.response_unavailable"), cx);
             cx.notify();
             return;
         };
@@ -1378,7 +1379,7 @@ impl Fintwind {
                 .get(turn_count.saturating_sub(1))
                 .is_none_or(|turn| turn.turn_count != turn_count || !turn.provider_turn_started)
         {
-            self.show_toast(tr!("session.response_cannot_fork"));
+            self.record_session_error(session_id, tr!("session.response_cannot_fork"), cx);
             cx.notify();
             return;
         }
@@ -1386,7 +1387,7 @@ impl Fintwind {
             .workspace_path_for_session(&source)
             .map(std::path::Path::to_path_buf)
         else {
-            self.show_toast(tr!("errors.task_project_not_found"));
+            self.record_session_error(session_id, tr!("errors.task_project_not_found"), cx);
             cx.notify();
             return;
         };
@@ -1408,7 +1409,11 @@ impl Fintwind {
             .count();
         let binary = self.probes.first().and_then(|probe| probe.path.clone());
         if binary.is_none() {
-            self.show_toast(tr!("errors.provider_not_installed", provider = "OpenCode"));
+            self.record_session_error(
+                session_id,
+                tr!("errors.provider_not_installed", provider = "OpenCode"),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -1459,7 +1464,7 @@ impl Fintwind {
             Ok(prepared) => prepared,
             Err(error) => {
                 self.drain_queued_message(session_id, cx);
-                self.show_toast(error);
+                self.record_session_error(session_id, error, cx);
                 cx.notify();
                 return;
             }
@@ -1478,7 +1483,11 @@ impl Fintwind {
         self.drain_queued_message(session_id, cx);
         match checkpoint_warning {
             Some(error) => {
-                self.show_toast(tr!("session.forked_with_checkpoint_warning", error = error))
+                self.record_session_error(
+                    session_id,
+                    tr!("session.forked_with_checkpoint_warning", error = error),
+                    cx,
+                )
             }
             None => self.show_success_toast(tr!("session.forked_from_response")),
         }
@@ -1726,7 +1735,7 @@ impl Fintwind {
             .workspace_path_for_session(&source)
             .map(std::path::Path::to_path_buf)
         else {
-            self.show_toast(tr!("errors.task_project_not_found"));
+            self.record_session_error(session_id, tr!("errors.task_project_not_found"), cx);
             cx.notify();
             return;
         };
@@ -1745,7 +1754,7 @@ impl Fintwind {
         // the UI leaves edit mode.
         let binary = self.probes.first().and_then(|probe| probe.path.clone());
         if rollback_turns > 0 && binary.is_none() {
-            self.show_toast(tr!("errors.provider_not_found", provider = "OpenCode"));
+            self.record_session_error(session_id, tr!("errors.provider_not_found", provider = "OpenCode"), cx);
             cx.notify();
             return;
         }
@@ -1868,7 +1877,7 @@ impl Fintwind {
             {
                 self.remeasure_transcript_message(message_index);
             }
-            self.show_toast(error);
+            self.record_session_error(session_id, error, cx);
             cx.notify();
             return;
         }
@@ -2504,7 +2513,11 @@ impl Fintwind {
         else {
             if selected {
                 self.restore_composer_submission(submission, cx);
-                self.show_toast(tr!("errors.prepare_task_project_not_found"));
+                self.record_session_error(
+                    session_id,
+                    tr!("errors.prepare_task_project_not_found"),
+                    cx,
+                );
             }
             cx.notify();
             return;
@@ -2672,7 +2685,7 @@ impl Fintwind {
             if self.state.selected_session == Some(session_id) {
                 self.restore_composer_submission(submission, cx);
             }
-            self.show_toast(tr!("errors.submission_replaced"));
+            self.record_session_error(session_id, tr!("errors.submission_replaced"), cx);
             cx.notify();
             return;
         }
@@ -2714,7 +2727,11 @@ impl Fintwind {
                     }
                     self.splice_transcript_rows_after_visibility_change(&previous_kinds);
                     self.restore_composer_submission(submission, cx);
-                    self.show_toast(tr!("errors.create_worktree", error = error));
+                    self.record_session_error(
+                        session_id,
+                        tr!("errors.create_worktree", error = error),
+                        cx,
+                    );
                 }
                 cx.notify();
                 self.save();
@@ -2796,8 +2813,8 @@ impl Fintwind {
         // The transcript already shows the turn — the prompt message, its
         // anchor, and the working indicator all landed at accept time. Only
         // preparation's own output surfaces here.
-        if selected && let Some(warning) = checkpoint_warning {
-            self.show_toast(warning);
+        if let Some(warning) = checkpoint_warning {
+            self.record_session_error(session_id, warning, cx);
         }
         // The provider-facing template expansion was frozen at acceptance.
         let mut failed_to_start = false;

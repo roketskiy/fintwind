@@ -1346,6 +1346,10 @@ pub struct Fintwind {
     settings_focus: FocusHandle,
     latest_available: Option<update_card::UpdateCard>,
     update_button_focus: FocusHandle,
+    /// The rail's help menu, anchored above its trigger while open.
+    help_menu: ContextMenuHandle,
+    /// Window-modal changelog card, opened from the help menu.
+    changelog: Option<help::ChangelogCard>,
     onboarding_add_project_focus: FocusHandle,
     onboarding_projectless_focus: FocusHandle,
     sidebar_add_project_focus: FocusHandle,
@@ -2138,6 +2142,7 @@ mod composer;
 mod drafts;
 mod file_search;
 mod git_history;
+mod help;
 mod image_preview;
 mod mcp_market_page;
 mod mcp_page;
@@ -2171,6 +2176,7 @@ pub use btw::init as init_btw_keys;
 pub use command_palette::init as init_command_palette;
 pub use commit_dialog::init as init_commit_dialog_keys;
 use components::*;
+pub use help::init as init_help_keys;
 pub use image_preview::init as init_image_preview_keys;
 pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
@@ -3342,6 +3348,8 @@ impl Fintwind {
                 settings_focus,
                 latest_available: None,
                 update_button_focus: cx.focus_handle(),
+                help_menu: ContextMenuHandle::new(cx),
+                changelog: None,
                 onboarding_add_project_focus,
                 onboarding_projectless_focus,
                 sidebar_add_project_focus,

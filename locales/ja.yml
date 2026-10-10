@@ -417,6 +417,11 @@ session.new_task: 新規タスク
 session.reveal_project_folder: ファイルマネージャーでプロジェクトフォルダを表示
 session.reveal_project_folder_unavailable: この画面で開けるフォルダはありません
 
+help.changelog: 更新履歴
+help.changelog_empty: 更新履歴はまだありません。
+help.dismiss: 閉じる
+help.menu_tooltip: ヘルプ
+
 sidebar.search: 検索
 rail.sessions: セッション
 rail.source_control: レビュー

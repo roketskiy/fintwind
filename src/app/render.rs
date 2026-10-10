@@ -249,6 +249,7 @@ impl Render for Fintwind {
         }
         let image_preview = self.render_image_preview(cx);
         let update_card = self.render_update_card(window, cx);
+        let changelog = self.render_changelog_card(window, cx);
         // Re-armed every frame this window shows time labels; parks while
         // another mode covers the workspace and while the window isn't
         // drawing at all.
@@ -509,6 +510,7 @@ impl Render for Fintwind {
             .children(toast)
             .children(command_palette)
             .children(commit_dialog)
+            .children(changelog)
             .children(discard_dialog)
             .children(review_commit_dialog)
             .children(image_preview)

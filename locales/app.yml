@@ -814,6 +814,15 @@ rail.sessions:
 rail.source_control:
   en: Review
 
+help.changelog:
+  en: Changelog
+help.changelog_empty:
+  en: No release notes yet.
+help.dismiss:
+  en: Close
+help.menu_tooltip:
+  en: Help
+
 sidebar.search:
   en: Search
 sidebar.update:

@@ -405,6 +405,10 @@ common.rename: 重命名
 session.new_task: 新任务
 session.reveal_project_folder: 在文件管理器中显示项目文件夹
 session.reveal_project_folder_unavailable: 当前页面没有可打开的文件夹
+help.changelog: 更新日志
+help.changelog_empty: 暂无更新日志。
+help.dismiss: 关闭
+help.menu_tooltip: 帮助
 sidebar.search: 搜索
 rail.sessions: 会话
 rail.source_control: 审阅

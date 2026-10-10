@@ -202,6 +202,11 @@ impl Fintwind {
             // the visit; the roster selection itself does.
             self.reset_providers_page(cx);
         }
+        if page == SettingsPage::General {
+            // The threshold field always shows the stored value on entry;
+            // a rejected edit restores it here as well as on commit.
+            self.sync_auto_compact_threshold_input(cx);
+        }
         if page == SettingsPage::McpServers {
             // Same contract as Providers: transient editors drop, the roster
             // selection survives, and the config is re-read so entries added
@@ -538,6 +543,90 @@ impl Fintwind {
                             this.set_browser_tools_enabled(!this.state.browser_tools_enabled, cx);
                         },
                     )),
+            )
+            .child(
+                div()
+                    .mt(px(12.0))
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .rounded(px(13.0))
+                    .bg(theme.raised)
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.auto_compact")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.auto_compact_description")),
+                            ),
+                    )
+                    .child(toggle_switch(
+                        "auto-compact-toggle",
+                        self.state.auto_compact_enabled,
+                        false,
+                        theme,
+                        window,
+                        cx,
+                        move |this: &mut Self, _, cx| {
+                            this.set_auto_compact_enabled(!this.state.auto_compact_enabled, cx);
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .mt(px(12.0))
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .rounded(px(13.0))
+                    .bg(theme.raised)
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.auto_compact_threshold")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.auto_compact_threshold_description")),
+                            ),
+                    )
+                    .child(
+                        TextField::new(
+                            "auto-compact-threshold-field",
+                            self.auto_compact_threshold_input.clone(),
+                        )
+                        .w(px(120.0)),
+                    ),
             )
             .child(
                 div()
@@ -1085,6 +1174,60 @@ impl Fintwind {
         self.state.browser_tools_enabled = enabled;
         self.save();
         cx.notify();
+    }
+
+    fn set_auto_compact_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.state.auto_compact_enabled == enabled {
+            return;
+        }
+        self.state.auto_compact_enabled = enabled;
+        self.save();
+        cx.notify();
+    }
+
+    /// Apply a validated early-compaction threshold. Out-of-range values
+    /// land on the nearest bound; the field is re-synced so it always shows
+    /// the stored value.
+    fn set_auto_compact_threshold_tokens(&mut self, tokens: u64, cx: &mut Context<Self>) {
+        let tokens = tokens.clamp(
+            fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_MIN,
+            fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_MAX,
+        );
+        if self.state.auto_compact_threshold_tokens == tokens {
+            return;
+        }
+        self.state.auto_compact_threshold_tokens = tokens;
+        self.sync_auto_compact_threshold_input(cx);
+        self.save();
+        cx.notify();
+    }
+
+    /// Commit the threshold field on Enter. Accepts the same `128k`/`1M`
+    /// forms as the provider window field; anything else toasts and
+    /// restores the stored value.
+    pub(super) fn confirm_auto_compact_threshold(&mut self, cx: &mut Context<Self>) {
+        let text = self.auto_compact_threshold_input.read(cx).content();
+        match fintwind_client::custom_providers::parse_context_window(&text) {
+            Some(tokens)
+                if tokens >= fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_MIN =>
+            {
+                self.set_auto_compact_threshold_tokens(tokens, cx)
+            }
+            _ => {
+                self.show_toast(tr!("settings.auto_compact_threshold_invalid"));
+                self.sync_auto_compact_threshold_input(cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn sync_auto_compact_threshold_input(&mut self, cx: &mut Context<Self>) {
+        let text = fintwind_client::custom_providers::format_context_window(
+            self.state.auto_compact_threshold_tokens,
+        );
+        self.auto_compact_threshold_input.update(cx, |input, cx| {
+            input.set_content(text, cx);
+        });
     }
 
     /// Switch the whole chrome to `scale`. A window refresh re-renders every

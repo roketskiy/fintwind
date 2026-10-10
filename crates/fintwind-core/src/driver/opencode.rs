@@ -170,6 +170,9 @@ enum CommandMessage {
     },
     Compact,
     Cancel,
+    CompactChild {
+        session_id: String,
+    },
     Respond {
         request_id: String,
         option_id: String,
@@ -1411,6 +1414,21 @@ impl OpenCodeDriver {
                                 }
                             }
                         }
+                        CommandMessage::CompactChild { session_id } => {
+                            // Client-side early compaction for a live subagent
+                            // child: same admission semantics as `Compact`, but
+                            // addressed at the child session. Every outcome
+                            // stays quiet — a 409 means one is already
+                            // admitted, and any other failure still leaves the
+                            // provider's own auto compaction armed as the net.
+                            // There is no per-child compaction surface yet to
+                            // report through.
+                            let path = format!(
+                                "/api/session/{}/compact",
+                                encode_path_segment(&session_id)
+                            );
+                            let _ = worker_server.request("POST", &path, Some(&json!({})));
+                        }
                         CommandMessage::Cancel => {
                             let path = format!(
                                 "/api/session/{}/interrupt",
@@ -1596,6 +1614,15 @@ impl DriverControl for OpenCodeDriver {
 
     fn compact(&self) {
         let _ = self.commands.send(CommandMessage::Compact);
+    }
+
+    fn compact_child(&self, control_id: String) {
+        if control_id.trim().is_empty() {
+            return;
+        }
+        let _ = self.commands.send(CommandMessage::CompactChild {
+            session_id: control_id,
+        });
     }
 
     fn refresh_background_work(&self) {
@@ -3200,6 +3227,19 @@ fn handle_child_event(
                 }),
             ));
         }
+        "session.step.ended" => {
+            // Occupancy is per settled step, like the foreground session's:
+            // `session.usage.updated` carries cumulative totals only, never
+            // the live context. Forward the newest occupancy on the child's
+            // card so the client-side auto compaction covers subagents too.
+            if child.item.key.kind == BackgroundWorkKind::Subagent
+                && let Some(usage) = opencode_normalized_usage(payload)
+            {
+                child.item.context_tokens = Some(usage.context);
+                child.item.updated_at_ms = unix_time_millis();
+                child_update(child, events, None, None);
+            }
+        }
         _ => {}
     }
 }
@@ -3641,8 +3681,7 @@ fn handle_event(
                 .filter(|body| !body.is_empty())
             {
                 Some(body) => {
-                    let quoted: String =
-                        body.chars().take(MAX_PROVIDER_BODY_CHARS).collect();
+                    let quoted: String = body.chars().take(MAX_PROVIDER_BODY_CHARS).collect();
                     let quoted = if quoted.len() < body.len() {
                         format!("{quoted}…")
                     } else {

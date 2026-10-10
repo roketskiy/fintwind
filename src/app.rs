@@ -1504,6 +1504,14 @@ pub struct Fintwind {
     /// the summary belongs to the provider's bookkeeping more than to the
     /// reader. Runtime-only, like the other transcript disclosures.
     expanded_compactions: HashSet<Uuid>,
+    /// Sessions already served one client-side early auto compaction.
+    /// Edge trigger: cleared when occupancy falls back below the threshold,
+    /// so one crossing fires exactly once. Runtime-only.
+    auto_compacted_sessions: HashSet<Uuid>,
+    /// Same, per live subagent child: (parent session, child provider id).
+    /// Cleared when the child settles or its occupancy drops back.
+    /// Runtime-only.
+    auto_compacted_children: HashSet<(Uuid, String)>,
     /// Sessions whose provider-retry card the user expanded to read the full
     /// error. Collapsed is the default: the header already carries the attempt
     /// and countdown. Runtime-only.
@@ -1870,6 +1878,9 @@ pub struct Fintwind {
     provider_rename_input: Entity<ComposerInput>,
     provider_model_id_input: Entity<ComposerInput>,
     provider_model_context_input: Entity<ComposerInput>,
+    /// General settings' early-compaction threshold field. Commits on Enter;
+    /// accepts the same `128k`/`1M` forms as the provider window field.
+    auto_compact_threshold_input: Entity<ComposerInput>,
     provider_form_name: Entity<ComposerInput>,
     provider_form_base_url: Entity<ComposerInput>,
     provider_form_api_key: Entity<ComposerInput>,
@@ -2599,6 +2610,11 @@ impl Fintwind {
                 .search_field()
                 .placeholder(tr!("providers.context_window_placeholder"))
         });
+        let auto_compact_threshold_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("settings.auto_compact_threshold_placeholder"))
+        });
         let provider_form_name = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
@@ -3183,6 +3199,15 @@ impl Fintwind {
                 })
                 .detach();
             }
+            cx.subscribe(
+                &auto_compact_threshold_input,
+                |this, _, event: &ComposerEvent, cx| match event {
+                    ComposerEvent::Submit(_) => this.confirm_auto_compact_threshold(cx),
+                    ComposerEvent::Edited => cx.notify(),
+                    _ => {}
+                },
+            )
+            .detach();
             for form_input in [
                 &provider_form_name,
                 &provider_form_base_url,
@@ -3499,6 +3524,8 @@ impl Fintwind {
                 expanded_turns: HashSet::new(),
                 expanded_changed_files: HashSet::new(),
                 expanded_compactions: HashSet::new(),
+                auto_compacted_sessions: HashSet::new(),
+                auto_compacted_children: HashSet::new(),
                 expanded_provider_retries: HashSet::new(),
                 provider_retries: HashMap::new(),
                 transcript_control_focuses: RefCell::new(HashMap::new()),
@@ -3650,6 +3677,7 @@ impl Fintwind {
                 provider_rename_input,
                 provider_model_id_input,
                 provider_model_context_input,
+                auto_compact_threshold_input,
                 provider_form_name,
                 provider_form_base_url,
                 provider_form_api_key,

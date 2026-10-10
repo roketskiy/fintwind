@@ -3651,6 +3651,7 @@ fn handle_driver_command(
                 control_id,
             );
         }
+        Command::CompactChildSession { control_id } => driver.compact_child(control_id),
         Command::Respond {
             request_id,
             option_id,

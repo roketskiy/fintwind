@@ -2652,7 +2652,6 @@ mod tests {
                 is_image: true,
                 blob_reference: None,
             }],
-            references: Vec::new(),
         };
         let mut drafts = ComposerDrafts::default();
         drafts.set(ComposerDraftKey::NewSession(project_id), draft.clone());
@@ -3021,7 +3020,6 @@ mod tests {
                     is_image: true,
                     blob_reference: Some(reference),
                 }],
-                references: Vec::new(),
             },
         );
         ComposerDraftStore::for_state_path(&directory.join("app.db"))

@@ -304,6 +304,7 @@ impl Fintwind {
                     .when_some(self.latest_available.as_ref(), |footer, update| {
                         footer.child(self.render_mode_rail_update(update, cx))
                     })
+                    .child(self.render_help_rail_entry(cx))
                     .child(self.render_mode_rail_entry(
                         "rail-settings",
                         "icons/settings.svg",
@@ -312,6 +313,48 @@ impl Fintwind {
                     )),
             )
             .pb(px(4.0))
+    }
+
+    /// The rail's help entry, in the same full-square shape as the mode
+    /// entries but toggling a dropdown menu instead of a mode. The menu opens
+    /// above the trigger and hugs the window's left edge, so a narrow window
+    /// never clips it.
+    fn render_help_rail_entry(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let group = SharedString::from("rail-help");
+        let trigger = div()
+            .id("rail-help")
+            .group(group.clone())
+            .relative()
+            .w(px(MODE_RAIL_WIDTH))
+            .h(px(MODE_RAIL_WIDTH))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_default()
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+            .tooltip(Tooltip::text(tr!("help.menu_tooltip")))
+            .child(
+                icon("icons/info.svg", 20.0, theme.text_tertiary)
+                    .group_hover(group, |style| style.text_color(theme.text)),
+            );
+        let weak = cx.entity().downgrade();
+        dropdown_menu(
+            trigger,
+            "help-menu",
+            &self.help_menu,
+            MenuAlign::AboveLeft,
+            move |_| {
+                let weak = weak.clone();
+                vec![
+                    MenuItem::new(tr!("help.changelog"), move |window, cx| {
+                        let _ = weak.update(cx, |fintwind, cx| fintwind.open_changelog(window, cx));
+                    })
+                    .icon("icons/history.svg"),
+                ]
+            },
+        )
     }
 
     /// One rail entry, following Ely's `ActivityBar`: a full 48px square hit

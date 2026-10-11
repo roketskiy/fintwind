@@ -271,9 +271,46 @@ impl Fintwind {
         let title = session
             .map(localized_session_title)
             .unwrap_or_else(|| tr!("session.new_task"));
-        let busy = session.is_some_and(|session| session.status.is_busy());
-        let waiting = session.is_some_and(|session| session.status == SessionStatus::Waiting);
-        let unread = self.tab_unread.contains(&session_id);
+        let status = session.map_or(SessionStatus::Idle, |session| session.status);
+        let runtime = self.runtimes.get(&session_id);
+        // Waiting is busy for submission routing, but not a running turn. An
+        // actionable state owns the indicator even after the tab is read.
+        // Match the composer's question-before-permission order, and let a
+        // failed session override requests left behind by a provider error.
+        let attention = if status == SessionStatus::Failed {
+            Some((
+                "failed",
+                "icons/alert.svg",
+                theme.danger,
+                tr!("tabs.failed"),
+            ))
+        } else if runtime.is_some_and(|runtime| runtime.pending_user_input.is_some()) {
+            Some((
+                "question",
+                "icons/message-square-text.svg",
+                theme.warning,
+                tr!("tabs.question"),
+            ))
+        } else if runtime.is_some_and(|runtime| runtime.pending_permission.is_some()) {
+            Some((
+                "permission",
+                "icons/lock.svg",
+                theme.warning,
+                tr!("tabs.permission"),
+            ))
+        } else if status == SessionStatus::Waiting {
+            Some((
+                "waiting",
+                "icons/alert.svg",
+                theme.warning,
+                tr!("tabs.waiting"),
+            ))
+        } else {
+            None
+        };
+        let busy = attention.is_none()
+            && matches!(status, SessionStatus::Connecting | SessionStatus::Working);
+        let unread = attention.is_none() && !busy && self.tab_unread.contains(&session_id);
         let focus = self
             .tab_focuses
             .borrow_mut()
@@ -352,18 +389,20 @@ impl Fintwind {
                     theme.accent,
                 ))))
             })
-            .when(!busy && waiting, |element| {
+            .when_some(attention, |element, (kind, path, color, label)| {
                 element.child(
                     div()
-                        .id(SharedString::from(format!("tab-waiting-{session_id}")))
-                        .size(px(7.0))
+                        .id(SharedString::from(format!("tab-{kind}-{session_id}")))
+                        .size(px(12.0))
                         .flex_none()
-                        .rounded_full()
-                        .bg(theme.warning)
-                        .tooltip(Tooltip::text(tr!("tabs.waiting"))),
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(icon(path, 12.0, color))
+                        .tooltip(Tooltip::text(label)),
                 )
             })
-            .when(!busy && !waiting && unread, |element| {
+            .when(unread, |element| {
                 element.child(
                     div()
                         .id(SharedString::from(format!("tab-unread-{session_id}")))

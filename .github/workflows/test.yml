@@ -44,3 +44,35 @@ jobs:
 
       - name: Run tests
         run: cargo test --locked
+
+  # Debug tests never compile the release-only channel code, so this job
+  # checks the stable release configuration that CI actually ships. Beta is
+  # a local-only channel and is never built or checked on GitHub. Check
+  # only — running tests stays the debug job above's.
+  stable-release:
+    name: Stable release compile check
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install 1.96.0 --profile minimal
+          rustup default 1.96.0
+
+      - name: Cache Cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-latest-rust-1.96.0-release-check-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            windows-latest-rust-1.96.0-release-check-
+
+      - name: Check stable release
+        run: cargo check --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon

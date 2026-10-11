@@ -27,6 +27,33 @@ draft, then publish it.
 
 ---
 
+## Channels
+
+| Channel | Built by | Data directory | Remote control | In-app updates |
+| --- | --- | --- | --- | --- |
+| stable | CI on a `v*` tag, or a manual **Release** run | `Fintwind` (production) | hidden; the package carries no `fintwind-remote-host.exe` | checks GitHub releases |
+| beta | **local builds only** (`bun scripts/bundle-windows.ts --channel=beta`) | `Fintwind` — the same directory as stable | enabled; the package adds `fintwind-remote-host.exe` | disabled — there is no beta feed |
+| dev | plain `cargo build` (debug), for agent development | `Fintwind Debug` (isolated) | enabled | disabled |
+
+GitHub builds and publishes the **stable channel only**: the Release workflow
+passes `--channel=stable` explicitly, and there is no beta job, input, tag,
+prerelease, or artifact. Do not add one — beta exists as a local convenience.
+
+Sharing the production directory is deliberate (beta is a feature-ahead
+stable, not a second profile), and it carries two consequences. Beta and
+stable must not run at the same time, and data a newer beta has already
+migrated is not guaranteed to reopen in an older stable — schema compatibility
+runs forward only. A beta updates by being rebuilt; the app skips its update
+check outside the stable channel so a personal beta is never "updated" into
+the published stable over it.
+
+Stable and beta builds write the same `target/release` executables, so
+building one after the other replaces them in place. Each
+`bundle-windows.ts` run packages immediately after its own build, so that is
+expected, not a conflict.
+
+---
+
 ## One-time setup
 
 The release runs on [Bun](https://bun.sh).

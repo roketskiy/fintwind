@@ -117,6 +117,14 @@ struct LatestAsset {
 }
 
 pub fn fetch_newer_release() -> Option<ReleaseInfo> {
+    // Only a stable build looks for updates. Beta is a personal build made
+    // locally from a tree that is usually ahead of the published release, so
+    // the stable channel's latest would read as "newer" and offer to replace
+    // the beta with stable. Dev builds have no release to update into at all.
+    // There is no beta feed to query; a beta build updates by being rebuilt.
+    if crate::BUILD_CHANNEL != crate::BuildChannel::Stable {
+        return None;
+    }
     let headers = [
         format!("User-Agent: fintwind/{APP_VERSION}"),
         "Accept: application/vnd.github+json".to_string(),

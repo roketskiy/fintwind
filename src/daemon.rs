@@ -217,6 +217,13 @@ fn daemon_executable_path() -> anyhow::Result<PathBuf> {
 /// Failure to start it is not fatal: the desktop works fully without
 /// remote control, and the devices page says so.
 pub fn start_remote_host(supervisor: &fintwind_client::DaemonSupervisor) {
+    // Defense in depth: `run` only calls this on a channel that ships the
+    // remote-control surface, but the guard lives here too so no future call
+    // site or environment tweak can start the host from a stable build.
+    // Stable bundles no `fintwind-remote-host.exe` and shows no devices page.
+    if !crate::REMOTE_CONTROL_ENABLED {
+        return;
+    }
     let executable = match remote_host_executable_path() {
         Ok(path) => path,
         Err(error) => {

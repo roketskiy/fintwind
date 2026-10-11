@@ -5,10 +5,12 @@
 // builds the installer half.
 //
 // Usage:
-//   bun scripts/bundle-windows.ts
+//   bun scripts/bundle-windows.ts                    # stable (CI uses this)
+//   bun scripts/bundle-windows.ts --channel=beta     # personal beta, local only
 //
 // Env:
 //   CARGO_TARGET_DIR              cargo target directory (default: target)
+//   FINTWIND_CHANNEL              fallback channel when --channel is absent
 //   WINDOWS_CERTIFICATE           base64 Authenticode .pfx (optional)
 //   WINDOWS_CERTIFICATE_PASSWORD  password for it
 import { $ } from "bun";
@@ -19,6 +21,23 @@ import { join, resolve } from "node:path";
 
 const packageName = "fintwind";
 const projectRoot = resolve(import.meta.dir, "..");
+
+type ReleaseChannel = "stable" | "beta";
+
+const channelArgument = process.argv.find((argument) =>
+  argument.startsWith("--channel="),
+);
+const channelInput =
+  channelArgument?.slice("--channel=".length) ??
+  process.env.FINTWIND_CHANNEL ??
+  "stable";
+if (channelInput !== "stable" && channelInput !== "beta") {
+  throw new Error(
+    `Unsupported release channel "${channelInput}"; use stable or beta.`,
+  );
+}
+const channel = channelInput as ReleaseChannel;
+const beta = channel === "beta";
 
 /** Installer naming uses the Rust arch name, so the installer carries
  *  that rather than the full triple. */
@@ -138,14 +157,19 @@ if (!targetTriple || !architecture) {
   throw new Error(`Unsupported Windows target ${targetTriple ?? "(unknown)"}`);
 }
 
-const packageDirectoryName = `fintwind-${version}-${targetTriple}`;
+const channelSuffix = beta ? "-beta" : "";
+const packageDirectoryName = `fintwind-${version}${channelSuffix}-${targetTriple}`;
 const archive = join(releaseDirectory, `${packageDirectoryName}.zip`);
 const installer = join(
   releaseDirectory,
-  `fintwind-${version}-${architecture}-Setup.exe`,
+  `fintwind-${version}${channelSuffix}-${architecture}-Setup.exe`,
 );
 
-await $`cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon --package fintwind-remote-host --bin fintwind-remote-host`;
+if (beta) {
+  await $`cargo build --locked --release --features beta --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon --package fintwind-remote-host --bin fintwind-remote-host`;
+} else {
+  await $`cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon`;
+}
 
 const staging = await mkdtemp(join(tmpdir(), "fintwind-bundle-"));
 try {
@@ -154,11 +178,12 @@ try {
   // runnable in place.
   const packageDirectory = join(staging, packageDirectoryName);
   await mkdir(packageDirectory, { recursive: true });
-  for (const file of [
+  const executables = [
     "fintwind.exe",
     "fintwind-daemon.exe",
-    "fintwind-remote-host.exe",
-  ]) {
+    ...(beta ? ["fintwind-remote-host.exe"] : []),
+  ];
+  for (const file of executables) {
     await copyFile(join(releaseDirectory, file), join(packageDirectory, file));
   }
   await copyFile(join(projectRoot, "LICENSE"), join(packageDirectory, "LICENSE"));
@@ -175,9 +200,7 @@ try {
     await writeFile(certificate, Buffer.from(certificateData, "base64"));
     signtool = findSigntool();
     await sign(signtool, certificate, certificatePassword, [
-      join(packageDirectory, "fintwind.exe"),
-      join(packageDirectory, "fintwind-daemon.exe"),
-      join(packageDirectory, "fintwind-remote-host.exe"),
+      ...executables.map((file) => join(packageDirectory, file)),
     ]);
   } else {
     console.log("No WINDOWS_CERTIFICATE set; packaging unsigned binaries.");
@@ -193,7 +216,7 @@ try {
   // The installer is the primary download artifact, so it ships from the
   // same signed staging directory as the zip.
   await rm(installer, { force: true });
-  await $`${findInnoSetupCompiler()} ${`/DAppVersion=${version}`} ${`/DArch=${architecture}`} ${`/DStageDir=${packageDirectory}`} ${`/DOutputDir=${releaseDirectory}`} ${join(projectRoot, "resources", "windows", "fintwind.iss")}`;
+  await $`${findInnoSetupCompiler()} ${`/DAppVersion=${version}`} ${`/DArch=${architecture}`} ${`/DChannel=${channel}`} ${`/DRemoteControl=${beta ? "1" : "0"}`} ${`/DStageDir=${packageDirectory}`} ${`/DOutputDir=${releaseDirectory}`} ${join(projectRoot, "resources", "windows", "fintwind.iss")}`;
   if (!existsSync(installer)) {
     throw new Error(`ISCC did not produce ${installer}`);
   }

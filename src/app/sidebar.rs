@@ -352,6 +352,10 @@ impl Fintwind {
                         let _ = weak.update(cx, |fintwind, cx| fintwind.open_changelog(window, cx));
                     })
                     .icon("icons/history.svg"),
+                    MenuItem::new(tr!("help.submit_issue"), |_, cx| {
+                        cx.open_url("https://github.com/roketskiy/fintwind/issues/new");
+                    })
+                    .icon("icons/github.svg"),
                 ]
             },
         )

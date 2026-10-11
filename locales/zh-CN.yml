@@ -445,6 +445,7 @@ help.changelog: 更新日志
 help.changelog_empty: 暂无更新日志。
 help.dismiss: 关闭
 help.menu_tooltip: 帮助
+help.submit_issue: 提交 Issue
 sidebar.search: 搜索
 rail.sessions: 会话
 rail.source_control: 审阅

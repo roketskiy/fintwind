@@ -85,7 +85,7 @@ use std::io::Write as _;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use serde::Deserialize;
 
 #[cfg(windows)]
@@ -93,14 +93,11 @@ mod job {
     use anyhow::{Context as _, Result};
     use windows_sys::Win32::{
         Foundation::{CloseHandle, HANDLE},
-        System::{
-            JobObjects::{
-                AssignProcessToJobObject, CreateJobObjectW, QueryInformationJobObject,
-                TerminateJobObject, JobObjectBasicAccountingInformation,
-                JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-                JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-                JobObjectExtendedLimitInformation, SetInformationJobObject,
-            },
+        System::JobObjects::{
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+            QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
         },
     };
 
@@ -196,11 +193,11 @@ mod job {
     /// Wait helpers over raw creation handles.
     pub mod wait {
         use anyhow::{Context as _, Result};
+        use windows_sys::Win32::Foundation::HANDLE;
         use windows_sys::Win32::{
             Foundation::{CloseHandle, WAIT_OBJECT_0},
             System::Threading::{GetExitCodeProcess, WaitForSingleObject},
         };
-        use windows_sys::Win32::Foundation::HANDLE;
 
         pub const WAIT_TIMEOUT: u32 = 0x0000_0102;
 
@@ -234,19 +231,18 @@ mod job {
 
 #[cfg(windows)]
 mod create {
-    use anyhow::{bail, Context as _, Result};
+    use anyhow::{Context as _, Result, bail};
     use std::collections::BTreeMap;
     use windows_sys::Win32::Foundation::{
-        CloseHandle, HANDLE, SetHandleInformation, WAIT_OBJECT_0,
-        WAIT_TIMEOUT,
+        CloseHandle, HANDLE, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, GetExitCodeProcess, ResumeThread, TerminateProcess, WaitForSingleObject,
-        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES,
-        STARTUPINFOEXW, EXTENDED_STARTUPINFO_PRESENT, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-        InitializeProcThreadAttributeList, UpdateProcThreadAttribute, DeleteProcThreadAttributeList,
-        LPPROC_THREAD_ATTRIBUTE_LIST,
+        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+        InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES,
+        STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
     };
 
     pub const CREATE_SUSPENDED_FLAG: u32 = CREATE_SUSPENDED;
@@ -503,10 +499,15 @@ mod create {
                         .context("could not initialize the acceptance handle list");
                 }
                 if UpdateProcThreadAttribute(
-                    list.pointer(), 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
-                    handles.as_mut_ptr().cast(), std::mem::size_of_val(handles),
-                    std::ptr::null_mut(), std::ptr::null_mut(),
-                ) == 0 {
+                    list.pointer(),
+                    0,
+                    PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                    handles.as_mut_ptr().cast(),
+                    std::mem::size_of_val(handles),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                ) == 0
+                {
                     return Err(std::io::Error::last_os_error())
                         .context("could not restrict acceptance handle inheritance");
                 }
@@ -518,7 +519,9 @@ mod create {
     impl Drop for HandleAttributes {
         fn drop(&mut self) {
             if !self.storage.is_empty() {
-                unsafe { DeleteProcThreadAttributeList(self.pointer()); }
+                unsafe {
+                    DeleteProcThreadAttributeList(self.pointer());
+                }
             }
         }
     }
@@ -548,24 +551,18 @@ mod create {
         }
         let mut command_line_wide = wide(&command_line);
         let mut application_wide = wide(program);
-        let mut cwd_wide = cwd.and_then(|path| {
-            Some(wide(&path.to_string_lossy()))
-        });
+        let mut cwd_wide = cwd.and_then(|path| Some(wide(&path.to_string_lossy())));
         let mut environment = environment_block(env);
 
         let mut pipes = create_pipes()?;
         let mut inherited = Vec::with_capacity(3 + extra_inherit.len());
-        inherited.extend_from_slice(&[
-            pipes.stdin_read,
-            pipes.stdout_write,
-            pipes.stderr_write,
-        ]);
+        inherited.extend_from_slice(&[pipes.stdin_read, pipes.stdout_write, pipes.stderr_write]);
         inherited.extend_from_slice(extra_inherit);
         let mut attributes = HandleAttributes::new(&mut inherited)?;
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES
-            | windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
+        startup.StartupInfo.dwFlags =
+            STARTF_USESTDHANDLES | windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
         startup.StartupInfo.wShowWindow = 0; // SW_HIDE; preserve the inherited console.
         startup.StartupInfo.hStdInput = pipes.stdin_read;
         startup.StartupInfo.hStdOutput = pipes.stdout_write;
@@ -580,8 +577,14 @@ mod create {
                 std::ptr::null(),
                 std::ptr::null(),
                 1, // inherit the child's pipe ends
-                CREATE_SUSPENDED_FLAG | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
-                    | if debug_descendants { windows_sys::Win32::System::Threading::DEBUG_PROCESS } else { 0 },
+                CREATE_SUSPENDED_FLAG
+                    | CREATE_UNICODE_ENVIRONMENT
+                    | EXTENDED_STARTUPINFO_PRESENT
+                    | if debug_descendants {
+                        windows_sys::Win32::System::Threading::DEBUG_PROCESS
+                    } else {
+                        0
+                    },
                 environment.as_mut_ptr() as *mut _,
                 cwd_wide
                     .as_mut()
@@ -843,9 +846,17 @@ impl Observation {
         deadline: Instant,
     ) -> Result<bool> {
         let duplicated = observation::duplicate_for_observer(
-            self.observer, process, observation::OBSERVER_PROCESS_ACCESS,
+            self.observer,
+            process,
+            observation::OBSERVER_PROCESS_ACCESS,
         )?;
-        self.offer(observation::Kind::Descendant, pid, Some(duplicated as u64), None, deadline)
+        self.offer(
+            observation::Kind::Descendant,
+            pid,
+            Some(duplicated as u64),
+            None,
+            deadline,
+        )
     }
 
     /// Offer the exact job query handle, before the freeze marker.
@@ -886,10 +897,7 @@ impl Observation {
     /// **before** the fixture process exists — the registration ACK is what
     /// lets the supervisor go on to create, contain, hand over and resume
     /// the fixture, in that order.
-    fn grant_fixture_channel(
-        &mut self,
-        deadline: Instant,
-    ) -> Result<FixtureGrant> {
+    fn grant_fixture_channel(&mut self, deadline: Instant) -> Result<FixtureGrant> {
         let fixture_id = self.next_fixture_id;
         self.next_fixture_id += 1;
         let channel = observation::Channel::create()?;
@@ -900,15 +908,15 @@ impl Observation {
         // site, labelled explicitly as pipe ends in the hand-off.
         let pipe_request_read = observation::duplicate_pipe_end_for_observer(
             self.observer,
-            channel.request_read().ok_or_else(|| {
-                anyhow::anyhow!("the fixture channel has no observer read end")
-            })?,
+            channel
+                .request_read()
+                .ok_or_else(|| anyhow::anyhow!("the fixture channel has no observer read end"))?,
         )?;
         let pipe_response_write = observation::duplicate_pipe_end_for_observer(
             self.observer,
-            channel.response_write().ok_or_else(|| {
-                anyhow::anyhow!("the fixture channel has no observer write end")
-            })?,
+            channel
+                .response_write()
+                .ok_or_else(|| anyhow::anyhow!("the fixture channel has no observer write end"))?,
         )?;
         self.next_transfer += 1;
         let message = observation::Handoff {
@@ -932,12 +940,12 @@ impl Observation {
                 ack.reason
             );
         }
-        let request_write = channel.request_write().ok_or_else(|| {
-            anyhow::anyhow!("the fixture channel has no fixture write end")
-        })?;
-        let response_read = channel.response_read().ok_or_else(|| {
-            anyhow::anyhow!("the fixture channel has no fixture read end")
-        })?;
+        let request_write = channel
+            .request_write()
+            .ok_or_else(|| anyhow::anyhow!("the fixture channel has no fixture write end"))?;
+        let response_read = channel
+            .response_read()
+            .ok_or_else(|| anyhow::anyhow!("the fixture channel has no fixture read end"))?;
         Ok(FixtureGrant {
             _channel: channel,
             fixture_id,
@@ -1011,7 +1019,11 @@ fn supervisor_main() -> Result<()> {
         let mut seen = BTreeMap::new();
         for (index, step) in plan.steps.iter().enumerate() {
             if step.mode != "spawn" && step.mode != "run" {
-                bail!("step {:?} has an invalid mode {:?} (spawn|run)", step.tag, step.mode);
+                bail!(
+                    "step {:?} has an invalid mode {:?} (spawn|run)",
+                    step.tag,
+                    step.mode
+                );
             }
             if step.tag.trim().is_empty() {
                 bail!("a plan step has an empty tag");
@@ -1032,9 +1044,15 @@ fn supervisor_main() -> Result<()> {
                     step.tag
                 );
             }
-            if step.debug_descendants && (step.mode != "run" || index + 1 != plan.steps.len()
-                || step.observe_descendants || observation_args.is_none()) {
-                bail!("debugDescendants requires an independent observer and the final run step, without observeDescendants");
+            if step.debug_descendants
+                && (step.mode != "run"
+                    || index + 1 != plan.steps.len()
+                    || step.observe_descendants
+                    || observation_args.is_none())
+            {
+                bail!(
+                    "debugDescendants requires an independent observer and the final run step, without observeDescendants"
+                );
             }
         }
     }
@@ -1082,7 +1100,9 @@ fn pump_debug_event(
                 let pid = process.pid;
                 let first = handles.is_empty();
                 handles.push(process.handle);
-                if first && pid != root_pid { bail!("debug root does not match the creation handle"); }
+                if first && pid != root_pid {
+                    bail!("debug root does not match the creation handle");
+                }
                 if !first {
                     let observer = observer.as_mut().context("debug tree has no observer")?;
                     if !observer.report_descendant(pid, handles.last().unwrap().raw(), deadline)? {
@@ -1090,7 +1110,9 @@ fn pump_debug_event(
                     }
                 }
             }
-            debug_tree::Event::Exited { pid, code } => { let _ = (pid, code); }
+            debug_tree::Event::Exited { pid, code } => {
+                let _ = (pid, code);
+            }
             debug_tree::Event::Other => {}
         }
         tree.continue_event()?;
@@ -1191,7 +1213,10 @@ fn run_steps(
     // Membership must be checked before a root is resumed, so the observer
     // needs the exact job handle before the first root hand-off.
     if let Some(observer) = observation.as_mut() {
-        if !matches!(observer.report_job_query(job.handle(), total_deadline), Ok(true)) {
+        if !matches!(
+            observer.report_job_query(job.handle(), total_deadline),
+            Ok(true)
+        ) {
             failed_step = Some("*:job-observation".to_owned());
             failure_class = Some("observation".to_owned());
             let _ = job.terminate();
@@ -1341,7 +1366,9 @@ fn run_steps(
             }
         };
         let pid = created.guard.pid;
-        if let Some(debug) = debug { debug_state = Some((debug, pid)); }
+        if let Some(debug) = debug {
+            debug_state = Some((debug, pid));
+        }
         if job.assign_handle(created.guard.process).is_err() {
             // It never ran an instruction and was never in the job: end it
             // through the creation handle and wait, verified.
@@ -1494,19 +1521,14 @@ fn run_steps(
                                         let protocol = value
                                             .get("protocolVersion")
                                             .and_then(serde_json::Value::as_u64);
-                                        let reported_pid = value
-                                            .get("pid")
-                                            .and_then(serde_json::Value::as_u64);
-                                        let loopback = address
-                                            .is_some_and(|address| {
-                                                address.starts_with("127.0.0.1:")
-                                            });
-                                        let protocol_matched = protocol.is_some_and(
-                                            |version| {
-                                                version
-                                                    == fintwind_protocol::PROTOCOL_VERSION as u64
-                                            },
-                                        );
+                                        let reported_pid =
+                                            value.get("pid").and_then(serde_json::Value::as_u64);
+                                        let loopback = address.is_some_and(|address| {
+                                            address.starts_with("127.0.0.1:")
+                                        });
+                                        let protocol_matched = protocol.is_some_and(|version| {
+                                            version == fintwind_protocol::PROTOCOL_VERSION as u64
+                                        });
                                         let pid_matched = reported_pid == Some(pid as u64);
                                         let valid_socket = address
                                             .and_then(|address| {
@@ -1518,11 +1540,11 @@ fn run_steps(
                                             && pid_matched
                                             && valid_socket
                                         {
-                                             let _ = ready_tx.try_send(Readiness::Ready {
-                                                 address: address.unwrap_or_default().to_owned(),
-                                             });
-                                             outcome_sent = true;
-                                             break;
+                                            let _ = ready_tx.try_send(Readiness::Ready {
+                                                address: address.unwrap_or_default().to_owned(),
+                                            });
+                                            outcome_sent = true;
+                                            break;
                                         }
                                     } else {
                                         line.push(byte);
@@ -1640,7 +1662,16 @@ fn run_steps(
                     failure_class.get_or_insert_with(|| "total-deadline".to_owned());
                     break None;
                 }
-                if pump_debug_event(tree, &job, *root_pid, &mut observation, &mut debug_handles, total_deadline).is_err() {
+                if pump_debug_event(
+                    tree,
+                    &job,
+                    *root_pid,
+                    &mut observation,
+                    &mut debug_handles,
+                    total_deadline,
+                )
+                .is_err()
+                {
                     failed_step.get_or_insert_with(|| step.tag.clone());
                     failure_class.get_or_insert_with(|| "debug-observation".to_owned());
                     break None;
@@ -1655,10 +1686,8 @@ fn run_steps(
                     }
                 }
             }
-            match create::wait_handle(
-                held.last().expect("pushed above").process,
-                remaining.max(1),
-            ) {
+            match create::wait_handle(held.last().expect("pushed above").process, remaining.max(1))
+            {
                 Ok(Some(code)) => break Some(code),
                 Ok(None) => {
                     verdict.deadline_exceeded = true;
@@ -1730,16 +1759,29 @@ fn run_steps(
         let debug_deadline = Instant::now() + Duration::from_secs(10);
         let _ = tree.continue_event(); // Pending event: Job termination came first.
         while Instant::now() < debug_deadline {
-            if pump_debug_event(tree, &job, *root_pid, &mut observation, &mut debug_handles, debug_deadline).is_err() {
+            if pump_debug_event(
+                tree,
+                &job,
+                *root_pid,
+                &mut observation,
+                &mut debug_handles,
+                debug_deadline,
+            )
+            .is_err()
+            {
                 debug_cleanup_ok = false;
                 break;
             }
-            if tree.active_count() == 0 && matches!(job.active_processes_is_zero(), Ok(true)) { break; }
+            if tree.active_count() == 0 && matches!(job.active_processes_is_zero(), Ok(true)) {
+                break;
+            }
         }
         debug_cleanup_ok &= tree.active_count() == 0 && !debug_handles.is_empty();
         for handle in &debug_handles {
-            let remaining = debug_deadline.saturating_duration_since(Instant::now())
-                .as_millis().min(u32::MAX as u128) as u32;
+            let remaining = debug_deadline
+                .saturating_duration_since(Instant::now())
+                .as_millis()
+                .min(u32::MAX as u128) as u32;
             debug_cleanup_ok &= matches!(create::wait_handle(handle.raw(), remaining), Ok(Some(_)));
         }
         if !debug_cleanup_ok {
@@ -1761,7 +1803,9 @@ fn run_steps(
         // The observer's separate lifetime covers this bounded cleanup phase.
         let freeze_deadline = if debug_state.is_some() {
             Instant::now() + Duration::from_secs(5)
-        } else { total_deadline };
+        } else {
+            total_deadline
+        };
         let frozen = observation.report_topology_frozen(freeze_deadline);
         if !matches!(frozen, Ok(true)) {
             failed_step.get_or_insert_with(|| "*:freeze".to_owned());
@@ -1837,8 +1881,12 @@ fn run_steps(
         None => "absent",
     };
 
-    let containment_verified = terminated && startup_cleanup_ok && all_exited
-        && active_zero && io_workers_exited && debug_cleanup_ok;
+    let containment_verified = terminated
+        && startup_cleanup_ok
+        && all_exited
+        && active_zero
+        && io_workers_exited
+        && debug_cleanup_ok;
 
     let final_event = serde_json::json!({
         "event": "final",

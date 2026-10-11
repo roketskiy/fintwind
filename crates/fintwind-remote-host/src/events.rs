@@ -22,8 +22,8 @@ use std::time::Duration;
 use fintwind_client::{Command, DaemonClient, ResponsePayload};
 use fintwind_protocol::provider_session::NativeTranscript;
 use fintwind_protocol::{
-    model::{ActivityItem, AgentSession, Message as NativeMessage, MessageRole, SessionStatus},
     SequencedEvent,
+    model::{ActivityItem, AgentSession, Message as NativeMessage, MessageRole, SessionStatus},
 };
 use fintwind_remote_protocol::{
     MessageBody, ProjectSummary, ResumeCursor, SessionSummary, TranscriptActivity,
@@ -454,8 +454,9 @@ pub fn push_session_list(state: &Arc<HostState>, device_id: Uuid, force: bool) {
         );
         return;
     };
-    let Ok(ResponsePayload::TaskState { projects, sessions, .. }) =
-        daemon.request(Uuid::nil(), Uuid::nil(), Command::LoadTaskState)
+    let Ok(ResponsePayload::TaskState {
+        projects, sessions, ..
+    }) = daemon.request(Uuid::nil(), Uuid::nil(), Command::LoadTaskState)
     else {
         state.send_to_device(
             MessageBody::WorkspaceUnavailable {
@@ -537,7 +538,10 @@ pub fn push_pending_offers(state: &Arc<HostState>, device_id: Uuid) {
 pub fn resume_streams(state: &Arc<HostState>, device_id: Uuid, cursors: &[ResumeCursor]) {
     for cursor in cursors {
         // A device may only resume a session it still holds open.
-        if state.session_runtime_for(cursor.session_id, device_id).is_none() {
+        if state
+            .session_runtime_for(cursor.session_id, device_id)
+            .is_none()
+        {
             state.send_to_device(
                 MessageBody::Resync {
                     session_id: Some(cursor.session_id),
@@ -588,7 +592,11 @@ fn now_ms() -> u64 {
 /// every device holding the session open. The workspace coordinates come
 /// from the session's own record; a missing coordinate or a failed fetch
 /// is logged and dropped — the next reconciled turn retries naturally.
-pub fn fetch_and_send_transcript(state: &Arc<HostState>, daemon: &Arc<DaemonClient>, session_id: Uuid) {
+pub fn fetch_and_send_transcript(
+    state: &Arc<HostState>,
+    daemon: &Arc<DaemonClient>,
+    session_id: Uuid,
+) {
     let owners = state.session_owners(session_id);
     if owners.is_empty() {
         return;
@@ -601,10 +609,19 @@ pub fn fetch_and_send_transcript(state: &Arc<HostState>, daemon: &Arc<DaemonClie
         if let Ok(ResponsePayload::TaskState { sessions, .. }) =
             daemon.request(Uuid::nil(), Uuid::nil(), Command::LoadTaskState)
         {
-            if sessions.iter().any(|session| session.id == session_id && session.native_session_id.is_none()) {
+            if sessions
+                .iter()
+                .any(|session| session.id == session_id && session.native_session_id.is_none())
+            {
                 for device_id in owners {
-                    state.send_to_device(MessageBody::Transcript { session_id, messages: Vec::new() },
-                        device_id, PendingKind::Event);
+                    state.send_to_device(
+                        MessageBody::Transcript {
+                            session_id,
+                            messages: Vec::new(),
+                        },
+                        device_id,
+                        PendingKind::Event,
+                    );
                 }
             }
         }
@@ -630,10 +647,21 @@ pub fn fetch_and_send_transcript(state: &Arc<HostState>, daemon: &Arc<DaemonClie
     // rule, computed from its own session status — a device never guesses
     // eligibility, and the host never offers an action that would be
     // refused here.
-    let saved = match daemon.request(session_id, Uuid::nil(), Command::HydrateSession { session_id }) {
-        Ok(ResponsePayload::Session { session: Some(session) })
-            if session.native_session_id.as_deref() == Some(native_session_id.as_str())
-                || session.provider_cursor.as_ref().is_some_and(|cursor| cursor.native_id() == native_session_id) => Some(session),
+    let saved = match daemon.request(
+        session_id,
+        Uuid::nil(),
+        Command::HydrateSession { session_id },
+    ) {
+        Ok(ResponsePayload::Session {
+            session: Some(session),
+        }) if session.native_session_id.as_deref() == Some(native_session_id.as_str())
+            || session
+                .provider_cursor
+                .as_ref()
+                .is_some_and(|cursor| cursor.native_id() == native_session_id) =>
+        {
+            Some(session)
+        }
         _ => None,
     };
     let messages = map_transcript(&transcript, saved.as_ref());
@@ -659,7 +687,10 @@ pub fn fetch_and_send_transcript(state: &Arc<HostState>, daemon: &Arc<DaemonClie
 /// bound to that turn's own id and count, and to whether this computer would
 /// branch or rewind to it. A device therefore never counts messages or roles
 /// to work out which turn it is looking at.
-fn map_transcript(transcript: &NativeTranscript, saved: Option<&AgentSession>) -> Vec<TranscriptMessage> {
+fn map_transcript(
+    transcript: &NativeTranscript,
+    saved: Option<&AgentSession>,
+) -> Vec<TranscriptMessage> {
     use std::collections::BTreeMap;
 
     // Native history parsers create fresh UUIDs on every read. Bind actions
@@ -668,24 +699,41 @@ fn map_transcript(transcript: &NativeTranscript, saved: Option<&AgentSession>) -
     let mut saved_inputs = HashMap::new();
     if let Some(saved) = saved {
         for turn in &saved.turns {
-            let input = turn.submission.as_ref().map(|receipt| receipt.input_id.as_str())
+            let input = turn
+                .submission
+                .as_ref()
+                .map(|receipt| receipt.input_id.as_str())
                 .or(turn.provider_resume_at.as_deref());
             if let Some(input) = input {
-                saved_inputs.entry(input).and_modify(|entry| *entry = None).or_insert(Some(turn));
+                saved_inputs
+                    .entry(input)
+                    .and_modify(|entry| *entry = None)
+                    .or_insert(Some(turn));
             }
         }
     }
-    let actionable = saved.is_some_and(|session| matches!(session.status, SessionStatus::Idle | SessionStatus::Failed));
-    let bindings = transcript.turns.iter().filter_map(|native| {
-        let input = native.provider_resume_at.as_deref()?;
-        let turn = saved_inputs.get(input).copied().flatten()?;
-        Some((native.id, TranscriptTurn {
-            turn_id: turn.id,
-            turn_count: turn.turn_count,
-            can_fork: actionable && turn.provider_turn_started && native.provider_turn_started,
-            can_rewind: actionable,
-        }))
-    }).collect::<HashMap<_, _>>();
+    let actionable = saved.is_some_and(|session| {
+        matches!(session.status, SessionStatus::Idle | SessionStatus::Failed)
+    });
+    let bindings = transcript
+        .turns
+        .iter()
+        .filter_map(|native| {
+            let input = native.provider_resume_at.as_deref()?;
+            let turn = saved_inputs.get(input).copied().flatten()?;
+            Some((
+                native.id,
+                TranscriptTurn {
+                    turn_id: turn.id,
+                    turn_count: turn.turn_count,
+                    can_fork: actionable
+                        && turn.provider_turn_started
+                        && native.provider_turn_started,
+                    can_rewind: actionable,
+                },
+            ))
+        })
+        .collect::<HashMap<_, _>>();
 
     let mut activities_by_position: BTreeMap<usize, Vec<TranscriptActivity>> = BTreeMap::new();
     for block in &transcript.blocks {
@@ -727,11 +775,14 @@ fn map_message(
     // The turn this message belongs to, resolved from the desktop's own
     // association. A message with no turn keeps `None` rather than a guessed
     // position.
-    let turn = message.turn_id.and_then(|turn_id| bindings.get(&turn_id)).map(|binding| {
-        let mut binding = binding.clone();
-        binding.can_rewind &= message.role == MessageRole::User;
-        binding
-    });
+    let turn = message
+        .turn_id
+        .and_then(|turn_id| bindings.get(&turn_id))
+        .map(|binding| {
+            let mut binding = binding.clone();
+            binding.can_rewind &= message.role == MessageRole::User;
+            binding
+        });
     TranscriptMessage {
         role: match message.role {
             MessageRole::User => TranscriptRole::User,

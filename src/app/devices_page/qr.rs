@@ -14,8 +14,8 @@
 use std::sync::Arc;
 
 use gpui::{
-    px, App, BorderStyle, Bounds, Element, ElementId, GlobalElementId, InspectorElementId,
-    IntoElement, LayoutId, Pixels, Style, Window, black, point, quad, size, white,
+    App, BorderStyle, Bounds, Element, ElementId, GlobalElementId, InspectorElementId, IntoElement,
+    LayoutId, Pixels, Style, Window, black, point, px, quad, size, white,
 };
 
 /// One module's edge. Large enough for a phone camera at arm's length,
@@ -37,10 +37,8 @@ impl QrMatrix {
     /// Encode `payload` at error-correction level M. Runs are merged here,
     /// on the caller's thread, so painting never walks the module grid.
     pub fn new(payload: &str) -> anyhow::Result<Self> {
-        let code = qrcode::QrCode::with_error_correction_level(
-            payload.as_bytes(),
-            qrcode::EcLevel::M,
-        )?;
+        let code =
+            qrcode::QrCode::with_error_correction_level(payload.as_bytes(), qrcode::EcLevel::M)?;
         let width = code.width();
         let colors = code.to_colors();
         let mut runs = Vec::new();

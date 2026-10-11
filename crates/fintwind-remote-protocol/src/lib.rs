@@ -26,8 +26,8 @@ mod message;
 pub mod schema;
 
 pub use frame::{
-    Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, HandshakeMode, PairingInvite,
-    RejectCode, RejectedFrame, RejectedFrameReason, MAX_FRAME_BYTES, REMOTE_PROTOCOL_VERSION,
+    Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, HandshakeMode, MAX_FRAME_BYTES,
+    PairingInvite, REMOTE_PROTOCOL_VERSION, RejectCode, RejectedFrame, RejectedFrameReason,
 };
 pub use message::{
     AgentPresetEntry, DriverEventFrame, MessageBody, ModelOptionEntry, OperationKind,

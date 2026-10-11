@@ -932,7 +932,10 @@ impl Fintwind {
                     self.enqueue_follow_up_submission(session_id, submission, cx);
                     self.record_session_error(
                         session_id,
-                        tr!("session.steer_rejected", error = compact_driver_error(&reason)),
+                        tr!(
+                            "session.steer_rejected",
+                            error = compact_driver_error(&reason)
+                        ),
                         cx,
                     );
                 } else if settled_cleanly {

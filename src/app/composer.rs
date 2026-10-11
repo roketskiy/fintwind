@@ -1982,7 +1982,8 @@ impl Fintwind {
     /// The staged-attachment chips above the input: a thumbnail tile per
     /// image, a file-type icon and basename for everything else, each with a
     /// floating remove button — T3 Code's attachment row in graphite.
-    fn render_composer_attachments(&self, cx: &mut Context<Self>) -> Div {        let theme = Theme::current(cx);
+    fn render_composer_attachments(&self, cx: &mut Context<Self>) -> Div {
+        let theme = Theme::current(cx);
         let mut row = div()
             .px(px(14.0))
             .pt(px(2.0))
@@ -2305,7 +2306,9 @@ impl Fintwind {
     /// relative to the workspace so a quoted path reads the way the file tree
     /// shows it.
     pub(super) fn stage_file_references(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
-        let root = self.selected_workspace_path().map(std::path::Path::to_path_buf);
+        let root = self
+            .selected_workspace_path()
+            .map(std::path::Path::to_path_buf);
         let mut staged = false;
         for path in paths {
             let mention = root

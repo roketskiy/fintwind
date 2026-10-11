@@ -326,7 +326,8 @@ impl ApprovalRegistry {
         session_id: Uuid,
         request_ref: &str,
         device_id: Uuid,
-    ) -> Option<RemoteOffer> {        self.approvals
+    ) -> Option<RemoteOffer> {
+        self.approvals
             .lock()
             .values()
             .find(|record| {
@@ -447,7 +448,10 @@ impl ApprovalRegistry {
         record: &mut ApprovalRecord,
         approval_id: &str,
     ) -> bool {
-        let key = (record.offer.session_id(), record.offer.request_ref().to_owned());
+        let key = (
+            record.offer.session_id(),
+            record.offer.request_ref().to_owned(),
+        );
         let mut claims = claims.lock();
         match claims.entry(key) {
             std::collections::hash_map::Entry::Occupied(entry) => {
@@ -479,7 +483,7 @@ impl ApprovalRegistry {
             RecordOutcome::Open => {}
             RecordOutcome::Decided(_) => return Err(ConsumeError::UnknownOrConsumed),
             RecordOutcome::Invalidated(reason) => {
-                return Err(ConsumeError::Invalidated(reason.clone()))
+                return Err(ConsumeError::Invalidated(reason.clone()));
             }
         }
         if record.offer.expires_at_ms() < now_ms() {
@@ -494,8 +498,7 @@ impl ApprovalRegistry {
             }
         }
         if record.offer.grant_version() != context.grant_version {
-            record.outcome =
-                RecordOutcome::Invalidated("the device grant changed".to_owned());
+            record.outcome = RecordOutcome::Invalidated("the device grant changed".to_owned());
             return Err(ConsumeError::GrantMismatch);
         }
         // An unconfirmable runtime fails closed: the offer belonged to an
@@ -705,7 +708,11 @@ mod tests {
     fn duplicate_decision_is_an_explicit_failure() {
         let (registry, approval_id, _) = registry_with_offer();
         let context = context(Uuid::nil());
-        assert!(registry.consume(&approval_id, "once", None, &context).is_ok());
+        assert!(
+            registry
+                .consume(&approval_id, "once", None, &context)
+                .is_ok()
+        );
         assert!(matches!(
             registry.consume(&approval_id, "once", None, &context),
             Err(ConsumeError::UnknownOrConsumed)
@@ -725,13 +732,23 @@ mod tests {
     fn digest_mismatch_consumes_and_refuses() {
         let (registry, approval_id, _) = registry_with_offer();
         assert!(matches!(
-            registry.consume(&approval_id, "once", Some("different"), &context(Uuid::nil())),
+            registry.consume(
+                &approval_id,
+                "once",
+                Some("different"),
+                &context(Uuid::nil())
+            ),
             Err(ConsumeError::DigestMismatch)
         ));
         // The refusal also ends the offer: no second chance with the
         // original digest after a mismatch was observed.
         assert!(matches!(
-            registry.consume(&approval_id, "once", Some("digest-1"), &context(Uuid::nil())),
+            registry.consume(
+                &approval_id,
+                "once",
+                Some("digest-1"),
+                &context(Uuid::nil())
+            ),
             Err(ConsumeError::Invalidated(_))
         ));
     }
@@ -744,9 +761,11 @@ mod tests {
             Err(ConsumeError::DeviceMismatch)
         ));
         // The refusal must not have consumed the real device's offer.
-        assert!(registry
-            .consume(&approval_id, "once", None, &context(Uuid::nil()))
-            .is_ok());
+        assert!(
+            registry
+                .consume(&approval_id, "once", None, &context(Uuid::nil()))
+                .is_ok()
+        );
     }
 
     #[test]
@@ -776,14 +795,16 @@ mod tests {
             "digest-shared".to_owned(),
             1,
         );
-        assert!(registry
-            .consume(
-                &first.approval_id().to_string(),
-                "once",
-                None,
-                &context(Uuid::nil())
-            )
-            .is_ok());
+        assert!(
+            registry
+                .consume(
+                    &first.approval_id().to_string(),
+                    "once",
+                    None,
+                    &context(Uuid::nil())
+                )
+                .is_ok()
+        );
         // The second device's decision is refused explicitly, and its offer
         // is voided — no second execution of the same request.
         assert!(matches!(
@@ -855,9 +876,11 @@ mod tests {
             selected_option_ids: Vec::new(),
             custom_text: Some("Gamma".to_owned()),
         }];
-        assert!(registry
-            .consume_user_input(&approval_id, &custom, &context)
-            .is_ok());
+        assert!(
+            registry
+                .consume_user_input(&approval_id, &custom, &context)
+                .is_ok()
+        );
 
         // A re-announced question starts a fresh offer.
         let offer = question_offer(&registry);
@@ -933,9 +956,18 @@ mod tests {
             1,
         );
         registry.invalidate_session(Uuid::nil(), "turn ended");
-        assert!(registry.offer_snapshot(&a.approval_id().to_string()).is_some());
+        assert!(
+            registry
+                .offer_snapshot(&a.approval_id().to_string())
+                .is_some()
+        );
         assert!(matches!(
-            registry.consume(&a.approval_id().to_string(), "once", None, &context(Uuid::nil())),
+            registry.consume(
+                &a.approval_id().to_string(),
+                "once",
+                None,
+                &context(Uuid::nil())
+            ),
             Err(ConsumeError::Invalidated(_))
         ));
         let other_runtime = DecisionContext {
@@ -943,9 +975,11 @@ mod tests {
             grant_version: 1,
             runtime_id: Some(Uuid::max()),
         };
-        assert!(registry
-            .consume(&b.approval_id().to_string(), "once", None, &other_runtime)
-            .is_ok());
+        assert!(
+            registry
+                .consume(&b.approval_id().to_string(), "once", None, &other_runtime)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -974,7 +1008,12 @@ mod tests {
             decided_at_ms: 0,
         };
         assert!(matches!(
-            registry.consume(&stray.approval_id.to_string(), &stray.option_id, None, &context(Uuid::nil())),
+            registry.consume(
+                &stray.approval_id.to_string(),
+                &stray.option_id,
+                None,
+                &context(Uuid::nil())
+            ),
             Err(ConsumeError::UnknownOrConsumed)
         ));
         let stray_answers = UserInputDecision {
@@ -982,7 +1021,11 @@ mod tests {
             answers: Vec::new(),
         };
         assert!(matches!(
-            registry.consume_user_input(&stray_answers.approval_id.to_string(), &[], &context(Uuid::nil())),
+            registry.consume_user_input(
+                &stray_answers.approval_id.to_string(),
+                &[],
+                &context(Uuid::nil())
+            ),
             Err(ConsumeError::UnknownOrConsumed)
         ));
     }

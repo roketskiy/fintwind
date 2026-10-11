@@ -32,16 +32,16 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 /// What a test file reaches for. The unused re-exports are the ones only
 /// some attack cases touch, and they keep every test file to one import.
 #[allow(unused_imports)]
 pub use fintwind_remote_crypto::{
-    fingerprint, pairing_code, ConnectResponder, IdentityKey, PairingBinding, PairingResponder,
-    SecureChannel,
+    ConnectResponder, IdentityKey, PairingBinding, PairingResponder, SecureChannel, fingerprint,
+    pairing_code,
 };
 pub use fintwind_remote_protocol::{Base64Bytes, Frame, MessageBody, SealedMessage};
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use fintwind_remote_protocol::{PairingInvite, REMOTE_PROTOCOL_VERSION};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -197,7 +197,12 @@ impl HostPeer {
         .expect("invite serializes")
     }
 
-    pub fn host_seal(&self, channel: &mut SecureChannel, seq: u64, sealed: &SealedMessage) -> String {
+    pub fn host_seal(
+        &self,
+        channel: &mut SecureChannel,
+        seq: u64,
+        sealed: &SealedMessage,
+    ) -> String {
         let plaintext = serde_json::to_vec(sealed).expect("sealed encodes");
         let ciphertext = channel.encrypt(&plaintext).expect("host encrypts");
         serde_json::to_string(&Frame::Sealed {

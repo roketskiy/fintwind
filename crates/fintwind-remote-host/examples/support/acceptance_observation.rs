@@ -90,16 +90,16 @@
 #![allow(dead_code)]
 
 use std::collections::BTreeMap;
-use std::sync::mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel};
 use std::time::Instant;
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_BROKEN_PIPE, HANDLE, WAIT_OBJECT_0,
+    CloseHandle, ERROR_BROKEN_PIPE, GetLastError, HANDLE, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::System::IO::CancelSynchronousIo;
 use windows_sys::Win32::System::Pipes::PeekNamedPipe;
@@ -299,7 +299,8 @@ fn create_pipe() -> Result<(HANDLE, HANDLE)> {
         windows_sys::Win32::System::Pipes::CreatePipe(&mut read, &mut write, std::ptr::null(), 0)
     };
     if ok == 0 {
-        return Err(std::io::Error::last_os_error()).context("could not create an observation pipe");
+        return Err(std::io::Error::last_os_error())
+            .context("could not create an observation pipe");
     }
     Ok((read, write))
 }
@@ -470,7 +471,9 @@ impl WriteWorker {
             // The worker owns the pipe end from here to thread exit.
             let mut stream = unsafe { std::fs::File::from_raw_handle(handle) };
             loop {
-                if stop.load(Ordering::SeqCst) { break; }
+                if stop.load(Ordering::SeqCst) {
+                    break;
+                }
                 let bytes = match queue.recv_timeout(std::time::Duration::from_millis(20)) {
                     Ok(bytes) => bytes,
                     Err(RecvTimeoutError::Timeout) => continue,
@@ -502,7 +505,12 @@ impl WriteWorker {
             .inbox
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("the observation write worker is finished"))?;
-        send_with_deadline(inbox, bytes.to_vec(), deadline, "the observation write queue")?;
+        send_with_deadline(
+            inbox,
+            bytes.to_vec(),
+            deadline,
+            "the observation write queue",
+        )?;
         match self.progress.recv_timeout(remaining(deadline)?) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => Err(error),
@@ -526,7 +534,12 @@ impl WriteWorker {
 /// Bounded send into a sync channel. `SyncSender::send_timeout` is unstable, so
 /// this polls `try_send` against a deadline and fails closed rather than
 /// blocking forever on a consumer that is gone.
-fn send_with_deadline<T>(sender: &SyncSender<T>, item: T, deadline: Instant, what: &str) -> Result<()> {
+fn send_with_deadline<T>(
+    sender: &SyncSender<T>,
+    item: T,
+    deadline: Instant,
+    what: &str,
+) -> Result<()> {
     let mut pending = item;
     loop {
         match sender.try_send(pending) {
@@ -618,9 +631,7 @@ impl LineReader {
                     );
                     return;
                 }
-                let want = (available as usize)
-                    .min(READ_CHUNK_BYTES)
-                    .min(room);
+                let want = (available as usize).min(READ_CHUNK_BYTES).min(room);
                 let mut buffer = [0_u8; READ_CHUNK_BYTES];
                 let read = match std::io::Read::read(&mut stream, &mut buffer[..want]) {
                     Ok(0) => return,
@@ -646,7 +657,14 @@ impl LineReader {
                     };
                     let violation = matches!(event, ReaderEvent::Violation(_));
                     let deadline = Instant::now() + std::time::Duration::from_secs(60);
-                    if send_with_deadline(&sender, Tagged { id, event }, deadline, "the observation read queue").is_err() {
+                    if send_with_deadline(
+                        &sender,
+                        Tagged { id, event },
+                        deadline,
+                        "the observation read queue",
+                    )
+                    .is_err()
+                    {
                         return;
                     }
                     if violation {
@@ -856,7 +874,8 @@ impl SubjectChannel {
 
 /// Frame one message as a single newline-terminated line.
 fn frame<T: Serialize>(message: &T) -> Result<Vec<u8>> {
-    let mut line = serde_json::to_vec(message).context("could not encode an observation message")?;
+    let mut line =
+        serde_json::to_vec(message).context("could not encode an observation message")?;
     if line.len() + 1 > MAX_MESSAGE_BYTES {
         bail!("an observation message exceeds the frame limit");
     }
@@ -943,7 +962,11 @@ impl ObserverHub {
                 }
                 let id = WriterId {
                     source: message.source,
-                    fixture: if message.kind == Kind::FixtureChannel { None } else { message.fixture },
+                    fixture: if message.kind == Kind::FixtureChannel {
+                        None
+                    } else {
+                        message.fixture
+                    },
                 };
                 if id != tagged.id {
                     bail!("a hand-off arrived on a channel that belongs to another writer");
@@ -1025,7 +1048,11 @@ impl Default for ObserverHub {
 
 /// The single auditable hand-off site. The access mask is enforced **here**,
 /// in this file; no message can widen it and no message needs to prove it.
-pub fn duplicate_for_observer(target_process: HANDLE, source: HANDLE, access: u32) -> Result<HANDLE> {
+pub fn duplicate_for_observer(
+    target_process: HANDLE,
+    source: HANDLE,
+    access: u32,
+) -> Result<HANDLE> {
     if target_process.is_null() || source.is_null() {
         bail!("cannot duplicate a null handle for the observer");
     }
@@ -1038,7 +1065,11 @@ pub fn duplicate_for_observer(target_process: HANDLE, source: HANDLE, access: u3
             &mut duplicated,
             access,
             0,
-            if access == 0 { windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS } else { 0 },
+            if access == 0 {
+                windows_sys::Win32::Foundation::DUPLICATE_SAME_ACCESS
+            } else {
+                0
+            },
         )
     };
     if ok == 0 {
@@ -1115,7 +1146,11 @@ pub fn verify_handoff(
     }
     let id = WriterId {
         source: message.source,
-        fixture: if message.kind == Kind::FixtureChannel { None } else { message.fixture },
+        fixture: if message.kind == Kind::FixtureChannel {
+            None
+        } else {
+            message.fixture
+        },
     };
     let last = seen.entry(id).or_insert(0);
     if message.transfer_id <= *last {

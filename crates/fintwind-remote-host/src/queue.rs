@@ -143,7 +143,9 @@ impl PromptQueues {
     /// durable queued row is still pending. Preserve an accepted local cancel.
     pub fn restore(&mut self, mut item: QueuedPrompt) -> Result<usize, EnqueueRefusal> {
         if let Some(queue) = self.sessions.get_mut(&item.session_id)
-            && let Some(position) = queue.iter().position(|known| known.operation_id == item.operation_id)
+            && let Some(position) = queue
+                .iter()
+                .position(|known| known.operation_id == item.operation_id)
         {
             item.cancel_requested = item.cancel_requested.or(queue[position].cancel_requested);
             queue[position] = item;
@@ -200,12 +202,7 @@ impl PromptQueues {
                 item.summary = String::new();
             }
         }
-        while queue
-            .iter()
-            .filter(|item| item.is_terminal())
-            .count()
-            > RETAINED_TERMINAL_ITEMS
-        {
+        while queue.iter().filter(|item| item.is_terminal()).count() > RETAINED_TERMINAL_ITEMS {
             let Some(position) = queue.iter().position(|item| item.is_terminal()) else {
                 break;
             };
@@ -284,11 +281,7 @@ impl PromptQueues {
     /// once the daemon has answered authoritatively, so an unanswered query
     /// leaves the prompt exactly as it was — still cancelled, still not
     /// dispatched.
-    pub fn pending_cancel_operation(
-        &self,
-        session_id: Uuid,
-        operation_id: Uuid,
-    ) -> Option<Uuid> {
+    pub fn pending_cancel_operation(&self, session_id: Uuid, operation_id: Uuid) -> Option<Uuid> {
         self.sessions
             .get(&session_id)?
             .iter()
@@ -465,12 +458,7 @@ impl PromptQueues {
         let Some(queue) = self.sessions.get_mut(&session_id) else {
             return;
         };
-        while queue
-            .iter()
-            .filter(|item| item.is_terminal())
-            .count()
-            > RETAINED_TERMINAL_ITEMS
-        {
+        while queue.iter().filter(|item| item.is_terminal()).count() > RETAINED_TERMINAL_ITEMS {
             let Some(position) = queue.iter().position(|item| item.is_terminal()) else {
                 break;
             };
@@ -499,7 +487,9 @@ impl PromptQueues {
         self.sessions
             .iter()
             .filter(|(_, queue)| {
-                queue.iter().any(|item| item.state == QueueItemState::Queued)
+                queue
+                    .iter()
+                    .any(|item| item.state == QueueItemState::Queued)
             })
             .map(|(session_id, _)| *session_id)
             .collect()

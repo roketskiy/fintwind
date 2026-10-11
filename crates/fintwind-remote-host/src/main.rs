@@ -27,8 +27,13 @@ use crossbeam_channel::unbounded;
 use fintwind_client::DaemonClient;
 use fintwind_protocol::Command;
 use fintwind_remote_host::{
-    adapter, approvals, config::HostConfig, dedup, events, grants, grants::GrantFile, identity,
-    pair, pending::PendingKind, queue, relay_session,
+    adapter, approvals,
+    config::HostConfig,
+    dedup, events, grants,
+    grants::GrantFile,
+    identity, pair,
+    pending::PendingKind,
+    queue, relay_session,
     state::{HostState, OrphanedCancel, SessionCommand},
 };
 use fintwind_remote_protocol::{
@@ -58,11 +63,9 @@ fn main() -> anyhow::Result<()> {
             // host's identity for the pairing QR. Neither starts the daemon
             // and neither needs the serve-only flags.
             "--provision-device" => {
-                provision = Some(
-                    arguments
-                        .next()
-                        .ok_or_else(|| anyhow::anyhow!("--provision-device requires \"deviceId,noisePublicKeyB64\""))?,
-                )
+                provision = Some(arguments.next().ok_or_else(|| {
+                    anyhow::anyhow!("--provision-device requires \"deviceId,noisePublicKeyB64\"")
+                })?)
             }
             "--print-identity" => print_identity = true,
             "--pair" => pair = true,
@@ -318,9 +321,8 @@ fn run_daemon(config: HostConfig) -> anyhow::Result<()> {
     // nothing trusted yet; the daemon still runs and waits. The file is
     // re-read on every handshake and every decision, so this is only the
     // startup tally.
-    let grants = GrantFile::load(&config.paired_device_file)?.unwrap_or(GrantFile {
-        grants: Vec::new(),
-    });
+    let grants =
+        GrantFile::load(&config.paired_device_file)?.unwrap_or(GrantFile { grants: Vec::new() });
     log::info!(target: "audit", "grants loaded; count={}", grants.grants.len());
 
     let dedup = dedup::OperationStore::open(&config.data_dir.join("operations.sqlite3"))?;
@@ -473,10 +475,10 @@ fn run_daemon(config: HostConfig) -> anyhow::Result<()> {
                         return;
                     }
                     let status = state.link_status();
-                    let changed = last_write
-                        .is_none_or(|(connected, _)| connected != status.relay_connected);
-                    let stale = last_write
-                        .is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(20));
+                    let changed =
+                        last_write.is_none_or(|(connected, _)| connected != status.relay_connected);
+                    let stale =
+                        last_write.is_none_or(|(_, at)| at.elapsed() >= Duration::from_secs(20));
                     if changed || stale {
                         if write_link_status(&path, status.relay_connected) {
                             last_write = Some((status.relay_connected, std::time::Instant::now()));
@@ -819,7 +821,9 @@ fn run_operation(state: &Arc<HostState>, device_id: Uuid, operation: OperationRe
             for dropped in state.queues().lock().drop_session(session_id) {
                 report_dropped_queue_item(state, &dropped, "the session was deleted");
             }
-            state.approvals().invalidate_session(session_id, "the session was deleted");
+            state
+                .approvals()
+                .invalidate_session(session_id, "the session was deleted");
             for owner in state.session_owners(session_id) {
                 state.detach_view(session_id, owner);
             }
@@ -897,11 +901,23 @@ fn run_operation(state: &Arc<HostState>, device_id: Uuid, operation: OperationRe
             // overall `Executed` below is only reached when every item
             // succeeded, because a partial batch arrives as a rejection
             // whose detail keeps the per-item truth.
-            complete_with_detail(state, device_id, &operation, OperationState::Executed, Some(detail));
-            if matches!(operation.kind, OperationKind::CreateSession | OperationKind::RenameSession
-                | OperationKind::ArchiveSession | OperationKind::RestoreArchivedSession | OperationKind::DeleteSessions
-                | OperationKind::ForkFromResponse | OperationKind::RewindToMessage)
-            {
+            complete_with_detail(
+                state,
+                device_id,
+                &operation,
+                OperationState::Executed,
+                Some(detail),
+            );
+            if matches!(
+                operation.kind,
+                OperationKind::CreateSession
+                    | OperationKind::RenameSession
+                    | OperationKind::ArchiveSession
+                    | OperationKind::RestoreArchivedSession
+                    | OperationKind::DeleteSessions
+                    | OperationKind::ForkFromResponse
+                    | OperationKind::RewindToMessage
+            ) {
                 for device in state.online_devices() {
                     events::push_session_list(state, device.device_id, true);
                 }
@@ -1021,9 +1037,9 @@ fn enqueue_prompt(state: &Arc<HostState>, device_id: Uuid, operation: &Operation
         },
     );
     let submission_id = match admitted {
-        Ok(fintwind_client::ResponsePayload::RemotePromptAdmitted {
-            submission_id, ..
-        }) => submission_id,
+        Ok(fintwind_client::ResponsePayload::RemotePromptAdmitted { submission_id, .. }) => {
+            submission_id
+        }
         Ok(fintwind_client::ResponsePayload::RemotePromptState {
             submission_id,
             state: label,
@@ -1069,7 +1085,13 @@ fn enqueue_prompt(state: &Arc<HostState>, device_id: Uuid, operation: &Operation
             return;
         }
         Err(error) => {
-            refuse_operation(state, device_id, operation, RejectCode::Malformed, &error.to_string());
+            refuse_operation(
+                state,
+                device_id,
+                operation,
+                RejectCode::Malformed,
+                &error.to_string(),
+            );
             return;
         }
     };
@@ -1276,10 +1298,11 @@ fn run_cancel_queued(state: &Arc<HostState>, device_id: Uuid, operation: Operati
     // The intent is recorded first, so a `dispatching` refusal cannot lose
     // it. A prompt this host does not hold for this device is refused
     // outright: there is nothing here to cancel.
-    let known = state
-        .queues()
-        .lock()
-        .request_cancel(session_id, target, device_id, operation.operation_id);
+    let known =
+        state
+            .queues()
+            .lock()
+            .request_cancel(session_id, target, device_id, operation.operation_id);
     if !known {
         let finished = state
             .dedup()
@@ -1337,10 +1360,7 @@ fn run_cancel_queued(state: &Arc<HostState>, device_id: Uuid, operation: Operati
     };
     match label.as_str() {
         "cancelled" | "expired" | "notSent" => {
-            state
-                .queues()
-                .lock()
-                .cancel(session_id, target, device_id);
+            state.queues().lock().cancel(session_id, target, device_id);
             let prompt_result = prompt_result_for_cancel_state(&label);
             let prompt_finished = state
                 .dedup()
@@ -1352,11 +1372,7 @@ fn run_cancel_queued(state: &Arc<HostState>, device_id: Uuid, operation: Operati
                 .unwrap_or(false);
             let cancel_finished = state
                 .dedup()
-                .record_finished_if_accepted(
-                    &cancel_operation_id,
-                    &OperationState::Executed,
-                    None,
-                )
+                .record_finished_if_accepted(&cancel_operation_id, &OperationState::Executed, None)
                 .unwrap_or(false);
             // The cancel operation itself is finished too, so a retry of it
             // is answered from this record rather than run again.
@@ -1413,17 +1429,10 @@ fn run_cancel_queued(state: &Arc<HostState>, device_id: Uuid, operation: Operati
                 .queues()
                 .lock()
                 .take_cancel_request(session_id, target);
-            state
-                .queues()
-                .lock()
-                .mark_dispatched(session_id, target);
+            state.queues().lock().mark_dispatched(session_id, target);
             let prompt_finished = state
                 .dedup()
-                .record_finished_if_accepted(
-                    &target.to_string(),
-                    &OperationState::Executed,
-                    None,
-                )
+                .record_finished_if_accepted(&target.to_string(), &OperationState::Executed, None)
                 .unwrap_or(false);
             let cancel_finished = state
                 .dedup()
@@ -1471,10 +1480,7 @@ fn run_cancel_queued(state: &Arc<HostState>, device_id: Uuid, operation: Operati
                 .queues()
                 .lock()
                 .take_cancel_request(session_id, target);
-            state
-                .queues()
-                .lock()
-                .settle_unknown(session_id, target);
+            state.queues().lock().settle_unknown(session_id, target);
             let prompt_finished = state
                 .dedup()
                 .record_finished_if_accepted(
@@ -1839,9 +1845,20 @@ fn run_options_catalog(state: &Arc<HostState>, device_id: Uuid, operation: Opera
                     models
                         .iter()
                         .map(|model| fintwind_remote_protocol::ModelOptionEntry {
-                            id: model.get("id").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                            name: model.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                            is_default: model.get("is_default").and_then(Value::as_bool).unwrap_or(false),
+                            id: model
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                            name: model
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                            is_default: model
+                                .get("is_default")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
                             reasoning_efforts: string_list(model, "reasoning_efforts"),
                             service_tiers: string_list(model, "service_tiers"),
                             context_windows: string_list(model, "context_windows"),
@@ -1856,9 +1873,20 @@ fn run_options_catalog(state: &Arc<HostState>, device_id: Uuid, operation: Opera
                     presets
                         .iter()
                         .map(|preset| fintwind_remote_protocol::AgentPresetEntry {
-                            id: preset.get("id").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                            name: preset.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                            is_default: preset.get("is_default").and_then(Value::as_bool).unwrap_or(false),
+                            id: preset
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                            name: preset
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                            is_default: preset
+                                .get("is_default")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false),
                         })
                         .collect()
                 })
@@ -1930,7 +1958,13 @@ fn run_read(state: &Arc<HostState>, device_id: Uuid, operation: OperationRequest
                 .dedup()
                 .record_finished(&operation_id, &OperationState::Executed, None)
                 .ok();
-            complete_with_detail(state, device_id, &operation, OperationState::Executed, Some(detail));
+            complete_with_detail(
+                state,
+                device_id,
+                &operation,
+                OperationState::Executed,
+                Some(detail),
+            );
         }
         Err((code, message)) => {
             refuse_operation(state, device_id, &operation, code, &message);
@@ -1999,7 +2033,11 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                 for dropped in dropped_items {
                     state.cancel_remote_prompt_as_recorded(dropped.device_id, dropped.operation_id);
                     settle_released_cancel(state, &dropped);
-                    report_dropped_queue_item(state, &dropped, "the session was removed or archived");
+                    report_dropped_queue_item(
+                        state,
+                        &dropped,
+                        "the session was removed or archived",
+                    );
                 }
                 break;
             }
@@ -2032,14 +2070,19 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                 },
             );
             match outcome {
-                Ok(fintwind_client::ResponsePayload::RemotePromptState { state: label, .. })
-                    if label == "dispatched" =>
-                {
+                Ok(fintwind_client::ResponsePayload::RemotePromptState {
+                    state: label, ..
+                }) if label == "dispatched" => {
                     // Dispatch may create the first runtime. Upgrade every
                     // already-open pre-runtime view before delivering events.
-                    if let Ok(fintwind_client::ResponsePayload::SessionRuntime { runtime_id: Some(runtime_id), .. }) =
-                        daemon.request(session_id, Uuid::nil(), fintwind_client::Command::AttachSession)
-                    {
+                    if let Ok(fintwind_client::ResponsePayload::SessionRuntime {
+                        runtime_id: Some(runtime_id),
+                        ..
+                    }) = daemon.request(
+                        session_id,
+                        Uuid::nil(),
+                        fintwind_client::Command::AttachSession,
+                    ) {
                         let mut changed = false;
                         for owner in state.session_owners(session_id) {
                             if state.session_runtime_for(session_id, owner) != Some(runtime_id) {
@@ -2047,7 +2090,9 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                                 changed = true;
                             }
                         }
-                        if changed { events::spawn_session_pump(Arc::clone(state), session_id, runtime_id); }
+                        if changed {
+                            events::spawn_session_pump(Arc::clone(state), session_id, runtime_id);
+                        }
                     }
                     state
                         .queues()
@@ -2082,9 +2127,9 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                     }
                     push_queue_view(state, session_id, item.device_id);
                 }
-                Ok(fintwind_client::ResponsePayload::RemotePromptState { state: label, .. })
-                    if label == "queued" || label == "dispatching" =>
-                {
+                Ok(fintwind_client::ResponsePayload::RemotePromptState {
+                    state: label, ..
+                }) if label == "queued" || label == "dispatching" => {
                     // The daemon still holds it: the session is busy, or
                     // another caller claimed the dispatch first. The prompt
                     // stays queued and a later tick takes it — an ordinary
@@ -2106,9 +2151,9 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                     }
                     push_queue_view(state, session_id, item.device_id);
                 }
-                Ok(fintwind_client::ResponsePayload::RemotePromptState { state: label, .. })
-                    if label == "unknown" =>
-                {
+                Ok(fintwind_client::ResponsePayload::RemotePromptState {
+                    state: label, ..
+                }) if label == "unknown" => {
                     // The daemon could not prove the dispatch outcome. A
                     // local dispatch retry is forbidden; if a cancel was
                     // waiting, keep it in the orphan set for query-only
@@ -2172,7 +2217,9 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                     }
                     push_queue_view(state, session_id, item.device_id);
                 }
-                Ok(fintwind_client::ResponsePayload::RemotePromptState { state: label, .. }) => {
+                Ok(fintwind_client::ResponsePayload::RemotePromptState {
+                    state: label, ..
+                }) => {
                     // The daemon settled it without dispatching (expired,
                     // cancelled, never sent). Nothing ran, so nothing is
                     // reported as executed.
@@ -2390,11 +2437,7 @@ fn resolve_replayed_cancel(
     }
     let cancel_finished = state
         .dedup()
-        .record_finished_if_accepted(
-            &operation.operation_id.to_string(),
-            &result,
-            None,
-        )
+        .record_finished_if_accepted(&operation.operation_id.to_string(), &result, None)
         .unwrap_or(false);
     if cancel_finished {
         complete_with_detail(
@@ -2465,10 +2508,7 @@ fn resolve_orphaned_cancels(state: &Arc<HostState>) {
                 };
                 query
             }
-            None => (
-                Some(entry.cancel_operation_id),
-                "unknown".to_owned(),
-            ),
+            None => (Some(entry.cancel_operation_id), "unknown".to_owned()),
         };
         if recorded != Some(entry.cancel_operation_id) {
             // The daemon is not holding this cancellation under this id.
@@ -2634,11 +2674,7 @@ fn push_queue_view(state: &Arc<HostState>, session_id: Uuid, device_id: Uuid) {
 
 /// Tell one device its queued prompt was dropped (revoked, or its target
 /// disappeared). The item never ran and never will.
-fn report_dropped_queue_item(
-    state: &Arc<HostState>,
-    item: &queue::QueuedPrompt,
-    reason: &str,
-) {
+fn report_dropped_queue_item(state: &Arc<HostState>, item: &queue::QueuedPrompt, reason: &str) {
     state.send_to_device(
         MessageBody::OperationResult(OperationOutcome {
             operation_id: item.operation_id,
@@ -2655,7 +2691,13 @@ fn report_dropped_queue_item(
 fn run_permission_decision(state: &Arc<HostState>, device_id: Uuid, decision: PermissionDecision) {
     let approval_id = decision.approval_id.to_string();
     let Some(offer) = state.approvals().offer_snapshot(&approval_id) else {
-        complete_by_id(state, device_id, &decision.approval_id, OperationState::Unknown, None);
+        complete_by_id(
+            state,
+            device_id,
+            &decision.approval_id,
+            OperationState::Unknown,
+            None,
+        );
         return;
     };
     let context = decision_context(state, device_id, offer.session_id());
@@ -2698,7 +2740,13 @@ fn run_permission_decision(state: &Arc<HostState>, device_id: Uuid, decision: Pe
 fn run_user_input_decision(state: &Arc<HostState>, device_id: Uuid, decision: UserInputDecision) {
     let approval_id = decision.approval_id.to_string();
     let Some(offer) = state.approvals().offer_snapshot(&approval_id) else {
-        complete_by_id(state, device_id, &decision.approval_id, OperationState::Unknown, None);
+        complete_by_id(
+            state,
+            device_id,
+            &decision.approval_id,
+            OperationState::Unknown,
+            None,
+        );
         return;
     };
     let context = decision_context(state, device_id, offer.session_id());
@@ -2752,9 +2800,7 @@ fn decision_context(
 }
 
 /// Map a refused decision onto the outcome the device is told.
-fn decision_failure(
-    error: approvals::ConsumeError,
-) -> (OperationState, Option<serde_json::Value>) {
+fn decision_failure(error: approvals::ConsumeError) -> (OperationState, Option<serde_json::Value>) {
     match error {
         approvals::ConsumeError::UnknownOrConsumed => (OperationState::Unknown, None),
         approvals::ConsumeError::Expired => (OperationState::Expired, None),
@@ -2762,7 +2808,9 @@ fn decision_failure(
             OperationState::Rejected {
                 code: RejectCode::Malformed,
             },
-            Some(serde_json::json!({ "message": "the action changed after this offer was issued" })),
+            Some(
+                serde_json::json!({ "message": "the action changed after this offer was issued" }),
+            ),
         ),
         approvals::ConsumeError::DeviceMismatch => (
             OperationState::Rejected {

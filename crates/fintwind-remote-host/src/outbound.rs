@@ -64,7 +64,12 @@ impl BoundedOutboundBuffer {
 
     /// Record a frame as sent. Refuses (with the frame handed back) when
     /// the buffer is full — backpressure is visible, never silent loss.
-    pub fn mark_sent(&mut self, seq: u64, frame: Frame, bytes: usize) -> Result<(), (u64, Frame, usize)> {
+    pub fn mark_sent(
+        &mut self,
+        seq: u64,
+        frame: Frame,
+        bytes: usize,
+    ) -> Result<(), (u64, Frame, usize)> {
         if self.queue.len() + 1 > BUFFER_MAX_MESSAGES || self.bytes + bytes > BUFFER_MAX_BYTES {
             return Err((seq, frame, bytes));
         }

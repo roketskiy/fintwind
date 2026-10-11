@@ -22,14 +22,14 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use common::{
-    arm_pairing_offer, link_frame, relay_source_hash, sealed, Admission, Identity, Relay,
-    SlowHead, MAX_AUTHENTICATED_CONNECTIONS, MAX_UNAUTHENTICATED_CONNECTIONS,
+    Admission, Identity, MAX_AUTHENTICATED_CONNECTIONS, MAX_UNAUTHENTICATED_CONNECTIONS, Relay,
+    SlowHead, arm_pairing_offer, link_frame, relay_source_hash, sealed,
 };
 use fintwind_remote_protocol::{ControlFrame, Frame};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// One recorded stage. Stages, counts and codes only — never a key, a
 /// nonce, a payload, or a URL.
@@ -135,8 +135,10 @@ fn both_global_quotas_compete_and_release() {
             "overflowRefused": overflow_status == Some(503) || overflow_status.is_none(),
         }),
     );
-    assert!(overflow_status == Some(503) || overflow_status.is_none(),
-        "stage=quota-unauth overflow must be refused, never served");
+    assert!(
+        overflow_status == Some(503) || overflow_status.is_none(),
+        "stage=quota-unauth overflow must be refused, never served"
+    );
 
     // ---- phase 3: both caps full, authenticated work continues --------
     for connection in slow.iter_mut() {
@@ -214,8 +216,10 @@ fn both_global_quotas_compete_and_release() {
         Some(200),
         "stage=quota-release a freed slot must admit new work"
     );
-    assert!(refilled_status == Some(503) || refilled_status.is_none(),
-        "stage=quota-refill a refilled cap must refuse again");
+    assert!(
+        refilled_status == Some(503) || refilled_status.is_none(),
+        "stage=quota-refill a refilled cap must refuse again"
+    );
 
     // ---- phase 5: release the authenticated side ----------------------
     // The unauthenticated cap has made its point; free it so the next
@@ -257,7 +261,10 @@ fn both_global_quotas_compete_and_release() {
     let health = relay.health_json();
     record(&mut stages, started, "final-health", health.clone());
     assert_eq!(health["ok"], json!(true), "stage=quota-final health");
-    assert!(relay.alive(), "stage=quota-final the relay must still serve");
+    assert!(
+        relay.alive(),
+        "stage=quota-final the relay must still serve"
+    );
 
     // ---- phase 7: privacy scan of the captured log --------------------
     // Every pattern a secret could take, gathered from this run. The

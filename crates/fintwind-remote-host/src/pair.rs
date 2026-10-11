@@ -15,14 +15,14 @@
 use std::io::{BufRead, Write as _};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use tungstenite::Message;
 use uuid::Uuid;
 
 use fintwind_remote_crypto::{
-    fingerprint as device_fingerprint, pairing_code, PairingBinding, PairingResponder,
-    PairingResponderFinal,
+    PairingBinding, PairingResponder, PairingResponderFinal, fingerprint as device_fingerprint,
+    pairing_code,
 };
 use fintwind_remote_protocol::{
     Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, HandshakeMode, MessageBody,
@@ -30,7 +30,7 @@ use fintwind_remote_protocol::{
 };
 
 use crate::config::HostConfig;
-use crate::grants::{DeviceGrant, GrantFile, GRANT_SCOPE_TEXT};
+use crate::grants::{DeviceGrant, GRANT_SCOPE_TEXT, GrantFile};
 use crate::identity;
 
 /// How long an invite lives, shown to the user and enforced twice: the
@@ -120,7 +120,10 @@ fn arm_invite(config: &HostConfig, host: &identity::HostIdentity) -> anyhow::Res
     signed.extend_from_slice(&nonce);
     let signature = host.signing.sign(&signed);
     identity::post_json(
-        &format!("{}/api/pairing/offer", config.relay_origin.trim_end_matches('/')),
+        &format!(
+            "{}/api/pairing/offer",
+            config.relay_origin.trim_end_matches('/')
+        ),
         &serde_json::json!({
             "hostId": host.host_id,
             "nonce": BASE64_STANDARD.encode(nonce),
@@ -272,8 +275,8 @@ pub fn run_pairing_session_events(
                         payload,
                         ..
                     } => {
-                        let mut state = PairingResponder::new(&binding, &host.noise)
-                            .expect("responder builds");
+                        let mut state =
+                            PairingResponder::new(&binding, &host.noise).expect("responder builds");
                         // read_first verifies the prologue binding: any
                         // tampered invite field fails right here.
                         let _ = state.read_first(&payload.0)?;
@@ -315,7 +318,12 @@ pub fn run_pairing_session_events(
                         break (device_id, device_name, device_public, channel);
                     }
                     Frame::Control {
-                        frame: ControlFrame::Rejected { code, message, frame: _ },
+                        frame:
+                            ControlFrame::Rejected {
+                                code,
+                                message,
+                                frame: _,
+                            },
                     } => anyhow::bail!("relay refused the pairing: {code:?} {message}"),
                     Frame::Control {
                         frame: ControlFrame::Ping { sent_at_ms },
@@ -354,7 +362,9 @@ pub fn run_pairing_session_events(
     let accepted = match confirm.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
         Ok(accepted) => accepted,
         Err(_) => {
-            let _ = events.send(PairingEvent::Failed("confirmation window closed".to_owned()));
+            let _ = events.send(PairingEvent::Failed(
+                "confirmation window closed".to_owned(),
+            ));
             anyhow::bail!("confirmation window closed with the invite");
         }
     };
@@ -386,9 +396,19 @@ pub fn run_pairing_session_events(
 
     let decision = MessageBody::PairingDecision {
         accepted,
-        reason: if accepted { None } else { Some("rejected on the host".to_owned()) },
+        reason: if accepted {
+            None
+        } else {
+            Some("rejected on the host".to_owned())
+        },
     };
-    send_sealed(&mut socket, &mut channel, &invite.host_id, device_id, decision)?;
+    send_sealed(
+        &mut socket,
+        &mut channel,
+        &invite.host_id,
+        device_id,
+        decision,
+    )?;
     if !accepted {
         let _ = events.send(PairingEvent::Failed("rejected on the host".to_owned()));
         println!("Pairing rejected.");
@@ -487,7 +507,6 @@ pub fn run_pair_session(config: &HostConfig) -> anyhow::Result<()> {
     outcome
 }
 
-
 /// Revoke a device: the local grant is marked revoked and the relay link
 /// is torn down with a signed declaration. Both ends fail closed while
 /// either revocation is still in flight.
@@ -503,7 +522,8 @@ pub fn revoke_device_with_outcome(
     if host.host_id.is_empty() {
         anyhow::bail!("this host is not registered yet");
     }
-    let mut file = GrantFile::load(&config.paired_device_file)?.unwrap_or(GrantFile { grants: vec![] });
+    let mut file =
+        GrantFile::load(&config.paired_device_file)?.unwrap_or(GrantFile { grants: vec![] });
     if !file.revoke(device_id, now_ms()) {
         anyhow::bail!("no active grant for device {device_id}");
     }
@@ -520,7 +540,7 @@ pub fn revoke_device_with_outcome(
         Err(error) => {
             return Ok(RevokeOutcome::RelayPending {
                 reason: format!("device id is not a uuid: {error}"),
-            })
+            });
         }
     };
     let unlink = (|| -> anyhow::Result<()> {
@@ -538,7 +558,10 @@ pub fn revoke_device_with_outcome(
         signed.extend_from_slice(&nonce);
         let offer_signature = host.signing.sign(&signed);
         identity::post_json(
-            &format!("{}/api/pairing/offer", config.relay_origin.trim_end_matches('/')),
+            &format!(
+                "{}/api/pairing/offer",
+                config.relay_origin.trim_end_matches('/')
+            ),
             &serde_json::json!({
                 "hostId": host.host_id,
                 "nonce": BASE64_STANDARD.encode(nonce),
@@ -592,9 +615,9 @@ pub fn revoke_device_with_outcome(
 pub fn run_revoke_device(config: &HostConfig, device_id: &str) -> anyhow::Result<()> {
     match revoke_device_with_outcome(config, device_id)? {
         RevokeOutcome::Revoked => Ok(()),
-        RevokeOutcome::RelayPending { reason } => anyhow::bail!(
-            "revoked on this host, but the relay unlink did not confirm: {reason}"
-        ),
+        RevokeOutcome::RelayPending { reason } => {
+            anyhow::bail!("revoked on this host, but the relay unlink did not confirm: {reason}")
+        }
     }
 }
 
@@ -683,7 +706,12 @@ fn wait_for_control(
                             | ControlFrame::Unlinked { device_id: got },
                     } if got == device_id => return Ok(()),
                     Frame::Control {
-                        frame: ControlFrame::Rejected { code, message, frame: _ },
+                        frame:
+                            ControlFrame::Rejected {
+                                code,
+                                message,
+                                frame: _,
+                            },
                     } => anyhow::bail!("relay refused the link change: {code:?} {message}"),
                     Frame::Control {
                         frame: ControlFrame::Ping { sent_at_ms },
@@ -710,7 +738,10 @@ fn wait_for_control(
 
 /// Connect to the relay and authenticate as the host (same signed
 /// challenge flow the daemon session uses).
-fn connect_and_auth(config: &HostConfig, host: &identity::HostIdentity) -> anyhow::Result<HostSocket> {
+fn connect_and_auth(
+    config: &HostConfig,
+    host: &identity::HostIdentity,
+) -> anyhow::Result<HostSocket> {
     let ws_url = format!(
         "{}/ws",
         config
@@ -750,7 +781,12 @@ fn connect_and_auth(config: &HostConfig, host: &identity::HostIdentity) -> anyho
                         frame: ControlFrame::RelayAck { .. },
                     } => return Ok(socket),
                     Frame::Control {
-                        frame: ControlFrame::Rejected { code, message, frame: _ },
+                        frame:
+                            ControlFrame::Rejected {
+                                code,
+                                message,
+                                frame: _,
+                            },
                     } => anyhow::bail!("relay refused host auth: {code:?} {message}"),
                     _ => anyhow::bail!("unexpected frame before auth ack"),
                 }

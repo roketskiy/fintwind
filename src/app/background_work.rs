@@ -1111,12 +1111,12 @@ impl Fintwind {
                 Some((item.key.clone(), item.context_tokens))
             }
             BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
-                key, ..
+                key,
+                ..
             }) => {
-                self.auto_compacted_children
-                    .retain(|(session, provider)| {
-                        *session != session_id || *provider != key.provider_id
-                    });
+                self.auto_compacted_children.retain(|(session, provider)| {
+                    *session != session_id || *provider != key.provider_id
+                });
                 None
             }
             _ => None,

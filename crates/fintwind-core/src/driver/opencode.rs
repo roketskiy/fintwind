@@ -760,11 +760,13 @@ impl OpenCodeDriver {
         } else {
             agent_preset.as_deref().unwrap_or("build")
         };
-        server.request(
-            "POST",
-            &format!("/api/session/{}/agent", encode_path_segment(&session_id)),
-            Some(&json!({"agent": agent})),
-        ).context("switch OpenCode agent")?;
+        server
+            .request(
+                "POST",
+                &format!("/api/session/{}/agent", encode_path_segment(&session_id)),
+                Some(&json!({"agent": agent})),
+            )
+            .context("switch OpenCode agent")?;
         apply_opencode_session_permissions(&server, &session_id, mode, interaction_mode);
 
         // opencode keeps the model on the session instead of on every

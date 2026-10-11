@@ -109,9 +109,11 @@ impl BrowserTools {
     pub fn set_enabled(&self, enabled: bool) {
         self.enabled.store(enabled, Ordering::Release);
         let mut state = self.state.lock();
-        state
-            .outgoing
-            .retain(|_, sender| sender.send(BrowserToolReply::ToolsState { enabled }).is_ok());
+        state.outgoing.retain(|_, sender| {
+            sender
+                .send(BrowserToolReply::ToolsState { enabled })
+                .is_ok()
+        });
     }
 
     /// Hand the transport's reply channel for one connection to the registry

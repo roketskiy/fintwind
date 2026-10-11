@@ -61,7 +61,9 @@ fn main() -> anyhow::Result<()> {
         (task_path, settings)
     };
     let task_store = fintwind_core::persistence::StateStore::daemon(task_path);
-    let backend = Arc::new(fintwind_core::daemon::FintwindBackend::new(settings, task_store)?);
+    let backend = Arc::new(fintwind_core::daemon::FintwindBackend::new(
+        settings, task_store,
+    )?);
     // Readiness means the isolated stores and backend actually opened. A failed
     // data directory must neither fall back nor announce a usable daemon.
     println!("{}", serde_json::to_string(&ready)?);
@@ -107,7 +109,9 @@ impl Arguments {
                 }
                 "--data-dir" => {
                     let directory = PathBuf::from(
-                        arguments.next().ok_or_else(|| anyhow!("--data-dir requires a directory"))?,
+                        arguments
+                            .next()
+                            .ok_or_else(|| anyhow!("--data-dir requires a directory"))?,
                     );
                     if !directory.is_absolute() {
                         bail!("--data-dir must be an absolute directory");
@@ -124,7 +128,11 @@ impl Arguments {
                 unknown => bail!("unknown argument {unknown:?}"),
             }
         }
-        Ok(Self { bind, parent_pid, data_dir })
+        Ok(Self {
+            bind,
+            parent_pid,
+            data_dir,
+        })
     }
 }
 

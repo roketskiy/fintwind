@@ -1482,13 +1482,11 @@ impl Fintwind {
         self.select_session(fork_id, cx);
         self.drain_queued_message(session_id, cx);
         match checkpoint_warning {
-            Some(error) => {
-                self.record_session_error(
-                    session_id,
-                    tr!("session.forked_with_checkpoint_warning", error = error),
-                    cx,
-                )
-            }
+            Some(error) => self.record_session_error(
+                session_id,
+                tr!("session.forked_with_checkpoint_warning", error = error),
+                cx,
+            ),
             None => self.show_success_toast(tr!("session.forked_from_response")),
         }
         cx.notify();
@@ -1754,7 +1752,11 @@ impl Fintwind {
         // the UI leaves edit mode.
         let binary = self.probes.first().and_then(|probe| probe.path.clone());
         if rollback_turns > 0 && binary.is_none() {
-            self.record_session_error(session_id, tr!("errors.provider_not_found", provider = "OpenCode"), cx);
+            self.record_session_error(
+                session_id,
+                tr!("errors.provider_not_found", provider = "OpenCode"),
+                cx,
+            );
             cx.notify();
             return;
         }
@@ -2258,8 +2260,8 @@ impl Fintwind {
     ) {
         let fingerprint = (session_id, key.provider_id.clone());
         let threshold = self.state.auto_compact_threshold_tokens.max(1);
-        let below = !self.state.auto_compact_enabled
-            || tokens.is_none_or(|tokens| tokens < threshold);
+        let below =
+            !self.state.auto_compact_enabled || tokens.is_none_or(|tokens| tokens < threshold);
         if below {
             self.auto_compacted_children.remove(&fingerprint);
             return;

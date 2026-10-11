@@ -25,8 +25,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use uuid::Uuid;
@@ -34,7 +34,7 @@ use uuid::Uuid;
 use fintwind_remote_crypto::{ConnectInitiator, IdentityKey, SecureChannel, SigningKey};
 use fintwind_remote_protocol::{
     Base64Bytes, ControlFrame, Frame, FrameRole, HandshakeMode, MessageBody, OperationKind,
-    OperationRequest, SealedMessage, REMOTE_PROTOCOL_VERSION,
+    OperationRequest, REMOTE_PROTOCOL_VERSION, SealedMessage,
 };
 
 type DeviceSocket = WebSocket<MaybeTlsStream<TcpStream>>;
@@ -160,8 +160,13 @@ fn daemon_smoke_reaches_a_real_fintwind_daemon() {
     let (mut socket, _) = tungstenite::connect(format!("wss://{RELAY_HOST}/ws")).expect("wss");
     apply_read_timeout(&socket, Some(Duration::from_millis(300)));
     device_auth(&mut socket, &device_id, &device_signing);
-    let mut channel =
-        device_handshake(&mut socket, &host_noise_public, &host_id, &device_id, &device_noise);
+    let mut channel = device_handshake(
+        &mut socket,
+        &host_noise_public,
+        &host_id,
+        &device_id,
+        &device_noise,
+    );
 
     // ---- the probe: AttachSession through to the real daemon ----
     let operation = OperationRequest {
@@ -180,7 +185,10 @@ fn daemon_smoke_reaches_a_real_fintwind_daemon() {
         MessageBody::Operation(operation.clone()),
     );
     let outcome = wait_for_operation_result(&mut socket, &mut channel, operation.operation_id);
-    println!("outcome: {}", serde_json::to_string_pretty(&outcome).expect("json"));
+    println!(
+        "outcome: {}",
+        serde_json::to_string_pretty(&outcome).expect("json")
+    );
     match outcome.state {
         fintwind_remote_protocol::OperationState::Executed => {}
         other => panic!("expected Executed from the real daemon, got {other:?}"),
@@ -271,8 +279,8 @@ fn post_json_https(path: &str, body: &serde_json::Value) -> serde_json::Value {
         ])
         .output()
         .expect("curl runs");
-    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .unwrap_or_else(|error| {
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {
             panic!(
                 "relay response unreadable for {path}: {error}; body={:?}",
                 String::from_utf8_lossy(&output.stdout)
@@ -337,7 +345,9 @@ fn inject_link_on_relay(host_id: &str, device_id: &str) {
             SSH_USER_AT_HOST,
             "python3 -",
         ])
-        .stdin(Stdio::from(std::fs::File::open(&script_path).expect("link script opens")))
+        .stdin(Stdio::from(
+            std::fs::File::open(&script_path).expect("link script opens"),
+        ))
         .output()
         .expect("ssh runs");
     assert!(
@@ -364,7 +374,7 @@ fn device_auth(socket: &mut DeviceSocket, device_id: &str, signing: &SigningKey)
         role: FrameRole::Device,
         host_id: None,
         device_id: Some(device_id.parse().expect("device uuid")),
-            purpose: fintwind_remote_protocol::ConnectionPurpose::Session,
+        purpose: fintwind_remote_protocol::ConnectionPurpose::Session,
         challenge: Base64Bytes(challenge_bytes),
         signature: Base64Bytes(signature),
     };
@@ -418,7 +428,12 @@ fn device_handshake(
                         ..
                     } => return initiator.finish(&payload.0).expect("kk completes"),
                     Frame::Control {
-                        frame: ControlFrame::Rejected { code, message, frame: _ },
+                        frame:
+                            ControlFrame::Rejected {
+                                code,
+                                message,
+                                frame: _,
+                            },
                     } => panic!("relay rejected handshake: {code:?} {message}"),
                     _ => continue,
                 }

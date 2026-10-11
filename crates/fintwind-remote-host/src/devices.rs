@@ -76,13 +76,16 @@ impl FragmentGroups {
         if self.total_bytes() + data.len() > MAX_FRAGMENT_TOTAL_BYTES {
             return false;
         }
-        let group = self.groups.entry(transport_seq).or_insert_with(|| FragmentGroup {
-            of,
-            parts: vec![None; of as usize],
-            arrived: 0,
-            bytes: 0,
-            started_at: std::time::Instant::now(),
-        });
+        let group = self
+            .groups
+            .entry(transport_seq)
+            .or_insert_with(|| FragmentGroup {
+                of,
+                parts: vec![None; of as usize],
+                arrived: 0,
+                bytes: 0,
+                started_at: std::time::Instant::now(),
+            });
         if group.of != of {
             return false;
         }
@@ -139,7 +142,9 @@ impl DeviceChannels {
     /// channel's ciphertext is meaningless — it is dropped, not merged.
     /// Returns the replaced channel's device id when there was one.
     pub fn insert(&mut self, channel: DeviceChannel) -> Option<Uuid> {
-        self.channels.insert(channel.device_id, channel).map(|old| old.device_id)
+        self.channels
+            .insert(channel.device_id, channel)
+            .map(|old| old.device_id)
     }
 
     pub fn remove(&mut self, device_id: Uuid) -> bool {

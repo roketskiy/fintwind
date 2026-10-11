@@ -5,8 +5,8 @@
 //! `cargo run -p fintwind-remote-protocol --example dump_schema` to
 //! print the current bundle.
 
-use schemars::schema::RootSchema;
 use schemars::JsonSchema;
+use schemars::schema::RootSchema;
 
 use crate::{
     ControlFrame, Frame, MessageBody, OperationOutcome, OperationRequest, PermissionDecision,
@@ -52,16 +52,20 @@ pub fn wire_schema<T: JsonSchema>() -> RootSchema {
                         }
                     }
                 }
-                for child in object.values_mut() { normalize(child); }
+                for child in object.values_mut() {
+                    normalize(child);
+                }
             }
             serde_json::Value::Array(items) => {
-                for child in items { normalize(child); }
+                for child in items {
+                    normalize(child);
+                }
             }
             _ => {}
         }
     }
-    let mut value = serde_json::to_value(schemars::schema_for!(T))
-        .expect("generated schema serializes");
+    let mut value =
+        serde_json::to_value(schemars::schema_for!(T)).expect("generated schema serializes");
     normalize(&mut value);
     serde_json::from_value(value).expect("property normalization preserves schema structure")
 }
@@ -96,16 +100,21 @@ mod tests {
     /// would starve its TypeScript generation.
     #[test]
     fn every_export_has_a_unique_name_and_a_title() {
-        let mut names: Vec<&str> = exported_schemas()
-            .iter()
-            .map(|(name, _)| *name)
-            .collect();
+        let mut names: Vec<&str> = exported_schemas().iter().map(|(name, _)| *name).collect();
         names.sort_unstable();
         let count = names.len();
         names.dedup();
         assert_eq!(names.len(), count, "exported schema names must be unique");
         for (name, schema) in exported_schemas() {
-            assert_eq!(schema.schema.metadata.as_ref().and_then(|m| m.title.clone()), Some(name.to_owned()), "schema title must match its export name: {name}");
+            assert_eq!(
+                schema
+                    .schema
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.title.clone()),
+                Some(name.to_owned()),
+                "schema title must match its export name: {name}"
+            );
         }
     }
 }

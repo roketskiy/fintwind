@@ -44,8 +44,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use anyhow::{bail, Context as _, Result};
-use serde_json::{json, Value};
+use anyhow::{Context as _, Result, bail};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 /// The shared observation channel. It lives under xamples/support/ so Cargo
@@ -67,30 +67,30 @@ mod win {
     use std::collections::BTreeMap;
     use std::os::windows::io::FromRawHandle as _;
     use std::path::Path;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use anyhow::{bail, Context as _, Result};
+    use anyhow::{Context as _, Result, bail};
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, DuplicateHandle, SetHandleInformation, HANDLE, HANDLE_FLAG_INHERIT,
+        CloseHandle, DuplicateHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
-        QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
-        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_BASIC_PROCESS_ID_LIST,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
-        JobObjectBasicProcessIdList, JobObjectExtendedLimitInformation,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+        JOBOBJECT_BASIC_PROCESS_ID_LIST, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectBasicAccountingInformation, JobObjectBasicProcessIdList,
+        JobObjectExtendedLimitInformation, QueryInformationJobObject, SetInformationJobObject,
+        TerminateJobObject,
     };
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, DeleteProcThreadAttributeList, GetCurrentProcess, GetCurrentProcessId,
-        GetExitCodeProcess, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-        PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, PROCESS_DUP_HANDLE, ResumeThread,
-        STARTUPINFOEXW, STARTF_USESTDHANDLES, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
-        EXTENDED_STARTUPINFO_PRESENT, TerminateProcess, UpdateProcThreadAttribute,
-        WaitForSingleObject,
+        CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+        DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
+        GetCurrentProcessId, GetExitCodeProcess, InitializeProcThreadAttributeList,
+        LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_DUP_HANDLE,
+        PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+        UpdateProcThreadAttribute, WaitForSingleObject,
     };
 
     pub const WAIT_OBJECT_0: u32 = 0x0000_0000;
@@ -261,8 +261,10 @@ mod win {
                     return Err(std::io::Error::last_os_error())
                         .context("could not read the job's extended limits");
                 }
-                Ok(limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-                    != 0)
+                Ok(
+                    limits.BasicLimitInformation.LimitFlags & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                        != 0,
+                )
             }
         }
 
@@ -366,8 +368,7 @@ mod win {
         unsafe {
             let mut code: u32 = 0;
             if GetExitCodeProcess(handle, &mut code) == 0 {
-                return Err(std::io::Error::last_os_error())
-                    .context("could not read an exit code");
+                return Err(std::io::Error::last_os_error()).context("could not read an exit code");
             }
             Ok(code)
         }
@@ -376,7 +377,9 @@ mod win {
     /// Alive means "has not exited": `STILL_ACTIVE`, read from a handle this
     /// process owns. Never a heartbeat, never a name.
     pub fn still_active(handle: HANDLE) -> bool {
-        exit_code(handle).map(|code| code == STILL_ACTIVE_CODE).unwrap_or(false)
+        exit_code(handle)
+            .map(|code| code == STILL_ACTIVE_CODE)
+            .unwrap_or(false)
     }
 
     pub fn current_process_id() -> u32 {
@@ -682,8 +685,8 @@ mod win {
         let mut attributes = HandleAttributes::new(&mut inherited)?;
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES
-            | windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
+        startup.StartupInfo.dwFlags =
+            STARTF_USESTDHANDLES | windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
         startup.StartupInfo.wShowWindow = 0;
         startup.StartupInfo.hStdInput = pipes.stdin_read;
         startup.StartupInfo.hStdOutput = pipes.stdout_write;
@@ -749,10 +752,7 @@ mod win {
 
     /// Create a child suspended, contain it in `job` by its creation handle,
     /// then resume. Mirrors the supervisor's own order exactly.
-    pub fn spawn_contained(
-        request: &SpawnRequest<'_>,
-        job: &Job,
-    ) -> Result<Child> {
+    pub fn spawn_contained(request: &SpawnRequest<'_>, job: &Job) -> Result<Child> {
         let request = SpawnRequest {
             suspended: true,
             ..*request
@@ -816,7 +816,11 @@ impl Checks {
     fn outcome(&self) -> &'static str {
         if self.items.iter().any(|item| item["verdict"] == "failed") {
             "fail"
-        } else if self.items.iter().any(|item| item["verdict"] == "notCovered") {
+        } else if self
+            .items
+            .iter()
+            .any(|item| item["verdict"] == "notCovered")
+        {
             "blocked"
         } else {
             "pass"
@@ -890,12 +894,12 @@ mod observer {
     use std::path::{Path, PathBuf};
 
     use anyhow::{Context as _, Result};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use windows_sys::Win32::System::JobObjects::{
-        JobObjectBasicProcessIdList, JOBOBJECT_BASIC_PROCESS_ID_LIST, QueryInformationJobObject,
+        JOBOBJECT_BASIC_PROCESS_ID_LIST, JobObjectBasicProcessIdList, QueryInformationJobObject,
     };
 
-    use super::{observation, str_field, win, Checks};
+    use super::{Checks, observation, str_field, win};
     use std::time::{Duration, Instant};
 
     pub fn main() -> Result<i32> {
@@ -914,8 +918,7 @@ mod observer {
                 .ok_or_else(|| anyhow::anyhow!("--facts is required"))?,
         );
         let job = take("--job", &mut arguments).and_then(|value| value.parse::<usize>().ok());
-        let probe =
-            take("--probe", &mut arguments).and_then(|value| value.parse::<usize>().ok());
+        let probe = take("--probe", &mut arguments).and_then(|value| value.parse::<usize>().ok());
         let outsider =
             take("--outsider", &mut arguments).and_then(|value| value.parse::<usize>().ok());
         let outsider_job =
@@ -934,14 +937,16 @@ mod observer {
 
         let nonce = take("--nonce", &mut arguments).unwrap_or_default();
         let crash_boundary = take("--crash-boundary", &mut arguments).map(PathBuf::from);
-        let debug_crash_boundary = take("--debug-crash-boundary", &mut arguments).map(PathBuf::from);
+        let debug_crash_boundary =
+            take("--debug-crash-boundary", &mut arguments).map(PathBuf::from);
         let mut handoffs_seen = 0_u64;
         let mut job_copies_closed_flag = false;
-        let observation_request =
-            take("--observation-request", &mut arguments).and_then(|value| value.parse::<usize>().ok());
-        let observation_response =
-            take("--observation-response", &mut arguments).and_then(|value| value.parse::<usize>().ok());
-        let deadline_ms = take("--deadline-ms", &mut arguments).and_then(|value| value.parse::<u64>().ok());
+        let observation_request = take("--observation-request", &mut arguments)
+            .and_then(|value| value.parse::<usize>().ok());
+        let observation_response = take("--observation-response", &mut arguments)
+            .and_then(|value| value.parse::<usize>().ok());
+        let deadline_ms =
+            take("--deadline-ms", &mut arguments).and_then(|value| value.parse::<u64>().ok());
         let started = Instant::now();
         let deadline = started + Duration::from_millis(deadline_ms.unwrap_or(60_000));
 
@@ -1114,9 +1119,11 @@ mod observer {
             return;
         };
         let mut hub = observation::ObserverHub::new();
-        if let Err(error) =
-            hub.register(observation::WriterId::supervisor(), request_read, response_write)
-        {
+        if let Err(error) = hub.register(
+            observation::WriterId::supervisor(),
+            request_read,
+            response_write,
+        ) {
             // Without a working channel no hand-off can be verified, so this
             // observation cannot produce evidence; the failure is reported,
             // never swallowed into a silent empty hub.
@@ -1189,9 +1196,8 @@ mod observer {
                                 );
                                 continue;
                             }
-                            let request = message
-                                .pipe_request_read
-                                .map(|value| value as win::Handle);
+                            let request =
+                                message.pipe_request_read.map(|value| value as win::Handle);
                             let response = message
                                 .pipe_response_write
                                 .map(|value| value as win::Handle);
@@ -1254,12 +1260,8 @@ mod observer {
                                 let held: Vec<u32> = processes
                                     .iter()
                                     .filter(|handle| win::still_active(**handle))
-                                    .map(|handle| {
-                                        unsafe {
-                                            windows_sys::Win32::System::Threading::GetProcessId(
-                                                *handle,
-                                            )
-                                        }
+                                    .map(|handle| unsafe {
+                                        windows_sys::Win32::System::Threading::GetProcessId(*handle)
                                     })
                                     .collect();
                                 match win::job_process_ids(job) {
@@ -1309,11 +1311,18 @@ mod observer {
                     // and withhold the ACK. This is NOT a Chrome freeze rule.
                     if let Some(path) = debug_crash_boundary {
                         if verified.kind == observation::Kind::Descendant && processes.len() == 2 {
-                            let held: Vec<u32> = processes.iter().map(|handle| unsafe {
-                                windows_sys::Win32::System::Threading::GetProcessId(*handle)
-                            }).collect();
-                            let complete = job.and_then(|handle| win::job_process_ids(handle).ok())
-                                .map(|members| members.len() == 2 && members.iter().all(|pid| held.contains(pid)))
+                            let held: Vec<u32> = processes
+                                .iter()
+                                .map(|handle| unsafe {
+                                    windows_sys::Win32::System::Threading::GetProcessId(*handle)
+                                })
+                                .collect();
+                            let complete = job
+                                .and_then(|handle| win::job_process_ids(handle).ok())
+                                .map(|members| {
+                                    members.len() == 2
+                                        && members.iter().all(|pid| held.contains(pid))
+                                })
                                 .unwrap_or(false);
                             checks.verify("observation.syntheticDebugTopology", complete,
                                 "the fixed two-process synthetic tree matches the exact job before debugger crash");
@@ -1322,10 +1331,24 @@ mod observer {
                             job_copies_closed = true;
                             *job_copies_closed_flag = true;
                             frozen = true; // Fixed synthetic topology, not a production freeze claim.
-                            let ready = complete && checks.outcome() == "pass" &&
-                                processes.iter().all(|handle| win::still_active(*handle));
-                            if std::fs::write(path, if ready { b"ready".as_slice() } else { b"failed".as_slice() }).is_err() {
-                                checks.verify("observation.debugCrashPublished", false, "could not publish debug crash boundary");
+                            let ready = complete
+                                && checks.outcome() == "pass"
+                                && processes.iter().all(|handle| win::still_active(*handle));
+                            if std::fs::write(
+                                path,
+                                if ready {
+                                    b"ready".as_slice()
+                                } else {
+                                    b"failed".as_slice()
+                                },
+                            )
+                            .is_err()
+                            {
+                                checks.verify(
+                                    "observation.debugCrashPublished",
+                                    false,
+                                    "could not publish debug crash boundary",
+                                );
                             }
                             break; // No ACK: creation event remains paused.
                         }
@@ -1335,23 +1358,53 @@ mod observer {
                             // Withhold the final ACK in the observer, not the
                             // subject. This stops normal teardown while the
                             // runner crashes its own supervisor creation handle.
-                            let live = processes.iter().filter(|handle| win::still_active(**handle)).count();
-                            let ready = checks.outcome() == "pass" && job_copies_closed && live >= 2;
+                            let live = processes
+                                .iter()
+                                .filter(|handle| win::still_active(**handle))
+                                .count();
+                            let ready =
+                                checks.outcome() == "pass" && job_copies_closed && live >= 2;
                             checks.verify("observation.crashBoundaryLive", ready,
                                 "verified frozen topology, closed job copies and at least two live handed-over processes before the crash");
-                            if std::fs::write(path, if ready { b"ready".as_slice() } else { b"failed".as_slice() }).is_err() {
-                                checks.verify("observation.crashBoundaryPublished", false, "could not publish the isolated crash boundary");
+                            if std::fs::write(
+                                path,
+                                if ready {
+                                    b"ready".as_slice()
+                                } else {
+                                    b"failed".as_slice()
+                                },
+                            )
+                            .is_err()
+                            {
+                                checks.verify(
+                                    "observation.crashBoundaryPublished",
+                                    false,
+                                    "could not publish the isolated crash boundary",
+                                );
                             }
                             break;
                         }
                     }
                     let accepted = checks.outcome() != "fail";
-                    let _ = hub.ack(&id, &message, accepted,
-                        if accepted { "accepted" } else { "observer invariant failed" }, deadline);
-                    if !accepted { break; }
+                    let _ = hub.ack(
+                        &id,
+                        &message,
+                        accepted,
+                        if accepted {
+                            "accepted"
+                        } else {
+                            "observer invariant failed"
+                        },
+                        deadline,
+                    );
+                    if !accepted {
+                        break;
+                    }
                     // Frozen topology is the protocol boundary. The runner
                     // still owns pipe copies, so EOF is not an exit signal.
-                    if frozen { break; }
+                    if frozen {
+                        break;
+                    }
                 }
                 Ok(None) => {
                     // The request pipe reached end of stream: the subject let
@@ -1400,11 +1453,9 @@ mod observer {
                     false,
                     "a handed-over descendant was still running after the bounded wait",
                 ),
-                Err(error) => checks.verify(
-                    "observation.descendantExited",
-                    false,
-                    format!("{error:#}"),
-                ),
+                Err(error) => {
+                    checks.verify("observation.descendantExited", false, format!("{error:#}"))
+                }
             }
         }
         if !unexplained.is_empty() {
@@ -1456,9 +1507,7 @@ mod observer {
                 false,
                 "the control grandchild was still running after the teardown deadline",
             ),
-            Err(error) => {
-                checks.verify("probe.exitedAfterTeardown", false, format!("{error:#}"))
-            }
+            Err(error) => checks.verify("probe.exitedAfterTeardown", false, format!("{error:#}")),
         }
         checks.verify(
             "probe.notActiveAfterTeardown",
@@ -1527,7 +1576,10 @@ mod observer {
             .cloned()
             .unwrap_or_default();
         if items.is_empty() {
-            checks.not_covered("observer.facts", "the observer facts file carried no checks");
+            checks.not_covered(
+                "observer.facts",
+                "the observer facts file carried no checks",
+            );
             return;
         }
         for item in items {
@@ -1653,7 +1705,10 @@ struct Harness {
 impl Harness {
     fn new(dir: PathBuf, supervisor: PathBuf, fixture: PathBuf) -> Result<Self> {
         let outsider_job = win::Job::new()?;
-        let runner_in_job = Some(win::is_in_job(win::current_process(), std::ptr::null_mut())?);
+        let runner_in_job = Some(win::is_in_job(
+            win::current_process(),
+            std::ptr::null_mut(),
+        )?);
         Ok(Self {
             browser_plan: None,
             dir,
@@ -1699,9 +1754,8 @@ impl Harness {
             let exited = observer.wait(10_000).ok().flatten();
             let reaped = observer.join_io();
             if exited.is_none() || !reaped {
-                self.unverified_cleanup.push(
-                    "the observer of the panicking run was not verifiably ended".to_owned(),
-                );
+                self.unverified_cleanup
+                    .push("the observer of the panicking run was not verifiably ended".to_owned());
             }
         }
         self.supervised = None;
@@ -1781,7 +1835,8 @@ impl Harness {
         if let Some(observer) = self.observing.as_mut() {
             exited = observer.wait(30_000).ok().flatten();
             if exited.is_none() {
-                self.unverified_cleanup.push("observer exceeded its exit deadline".to_owned());
+                self.unverified_cleanup
+                    .push("observer exceeded its exit deadline".to_owned());
                 let _ = observer.terminate();
                 exited = observer.wait(5_000).ok().flatten();
             }
@@ -1881,16 +1936,26 @@ impl Harness {
                 .unwrap_or_default(),
         ];
         if name == "supervisor-crash" {
-            observer_argv.extend(["--crash-boundary".to_owned(), self.path(name, "crash-boundary.txt").to_string_lossy().into_owned()]);
+            observer_argv.extend([
+                "--crash-boundary".to_owned(),
+                self.path(name, "crash-boundary.txt")
+                    .to_string_lossy()
+                    .into_owned(),
+            ]);
         }
         if name == "debug-supervisor-crash" {
-            observer_argv.extend(["--debug-crash-boundary".to_owned(), self.path(name, "crash-boundary.txt").to_string_lossy().into_owned()]);
+            observer_argv.extend([
+                "--debug-crash-boundary".to_owned(),
+                self.path(name, "crash-boundary.txt")
+                    .to_string_lossy()
+                    .into_owned(),
+            ]);
         }
         let env = self.whitelist_env();
         let request_read = channel.request_read().unwrap_or(std::ptr::null_mut());
         let response_write = channel.response_write().unwrap_or(std::ptr::null_mut());
-        let executable = std::env::current_exe()
-            .context("could not resolve the black box executable")?;
+        let executable =
+            std::env::current_exe().context("could not resolve the black box executable")?;
         let request = win::SpawnRequest {
             program: &executable.to_string_lossy(),
             args: &observer_argv,
@@ -1910,8 +1975,10 @@ impl Harness {
         // needs: enough to duplicate into, and nothing that could end it.
         // Narrowed to exactly PROCESS_DUP_HANDLE, then made inheritable so it
         // can enter the subject's HANDLE_LIST. Nothing wider is ever granted.
-        let observer_for_subject =
-            observation::dup_handle_with_access(observer.process, observation::OBSERVER_TARGET_ACCESS)?;
+        let observer_for_subject = observation::dup_handle_with_access(
+            observer.process,
+            observation::OBSERVER_TARGET_ACCESS,
+        )?;
         win::set_inheritable(observer_for_subject)?;
         // The process handle is still needed after duplication — it is what
         // the harness holds for the bounded ending — so the child moves into
@@ -1953,7 +2020,11 @@ impl Harness {
     ) -> Result<PathBuf> {
         struct Copies(Vec<win::Handle>);
         impl Drop for Copies {
-            fn drop(&mut self) { for handle in self.0.drain(..) { win::close(handle); } }
+            fn drop(&mut self) {
+                for handle in self.0.drain(..) {
+                    win::close(handle);
+                }
+            }
         }
         let mut copies = Copies(Vec::new());
         let facts = self.path(name, &format!("observer.{phase}.facts.json"));
@@ -1969,8 +2040,14 @@ impl Harness {
             args.push((*flag).to_owned());
             if matches!(*flag, "--job" | "--outsider-job" | "--probe" | "--outsider") {
                 let source = value.parse::<usize>()? as win::Handle;
-                if !inherit.contains(&source) { bail!("observer handle is not in the explicit inheritance grant"); }
-                let access = if matches!(*flag, "--job" | "--outsider-job") { 0x0004 } else { observation::OBSERVER_PROCESS_ACCESS };
+                if !inherit.contains(&source) {
+                    bail!("observer handle is not in the explicit inheritance grant");
+                }
+                let access = if matches!(*flag, "--job" | "--outsider-job") {
+                    0x0004
+                } else {
+                    observation::OBSERVER_PROCESS_ACCESS
+                };
                 let copy = observation::dup_handle_with_access(source, access)?;
                 copies.0.push(copy);
                 win::set_inheritable(copy)?;
@@ -1980,8 +2057,8 @@ impl Harness {
             }
         }
         let env = self.whitelist_env();
-        let executable = std::env::current_exe()
-            .context("could not resolve the black box executable")?;
+        let executable =
+            std::env::current_exe().context("could not resolve the black box executable")?;
         let request = win::SpawnRequest {
             program: &executable.to_string_lossy(),
             args: &args,
@@ -1993,10 +2070,14 @@ impl Harness {
         let mut child = win::spawn(&request)?;
         if child.wait(60_000)?.is_none() {
             child.terminate()?;
-            if child.wait(5_000)?.is_none() { bail!("control observer failed to exit after owned-handle termination"); }
+            if child.wait(5_000)?.is_none() {
+                bail!("control observer failed to exit after owned-handle termination");
+            }
             bail!("control observer exceeded its deadline");
         }
-        if !child.join_io() { bail!("control observer stdio workers were not reaped"); }
+        if !child.join_io() {
+            bail!("control observer stdio workers were not reaped");
+        }
         Ok(facts)
     }
 
@@ -2023,9 +2104,9 @@ impl Harness {
             facts["exitedWithinDeadline"] = json!(exited.is_some());
             facts["exitCode"] = json!(exited);
             if !terminated || exited.is_none() {
-                self.unverified_cleanup
-                    .push("the controlled outsider did not exit within the cleanup deadline"
-                        .to_owned());
+                self.unverified_cleanup.push(
+                    "the controlled outsider did not exit within the cleanup deadline".to_owned(),
+                );
             }
         }
         self.outsider = None;
@@ -2135,9 +2216,8 @@ impl Harness {
             None => true,
         };
         if !reaped {
-            self.unverified_cleanup.push(
-                "the supervisor's stdio drains did not reap cleanly".to_owned(),
-            );
+            self.unverified_cleanup
+                .push("the supervisor's stdio drains did not reap cleanly".to_owned());
         }
         // The run is over and verified as far as it will be; the harness
         // releases its handle here, so the next run starts clean.
@@ -2238,7 +2318,9 @@ fn record_tree_deduction(
     supervisor_in_job: Option<bool>,
 ) {
     let value = fixture_facts(facts);
-    let fixture_in = value.as_ref().and_then(|value| bool_field(value, "inAnyJob"));
+    let fixture_in = value
+        .as_ref()
+        .and_then(|value| bool_field(value, "inAnyJob"));
     let grandchild_in = value
         .as_ref()
         .and_then(|value| bool_field(value, "grandchildInAnyJob"));
@@ -2278,9 +2360,16 @@ fn record_tree_deduction(
 #[cfg(windows)]
 fn record_supervisor_tree_blocks(h: &mut Harness) {
     for name in ["normal", "supervisor-crash"] {
-        if !h.scenarios.iter().any(|scenario| scenario["name"] == name && scenario["outcome"] == "pass") {
-            h.record_blocked(name, "this round has no passing independent real-handle observation for this scenario",
-                "run this scenario with the frozen observer, fixture and supervisor binaries");
+        if !h
+            .scenarios
+            .iter()
+            .any(|scenario| scenario["name"] == name && scenario["outcome"] == "pass")
+        {
+            h.record_blocked(
+                name,
+                "this round has no passing independent real-handle observation for this scenario",
+                "run this scenario with the frozen observer, fixture and supervisor binaries",
+            );
         }
     }
     // Rejected on purpose: a named job object. The named job disappearing only
@@ -2369,10 +2458,7 @@ fn run_scenario(h: &mut Harness, name: &str) -> Value {
             "verdict": "failed",
             "detail": "the controlled outsider is no longer running after this scenario",
         });
-        let outcome = if let Some(items) = value
-            .get_mut("checks")
-            .and_then(Value::as_array_mut)
-        {
+        let outcome = if let Some(items) = value.get_mut("checks").and_then(Value::as_array_mut) {
             items.push(survived);
             if items.iter().any(|item| item["verdict"] == "failed") {
                 "fail"
@@ -2405,7 +2491,9 @@ fn scenario_preconditions(h: &mut Harness) -> Checks {
     let env = json!(h.whitelist_env());
     let args = vec![
         "--facts".to_owned(),
-        h.path(name, "smoke.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "smoke.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--exit-code".to_owned(),
         "0".to_owned(),
     ];
@@ -2432,7 +2520,10 @@ fn scenario_preconditions(h: &mut Harness) -> Checks {
             checks.verify(
                 "supervisor.drivable",
                 run.exit_code == Some(0),
-                format!("a trivial one-step plan settles green (exit {:?})", run.exit_code),
+                format!(
+                    "a trivial one-step plan settles green (exit {:?})",
+                    run.exit_code
+                ),
             );
             checks.verify(
                 "supervisor.containmentVerified",
@@ -2474,7 +2565,11 @@ fn scenario_control_tree(h: &mut Harness) -> Checks {
     let name = "control-tree";
     let mut checks = Checks::new();
     if std::fs::create_dir_all(h.scenario_dir(name)).is_err() {
-        checks.verify("controlTree.directory", false, "could not create the scenario directory");
+        checks.verify(
+            "controlTree.directory",
+            false,
+            "could not create the scenario directory",
+        );
         return checks;
     }
 
@@ -2611,18 +2706,27 @@ fn scenario_control_tree(h: &mut Harness) -> Checks {
         ("--job", (job.handle() as usize).to_string()),
         ("--probe", (grandchild as usize).to_string()),
         ("--outsider", (outsider_handle as usize).to_string()),
-        ("--outsider-job", (h.outsider_job.handle() as usize).to_string()),
+        (
+            "--outsider-job",
+            (h.outsider_job.handle() as usize).to_string(),
+        ),
         (
             "--probe-pid",
-            grandchild_pid.map(|pid| pid.to_string()).unwrap_or_default(),
+            grandchild_pid
+                .map(|pid| pid.to_string())
+                .unwrap_or_default(),
         ),
         (
             "--fixture-pid",
-            fixture_pid_value.map(|pid| pid.to_string()).unwrap_or_default(),
+            fixture_pid_value
+                .map(|pid| pid.to_string())
+                .unwrap_or_default(),
         ),
         (
             "--outsider-pid",
-            outsider_pid_value.map(|pid| pid.to_string()).unwrap_or_default(),
+            outsider_pid_value
+                .map(|pid| pid.to_string())
+                .unwrap_or_default(),
         ),
     ];
     match h.spawn_observer(name, "control-before", &inherit, &values) {
@@ -2706,7 +2810,9 @@ fn scenario_normal(h: &mut Harness) -> Checks {
 
     let ready_args = vec![
         "--facts".to_owned(),
-        h.path(name, "ready.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "ready.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--ready-mode".to_owned(),
         "correct".to_owned(),
         "--stay-alive".to_owned(),
@@ -2714,7 +2820,9 @@ fn scenario_normal(h: &mut Harness) -> Checks {
     let seed_file = h.path(name, "seed.json").to_string_lossy().into_owned();
     let seed_args = vec![
         "--facts".to_owned(),
-        h.path(name, "seed.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "seed.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--substitute-out".to_owned(),
         seed_file.clone(),
         "--substitute-field".to_owned(),
@@ -2738,7 +2846,9 @@ fn scenario_normal(h: &mut Harness) -> Checks {
     // no further process.
     let observe_args = vec![
         "--facts".to_owned(),
-        h.path(name, "observe.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "observe.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--grandchild".to_owned(),
         "--grandchild-facts".to_owned(),
         h.path(name, "observe.grandchild.facts.json")
@@ -2881,16 +2991,23 @@ fn scenario_exit_three(h: &mut Harness) -> Checks {
     let env = json!(h.whitelist_env());
     let program = h.fixture.to_string_lossy().into_owned();
 
-    let marker = h.path(name, "after.marker.json").to_string_lossy().into_owned();
+    let marker = h
+        .path(name, "after.marker.json")
+        .to_string_lossy()
+        .into_owned();
     let exit_args = vec![
         "--facts".to_owned(),
-        h.path(name, "exit3.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "exit3.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--exit-code".to_owned(),
         "3".to_owned(),
     ];
     let after_args = vec![
         "--facts".to_owned(),
-        h.path(name, "after.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "after.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--substitute-out".to_owned(),
         marker.clone(),
         "--substitute-field".to_owned(),
@@ -2912,7 +3029,10 @@ fn scenario_exit_three(h: &mut Harness) -> Checks {
     checks.verify(
         "supervisor.exitCode",
         run.exit_code == Some(1),
-        format!("a failing step makes the run non-green (exit {:?})", run.exit_code),
+        format!(
+            "a failing step makes the run non-green (exit {:?})",
+            run.exit_code
+        ),
     );
     let final_event = final_event(&run.events).cloned();
     if let Some(event) = final_event.as_ref() {
@@ -2932,7 +3052,11 @@ fn scenario_exit_three(h: &mut Harness) -> Checks {
             "a failed run still tears down and verifies",
         );
     } else {
-        checks.verify("status.finalEvent", false, "the status file has no final event");
+        checks.verify(
+            "status.finalEvent",
+            false,
+            "the status file has no final event",
+        );
     }
     checks.verify(
         "status.stepRecorded",
@@ -2963,46 +3087,115 @@ fn scenario_debug_tree(h: &mut Harness, name: &str) -> Checks {
     let mut checks = Checks::new();
     let dir = h.scenario_dir(name);
     let mut args = vec![
-        "--facts".to_owned(), h.path(name, "root.facts.json").to_string_lossy().into_owned(),
-        "--grandchild".to_owned(), "--grandchild-facts".to_owned(),
-        h.path(name, "descendant.facts.json").to_string_lossy().into_owned(),
+        "--facts".to_owned(),
+        h.path(name, "root.facts.json")
+            .to_string_lossy()
+            .into_owned(),
+        "--grandchild".to_owned(),
+        "--grandchild-facts".to_owned(),
+        h.path(name, "descendant.facts.json")
+            .to_string_lossy()
+            .into_owned(),
     ];
-    let deadline = if name == "debug-deadline" { 4_000 } else { 15_000 };
-    if name == "debug-deadline" { args.push("--stay-alive".to_owned()); }
-    if name == "debug-exit-3" { args.extend(["--exit-code".to_owned(), "3".to_owned()]); }
+    let deadline = if name == "debug-deadline" {
+        4_000
+    } else {
+        15_000
+    };
+    if name == "debug-deadline" {
+        args.push("--stay-alive".to_owned());
+    }
+    if name == "debug-exit-3" {
+        args.extend(["--exit-code".to_owned(), "3".to_owned()]);
+    }
     let plan = json!({"steps": [step_json("debug-tree", "run",
         &h.fixture.to_string_lossy(), &args, &dir, &json!(h.whitelist_env()),
         json!({"debugDescendants": true}))]});
-    let run = match h.run_supervisor(name, &serde_json::to_string_pretty(&plan).unwrap_or_default(),
-        deadline, &[], None, true) {
+    let run = match h.run_supervisor(
+        name,
+        &serde_json::to_string_pretty(&plan).unwrap_or_default(),
+        deadline,
+        &[],
+        None,
+        true,
+    ) {
         Ok(run) => run,
-        Err(error) => { checks.verify("debug.supervisor", false, format!("{error:#}")); return checks; }
+        Err(error) => {
+            checks.verify("debug.supervisor", false, format!("{error:#}"));
+            return checks;
+        }
     };
-    checks.verify("debug.exitCode", run.exit_code == Some(if name == "debug-normal" { 0 } else { 1 }),
-        "success exits zero; nonzero root or deadline fails the plan");
+    checks.verify(
+        "debug.exitCode",
+        run.exit_code == Some(if name == "debug-normal" { 0 } else { 1 }),
+        "success exits zero; nonzero root or deadline fails the plan",
+    );
     if let Some(event) = final_event(&run.events) {
-        checks.verify("debug.handles", event["debugProcessHandles"] == json!(2),
-            "kernel events supplied root and descendant query/wait handles");
-        checks.verify("debug.cleanup", event["debugTreeRequested"] == json!(true)
-            && event["debugCleanupVerified"] == json!(true) && containment_consistent(event),
-            "debug events were drained; every handle exited; the owned job and IO workers settled");
-        let expected_failure = match name { "debug-exit-3" => Some("exit-3"),
-            "debug-deadline" => Some("total-deadline"), _ => None };
-        checks.verify("debug.failureClass", event["failureClass"].as_str() == expected_failure,
-            "the expected root failure is not confused with cleanup failure");
-        checks.verify("debug.deadline", event["totalDeadlineExceeded"] == json!(name == "debug-deadline"),
-            "execution deadline and bounded cleanup remain separate");
-    } else { checks.verify("debug.finalEvent", false, "no final containment verdict"); }
-    checks.verify("debug.rootSynthetic", fixture_bool(&h.path(name, "root.facts.json"), "inAnyJob") == Some(true),
-        "the synthetic root wrote its facts inside the controlled job");
-    checks.verify("debug.planFrozen", run.plan_sha_before == run.plan_sha_after, "plan bytes did not change");
-    checks.verify("debug.noOuterJob", !run.supervisor_in_any_job, "supervisor was not contained by a masking outer job");
-    checks.verify("outsider.alive", h.outsider_alive(), "the independent controlled outsider survived");
+        checks.verify(
+            "debug.handles",
+            event["debugProcessHandles"] == json!(2),
+            "kernel events supplied root and descendant query/wait handles",
+        );
+        checks.verify(
+            "debug.cleanup",
+            event["debugTreeRequested"] == json!(true)
+                && event["debugCleanupVerified"] == json!(true)
+                && containment_consistent(event),
+            "debug events were drained; every handle exited; the owned job and IO workers settled",
+        );
+        let expected_failure = match name {
+            "debug-exit-3" => Some("exit-3"),
+            "debug-deadline" => Some("total-deadline"),
+            _ => None,
+        };
+        checks.verify(
+            "debug.failureClass",
+            event["failureClass"].as_str() == expected_failure,
+            "the expected root failure is not confused with cleanup failure",
+        );
+        checks.verify(
+            "debug.deadline",
+            event["totalDeadlineExceeded"] == json!(name == "debug-deadline"),
+            "execution deadline and bounded cleanup remain separate",
+        );
+    } else {
+        checks.verify("debug.finalEvent", false, "no final containment verdict");
+    }
+    checks.verify(
+        "debug.rootSynthetic",
+        fixture_bool(&h.path(name, "root.facts.json"), "inAnyJob") == Some(true),
+        "the synthetic root wrote its facts inside the controlled job",
+    );
+    checks.verify(
+        "debug.planFrozen",
+        run.plan_sha_before == run.plan_sha_after,
+        "plan bytes did not change",
+    );
+    checks.verify(
+        "debug.noOuterJob",
+        !run.supervisor_in_any_job,
+        "supervisor was not contained by a masking outer job",
+    );
+    checks.verify(
+        "outsider.alive",
+        h.outsider_alive(),
+        "the independent controlled outsider survived",
+    );
     match run.observation {
         Some(mut observer) => {
-            checks.verify("debug.observerHandleCount", observer.items.iter()
-                .filter(|item| item["name"] == "observer.observation.inExactJob" && item["verdict"] == "verified").count() == 2,
-                "the independent observer verified both real handles against the exact job");
+            checks.verify(
+                "debug.observerHandleCount",
+                observer
+                    .items
+                    .iter()
+                    .filter(|item| {
+                        item["name"] == "observer.observation.inExactJob"
+                            && item["verdict"] == "verified"
+                    })
+                    .count()
+                    == 2,
+                "the independent observer verified both real handles against the exact job",
+            );
             checks.items.append(&mut observer.items);
         }
         None => checks.verify("debug.observer", false, "independent observer missing"),
@@ -3018,29 +3211,79 @@ fn scenario_debug_browser(h: &mut Harness) -> Checks {
         let text = std::fs::read_to_string(plan_path)?;
         let mut plan: Value = serde_json::from_str(&text)?;
         let steps = plan["steps"].as_array().context("steps missing")?;
-        if steps.len() != 1 || steps[0]["debugDescendants"] != json!(true)
-            || steps[0]["mode"] != "run" { bail!("browser probe must be one debug run step"); }
+        if steps.len() != 1
+            || steps[0]["debugDescendants"] != json!(true)
+            || steps[0]["mode"] != "run"
+        {
+            bail!("browser probe must be one debug run step");
+        }
         let deadline_ms = plan["acceptanceDeadlineMs"].as_u64().unwrap_or(45_000);
-        if !(45_000..=180_000).contains(&deadline_ms) { bail!("browser acceptance deadline is outside its bound"); }
-        plan.as_object_mut().context("plan must be an object")?.remove("acceptanceDeadlineMs");
-        h.run_supervisor("debug-browser", &serde_json::to_string(&plan)?, deadline_ms, &[], None, true)
+        if !(45_000..=180_000).contains(&deadline_ms) {
+            bail!("browser acceptance deadline is outside its bound");
+        }
+        plan.as_object_mut()
+            .context("plan must be an object")?
+            .remove("acceptanceDeadlineMs");
+        h.run_supervisor(
+            "debug-browser",
+            &serde_json::to_string(&plan)?,
+            deadline_ms,
+            &[],
+            None,
+            true,
+        )
     })();
     let run = match result {
         Ok(run) => run,
-        Err(error) => { checks.verify("browser.started", false, format!("{error:#}")); return checks; }
+        Err(error) => {
+            checks.verify("browser.started", false, format!("{error:#}"));
+            return checks;
+        }
     };
-    checks.verify("browser.driverExit", run.exit_code == Some(0), "isolated blank-page driver exited successfully");
-    let count = final_event(&run.events).and_then(|event| event["debugProcessHandles"].as_u64()).unwrap_or(0);
-    checks.verify("browser.descendantsObserved", count >= 4, "kernel creation handles cover driver, Chrome and multiple internal descendants");
-    checks.verify("browser.cleanup", final_event(&run.events).map(|event|
-        event["debugCleanupVerified"] == json!(true) && containment_consistent(event)
-        && event["failureClass"].is_null()).unwrap_or(false), "debug tree settled without degrading sandbox or cleanup");
-    checks.verify("browser.planFrozen", run.plan_sha_before == run.plan_sha_after, "probe plan remained unchanged");
+    checks.verify(
+        "browser.driverExit",
+        run.exit_code == Some(0),
+        "isolated blank-page driver exited successfully",
+    );
+    let count = final_event(&run.events)
+        .and_then(|event| event["debugProcessHandles"].as_u64())
+        .unwrap_or(0);
+    checks.verify(
+        "browser.descendantsObserved",
+        count >= 4,
+        "kernel creation handles cover driver, Chrome and multiple internal descendants",
+    );
+    checks.verify(
+        "browser.cleanup",
+        final_event(&run.events)
+            .map(|event| {
+                event["debugCleanupVerified"] == json!(true)
+                    && containment_consistent(event)
+                    && event["failureClass"].is_null()
+            })
+            .unwrap_or(false),
+        "debug tree settled without degrading sandbox or cleanup",
+    );
+    checks.verify(
+        "browser.planFrozen",
+        run.plan_sha_before == run.plan_sha_after,
+        "probe plan remained unchanged",
+    );
     match run.observation {
         Some(mut observer) => {
-            checks.verify("browser.independentHandles", observer.items.iter().filter(|item|
-                item["name"] == "observer.observation.inExactJob" && item["verdict"] == "verified").count() as u64 == count,
-                "observer received every kernel creation handle and checked exact-job membership");
+            checks.verify(
+                "browser.independentHandles",
+                observer
+                    .items
+                    .iter()
+                    .filter(|item| {
+                        item["name"] == "observer.observation.inExactJob"
+                            && item["verdict"] == "verified"
+                    })
+                    .count() as u64
+                    == count,
+                "observer received every kernel creation handle and checked exact-job membership",
+            );
             checks.items.append(&mut observer.items);
         }
         None => checks.verify("browser.observer", false, "independent observer absent"),
@@ -3058,7 +3301,9 @@ fn scenario_no_ready(h: &mut Harness) -> Checks {
     // A child that exits without ever printing a readiness line.
     let eof_args = vec![
         "--facts".to_owned(),
-        h.path(name, "eof.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "eof.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--exit-code".to_owned(),
         "0".to_owned(),
     ];
@@ -3076,7 +3321,10 @@ fn scenario_no_ready(h: &mut Harness) -> Checks {
         checks.verify(
             "eof.exitCode",
             run.exit_code == Some(1),
-            format!("a spawn step that never becomes ready is non-green (exit {:?})", run.exit_code),
+            format!(
+                "a spawn step that never becomes ready is non-green (exit {:?})",
+                run.exit_code
+            ),
         );
         checks.verify(
             "eof.failureClass",
@@ -3099,7 +3347,9 @@ fn scenario_no_ready(h: &mut Harness) -> Checks {
     // A child that stays alive and silent: the total deadline has to fire.
     let live_args = vec![
         "--facts".to_owned(),
-        h.path(name, "live.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "live.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--stay-alive".to_owned(),
     ];
     let plan = json!({"steps": [step_json(
@@ -3116,7 +3366,10 @@ fn scenario_no_ready(h: &mut Harness) -> Checks {
         checks.verify(
             "timeout.exitCode",
             run.exit_code == Some(1),
-            format!("a silent long-lived child is non-green (exit {:?})", run.exit_code),
+            format!(
+                "a silent long-lived child is non-green (exit {:?})",
+                run.exit_code
+            ),
         );
         checks.verify(
             "timeout.failureClass",
@@ -3150,7 +3403,9 @@ fn scenario_malformed_readiness(h: &mut Harness) -> Checks {
             "wrong-pid",
             vec![
                 "--facts".to_owned(),
-                h.path(name, "wrong-pid.facts.json").to_string_lossy().into_owned(),
+                h.path(name, "wrong-pid.facts.json")
+                    .to_string_lossy()
+                    .into_owned(),
                 "--ready-mode".to_owned(),
                 "wrong-pid".to_owned(),
                 "--exit-code".to_owned(),
@@ -3215,7 +3470,11 @@ fn scenario_malformed_readiness(h: &mut Harness) -> Checks {
         )]});
         let plan_text = serde_json::to_string_pretty(&plan).unwrap_or_default();
         let Ok(run) = h.run_supervisor(name, &plan_text, 15_000, &[], None, false) else {
-            checks.verify(&format!("{label}.ran"), false, "the supervisor could not be run");
+            checks.verify(
+                &format!("{label}.ran"),
+                false,
+                "the supervisor could not be run",
+            );
             continue;
         };
         let green = run.exit_code == Some(0);
@@ -3262,7 +3521,9 @@ fn scenario_flood(h: &mut Harness) -> Checks {
     let program = h.fixture.to_string_lossy().into_owned();
     let args = vec![
         "--facts".to_owned(),
-        h.path(name, "flood.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "flood.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--junk-bytes".to_owned(),
         "70000".to_owned(),
         "--exit-code".to_owned(),
@@ -3288,7 +3549,10 @@ fn scenario_flood(h: &mut Harness) -> Checks {
     checks.verify(
         "supervisor.exitCode",
         run.exit_code == Some(1),
-        format!("a flood before any valid line is non-green (exit {:?})", run.exit_code),
+        format!(
+            "a flood before any valid line is non-green (exit {:?})",
+            run.exit_code
+        ),
     );
     checks.verify(
         "final.failureClass",
@@ -3312,7 +3576,9 @@ fn scenario_stdin_unread(h: &mut Harness) -> Checks {
 
     let exit_args = vec![
         "--facts".to_owned(),
-        h.path(name, "exits.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "exits.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--exit-code".to_owned(),
         "0".to_owned(),
     ];
@@ -3334,7 +3600,10 @@ fn scenario_stdin_unread(h: &mut Harness) -> Checks {
         checks.verify(
             "exits.exitCode",
             run.exit_code == Some(0),
-            format!("a child that exits without reading stdin does not wedge the run (exit {:?})", run.exit_code),
+            format!(
+                "a child that exits without reading stdin does not wedge the run (exit {:?})",
+                run.exit_code
+            ),
         );
         checks.verify(
             "exits.ioWorkersExited",
@@ -3345,9 +3614,9 @@ fn scenario_stdin_unread(h: &mut Harness) -> Checks {
         );
         checks.verify(
             "exits.continued",
-            run.events.iter().any(|event| {
-                event["event"] == "step" && event["tag"] == json!("after")
-            }),
+            run.events
+                .iter()
+                .any(|event| event["event"] == "step" && event["tag"] == json!("after")),
             "the run continued past the step whose stdin was never read",
         );
     } else {
@@ -3358,7 +3627,9 @@ fn scenario_stdin_unread(h: &mut Harness) -> Checks {
     // only unblocks at teardown.
     let live_args = vec![
         "--facts".to_owned(),
-        h.path(name, "live.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "live.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--stay-alive".to_owned(),
     ];
     let plan = json!({"steps": [
@@ -3371,7 +3642,10 @@ fn scenario_stdin_unread(h: &mut Harness) -> Checks {
         checks.verify(
             "live.exitCode",
             run.exit_code == Some(0),
-            format!("a live child that never reads stdin does not wedge the run (exit {:?})", run.exit_code),
+            format!(
+                "a live child that never reads stdin does not wedge the run (exit {:?})",
+                run.exit_code
+            ),
         );
         checks.verify(
             "live.ioWorkersExited",
@@ -3383,7 +3657,10 @@ fn scenario_stdin_unread(h: &mut Harness) -> Checks {
         checks.verify(
             "live.bounded",
             run.duration_ms < 60_000,
-            format!("the run finished in {} ms rather than hanging", run.duration_ms),
+            format!(
+                "the run finished in {} ms rather than hanging",
+                run.duration_ms
+            ),
         );
     } else {
         checks.verify("live.ran", false, "the supervisor could not be run");
@@ -3399,7 +3676,9 @@ fn scenario_total_deadline(h: &mut Harness) -> Checks {
     let program = h.fixture.to_string_lossy().into_owned();
     let args = vec![
         "--facts".to_owned(),
-        h.path(name, "sleep.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "sleep.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--sleep-ms".to_owned(),
         "60000".to_owned(),
         "--exit-code".to_owned(),
@@ -3425,7 +3704,10 @@ fn scenario_total_deadline(h: &mut Harness) -> Checks {
     checks.verify(
         "supervisor.exitCode",
         run.exit_code == Some(1),
-        format!("a step that outruns the total deadline is non-green (exit {:?})", run.exit_code),
+        format!(
+            "a step that outruns the total deadline is non-green (exit {:?})",
+            run.exit_code
+        ),
     );
     let final_event = final_event(&run.events).cloned();
     checks.verify(
@@ -3458,7 +3740,10 @@ fn scenario_total_deadline(h: &mut Harness) -> Checks {
     checks.verify(
         "run.bounded",
         run.duration_ms < 60_000,
-        format!("the run finished in {} ms rather than waiting for the sleeping child", run.duration_ms),
+        format!(
+            "the run finished in {} ms rather than waiting for the sleeping child",
+            run.duration_ms
+        ),
     );
     checks
 }
@@ -3469,10 +3754,15 @@ fn scenario_output_substitute(h: &mut Harness) -> Checks {
     let mut checks = Checks::new();
     let env = json!(h.whitelist_env());
     let program = h.fixture.to_string_lossy().into_owned();
-    let missing = h.path(name, "never-written.json").to_string_lossy().into_owned();
+    let missing = h
+        .path(name, "never-written.json")
+        .to_string_lossy()
+        .into_owned();
     let args = vec![
         "--facts".to_owned(),
-        h.path(name, "nosub.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "nosub.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--exit-code".to_owned(),
         "0".to_owned(),
     ];
@@ -3502,7 +3792,10 @@ fn scenario_output_substitute(h: &mut Harness) -> Checks {
     checks.verify(
         "supervisor.exitCode",
         run.exit_code == Some(1),
-        format!("a step that succeeds but produces no substitute is non-green (exit {:?})", run.exit_code),
+        format!(
+            "a step that succeeds but produces no substitute is non-green (exit {:?})",
+            run.exit_code
+        ),
     );
     checks.verify(
         "final.failureClass",
@@ -3519,7 +3812,10 @@ fn scenario_invalid_plan(h: &mut Harness) -> Checks {
     let name = "invalid-plan";
     let mut checks = Checks::new();
     let program = h.fixture.to_string_lossy().into_owned();
-    let facts = h.path(name, "child.facts.json").to_string_lossy().into_owned();
+    let facts = h
+        .path(name, "child.facts.json")
+        .to_string_lossy()
+        .into_owned();
 
     let cases: [(&str, String, bool); 7] = [
         ("bad-json", "{\"steps\": [".to_owned(), false),
@@ -3644,7 +3940,9 @@ fn scenario_status_unwritable(h: &mut Harness) -> Checks {
     let program = h.fixture.to_string_lossy().into_owned();
     let args = vec![
         "--facts".to_owned(),
-        h.path(name, "child.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "child.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--exit-code".to_owned(),
         "0".to_owned(),
     ];
@@ -3669,7 +3967,10 @@ fn scenario_status_unwritable(h: &mut Harness) -> Checks {
     checks.verify(
         "supervisor.exitCode",
         run.exit_code == Some(1),
-        format!("a status file that cannot be created fails the run (exit {:?})", run.exit_code),
+        format!(
+            "a status file that cannot be created fails the run (exit {:?})",
+            run.exit_code
+        ),
     );
     checks.verify(
         "status.notWritten",
@@ -3718,7 +4019,10 @@ fn scenario_spawn_fail(h: &mut Harness) -> Checks {
     checks.verify(
         "supervisor.exitCode",
         run.exit_code == Some(1),
-        format!("a step whose program cannot be created is non-green (exit {:?})", run.exit_code),
+        format!(
+            "a step whose program cannot be created is non-green (exit {:?})",
+            run.exit_code
+        ),
     );
     checks.verify(
         "status.spawnClass",
@@ -3755,14 +4059,20 @@ fn scenario_supervisor_crash(h: &mut Harness, name: &str) -> Checks {
     let mut checks = Checks::new();
     let dir = h.scenario_dir(name);
     if std::fs::create_dir_all(&dir).is_err() {
-        checks.verify("directory", false, "could not create the scenario directory");
+        checks.verify(
+            "directory",
+            false,
+            "could not create the scenario directory",
+        );
         return checks;
     }
     let env = json!(h.whitelist_env());
     let program = h.fixture.to_string_lossy().into_owned();
     let args = vec![
         "--facts".to_owned(),
-        h.path(name, "live.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "live.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--ready-mode".to_owned(),
         "correct".to_owned(),
         "--stay-alive".to_owned(),
@@ -3773,7 +4083,9 @@ fn scenario_supervisor_crash(h: &mut Harness, name: &str) -> Checks {
     // inference from the job disappearing.
     let observe_args = vec![
         "--facts".to_owned(),
-        h.path(name, "observe.facts.json").to_string_lossy().into_owned(),
+        h.path(name, "observe.facts.json")
+            .to_string_lossy()
+            .into_owned(),
         "--grandchild".to_owned(),
         "--grandchild-facts".to_owned(),
         h.path(name, "observe.grandchild.facts.json")
@@ -3787,9 +4099,18 @@ fn scenario_supervisor_crash(h: &mut Harness, name: &str) -> Checks {
         step_json("observe", "run", &program, &observe_args, &dir, &env, json!({"observeDescendants": true})),
     ]});
     if name == "debug-supervisor-crash" {
-        let debug_args = vec!["--facts".to_owned(), h.path(name, "live.facts.json").to_string_lossy().into_owned(),
-            "--grandchild".to_owned(), "--grandchild-facts".to_owned(),
-            h.path(name, "debug.grandchild.facts.json").to_string_lossy().into_owned(), "--stay-alive".to_owned()];
+        let debug_args = vec![
+            "--facts".to_owned(),
+            h.path(name, "live.facts.json")
+                .to_string_lossy()
+                .into_owned(),
+            "--grandchild".to_owned(),
+            "--grandchild-facts".to_owned(),
+            h.path(name, "debug.grandchild.facts.json")
+                .to_string_lossy()
+                .into_owned(),
+            "--stay-alive".to_owned(),
+        ];
         plan = json!({"steps": [step_json("debug-live", "run", &program, &debug_args, &dir, &env,
             json!({"debugDescendants": true}))]});
     }
@@ -3847,7 +4168,12 @@ fn scenario_supervisor_crash(h: &mut Harness, name: &str) -> Checks {
             ready = boundary == b"ready";
             break;
         }
-        if !h.supervised.as_ref().map(|child| win::still_active(child.process)).unwrap_or(false) {
+        if !h
+            .supervised
+            .as_ref()
+            .map(|child| win::still_active(child.process))
+            .unwrap_or(false)
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
@@ -3870,9 +4196,15 @@ fn scenario_supervisor_crash(h: &mut Harness, name: &str) -> Checks {
     );
 
     // The crash itself: TerminateProcess on the handle this round created.
-    let supervisor = h.supervised.as_mut().expect("creation handle retained in harness");
-    checks.verify("supervisor.aliveAtCrash", win::still_active(supervisor.process),
-        "the subject is still alive and awaiting the withheld observation ACK");
+    let supervisor = h
+        .supervised
+        .as_mut()
+        .expect("creation handle retained in harness");
+    checks.verify(
+        "supervisor.aliveAtCrash",
+        win::still_active(supervisor.process),
+        "the subject is still alive and awaiting the withheld observation ACK",
+    );
     let crash_code = 1_u32;
     let terminated = unsafe {
         windows_sys::Win32::System::Threading::TerminateProcess(supervisor.process, crash_code)
@@ -3884,11 +4216,18 @@ fn scenario_supervisor_crash(h: &mut Harness, name: &str) -> Checks {
     );
     let exit = supervisor.wait(20_000).ok().flatten();
     let io_reaped = supervisor.join_io();
-    checks.verify("supervisor.ioReaped", io_reaped, "supervisor stdio threads exited within their bound");
+    checks.verify(
+        "supervisor.ioReaped",
+        io_reaped,
+        "supervisor stdio threads exited within their bound",
+    );
     checks.verify(
         "supervisor.exited",
         exit.is_some(),
-        format!("the supervisor exited within the bounded wait (code {:?})", exit),
+        format!(
+            "the supervisor exited within the bounded wait (code {:?})",
+            exit
+        ),
     );
 
     let (status_present, events) = Harness::read_status(&status_path);
@@ -4007,7 +4346,10 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
         }
     }
     if !supervisor.is_file() {
-        bail!("the supervisor binary {} does not exist", supervisor.display());
+        bail!(
+            "the supervisor binary {} does not exist",
+            supervisor.display()
+        );
     }
     if !fixture.is_file() {
         bail!("the fixture binary {} does not exist", fixture.display());
@@ -4018,10 +4360,7 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or(0);
-    let dir = workdir.join(format!(
-        "ownership-{stamp}-{}",
-        win::current_process_id()
-    ));
+    let dir = workdir.join(format!("ownership-{stamp}-{}", win::current_process_id()));
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("could not create the run directory {}", dir.display()))?;
 
@@ -4029,8 +4368,7 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
     harness.browser_plan = browser_plan;
     harness.spawn_outsider()?;
 
-    let self_exe = std::env::current_exe()
-        .context("could not resolve the black box executable")?;
+    let self_exe = std::env::current_exe().context("could not resolve the black box executable")?;
     let mut binaries = vec![
         json!({"role": "supervisor", "path": supervisor.display().to_string(), "sha256": sha256_file(&supervisor)}),
         json!({"role": "fixture", "path": fixture.display().to_string(), "sha256": sha256_file(&fixture)}),
@@ -4059,7 +4397,9 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
     // reported as what it is, never converted into a pass.
     let round = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<i32> {
         for name in SCENARIOS {
-            if *name == "debug-browser" && harness.browser_plan.is_none() { continue; }
+            if *name == "debug-browser" && harness.browser_plan.is_none() {
+                continue;
+            }
             if !selected.is_empty() && !selected.iter().any(|selected| selected == name) {
                 continue;
             }
@@ -4146,15 +4486,13 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
         for item in &unverified_cleanup {
             eprintln!("cleanup not verified: {item}");
         }
-        Ok(if failed == 0
-            && blocked == 0
-            && scenario_count > 0
-            && unverified_cleanup.is_empty()
-        {
-            0
-        } else {
-            1
-        })
+        Ok(
+            if failed == 0 && blocked == 0 && scenario_count > 0 && unverified_cleanup.is_empty() {
+                0
+            } else {
+                1
+            },
+        )
     }));
 
     match round {
@@ -4222,7 +4560,9 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
             );
             println!("run directory: {}", dir.display());
             println!("report:        {} (panic)", report_path.display());
-            eprintln!("cleanup is UNVERIFIED: the round panicked, and nothing here claims the owned trees clean");
+            eprintln!(
+                "cleanup is UNVERIFIED: the round panicked, and nothing here claims the owned trees clean"
+            );
             Ok(1)
         }
     }
@@ -4256,7 +4596,13 @@ fn panic_excerpt(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "unknown panic payload".to_owned());
     let masked: String = text
         .chars()
-        .map(|character| if character.is_ascii_digit() { '#' } else { character })
+        .map(|character| {
+            if character.is_ascii_digit() {
+                '#'
+            } else {
+                character
+            }
+        })
         .collect();
     masked.chars().take(200).collect()
 }

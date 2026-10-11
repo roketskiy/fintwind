@@ -28,13 +28,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    div, px, App, AnyElement, Context, FocusHandle, FontWeight, InteractiveElement, IntoElement,
-    KeyDownEvent, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window,
+    AnyElement, App, Context, FocusHandle, FontWeight, InteractiveElement, IntoElement,
+    KeyDownEvent, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 
 use crate::app::Fintwind;
 use crate::daemon::{LinkState, RemoteHostStatus};
-use crate::theme::{ui_px, Theme};
+use crate::theme::{Theme, ui_px};
 
 /// Where the host daemon's data lives. Must agree with
 /// `fintwind-remote-host`'s own default: the grant file and identity keys
@@ -725,9 +725,9 @@ fn revoke_device(this: &mut Fintwind, device_id: String, cx: &mut Context<Fintwi
         let id = device_id.clone();
         let result = cx
             .background_executor()
-            .spawn(async move {
-                fintwind_remote_host::pair::revoke_device_with_outcome(&config, &id)
-            })
+            .spawn(
+                async move { fintwind_remote_host::pair::revoke_device_with_outcome(&config, &id) },
+            )
             .await;
         this.update(cx, |this, cx| {
             this.devices_busy = false;
@@ -858,9 +858,8 @@ fn pump_pairing_events(cx: &mut Context<Fintwind>) {
                                 }
                             }
                             None => {
-                                this.devices_error = Some(
-                                    tr!("settings.devices_qr_failed").to_string(),
-                                );
+                                this.devices_error =
+                                    Some(tr!("settings.devices_qr_failed").to_string());
                             }
                         }
                         cx.notify();

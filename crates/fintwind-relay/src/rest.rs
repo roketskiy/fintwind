@@ -145,7 +145,10 @@ fn canonical_client_ip(forwarded: &str) -> Option<String> {
     if !single || first.is_empty() {
         return None;
     }
-    first.parse::<std::net::IpAddr>().ok().map(|ip| ip.to_string())
+    first
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .map(|ip| ip.to_string())
 }
 
 fn decode(value: &str) -> anyhow::Result<Vec<u8>> {

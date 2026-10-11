@@ -164,7 +164,9 @@ pub enum Command {
     /// `control_id` is the child's provider-native session id (the
     /// background-work key's `provider_id`). Routed through the parent
     /// session's driver, like `StopBackgroundWork`.
-    CompactChildSession { control_id: String },
+    CompactChildSession {
+        control_id: String,
+    },
     Respond {
         request_id: String,
         option_id: String,

@@ -71,7 +71,10 @@ pub fn fingerprint_of(public_key_b64: &str) -> String {
         .decode(public_key_b64)
         .unwrap_or_default();
     let digest = Sha256::digest(&bytes);
-    digest[..16].iter().map(|byte| format!("{byte:02x}")).collect()
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -92,9 +95,9 @@ impl GrantFile {
 
     /// The live grant for a device id, if one exists and is not revoked.
     pub fn active_grant(&self, device_id: &str) -> Option<&DeviceGrant> {
-        self.grants.iter().find(|grant| {
-            grant.device_id == device_id && grant.revoked_at_ms.is_none()
-        })
+        self.grants
+            .iter()
+            .find(|grant| grant.device_id == device_id && grant.revoked_at_ms.is_none())
     }
 
     /// Decode the grant's stored public key into raw bytes for the Noise
@@ -149,5 +152,8 @@ pub fn action_digest(parts: &[&str]) -> String {
         hasher.update([0]);
     }
     let digest = hasher.finalize();
-    digest[..16].iter().map(|byte| format!("{byte:02x}")).collect()
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

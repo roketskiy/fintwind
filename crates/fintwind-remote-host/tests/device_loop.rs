@@ -23,8 +23,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use uuid::Uuid;
@@ -32,7 +32,7 @@ use uuid::Uuid;
 use fintwind_remote_crypto::{ConnectInitiator, IdentityKey, SecureChannel, SigningKey};
 use fintwind_remote_protocol::{
     Base64Bytes, ControlFrame, Frame, FrameRole, HandshakeMode, MessageBody, OperationKind,
-    OperationRequest, SealedMessage, REMOTE_PROTOCOL_VERSION,
+    OperationRequest, REMOTE_PROTOCOL_VERSION, SealedMessage,
 };
 
 type DeviceSocket = WebSocket<MaybeTlsStream<TcpStream>>;
@@ -160,8 +160,13 @@ fn device_loop_registers_pairs_and_reaches_the_host() {
     let (mut socket, _) = tungstenite::connect(&ws_url).expect("device ws connect");
     apply_read_timeout(&socket, Some(Duration::from_millis(250)));
     device_auth(&mut socket, &device_id, &device_signing);
-    let mut channel =
-        device_handshake(&mut socket, &host_noise_public, &host_id, &device_id, &device_noise);
+    let mut channel = device_handshake(
+        &mut socket,
+        &host_noise_public,
+        &host_id,
+        &device_id,
+        &device_noise,
+    );
 
     // ---- one sealed operation, end to end ----
     let operation = OperationRequest {
@@ -290,8 +295,10 @@ fn wait_http_ok(origin: &str) {
             stream.set_write_timeout(Some(Duration::from_secs(2)))?;
             use std::io::Write as _;
             stream.write_all(
-                format!("GET /api/health HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n")
-                    .as_bytes(),
+                format!(
+                    "GET /api/health HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
             )?;
             let mut raw = Vec::new();
             stream.read_to_end(&mut raw)?;
@@ -401,7 +408,11 @@ fn device_auth(socket: &mut DeviceSocket, device_id: &str, signing: &SigningKey)
         _ => panic!("plain ws expected in tests"),
     };
     let rest = format!("http://{peer}");
-    let challenge = post_json(&rest, "/api/challenge", &serde_json::json!({"role":"device"}));
+    let challenge = post_json(
+        &rest,
+        "/api/challenge",
+        &serde_json::json!({"role":"device"}),
+    );
     let challenge_b64 = challenge
         .get("challenge")
         .and_then(serde_json::Value::as_str)
@@ -414,7 +425,7 @@ fn device_auth(socket: &mut DeviceSocket, device_id: &str, signing: &SigningKey)
         role: FrameRole::Device,
         host_id: None,
         device_id: Some(device_id.parse().expect("device uuid")),
-            purpose: fintwind_remote_protocol::ConnectionPurpose::Session,
+        purpose: fintwind_remote_protocol::ConnectionPurpose::Session,
         challenge: Base64Bytes(challenge_bytes),
         signature: Base64Bytes(signature),
     };
@@ -473,7 +484,12 @@ fn device_handshake(
                         return channel;
                     }
                     Frame::Control {
-                        frame: ControlFrame::Rejected { code, message, frame: _ },
+                        frame:
+                            ControlFrame::Rejected {
+                                code,
+                                message,
+                                frame: _,
+                            },
                     } => panic!("relay rejected handshake: {code:?} {message}"),
                     _ => continue,
                 }

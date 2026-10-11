@@ -26,8 +26,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use uuid::Uuid;
@@ -35,7 +35,7 @@ use uuid::Uuid;
 use fintwind_remote_crypto::{ConnectInitiator, IdentityKey, SecureChannel, SigningKey};
 use fintwind_remote_protocol::{
     Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, HandshakeMode, MessageBody,
-    ResumeCursor, SealedMessage, REMOTE_PROTOCOL_VERSION,
+    REMOTE_PROTOCOL_VERSION, ResumeCursor, SealedMessage,
 };
 
 type DeviceSocket = WebSocket<MaybeTlsStream<TcpStream>>;
@@ -131,8 +131,6 @@ impl Device {
             .expect("host id")
             .expect("host id known")
     }
-
-
 }
 
 #[test]
@@ -243,11 +241,21 @@ fn two_devices_one_host_isolate_faults_grants_and_resume() {
         "device A must be served before anything goes wrong"
     );
     let b_first = snapshot_roundtrip(&mut b);
-    assert!(b_first, "device B must be served before anything goes wrong");
+    assert!(
+        b_first,
+        "device B must be served before anything goes wrong"
+    );
 
     // ---- the never-paired device gets nothing, and costs nobody anything ----
     assert!(
-        !probe_ungranted(&ws_url, &c_id, &c_signing, &c_noise, &host_noise_public, host_id),
+        !probe_ungranted(
+            &ws_url,
+            &c_id,
+            &c_signing,
+            &c_noise,
+            &host_noise_public,
+            host_id
+        ),
         "a device without a grant must never be answered"
     );
     assert!(
@@ -379,7 +387,10 @@ fn send_tampered_seq(device: &mut Device, body: MessageBody) {
         body,
     };
     let plaintext = serde_json::to_string(&sealed).expect("sealed json");
-    let ciphertext = device.channel.encrypt(plaintext.as_bytes()).expect("encrypt");
+    let ciphertext = device
+        .channel
+        .encrypt(plaintext.as_bytes())
+        .expect("encrypt");
     let frame = Frame::Sealed {
         seq: actual,
         host_id: device.host_id(),
@@ -620,11 +631,7 @@ fn write_grants(path: &std::path::Path, devices: &[(&str, &IdentityKey, u64)]) {
             })
         })
         .collect();
-    std::fs::write(
-        path,
-        serde_json::json!({ "grants": grants }).to_string(),
-    )
-    .expect("grant file");
+    std::fs::write(path, serde_json::json!({ "grants": grants }).to_string()).expect("grant file");
 }
 
 fn host_tool(arguments: &[&str]) -> serde_json::Value {
@@ -676,10 +683,17 @@ fn apply_read_timeout(socket: &DeviceSocket, timeout: Option<Duration>) {
 fn wait_for_relay_link(path: &std::path::Path) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
-        assert!(Instant::now() < deadline, "the host never linked to the relay");
+        assert!(
+            Instant::now() < deadline,
+            "the host never linked to the relay"
+        );
         if let Ok(text) = std::fs::read_to_string(path) {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-                if value.get("relayConnected").and_then(serde_json::Value::as_bool) == Some(true) {
+                if value
+                    .get("relayConnected")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+                {
                     return;
                 }
             }
@@ -712,8 +726,10 @@ fn wait_http_ok(origin: &str) {
             stream.set_read_timeout(Some(Duration::from_secs(2)))?;
             stream.set_write_timeout(Some(Duration::from_secs(2)))?;
             stream.write_all(
-                format!("GET /api/health HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n")
-                    .as_bytes(),
+                format!(
+                    "GET /api/health HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\n\r\n"
+                )
+                .as_bytes(),
             )?;
             let mut raw = Vec::new();
             stream.read_to_end(&mut raw)?;
@@ -780,11 +796,7 @@ fn register_identity(origin: &str, role: &str, signing: &SigningKey) -> String {
             "signature": BASE64_STANDARD.encode(signature),
         }),
     );
-    let id_field = if role == "host" {
-        "hostId"
-    } else {
-        "deviceId"
-    };
+    let id_field = if role == "host" { "hostId" } else { "deviceId" };
     registered
         .get(id_field)
         .and_then(serde_json::Value::as_str)
@@ -820,7 +832,11 @@ fn device_auth(socket: &mut DeviceSocket, device_id: &str, signing: &SigningKey)
         _ => panic!("plain ws expected in tests"),
     };
     let rest = format!("http://{peer}");
-    let challenge = post_json(&rest, "/api/challenge", &serde_json::json!({"role":"device"}));
+    let challenge = post_json(
+        &rest,
+        "/api/challenge",
+        &serde_json::json!({"role":"device"}),
+    );
     let challenge_b64 = challenge
         .get("challenge")
         .and_then(serde_json::Value::as_str)

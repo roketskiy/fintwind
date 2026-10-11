@@ -299,8 +299,9 @@ fn supervise_remote_host(supervisor: fintwind_client::DaemonSupervisor, executab
             match &endpoint {
                 Some(_) => spawn_host(&executable, endpoint.as_ref()),
                 None => set_status(RemoteHostStatus::NotStarted {
-                    reason: "the daemon is managed outside fintwind; remote control needs its address"
-                        .to_owned(),
+                    reason:
+                        "the daemon is managed outside fintwind; remote control needs its address"
+                            .to_owned(),
                 }),
             }
             continue;
@@ -350,8 +351,8 @@ fn spawn_host(executable: &PathBuf, endpoint: Option<&(String, String)>) {
         return;
     };
     let token_env = "FINTWIND_REMOTE_HOST_DAEMON_TOKEN";
-    let relay_origin =
-        std::env::var("FINTWIND_RELAY_ORIGIN").unwrap_or_else(|_| "https://relay.fintwind.xyz".to_owned());
+    let relay_origin = std::env::var("FINTWIND_RELAY_ORIGIN")
+        .unwrap_or_else(|_| "https://relay.fintwind.xyz".to_owned());
     let data_dir = remote_data_dir();
 
     let mut command = Command::new(executable);
@@ -435,8 +436,8 @@ fn log_line(line: &str) {
 }
 
 fn remote_host_executable_path() -> anyhow::Result<PathBuf> {
-    if let Some(path) = std::env::var_os("FINTWIND_REMOTE_HOST_PATH")
-        .filter(|path| !path.is_empty())
+    if let Some(path) =
+        std::env::var_os("FINTWIND_REMOTE_HOST_PATH").filter(|path| !path.is_empty())
     {
         return Ok(path.into());
     }

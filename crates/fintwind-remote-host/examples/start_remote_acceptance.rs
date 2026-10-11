@@ -33,7 +33,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{bail, Context as _};
+use anyhow::{Context as _, bail};
 use uuid::Uuid;
 
 use fintwind_client::{Command, DaemonClient, ResponsePayload};
@@ -85,7 +85,8 @@ fn main() -> anyhow::Result<()> {
         if !workspace.is_absolute() || !workspace.join(".fintwind-e2e-fixture").is_file() {
             bail!("queue recovery requires a marked isolated workspace");
         }
-        let fixture = queue_fixture.ok_or_else(|| anyhow::anyhow!("--queue-fixture is required"))?;
+        let fixture =
+            queue_fixture.ok_or_else(|| anyhow::anyhow!("--queue-fixture is required"))?;
         let client = connect_with_retry(&daemon_address, &daemon_token, 30)?;
         return queue_recovery_phase(&client, project_id, &phase, &fixture, &out);
     }
@@ -126,7 +127,11 @@ fn main() -> anyhow::Result<()> {
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent).ok();
         }
-        std::fs::write(&out, serde_json::to_string_pretty(artifact).unwrap_or_default()).ok();
+        std::fs::write(
+            &out,
+            serde_json::to_string_pretty(artifact).unwrap_or_default(),
+        )
+        .ok();
     };
     let mut record_phase = |artifact: &mut serde_json::Value, phase: &str| {
         artifact["phases"]
@@ -199,16 +204,27 @@ fn main() -> anyhow::Result<()> {
     record_phase(&mut artifact, "remote-task-created");
     // This isolated interactive scenario must ask, rather than exercising
     // the computer's default auto-approval policy and counting it as a reply.
-    match client.request_with_timeout(session_id, Uuid::nil(), Command::SetRemoteSessionOptions {
-        provenance: provenance.clone(),
+    match client.request_with_timeout(
         session_id,
-        agent_preset: None,
-        options: fintwind_protocol::WireSessionOptions {
-            mode: "ask".to_owned(), interaction_mode: "build".to_owned(),
-            model: None, reasoning_effort: None, service_tier: None, context_window: None,
+        Uuid::nil(),
+        Command::SetRemoteSessionOptions {
+            provenance: provenance.clone(),
+            session_id,
+            agent_preset: None,
+            options: fintwind_protocol::WireSessionOptions {
+                mode: "ask".to_owned(),
+                interaction_mode: "build".to_owned(),
+                model: None,
+                reasoning_effort: None,
+                service_tier: None,
+                context_window: None,
+            },
         },
-    }, COMMAND_TIMEOUT)? {
-        ResponsePayload::OptionsApplied { .. } => record_phase(&mut artifact, "approval-policy-set"),
+        COMMAND_TIMEOUT,
+    )? {
+        ResponsePayload::OptionsApplied { .. } => {
+            record_phase(&mut artifact, "approval-policy-set")
+        }
         _ => bail!("the isolated approval policy was not recorded"),
     }
 
@@ -234,7 +250,8 @@ fn main() -> anyhow::Result<()> {
                 operation_id: echoed,
                 submission_id,
                 state,
-            }) | Ok(ResponsePayload::RemotePromptState {
+            })
+            | Ok(ResponsePayload::RemotePromptState {
                 operation_id: echoed,
                 submission_id,
                 state,
@@ -267,7 +284,10 @@ fn main() -> anyhow::Result<()> {
         }
     }
     if artifact["admitIdempotent"].as_bool() != Some(true) {
-        note_gap(&mut artifact, "a retried admit did not dedup onto the same submission");
+        note_gap(
+            &mut artifact,
+            "a retried admit did not dedup onto the same submission",
+        );
     }
     record_phase(&mut artifact, "admit-dedup-checked");
 
@@ -285,9 +305,8 @@ fn main() -> anyhow::Result<()> {
             COMMAND_TIMEOUT,
         ) {
             Ok(ResponsePayload::RemotePromptState { state, .. }) => {
-                artifact["secondPromptCancelled"] = serde_json::json!(
-                    state == RemotePromptState::Cancelled.label()
-                );
+                artifact["secondPromptCancelled"] =
+                    serde_json::json!(state == RemotePromptState::Cancelled.label());
             }
             Ok(other) => {
                 bail!("CancelRemotePrompt answered with an unexpected payload: {other:?}")
@@ -296,19 +315,38 @@ fn main() -> anyhow::Result<()> {
         }
     } else {
         artifact["secondPromptCancelled"] = serde_json::json!(false);
-        note_gap(&mut artifact, "the second admit was rejected; cancel was not exercised");
+        note_gap(
+            &mut artifact,
+            "the second admit was rejected; cancel was not exercised",
+        );
     }
     record_phase(&mut artifact, "second-prompt-cancelled");
     // Exact cancellation identity, tombstone lookup and cross-device
     // isolation are checked through public IPC, not internal store helpers.
     let query_cancel = |who: RemoteProvenance, target: Uuid, cancel: Uuid| {
-        client.request_with_timeout(session_id, Uuid::nil(), Command::QueryRemoteCancel {
-            provenance: who, operation_id: target, cancel_operation_id: Some(cancel),
-        }, COMMAND_TIMEOUT)
+        client.request_with_timeout(
+            session_id,
+            Uuid::nil(),
+            Command::QueryRemoteCancel {
+                provenance: who,
+                operation_id: target,
+                cancel_operation_id: Some(cancel),
+            },
+            COMMAND_TIMEOUT,
+        )
     };
     match query_cancel(provenance, second_operation_id, cancel_id)? {
-        ResponsePayload::RemoteCancelState { cancel_operation_id: Some(id), cancel_state, host_id: Some(host), device_id: Some(device), grant_version: Some(1), .. }
-            if id == cancel_id && cancel_state == "cancelled" && host == provenance.host_id && device == provenance.device_id => {}
+        ResponsePayload::RemoteCancelState {
+            cancel_operation_id: Some(id),
+            cancel_state,
+            host_id: Some(host),
+            device_id: Some(device),
+            grant_version: Some(1),
+            ..
+        } if id == cancel_id
+            && cancel_state == "cancelled"
+            && host == provenance.host_id
+            && device == provenance.device_id => {}
         _ => bail!("exact cancellation did not return its own durable ending"),
     }
     match query_cancel(provenance, second_operation_id, Uuid::new_v4())? {
@@ -319,8 +357,12 @@ fn main() -> anyhow::Result<()> {
         ResponsePayload::RemoteCancelState { cancel_state, .. } if cancel_state == "unknown" => {}
         _ => bail!("a cancellation ending leaked to a different target prompt"),
     }
-    let stranger = RemoteProvenance { device_id: Uuid::new_v4(), ..provenance };
-    if matches!(query_cancel(stranger, second_operation_id, cancel_id), Ok(ResponsePayload::RemoteCancelState { cancel_state, .. }) if cancel_state == "cancelled") {
+    let stranger = RemoteProvenance {
+        device_id: Uuid::new_v4(),
+        ..provenance
+    };
+    if matches!(query_cancel(stranger, second_operation_id, cancel_id), Ok(ResponsePayload::RemoteCancelState { cancel_state, .. }) if cancel_state == "cancelled")
+    {
         bail!("another device could read a cancellation's success");
     }
     artifact["exactCancelIdentityVerified"] = serde_json::json!(true);
@@ -339,11 +381,9 @@ fn main() -> anyhow::Result<()> {
             let mut operations: Vec<Uuid> = prompts.iter().map(|row| row.operation_id).collect();
             operations.sort();
             operations.dedup();
-            artifact["operationIdsUnique"] =
-                serde_json::json!(operations.len() == prompts.len());
-            artifact["listMatched"] = serde_json::json!(prompts
-                .iter()
-                .any(|row| row.operation_id == operation_id));
+            artifact["operationIdsUnique"] = serde_json::json!(operations.len() == prompts.len());
+            artifact["listMatched"] =
+                serde_json::json!(prompts.iter().any(|row| row.operation_id == operation_id));
         }
         Ok(other) => bail!("ListRemotePrompts answered with an unexpected payload: {other:?}"),
         Err(error) => bail!("ListRemotePrompts failed: {error:#}"),
@@ -376,12 +416,40 @@ fn main() -> anyhow::Result<()> {
         }
         Err(error) => {
             let diagnostic = format!("{error:#}");
-            let class = ["timeout", "timed out", "busy", "locked", "no such", "NOT NULL", "FOREIGN KEY", "UNIQUE", "another device", "missing", "unavailable", "refused", "disconnected", "cancel", "syntax"]
-                .into_iter().find(|label| diagnostic.to_lowercase().contains(&label.to_lowercase())).unwrap_or("unclassified");
+            let class = [
+                "timeout",
+                "timed out",
+                "busy",
+                "locked",
+                "no such",
+                "NOT NULL",
+                "FOREIGN KEY",
+                "UNIQUE",
+                "another device",
+                "missing",
+                "unavailable",
+                "refused",
+                "disconnected",
+                "cancel",
+                "syntax",
+            ]
+            .into_iter()
+            .find(|label| diagnostic.to_lowercase().contains(&label.to_lowercase()))
+            .unwrap_or("unclassified");
             artifact["failedCommand"] = serde_json::json!("dispatch");
             artifact["failureClass"] = serde_json::json!(class);
-            artifact["failureStage"] = serde_json::json!(["remote-dispatch-claim", "remote-dispatch-target", "remote-dispatch-materialize", "remote-dispatch-commit", "remote-dispatch-cancel-settlement"]
-                .into_iter().find(|label| diagnostic.contains(label)).unwrap_or("before-claim-or-unclassified"));
+            artifact["failureStage"] = serde_json::json!(
+                [
+                    "remote-dispatch-claim",
+                    "remote-dispatch-target",
+                    "remote-dispatch-materialize",
+                    "remote-dispatch-commit",
+                    "remote-dispatch-cancel-settlement"
+                ]
+                .into_iter()
+                .find(|label| diagnostic.contains(label))
+                .unwrap_or("before-claim-or-unclassified")
+            );
             persist(&artifact);
             bail!("DispatchRemotePrompt failed ({class})");
         }
@@ -407,12 +475,13 @@ fn main() -> anyhow::Result<()> {
     let events = client.subscribe(session_id, runtime_id);
     record_phase(&mut artifact, "attached");
 
-    let deadline = std::time::Instant::now() + Duration::from_secs(
-        std::env::var("FINTWIND_ACCEPTANCE_TIMEOUT_SECS")
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(60),
-    );
+    let deadline = std::time::Instant::now()
+        + Duration::from_secs(
+            std::env::var("FINTWIND_ACCEPTANCE_TIMEOUT_SECS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(60),
+        );
     while std::time::Instant::now() < deadline {
         let remaining = deadline - std::time::Instant::now();
         let event = match events.recv_timeout(remaining.min(Duration::from_secs(5))) {
@@ -591,54 +660,147 @@ fn main() -> anyhow::Result<()> {
 /// a completed cancel loses its exact ending; another cancel/target/device/
 /// grant borrows it; a query mutates the queue; a cancelled item resurrects.
 /// Three fresh daemon processes use the same isolated DB. No provider starts.
-fn queue_recovery_phase(client: &DaemonClient, project: Uuid, phase: &str, fixture: &std::path::Path, out: &std::path::Path) -> anyhow::Result<()> {
+fn queue_recovery_phase(
+    client: &DaemonClient,
+    project: Uuid,
+    phase: &str,
+    fixture: &std::path::Path,
+    out: &std::path::Path,
+) -> anyhow::Result<()> {
     use serde::{Deserialize, Serialize};
     #[derive(Serialize, Deserialize)]
     struct Fixture {
-        synthetic: bool, provenance: RemoteProvenance, session: Uuid,
-        queued: Uuid, queued_submission: Uuid, cancelled: Uuid,
-        cancel: Uuid, recovery_cancel: Uuid,
+        synthetic: bool,
+        provenance: RemoteProvenance,
+        session: Uuid,
+        queued: Uuid,
+        queued_submission: Uuid,
+        cancelled: Uuid,
+        cancel: Uuid,
+        recovery_cancel: Uuid,
     }
-    let call = |command| client.request_with_timeout(Uuid::nil(), Uuid::nil(), command, COMMAND_TIMEOUT);
+    let call =
+        |command| client.request_with_timeout(Uuid::nil(), Uuid::nil(), command, COMMAND_TIMEOUT);
     let data = if phase == "prepare" {
-        if fixture.exists() { bail!("recovery fixture must not already exist"); }
-        let provenance = RemoteProvenance { host_id: Uuid::new_v4(), device_id: Uuid::new_v4(), grant_version: 1 };
-        let ResponsePayload::RemoteTaskCreated { session_id } = call(Command::CreateRemoteTask { provenance, project_id: project })? else { bail!("task creation failed"); };
+        if fixture.exists() {
+            bail!("recovery fixture must not already exist");
+        }
+        let provenance = RemoteProvenance {
+            host_id: Uuid::new_v4(),
+            device_id: Uuid::new_v4(),
+            grant_version: 1,
+        };
+        let ResponsePayload::RemoteTaskCreated { session_id } = call(Command::CreateRemoteTask {
+            provenance,
+            project_id: project,
+        })?
+        else {
+            bail!("task creation failed");
+        };
         let queued = Uuid::new_v4();
         let cancelled = Uuid::new_v4();
-        let admit = |operation_id| call(Command::AdmitRemotePrompt {
-            provenance, session_id, operation_id, prompt: "isolated restart prompt".to_owned(),
-            expires_at_ms: now_ms() + 600_000, summary: "restart fixture".to_owned(),
-        });
-        let ResponsePayload::RemotePromptAdmitted { submission_id, state, .. } = admit(queued)? else { bail!("queue admission failed"); };
-        if state != "queued" { bail!("new item was not queued"); }
-        if !matches!(admit(cancelled)?, ResponsePayload::RemotePromptAdmitted { .. }) { bail!("cancel target admission failed"); }
+        let admit = |operation_id| {
+            call(Command::AdmitRemotePrompt {
+                provenance,
+                session_id,
+                operation_id,
+                prompt: "isolated restart prompt".to_owned(),
+                expires_at_ms: now_ms() + 600_000,
+                summary: "restart fixture".to_owned(),
+            })
+        };
+        let ResponsePayload::RemotePromptAdmitted {
+            submission_id,
+            state,
+            ..
+        } = admit(queued)?
+        else {
+            bail!("queue admission failed");
+        };
+        if state != "queued" {
+            bail!("new item was not queued");
+        }
+        if !matches!(
+            admit(cancelled)?,
+            ResponsePayload::RemotePromptAdmitted { .. }
+        ) {
+            bail!("cancel target admission failed");
+        }
         let cancel = Uuid::new_v4();
-        if !matches!(call(Command::CancelRemotePrompt { provenance, operation_id: cancelled, cancel_operation_id: Some(cancel) })?, ResponsePayload::RemotePromptState { state, .. } if state == "cancelled") { bail!("initial cancellation failed"); }
-        let data = Fixture { synthetic: true, provenance, session: session_id, queued, queued_submission: submission_id, cancelled, cancel, recovery_cancel: Uuid::new_v4() };
+        if !matches!(call(Command::CancelRemotePrompt { provenance, operation_id: cancelled, cancel_operation_id: Some(cancel) })?, ResponsePayload::RemotePromptState { state, .. } if state == "cancelled")
+        {
+            bail!("initial cancellation failed");
+        }
+        let data = Fixture {
+            synthetic: true,
+            provenance,
+            session: session_id,
+            queued,
+            queued_submission: submission_id,
+            cancelled,
+            cancel,
+            recovery_cancel: Uuid::new_v4(),
+        };
         std::fs::write(fixture, serde_json::to_vec_pretty(&data)?)?;
         data
     } else if matches!(phase, "recover" | "verify") {
         serde_json::from_slice::<Fixture>(&std::fs::read(fixture)?)?
-    } else { bail!("unknown queue recovery phase"); };
-    if !data.synthetic { bail!("not a synthetic recovery fixture"); }
+    } else {
+        bail!("unknown queue recovery phase");
+    };
+    if !data.synthetic {
+        bail!("not a synthetic recovery fixture");
+    }
     let list = || -> anyhow::Result<Vec<fintwind_protocol::submission::RemotePromptRecord>> {
-        let ResponsePayload::RemotePrompts { prompts } = call(Command::ListRemotePrompts { provenance: data.provenance })? else { bail!("list response mismatch"); };
+        let ResponsePayload::RemotePrompts { prompts } = call(Command::ListRemotePrompts {
+            provenance: data.provenance,
+        })?
+        else {
+            bail!("list response mismatch");
+        };
         Ok(prompts)
     };
     let before = list()?;
-    if before.iter().any(|row| row.operation_id == data.cancelled) { bail!("cancelled prompt resurrected"); }
+    if before.iter().any(|row| row.operation_id == data.cancelled) {
+        bail!("cancelled prompt resurrected");
+    }
     let expected = phase != "verify";
     let queued = before.iter().find(|row| row.operation_id == data.queued);
     if expected {
         let row = queued.ok_or_else(|| anyhow::anyhow!("queued prompt lost across restart"))?;
-        if row.submission_id != data.queued_submission || row.session_id != data.session || row.state != "queued" { bail!("queued identity or state changed across restart"); }
-    } else if queued.is_some() { bail!("recovered cancellation resurrected"); }
-    let query = |provenance, operation_id, cancel_operation_id| call(Command::QueryRemoteCancel { provenance, operation_id, cancel_operation_id: Some(cancel_operation_id) });
+        if row.submission_id != data.queued_submission
+            || row.session_id != data.session
+            || row.state != "queued"
+        {
+            bail!("queued identity or state changed across restart");
+        }
+    } else if queued.is_some() {
+        bail!("recovered cancellation resurrected");
+    }
+    let query = |provenance, operation_id, cancel_operation_id| {
+        call(Command::QueryRemoteCancel {
+            provenance,
+            operation_id,
+            cancel_operation_id: Some(cancel_operation_id),
+        })
+    };
     let exact = |target, cancel| -> anyhow::Result<()> {
         match query(data.provenance, target, cancel)? {
-            ResponsePayload::RemoteCancelState { cancel_operation_id: Some(id), cancel_state, host_id: Some(host), device_id: Some(device), grant_version: Some(version), .. }
-                if id == cancel && cancel_state == "cancelled" && host == data.provenance.host_id && device == data.provenance.device_id && version == 1 => Ok(()),
+            ResponsePayload::RemoteCancelState {
+                cancel_operation_id: Some(id),
+                cancel_state,
+                host_id: Some(host),
+                device_id: Some(device),
+                grant_version: Some(version),
+                ..
+            } if id == cancel
+                && cancel_state == "cancelled"
+                && host == data.provenance.host_id
+                && device == data.provenance.device_id
+                && version == 1 =>
+            {
+                Ok(())
+            }
             _ => bail!("exact cancel ending lost across restart"),
         }
     };
@@ -646,24 +808,49 @@ fn queue_recovery_phase(client: &DaemonClient, project: Uuid, phase: &str, fixtu
     for (who, target, cancel) in [
         (data.provenance, data.cancelled, Uuid::new_v4()),
         (data.provenance, Uuid::new_v4(), data.cancel),
-        (RemoteProvenance { device_id: Uuid::new_v4(), ..data.provenance }, data.cancelled, data.cancel),
-        (RemoteProvenance { grant_version: 2, ..data.provenance }, data.cancelled, data.cancel),
+        (
+            RemoteProvenance {
+                device_id: Uuid::new_v4(),
+                ..data.provenance
+            },
+            data.cancelled,
+            data.cancel,
+        ),
+        (
+            RemoteProvenance {
+                grant_version: 2,
+                ..data.provenance
+            },
+            data.cancelled,
+            data.cancel,
+        ),
     ] {
-        if !matches!(query(who, target, cancel)?, ResponsePayload::RemoteCancelState { cancel_state, .. } if cancel_state == "unknown") { bail!("cancel result crossed its identity boundary"); }
+        if !matches!(query(who, target, cancel)?, ResponsePayload::RemoteCancelState { cancel_state, .. } if cancel_state == "unknown")
+        {
+            bail!("cancel result crossed its identity boundary");
+        }
     }
-    if serde_json::to_vec(&before)? != serde_json::to_vec(&list()?)? { bail!("cancel query mutated the queue"); }
+    if serde_json::to_vec(&before)? != serde_json::to_vec(&list()?)? {
+        bail!("cancel query mutated the queue");
+    }
     if phase == "recover" {
-        if !matches!(call(Command::CancelRemotePrompt { provenance: data.provenance, operation_id: data.queued, cancel_operation_id: Some(data.recovery_cancel) })?, ResponsePayload::RemotePromptState { state, .. } if state == "cancelled") { bail!("recovered queue item could not be cancelled"); }
+        if !matches!(call(Command::CancelRemotePrompt { provenance: data.provenance, operation_id: data.queued, cancel_operation_id: Some(data.recovery_cancel) })?, ResponsePayload::RemotePromptState { state, .. } if state == "cancelled")
+        {
+            bail!("recovered queue item could not be cancelled");
+        }
         exact(data.queued, data.recovery_cancel)?;
     } else if phase == "verify" {
         exact(data.queued, data.recovery_cancel)?;
     }
-    std::fs::write(out, serde_json::to_vec_pretty(&serde_json::json!({
-        "synthetic": true, "phase": phase, "passed": true,
-        "exactCancelIdentityVerified": true, "queryReadOnly": true,
-        "queuedAfterRestart": phase == "recover", "cancelledAfterRestart": phase == "verify",
-        "providerStarted": false, "fullPlanVerified": false,
-    }))?)?;
+    std::fs::write(
+        out,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "synthetic": true, "phase": phase, "passed": true,
+            "exactCancelIdentityVerified": true, "queryReadOnly": true,
+            "queuedAfterRestart": phase == "recover", "cancelledAfterRestart": phase == "verify",
+            "providerStarted": false, "fullPlanVerified": false,
+        }))?,
+    )?;
     Ok(())
 }
 

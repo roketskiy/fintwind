@@ -161,13 +161,7 @@ fn observation_from_env() -> Result<Option<ObservationEnv>, String> {
     let fixture_id = value(keys::FIXTURE_ID);
     match (request, response, observer, nonce, fixture_id) {
         (None, None, None, None, None) => Ok(None),
-        (
-            Some(request),
-            Some(response),
-            Some(observer),
-            Some(nonce),
-            Some(fixture_id),
-        ) => {
+        (Some(request), Some(response), Some(observer), Some(nonce), Some(fixture_id)) => {
             let parse = |text: &str, what: &str| {
                 text.parse::<usize>()
                     .map_err(|_| format!("{what} is not a number"))
@@ -305,7 +299,10 @@ fn fixture_main() {
     // plan is frozen and hashed, so the supervisor injects the grant per
     // step, and only for a step whose plan asked for it.
     let options = match observation_from_env() {
-        Ok(observation) => Options { observation, ..options },
+        Ok(observation) => Options {
+            observation,
+            ..options
+        },
         Err(error) => {
             eprintln!("fixture: {error}");
             std::process::exit(2);

@@ -885,25 +885,20 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                     .gap(px(7.0))
                     .text_size(ui_px(11.5))
                     .line_height(ui_px(16.0))
-                    .child(
-                        div()
-                            .flex_none()
-                            .pt(px(1.0))
-                            .child(icon("icons/alert.svg", 13.0, theme.danger_text)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .whitespace_normal()
-                            .child(md::render::plain_text(
-                                content.clone(),
-                                md::render::sans_family(),
-                                FontWeight::NORMAL,
-                                theme.text,
-                                &ctx,
-                            )),
-                    ),
+                    .child(div().flex_none().pt(px(1.0)).child(icon(
+                        "icons/alert.svg",
+                        13.0,
+                        theme.danger_text,
+                    )))
+                    .child(div().flex_1().min_w_0().whitespace_normal().child(
+                        md::render::plain_text(
+                            content.clone(),
+                            md::render::sans_family(),
+                            FontWeight::NORMAL,
+                            theme.text,
+                            &ctx,
+                        ),
+                    )),
             )
         }
         MessageRole::Compaction => {
@@ -1093,16 +1088,15 @@ fn message_menu_items(
     if !quote_text.trim().is_empty() {
         let fintwind = fintwind.clone();
         let role = message_role_label(role);
-        items.push(MenuItem::new(
-            tr!("quote.quote_message"),
-            move |window, cx| {
+        items.push(
+            MenuItem::new(tr!("quote.quote_message"), move |window, cx| {
                 let reference = quote::message_reference(&role, &quote_text);
                 let _ = fintwind.update(cx, |this, cx| {
                     this.stage_composer_reference_with_focus(reference, window, cx);
                 });
-            },
-        )
-        .icon("icons/message-square-text.svg"));
+            })
+            .icon("icons/message-square-text.svg"),
+        );
     }
 
     if role == MessageRole::User && user_message_rewind.ready().is_none() {

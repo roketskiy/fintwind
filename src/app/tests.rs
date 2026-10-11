@@ -2455,6 +2455,7 @@ fn settings_search_filters_pages_for_arrow_cycling() {
         SettingsPage::Skills,
         SettingsPage::McpServers,
         SettingsPage::McpMarket,
+        SettingsPage::Devices,
     ];
     assert_eq!(pages(""), all_pages);
 

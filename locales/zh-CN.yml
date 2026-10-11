@@ -192,6 +192,12 @@ settings.local_by_default: 默认存储在本地
 settings.local_by_default_description: 项目、对话和设置均存储在这台电脑上
 settings.browser_tools: 浏览器工具
 settings.browser_tools_description: 默认关闭。开启后向模型提供内置浏览器操作工具与使用说明，会占用少量上下文
+settings.auto_compact: 自动压缩
+settings.auto_compact_description: 上下文达到下方阈值时压缩一次，前台会话与子代理都适用
+settings.auto_compact_threshold: 压缩阈值
+settings.auto_compact_threshold_description: 用量到不了阈值的窗口不受影响，仍走服务商默认压缩
+settings.auto_compact_threshold_placeholder: 如 500K
+settings.auto_compact_threshold_invalid: 阈值格式不对
 settings.app_version: fintwind %{version}
 providers.coding_agents: 编程智能体
 providers.description: fintwind 调用安装在本机上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新
@@ -802,6 +808,7 @@ session.turn_failed: 本轮未返回响应即告结束
 session.steer_rejected: 无法向智能体补充指示（%{error}）；消息已排队，将作为后续消息发送
 session.steer_rejected_plain: 无法向智能体补充指示；消息已排队，将作为后续消息发送
 session.compaction_requested: 已请求压缩上下文：提供方将在下一个安全节点开始总结
+session.auto_compaction_started: 上下文达到阈值，开始自动压缩
 session.compaction_completed: 上下文已压缩
 session.compaction_failed: 上下文压缩失败
 session.compaction_unavailable: 当前没有运行中的提供方，无法压缩该任务的上下文

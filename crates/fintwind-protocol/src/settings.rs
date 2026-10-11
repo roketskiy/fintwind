@@ -49,6 +49,43 @@ impl DaemonSettings {
             .and_then(Value::as_bool)
             .unwrap_or(false)
     }
+
+    /// Whether the client compacts a session whose live context occupancy
+    /// reaches [`AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT`]. On by default: the
+    /// provider's own near-limit auto compaction stays armed as the net, so
+    /// this only moves compression earlier.
+    pub fn auto_compact_enabled(&self) -> bool {
+        self.extra
+            .get(AUTO_COMPACT_ENABLED_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+    }
+
+    /// Live context tokens at which the client requests a compaction, for
+    /// the foreground session and every live subagent alike. Absolute, not a
+    /// percentage: windows smaller than this never reach it and stay on the
+    /// provider's own auto compaction. Clamped to a sane range; a missing or
+    /// non-numeric value reads as the default.
+    pub fn auto_compact_threshold_tokens(&self) -> u64 {
+        self.extra
+            .get(AUTO_COMPACT_THRESHOLD_TOKENS_KEY)
+            .and_then(Value::as_u64)
+            .map(|tokens| {
+                tokens.clamp(
+                    AUTO_COMPACT_THRESHOLD_TOKENS_MIN,
+                    AUTO_COMPACT_THRESHOLD_TOKENS_MAX,
+                )
+            })
+            .unwrap_or(AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT)
+    }
 }
 
 pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";
+pub const AUTO_COMPACT_ENABLED_KEY: &str = "auto_compact_enabled";
+pub const AUTO_COMPACT_THRESHOLD_TOKENS_KEY: &str = "auto_compact_threshold_tokens";
+/// Default trigger: half of a 1M window. Smaller windows never reach it and
+/// stay on the provider's own near-limit auto compaction, which Fintwind
+/// never reconfigures.
+pub const AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT: u64 = 500_000;
+pub const AUTO_COMPACT_THRESHOLD_TOKENS_MIN: u64 = 10_000;
+pub const AUTO_COMPACT_THRESHOLD_TOKENS_MAX: u64 = 100_000_000;

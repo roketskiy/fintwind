@@ -111,6 +111,14 @@ fn default_transcript_width() -> f32 {
     DEFAULT_TRANSCRIPT_WIDTH
 }
 
+fn default_auto_compact_enabled() -> bool {
+    true
+}
+
+fn default_auto_compact_threshold_tokens() -> u64 {
+    fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT
+}
+
 fn default_right_panel_width() -> f32 {
     DEFAULT_RIGHT_PANEL_WIDTH
 }
@@ -277,6 +285,13 @@ pub struct AppSettings {
     /// Off by default: browser tools cost model context, so enabling them
     /// is an explicit act.
     pub browser_tools_enabled: bool,
+    /// Client-side early auto compaction: compact once live context
+    /// occupancy reaches the threshold below, for the foreground session
+    /// and live subagents alike. On by default; the provider's own
+    /// near-limit auto compaction stays armed regardless.
+    pub auto_compact_enabled: bool,
+    /// Absolute live-context tokens triggering the early auto compaction.
+    pub auto_compact_threshold_tokens: u64,
     pub transcript_width: f32,
 }
 
@@ -292,6 +307,9 @@ impl Default for AppSettings {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
+            auto_compact_enabled: true,
+            auto_compact_threshold_tokens:
+                fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
             transcript_width: DEFAULT_TRANSCRIPT_WIDTH,
         }
     }
@@ -370,6 +388,12 @@ pub struct PersistedState {
     /// is an explicit act.
     #[serde(default)]
     pub browser_tools_enabled: bool,
+    /// Client-side early auto compaction switch. On by default.
+    #[serde(default = "default_auto_compact_enabled")]
+    pub auto_compact_enabled: bool,
+    /// Absolute live-context tokens triggering the early auto compaction.
+    #[serde(default = "default_auto_compact_threshold_tokens")]
+    pub auto_compact_threshold_tokens: u64,
     #[serde(default = "default_transcript_width")]
     pub transcript_width: f32,
     #[serde(default = "default_sidebar_visibility")]
@@ -430,6 +454,9 @@ impl PersistedState {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
+            auto_compact_enabled: true,
+            auto_compact_threshold_tokens:
+                fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
             transcript_width: DEFAULT_TRANSCRIPT_WIDTH,
             sidebar_visible: true,
             right_panel_visible: false,
@@ -523,6 +550,14 @@ impl PersistedState {
             fintwind_protocol::settings::BROWSER_TOOLS_ENABLED_KEY.to_owned(),
             serde_json::Value::Bool(self.browser_tools_enabled),
         );
+        extra.insert(
+            fintwind_protocol::settings::AUTO_COMPACT_ENABLED_KEY.to_owned(),
+            serde_json::Value::Bool(self.auto_compact_enabled),
+        );
+        extra.insert(
+            fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_KEY.to_owned(),
+            serde_json::Value::from(self.auto_compact_threshold_tokens),
+        );
         DaemonSettings { extra }
     }
 
@@ -541,6 +576,8 @@ impl PersistedState {
             ui_font_family: self.ui_font_family.clone(),
             code_font_family: self.code_font_family.clone(),
             browser_tools_enabled: self.browser_tools_enabled,
+            auto_compact_enabled: self.auto_compact_enabled,
+            auto_compact_threshold_tokens: self.auto_compact_threshold_tokens,
             transcript_width: self.transcript_width,
         }
     }
@@ -576,6 +613,8 @@ impl PersistedState {
         self.ui_font_family = settings.ui_font_family;
         self.code_font_family = settings.code_font_family;
         self.browser_tools_enabled = settings.browser_tools_enabled;
+        self.auto_compact_enabled = settings.auto_compact_enabled;
+        self.auto_compact_threshold_tokens = settings.auto_compact_threshold_tokens;
         self.transcript_width = settings.transcript_width;
     }
 

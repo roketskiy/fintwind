@@ -199,6 +199,12 @@ settings.local_by_default: デフォルトでローカルに保存
 settings.local_by_default_description: プロジェクト、会話、設定はこのコンピューターに保存されます
 settings.browser_tools: ブラウザツール
 settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します
+settings.auto_compact: 自動圧縮
+settings.auto_compact_description: コンテキストが下のしきい値に達したら1回圧縮します。セッションとサブエージェントの両方に適用されます
+settings.auto_compact_threshold: 圧縮のしきい値
+settings.auto_compact_threshold_description: 使用量がしきい値に届かないウィンドウには影響せず、プロバイダーの既定の圧縮のままです
+settings.auto_compact_threshold_placeholder: 例：500K
+settings.auto_compact_threshold_invalid: しきい値の形式が正しくありません
 settings.app_version: fintwind %{version}
 
 providers.coding_agents: コーディングエージェント
@@ -837,6 +843,7 @@ session.turn_failed: ターンは応答なしに終了しました
 session.steer_rejected: エージェントに追加の指示を送れませんでした（%{error}）。メッセージはフォローアップとしてキューに追加されました
 session.steer_rejected_plain: エージェントに追加の指示を送れませんでした。メッセージはフォローアップとしてキューに追加されました
 session.compaction_requested: 圧縮を要求しました。プロバイダーは次の安全な区切りで要約を開始します
+session.auto_compaction_started: しきい値に達したため自動圧縮を開始しました
 session.compaction_completed: コンテキストを圧縮しました
 session.compaction_failed: コンテキストの圧縮に失敗しました
 session.compaction_unavailable: 実行中のプロバイダーがないため、このセッションを圧縮できません

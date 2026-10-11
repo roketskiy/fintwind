@@ -2052,6 +2052,12 @@ pub struct BackgroundWorkItem {
     pub role: Option<String>,
     pub model: Option<String>,
     pub parent_id: Option<String>,
+    /// Latest live context occupancy in tokens, when the driver tracks one.
+    /// Only subagent children report it (from their settled steps); the
+    /// foreground session's occupancy lives on `AgentSession::context_usage`
+    /// instead. `None` means "not measured yet", never zero usage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
     pub status: BackgroundWorkStatus,
 }
 
@@ -2082,6 +2088,7 @@ impl BackgroundWorkItem {
             role: None,
             model: None,
             parent_id: None,
+            context_tokens: None,
             status,
         }
     }

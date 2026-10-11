@@ -874,6 +874,7 @@ fn command_targets_runtime(command: &Command) -> bool {
             | Command::Cancel
             | Command::RefreshBackgroundWork
             | Command::StopBackgroundWork { .. }
+            | Command::CompactChildSession { .. }
             | Command::Respond { .. }
             | Command::RespondUserInput { .. }
             | Command::ApplyOptions { .. }

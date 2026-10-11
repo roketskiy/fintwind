@@ -2,9 +2,19 @@
   "session_id": "ses_remote_acceptance",
   "default_session_status": "busy",
   "models": [
-    {"id": "synthetic/model-a", "name": "Synthetic A", "release_date": "2026-01-01",
+    {"id": "model-a", "providerID": "synthetic", "name": "Synthetic A", "release_date": "2026-01-01",
      "attachment": false, "reasoning": false, "temperature": false,
+     "cost": {"input": 0, "output": 0}},
+    {"id": "model-b", "providerID": "synthetic", "name": "Synthetic B", "enabled": true,
+     "variants": [{"id": "normal", "name": "Normal"}, {"id": "careful", "name": "Careful"}],
      "cost": {"input": 0, "output": 0}}
+  ],
+  "agents": [
+    {"id": "build", "name": "Build", "mode": "primary", "hidden": false},
+    {"id": "plan", "name": "Plan", "mode": "primary", "hidden": false},
+    {"id": "synthetic-reviewer", "name": "Synthetic reviewer", "mode": "all", "hidden": false},
+    {"id": "synthetic-worker", "name": "Synthetic worker", "mode": "subagent", "hidden": false},
+    {"id": "synthetic-hidden", "name": "Synthetic hidden", "mode": "primary", "hidden": true}
   ],
   "turns": [
     {

@@ -48,7 +48,27 @@ pub fn discover_catalog(
         // Only a failed probe keeps the last successful catalog.
         cached_models(directory).unwrap_or_else(fallback_models)
     };
-    (models, Vec::new())
+    (models, discover_opencode_agents(binary, directory))
+}
+
+fn discover_opencode_agents(binary: &Path, directory: Option<&Path>) -> Vec<ProviderAgentPreset> {
+    let Some(location) = workspace_location(directory) else { return Vec::new(); };
+    let Ok(server) = crate::opencode_pool::acquire(binary, Path::new(&location)) else { return Vec::new(); };
+    let Ok(value) = server.request_for_directory_with_timeout(&location, "GET", "/api/agent", None, MODEL_REQUEST_TIMEOUT)
+        else { return Vec::new(); };
+    let mut seen = std::collections::HashSet::new();
+    value.get("data").and_then(serde_json::Value::as_array).into_iter().flatten()
+        .filter(|entry| entry.get("hidden").and_then(serde_json::Value::as_bool) == Some(false)
+            && matches!(entry.get("mode").and_then(serde_json::Value::as_str), Some("primary" | "all")))
+        .filter_map(|entry| {
+            let id = entry.get("id")?.as_str()?;
+            if !seen.insert(id.to_owned()) { return None; }
+            let name = entry.get("name").and_then(serde_json::Value::as_str).unwrap_or(id);
+            let mut agent = ProviderAgentPreset::new(id, name);
+            agent.description = entry.get("description").and_then(serde_json::Value::as_str).map(str::to_owned);
+            agent.is_custom = !matches!(id, "build" | "plan");
+            Some(agent)
+        }).collect()
 }
 
 /// Where OpenCode's last discovered catalog is cached. Debug builds keep it

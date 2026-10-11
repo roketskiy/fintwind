@@ -20,6 +20,58 @@ relay、host 和 daemon；模型服务可以使用仅监听 loopback 的合成 p
 
 ## 失败方式与判据
 
+双 host 实现前失败清单：第二次配对不得覆盖第一台的可信记录；hostId 相同
+但公钥/relay 不同不得隐式替换；失败配对不得丢失原授权。切换目标先关闭
+旧通道并清除会话、项目、offers、队列视图、批量选择和未提交输入，不把旧
+异步事件送入新视图；不重发任何副作用。设备身份复用，授权仍逐 host。
+同一 relay 一次仅连接当前 host；选择另一台不自动给它配对。忘记当前电脑
+仅移除该记录，撤销一台的 grant 不影响另一台。旧单 host 记录只迁移可信
+元数据，不读取或迁移业务正文；存储损坏拒绝静默生成身份。
+
+daemon 单独崩溃恢复补充失败清单：仍存活的 host 不得把其已持有的 operationId
+再次 enqueue。否则原 queued 项变为两个可见条目，取消一个后另一个仍可
+派发。恢复按原 ID 原位对账而非重复加入，以 daemon 持久 state 为准，保留
+已接受的 cancel binding；断链窗口的本机终态猜测不应吞掉实际仍 queued 的条目；
+取消后不得有同 ID 的 queued/dispatching 副本，不重复发送 provider prompt。
+
+手机取消精确 C 查询验收补充：从隔离 host 的只读 operations 库读取手机
+产生的 cancel_target/C，不自造成功取消记录；用其真实 grant/host/device
+查询 daemon。错误 C、target、host、device、grant 必须 unknown，重复正确
+查询保持同一 cancelled 绑定；查询前后 ListRemotePrompts 字节一致，不
+写库、不重新 Cancel/Dispatch。缺失合成目录标记或非 cancelled 结果失败。
+
+手机恶意 wire 验收编码前清单：独立页面使用实际 vault 与发布 WASM，关闭
+正常 UI 通道后建立新 KK，通过真实 relay/host 发合法加密 ReadFile/Directory。
+路径穿越、绝对路径、凭据文件、自报 cwd、另一项目须拒绝且不返回正文。
+接收正文仅内存检查，产物只记录 case/状态；不导出或打印身份，不在发布
+bundle 注入测试接口，不发送任何写操作。前后核对工作区字节与 grant。
+
+2026-10-10 用户决定：不做恶意测试。上述恶意 wire 情景停止执行，保留为
+未验收；不以正常读取、编译或已有模块结果替代。
+
+正常会话管理验收编码前失败清单：归档与恢复不能仅改变手机本机标记；刷新
+后须收到同一任务的权威标记，任务身份和历史保留，不能重新提交 prompt。
+删除确认取消时不删除任何任务；确认后只删除明确选择的本轮合成草稿，
+已完成任务与其它任务的 ID 集合不变。每个阶段通过真实页面控件和加密通道，
+只读回查隔离 daemon，不直接改数据库或用本机调用代替手机操作。
+
+正常管理的独立隐藏运行已通过（2026-10-10）：
+`C:/Users/Public/Temp/opencode/owned-real-chain-frozen-ElfNJ8/summary.json`，
+18 项正常行为检查，包含上述归档/恢复/草稿删除；进程边界与清理独立通过。
+主代理只读复核报告为
+`C:/Users/Public/Temp/opencode/normal-management-evidence-nhOu85/summary.json`。
+这不是全量或公网通过，也不替代忙任务归档、已启动任务删除或历史操作验收。
+
+2026-10-11 同一输入正常批次 **13/13 通过**，另有独立 preflight；静态检查
+**10/10 通过**。覆盖忙任务归档、已启动任务删除、Stop、刷新、重启/crash、
+双设备/双 host、存活检测及实际 Service Worker 显式更新。逐轮整树清理与输入
+哈希已由主代理只读复核，汇总证据：
+`C:/Users/Public/Temp/opencode/normal-remote-acceptance-W0w7PV/summary.json`。
+完整批次为 `normal-remote-suite-oQ0cKY`，范围与未覆盖项见
+[`remote-control-normal-suite.md`](remote-control-normal-suite.md)。首轮两项失败
+记录仍保留，瞬态根因未完全确认；最终通过不改写首轮结果。此批次不是全量
+计划、公网或发布验收，恶意测试仍未执行。
+
 | 情景 | 必须发现的失败 | 通过判据 |
 | --- | --- | --- |
 | 首次配对 | 预先信任、没有核对码即批准、电脑与手机指纹不一致 | 真实 XX；在本机确认前无 grant；两端同码；确认后得到授权 |

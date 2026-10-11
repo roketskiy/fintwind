@@ -794,7 +794,7 @@ impl HostState {
                 );
                 return;
             }
-            let position = self.queues().lock().enqueue(item);
+            let position = self.queues().lock().restore(item);
             log::info!(
                 target: "audit",
                 "queue recovered; session={} operation={} submission={} position={:?}",

@@ -638,6 +638,8 @@ mod win {
         let mut application_wide = wide(&executable.to_string_lossy());
         let mut startup = STARTUPINFOW::default();
         startup.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+        startup.dwFlags = windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
+        startup.wShowWindow = 0;
         let mut information = PROCESS_INFORMATION::default();
         let created = unsafe {
             CreateProcessW(

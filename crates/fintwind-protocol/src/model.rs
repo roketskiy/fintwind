@@ -1490,8 +1490,10 @@ impl AgentSession {
         fork.status = SessionStatus::Idle;
         fork.created_at = now;
         fork.updated_at = now;
+        fork.native_session_id = Some(provider_cursor.native_id().to_owned());
         fork.provider_cursor = Some(provider_cursor);
         fork.provider_session_id = None;
+        fork.runtime_event_cursor = None;
         // A fork snapshots the conversation, not the pending follow-ups its
         // source session is still holding for the live agent.
         fork.queued_messages.clear();

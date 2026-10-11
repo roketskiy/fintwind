@@ -202,6 +202,7 @@ fn main() -> anyhow::Result<()> {
     match client.request_with_timeout(session_id, Uuid::nil(), Command::SetRemoteSessionOptions {
         provenance: provenance.clone(),
         session_id,
+        agent_preset: None,
         options: fintwind_protocol::WireSessionOptions {
             mode: "ask".to_owned(), interaction_mode: "build".to_owned(),
             model: None, reasoning_effort: None, service_tier: None, context_window: None,

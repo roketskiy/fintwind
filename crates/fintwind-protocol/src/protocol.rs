@@ -20,7 +20,7 @@ use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 /// Desktop protocol version. Bumped when the `ClientMessage` or
 /// `ServerMessage` grammar changes; the handshake refuses a mismatch in
 /// either direction, so an old client and a new daemon never half-speak.
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes
@@ -334,6 +334,8 @@ pub enum Command {
         provenance: crate::submission::RemoteProvenance,
         session_id: Uuid,
         options: WireSessionOptions,
+        /// Vetted provider agent; omission preserves the recorded selection.
+        agent_preset: Option<String>,
     },
     /// Remove a project from the app catalog. Ordinary state saves are
     /// merge-only, so a stale client snapshot cannot restore a project

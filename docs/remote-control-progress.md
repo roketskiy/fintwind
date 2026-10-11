@@ -871,3 +871,714 @@
 --example acceptance_supervisor` → 通过，0 error；supervisor 4 个早期批次
 既有未用 helper 警告不变。main 重跑前需以当前源码重新 build 并记录新 sha
 （旧冻结 exe 不含本批修复，不得复用其结果定性）。
+
+### 主代理继续：候选构建与浏览器句柄边界（2026-10-10）
+
+- 用户要求继续下一步；本轮不委派、不审查、不提交、不推送、不部署。
+- 保留开始时 `crates/fintwind-core/src/persistence.rs` 的两处已有改动。
+- 配对驱动已有内存中的验证码/指纹核对和 `stdin.end("y\n")`，无需为批准
+  添加生产自动批准开关。但“Node 驱动整体放进 Job”目前只有容纳方案，
+  **不等于**独立 observer 已取得 Chrome 每个后代的真实进程句柄。
+  依据 `scripts/fixtures/remote-control/process-ownership-plan.md` 第 34–37 行，
+  不能用 `IsProcessInJob(handle, NULL)` 或最终 Job 计数为零替代这一证据。
+- 同级 PWA 的 `scripts/isolated-real-chain.mjs` 继续阻断所有真实链路模式。
+  仅允许 `--build-snapshot <绝对路径>` 的构建准备，不启动 daemon、host、
+  relay、provider 或浏览器。修复 Cargo 不支持的 `--debug` 参数。
+- 原生构建快照新增内嵌依赖：`locales/`、`models_thinking_modes.json`、
+  `db/migrations/`、`resources/opencode-browser-plugin.ts`；构建前后也检查
+  新增/删除文件，不再仅比较原有文件。后续验收要求快照的输入集合完整。
+- 构建准备新增独占冻结目录：复制四个原生产物、全部输入与构建脚本，
+  逐文件复核 SHA-256；摘要以 `wx` 写入，不能覆盖已有证据。
+  失败冻结目录保留，不把缺少摘要的目录作为成功证据。
+- `scripts/build-wasm.mjs` 的来源证明补入协议内嵌的语言文件和思考模式表，
+  并记录相关 crate 内的全部文件，而非仅 `.rs`/`.toml`。
+- 两个脚本的 `node --check` 通过；真实链路入口实际以阻断错误退出，
+  未启动验收应用。本轮首次原生/WASM 构建在来源集合补全前已启动，
+  因此即使成功，也不能代替修改后版本的候选快照，需要随后重建。
+- 手机真实 WASM 配对、Chrome 后代句柄交接、F32–F36 与公网链路仍未验证；
+  `fullPlanVerified=false`。没有放宽原有事故隔离标准。
+
+本轮候选构建收尾（均非运行时链路验收）：
+
+- 修改后原生快照通过：4 个 debug 产物、182 项来源；摘要
+  `C:/Users/Public/Temp/opencode/remote-native-snapshot-20261010-complete-inputs.json`，
+  其中记录独占冻结目录、四个 exe 路径、来源与构建器 SHA-256。
+- `node scripts/build-wasm.mjs` 以补全后的来源集合重跑通过，协议仍为 2；
+  保留已有的 `unused_mut` 与 wasm-pack 可选元数据提示，不称为零警告构建。
+- `node node_modules/typescript/bin/tsc -b` 和
+  `node scripts/generate-remote-contract.mjs --check` 通过。
+- 私有候选页面通过 Vite 生产构建与 Workbox 生成，未替换仓库 `dist/`：
+  `C:/Users/Public/Temp/opencode/remote-candidate-h3PWxX/site/`。
+  真实检查原生冻结产物/来源、WASM 输出/来源、PWA 构建前后来源及每项
+  页面资产 SHA-256 后写出 `summary.json`，`passed=true` 仅指构建检查；
+  `runtimeChainVerified=false`、`publicChainVerified=false`、
+  `fullPlanVerified=false` 均保留。
+- 可重复构建运行器为
+  `C:/Users/Public/Temp/opencode/prepare-remote-site-20261010.mjs`；每次运行
+  创建新目录，已有目录和失败证据不覆盖，冻结的运行器也随候选保存。
+  命令：`node C:/Users/Public/Temp/opencode/prepare-remote-site-20261010.mjs`。
+- Vite 报告 `crypto-bridge.ts` 同时静态/动态导入，不能拆到独立 chunk；
+  这不是配对失败或行为验收通过的证据，本轮不扩大为打包优化改造。
+
+### 主代理继续：真实后代句柄来源（2026-10-10）
+
+- 根据 Microsoft 的 `DEBUG_PROCESS` / `WaitForDebugEvent` 文档，调试创建
+  事件提供真实进程句柄，无需 `OpenProcess(pid)`。已先记录失败清单：
+  `docs/remote-control-browser-ownership.md`，随后实现
+  `examples/support/acceptance_debug_tree.rs` 和纯合成
+  `examples/acceptance_debug_tree_blackbox.rs`（均在 remote-host crate）。
+- 模块限制事件泵在创建线程；复制为查询+等待权限；进程必须属于确切
+  Job；独立交接完成前不自动继续事件；不读取进程内存/正文；不吞掉业务
+  异常；文件句柄与系统托管进程/线程句柄分开处理。
+- 已在 supervisor 中仅加入编译入口，未更改其创建标志/等待/清理流程，
+  未接真实浏览器驱动。Cargo 新增 `Win32_System_Diagnostics_Debug` feature。
+  源码与构建输入已变化，上一候选只代表此前冻结代码，最终发布必须重建；
+  此前 15/15 冻结 supervisor exe 的证据仍只约束其原哈希。
+- 合成双进程黑盒首跑因零时限等待而失败，失败目录完整保留；改用有界
+  等待后重复两轮通过。每轮持有两个事件来源的真实进程句柄，核验确切
+  Job、两个退出事件、所有句柄终态和 Job 归零。证据完整路径与重复命令
+  见上述浏览器归属文档。
+- 仅该合成正常清理路径通过，不外推 Chrome、超时、observer 或 crash；
+  `fullPlanVerified=false`。未启动浏览器/daemon/host/relay/provider，
+  未委派、审查、提交、推送或部署。接下来接独立 observer 和合成故障矩阵。
+
+### 主代理自动推进：独立 observer、Chromium、手机只读链路（2026-10-10）
+
+- 用户要求“主动进行直到需要我操作”；主代理继续，不委派、不审查、不
+  提交或部署，不使用真实模型密钥。开始时既有 persistence.rs 两处改动保留。
+- supervisor 的 `debugDescendants` 接线已完成；仅允许独立 observer 下
+  的最后一个 run 步骤；每个内核事件提供的真实后代句柄先交接、ACK 后
+  才继续。结束时先终止本轮 Job，泵退出事件并等真实句柄，再冻结拓扑。
+- 完整合成矩阵 19/19 pass（含原 15 项、调试树正常/exit-3/期限/调试器
+  crash）。证据与失败保留记录：`docs/remote-control-browser-ownership.md`。
+  最新冻结矩阵：
+  `C:/Users/Public/Temp/opencode/ownership-debug-frozen-17a29d9b0dba4a5abe2680e19f6f9214/matrix-report.json`。
+- sandbox 未关闭的测试版 Chromium 空白页两轮通过，14 个真实句柄交接
+  并逐一等待，旁观者存活，Job 归零；安装版 Chrome 仍 CDP connect 超时，
+  不把其清理通过外推为页面通过。后续固定使用已核验测试版路径与哈希。
+- 新内部驱动：同级 PWA 的 `scripts/browser-ownership-probe.mjs`（创建管道
+  CDP、connect/disconnect、无库 launch/close 回退）及
+  `scripts/owned-real-chain-driver.mjs`（仅从受控调试计划启动）。旧
+  `isolated-real-chain.mjs` direct-spawn 路径仍保留阻断，不提供 bypass。
+- 运行器先核验完整 19 项与真实 Chromium 证据及 supervisor 哈希，再
+  使用冻结原生 exe、逐资产核验的私有候选页面、隔离身份/profile/数据目录。
+  Node 启动只负责受控作业内后代，所有终止交给 Job；无 PID 打开/认领。
+- 本地 CSP 不允许随机 relay 端口，初轮配对请求在浏览器内被阻断。
+  未放宽生产 CSP/未占固定端口；驱动加同源转发至 relay 自报并核验的
+  随机 loopback 端口。页面字节不变，报告显式记载此转发方式，公网跨域
+  仍未验证。失败目录逐轮保留。
+- 6 项基础链路通过：daemon 合成 seed、真实 WASM XX 与代码/指纹比较、
+  本机 stdin 批准、会话 attach、持久 rename、刷新身份以及撤销后旧通道
+  的只读 attach 被拒（基础报告将 seed/配对/attach/rename/reload/revoke 分列）。
+  空闲 relay socket 没有授权语义；不要求撤销后无业务请求时主动关闭全局
+  设备 socket，以免影响此设备其它 host。现测试通过旧通道只读请求验证拒绝。
+- 已修复真实手机分页缺陷：`src/components/WorkspacePanel.tsx` 和
+  `src/api/session.ts` 将文件/目录/diff revision 从 number 改为 string，
+  More 请求传递当前响应 revision；后端首屏校验与变更拒绝均不放宽。
+  新私有候选：`C:/Users/Public/Temp/opencode/remote-candidate-XN6Nxb/`。
+- 最新真实链路 **11 项通过**：基础六项 + 文件/目录分页、变更 revision
+  与 binary 拒绝、Git diff 分页、业务缓存检查。读取前后合成工作区正文
+  哈希一致；只保存检查/计数/资产哈希，不保存配对 nonce/code/private key。
+  `C:/Users/Public/Temp/opencode/owned-real-chain-frozen-4IRaqU/summary.json`：
+  `passed=true`、`containmentVerified=true`、`inputsUnchanged=true`；
+  `fullPlanVerified=false`、`publicChainVerified=false`。
+- 可重复命令：`node C:/Users/Public/Temp/opencode/run-owned-real-chain-20261010.mjs`
+  （运行器及两个内部驱动随每轮冻结保存）。原生来源冻结摘要：
+  `C:/Users/Public/Temp/opencode/remote-native-snapshot-20261010-owned-chain.json`。
+- 仍未覆盖：手机任务执行/审批/问题/在飞取消，手机恶意路径 wire、任务
+  output、跨设备/跨 host 和公网跨域。19 项矩阵未合法注入 assignmentFailure，
+  该项仍 NotCovered，不因 summary blocked=0 称其已覆盖。
+
+### 手机任务执行、审批、问题与取消后续（2026-10-10）
+
+- 后续发现并修复三个真实路径缺口：`main.rs` 的普通发送统一使用持久
+  admission/queue/dispatch（不再要求空闲新任务已有 runtime）；已持久化
+  但未启动的任务也保留打开视图与已核验空 transcript，首轮派发后升级
+  到 daemon 返回的真实 runtime 并建立事件泵；create/rename/archive/
+  restore/delete/fork/rewind 成功后向在线设备推送权威会话列表。
+- `events.rs` 的空 transcript 只用于 LoadTaskState 确认存在且没有 native
+  session 的任务，不能把 provider 查询失败当空内容。nil runtime 只是
+  未启动视图哨兵，不订阅或 unsubscribe 伪造 runtime。
+- PWA `src/api/session.ts` 关闭视图时结束该视图尚未完成的 attach 等待，
+  防止旧等待阻止打开另一任务；收到该 session 的 turnStarted/turnFinished
+  等生命周期边界时清除旧 offers，不影响其它 session 的 offers。
+- 合成 provider 不使用真实模型。问询政策是本机设置，不算手机设置：
+  `seed_remote_workspace --ask-session UUID ...` 仅对标记工作区内未启动
+  任务写入 Ask，拒绝未知/已启动/外部项目。手机本身没有政策绕过入口。
+- 驱动新建后等待两条会话并用 daemon.inspect 返回的新任务标题选择，
+  而不是把尚未刷新列表中的旧任务误作新任务。早期失败曾混有此测试
+  选择问题；失败目录保留，不以其单独证明新任务行为。
+- `synthetic_opencode.py` 新增可选 expected_reply：实际 provider 收到的
+  once、单选、多选与自定义文本逐项匹配，只记录 matched 布尔值，不记
+  答案正文。负向场景故意设不匹配期望，要求流程失败且不发问题/成功终态。
+  新增 interruptible 行为：停止等待回复，发真实 interrupted + idle，不
+  继续预设成功脚本；保持 SSE 开放，避免测试服务器重连重复发布旧请求。
+- 当前正常链路 **14 项**通过：前述只读能力 + 手机创建任务、首次发送、
+  等待审批期间排队并精确取消、once 批准、单选/多选/custom 回复、成功
+  终态与刷新身份/撤销旧通道。provider prompt 计数始终为 1，取消的
+  队列项未运行，当前审批不受队列取消影响。
+- 独立中断场景通过：不回答批准卡而点击 Stop，provider 收到一次 interrupt、
+  一次 interrupted 终态，没有批准回复或成功终态；手机停止运行状态，
+  旧审批卡不可继续操作。初轮发现旧卡仍可点击，以上 PWA 清理修复后通过。
+- 最新候选页面：`C:/Users/Public/Temp/opencode/remote-candidate-QL2Htz/`。
+  最新原生冻结：`C:/Users/Public/Temp/opencode/remote-native-snapshot-20261010-owned-chain-queue.json`。
+  当前状态的独立证据（均 passed/containmentVerified/inputsUnchanged=true）：
+  - 正常：`C:/Users/Public/Temp/opencode/owned-real-chain-frozen-slqTNs/summary.json`
+  - 中断：`C:/Users/Public/Temp/opencode/owned-real-chain-frozen-V7AwNe/summary.json`
+  - 不匹配回复负向：`C:/Users/Public/Temp/opencode/owned-real-chain-frozen-vdJv1t/summary.json`
+- 可重复命令：`node C:/Users/Public/Temp/opencode/run-owned-real-chain-20261010.mjs`；
+  中断加 `--cancel-running`，负向加 `--expect-reply-rejection`，各自独立目录。
+  负向 passed 表示预期拒绝与清理得到验证，绝不是其业务任务成功。
+- 既有 daemon 合成整体黑盒重验 8/8：
+  `C:/Users/Public/Temp/opencode/provider-chain-VF5Doc/summary.json`（早于随后
+  interruptible fixture 改动，因此不当作最新 fixture 全部行为的证据）。
+- 计数更正：上节早期“11 项”实际报告列出 10 项，任务三项新增前的
+  口头“14 项”实际为 13 项；以各轮 chain.json 检查列表为准。当前正常
+  slqTNs 报告确为 14 项，不累加重复轮次。
+- 仍待：手机/host/daemon 重启与双方崩溃、精确 C 查询恢复及查询失败保留、
+  自动恢复 F32–F36、多设备批准竞争/双 host、手机恶意路径 wire、任务
+  output、stress/WASM 安全与公网跨域；fullPlanVerified/publicChainVerified
+  始终 false。不提交、push 或部署；用户此时仍无需操作。
+
+### 双设备、任务输出与 host 安全重启（2026-10-10，续）
+
+- 两个隔离 browser context 使用不同 device 身份配对同一 host；两端同时
+  收到批准，竞争 once 只产生一次 provider permission reply。撤销第一端
+  后，第二端 grant 未撤销且继续读取合成文件。此证据不覆盖同设备双 host。
+- 手机刷新期间保留 queued 提示：刷新后重新 attach，恢复队列和批准卡，
+  精确取消 queued 项；最终 provider 只有一次 prompt，不重复发送。
+- 输出检查发现 HydrateSession 的本地消息仍只有用户提示；started task
+  改为通过 trusted session_coordinates + FetchNativeTranscript 读取权威
+  provider 消息，保持输出上限，失败不回退成旧内容，不记录正文。
+- daemon `fetch_native_transcript` 原本只允许冷恢复，驻留 runtime 会报
+  `native history read raced an attached runtime`。增加已连接 runtime 的
+  纯只读返回：I/O 前记录 runtime UUID，I/O 后核验同一 runtime 与 native
+  绑定，变更则拒绝，不进入冷历史 receipt/turn 写回。原离线恢复校验保留。
+- 双设备真实链路现覆盖 Output 返回用户提示与助手成功结果，取消队列正文
+  不出现在输出。初轮输出失败证据保留，不以正文流已成功替代 Output 验收。
+- 新 `scripts/owned-lifetime-parent.mjs` 只在受控 Job 内等待自己的 stdin
+  EOF 后自然退出；host 使用现有 parent watchdog 自行结束，再由同一 Job
+  内驱动创建新 host。没有 kill/PID 打开/清理扫描，明确是**安全退出重启**，
+  不是 crash；独立 observer 核验两代进程句柄和确切 Job。
+- 首轮 host 重启卡在列表：恢复的 queued 项在手机尚未 attach 的窗口被
+  当“ownerless”失效；drop_session 迭代持锁又进入 take_cancel_request，
+  重复加锁导致 worker 卡住。现在 ownerless 仅等待重新 attach，不等同
+  任务删除；归档 drop 在释放队列锁后逐项结算。重新 attach 也显式推送
+  queue view 和仍有效 offers，避免首次 snapshot 先于视图建立时漏恢复。
+- 当前原生冻结：
+  `C:/Users/Public/Temp/opencode/remote-native-snapshot-20261010-host-attach.json`。
+  当前页面候选：`C:/Users/Public/Temp/opencode/remote-candidate-arYmUL/`。
+  最新对应代码的真实链路证据（均通过资产稳定性与独立容纳检查）：
+  - host 安全重启、队列恢复/精确取消/批准后结算：
+    `C:/Users/Public/Temp/opencode/owned-real-chain-frozen-bk19P1/summary.json`
+  - 双设备竞争 + 手机 queued 刷新 + 任务输出 + 撤销隔离：
+    `C:/Users/Public/Temp/opencode/owned-real-chain-frozen-jPmw3r/summary.json`
+  - 运行中取消：
+    `C:/Users/Public/Temp/opencode/owned-real-chain-frozen-2JjnTl/summary.json`
+- 可重复命令仍为 run-owned-real-chain-20261010.mjs；分别加
+  `--host-restart`、`--multi-device --queue-reload`、`--cancel-running`。
+  host restart 场景会主动刷新页面建立新通道，不能以此宣称不刷新自动重连
+  也通过。旧 UI DOM 不当成新通道恢复证据。
+- 仍缺：host 强制 crash、daemon 单独/双方 crash 与自动恢复、精确 C
+  查询失败保留、双 host UI、恶意 wire 与 stress/WASM、公网跨域。浏览器
+  缓存检查只核验 localStorage 字符串、缓存请求和数据库名单，不外推完整
+  IndexedDB 正文扫描通过。所有 fullPlanVerified/publicChainVerified=false。
+
+- 补充当前验证：存储检查已升级，真实页面只读扫描 localStorage、
+  sessionStorage、CacheStorage 响应 bytes 及全部 IndexedDB store 记录，
+  不写出记录正文；vault 必须恰有一个非空密封记录，AES-GCM CryptoKey
+  extractable=false，实际 exportKey 被拒绝。仅扫描指定合成正文标记，
+  不宣称形式化证明任意业务内容永不落盘。
+  最新双设备 + queue reload + Output + 此存储检查通过：
+  `C:/Users/Public/Temp/opencode/owned-real-chain-frozen-cPM5IK/summary.json`。
+- 最新 daemon 合成整体黑盒 8/8 重验：
+  `C:/Users/Public/Temp/opencode/provider-chain-Eq7uMa/summary.json`。
+  其运行时对应上述 host-attach 与 output-bound 代码，随后只修改测试驱动
+  的存储检查，不改生产代码；检查结果不外推后续未知修改。
+
+- 新增不刷新自动重连失败检查：运行器参数
+  `--host-restart --host-auto-reconnect` 要求旧 host 结束后手机输入框先
+  disabled，再创建新 host；不以旧 DOM 或 relay socket 活着作为恢复证明。
+  最新失败：`C:/Users/Public/Temp/opencode/owned-real-chain-frozen-uRAgIv/`
+  是安全重启早期诊断；真正不刷新检查失败证据为
+  `C:/Users/Public/Temp/opencode/owned-real-chain-frozen-paQ4LW/summary.json`，
+  `hostRestartStage=old-channel-disabled`。relay 连接持续时手机未及时识别
+  host 离线。需端到端存活检测，relay ping 不能替代 host 在线证据。
+  本次未增加轮询整份快照来掩盖此缺口，不宣称自动恢复已通过。
+
+### 端到端存活与创建句柄崩溃恢复（2026-10-10，续）
+
+- protocol 2 增加加密 LivenessProbe/LivenessReply；只核验当前 Noise 周期
+  与单个 UUID，不读取 daemon/工作区。relay ping/ack 不更新存活时间。
+  空闲 5 秒发一项 probe，5 秒无匹配回复则关闭通道并用新 Noise 重连，
+  不重放旧密文或重新提交 prompt。关闭时移除计时器/可见性监听；隐藏页
+  不发送 probe，恢复前台时先重建过期通道再恢复操作。
+- host 安全退出、不刷新恢复已通过（13pTAD）；之后补真正 crash 注入。
+  新 acceptance_owned_crash_child 仅在受控 Job 中启动有合成标记的冻结
+  host/daemon。随机一次性 stdin 命令触发 Rust Child::kill 的 Windows
+  创建句柄 TerminateProcess，wait 核对 exitCode=1；无 PID 打开/扫描、
+  无产品故障开关。独立 observer 仍核验真实后代句柄、确切 Job 和退出。
+- daemon 单独 crash 要先观察旧工作区控件失效，再重启 daemon；host 保持
+  存活。修复手机 workspaceUnavailable 清除旧 runtime 的 offers/catalogs，
+  保留持久 operation/queue 身份。双方 crash 恢复只证明 queued 取消与
+  不重放，不代表原运行任务未知结算或全部 F32–F36 已验收。
+- 同时修复已打开视图未跟随 sessionList 更新标题的问题；不换 sessionId。
+- 更正历史“durable rename”：seed 是未启动草稿，daemon task-state 回读
+  只证明内存更名。StateStore::save 明确不持久保存草稿，这是原有行为，
+  本轮不改该产品规则。现对真正已启动任务更名并验证跨 daemon crash
+  及手机刷新保留；不再把 seed 回读写成持久更名通过。
+- 最新原生冻结 remote-native-snapshot-20261010-owned-crash.json（5 个
+  exe，185 个源码输入）；页面 remote-candidate-nekKDt/summary.json。
+  路径均在 C:/Users/Public/Temp/opencode/ 下。对应通过证据：
+  - host 创建句柄 crash、不刷新重连、原审批继续正常结算：
+    owned-real-chain-frozen-tBla1Y/summary.json。
+  - daemon 单独 crash、host 存活、原队列恢复取消、旧审批不可用：
+    owned-real-chain-frozen-OwtOLA/summary.json。
+  - host + daemon crash、持久任务名称、原队列取消、不虚构成功：
+    owned-real-chain-frozen-E1YBWu/summary.json。
+  - 双设备竞争/撤销隔离 + queue reload + Output：
+    owned-real-chain-frozen-0iyFDE/summary.json。
+  - 运行中 Stop：owned-real-chain-frozen-YzxCFh/summary.json。
+  - 空闲 probe 回复 + 隐藏页无发送 + 前台新通道与读取（无刷新）：
+    owned-real-chain-frozen-4tzmTy/summary.json。
+  每轮 inputsUnchanged/containmentVerified=true；仍是同源 loopback 转发，
+  不外推公网验收。失败目录全部保留；早期失败不计通过。
+- 当前所有权基线仍为 ownership-debug-frozen-660f2dd57e814af1b2fe1b22f288bbea/
+  matrix-report.json（19/19）与 browser-ownership-frozen-1317b08141fc4563823bdf17a06ec2d7/
+  matrix-report.json（3/3）。bounded acceptanceDeadlineMs 只由黑盒读取，
+  传给 supervisor 前移除该字段；不扩大容纳或清理权限。
+- 可重复命令 node C:/Users/Public/Temp/opencode/run-owned-real-chain-20261010.mjs；
+  host crash 加 --host-restart --host-auto-reconnect --host-crash；双方再加
+  --daemon-crash；daemon 单独使用 --host-restart --host-auto-reconnect
+  --daemon-crash --daemon-only。存活场景 --idle-liveness --foreground-liveness。
+- 仍待精确 C 在飞/查询失败保留、原任务未知结算、双 host UI 与逐 host
+  隔离、恶意 wire、stress/WASM、公网/真实模型及最终统一资产。未提交、
+  push、部署；fullPlanVerified/publicChainVerified 始终 false。
+
+### 双 host 与隐藏运行（2026-10-10，续）
+
+- 手机可信记录改为逐 host 列表，仍保留旧 HOST_KEY 兼容迁移与当前目标。
+  每项保存配对公钥、指纹、relay 与该 relay 注册的 deviceId，不保存正文。
+  配对另一台不覆盖第一台；相同 hostId 的公钥/relay 变化在配对前拒绝，
+  失败时恢复此前目标。菜单切换先关旧连接、清除目标相关内存；旧 effect
+  回调按 cancelled 拒绝，SessionView 按 hostId/sessionId 隔离。
+- 已打开 /pair 页面再扫描新链接可能只触发 hashchange，不重新挂载 React；
+  现在监听 hashchange 并使用 in-flight guard，配对期间阻断旧 KK 连接竞争。
+- 两台真实独立 daemon/host/workspace、同一设备密钥的真实 XX 分别配对，
+  切换后分别读到不同合成文件；撤销第一台 grant 后第二台仍可读取。
+  最后忘记第二台仅移除其本机记录，第一台记录/设备身份保留，第二台
+  服务器 grant 仍在，符合“忘记不等于撤销”。双设备同时批准只回复一次。
+- 用户要求不再使用可见终端。runner 以 windowsHide+管道隐藏执行，底层
+  CreateProcess 启动器设置 STARTF_USESHOWWINDOW/SW_HIDE；crash helper
+  使用 CREATE_NO_WINDOW。首版为全部 supervisor 后代加 CREATE_NO_WINDOW
+  导致无控制台的 fixture 子孙启动出现额外系统成员，19 项矩阵有 6 项
+  失败，已改为隐藏但保留控制台继承；失败产物保留，不放宽拓扑检查。
+  隐藏版全矩阵 19/19 和 browser 3/3 重新通过。
+- 最新冻结：remote-native-snapshot-20261010-hidden-crash.json；当前页面
+  remote-candidate-LfXlBA/summary.json。隐藏容纳证据：
+  ownership-debug-frozen-facf3305d45e47d094960aef5e407900/matrix-report.json，
+  browser-ownership-frozen-11c2446e71804203a79a4ddb11997181/matrix-report.json。
+  全部路径在 C:/Users/Public/Temp/opencode/ 下。
+- 最新双 host + 双设备 + queue reload + Output + 撤销/忘记隔离通过：
+  owned-real-chain-frozen-4qytNu/summary.json；运行参数
+  --multi-host --multi-device --queue-reload。源码/冻结字节未漂移且独立容纳
+  验证通过。这不是每台 host 均拥有两枚设备的全关系矩阵，也不是公网证据。
+- 后续页面变更后，前节 host/daemon crash 与前后台存活报告仅代表旧页面
+  状态，需在最终页面统一复验。精确 C 在飞/查询失败、原任务未知结算、
+  恶意 wire、stress/WASM、公网与最终包仍未关闭门禁。未提交/push/部署。
+
+- 隐藏版统一复验发现 daemon-only 旧队列重复恢复：同 operationId 的本机
+  项与持久 row 被再次 enqueue。仅跳过已有 ID 又会漏掉断链窗口本机投影
+  已结算、但 daemon 仍 queued 的记录。改为 PromptQueues::restore 原位
+  对账，使用持久 state，保留 cancel_requested；先恢复队列再发布新 daemon
+  连接，重新附加视图同时推 queue snapshot。daemon-only 连续两轮通过：
+  owned-real-chain-frozen-oHnYQU/summary.json 与
+  owned-real-chain-frozen-EAmnHq/summary.json。早期 OwtOLA 不能替代这次
+  更严格复验，失败目录 4kfJeU/TN1z0z 等保留。
+- 增加冲突 hostId/公钥拒绝验收：使用已信任 ID 配上另一枚合成公钥，
+  pairing 之前拒绝，grant 文件和可信记录不变；原连接恢复。发现同步拒绝
+  的 React 批处理可能令 host/busy 最终值未变化而不重启已关闭连接，增加
+  显式 connectionGeneration，拒绝后的旧目标使用新通道恢复。
+- 当前 native 冻结更新为 remote-native-snapshot-20261010-recover-reconcile.json，
+  当前页面为 remote-candidate-iNWuAd/summary.json。最新冲突身份拒绝 +
+  双 host + 双设备 + queue reload + 撤销/忘记隔离通过：
+  owned-real-chain-frozen-m7bcuM/summary.json。上一页面 LfXlBA 对应原生
+  recover-reconcile 的双方 crash、双 host 和前后台存活分别为 THViqm、
+  9ibqrn、NOTY5e；仍需最终页面重跑，不混同 siteSha256。
+
+- 精确 C 新真实链路检查：seed_remote_workspace --verify-phone-cancel 仅
+  在合成 host/workspace 标记齐备时只读读取 host operations 的 C/target，
+  使用真实配对 grant 查询 daemon。正确查询重复两次，错误 C/target/host/
+  device/grant 共五次均 unknown；前后 ListRemotePrompts 字节一致。
+  不新增取消/派发、不输出正文、不写 host 数据库。该检查是在手机实际
+  取消后执行，不能替代手机 wire 查询或在飞 C 故障验收。
+- --cancel-result-restart 在取消后再次用创建句柄 crash/restart，再查询同一
+  C/target。daemon-only（KPrfMy）与双方（WJ3t7O）均通过，正确 cancelled
+  绑定保留，队列不复活，prompt 计数仍为 1。完整证据目录均为
+  C:/Users/Public/Temp/opencode/owned-real-chain-frozen-<名称>/summary.json。
+- 当前统一 native：remote-native-snapshot-20261010-phone-c-query.json；页面
+  仍为 remote-candidate-iNWuAd，完整 siteSha256 相同。最新通过：
+  host crash + 精确 C：SvA296；运行中 Stop + 精确 C：hFTLjM；双 host +
+  双设备 + 队列刷新 + 冲突身份拒绝 + 精确 C：yW2rey。之前当前页面
+  daemon-only/双方：62uDh6/QC04Dg；前后台存活：kvdsXF。前后台并行
+  首轮 DBkGss 失败，顺序复验通过；不据此宣称任意并发/压力验收通过。
+- 仍未验收：在飞取消与查询故障后 host 保留重试、原运行任务未知结算、
+  手机恶意 wire、stress/WASM 与公网/真实模型。fullPlanVerified=false。
+
+### 正常会话管理与当前入口阻断（2026-10-10，续）
+
+- 用户原话：“不做恶意测试了，容易让openai停止模型服务”。本轮未执行
+  恶意 wire；外层和内部运行器都在启动前拒绝该模式，已有文件保留，不以
+  正常读取替代其验收。不委派、不调用真实模型、不提交、push 或部署。
+- 新增正常 `--session-management` 情景：真实手机控件归档已完成任务，
+  刷新后保留标记、身份和历史；恢复不重新发 prompt；删除确认先取消、
+  再确认删除唯一合成草稿，daemon 只读回查其它任务 ID 集合不变。
+  编码前失败清单已写入 `remote-control-chain-acceptance.md`。
+- 首轮 `C:/Users/Public/Temp/opencode/owned-real-chain-frozen-xkVQU9/summary.json`
+  为 **失败，不能计作通过**：内部 chain 的 18 项正常行为检查均通过，
+  inputsUnchanged=true，清理/后代观察字段通过；但 preconditions 的
+  runner.notInAnyJob 与 supervisor.notInAnyJob 均失败，runnerInAnyJob=true。
+  当前 Fintwind 工具执行入口带上级 Job，因此不能证明无外层 Job 掩盖的
+  独立容纳。失败目录保留，不扩大清理范围、不使用 breakaway 绕过。
+- 外层运行器追加单独的 ownership preflight 阶段；失败时写 blocked 摘要，
+  不再启动 daemon、host、relay、provider 或浏览器。修改后只做 JavaScript
+  语法检查；新门禁未执行，不能宣称本轮管理验收或入口修复已行为通过。
+- 隐藏执行包装器：
+  `C:/Users/Public/Temp/opencode/invoke-owned-chain-management-20261010.ps1`。
+  它使用 CreateNoWindow、环境白名单和管道，仅输出产物路径，不打印原始
+  stderr。独立运行前仍必须通过上述 preflight，不能由隐藏窗口替代容纳证明。
+- 下一步需要不在上级 Job 内的独立入口；入口解决前只推进源码和静态检查。
+  fullPlanVerified/publicChainVerified 继续为 false，公网和用户发布未执行。
+- 用户通过选择工具选定“独立隐藏入口”。已准备
+  `C:/Users/Public/Temp/opencode/start-normal-management-acceptance.vbs`，须由用户
+  从 Windows 文件管理器双击启动；本会话不代为启动、不使用 breakaway。
+  VBS 隐藏启动 PowerShell 7，PowerShell 再以 CreateNoWindow 启动 Node；
+  全部实际子树仍由已冻结的 supervisor 独占 Job 管理和独立 observer 核验。
+  运行完成仅弹出固定结果与独占 `remote-management-click-*/launch.json` 路径。
+- 包装器使用环境白名单、独立 HOME 和十分钟等待上限；超时不扩大进程清理，
+  标为 unverified。launch.json 仅存状态、产物路径、运行器哈希和时间；
+  原始 stdout/stderr 不落盘。实际验收摘要仍由运行器在独占目录保存。
+- `check-management-launcher-syntax.ps1` 的 PowerShell 解析与两个 JavaScript
+  `node --check` 均通过。VBS/独立入口尚未由用户执行，未计作行为通过；
+  正常管理仍待外部入口下的完整冻结验收，用户无需开启可见终端。
+
+### 用户独立隐藏运行：正常管理通过（2026-10-10，续）
+
+- 用户从独立入口运行后提供成功弹窗。主代理读取实际
+  `C:/Users/Public/Temp/opencode/remote-management-click-rad53B76.tmp/launch.json`
+  与其关联报告，而非只凭截图判断通过。launch exitCode=0，
+  maliciousTestsEnabled=false；未运行恶意 wire、未调用真实模型。
+- 本轮冻结真实链路：
+  `C:/Users/Public/Temp/opencode/owned-real-chain-frozen-ElfNJ8/summary.json`。
+  **18/18 正常行为检查通过**，包含实际 XX 配对、本机确认、附加、分页读取、
+  创建/发送/排队/精确取消、审批/问题/成功结算、Output、身份刷新和撤销，
+  以及新增的完成任务归档/恢复、删除确认取消与仅删除指定合成草稿。
+- 独立 ownership preflight 2/2、实际链路 ownership 3/3 通过；两轮
+  runnerInAnyJob=false，runner/supervisor 不属于上级 Job。实际调试树移交
+  127 个真实进程句柄，独立 observer 的确切 Job/拓扑/退出检查均 verified，
+  cleanup.unverified=[]，旁观者全程存活并由本轮自有作业清理。
+  supervisor final 的 allChildrenExited、ioWorkersExited、
+  startupCleanupVerified、debugCleanupVerified、jobActiveProcessesZero
+  均为 true。该独立入口通过不解除本会话工具入口的上级 Job 限制。
+- 主代理随后仅做只读产物复核，10 项证据核对通过：全部输入 SHA-256、
+  当前原生/PWA 源码与冻结副本、完整 20 项页面资产、包装器/运行器、原始
+  报告哈希及清理字段均匹配。provider 只有 1 次 prompt、1 次成功终态，
+  管理操作没有重新提交或中断已完成任务。复核不是新增行为测试，不累加到 18 项。
+  复核产物：
+  `C:/Users/Public/Temp/opencode/normal-management-evidence-nhOu85/summary.json`；
+  可重复命令：
+  `node C:/Users/Public/Temp/opencode/verify-normal-management-evidence-20261010.mjs`。
+- 代码状态仍使用 native `remote-native-snapshot-20261010-phone-c-query.json`
+  和页面 `remote-candidate-iNWuAd`。本轮主未启动或清理服务，只读取已完成
+  的本轮产物；未提交、push 或部署。
+- fullPlanVerified/publicChainVerified 仍为 false：本轮未覆盖在飞取消与查询
+  故障保留重试、原运行任务未知结算、选项实际应用、历史分支/回退、完整
+  双 host × 双设备关系、stress/WASM 最终复验及公网跨域。恶意 wire 按用户
+  决定保持未执行，不冒充通过。
+
+### 正常测试批次准备与重新核验入口（2026-10-11）
+
+- 用户要求“继续所有测试”。沿用“不做恶意测试”、隐藏运行、独立合成数据
+  的范围；无真实模型、单元测试、watcher、视觉测试、提交或部署。
+- 编码前失败方式及未具备条件的项目见 `remote-control-normal-suite.md`。
+  正常批次包括完成任务管理、忙任务归档、已启动任务删除、Stop、刷新恢复、
+  安全重启/崩溃、双设备/双 host、存活检测和实际 waiting worker 更新。
+  未具备条件的选项应用、历史操作、故障查询、完整关系矩阵及旧压力运行器
+  保留未验收，不以本批次替代。
+- 新入口：`scripts/invoke-normal-remote-suite.ps1`，顺序批次：
+  `scripts/run-normal-remote-suite.mjs`。外层冻结运行器另存为
+  `C:/Users/Public/Temp/opencode/run-owned-real-chain-20261011.mjs`，没有覆盖
+  10 月 10 日的成功轮运行器。正常批次拒绝恶意模式并跳过旧双 host 情景中
+  的冲突身份输入；清理无法独立核验时停止后续轮。
+- 10 月 11 日当前工具入口的 `--preflight-only` 实测通过：
+  `C:/Users/Public/Temp/opencode/owned-real-chain-frozen-USPV2h/summary.json`。
+  preconditions 与 outsider-final 共 2/2；runnerInAnyJob=false，runner 和
+  supervisor 不属于上级 Job，cleanup.unverified=[]。未启动业务链路。
+  这是本次实际启动环境的证据，不将此前入口失败改写为通过，也不对所有
+  工具启动方式作推断；每个后续轮仍须独立 preflight。
+- 隐藏 PowerShell 包装器解析、批次/外层/证据复核 JavaScript 语法检查通过。
+  备用用户双击入口为
+  `C:/Users/Public/Temp/opencode/start-normal-remote-suite-20261011.vbs`。
+- 首轮静态检查准备失败：
+  `C:/Users/Public/Temp/opencode/normal-remote-static-ZJ5bZI/summary.json`，
+  checks=[]；误列不存在的 `tsconfig.node.json`，已移除并重新启动。
+  此失败保留，不计编译或行为通过。
+- 主代理已通过隐藏包装器启动正常批次，启动前检查逐轮执行；结果待完成后
+  读取并复核，不在运行中宣称通过。产物复核脚本：
+  `C:/Users/Public/Temp/opencode/verify-normal-suite-evidence-20261011.mjs`。
+- 第二轮静态检查保存为
+  `C:/Users/Public/Temp/opencode/normal-remote-static-PFIRb9/summary.json`：
+  7/10 静态检查通过，输入未变化；workspace、现有 test targets、remote examples
+  三项编译失败。WASM、PWA 类型、协议漂移、三个驱动语法及合成 provider
+  语法通过。这不是行为验收，也不是整体静态检查通过。
+- 编译诊断：
+  `C:/Users/Public/Temp/opencode/normal-native-diagnostic-3tSLnq/summary.json`。
+  ring 报 stddef.h 不存在，SQLite 报 stdarg.h 没有 include 路径；检查脚本的
+  白名单漏掉当前 MSVC 的 INCLUDE/LIB，而非已证明的远控源码错误。
+  已补入编译器与 SDK 变量并重新检查；仍不继承模型凭据，不更改业务源码。
+- 补齐 MSVC 编译环境后的第三轮静态检查 **10/10 通过**：
+  `C:/Users/Public/Temp/opencode/normal-remote-static-6P3Sob/summary.json`。
+  workspace、现有测试目标（仅编译）、remote examples、WASM 目标、PWA 类型、
+  跨端协议漂移、三个驱动与合成 provider 语法全部 exitCode=0，inputsUnchanged=true。
+  未执行单元测试，也不把此结果算作真实链路或公网通过。
+- 主代理只读复核第三轮静态结果：
+  `C:/Users/Public/Temp/opencode/normal-static-evidence-9iUcuU/summary.json`，
+  3 项证据检查通过；十项退出码/不升级覆盖、冻结检查器和全部记录的当前
+  输入 SHA-256 均匹配。复核脚本为
+  `C:/Users/Public/Temp/opencode/verify-normal-static-evidence-20261011.mjs`。
+
+### 正常批次首轮结果与两项复测（2026-10-11，续）
+
+- 首轮批次：
+  `C:/Users/Public/Temp/opencode/normal-remote-suite-Vp1s7p/summary.json`。
+  **13 项业务情景中 11 项通过、2 项失败，无未运行项**；另有独立 preflight
+  通过，所以摘要计数为 passed=12/failed=2。inputsUnchanged=true；13 个业务轮
+  都 containmentVerified=true。不能把 12 当作业务情景通过数，也不能把失败轮
+  内已完成的子步骤累计为整个场景通过。
+- 通过范围：完成任务管理、已启动任务删除、显式 Stop、手机队列刷新、host
+  安全重启和 crash、daemon 单独及联合 crash 后精确取消结果再次重启保留、
+  双设备审批、双 host 切换、空闲与前台恢复。完整两 host × 两设备关系仍未覆盖。
+- 失败轮：忙任务归档 `owned-real-chain-frozen-MD7cxh` 在归档前的精确 C 只读
+  查询 helper 退出；页面更新 `owned-real-chain-frozen-ih2lBZ` 在浏览器创建管道
+  connect 超时，未进入页面更新步骤。第二轮 chain 的 failedPhase 错沿用了
+  已通过的 seed 阶段，browser.json 确认为 connect/timeout=true；不将其误记为
+  daemon seed 或 Service Worker 业务缺陷。
+- 主代理复核：
+  `C:/Users/Public/Temp/opencode/normal-suite-evidence-vZ9xND/summary.json`，
+  evidenceVerified=true、batchPassed=false；输入、完整页面清单、原始报告哈希、
+  每轮独立前置与整树句柄清理均复核，成功轮只有一次显式 prompt。失败轮
+  保持失败。最初复核器误要求启动前失败轮必须有 provider 日志，首份复核
+  `normal-suite-evidence-I4E9ki` 因此失败；已允许此类失败轮缺失日志，不允许
+  成功轮缺失，原报告均保留。
+- 为诊断忙任务归档前失败，仅读取原数据库副本：
+  `C:/Users/Public/Temp/opencode/normal-cancel-inspection-vpub82y8/summary.json`。
+  观察到 exact cancellation 的 cancelled 终态存在，prompt 已不在等待表，
+  host/device/grant 均匹配，原始数据库及 WAL/SHM 哈希未改变。这只证明结束
+  后落库状态，不证明当时 helper 已成功，也不足以确认瞬态失败的根因。
+- 业务实现未改；驱动仅追加失败子进程的固定错误类别和退出码，以及正确的
+  浏览器连接阶段。未保存原始输出、未增加自动重试、未放宽判据。两处 JavaScript
+  语法通过后，在全新目录单独复测忙任务归档与更新，其余 11 项不在复测范围。
+  原首轮输入对应的静态/行为结果不宣称适用于此后的驱动改动。
+- 两项独立复测 **2/2 通过**：
+  `C:/Users/Public/Temp/opencode/normal-remote-suite-7q4iiX/summary.json`，
+  scope=targeted-normal-recheck，另有 preflight 通过，未重跑的 11 项明确列在
+  omittedScenarios。忙任务归档轮 `owned-real-chain-frozen-k8B0AG` 14 项检查；
+  页面更新轮 `owned-real-chain-frozen-PE4kDf` 16 项检查。均 exitCode=0、
+  inputsUnchanged=true、cleanupVerified=true。未修改产品业务实现或放宽判据，
+  所以复测成功不等于首次瞬态失败根因已确认。
+- 复测的主代理只读复核：
+  `C:/Users/Public/Temp/opencode/normal-suite-evidence-ZsDWEC/summary.json`，
+  evidenceVerified=true、batchPassed=true。已核验归档产生实际 interrupted 终态
+  且无重发，更新确有 waiting worker、输入保留直到显式 Reload、身份保留且
+  草稿未持久化；仅是本次两项复测通过，不把首轮整体改为通过。
+- 下一步使用当前驱动与批次源码完整重跑 13 项，统一输入版本；保持
+  fullPlanVerified/publicChainVerified=false，未覆盖项目继续列明。
+- 当前驱动版本的静态复验再次 **10/10 通过**：
+  `C:/Users/Public/Temp/opencode/normal-remote-static-9zsWn1/summary.json`；
+  主代理只读复核为 `normal-static-evidence-jP4v3c/summary.json`，3 项通过。
+  已在静态编译结束后启动完整批次，避免将编译负载与浏览器启动叠加；
+  未增大超时、未自动重试业务步骤、未修改产品源码。
+
+### 同一输入完整正常批次通过（2026-10-11，最终轮）
+
+- 最终完整批次 **13/13 正常业务情景通过**，另有独立 preflight 通过：
+  `C:/Users/Public/Temp/opencode/normal-remote-suite-oQ0cKY/summary.json`。
+  scope=full-defined-normal-batch，omittedScenarios=[]，failed=0、notRun=0，
+  inputsUnchanged=true；摘要 passed=14 包含 preflight，不是 14 项业务情景。
+  运行期间没有源码改动，不混用首轮和两项复测结果。
+- 全部 13 轮的真实 XX/KK、relay/host/daemon/浏览器链路和各自场景判据通过。
+  包括实际忙任务归档并停止、已启动任务删除、队列/Stop、刷新、重启/crash、
+  两设备审批、双 host 切换、前后台存活，以及 waiting worker 保留输入直到
+  用户 Reload。各轮只有一次明确 prompt；归档/Stop 各有一次 interrupted，
+  已启动任务删除恰有一次 provider 删除。没有真实模型调用。
+- 主代理只读证据复核：
+  `C:/Users/Public/Temp/opencode/normal-suite-evidence-wSGA2s/summary.json`，
+  evidenceVerified=true、batchPassed=true。每轮独立 preflight 和业务 runner
+  均不属于上级 Job；整树退出、I/O worker 退出、Job 空、独立 observer、旁观者
+  隔离和输入/资产/报告哈希均通过。每轮核验 114–145 个真实进程句柄。
+- 汇总产物（静态 10/10 + 正常行为 13/13 + 独立复核）：
+  `C:/Users/Public/Temp/opencode/normal-remote-acceptance-W0w7PV/summary.json`。
+  汇总检查 3055 个跨静态/行为重复记录的输入哈希一致，保留原报告哈希、
+  逐轮计数、未覆盖项和可重复只读复核命令；不启动任何额外服务。
+- 首次失败批次和两项复测目录均保留；首次瞬态失败根因未完全确认，
+  firstFailureRootCausesResolved=false，不因为最后通过而声称已修复产品缺陷。
+  此轮只改验收驱动、合成 provider 记录与文档，没有改产品业务实现。
+- fullPlanVerified/publicChainVerified 继续为 false。仍待选项实际应用、历史
+  分支/回退、在飞取消/查询失败重试、原运行任务未知结算、完整双 host × 双设备
+  关系、stress/WASM 性能复验及公网跨域。恶意测试按用户决定未执行。
+  未提交、push、部署、触及生产数据或终止其它会话进程。
+
+### 暂停前扩展场景与恢复（2026-10-11）
+
+- 用户先要求暂停，随后评估 OpenTunnel；未修改连接架构。用户决定保留原方案，
+  并以“继续吧”恢复开发。仍不运行恶意测试、watcher、视觉测试或真实模型；
+  Cloudflare 页面由用户自行部署。已有 WIP 和全部失败轮不回滚、不覆盖。
+- 扩展正常清单已为 17 项，旧统一 13/13 与静态 10/10 只对应旧冻结输入，
+  不是当前扩展版本已通过。完整双 host × 双设备关系单项曾通过，最终须重跑。
+- `normal-remote-suite-JjmtFB/summary.json` 中正常 WASM 测量通过、历史失败；
+  `normal-suite-evidence-xKxvbK/summary.json` 为 evidenceVerified=true、
+  batchPassed=false。采用真实页面 bridge 与独立原生 Noise peer，预热后测量
+  三轮双向 1 MiB；不冒充真实手机或非调试生产性能。
+- 最新已运行历史轮 `normal-remote-suite-SDn10v/summary.json` 仍失败在
+  historyStage=fork-inspection；复核 `normal-suite-evidence-wPDt24/summary.json`
+  为 evidenceVerified=true、batchPassed=false。分支显示标题已修正，随后发现
+  分支继承源 native_session_id，已修正原生身份并清除 runtime_event_cursor，
+  此身份修正尚未运行通过。
+- 模型、Agent 与变体提交、可选 Agent 目录发现及真实 Agent 应用已写入代码；
+  `session-options-apply` 三轮场景尚未验收。桌面 IPC 协议为 13，外部远控协议
+  仍为 2；新的页面、WASM 与 native 必须重新冻结配套使用。
+- 暂停前 `remote-native-snapshot-20261011-history-options.json` 构建失败 exit 101，
+  没有成功摘要，原输出未保留足够诊断，根因未知。后续
+  `normal-native-diagnostic-Xiq1EH/summary.json` 的 cargo check 通过，不当作
+  成功构建或行为证明。暂停后原已启动 WASM 构建自然成功结束，未继续测试。
+- 恢复轮先启动同一六产物编译命令的过滤诊断，不启动业务服务。snapshot 入口
+  追加独立的编译环境白名单与 build-diagnostic.json；失败仍不写成功 snapshot。
+  当前诊断已完成：`normal-native-build-diagnostic-LhQMtN/summary.json`，同一六产物
+  cargo build exitCode=0，耗时约 209 秒；原 exit 101 未复现，根因仍未知。
+  随后 Inspector 追加正常取消查询模式，此编译结果不代表该后续修改已编译。
+  未重新提交、push 或部署。
+- 新历史判据要求读回两个独立原生身份和持久轮次；选项复核同时核对 Inspector
+  和真实合成 provider 请求计数。不降低判据、不重试业务步骤、不延长截止。
+- 上述相对路径均位于 `C:/Users/Public/Temp/opencode/`。后续结果须追加到本节，
+  fullPlanVerified/publicChainVerified 保持 false。
+- 恢复核对发现旧精确取消 helper 内含错误 host/device/grant 等五种负面查询。
+  保留旧 helper，但正常驱动改用 `--verify-phone-cancel-normal`，只重复查询实际
+  配对的原 C/P；产物明确 identityBoundaryNegativeVerified=false。不执行这些
+  负面查询，不用它们增加正常检查计数；新模式尚待冻结后运行。
+- 最新配套原生 snapshot 已成功：
+  `remote-native-snapshot-20261011-resumed-history-options.json`，六个二进制、
+  186 个来源输入；编译诊断为 `remote-real-chain-UI4Wbc/build-diagnostic.json`。
+  私有生产页面候选 `remote-candidate-PEAzTM/summary.json` 构建通过，使用当前
+  WASM、源码与正式页面配置。候选仅用于隔离测试，不是发布或公网验收。
+- 扩展运行器已指向上述 native/site。已启动 `history-fork-rewind` 与
+  `session-options-apply` 两项定向正常批次，每轮仍先独立核验容纳边界；
+  当前行为结果待完成后记录。未改旧成功批次或混用旧页面。
+- 用户反馈推进太慢，建议复用 ZCode/Codex 与现有 PWA。本阶段不扩展功能、
+  不重做 PWA，先关闭历史与选项两项阻断，稳定后统一验收；原剩余故障恢复、
+  正常压力与公网项目仍明确未验收，不因缩短当前批次而删除其判据。
+- 定向批次 `normal-remote-suite-fA0vx0/summary.json`：历史通过，选项在忙任务
+  控件检查失败；全批仍失败。只读复核 `normal-suite-evidence-qLM8MA/summary.json`
+  为 evidenceVerified=true、batchPassed=false，整树清理与输入哈希通过。
+  历史实际三次 prompt，分支与源 nativeSessionId 不同，源回退保留一轮且分支
+  不受影响。合成链路通过不代表真实 OpenCode worktree 快照恢复。
+- 选项失败定位为运行器寻找不存在的 `Options` 按钮；实际入口为已有
+  `Models and agents`。仅修正运行器标签，并允许复用已加载目录，不改页面，
+  不扩大超时或重试业务动作。保留失败轮，下一轮单独复测选项。
+- 标签修正后的 `normal-remote-suite-gvePh0/summary.json` 仍失败；已通过忙任务
+  禁用检查，读取两模型与三个可见 Agent，随后停在选择选项阶段，尚未 Apply。
+  容纳与整树清理通过。追加固定子阶段及合成选择控件的 ID/值/禁用状态诊断，
+  不保存用户正文或原始异常；下一轮只诊断此阻断。
+- 诊断轮 `normal-remote-suite-xwMebc/summary.json` 停在 select-effort-b：模型 B 与
+  自定义 Agent 已被选择且可用，但页面没有变体控件。只读复核
+  `normal-suite-evidence-3T4OOl/summary.json` 为 evidenceVerified=true、batchPassed=false。
+  源码核对发现内部 ProviderModel/ProviderAgentPreset 没有 camelCase 序列化，
+  host 却以 reasoningEfforts/serviceTiers/contextWindows/isDefault 读取它们。
+  仅修复 host 这五处内部字段名；外部协议与 PWA 不变。准备新冻结输入再验收。
+- 五处字段修正后的 native snapshot 构建通过：
+  `remote-native-snapshot-20261011-catalog-traits.json`；诊断
+  `remote-real-chain-6QLarI/build-diagnostic.json`。配套私有页面
+  `remote-candidate-i3i9FI/summary.json` 构建通过，与前一候选的 PWA 应用资产相同。
+  已更新扩展入口并启动选项单项；结果尚待完成。不部署，不更改生产文件。
+- `normal-remote-suite-7RR1rY/summary.json` 已能显示和选择 careful，Apply 仍失败。
+  只读复核 `normal-suite-evidence-igO696/summary.json` 为 evidenceVerified=true、
+  batchPassed=false。读取已清理轮的独立 operations 数据库确认一次选项请求为
+  failed，固定拒绝原因为“the task permission mode changed on this computer”。
+  list_projection 刻意剥离实际权限/变体，adapter 却回传列表默认 FullAccess；
+  daemon 正确拒绝覆盖实际 Ask。应用选项改为 HydrateSession 读取实际设置，
+  不放宽权限校验。诊断只输出白名单原因与合成配置；不重发业务步骤。
+- 实际权限读取修正已构建冻结：
+  `remote-native-snapshot-20261011-hydrated-options.json` 与
+  `remote-real-chain-ET6OTX/build-diagnostic.json`，六产物、186 个输入。
+  配套候选 `remote-candidate-Q44eSA/summary.json` 构建通过；PWA 应用资产未变。
+  选项单项已使用新配套输入启动。最终证据汇总器改为要求四个显式摘要，
+  校验 17 项完整批次，避免继承旧版硬编码静态结果；旧冻结汇总仍保留。
+- `normal-remote-suite-vAAHSS/summary.json` 仍在 first-apply 阶段失败；
+  `normal-suite-evidence-QOebma/summary.json` 为 evidenceVerified=true、batchPassed=false。
+  已清理轮的只读数据库确认一次 Apply 已 executed，模型 B、自定义 Agent 和
+  careful 已持久化。任务选项行为并未据此标为通过：尚未运行下一轮 prompt。
+  等待回执改为检查状态行内的实际结果 span，并在不匹配时记录固定文案分类及
+  Inspector，不存原始异常、不中断判据、不自动重发。
+- 回执等待轮运行期间只读核对发现 SessionView 的 USER_OPERATION_KINDS 缺少
+  applySessionOptions；实际保存成功仍不会显示结果行。已定位这处页面过滤，
+  待该轮完成再修改，避免运行中输入漂移；不移除可见结果判据。
+- `normal-remote-suite-aPjTLO/summary.json` 保留为失败，独立复核
+  `normal-suite-evidence-xZsrdV/summary.json` 为 evidenceVerified=true、batchPassed=false。
+  已结束本轮后给 USER_OPERATION_KINDS 补上 applySessionOptions；复用现有结果
+  状态行，没有新增说明文案或组件。准备仅重建私有页面，不重复编译 native。
+- 选项轮 `normal-remote-suite-McrmGH/summary.json` 的业务驱动报告通过，但独立
+  复核 `normal-suite-evidence-FEQSMd/summary.json` 拒绝：三次 prompt 有六次成功
+  终态。源码/日志确认每个新 SSE 从零执行旧轮，旧连接也继续执行后续轮，
+  原生消息被重复追加。该轮不当作验收通过，保留失败复核。
+  测试服务补 SSE generation 与空闲订阅起点，旧订阅退场、不重演已完成轮。
+  业务驱动同步补上三成功终态/九条原生消息判据；复核计数不放宽。
+  仅变更运行时 fixture 和测试驱动，native/PWA 字节不变，无须重复编译。
+- 修正 fixture 后的 `normal-remote-suite-MY5t8s/summary.json` 选项单项通过；
+  `normal-suite-evidence-RZ6d1A/summary.json` 为 evidenceVerified=true、batchPassed=true。
+  恰好三次实际 prompt/三次成功终态/九条原生消息，两次模型应用、三次 Agent
+  应用，模型 B/reviewer/careful → 模型 A/build/无变体，刷新不重发、重复 Apply
+  只提交一次。权限始终 Ask。此结果只覆盖单项，不混成 17 项完整通过。
+- 已启动当前输入的十项静态检查；完成并复核后运行完整 17 项正常批次。
+  使用 `remote-native-snapshot-20261011-hydrated-options.json`、
+  `remote-candidate-KpLBw0/summary.json` 及当前 fixture/驱动，暂不扩展功能。
+  原在飞取消/查询失败、真实 worktree 恢复、压力、真实手机性能、公网验收等
+  未覆盖项目继续保留；fullPlanVerified/publicChainVerified=false。
+- 当前配套输入静态检查 **10/10 通过**：
+  `normal-remote-static-NH96gY/summary.json`；只读复核
+  `normal-static-evidence-O34Xdj/summary.json` passed=true、3 项检查通过。
+  现有测试只编译、不执行，没有新增单元测试。静态检查结束后已启动同一输入
+  完整 17 项正常批次，避免编译负载与浏览器验收重叠。运行期间不修改源码。
+- 完整批次 `normal-remote-suite-cqd4AC/summary.json` **11/17 正常业务项通过**，
+  另有 preflight 通过；六项失败均在 question answers / turn settles 阶段：手机
+  queue reload、host 安全重启、host crash、双设备、双 host、完整关系矩阵。
+  源码与输入未漂移，各轮独立清理完整；只读复核
+  `normal-suite-evidence-q5wC4M/summary.json` evidenceVerified=true、batchPassed=false。
+  当前完整批次不得标为通过，不拼接旧版局部通过。保留全部失败轮并定位共同
+  结算问题，下一轮只复测 queue reload 以确认具体停在 transcript 还是 idle。
+
+### 17 项正常批次最终复核（2026-10-11，最新输入）
+
+- 已修复手机页面的生命周期状态合并缺陷：transcript 已更新且 provider 已成功
+  结束时，旧的 session-list `working` 状态仍会让 Stop 按钮保持显示。PWA 使用
+  `live.running` 的三态值，收到 `turnFinished` 后以实时边界覆盖滞后的列表状态。
+  独立 PWA 提交：`abfab8e`（`fix remote session stop state after turn settles`）。
+- 修复后的 `phone-queue-reload`、host 安全重启、host crash、双设备审批、双
+  host 切换、完整关系矩阵均先独立定向通过；随后使用同一套最新输入完整重跑。
+- 完整正常批次 **17/17 业务场景通过**，另有独立 preflight 通过：
+  `C:/Users/Public/Temp/opencode/normal-remote-suite-fyeRfz/summary.json`。
+  `batchPlanVerified=true`、`omittedScenarios=[]`、`inputsUnchanged=true`，
+  所有业务轮 `exitCode=0`、`failedPhase=null`、`cleanupVerified=true`。
+- 主代理只读证据复核：
+  `C:/Users/Public/Temp/opencode/normal-suite-evidence-rIyc78/summary.json`。
+  `evidenceVerified=true`、`batchPassed=true`；复核确认完整页面资产、运行器、
+  每轮输入/报告哈希、独立 preflight、整树清理和正常覆盖边界均未被升级。
+- 当前配套页面 candidate：
+  `C:/Users/Public/Temp/opencode/remote-candidate-hcpc7h/summary.json`；旧页面
+  candidate 未覆盖。失败首轮和全部定向复测产物均保留，不混用旧结果。
+- 当前源码静态检查 **10/10 通过**：
+  `C:/Users/Public/Temp/opencode/normal-remote-static-lJkHjI/summary.json`；
+  只读复核 `C:/Users/Public/Temp/opencode/normal-static-evidence-3aaQHN/summary.json`
+  通过 3 项检查。未执行单元测试或业务服务启动。
+- `fullPlanVerified=false`、`publicChainVerified=false` 仍保持不变。未覆盖真实
+  OpenCode worktree 快照恢复、在飞取消/查询失败重试、原运行任务未知结算、旧
+  relay 压力测试、真实手机性能与用户部署后的公网跨域链路；恶意测试按用户决定
+  不运行。

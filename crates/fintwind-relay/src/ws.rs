@@ -22,14 +22,12 @@ use uuid::Uuid;
 
 use tungstenite::{Message, WebSocket};
 
-use fintwind_remote_protocol::{RejectedFrame, RejectedFrameReason,
+use fintwind_remote_protocol::{
     ConnectionPurpose, ControlFrame, Frame, FrameRole, HandshakeMode, MAX_FRAME_BYTES,
-    REMOTE_PROTOCOL_VERSION, RejectCode,
+    REMOTE_PROTOCOL_VERSION, RejectCode, RejectedFrame, RejectedFrameReason,
 };
 
-use crate::config::{
-    FRAME_RATE_LIMIT, FRAME_RATE_WINDOW, IDLE_TIMEOUT, WRITE_TIMEOUT,
-};
+use crate::config::{FRAME_RATE_LIMIT, FRAME_RATE_WINDOW, IDLE_TIMEOUT, WRITE_TIMEOUT};
 use crate::context::RelayContext;
 use crate::http::AdmissionGuard;
 use crate::ratelimit::RateLimiter;
@@ -128,7 +126,10 @@ pub fn run_session(
     deadline: DeadlineHandle,
 ) {
     // A peer that stops reading must not hold this slot forever.
-    let _ = websocket.get_ref().socket().set_write_timeout(Some(WRITE_TIMEOUT));
+    let _ = websocket
+        .get_ref()
+        .socket()
+        .set_write_timeout(Some(WRITE_TIMEOUT));
     // Admission window: one Auth frame, nothing else, hard overall limit.
     let first = match read_frame(&mut websocket, admission_deadline) {
         Some(frame) => frame,
@@ -168,7 +169,10 @@ pub fn run_session(
     };
     match websocket.get_ref().socket().try_clone() {
         Ok(socket) => context.registry.bind_socket(connection_id, socket),
-        Err(_) => { context.registry.unregister(connection_id); return; }
+        Err(_) => {
+            context.registry.unregister(connection_id);
+            return;
+        }
     }
     admission.release();
     context.metrics.auth_accepted();
@@ -218,7 +222,12 @@ pub fn run_session(
         // if no inbound frame ever arrives again.
         let mut outgoing_closed = false;
         while let Ok(frame) = outbound_rx.try_recv() {
-            let connection_rejected = matches!(&frame, Frame::Control { frame: ControlFrame::Rejected { .. } });
+            let connection_rejected = matches!(
+                &frame,
+                Frame::Control {
+                    frame: ControlFrame::Rejected { .. }
+                }
+            );
             let frame_bytes = encoded_len_hint(&frame);
             if send(&mut websocket, frame).is_err() {
                 // The peer stopped reading for good: a stuck write is a
@@ -232,8 +241,12 @@ pub fn run_session(
                     .registry
                     .release_outbound(connection_id, frame_bytes);
             }
-            if connection_rejected { outgoing_closed = true; }
-            if outgoing_closed { break; }
+            if connection_rejected {
+                outgoing_closed = true;
+            }
+            if outgoing_closed {
+                break;
+            }
         }
         if outgoing_closed {
             context.metrics.timeout();
@@ -376,11 +389,7 @@ fn refused(code: RejectCode, message: &str) -> RouteReply {
 /// A refusal that can name the frame it refused. Only used where the
 /// relay actually identified one: an unparsable frame has no reference
 /// to give, and inventing one would be worse than omitting it.
-fn refused_frame(
-    code: RejectCode,
-    message: &str,
-    reference: Option<RejectedFrame>,
-) -> RouteReply {
+fn refused_frame(code: RejectCode, message: &str, reference: Option<RejectedFrame>) -> RouteReply {
     RouteReply::Refused(code, message.to_owned(), reference)
 }
 
@@ -447,7 +456,12 @@ fn route_frame(context: &RelayContext, role: &ConnectionRole, frame: Frame) -> R
                             return refused_frame(
                                 RejectCode::UnknownRoute,
                                 "device is not in this host's account",
-                                reference(self_host, Some(&device_id), seq, RejectedFrameReason::Unlinked),
+                                reference(
+                                    self_host,
+                                    Some(&device_id),
+                                    seq,
+                                    RejectedFrameReason::Unlinked,
+                                ),
                             );
                         }
                     }
@@ -465,7 +479,12 @@ fn route_frame(context: &RelayContext, role: &ConnectionRole, frame: Frame) -> R
                         RouteOutcome::QueueFull => refused_frame(
                             RejectCode::QueueFull,
                             &format!("device queue is full; seq={seq}"),
-                            reference(self_host, Some(&device_id), seq, RejectedFrameReason::QueueFull),
+                            reference(
+                                self_host,
+                                Some(&device_id),
+                                seq,
+                                RejectedFrameReason::QueueFull,
+                            ),
                         ),
                         RouteOutcome::NoRoute => {
                             // The registered connection vanished between
@@ -473,7 +492,12 @@ fn route_frame(context: &RelayContext, role: &ConnectionRole, frame: Frame) -> R
                             refused_frame(
                                 RejectCode::UnknownRoute,
                                 &format!("device not connected; seq={seq}"),
-                                reference(self_host, Some(&device_id), seq, RejectedFrameReason::EndpointOffline),
+                                reference(
+                                    self_host,
+                                    Some(&device_id),
+                                    seq,
+                                    RejectedFrameReason::EndpointOffline,
+                                ),
                             )
                         }
                     }
@@ -500,15 +524,23 @@ fn route_frame(context: &RelayContext, role: &ConnectionRole, frame: Frame) -> R
                         RouteOutcome::NoRoute => refused_frame(
                             RejectCode::UnknownRoute,
                             "host not connected",
-                            reference(&host_id, Some(self_device), seq, RejectedFrameReason::EndpointOffline),
+                            reference(
+                                &host_id,
+                                Some(self_device),
+                                seq,
+                                RejectedFrameReason::EndpointOffline,
+                            ),
                         ),
-                        RouteOutcome::Queued | RouteOutcome::QueueFull => {
-                            refused_frame(
-                                RejectCode::QueueFull,
-                                "hosts are never queued",
-                                reference(&host_id, Some(self_device), seq, RejectedFrameReason::QueueFull),
-                            )
-                        }
+                        RouteOutcome::Queued | RouteOutcome::QueueFull => refused_frame(
+                            RejectCode::QueueFull,
+                            "hosts are never queued",
+                            reference(
+                                &host_id,
+                                Some(self_device),
+                                seq,
+                                RejectedFrameReason::QueueFull,
+                            ),
+                        ),
                     }
                 }
             }
@@ -534,7 +566,12 @@ fn route_frame(context: &RelayContext, role: &ConnectionRole, frame: Frame) -> R
             // the host consumes it once.
             if mode == HandshakeMode::Connect {
                 match (&device_id, role) {
-                    (Some(device_id), ConnectionRole::Device { device_id: self_device }) => {
+                    (
+                        Some(device_id),
+                        ConnectionRole::Device {
+                            device_id: self_device,
+                        },
+                    ) => {
                         // The device that opens a business session must be
                         // the one this connection authenticated as. A frame
                         // naming another device of the same account is a
@@ -672,12 +709,22 @@ fn route_frame(context: &RelayContext, role: &ConnectionRole, frame: Frame) -> R
                                 RouteOutcome::QueueFull => refused_frame(
                                     RejectCode::QueueFull,
                                     "device queue is full",
-                                    reference(&host_id, Some(&device_id), 0, RejectedFrameReason::QueueFull),
+                                    reference(
+                                        &host_id,
+                                        Some(&device_id),
+                                        0,
+                                        RejectedFrameReason::QueueFull,
+                                    ),
                                 ),
                                 RouteOutcome::NoRoute => refused_frame(
                                     RejectCode::UnknownRoute,
                                     "peer not connected",
-                                    reference(&host_id, Some(&device_id), 0, RejectedFrameReason::EndpointOffline),
+                                    reference(
+                                        &host_id,
+                                        Some(&device_id),
+                                        0,
+                                        RejectedFrameReason::EndpointOffline,
+                                    ),
                                 ),
                             }
                         }
@@ -817,9 +864,11 @@ fn handle_link(context: &RelayContext, role: &ConnectionRole, message: LinkMessa
             .store
             .unlink_device(&message.host_id, &message.device_id)
             .map(|_| {
-                context.registry.drop_link_queue(&message.device_id, &message.host_id);
+                context
+                    .registry
+                    .drop_link_queue(&message.device_id, &message.host_id);
                 ControlFrame::Unlinked {
-                device_id: device_uuid,
+                    device_id: device_uuid,
                 }
             })
     } else {
@@ -951,10 +1000,7 @@ fn rejection_frame(code: RejectCode, message: &str, reference: RejectedFrame) ->
     }
 }
 
-fn send(
-    websocket: &mut WebSocket<DeadlineStream>,
-    frame: Frame,
-) -> Result<(), tungstenite::Error> {
+fn send(websocket: &mut WebSocket<DeadlineStream>, frame: Frame) -> Result<(), tungstenite::Error> {
     let text = serde_json::to_string(&frame).unwrap_or_else(|_| "{}".to_owned());
     websocket.send(Message::text(text))
 }

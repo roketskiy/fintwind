@@ -262,9 +262,12 @@ impl Registry {
                 .and_then(|old| inner.connections.remove(&old)),
         };
         if let Some(old) = displaced.as_ref() {
-            if let Some(socket) = inner.sockets.remove(&old.id) { let _ = socket.shutdown(Shutdown::Both); }
+            if let Some(socket) = inner.sockets.remove(&old.id) {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
             if let Some(buffer) = inner.outbound.remove(&old.id) {
-                inner.outbound_total_bytes = inner.outbound_total_bytes.saturating_sub(buffer.bytes);
+                inner.outbound_total_bytes =
+                    inner.outbound_total_bytes.saturating_sub(buffer.bytes);
             }
         }
         inner
@@ -459,7 +462,13 @@ impl Registry {
                 let original_messages = queue.frames.len();
                 let mut removed_bytes = 0;
                 let mut removed_messages = 0;
-                drop_expired(&mut queue, &mut removed_bytes, &mut removed_messages, now_ms(), ttl_ms);
+                drop_expired(
+                    &mut queue,
+                    &mut removed_bytes,
+                    &mut removed_messages,
+                    now_ms(),
+                    ttl_ms,
+                );
                 inner.queued_total_bytes = inner.queued_total_bytes.saturating_sub(original_bytes);
                 inner.queued_total_messages = inner
                     .queued_total_messages
@@ -493,14 +502,22 @@ impl Registry {
     /// queued ciphertext; the other host's accepted frames stay deliverable.
     pub fn drop_link_queue(&self, device_id: &str, host_id: &str) {
         let mut inner = self.inner.lock();
-        let Some(mut queue) = inner.queues.remove(device_id) else { return; };
+        let Some(mut queue) = inner.queues.remove(device_id) else {
+            return;
+        };
         let before_bytes = queue.bytes;
         let before_messages = queue.frames.len();
         queue.frames.retain(|frame| frame.host_id != host_id);
         queue.bytes = queue.frames.iter().map(QueuedFrame::frame_bytes).sum();
-        inner.queued_total_bytes = inner.queued_total_bytes.saturating_sub(before_bytes - queue.bytes);
-        inner.queued_total_messages = inner.queued_total_messages.saturating_sub(before_messages - queue.frames.len());
-        if !queue.frames.is_empty() { inner.queues.insert(device_id.to_owned(), queue); }
+        inner.queued_total_bytes = inner
+            .queued_total_bytes
+            .saturating_sub(before_bytes - queue.bytes);
+        inner.queued_total_messages = inner
+            .queued_total_messages
+            .saturating_sub(before_messages - queue.frames.len());
+        if !queue.frames.is_empty() {
+            inner.queues.insert(device_id.to_owned(), queue);
+        }
     }
 
     /// Periodic reclaim of undeliverable ciphertext. TTL reclaim used to
@@ -586,9 +603,12 @@ impl Registry {
             return false;
         };
         if let Some(handle) = inner.connections.remove(&id) {
-            if let Some(socket) = inner.sockets.remove(&id) { let _ = socket.shutdown(Shutdown::Both); }
+            if let Some(socket) = inner.sockets.remove(&id) {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
             if let Some(buffer) = inner.outbound.remove(&id) {
-                inner.outbound_total_bytes = inner.outbound_total_bytes.saturating_sub(buffer.bytes);
+                inner.outbound_total_bytes =
+                    inner.outbound_total_bytes.saturating_sub(buffer.bytes);
             }
             let _ = handle.outbound.send(Frame::Control {
                 frame: fintwind_remote_protocol::ControlFrame::Rejected {

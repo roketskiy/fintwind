@@ -125,7 +125,9 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
     // never interleave their bytes inside a single fixed sibling file.
     let unique = format!(
         "{}.tmp-{}",
-        path.file_name().and_then(|name| name.to_str()).unwrap_or("record"),
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("record"),
         uuid::Uuid::new_v4(),
     );
     let temp = path.with_file_name(unique);
@@ -256,16 +258,18 @@ fn store_new_secret(
     #[cfg(windows)]
     {
         let _ = plain_name;
-    write_sealed(&data_dir.join(sealed_name), secret)
-        .with_context(|| format!("could not durably seal the fresh {what}"))
+        write_sealed(&data_dir.join(sealed_name), secret)
+            .with_context(|| format!("could not durably seal the fresh {what}"))
     }
     #[cfg(not(windows))]
     {
         let _ = sealed_name;
         let path = data_dir.join(plain_name);
-        write_atomic(&path, secret)
-            .with_context(|| format!("could not store the fresh {what}"))?;
-        ensure!(fs::read(&path)? == secret, "the identity record did not round-trip");
+        write_atomic(&path, secret).with_context(|| format!("could not store the fresh {what}"))?;
+        ensure!(
+            fs::read(&path)? == secret,
+            "the identity record did not round-trip"
+        );
         Ok(())
     }
 }
@@ -284,7 +288,13 @@ fn generate_identity(data_dir: &Path) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
     let noise = IdentityKey::generate()?;
     let mut blob = noise.public.clone();
     blob.extend_from_slice(&noise.private);
-    store_new_secret(data_dir, NOISE_KEY_FILE, NOISE_KEY_SEALED_FILE, &blob, "noise key")?;
+    store_new_secret(
+        data_dir,
+        NOISE_KEY_FILE,
+        NOISE_KEY_SEALED_FILE,
+        &blob,
+        "noise key",
+    )?;
     Ok((signing.signing, blob))
 }
 
@@ -303,7 +313,9 @@ fn acquire_identity_lock(data_dir: &Path) -> anyhow::Result<fs::File> {
         match lock.try_lock() {
             Ok(()) => return Ok(lock),
             Err(fs::TryLockError::WouldBlock) => {}
-            Err(fs::TryLockError::Error(error)) => return Err(error).context("could not lock the identity records"),
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(error).context("could not lock the identity records");
+            }
         }
         if Instant::now() >= deadline {
             bail!("another process still holds the identity lock");
@@ -315,10 +327,7 @@ fn acquire_identity_lock(data_dir: &Path) -> anyhow::Result<fs::File> {
 /// Register this host's signing key with the relay (first start only; a
 /// stored host id short-circuits). Proves possession by signing the
 /// relay's one-time challenge.
-pub fn register_with_relay(
-    relay_origin: &str,
-    signing: &SigningKey,
-) -> anyhow::Result<String> {
+pub fn register_with_relay(relay_origin: &str, signing: &SigningKey) -> anyhow::Result<String> {
     let origin = relay_origin.trim_end_matches('/');
     let challenge = post_json(
         &format!("{origin}/api/challenge"),
@@ -398,7 +407,10 @@ pub(crate) fn post_json(url: &str, body: &Value) -> anyhow::Result<Value> {
     }
     let output = command.output()?;
     if !output.status.success() {
-        anyhow::bail!("relay request failed: {}", String::from_utf8_lossy(&output.stderr));
+        anyhow::bail!(
+            "relay request failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
     let value: Value = serde_json::from_slice(&output.stdout)
         .map_err(|error| anyhow::anyhow!("relay response unreadable: {error}"))?;

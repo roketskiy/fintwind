@@ -1786,11 +1786,15 @@ impl StateStore {
         state: &str,
     ) -> io::Result<Option<Uuid>> {
         let mut connection = self.open()?;
-        connection.execute_batch("PRAGMA synchronous = FULL;").map_err(to_io_error)?;
+        connection
+            .execute_batch("PRAGMA synchronous = FULL;")
+            .map_err(to_io_error)?;
         // Reserve the writer before reading the binding. A streaming save
         // may commit concurrently; a deferred read snapshot cannot then be
         // upgraded to a writer in WAL mode (SQLITE_BUSY_SNAPSHOT).
-        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(to_io_error)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(to_io_error)?;
         let row: Option<(String, String, String, i64, Option<String>)> = transaction
             .query_row(
                 "SELECT submission_id, host_id, device_id, grant_version, cancel_operation_id
@@ -1868,8 +1872,12 @@ impl StateStore {
         state: &str,
     ) -> io::Result<Option<Uuid>> {
         let mut connection = self.open()?;
-        connection.execute_batch("PRAGMA synchronous = FULL;").map_err(to_io_error)?;
-        let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(to_io_error)?;
+        connection
+            .execute_batch("PRAGMA synchronous = FULL;")
+            .map_err(to_io_error)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(to_io_error)?;
         let row: Option<(String, String, String, i64, Option<String>, Option<String>)> =
             transaction
                 .query_row(
@@ -1945,7 +1953,11 @@ impl StateStore {
     /// host's operation id is what the phone knows; the submission id is
     /// what the submission store knows, and only the daemon can mint one.
     /// own state, not a projection a phone or an old build may overwrite.
-    pub(crate) fn set_session_archived(&self, session_id: Uuid, archived: bool) -> io::Result<bool> {
+    pub(crate) fn set_session_archived(
+        &self,
+        session_id: Uuid,
+        archived: bool,
+    ) -> io::Result<bool> {
         let connection = self.open()?;
         let changed = connection
             .execute(
@@ -2072,20 +2084,9 @@ pub(crate) struct CancelTerm {
 
 /// The column order a cancel-term read maps from, spelled once so the two
 /// readers and the builder cannot drift apart.
-type CancelTermColumns = (
-    String,
-    String,
-    String,
-    String,
-    String,
-    i64,
-    i64,
-    String,
-);
+type CancelTermColumns = (String, String, String, String, String, i64, i64, String);
 
-fn row_to_term_columns(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<CancelTermColumns> {
+fn row_to_term_columns(row: &rusqlite::Row<'_>) -> rusqlite::Result<CancelTermColumns> {
     Ok((
         row.get(0)?,
         row.get(1)?,

@@ -16,8 +16,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use parking_lot::Mutex;
@@ -485,9 +485,7 @@ impl HostState {
     /// The grant version this host durably recorded for one prompt, from its
     /// own queue record. `None` when the host holds no such item.
     fn recorded_grant_version(&self, operation_id: Uuid) -> Option<u64> {
-        self.queues()
-            .lock()
-            .recorded_grant_version(operation_id)
+        self.queues().lock().recorded_grant_version(operation_id)
     }
 
     pub fn approvals(&self) -> &ApprovalRegistry {
@@ -516,9 +514,13 @@ impl HostState {
     // ---- devices ----
 
     pub fn note_device_online(&self, device_id: Uuid, grant_version: u64) {
-        self.online
-            .lock()
-            .insert(device_id, ActiveDevice { device_id, grant_version });
+        self.online.lock().insert(
+            device_id,
+            ActiveDevice {
+                device_id,
+                grant_version,
+            },
+        );
     }
 
     pub fn note_device_offline(&self, device_id: Uuid) {
@@ -544,7 +546,13 @@ impl HostState {
     pub fn attach_view(&self, session_id: Uuid, device_id: Uuid, runtime_id: Uuid) -> bool {
         self.views
             .lock()
-            .insert((session_id, device_id), SessionView { runtime_id, device_id })
+            .insert(
+                (session_id, device_id),
+                SessionView {
+                    runtime_id,
+                    device_id,
+                },
+            )
             .is_none()
     }
 
@@ -649,7 +657,11 @@ impl HostState {
     /// a device never sees a replayed event after a newer live one.
     pub fn session_lock(&self, session_id: Uuid) -> Arc<Mutex<()>> {
         let mut locks = self.send_locks.lock();
-        Arc::clone(locks.entry(session_id).or_insert_with(|| Arc::new(Mutex::new(()))))
+        Arc::clone(
+            locks
+                .entry(session_id)
+                .or_insert_with(|| Arc::new(Mutex::new(()))),
+        )
     }
 
     // ---- prompt queues ----
@@ -785,9 +797,11 @@ impl HostState {
             device_id: Uuid::nil(),
             grant_version: 0,
         };
-        let Ok(fintwind_client::ResponsePayload::RemotePrompts { prompts }) =
-            daemon.request(uuid::Uuid::nil(), uuid::Uuid::nil(), fintwind_client::Command::ListRemotePrompts { provenance })
-        else {
+        let Ok(fintwind_client::ResponsePayload::RemotePrompts { prompts }) = daemon.request(
+            uuid::Uuid::nil(),
+            uuid::Uuid::nil(),
+            fintwind_client::Command::ListRemotePrompts { provenance },
+        ) else {
             return;
         };
         let total = prompts.len();
@@ -878,10 +892,13 @@ impl HostState {
     pub fn record_orphaned_cancels(&self, cancels: Vec<OrphanedCancel>) {
         let mut guard = self.orphaned_cancels.lock();
         for cancel in cancels {
-            let existing = guard.iter().find(|entry| {
-                entry.prompt_operation_id == cancel.prompt_operation_id
-                    && entry.cancel_operation_id == cancel.cancel_operation_id
-            }).copied();
+            let existing = guard
+                .iter()
+                .find(|entry| {
+                    entry.prompt_operation_id == cancel.prompt_operation_id
+                        && entry.cancel_operation_id == cancel.cancel_operation_id
+                })
+                .copied();
             if let Some(existing) = existing {
                 // Prefer the daemon row's original grant over an older host
                 // record that predates grant persistence.
@@ -923,7 +940,6 @@ impl HostState {
                 || entry.cancel_operation_id != cancel_operation_id
         });
     }
-
 
     /// Mark one device as needing a resynchronize: a relay refused a frame
     /// addressed to it, so that frame's ciphertext was dropped rather than

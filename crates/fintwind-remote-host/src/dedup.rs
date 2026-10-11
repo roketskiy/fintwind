@@ -141,9 +141,7 @@ fn ensure_columns(connection: &mut Connection, names: &[&str]) -> anyhow::Result
         }
         // Column names come from this file's own constants, never from
         // stored data, so formatting them into the statement is safe.
-        transaction.execute_batch(&format!(
-            "ALTER TABLE operations ADD COLUMN {name} TEXT"
-        ))?;
+        transaction.execute_batch(&format!("ALTER TABLE operations ADD COLUMN {name} TEXT"))?;
     }
     transaction.commit()?;
     Ok(())
@@ -241,7 +239,14 @@ impl OperationStore {
                 )
                 .optional()?;
         match row {
-            Some((stored_kind, stored_summary, stored_state, stored_reject_code, stored_device, stored_hash)) => {
+            Some((
+                stored_kind,
+                stored_summary,
+                stored_state,
+                stored_reject_code,
+                stored_device,
+                stored_hash,
+            )) => {
                 if stored_kind != kind || stored_summary != summary {
                     // A retry must never mutate the operation it retries.
                     return Ok(AcceptCheck {
@@ -528,7 +533,8 @@ impl OperationStore {
             device_id,
             state: decode_state(&state, reject_code.as_deref()),
             detail,
-        })    }
+        })
+    }
 
     /// Drop records past their retention window. A retry arriving after
     /// this gets `Unknown`, which the protocol defines as "query first,
@@ -547,10 +553,8 @@ mod tests {
     use super::*;
 
     fn store() -> OperationStore {
-        let path = std::env::temp_dir().join(format!(
-            "relay-dedup-test-{}.sqlite3",
-            uuid::Uuid::new_v4()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("relay-dedup-test-{}.sqlite3", uuid::Uuid::new_v4()));
         OperationStore::open(&path).expect("dedup store opens")
     }
 
@@ -569,7 +573,9 @@ mod tests {
             .check("op-1", "SendPrompt", "s", "d", fresh_expiry(), None)
             .unwrap();
         assert!(!check.replay);
-        store.record_accepted("op-1", "SendPrompt", "s", "d", None, fresh_expiry(), None).unwrap();
+        store
+            .record_accepted("op-1", "SendPrompt", "s", "d", None, fresh_expiry(), None)
+            .unwrap();
         // Crash before record_finished: the retry must see Accepted and
         // must not be admitted for execution again.
         let replay = store
@@ -583,13 +589,35 @@ mod tests {
     fn summary_changing_retry_is_refused() {
         let store = store();
         store
-            .check("op-1", "SendPrompt", "prompt A", "d", fresh_expiry(), Some(&prompt_hash("prompt A")))
+            .check(
+                "op-1",
+                "SendPrompt",
+                "prompt A",
+                "d",
+                fresh_expiry(),
+                Some(&prompt_hash("prompt A")),
+            )
             .unwrap();
         store
-            .record_accepted("op-1", "SendPrompt", "prompt A", "d", None, fresh_expiry(), Some(&prompt_hash("prompt A")))
+            .record_accepted(
+                "op-1",
+                "SendPrompt",
+                "prompt A",
+                "d",
+                None,
+                fresh_expiry(),
+                Some(&prompt_hash("prompt A")),
+            )
             .unwrap();
         let tampered = store
-            .check("op-1", "SendPrompt", "prompt B", "d", fresh_expiry(), Some(&prompt_hash("prompt B")))
+            .check(
+                "op-1",
+                "SendPrompt",
+                "prompt B",
+                "d",
+                fresh_expiry(),
+                Some(&prompt_hash("prompt B")),
+            )
             .unwrap();
         assert!(tampered.replay);
         assert!(matches!(
@@ -617,7 +645,15 @@ mod tests {
             .check("op-3", "RenameSession", "s", "d", fresh_expiry(), None)
             .unwrap();
         store
-            .record_accepted("op-3", "RenameSession", "s", "d", None, fresh_expiry(), None)
+            .record_accepted(
+                "op-3",
+                "RenameSession",
+                "s",
+                "d",
+                None,
+                fresh_expiry(),
+                None,
+            )
             .unwrap();
         store
             .record_finished("op-3", &OperationState::Executed, None)
@@ -636,7 +672,15 @@ mod tests {
             .check("op-4", "AttachSession", "s", "d", fresh_expiry(), None)
             .unwrap();
         store
-            .record_accepted("op-4", "AttachSession", "s", "d", None, fresh_expiry(), None)
+            .record_accepted(
+                "op-4",
+                "AttachSession",
+                "s",
+                "d",
+                None,
+                fresh_expiry(),
+                None,
+            )
             .unwrap();
         store
             .record_finished(

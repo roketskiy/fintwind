@@ -297,12 +297,7 @@ pub fn mix(from: Hsla, to: Hsla, t: f32) -> Hsla {
 /// first mount stays static: zero means the value arrived with the element,
 /// so there is nothing to animate from. Ported from Ely's motion kit
 /// (`src/motion/changes.rs`). Must run during a frame's build or paint.
-pub fn changes(
-    id: impl Into<ElementId>,
-    value: bool,
-    window: &mut Window,
-    cx: &mut App,
-) -> usize {
+pub fn changes(id: impl Into<ElementId>, value: bool, window: &mut Window, cx: &mut App) -> usize {
     struct Changes {
         last: bool,
         count: usize,

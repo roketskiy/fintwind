@@ -14,7 +14,8 @@ use gpui::{
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
     ScrollHandle, SharedString, StyledText, Subscription, Task, TextLayout, TextRun,
     UTF16Selection, UnderlineStyle, Window, actions, div, fill, point, prelude::*, px, size,
-};use unicode_segmentation::UnicodeSegmentation;
+};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::theme::Theme;
 
@@ -2435,10 +2436,9 @@ impl Render for ComposerInput {
                 // composer's menu is exactly what it was.
                 let quote_item = quote_selection.as_ref().map(|quote| {
                     let quote = quote.clone();
-                    MenuItem::new(
-                        tr!("quote.quote_selection"),
-                        move |window, cx| quote(window, cx),
-                    )
+                    MenuItem::new(tr!("quote.quote_selection"), move |window, cx| {
+                        quote(window, cx)
+                    })
                     .icon("icons/file-bottom-left-arrow.svg")
                     .disabled(!has_selection)
                 });

@@ -293,8 +293,7 @@ impl BrowserAction {
             return Err("browser input exceeds the size limit".into());
         }
         if let Self::Evaluate { expression } = self
-            && (expression.trim().is_empty()
-                || expression.len() > MAX_BROWSER_EXPRESSION_BYTES)
+            && (expression.trim().is_empty() || expression.len() > MAX_BROWSER_EXPRESSION_BYTES)
         {
             return Err("browser expression is empty or too long".into());
         }
@@ -330,13 +329,20 @@ pub struct BrowserRequest {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum BrowserResult {
-    Ok { value: Value },
-    Error { message: String },
+    Ok {
+        value: Value,
+    },
+    Error {
+        message: String,
+    },
     /// One bounded binary payload — a screenshot — as standard base64. Wire
     /// caps treat this variant separately: [`Self::wire_budget`] gives it a
     /// larger budget than the JSON results, still fixed and enforced on both
     /// sides of the bridge.
-    Media { mime: String, data: String },
+    Media {
+        mime: String,
+        data: String,
+    },
 }
 
 impl BrowserResult {
@@ -415,72 +421,100 @@ mod tests {
 
     #[test]
     fn new_actions_validate_their_bounds() {
-        assert!(BrowserAction::Evaluate {
-            expression: "1 + 1".into()
-        }
-        .validate()
-        .is_ok());
-        assert!(BrowserAction::Evaluate {
-            expression: String::new()
-        }
-        .validate()
-        .is_err());
-        assert!(BrowserAction::Evaluate {
-            expression: "x".repeat(MAX_BROWSER_EXPRESSION_BYTES + 1)
-        }
-        .validate()
-        .is_err());
+        assert!(
+            BrowserAction::Evaluate {
+                expression: "1 + 1".into()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BrowserAction::Evaluate {
+                expression: String::new()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            BrowserAction::Evaluate {
+                expression: "x".repeat(MAX_BROWSER_EXPRESSION_BYTES + 1)
+            }
+            .validate()
+            .is_err()
+        );
 
         assert!(BrowserAction::ClickAt { x: 0, y: 8192 }.validate().is_ok());
         assert!(BrowserAction::ClickAt { x: -1, y: 10 }.validate().is_err());
-        assert!(BrowserAction::ClickAt { x: 10, y: 8193 }.validate().is_err());
+        assert!(
+            BrowserAction::ClickAt { x: 10, y: 8193 }
+                .validate()
+                .is_err()
+        );
 
-        assert!(BrowserAction::Press {
-            selector: "#q".into(),
-            key: "Enter".into()
-        }
-        .validate()
-        .is_ok());
-        assert!(BrowserAction::Press {
-            selector: "#q".into(),
-            key: "Meta+A".into()
-        }
-        .validate()
-        .is_err());
-        assert!(BrowserAction::Press {
-            selector: " ".into(),
-            key: "Enter".into()
-        }
-        .validate()
-        .is_err());
+        assert!(
+            BrowserAction::Press {
+                selector: "#q".into(),
+                key: "Enter".into()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BrowserAction::Press {
+                selector: "#q".into(),
+                key: "Meta+A".into()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            BrowserAction::Press {
+                selector: " ".into(),
+                key: "Enter".into()
+            }
+            .validate()
+            .is_err()
+        );
 
-        assert!(BrowserAction::Drag {
-            from: "#a".into(),
-            to: "#b".into()
-        }
-        .validate()
-        .is_ok());
-        assert!(BrowserAction::Drag {
-            from: "#a".into(),
-            to: " ".into()
-        }
-        .validate()
-        .is_err());
+        assert!(
+            BrowserAction::Drag {
+                from: "#a".into(),
+                to: "#b".into()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BrowserAction::Drag {
+                from: "#a".into(),
+                to: " ".into()
+            }
+            .validate()
+            .is_err()
+        );
 
-        assert!(BrowserAction::Select {
-            selector: "#s".into(),
-            value: String::new()
-        }
-        .validate()
-        .is_ok());
-        assert!(BrowserAction::Select {
-            selector: "#s".into(),
-            value: "v".repeat(MAX_BROWSER_TEXT_BYTES + 1)
-        }
-        .validate()
-        .is_err());
+        assert!(
+            BrowserAction::Select {
+                selector: "#s".into(),
+                value: String::new()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            BrowserAction::Select {
+                selector: "#s".into(),
+                value: "v".repeat(MAX_BROWSER_TEXT_BYTES + 1)
+            }
+            .validate()
+            .is_err()
+        );
 
-        assert!(BrowserAction::Screenshot { full_page: true }.validate().is_ok());
+        assert!(
+            BrowserAction::Screenshot { full_page: true }
+                .validate()
+                .is_ok()
+        );
         assert!(BrowserAction::Close.validate().is_ok());
     }
 
@@ -543,9 +577,7 @@ mod tests {
 
     #[test]
     fn media_results_carry_their_own_wire_budget() {
-        let json = BrowserResult::Ok {
-            value: Value::Null,
-        };
+        let json = BrowserResult::Ok { value: Value::Null };
         assert_eq!(json.wire_budget(), MAX_BROWSER_RESULT_BYTES);
         let media = BrowserResult::media("image/png", "AAAA".into()).unwrap();
         assert_eq!(media.wire_budget(), MAX_BROWSER_MEDIA_RESULT_BYTES);
@@ -619,13 +651,17 @@ mod tests {
             );
             assert_eq!(serde_json::to_value(&action).unwrap(), wire, "{wire}");
         }
-        assert!(serde_json::from_value::<BrowserAction>(serde_json::json!({
-            "kind": "evaluate"
-        }))
-        .is_err());
-        assert!(serde_json::from_value::<BrowserResult>(serde_json::json!({
-            "kind": "media", "mime": "image/png", "data": "AAAA"
-        }))
-        .is_ok());
+        assert!(
+            serde_json::from_value::<BrowserAction>(serde_json::json!({
+                "kind": "evaluate"
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<BrowserResult>(serde_json::json!({
+                "kind": "media", "mime": "image/png", "data": "AAAA"
+            }))
+            .is_ok()
+        );
     }
 }

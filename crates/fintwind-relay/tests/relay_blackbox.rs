@@ -27,13 +27,14 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use common::{connect_handshake, unlink_frame,
-    arm_pairing_offer, handshake, link_frame, sealed, sealed_with_payload, Admission, Identity,
-    Relay, Ws, ALLOWED_ORIGIN, EVIL_ORIGIN, OVERSIZE_FRAME_BYTES, QUEUE_PROBE_FRAMES,
+use common::{
+    ALLOWED_ORIGIN, Admission, EVIL_ORIGIN, Identity, OVERSIZE_FRAME_BYTES, QUEUE_PROBE_FRAMES,
+    Relay, Ws, arm_pairing_offer, connect_handshake, handshake, link_frame, sealed,
+    sealed_with_payload, unlink_frame,
 };
 use fintwind_remote_protocol::{
-    Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, RejectCode,
-    REMOTE_PROTOCOL_VERSION,
+    Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, REMOTE_PROTOCOL_VERSION,
+    RejectCode,
 };
 
 use uuid::Uuid;
@@ -541,7 +542,9 @@ fn a_slow_consumer_hits_the_live_outbound_bound() {
         "stage=slow-consumer a healthy device must still be routable"
     );
     assert!(
-        healthy_session.next_frame(Duration::from_secs(10)).is_some(),
+        healthy_session
+            .next_frame(Duration::from_secs(10))
+            .is_some(),
         "stage=slow-consumer the healthy device must still receive"
     );
     healthy_session.send_frame(&sealed(91, &host_id, None));
@@ -566,7 +569,10 @@ fn a_slow_consumer_hits_the_live_outbound_bound() {
         "stage=slow-consumer everything accepted must arrive once the peer reads"
     );
 
-    assert!(relay.alive(), "stage=slow-consumer the relay must still serve");
+    assert!(
+        relay.alive(),
+        "stage=slow-consumer the relay must still serve"
+    );
 }
 
 /// The offline queue is bounded and ordered: a full queue refuses the
@@ -709,13 +715,7 @@ fn offline_device_queue_is_bounded_and_ordered() {
 /// shared preamble of the offline-budget cases: pairing is the only way
 /// a device becomes a delivery target, and these cases want targets that
 /// never come online.
-fn link_one(
-    relay: &Relay,
-    host: &Identity,
-    host_id: &str,
-    host_session: &Ws,
-    device_id: &str,
-) {
+fn link_one(relay: &Relay, host: &Identity, host_id: &str, host_session: &Ws, device_id: &str) {
     let nonce = arm_pairing_offer(host, relay, host_id);
     host_session.send_frame(&link_frame(
         host_id,
@@ -879,11 +879,22 @@ fn offline_frames_expire_and_release_their_budget() {
     loop {
         let queue = relay.health_json()["queue"].clone();
         if queue["messages"].as_u64() == Some(0) {
-            assert_eq!(queue["bytes"].as_u64(), Some(0), "stage=expiry byte reclaim");
-            assert_eq!(queue["devices"].as_u64(), Some(0), "stage=expiry queue reclaim");
+            assert_eq!(
+                queue["bytes"].as_u64(),
+                Some(0),
+                "stage=expiry byte reclaim"
+            );
+            assert_eq!(
+                queue["devices"].as_u64(),
+                Some(0),
+                "stage=expiry queue reclaim"
+            );
             break;
         }
-        assert!(Instant::now() < reclaimed_by, "stage=expiry no traffic-independent reclaim");
+        assert!(
+            Instant::now() < reclaimed_by,
+            "stage=expiry no traffic-independent reclaim"
+        );
         std::thread::sleep(Duration::from_millis(250));
     }
     host_session.send_frame(&sealed_with_payload(500, &host_id, &device_id, payload));
@@ -911,37 +922,70 @@ fn offline_frames_expire_and_release_their_budget() {
 /// normal client is admitted right after.
 #[test]
 fn a_dripping_client_loses_its_slot_at_the_deadline() {
-    dripping_admission_case(b"POST /api/challenge HTTP/1.1\r\nHost: local\r\nX-Drip: ", b"x", false);
+    dripping_admission_case(
+        b"POST /api/challenge HTTP/1.1\r\nHost: local\r\nX-Drip: ",
+        b"x",
+        false,
+    );
 }
 
 fn dripping_admission_case(prefix: &[u8], byte: &[u8], delayed_prefix: bool) {
     let relay = Relay::start();
     let mut socket = TcpStream::connect(("127.0.0.1", relay.port)).expect("drip socket");
-    socket.set_read_timeout(Some(Duration::from_millis(100))).expect("drip read timeout");
-    socket.set_write_timeout(Some(Duration::from_millis(200))).expect("drip write timeout");
+    socket
+        .set_read_timeout(Some(Duration::from_millis(100)))
+        .expect("drip read timeout");
+    socket
+        .set_write_timeout(Some(Duration::from_millis(200)))
+        .expect("drip write timeout");
     let started = Instant::now();
-    if delayed_prefix { std::thread::sleep(Duration::from_secs(7)); }
+    if delayed_prefix {
+        std::thread::sleep(Duration::from_secs(7));
+    }
     socket.write_all(prefix).expect("drip prefix");
     let deadline = started + Duration::from_secs(13);
     let mut closed = false;
     while Instant::now() < deadline {
-        if socket.write_all(byte).is_err() { closed = true; break; }
+        if socket.write_all(byte).is_err() {
+            closed = true;
+            break;
+        }
         let mut response = [0u8; 512];
         match socket.read(&mut response) {
-            Ok(0) => { closed = true; break; }
+            Ok(0) => {
+                closed = true;
+                break;
+            }
             Ok(_) => {}
-            Err(error) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
-            Err(_) => { closed = true; break; }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(_) => {
+                closed = true;
+                break;
+            }
         }
         std::thread::sleep(Duration::from_millis(400));
     }
-    assert!(closed, "stage=admission continuous drip exceeded the total deadline");
-    assert!(relay.alive(), "stage=admission normal traffic must remain reachable");
+    assert!(
+        closed,
+        "stage=admission continuous drip exceeded the total deadline"
+    );
+    assert!(
+        relay.alive(),
+        "stage=admission normal traffic must remain reachable"
+    );
 }
 
 #[test]
 fn dripping_rest_body_obeys_the_same_total_deadline() {
-    dripping_admission_case(b"POST /api/challenge HTTP/1.1\r\nHost: local\r\nContent-Length: 4096\r\n\r\n", b" ", false);
+    dripping_admission_case(
+        b"POST /api/challenge HTTP/1.1\r\nHost: local\r\nContent-Length: 4096\r\n\r\n",
+        b" ",
+        false,
+    );
 }
 
 #[test]
@@ -974,7 +1018,12 @@ fn a_connect_handshake_names_only_its_own_device() {
     // Device one is authenticated and marks its handshake with device
     // two's id. Refused, and the host never sees it.
     let first_session = first.device_session(&relay, &first_id);
-    first_session.send_frame(&connect_handshake(0, &host_id, &second_id, FrameRole::Device));
+    first_session.send_frame(&connect_handshake(
+        0,
+        &host_id,
+        &second_id,
+        FrameRole::Device,
+    ));
     let (code, message, _) = first_session.expect_reject_full(Duration::from_secs(15));
     assert_eq!(
         code,
@@ -986,12 +1035,22 @@ fn a_connect_handshake_names_only_its_own_device() {
 
     // The host session is unaffected: device two's own handshake flows.
     let second_session = second.device_session(&relay, &second_id);
-    second_session.send_frame(&connect_handshake(0, &host_id, &second_id, FrameRole::Device));
-    assert!(matches!(host_session.next_frame(Duration::from_secs(15)),
+    second_session.send_frame(&connect_handshake(
+        0,
+        &host_id,
+        &second_id,
+        FrameRole::Device,
+    ));
+    assert!(
+        matches!(host_session.next_frame(Duration::from_secs(15)),
         Some(Frame::Handshake { host_id: actual_host, device_id: Some(actual_device), role: FrameRole::Device, .. })
         if actual_host.to_string() == host_id && actual_device.to_string() == second_id),
-        "stage=foreign-handshake the exact legitimate device frame must route");
-    assert!(relay.alive(), "stage=foreign-handshake the relay must serve");
+        "stage=foreign-handshake the exact legitimate device frame must route"
+    );
+    assert!(
+        relay.alive(),
+        "stage=foreign-handshake the relay must serve"
+    );
 }
 
 /// Removing a link must not discard accepted ciphertext from another host.
@@ -1006,21 +1065,53 @@ fn unlink_only_reclaims_the_selected_hosts_frames() {
     let device_id = device.register(&relay, "device");
     let first_session = first.host_session(&relay, &first_id);
     let second_session = second.host_session(&relay, &second_id);
-    for (host, id, session) in [(&first, &first_id, &first_session), (&second, &second_id, &second_session)] {
+    for (host, id, session) in [
+        (&first, &first_id, &first_session),
+        (&second, &second_id, &second_session),
+    ] {
         link_one(&relay, host, id, session, &device_id);
         session.send_frame(&sealed(1, id, Some(&device_id)));
-        assert!(matches!(session.next_frame(Duration::from_secs(10)), Some(Frame::Control { frame: ControlFrame::RelayAck { acked_seq: 1 } })), "stage=multi-host queue did not accept frame");
+        assert!(
+            matches!(
+                session.next_frame(Duration::from_secs(10)),
+                Some(Frame::Control {
+                    frame: ControlFrame::RelayAck { acked_seq: 1 }
+                })
+            ),
+            "stage=multi-host queue did not accept frame"
+        );
     }
     let nonce = arm_pairing_offer(&first, &relay, &first_id);
     first_session.send_frame(&unlink_frame(&first_id, &device_id, &nonce, &first.signing));
-    assert!(matches!(first_session.next_frame(Duration::from_secs(10)), Some(Frame::Control { frame: ControlFrame::Unlinked { .. } })), "stage=multi-host unlink missing");
-    assert_eq!(relay.health_json()["queue"]["messages"].as_u64(), Some(1), "stage=multi-host another host's frame was discarded");
+    assert!(
+        matches!(
+            first_session.next_frame(Duration::from_secs(10)),
+            Some(Frame::Control {
+                frame: ControlFrame::Unlinked { .. }
+            })
+        ),
+        "stage=multi-host unlink missing"
+    );
+    assert_eq!(
+        relay.health_json()["queue"]["messages"].as_u64(),
+        Some(1),
+        "stage=multi-host another host's frame was discarded"
+    );
     let challenge = device.challenge(&relay, "device");
     let reconnect = relay.ws("/ws", Some(ALLOWED_ORIGIN)).expect("reconnect");
-    reconnect.send_frame(&Frame::Auth { protocol_version: REMOTE_PROTOCOL_VERSION, role: FrameRole::Device, host_id: None,
-        device_id: Some(Uuid::parse_str(&device_id).expect("device id")), purpose: ConnectionPurpose::Session,
-        challenge: Base64Bytes(challenge.clone()), signature: Base64Bytes(device.sign(&challenge)) });
-    assert!(matches!(reconnect.next_frame(Duration::from_secs(10)), Some(Frame::Sealed { host_id, seq: 1, .. }) if host_id.to_string() == second_id), "stage=multi-host remaining host's exact frame was lost");
+    reconnect.send_frame(&Frame::Auth {
+        protocol_version: REMOTE_PROTOCOL_VERSION,
+        role: FrameRole::Device,
+        host_id: None,
+        device_id: Some(Uuid::parse_str(&device_id).expect("device id")),
+        purpose: ConnectionPurpose::Session,
+        challenge: Base64Bytes(challenge.clone()),
+        signature: Base64Bytes(device.sign(&challenge)),
+    });
+    assert!(
+        matches!(reconnect.next_frame(Duration::from_secs(10)), Some(Frame::Sealed { host_id, seq: 1, .. }) if host_id.to_string() == second_id),
+        "stage=multi-host remaining host's exact frame was lost"
+    );
 }
 
 /// A departed slow consumer releases the aggregate budget, not just its slot.
@@ -1039,18 +1130,42 @@ fn slow_consumer_exit_releases_global_outbound_accounting() {
     for seq in 1..=32 {
         host_session.send_frame(&sealed_with_payload(seq, &host_id, &device_id, 700_000));
         match host_session.next_frame(Duration::from_secs(15)) {
-            Some(Frame::Control { frame: ControlFrame::Rejected { code: RejectCode::QueueFull, .. } }) => { rejected = true; break; }
-            Some(Frame::Control { frame: ControlFrame::RelayAck { .. } }) => {}
+            Some(Frame::Control {
+                frame:
+                    ControlFrame::Rejected {
+                        code: RejectCode::QueueFull,
+                        ..
+                    },
+            }) => {
+                rejected = true;
+                break;
+            }
+            Some(Frame::Control {
+                frame: ControlFrame::RelayAck { .. },
+            }) => {}
             _ => panic!("stage=outbound-reclaim unexpected answer"),
         }
     }
-    assert!(rejected, "stage=outbound-reclaim slow consumer did not fill budget");
-    assert!(relay.health_json()["outbound"]["bytes"].as_u64().is_some_and(|bytes| bytes > 0), "stage=outbound-reclaim no outstanding bytes observed");
+    assert!(
+        rejected,
+        "stage=outbound-reclaim slow consumer did not fill budget"
+    );
+    assert!(
+        relay.health_json()["outbound"]["bytes"]
+            .as_u64()
+            .is_some_and(|bytes| bytes > 0),
+        "stage=outbound-reclaim no outstanding bytes observed"
+    );
     drop(slow);
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
-        if relay.health_json()["outbound"]["bytes"].as_u64() == Some(0) { break; }
-        assert!(Instant::now() < deadline, "stage=outbound-reclaim departed peer leaked aggregate budget");
+        if relay.health_json()["outbound"]["bytes"].as_u64() == Some(0) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "stage=outbound-reclaim departed peer leaked aggregate budget"
+        );
         std::thread::sleep(Duration::from_millis(150));
     }
 }

@@ -1,8 +1,7 @@
-
 mod common;
 
 use common::{
-    fresh_bytes, now_ms, new_device_identity, pair_ok_as, Device, HostPeer, REQUEST_SNAPSHOT,
+    Device, HostPeer, REQUEST_SNAPSHOT, fresh_bytes, new_device_identity, now_ms, pair_ok_as,
 };
 use fintwind_remote_protocol::MessageBody;
 use serde_json::json;

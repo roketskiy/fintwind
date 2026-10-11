@@ -59,34 +59,69 @@ fn invalid(message: &'static str) -> ReadError {
 }
 
 fn unavailable() -> ReadError {
-    (RejectCode::UnknownRoute, "This file is unavailable in the selected project.".to_owned())
+    (
+        RejectCode::UnknownRoute,
+        "This file is unavailable in the selected project.".to_owned(),
+    )
 }
 
 pub(crate) fn relative_path(value: &str) -> Result<PathBuf, ReadError> {
-    if value.is_empty() || value.len() > MAX_RELATIVE_PATH_BYTES
+    if value.is_empty()
+        || value.len() > MAX_RELATIVE_PATH_BYTES
         || value.chars().any(|character| character.is_control())
-        || value.contains(':') || value.contains('\\') || value.starts_with('/')
+        || value.contains(':')
+        || value.contains('\\')
+        || value.starts_with('/')
     {
-        return Err(invalid("Choose a relative file path within the selected project."));
+        return Err(invalid(
+            "Choose a relative file path within the selected project.",
+        ));
     }
     let path = PathBuf::from(value);
-    if path.components().any(|part| !matches!(part, Component::Normal(_)))
-        || value.split('/').any(|part| part.is_empty() || part == "." || part == ".."
-            || part.ends_with(' ') || part.ends_with('.'))
+    if path
+        .components()
+        .any(|part| !matches!(part, Component::Normal(_)))
+        || value.split('/').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || part.ends_with(' ')
+                || part.ends_with('.')
+        })
     {
-        return Err(invalid("Choose a relative file path within the selected project."));
+        return Err(invalid(
+            "Choose a relative file path within the selected project.",
+        ));
     }
     // Configuration/credential storage is not a remote read interface. This
     // denylist is supplementary; it cannot guarantee source files lack secrets.
     if value.split('/').any(|part| {
         let part = part.to_ascii_lowercase();
-        matches!(part.as_str(), ".git" | ".ssh" | ".aws" | ".azure" | ".gnupg"
-            | ".opencode" | ".fintwind" | "credentials" | "credentials.json"
-            | "auth.json" | "opencode.json" | "opencode.jsonc" | "id_rsa"
-            | "id_ed25519") || part == ".env" || part.starts_with(".env.")
-            || part.ends_with(".pem") || part.ends_with(".pfx") || part.ends_with(".key")
+        matches!(
+            part.as_str(),
+            ".git"
+                | ".ssh"
+                | ".aws"
+                | ".azure"
+                | ".gnupg"
+                | ".opencode"
+                | ".fintwind"
+                | "credentials"
+                | "credentials.json"
+                | "auth.json"
+                | "opencode.json"
+                | "opencode.jsonc"
+                | "id_rsa"
+                | "id_ed25519"
+        ) || part == ".env"
+            || part.starts_with(".env.")
+            || part.ends_with(".pem")
+            || part.ends_with(".pfx")
+            || part.ends_with(".key")
     }) {
-        return Err(invalid("Credential and private configuration files are not available remotely."));
+        return Err(invalid(
+            "Credential and private configuration files are not available remotely.",
+        ));
     }
     Ok(path)
 }
@@ -102,8 +137,8 @@ fn validate_resolved_relative(root: &Path, target: &Path) -> Result<(), ReadErro
 /// Resolve the opened file rather than trusting a pre-open symlink check.
 #[cfg(windows)]
 pub(crate) fn opened_path(file: &File) -> Result<PathBuf, ReadError> {
-    use std::os::windows::io::AsRawHandle;
     use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
 
     let mut buffer = vec![0_u16; 32768];
@@ -111,7 +146,12 @@ pub(crate) fn opened_path(file: &File) -> Result<PathBuf, ReadError> {
     // remains writable for its declared length. The default mode resolves all
     // links to a normalized volume path, including any replaced intermediate.
     let length = unsafe {
-        GetFinalPathNameByHandleW(file.as_raw_handle(), buffer.as_mut_ptr(), buffer.len() as u32, 0)
+        GetFinalPathNameByHandleW(
+            file.as_raw_handle(),
+            buffer.as_mut_ptr(),
+            buffer.len() as u32,
+            0,
+        )
     } as usize;
     if length == 0 || length >= buffer.len() {
         return Err(unavailable());
@@ -129,14 +169,18 @@ pub(crate) fn opened_path(file: &File) -> Result<PathBuf, ReadError> {
 #[cfg(not(any(windows, target_os = "linux")))]
 pub(crate) fn opened_path(_file: &File) -> Result<PathBuf, ReadError> {
     // Fail closed on platforms without an implemented handle-target verifier.
-    Err(invalid("Remote file reads are unavailable on this platform."))
+    Err(invalid(
+        "Remote file reads are unavailable on this platform.",
+    ))
 }
 
 fn validate_single_link(file: &File) -> Result<(), ReadError> {
     #[cfg(windows)]
     let count = {
         use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::{BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle};
+        use windows_sys::Win32::Storage::FileSystem::{
+            BY_HANDLE_FILE_INFORMATION, GetFileInformationByHandle,
+        };
         // SAFETY: this Win32 output type consists only of integer fields and
         // FILETIME integer pairs; an all-zero value is a valid empty buffer.
         let mut information: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
@@ -154,11 +198,16 @@ fn validate_single_link(file: &File) -> Result<(), ReadError> {
     };
     #[cfg(not(any(windows, unix)))]
     let count = 0_u64;
-    if count != 1 { return Err(unavailable()); }
+    if count != 1 {
+        return Err(unavailable());
+    }
     Ok(())
 }
 
-pub fn read_file(project_root: &Path, request: &FileReadRequest) -> Result<FileReadPage, ReadError> {
+pub fn read_file(
+    project_root: &Path,
+    request: &FileReadRequest,
+) -> Result<FileReadPage, ReadError> {
     if request.page_bytes == 0 || request.page_bytes > MAX_PAGE_BYTES {
         return Err(invalid("The requested file page is too large."));
     }
@@ -167,16 +216,31 @@ pub fn read_file(project_root: &Path, request: &FileReadRequest) -> Result<FileR
     }
     let content = read_text_snapshot(project_root, &request.path)?;
     let revision = format!("{:x}", Sha256::digest(content.as_bytes()));
-    if request.revision.as_ref().is_some_and(|expected| expected != &revision) {
-        return Err(invalid("This file changed. Refresh it before reading another page."));
+    if request
+        .revision
+        .as_ref()
+        .is_some_and(|expected| expected != &revision)
+    {
+        return Err(invalid(
+            "This file changed. Refresh it before reading another page.",
+        ));
     }
     if request.offset_bytes > content.len() || !content.is_char_boundary(request.offset_bytes) {
-        return Err(invalid("The requested file position is invalid. Refresh the file."));
+        return Err(invalid(
+            "The requested file position is invalid. Refresh the file.",
+        ));
     }
-    let mut end = request.offset_bytes.saturating_add(request.page_bytes).min(content.len());
-    while end > request.offset_bytes && !content.is_char_boundary(end) { end -= 1; }
+    let mut end = request
+        .offset_bytes
+        .saturating_add(request.page_bytes)
+        .min(content.len());
+    while end > request.offset_bytes && !content.is_char_boundary(end) {
+        end -= 1;
+    }
     if end == request.offset_bytes && end < content.len() {
-        return Err(invalid("The requested page is too small to display this text."));
+        return Err(invalid(
+            "The requested page is too small to display this text.",
+        ));
     }
     Ok(FileReadPage {
         project_id: request.project_id,
@@ -194,10 +258,12 @@ pub fn read_file(project_root: &Path, request: &FileReadRequest) -> Result<FileR
 /// worktree pathname between a symlink check and its own open.
 pub(crate) fn read_text_snapshot(project_root: &Path, path: &str) -> Result<String, ReadError> {
     let bytes = read_bytes_snapshot(project_root, path)?;
-    let content = std::str::from_utf8(&bytes)
-        .map_err(|_| invalid("This file is not UTF-8 text."))?;
+    let content =
+        std::str::from_utf8(&bytes).map_err(|_| invalid("This file is not UTF-8 text."))?;
     if content.contains('\0') {
-        return Err(invalid("Binary files are not available in the text viewer."));
+        return Err(invalid(
+            "Binary files are not available in the text viewer.",
+        ));
     }
     Ok(content.to_owned())
 }
@@ -210,7 +276,10 @@ pub(crate) fn read_bytes_snapshot(project_root: &Path, path: &str) -> Result<Vec
     if !root.is_dir() {
         return Err(unavailable());
     }
-    let target = root.join(&relative).canonicalize().map_err(|_| unavailable())?;
+    let target = root
+        .join(&relative)
+        .canonicalize()
+        .map_err(|_| unavailable())?;
     if !target.starts_with(&root) || target == root {
         return Err(unavailable());
     }
@@ -224,8 +293,11 @@ pub(crate) fn read_bytes_snapshot(project_root: &Path, path: &str) -> Result<Vec
         // A local writer can replace a regular file with a FIFO between the
         // metadata check and open. Nonblocking open cannot hang the host; the
         // opened-handle check below still rejects every non-regular object.
-        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK)
-            .open(&target).map_err(|_| unavailable())?
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&target)
+            .map_err(|_| unavailable())?
     };
     #[cfg(not(unix))]
     let file = File::open(&target).map_err(|_| unavailable())?;
@@ -243,7 +315,10 @@ pub(crate) fn read_bytes_snapshot(project_root: &Path, path: &str) -> Result<Vec
     }
     validate_single_link(&file)?;
     let mut bytes = Vec::with_capacity((metadata.len() as usize).min(MAX_FILE_BYTES));
-    (&file).take(MAX_FILE_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|_| unavailable())?;
+    (&file)
+        .take(MAX_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| unavailable())?;
     if bytes.len() > MAX_FILE_BYTES {
         return Err(invalid("This file is too large to view remotely."));
     }

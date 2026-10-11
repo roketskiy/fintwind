@@ -51,8 +51,8 @@ use uuid::Uuid;
 
 use fintwind_remote_crypto::ConnectResponder;
 use fintwind_remote_protocol::{
-    Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, HandshakeMode, MessageBody,
-    SealedMessage, MAX_FRAME_BYTES, MAX_SEALED_PLAINTEXT, REMOTE_PROTOCOL_VERSION,
+    Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, HandshakeMode, MAX_FRAME_BYTES,
+    MAX_SEALED_PLAINTEXT, MessageBody, REMOTE_PROTOCOL_VERSION, SealedMessage,
 };
 
 use crate::config::{RECONNECT_DELAYS_SECONDS, RELAY_PING_INTERVAL, RELAY_PONG_TIMEOUT};
@@ -455,12 +455,7 @@ fn run_one_connection(links: &Arc<SessionLinks>) -> SessionEnd {
                     state.set_link_status(false);
                     return SessionEnd::Reconnect;
                 };
-                match handle_frame(
-                    links,
-                    &mut socket,
-                    &mut channels,
-                    frame,
-                ) {
+                match handle_frame(links, &mut socket, &mut channels, frame) {
                     Handled::Continue => {}
                     Handled::Reconnect => {
                         for device_id in channels.ids() {
@@ -540,8 +535,12 @@ fn handle_frame(
             // channel has no use for them.
             Handled::Continue
         }
-        Frame::Control { frame: ControlFrame::Pong { .. } } => Handled::Continue,
-        Frame::Control { frame: ControlFrame::Ping { sent_at_ms } } => {
+        Frame::Control {
+            frame: ControlFrame::Pong { .. },
+        } => Handled::Continue,
+        Frame::Control {
+            frame: ControlFrame::Ping { sent_at_ms },
+        } => {
             let _ = send_frame(
                 socket,
                 Frame::Control {
@@ -551,11 +550,12 @@ fn handle_frame(
             Handled::Continue
         }
         Frame::Control {
-            frame: ControlFrame::Rejected {
-                code,
-                message,
-                frame: refused,
-            },
+            frame:
+                ControlFrame::Rejected {
+                    code,
+                    message,
+                    frame: refused,
+                },
         } => {
             // A refused frame is a routing fact about one frame, never an
             // endpoint result: the frame did not reach its device, so
@@ -609,7 +609,9 @@ fn handle_frame(
             }
             Handled::Continue
         }
-        Frame::Control { frame: ControlFrame::RelayAck { .. } } => {
+        Frame::Control {
+            frame: ControlFrame::RelayAck { .. },
+        } => {
             // Relay-level receipt: proves transport, releases nothing.
             Handled::Continue
         }
@@ -696,7 +698,9 @@ fn handle_frame(
             crate::events::push_pending_offers(state, device_id);
             Handled::Continue
         }
-        Frame::Handshake { protocol_version, .. } => {
+        Frame::Handshake {
+            protocol_version, ..
+        } => {
             // Any other handshake shape on the business connection (a
             // pairing-mode frame, or one that names no device) is not
             // something this channel serves — but a version mismatch is
@@ -809,8 +813,11 @@ fn handle_sealed(
 ) -> Handled {
     match message.body {
         MessageBody::LivenessProbe { probe_id } => {
-            links.state.send_to_device(MessageBody::LivenessReply { probe_id },
-                device_id, PendingKind::Event);
+            links.state.send_to_device(
+                MessageBody::LivenessReply { probe_id },
+                device_id,
+                PendingKind::Event,
+            );
             Handled::Continue
         }
         MessageBody::Acknowledged { upto_seq } => {
@@ -827,7 +834,10 @@ fn handle_sealed(
             // read loop. The result comes back through the pending queue.
             if links
                 .work_tx
-                .send(SessionCommand::Operation { device_id, operation })
+                .send(SessionCommand::Operation {
+                    device_id,
+                    operation,
+                })
                 .is_err()
             {
                 return Handled::Reconnect;
@@ -837,7 +847,10 @@ fn handle_sealed(
         MessageBody::PermissionDecision(decision) => {
             if links
                 .work_tx
-                .send(SessionCommand::PermissionDecision { device_id, decision })
+                .send(SessionCommand::PermissionDecision {
+                    device_id,
+                    decision,
+                })
                 .is_err()
             {
                 return Handled::Reconnect;
@@ -847,7 +860,10 @@ fn handle_sealed(
         MessageBody::UserInputDecision(decision) => {
             if links
                 .work_tx
-                .send(SessionCommand::UserInputDecision { device_id, decision })
+                .send(SessionCommand::UserInputDecision {
+                    device_id,
+                    decision,
+                })
                 .is_err()
             {
                 return Handled::Reconnect;
@@ -981,7 +997,10 @@ impl std::fmt::Display for DispatchError {
         match self {
             Self::Transport(error) => write!(f, "{error}"),
             Self::Backpressure => {
-                write!(f, "outbound buffer is full; refusing to send untracked ciphertext")
+                write!(
+                    f,
+                    "outbound buffer is full; refusing to send untracked ciphertext"
+                )
             }
             Self::Oversized => write!(f, "encoded frame exceeds the wire limit"),
             Self::Encrypt(error) => write!(f, "encrypt refused the message: {error}"),
@@ -1008,9 +1027,9 @@ enum DispatchScope {
 fn failure_kind(error: &DispatchError) -> DispatchScope {
     match error {
         DispatchError::Transport(_) => DispatchScope::Link,
-        DispatchError::Backpressure
-        | DispatchError::Oversized
-        | DispatchError::Encrypt(_) => DispatchScope::Device,
+        DispatchError::Backpressure | DispatchError::Oversized | DispatchError::Encrypt(_) => {
+            DispatchScope::Device
+        }
     }
 }
 
@@ -1141,11 +1160,7 @@ fn send_frame(socket: &mut RelaySocket, frame: Frame) -> Result<(), tungstenite:
 
 /// Tell one device its queued prompt was dropped (revoked, or its target
 /// disappeared). The item never ran and never will.
-fn report_dropped_queue_item(
-    state: &HostState,
-    item: &crate::queue::QueuedPrompt,
-    reason: &str,
-) {
+fn report_dropped_queue_item(state: &HostState, item: &crate::queue::QueuedPrompt, reason: &str) {
     state.send_to_device(
         MessageBody::OperationResult(fintwind_remote_protocol::OperationOutcome {
             operation_id: item.operation_id,

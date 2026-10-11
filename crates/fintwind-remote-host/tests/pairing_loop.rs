@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use uuid::Uuid;
@@ -107,15 +107,16 @@ fn pairing_loop_confirms_grants_and_links() {
         expires_at_ms: invite.expires_at_ms,
         relay_origin: invite.relay_origin.clone(),
     };
-    let host_public = BASE64_STANDARD.decode(&invite.host_public_key).expect("host key");
+    let host_public = BASE64_STANDARD
+        .decode(&invite.host_public_key)
+        .expect("host key");
 
     // ---- connect, authenticate, open the XX pairing handshake ----
     let (mut socket, _) = tungstenite::connect(&ws_url).expect("device ws connect");
     apply_read_timeout(&socket, Some(Duration::from_millis(250)));
     device_auth(&mut socket, &device_id, &device_signing);
 
-    let mut initiator =
-        PairingInitiator::new(&binding, &device_noise).expect("xx initiator");
+    let mut initiator = PairingInitiator::new(&binding, &device_noise).expect("xx initiator");
     let message1 = initiator.write_first().expect("xx message 1");
     send_frame(
         &mut socket,
@@ -156,8 +157,9 @@ fn pairing_loop_confirms_grants_and_links() {
                     },
                 };
                 let hello_bytes = serde_json::to_string(&hello).expect("hello json");
-                let (message3, channel) =
-                    initiator.finish(hello_bytes.as_bytes()).expect("xx message 3");
+                let (message3, channel) = initiator
+                    .finish(hello_bytes.as_bytes())
+                    .expect("xx message 3");
                 send_frame(
                     &mut socket,
                     Frame::Handshake {
@@ -173,7 +175,12 @@ fn pairing_loop_confirms_grants_and_links() {
                 break channel;
             }
             Frame::Control {
-                frame: ControlFrame::Rejected { code, message, frame: _ },
+                frame:
+                    ControlFrame::Rejected {
+                        code,
+                        message,
+                        frame: _,
+                    },
             } => panic!("relay refused the pairing handshake: {code:?} {message}"),
             other => panic!("unexpected frame during pairing: {other:?}"),
         }
@@ -246,11 +253,15 @@ fn pairing_loop_confirms_grants_and_links() {
         .expect("grant array");
     assert_eq!(grants.len(), 1, "exactly one grant after the first pairing");
     assert_eq!(
-        grants[0].get("deviceId").and_then(serde_json::Value::as_str),
+        grants[0]
+            .get("deviceId")
+            .and_then(serde_json::Value::as_str),
         Some(device_id.as_str())
     );
     assert_eq!(
-        grants[0].get("devicePublicKey").and_then(serde_json::Value::as_str),
+        grants[0]
+            .get("devicePublicKey")
+            .and_then(serde_json::Value::as_str),
         Some(BASE64_STANDARD.encode(&device_noise.public).as_str()),
         "the grant must pin the public key the XX handshake bound"
     );
@@ -268,7 +279,10 @@ fn pairing_loop_confirms_grants_and_links() {
             |row| row.get::<_, Option<i64>>(0),
         )
         .expect("link row queried");
-    assert!(link.is_none(), "the pairing link must be live, not unlinked");
+    assert!(
+        link.is_none(),
+        "the pairing link must be live, not unlinked"
+    );
 }
 
 fn host_tool_idle() {
@@ -374,12 +388,19 @@ fn post_json(origin: &str, path: &str, body: &serde_json::Value) -> serde_json::
     let head = parts.next().unwrap_or_default();
     let payload = parts.next().unwrap_or_default();
     let status = head.lines().next().unwrap_or_default();
-    assert!(status.contains(" 200 "), "relay refused {path}: {status} {payload}");
+    assert!(
+        status.contains(" 200 "),
+        "relay refused {path}: {status} {payload}"
+    );
     serde_json::from_str(payload).expect("relay json response")
 }
 
 fn register_identity(origin: &str, signing: &SigningKey) -> String {
-    let challenge = post_json(origin, "/api/challenge", &serde_json::json!({"role": "device"}));
+    let challenge = post_json(
+        origin,
+        "/api/challenge",
+        &serde_json::json!({"role": "device"}),
+    );
     let challenge_b64 = challenge
         .get("challenge")
         .and_then(serde_json::Value::as_str)
@@ -410,7 +431,11 @@ fn device_auth(socket: &mut DeviceSocket, device_id: &str, signing: &SigningKey)
         _ => panic!("plain ws expected in tests"),
     };
     let origin = format!("http://{authority}");
-    let challenge = post_json(&origin, "/api/challenge", &serde_json::json!({"role": "device"}));
+    let challenge = post_json(
+        &origin,
+        "/api/challenge",
+        &serde_json::json!({"role": "device"}),
+    );
     let challenge_b64 = challenge
         .get("challenge")
         .and_then(serde_json::Value::as_str)

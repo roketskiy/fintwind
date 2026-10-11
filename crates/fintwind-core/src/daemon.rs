@@ -241,7 +241,10 @@ impl FintwindBackend {
             .unwrap_or_default();
         let server = crate::opencode_pool::acquire(binary, directory)?;
         let read_runtime = local.as_ref().and_then(|local| {
-            self.sessions.lock().get(&local.id).map(|(runtime_id, _)| *runtime_id)
+            self.sessions
+                .lock()
+                .get(&local.id)
+                .map(|(runtime_id, _)| *runtime_id)
         });
         let mut transcript = driver::native::fetch_transcript(
             &server,
@@ -257,10 +260,14 @@ impl FintwindBackend {
             let state = self.task_state.lock();
             let runtimes = self.sessions.lock();
             if let (Some(local), Some(read_runtime)) = (local.as_ref(), read_runtime) {
-                let current = state.sessions.iter().find(|session| session.id == local.id)
+                let current = state
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == local.id)
                     .ok_or_else(|| anyhow!("native history target was removed"))?;
                 if current.native_session_id.as_deref() != Some(native_id)
-                    || runtimes.get(&local.id).map(|(runtime_id, _)| *runtime_id) != Some(read_runtime)
+                    || runtimes.get(&local.id).map(|(runtime_id, _)| *runtime_id)
+                        != Some(read_runtime)
                 {
                     bail!("native history target changed during read");
                 }
@@ -637,8 +644,7 @@ impl FintwindBackend {
             cancel_operation_id: None,
             cancel_state: None,
         };
-        let response =
-            self.commit_remote_admission(&project, &record, &row, operation_id)?;
+        let response = self.commit_remote_admission(&project, &record, &row, operation_id)?;
         crate::opencode_diagnostics::record("remote_prompt_admitted", 0, 0);
         Ok(response)
     }
@@ -704,14 +710,18 @@ impl FintwindBackend {
         {
             next.projects.push(project.clone());
         }
-        self.task_store
-            .save_with_submission_and_remote(&mut next, Some(submission), Some(remote))?;
+        self.task_store.save_with_submission_and_remote(
+            &mut next,
+            Some(submission),
+            Some(remote),
+        )?;
         *state = next;
         // The daemon owns this preparation: no client going away may
         // invalidate it, so the sink is detached from any subscriber.
-        self.active_preparations
-            .lock()
-            .insert(submission.receipt.id, EventSink::detached(session_id, Uuid::nil()));
+        self.active_preparations.lock().insert(
+            submission.receipt.id,
+            EventSink::detached(session_id, Uuid::nil()),
+        );
         crate::opencode_diagnostics::submission("saved", submission, 0, 0);
         Ok(ResponsePayload::RemotePromptAdmitted {
             operation_id,
@@ -758,7 +768,8 @@ impl FintwindBackend {
             || provenance.grant_version != row.grant_version
         {
             bail!("that prompt belongs to another device");
-        }        let state_now = fintwind_protocol::submission::RemotePromptState::parse(&row.state)
+        }
+        let state_now = fintwind_protocol::submission::RemotePromptState::parse(&row.state)
             .unwrap_or(fintwind_protocol::submission::RemotePromptState::Unknown);
         if !state_now.is_pending() {
             // Already dispatched, cancelled or expired: the recorded state
@@ -897,12 +908,17 @@ impl FintwindBackend {
             // with cancellation. No caller can observe a claimed-but-not-live
             // operation and settle it as an abandoned request.
             let mut live = self.live_dispatches.lock();
-            let claimed = self.task_store.transition_remote_prompt(
-            operation_id,
-            fintwind_protocol::submission::RemotePromptState::Queued.label(),
-            fintwind_protocol::submission::RemotePromptState::Dispatching.label(),
-            ).context("remote-dispatch-claim")?;
-            if claimed { live.insert(operation_id); }
+            let claimed = self
+                .task_store
+                .transition_remote_prompt(
+                    operation_id,
+                    fintwind_protocol::submission::RemotePromptState::Queued.label(),
+                    fintwind_protocol::submission::RemotePromptState::Dispatching.label(),
+                )
+                .context("remote-dispatch-claim")?;
+            if claimed {
+                live.insert(operation_id);
+            }
             claimed
         };
         if !claimed {
@@ -930,36 +946,43 @@ impl FintwindBackend {
 
         // Re-check the target after the claim: a session deleted, archived or
         // expired while this ran must never receive the prompt.
-        if self.remote_target_still_valid(session_id, operation_id).context("remote-dispatch-target")? {
+        if self
+            .remote_target_still_valid(session_id, operation_id)
+            .context("remote-dispatch-target")?
+        {
             // The turn opens first, so the checkpoint below addresses the
             // turn it belongs to rather than the one before it. Opening it
             // is also where the busy question is answered authoritatively:
             // the local GUI can have committed a turn between the snapshot
             // above and this point, and a queued prompt must never become a
             // second running turn.
-            match self.materialize_remote_turn(session_id, row.submission_id, &row.prompt).context("remote-dispatch-materialize")? {
+            match self
+                .materialize_remote_turn(session_id, row.submission_id, &row.prompt)
+                .context("remote-dispatch-materialize")?
+            {
                 MaterializedTurn::Opened(turn_count) => {
                     if let Ok(workspace) =
                         self.prepare_remote_turn(&project, session_id, &workspace, turn_count)
                     {
                         let outcome = (|| -> anyhow::Result<ResponsePayload> {
                             self.ensure_remote_runtime(session_id, &events)?;
-                            self.dispatch_submission_inner(
-                                session_id,
-                                row.submission_id,
-                                workspace,
-                            )
+                            self.dispatch_submission_inner(session_id, row.submission_id, workspace)
                         })();
                         if let Ok(ResponsePayload::SubmissionSaved { receipt }) = outcome
-                            && matches!(receipt.state, SubmissionState::Dispatching | SubmissionState::Accepted)
+                            && matches!(
+                                receipt.state,
+                                SubmissionState::Dispatching | SubmissionState::Accepted
+                            )
                         {
-                            self.task_store.transition_remote_prompt(
-                                operation_id,
-                                fintwind_protocol::submission::RemotePromptState::Dispatching
-                                    .label(),
-                                fintwind_protocol::submission::RemotePromptState::Dispatched
-                                    .label(),
-                            ).context("remote-dispatch-commit")?;
+                            self.task_store
+                                .transition_remote_prompt(
+                                    operation_id,
+                                    fintwind_protocol::submission::RemotePromptState::Dispatching
+                                        .label(),
+                                    fintwind_protocol::submission::RemotePromptState::Dispatched
+                                        .label(),
+                                )
+                                .context("remote-dispatch-commit")?;
                             // The prompt reached the driver. A cancel that
                             // arrived while this dispatch was in flight came
                             // too late: it is settled as `dispatched`, never
@@ -967,16 +990,15 @@ impl FintwindBackend {
                             // prompt was stopped when it ran. The ending is
                             // written to the durable term record so a query
                             // after a crash still has it.
-                            self.settle_cancel_term(operation_id, "dispatched").context("remote-dispatch-cancel-settlement")?;
-                            crate::opencode_diagnostics::record(
-                                "remote_prompt_dispatched",
-                                0,
-                                0,
-                            );
+                            self.settle_cancel_term(operation_id, "dispatched")
+                                .context("remote-dispatch-cancel-settlement")?;
+                            crate::opencode_diagnostics::record("remote_prompt_dispatched", 0, 0);
                             return Ok(ResponsePayload::RemotePromptState {
                                 operation_id,
                                 submission_id: row.submission_id,
-                                state: fintwind_protocol::submission::RemotePromptState::Dispatched.label().to_owned(),
+                                state: fintwind_protocol::submission::RemotePromptState::Dispatched
+                                    .label()
+                                    .to_owned(),
                             });
                         }
                     }
@@ -1256,10 +1278,7 @@ impl FintwindBackend {
             }
             workspace => workspace.clone(),
         };
-        let project_path = workspace
-            .path()
-            .unwrap_or(&project.path)
-            .to_path_buf();
+        let project_path = workspace.path().unwrap_or(&project.path).to_path_buf();
         // A checkpoint failure is reported, never fatal: the turn still runs,
         // and the warning travels with the session's own record.
         if let Err(error) = self.capture_turn_checkpoint(project_path, session_id, turn_count) {
@@ -1386,11 +1405,7 @@ impl FintwindBackend {
         if session.archived {
             return Ok(MaterializedTurn::Gone);
         }
-        if let Some(turn) = session
-            .turns
-            .iter()
-            .find(|turn| turn.id == submission_id)
-        {
+        if let Some(turn) = session.turns.iter().find(|turn| turn.id == submission_id) {
             return Ok(MaterializedTurn::Opened(turn.turn_count));
         }
         self.hydrate_submission_session(session)?;
@@ -1568,32 +1583,59 @@ impl FintwindBackend {
             .spawn(move || {
                 let mut continuation_start = None;
                 while let Ok(event) = event_receiver.recv() {
-                    if matches!(&event, DriverEvent::TurnStarted | DriverEvent::TurnTranscriptReconciled { .. }) {
+                    if matches!(
+                        &event,
+                        DriverEvent::TurnStarted | DriverEvent::TurnTranscriptReconciled { .. }
+                    ) {
                         let mut state = task_state.lock();
-                        let current_runtime = active_runtimes.lock().get(&session_id)
+                        let current_runtime = active_runtimes
+                            .lock()
+                            .get(&session_id)
                             .is_some_and(|(active, _)| *active == runtime_id);
-                        if let Some(session) = state.sessions.iter_mut()
+                        if let Some(session) = state
+                            .sessions
+                            .iter_mut()
                             .find(|session| session.id == session_id && current_runtime)
                         {
                             let changed = match &event {
                                 DriverEvent::TurnStarted => {
-                                    continuation_start = session.active_turn_id().is_none()
-                                        .then_some((session.messages.len(), session.transcript_blocks.len()));
+                                    continuation_start =
+                                        session.active_turn_id().is_none().then_some((
+                                            session.messages.len(),
+                                            session.transcript_blocks.len(),
+                                        ));
                                     session.resume_provider_turn();
                                     session.active_turn_id().is_some()
                                 }
-                                DriverEvent::TurnTranscriptReconciled { transcript, continuation } => {
-                                    let input = session.turns.last().and_then(|turn| turn.submission.as_ref())
+                                DriverEvent::TurnTranscriptReconciled {
+                                    transcript,
+                                    continuation,
+                                } => {
+                                    let input = session
+                                        .turns
+                                        .last()
+                                        .and_then(|turn| turn.submission.as_ref())
                                         .map(|receipt| receipt.input_id.clone());
                                     // The driver validated this window against the active input.
                                     // Verify its binding again before replacing durable history.
-                                    let matched = input.as_ref().is_some_and(|input| transcript.turns.iter()
-                                        .any(|turn| turn.provider_resume_at.as_deref() == Some(input.as_str())));
+                                    let matched = input.as_ref().is_some_and(|input| {
+                                        transcript.turns.iter().any(|turn| {
+                                            turn.provider_resume_at.as_deref()
+                                                == Some(input.as_str())
+                                        })
+                                    });
                                     let applied = if *continuation {
-                                        continuation_start.is_some_and(|(messages, blocks)| session
-                                            .reconcile_active_transcript_from(transcript.clone(), messages, blocks))
+                                        continuation_start.is_some_and(|(messages, blocks)| {
+                                            session.reconcile_active_transcript_from(
+                                                transcript.clone(),
+                                                messages,
+                                                blocks,
+                                            )
+                                        })
                                     } else {
-                                        matched && session.reconcile_active_transcript(transcript.clone())
+                                        matched
+                                            && session
+                                                .reconcile_active_transcript(transcript.clone())
                                     };
                                     if applied && matched {
                                         session.mark_active_turn_provider_started();
@@ -1698,11 +1740,7 @@ impl FintwindBackend {
     /// Either way the session's status is recomputed from what is actually
     /// still unsettled: abandoning one queued prompt must never declare a
     /// session idle while another turn is still running.
-    fn abandon_remote_prompt(
-        &self,
-        session_id: Uuid,
-        submission_id: Uuid,
-    ) -> anyhow::Result<()> {
+    fn abandon_remote_prompt(&self, session_id: Uuid, submission_id: Uuid) -> anyhow::Result<()> {
         self.active_preparations.lock().remove(&submission_id);
         let mut state = self.task_state.lock();
         if let Some(session) = state
@@ -1804,13 +1842,21 @@ impl FintwindBackend {
                 state: row.state,
             });
         }
-        match self.task_store.record_cancel_intent(operation_id, cancel_operation_id)? {
+        match self
+            .task_store
+            .record_cancel_intent(operation_id, cancel_operation_id)?
+        {
             crate::persistence::CancelIntentOutcome::Recorded => {}
-            crate::persistence::CancelIntentOutcome::Conflict => bail!("another cancellation is already waiting on this prompt"),
-            crate::persistence::CancelIntentOutcome::RowMissing => bail!("no queued prompt carries that operation id"),
+            crate::persistence::CancelIntentOutcome::Conflict => {
+                bail!("another cancellation is already waiting on this prompt")
+            }
+            crate::persistence::CancelIntentOutcome::RowMissing => {
+                bail!("no queued prompt carries that operation id")
+            }
         }
         self.abandon_remote_prompt(row.session_id, row.submission_id)?;
-        self.task_store.settle_cancel_and_delete_row(operation_id, "cancelled")?;
+        self.task_store
+            .settle_cancel_and_delete_row(operation_id, "cancelled")?;
         crate::opencode_diagnostics::record("remote_prompt_cancelled", 0, 0);
         Ok(ResponsePayload::RemotePromptState {
             operation_id,
@@ -1969,7 +2015,9 @@ impl FintwindBackend {
             if mode != session.runtime_mode {
                 bail!("the task permission mode changed on this computer");
             }
-            let agent_changed = agent_preset.as_ref().is_some_and(|agent| session.agent_preset.as_ref() != Some(agent));
+            let agent_changed = agent_preset
+                .as_ref()
+                .is_some_and(|agent| session.agent_preset.as_ref() != Some(agent));
             if let Some(agent) = agent_preset {
                 session.agent_preset = Some(agent);
             }
@@ -1979,20 +2027,24 @@ impl FintwindBackend {
             session.reasoning_effort = options.reasoning_effort;
             session.service_tier = options.service_tier;
             session.context_window = options.context_window;
-            (crate::driver::SessionOptions {
-                mode,
-                interaction_mode,
-                model: session.model.clone(),
-                reasoning_effort: session.reasoning_effort.clone(),
-                service_tier: session.service_tier.clone(),
-                context_window: session.context_window.clone(),
-            }, agent_changed)
+            (
+                crate::driver::SessionOptions {
+                    mode,
+                    interaction_mode,
+                    model: session.model.clone(),
+                    reasoning_effort: session.reasoning_effort.clone(),
+                    service_tier: session.service_tier.clone(),
+                    context_window: session.context_window.clone(),
+                },
+                agent_changed,
+            )
         };
         state.mark_session_dirty(session_id);
         self.task_store.save(&mut state)?;
         let (applied, retired) = {
             let mut runtimes = self.sessions.lock();
-            let applied = runtimes.get(&session_id)
+            let applied = runtimes
+                .get(&session_id)
                 .is_some_and(|(_, driver)| !agent_changed && driver.apply_options(recorded));
             // Keep the task-state lock through retirement so a new prompt
             // cannot start on the old runtime after these options were saved.
@@ -2015,9 +2067,10 @@ impl Backend for FintwindBackend {
         let session_id = request.session_id;
         let runtime_id = request.runtime_id;
         let checkpoint_skeletons = match &request.command {
-            Command::SaveTaskStateCheckpoint { skeleton_session_ids, .. } => {
-                Some(skeleton_session_ids.clone())
-            }
+            Command::SaveTaskStateCheckpoint {
+                skeleton_session_ids,
+                ..
+            } => Some(skeleton_session_ids.clone()),
             _ => None,
         };
         match request.command {
@@ -2359,9 +2412,7 @@ impl Backend for FintwindBackend {
                 sessions,
             }
             | Command::SaveTaskStateCheckpoint {
-                projects,
-                sessions,
-                ..
+                projects, sessions, ..
             } => {
                 let active_runtimes = self
                     .sessions
@@ -2610,7 +2661,8 @@ impl Backend for FintwindBackend {
                 provenance,
                 operation_id,
                 cancel_operation_id,
-            } => self.cancel_remote_prompt(&provenance, operation_id, cancel_operation_id),            Command::ListRemotePrompts { provenance } => {
+            } => self.cancel_remote_prompt(&provenance, operation_id, cancel_operation_id),
+            Command::ListRemotePrompts { provenance } => {
                 let prompts = self
                     .task_store
                     .remote_prompts()?
@@ -2694,9 +2746,7 @@ impl Backend for FintwindBackend {
                     // device's ending is not this caller's business, and a
                     // re-paired device's new grant does not own the old
                     // cancellation either.
-                    let term =
-                        self.task_store
-                            .cancel_term_by_id(asked, operation_id)?;
+                    let term = self.task_store.cancel_term_by_id(asked, operation_id)?;
                     if let Some(term) = term.as_ref()
                         && (term.device_id != provenance.device_id
                             || term.host_id != provenance.host_id.to_string()
@@ -2773,9 +2823,7 @@ impl Backend for FintwindBackend {
                                 .as_ref()
                                 .map(|row| row.submission_id)
                                 .or(term.as_ref().map(|term| term.submission_id)),
-                            cancel_operation_id: term
-                                .as_ref()
-                                .map(|term| term.cancel_operation_id),
+                            cancel_operation_id: term.as_ref().map(|term| term.cancel_operation_id),
                             cancel_state,
                             host_id: term
                                 .as_ref()

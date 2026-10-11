@@ -16,8 +16,8 @@
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use schemars::JsonSchema;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
 /// Explicit remote-control protocol version. Both ends must agree during
@@ -69,9 +69,7 @@ impl JsonSchema for Base64Bytes {
         "Base64Bytes".to_owned()
     }
 
-    fn json_schema(
-        _generator: &mut schemars::r#gen::SchemaGenerator,
-    ) -> schemars::schema::Schema {
+    fn json_schema(_generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
         schemars::schema::SchemaObject {
             metadata: Some(Box::new(schemars::schema::Metadata {
                 description: Some("Standard-alphabet base64 bytes.".to_owned()),
@@ -142,7 +140,12 @@ pub enum RejectCode {
 
 /// One wire frame. Exactly one variant per WSS message.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum Frame {
     /// First frame on every connection, before anything else. The relay
     /// validates it against its identity registry; until it is accepted
@@ -229,7 +232,9 @@ pub enum Frame {
         nonce: Base64Bytes,
         signature: Base64Bytes,
     },
-    Control { frame: ControlFrame },
+    Control {
+        frame: ControlFrame,
+    },
 }
 
 /// The pairing invite payload, rendered into the QR the host displays.
@@ -303,11 +308,22 @@ pub struct RejectedFrame {
 /// never releases endpoint-side recovery records (architecture: layered
 /// acks, 分层 ack).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum ControlFrame {
-    RelayAck { acked_seq: u64 },
-    Ping { sent_at_ms: u64 },
-    Pong { sent_at_ms: u64 },
+    RelayAck {
+        acked_seq: u64,
+    },
+    Ping {
+        sent_at_ms: u64,
+    },
+    Pong {
+        sent_at_ms: u64,
+    },
     Rejected {
         code: RejectCode,
         /// Human-readable summary for logs. Never parsed for routing: the
@@ -320,9 +336,13 @@ pub enum ControlFrame {
     /// The relay recorded the host's `LinkDevice` declaration. The grant
     /// file on the host stays the source of trust; this only says the
     /// routing link now exists.
-    Linked { device_id: Uuid },
+    Linked {
+        device_id: Uuid,
+    },
     /// The relay tore the link down on the host's `UnlinkDevice`.
-    Unlinked { device_id: Uuid },
+    Unlinked {
+        device_id: Uuid,
+    },
 }
 
 #[cfg(test)]

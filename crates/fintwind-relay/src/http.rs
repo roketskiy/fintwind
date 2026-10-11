@@ -47,8 +47,11 @@ impl AdmissionGuard {
     /// Take a slot if one is free; `None` means the process is at its
     /// unauthenticated cap and the connection must be refused.
     pub fn acquire(context: &Arc<RelayContext>) -> Option<Self> {
-        context.pending_connections.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count|
-            (count < crate::config::MAX_UNAUTHENTICATED_CONNECTIONS).then_some(count + 1))
+        context
+            .pending_connections
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < crate::config::MAX_UNAUTHENTICATED_CONNECTIONS).then_some(count + 1)
+            })
             .ok()?;
         Some(Self {
             context: Arc::clone(context),
@@ -129,7 +132,9 @@ pub fn serve(listener: TcpListener, context: Arc<RelayContext>) -> anyhow::Resul
                 let accepted_at = Instant::now();
                 if std::thread::Builder::new()
                     .name("fintwind-relay-conn".into())
-                    .spawn(move || handle_connection_inner(stream, &context, admission, accepted_at))
+                    .spawn(move || {
+                        handle_connection_inner(stream, &context, admission, accepted_at)
+                    })
                     .is_err()
                 {
                     log::warn!(target: "audit", "connection thread spawn failed; connection dropped");
@@ -192,9 +197,7 @@ fn handle_connection_inner(
     // loopback peer is Caddy in the intended deployment; anything else
     // writing X-Forwarded-For is a client with a header.
     let peer_ip = stream.peer_addr().ok().map(|peer| peer.ip().to_string());
-    let trusted_proxy = stream
-        .peer_addr()
-        .is_ok_and(|peer| peer.ip().is_loopback());
+    let trusted_proxy = stream.peer_addr().is_ok_and(|peer| peer.ip().is_loopback());
     let mut head = head;
     head.peer_ip = peer_ip;
     head.trusted_proxy = trusted_proxy;
@@ -405,7 +408,11 @@ fn read_head(
     }))
 }
 
-fn read_body(reader: &mut BufReader<TcpStream>, content_length: usize, deadline: Instant) -> std::io::Result<Vec<u8>> {
+fn read_body(
+    reader: &mut BufReader<TcpStream>,
+    content_length: usize,
+    deadline: Instant,
+) -> std::io::Result<Vec<u8>> {
     if content_length > MAX_BODY_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
@@ -416,11 +423,18 @@ fn read_body(reader: &mut BufReader<TcpStream>, content_length: usize, deadline:
     let mut offset = 0;
     while offset < body.len() {
         if Instant::now() >= deadline {
-            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "admission deadline passed"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "admission deadline passed",
+            ));
         }
-        reader.get_ref().set_read_timeout(Some(remaining_timeout(deadline)))?;
+        reader
+            .get_ref()
+            .set_read_timeout(Some(remaining_timeout(deadline)))?;
         let read = reader.read(&mut body[offset..])?;
-        if read == 0 { return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof)); }
+        if read == 0 {
+            return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+        }
         offset += read;
     }
     Ok(body)

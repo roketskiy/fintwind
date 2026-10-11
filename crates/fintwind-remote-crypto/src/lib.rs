@@ -132,19 +132,17 @@ impl SigningKey {
     /// Verify a challenge signature against a registered public key.
     /// The relay's only authentication primitive.
     pub fn verify(verifying: &[u8], challenge: &[u8], signature: &[u8]) -> bool {
-        let (Ok(key_bytes), Ok(sig_bytes)) =
-            (<[u8; 32]>::try_from(verifying), <[u8; 64]>::try_from(signature))
-        else {
+        let (Ok(key_bytes), Ok(sig_bytes)) = (
+            <[u8; 32]>::try_from(verifying),
+            <[u8; 64]>::try_from(signature),
+        ) else {
             return false;
         };
         let Ok(verifying_key) = ed25519_dalek::VerifyingKey::from_bytes(&key_bytes) else {
             return false;
         };
         verifying_key
-            .verify_strict(
-                challenge,
-                &ed25519_dalek::Signature::from_bytes(&sig_bytes),
-            )
+            .verify_strict(challenge, &ed25519_dalek::Signature::from_bytes(&sig_bytes))
             .is_ok()
     }
 }
@@ -178,7 +176,10 @@ impl IdentityKey {
 /// Hex of the first 16 bytes of SHA-256(`public`), 32 characters.
 pub fn fingerprint(public: &[u8]) -> String {
     let digest = Sha256::digest(public);
-    digest[..16].iter().map(|byte| format!("{byte:02x}")).collect()
+    digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// The full prologue for a pairing handshake: prefix + protocol version,
@@ -235,11 +236,7 @@ pub fn connect_prologue(protocol_version: u32, host_id: Uuid, device_id: Uuid) -
 /// static public keys plus the invite binding after the XX handshake, and
 /// the user compares the displays — this is what catches a relay swapping
 /// device keys or splicing a different pairing into the flow.
-pub fn pairing_code(
-    host_public: &[u8],
-    device_public: &[u8],
-    binding: &PairingBinding,
-) -> String {
+pub fn pairing_code(host_public: &[u8], device_public: &[u8], binding: &PairingBinding) -> String {
     let mut keys = [host_public, device_public];
     keys.sort_by_key(|key| key.to_vec());
     let mut ikm = keys[0].to_vec();
@@ -427,7 +424,10 @@ impl PairingResponder {
         let mut buffer = vec![0u8; 65535];
         let length = self.state.write_message(payload, &mut buffer)?;
         buffer.truncate(length);
-        Ok((buffer[..length].to_vec(), PairingResponderFinal { state: self.state }))
+        Ok((
+            buffer[..length].to_vec(),
+            PairingResponderFinal { state: self.state },
+        ))
     }
 }
 

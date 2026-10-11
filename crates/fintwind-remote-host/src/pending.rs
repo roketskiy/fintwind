@@ -197,10 +197,7 @@ impl PendingOutbound {
         let mut batch = Vec::new();
         while batch.len() < max {
             self.results.sweep_expired(PENDING_TTL);
-            let next = self
-                .results
-                .pop_front()
-                .or_else(|| self.events.pop_front());
+            let next = self.results.pop_front().or_else(|| self.events.pop_front());
             match next {
                 Some(message) => batch.push(message),
                 None => break,
@@ -240,5 +237,7 @@ impl PendingOutbound {
 /// estimated: the byte cap is a memory bound, and a transcript snapshot is
 /// exactly the message that must not be undercounted.
 fn serialized_len(message: &SealedMessage) -> usize {
-    serde_json::to_vec(message).map(|bytes| bytes.len()).unwrap_or(0)
+    serde_json::to_vec(message)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0)
 }

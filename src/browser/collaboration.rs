@@ -1404,11 +1404,8 @@ impl BrowserOutcome {
     fn into_result(self) -> BrowserResult {
         match self {
             Self::Json(value) => BrowserResult::Ok { value },
-            Self::Media { mime, data } => {
-                BrowserResult::media(&mime, data).unwrap_or_else(|message| {
-                    BrowserResult::Error { message }
-                })
-            }
+            Self::Media { mime, data } => BrowserResult::media(&mime, data)
+                .unwrap_or_else(|message| BrowserResult::Error { message }),
         }
     }
 }
@@ -1455,7 +1452,9 @@ async fn execute(
             {
                 return Err("The browser could not navigate to the requested page; observe again without retrying automatically.".into());
             }
-            return Ok(BrowserOutcome::Json(json!({"issued":true,"requiresObservation":true})));
+            return Ok(BrowserOutcome::Json(
+                json!({"issued":true,"requiresObservation":true}),
+            ));
         }
         BrowserAction::Screenshot { full_page } => {
             let full_page = *full_page;
@@ -1507,11 +1506,9 @@ async fn execute(
     // the element map, the latter nudges the real viewport. Everything from
     // here on owns its action: the early arms above only borrowed it.
     match action {
-        BrowserAction::Snapshot => {
-            evaluate(&host, context, SNAPSHOT.to_owned(), guard, executor)
-                .await
-                .map(BrowserOutcome::Json)
-        }
+        BrowserAction::Snapshot => evaluate(&host, context, SNAPSHOT.to_owned(), guard, executor)
+            .await
+            .map(BrowserOutcome::Json),
         BrowserAction::Scroll { delta_y } => {
             let clamped = delta_y.clamp(-MAX_SCROLL_DELTA, MAX_SCROLL_DELTA);
             let expression = format!(
@@ -1527,7 +1524,8 @@ async fn execute(
                 .map(BrowserOutcome::Json)
         }
         BrowserAction::Click { selector } => {
-            let (x, y) = resolve_target(&host, context, &selector, false, false, guard, executor).await?;
+            let (x, y) =
+                resolve_target(&host, context, &selector, false, false, guard, executor).await?;
             input_pair(
                 &host,
                 "Input.dispatchMouseEvent",
@@ -1608,7 +1606,8 @@ async fn execute(
             ))
         }
         BrowserAction::DoubleClick { selector } => {
-            let (x, y) = resolve_target(&host, context, &selector, false, false, guard, executor).await?;
+            let (x, y) =
+                resolve_target(&host, context, &selector, false, false, guard, executor).await?;
             input_pair(
                 &host,
                 "Input.dispatchMouseEvent",
@@ -1677,7 +1676,8 @@ async fn execute(
             ))
         }
         BrowserAction::Hover { selector } => {
-            let (x, y) = resolve_target(&host, context, &selector, false, false, guard, executor).await?;
+            let (x, y) =
+                resolve_target(&host, context, &selector, false, false, guard, executor).await?;
             cdp(
                 &host,
                 "Input.dispatchMouseEvent",
@@ -1718,7 +1718,8 @@ async fn execute(
             ))
         }
         BrowserAction::Drag { from, to } => {
-            let start = resolve_target(&host, context, &from, false, false, guard, executor).await?;
+            let start =
+                resolve_target(&host, context, &from, false, false, guard, executor).await?;
             let end = resolve_target(&host, context, &to, false, false, guard, executor).await?;
             dispatch_drag(&host, start, end, guard, executor).await?;
             Ok(BrowserOutcome::Json(

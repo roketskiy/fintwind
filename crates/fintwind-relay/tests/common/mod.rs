@@ -7,14 +7,13 @@
 //! nonce, signature, or ciphertext ever reaches an assertion message.
 #![allow(dead_code)]
 
-
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -23,7 +22,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use fintwind_remote_crypto::SigningKey;
 use fintwind_remote_protocol::{
     Base64Bytes, ConnectionPurpose, ControlFrame, Frame, FrameRole, HandshakeMode,
-    REMOTE_PROTOCOL_VERSION, RejectedFrame, RejectCode,
+    REMOTE_PROTOCOL_VERSION, RejectCode, RejectedFrame,
 };
 use serde_json::{Value, json};
 use tungstenite::protocol::Role;
@@ -86,8 +85,15 @@ impl Relay {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("free port");
         let port = listener.local_addr().expect("port").port();
         drop(listener);
-        let base = std::env::var_os("FINTWIND_RELAY_BLACKBOX_OUT").map(PathBuf::from)
-            .unwrap_or_else(|| if cfg!(windows) { PathBuf::from("C:/Users/Public/Temp/opencode") } else { std::env::temp_dir() });
+        let base = std::env::var_os("FINTWIND_RELAY_BLACKBOX_OUT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                if cfg!(windows) {
+                    PathBuf::from("C:/Users/Public/Temp/opencode")
+                } else {
+                    std::env::temp_dir()
+                }
+            });
         let dir = base.join(format!("fintwind-relay-e2e-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let log_path = capture_logs.then(|| dir.join("relay.log"));
@@ -96,16 +102,36 @@ impl Relay {
             .unwrap_or_else(|| PathBuf::from(env!("CARGO_BIN_EXE_fintwind-relay")));
         let mut command = Command::new(binary);
         command.env_clear();
-        for name in ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "ComSpec", "SYSTEMDRIVE"] {
-            if let Some(value) = std::env::var_os(name) { command.env(name, value); }
+        for name in [
+            "PATH",
+            "PATHEXT",
+            "SystemRoot",
+            "WINDIR",
+            "ComSpec",
+            "SYSTEMDRIVE",
+        ] {
+            if let Some(value) = std::env::var_os(name) {
+                command.env(name, value);
+            }
         }
         let home = dir.join("home");
         std::fs::create_dir_all(&home).expect("isolated home");
-        for name in ["HOME", "USERPROFILE", "XDG_CONFIG_HOME", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "TMPDIR"] {
+        for name in [
+            "HOME",
+            "USERPROFILE",
+            "XDG_CONFIG_HOME",
+            "APPDATA",
+            "LOCALAPPDATA",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+        ] {
             command.env(name, &home);
         }
         command.current_dir(&dir);
-        for (name, value) in overrides { command.env(name, value); }
+        for (name, value) in overrides {
+            command.env(name, value);
+        }
         command
             .arg("--bind")
             .arg(format!("127.0.0.1:{port}"))
@@ -129,7 +155,9 @@ impl Relay {
             dir,
             log_path,
         };
-        relay.write_lifecycle(false).expect("initial process artifact");
+        relay
+            .write_lifecycle(false)
+            .expect("initial process artifact");
         relay.wait_healthy();
         relay
     }
@@ -469,7 +497,12 @@ impl Ws {
         while Instant::now() < deadline {
             match self.next_frame(deadline.saturating_duration_since(Instant::now())) {
                 Some(Frame::Control {
-                    frame: ControlFrame::Rejected { code, message, frame },
+                    frame:
+                        ControlFrame::Rejected {
+                            code,
+                            message,
+                            frame,
+                        },
                 }) => return (code, message, frame),
                 Some(_) => continue,
                 None => break,
@@ -685,7 +718,12 @@ pub fn sealed(seq: u64, host_id: &str, device_id: Option<&str>) -> Frame {
 
 /// A sealed frame with a chosen ciphertext length, for exercising byte
 /// budgets. The filler stays non-secret and is never asserted on.
-pub fn sealed_with_payload(seq: u64, host_id: &str, device_id: &str, payload_bytes: usize) -> Frame {
+pub fn sealed_with_payload(
+    seq: u64,
+    host_id: &str,
+    device_id: &str,
+    payload_bytes: usize,
+) -> Frame {
     Frame::Sealed {
         seq,
         host_id: Uuid::parse_str(host_id).expect("host uuid"),
@@ -709,7 +747,12 @@ pub fn relay_source_hash() -> String {
     files.sort();
     let mut hasher = Sha256::new();
     for path in files {
-        hasher.update(path.file_name().expect("file name").to_string_lossy().as_bytes());
+        hasher.update(
+            path.file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .as_bytes(),
+        );
         hasher.update(std::fs::read(&path).unwrap_or_default());
     }
     format!("{:x}", hasher.finalize())
@@ -748,7 +791,9 @@ impl SlowHead {
     /// a readable byte is an EOF, and a read timeout means still open.
     /// Short timeout so a probe never adds measurable wait of its own.
     pub fn is_closed(&mut self) -> bool {
-        let _ = self.stream.set_read_timeout(Some(Duration::from_millis(300)));
+        let _ = self
+            .stream
+            .set_read_timeout(Some(Duration::from_millis(300)));
         let mut byte = [0u8; 1];
         match self.stream.read(&mut byte) {
             Ok(0) => true,
@@ -773,12 +818,7 @@ pub fn handshake(step: u8, host_id: &str, device_id: Option<&str>, role: FrameRo
 /// A device's business-session handshake. `mode` is Connect — the path
 /// the foreign-device binding (C3) lives on; pairing handshakes name no
 /// device and route on the invite nonce instead.
-pub fn connect_handshake(
-    step: u8,
-    host_id: &str,
-    device_id: &str,
-    role: FrameRole,
-) -> Frame {
+pub fn connect_handshake(step: u8, host_id: &str, device_id: &str, role: FrameRole) -> Frame {
     Frame::Handshake {
         protocol_version: REMOTE_PROTOCOL_VERSION,
         role,
@@ -816,12 +856,7 @@ pub fn link_frame(
 
 /// The teardown declaration. Signs `host || device || nonce` — no key on
 /// an unlink, matching the relay's verification order.
-pub fn unlink_frame(
-    host_id: &str,
-    device_id: &str,
-    nonce: &[u8],
-    signing: &SigningKey,
-) -> Frame {
+pub fn unlink_frame(host_id: &str, device_id: &str, nonce: &[u8], signing: &SigningKey) -> Frame {
     let mut signed = Uuid::parse_str(host_id)
         .expect("host uuid")
         .as_bytes()

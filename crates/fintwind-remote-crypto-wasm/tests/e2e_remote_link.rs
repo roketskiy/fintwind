@@ -21,14 +21,14 @@
 
 mod common;
 
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
-use common::{Base64Bytes,
-    ConnectResponder, fingerprint, now_ms, pairing_code, IdentityKey, PairingResponder,
-    new_device_identity, pair_ok, Device, HostPeer, REQUEST_SNAPSHOT,
+use base64::engine::general_purpose::STANDARD as BASE64;
+use common::{
+    Base64Bytes, ConnectResponder, Device, HostPeer, IdentityKey, PairingResponder,
+    REQUEST_SNAPSHOT, fingerprint, new_device_identity, now_ms, pair_ok, pairing_code,
 };
-use fintwind_remote_protocol::{MessageBody, SealedMessage, REMOTE_PROTOCOL_VERSION};
-use serde_json::{json, Value};
+use fintwind_remote_protocol::{MessageBody, REMOTE_PROTOCOL_VERSION, SealedMessage};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 #[test]

@@ -54,10 +54,12 @@ pub fn device_provenance(
     // The host id is the identity this host registered with the relay; a
     // value that is not a uuid refuses rather than attributing the
     // operation to a default.
-    let host_id = state
-        .host_id()
-        .parse::<Uuid>()
-        .map_err(|_| (RejectCode::Malformed, "this host has no usable identity".to_owned()))?;
+    let host_id = state.host_id().parse::<Uuid>().map_err(|_| {
+        (
+            RejectCode::Malformed,
+            "this host has no usable identity".to_owned(),
+        )
+    })?;
     // The grant version is read fresh from the grant file, so a revocation
     // or re-pairing is visible to the daemon on the very request that
     // follows it.
@@ -186,7 +188,9 @@ pub fn execute(
                 .map_err(|error| (RejectCode::Malformed, error.to_string()))?;
             to_value(payload)
         }
-        OperationKind::ApplySessionOptions => apply_session_options(daemon, catalog, operation, provenance),
+        OperationKind::ApplySessionOptions => {
+            apply_session_options(daemon, catalog, operation, provenance)
+        }
         OperationKind::LoadOptionsCatalog => {
             // Read-only: the host answers from its own provider probe and
             // the device may only name options that came back here.
@@ -199,7 +203,9 @@ pub fn execute(
             // The operation settles with `Executed` and no payload; the
             // catalog itself travels as its own typed message, so a large
             // model list never rides inside a result detail.
-            to_value(serde_json::json!({ "models": probe.models, "agentPresets": probe.agent_presets }))
+            to_value(
+                serde_json::json!({ "models": probe.models, "agentPresets": probe.agent_presets }),
+            )
         }
         OperationKind::RenameSession => rename_session(daemon, operation),
         OperationKind::CreateSession => create_session(daemon, operation, provenance),
@@ -259,8 +265,9 @@ pub fn execute(
             to_value(page)
         }
         OperationKind::ReadDirectory => {
-            let request: DirectoryReadRequest = serde_json::from_value(operation.payload.clone())
-                .map_err(|error| (RejectCode::Malformed, error.to_string()))?;
+            let request: DirectoryReadRequest =
+                serde_json::from_value(operation.payload.clone())
+                    .map_err(|error| (RejectCode::Malformed, error.to_string()))?;
             let root = project_directory(daemon, request.project_id)?;
             let page = workspace_directory::read_directory(&root, &request)
                 .map_err(|(code, message)| (code, message))?;
@@ -279,7 +286,9 @@ pub fn execute(
         // stops a busy turn, cancels what is queued, and never deletes
         // files or touches the provider's own session.
         OperationKind::ArchiveSession => archive_session(daemon, operation, true, provenance),
-        OperationKind::RestoreArchivedSession => archive_session(daemon, operation, false, provenance),
+        OperationKind::RestoreArchivedSession => {
+            archive_session(daemon, operation, false, provenance)
+        }
     }
 }
 
@@ -313,7 +322,9 @@ fn create_session(
     {
         return refused(
             RejectCode::Malformed,
-            &format!("a new remote task carries a project id and nothing else; {key} is not accepted"),
+            &format!(
+                "a new remote task carries a project id and nothing else; {key} is not accepted"
+            ),
         );
     }
     // The daemon creates the record with its own new-task defaults and
@@ -355,13 +366,25 @@ fn rename_session(
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|title| !title.is_empty())
-        .ok_or_else(|| (RejectCode::Malformed, "a non-empty title is required".to_owned()))?;
+        .ok_or_else(|| {
+            (
+                RejectCode::Malformed,
+                "a non-empty title is required".to_owned(),
+            )
+        })?;
     if title.len() > MAX_TITLE_BYTES {
         return refused(RejectCode::Malformed, "title is too long");
     }
     let state = load_task_state(daemon)?;
-    let Some(session) = state.sessions.iter().find(|session| session.id == session_id) else {
-        return refused(RejectCode::UnknownRoute, "this session is unknown to this host");
+    let Some(session) = state
+        .sessions
+        .iter()
+        .find(|session| session.id == session_id)
+    else {
+        return refused(
+            RejectCode::UnknownRoute,
+            "this session is unknown to this host",
+        );
     };
     let mut renamed_on_provider = false;
     let mut provider_error: Option<String> = None;
@@ -464,17 +487,32 @@ fn delete_sessions(
         .payload
         .get("sessionIds")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| (RejectCode::Malformed, "sessionIds field required".to_owned()))?;
+        .ok_or_else(|| {
+            (
+                RejectCode::Malformed,
+                "sessionIds field required".to_owned(),
+            )
+        })?;
     if ids.is_empty() || ids.len() > MAX_BATCH_SESSIONS {
-        return refused(RejectCode::Malformed, "the session list is empty or too long");
+        return refused(
+            RejectCode::Malformed,
+            "the session list is empty or too long",
+        );
     }
     let mut session_ids = Vec::with_capacity(ids.len());
     for id in ids {
-        let text = id
-            .as_str()
-            .ok_or_else(|| (RejectCode::Malformed, "sessionIds must be uuid strings".to_owned()))?;
-        let session_id = Uuid::parse_str(text)
-            .map_err(|_| (RejectCode::Malformed, "sessionIds must be uuid strings".to_owned()))?;
+        let text = id.as_str().ok_or_else(|| {
+            (
+                RejectCode::Malformed,
+                "sessionIds must be uuid strings".to_owned(),
+            )
+        })?;
+        let session_id = Uuid::parse_str(text).map_err(|_| {
+            (
+                RejectCode::Malformed,
+                "sessionIds must be uuid strings".to_owned(),
+            )
+        })?;
         if !session_ids.contains(&session_id) {
             session_ids.push(session_id);
         }
@@ -632,7 +670,14 @@ fn apply_session_options(
     let Some(session_id) = operation.session_id else {
         return refused(RejectCode::Malformed, "session id required");
     };
-    for key in ["mode", "runtimeMode", "workspace", "binary", "cwd", "projectId"] {
+    for key in [
+        "mode",
+        "runtimeMode",
+        "workspace",
+        "binary",
+        "cwd",
+        "projectId",
+    ] {
         if operation.payload.get(key).is_some() {
             return refused(
                 RejectCode::Malformed,
@@ -644,7 +689,10 @@ fn apply_session_options(
         None => None,
         Some(value) => {
             let text = value.as_str().ok_or_else(|| {
-                (RejectCode::Malformed, "interactionMode must be a string".to_owned())
+                (
+                    RejectCode::Malformed,
+                    "interactionMode must be a string".to_owned(),
+                )
             })?;
             match text {
                 "build" | "plan" => Some(text.to_owned()),
@@ -652,20 +700,28 @@ fn apply_session_options(
                     return refused(
                         RejectCode::Malformed,
                         "interactionMode must be \"build\" or \"plan\"",
-                    )
+                    );
                 }
             }
         }
     };
     // List projections omit permission and option detail. Echo only the
     // hydrated computer-owned settings, never the list's default posture.
-    let Ok(ResponsePayload::Session { session }) =
-        daemon.request(session_id, Uuid::nil(), Command::HydrateSession { session_id })
-    else {
-        return refused(RejectCode::UnknownRoute, "this session's options are unavailable on this computer");
+    let Ok(ResponsePayload::Session { session }) = daemon.request(
+        session_id,
+        Uuid::nil(),
+        Command::HydrateSession { session_id },
+    ) else {
+        return refused(
+            RejectCode::UnknownRoute,
+            "this session's options are unavailable on this computer",
+        );
     };
     let Some(session) = session else {
-        return refused(RejectCode::UnknownRoute, "this session is unknown to this host");
+        return refused(
+            RejectCode::UnknownRoute,
+            "this session is unknown to this host",
+        );
     };
     let project_id = session_project(daemon, session_id)?;
     let directory = project_directory(daemon, project_id)?;
@@ -678,7 +734,10 @@ fn apply_session_options(
     if (session.runtime_mode == RuntimeMode::Plan || interaction_mode.as_deref() == Some("plan"))
         && agent_preset.as_deref().is_some_and(|agent| agent != "plan")
     {
-        return refused(RejectCode::Malformed, "this task is restricted to the plan agent on this computer");
+        return refused(
+            RejectCode::Malformed,
+            "this task is restricted to the plan agent on this computer",
+        );
     }
     // The effective model is what traits are checked against: the one this
     // change selects, or the one the session already runs.
@@ -706,11 +765,7 @@ fn apply_session_options(
     // provider would refuse on the next turn.
     let model_changed = model.is_some() && model != session.model;
     let inherited = |current: &Option<String>| {
-        if model_changed {
-            None
-        } else {
-            current.clone()
-        }
+        if model_changed { None } else { current.clone() }
     };
     let options = fintwind_protocol::WireSessionOptions {
         // The permission posture is this computer's own; it is echoed, never
@@ -765,9 +820,11 @@ fn resolve_turn_count(
     session_id: Uuid,
     turn_id: Uuid,
 ) -> Result<usize, (RejectCode, String)> {
-    let Ok(ResponsePayload::Session { session }) =
-        daemon.request(session_id, Uuid::nil(), Command::HydrateSession { session_id })
-    else {
+    let Ok(ResponsePayload::Session { session }) = daemon.request(
+        session_id,
+        Uuid::nil(),
+        Command::HydrateSession { session_id },
+    ) else {
         return Err((
             RejectCode::UnknownRoute,
             "this session could not be read on this computer".to_owned(),
@@ -860,33 +917,59 @@ fn read_task_output(
     let Some(session_id) = operation.session_id else {
         return refused(RejectCode::Malformed, "session id required");
     };
-    let Ok(ResponsePayload::Session { session }) =
-        daemon.request(session_id, Uuid::nil(), Command::HydrateSession { session_id })
-    else {
+    let Ok(ResponsePayload::Session { session }) = daemon.request(
+        session_id,
+        Uuid::nil(),
+        Command::HydrateSession { session_id },
+    ) else {
         return refused(
             RejectCode::UnknownRoute,
             "this session's output is unavailable on this computer",
         );
     };
     let Some(session) = session else {
-        return refused(RejectCode::UnknownRoute, "this session is unknown to this host");
+        return refused(
+            RejectCode::UnknownRoute,
+            "this session is unknown to this host",
+        );
     };
     // Started tasks keep their authoritative conversation in the provider;
     // the local hydrated record can still contain only the admitted prompt.
     // Do not silently substitute that stale projection on a failed fetch.
     let messages = if session.native_session_id.is_some() {
-        let Some((binary, directory, native_session_id)) = session_coordinates(daemon, session_id) else {
-            return refused(RejectCode::UnknownRoute, "this session's output coordinates are unavailable on this computer");
+        let Some((binary, directory, native_session_id)) = session_coordinates(daemon, session_id)
+        else {
+            return refused(
+                RejectCode::UnknownRoute,
+                "this session's output coordinates are unavailable on this computer",
+            );
         };
-        match daemon.request(Uuid::nil(), Uuid::nil(), Command::FetchNativeTranscript {
-            binary, directory, session_id: native_session_id,
-        }) {
+        match daemon.request(
+            Uuid::nil(),
+            Uuid::nil(),
+            Command::FetchNativeTranscript {
+                binary,
+                directory,
+                session_id: native_session_id,
+            },
+        ) {
             Ok(ResponsePayload::NativeTranscript { transcript }) => transcript.messages,
-            Err(error) if error.to_string().contains("superseded") =>
-                return refused(RejectCode::UnknownRoute, "this session's output read was superseded; retry the read"),
-            _ => return refused(RejectCode::UnknownRoute, "this session's provider output is unavailable on this computer"),
+            Err(error) if error.to_string().contains("superseded") => {
+                return refused(
+                    RejectCode::UnknownRoute,
+                    "this session's output read was superseded; retry the read",
+                );
+            }
+            _ => {
+                return refused(
+                    RejectCode::UnknownRoute,
+                    "this session's provider output is unavailable on this computer",
+                );
+            }
         }
-    } else { session.messages };
+    } else {
+        session.messages
+    };
     let mut body = String::new();
     let mut truncated = false;
     for message in &messages {
@@ -1061,10 +1144,7 @@ fn load_task_state(daemon: &DaemonClient) -> Result<TaskStateView, (RejectCode, 
 }
 
 /// The project a session belongs to, from the host's own task state.
-fn session_project(
-    daemon: &DaemonClient,
-    session_id: Uuid,
-) -> Result<Uuid, (RejectCode, String)> {
+fn session_project(daemon: &DaemonClient, session_id: Uuid) -> Result<Uuid, (RejectCode, String)> {
     let state = load_task_state(daemon)?;
     state
         .sessions
@@ -1173,8 +1253,9 @@ pub fn session_coordinates(
     daemon: &DaemonClient,
     session_id: Uuid,
 ) -> Option<(PathBuf, PathBuf, String)> {
-    let Ok(ResponsePayload::TaskState { projects, sessions, .. }) =
-        daemon.request(Uuid::nil(), Uuid::nil(), Command::LoadTaskState)
+    let Ok(ResponsePayload::TaskState {
+        projects, sessions, ..
+    }) = daemon.request(Uuid::nil(), Uuid::nil(), Command::LoadTaskState)
     else {
         return None;
     };
@@ -1212,9 +1293,7 @@ fn encode_interaction_mode(mode: fintwind_protocol::model::InteractionMode) -> &
     }
 }
 
-fn to_value(
-    payload: impl serde::Serialize,
-) -> Result<serde_json::Value, (RejectCode, String)> {
+fn to_value(payload: impl serde::Serialize) -> Result<serde_json::Value, (RejectCode, String)> {
     serde_json::to_value(&payload)
         .map_err(|_| (RejectCode::Malformed, "payload encode failed".to_owned()))
 }

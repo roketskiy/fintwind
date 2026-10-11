@@ -73,14 +73,15 @@ impl HostConfig {
                 "--daemon-address" => daemon_address = Some(value("--daemon-address")?),
                 "--daemon-token-env" => daemon_token_env = Some(value("--daemon-token-env")?),
                 "--data-dir" => data_dir = Some(PathBuf::from(value("--data-dir")?)),
-                "--paired-device" => paired_device_file = Some(PathBuf::from(value("--paired-device")?)),
+                "--paired-device" => {
+                    paired_device_file = Some(PathBuf::from(value("--paired-device")?))
+                }
                 other => anyhow::bail!("unknown argument {other:?}"),
             }
         }
         let data_dir = data_dir.unwrap_or_else(|| PathBuf::from("."));
         Ok(Self {
-            relay_origin: relay_origin
-                .unwrap_or_else(|| "https://relay.fintwind.xyz".to_owned()),
+            relay_origin: relay_origin.unwrap_or_else(|| "https://relay.fintwind.xyz".to_owned()),
             daemon_address: daemon_address.unwrap_or_else(|| "127.0.0.1:0".to_owned()),
             daemon_token_env: daemon_token_env
                 .ok_or_else(|| anyhow::anyhow!("--daemon-token-env is required"))?

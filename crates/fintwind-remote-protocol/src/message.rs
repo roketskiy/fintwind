@@ -73,7 +73,12 @@ pub struct SealedMessage {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum MessageBody {
     /// End-to-end receive acknowledgement for sealed messages up to the
     /// named transport `seq`. Only this releases the sender's outbound
@@ -83,11 +88,17 @@ pub enum MessageBody {
     /// relay-visible number. An acknowledgement is never itself queued for
     /// delivery in the sender's unacked buffer: acking the ack would
     /// recurse forever.
-    Acknowledged { upto_seq: u64 },
+    Acknowledged {
+        upto_seq: u64,
+    },
     /// Authenticated host transport liveness, not relay or execution receipt.
     /// Exactly one bounded UUID probe per device; no workspace I/O.
-    LivenessProbe { probe_id: Uuid },
-    LivenessReply { probe_id: Uuid },
+    LivenessProbe {
+        probe_id: Uuid,
+    },
+    LivenessReply {
+        probe_id: Uuid,
+    },
     /// One fragment of a sealed message whose JSON is too large for a
     /// single Noise transport frame. Noise caps a transport message at
     /// 65535 bytes, so a `SessionList` for a workspace with hundreds of
@@ -120,15 +131,22 @@ pub enum MessageBody {
     /// verify first", never "retry the side effect". This is the recovery
     /// path for a result that was lost with the link: the device re-asks
     /// instead of re-executing.
-    QueryOperationResult { operation_id: Uuid },
+    QueryOperationResult {
+        operation_id: Uuid,
+    },
     /// Device resumes event streams from cursors it already holds. The
     /// host replays from each cursor or answers with a fresh snapshot
     /// when the cursor can no longer be honored; it never bridges a gap
     /// silently.
-    Resume { cursors: Vec<ResumeCursor> },
+    Resume {
+        cursors: Vec<ResumeCursor>,
+    },
     /// Host pushes the authoritative session list snapshot. `revision`
     /// changes whenever any listed session changes.
-    SessionList { revision: u64, sessions: Vec<SessionSummary> },
+    SessionList {
+        revision: u64,
+        sessions: Vec<SessionSummary>,
+    },
     /// Host pushes the project directory: ids and names, never paths. Sent
     /// with every snapshot so a device can name a target for a new task or a
     /// workspace read without rendering a UUID as a label.
@@ -140,7 +158,9 @@ pub enum MessageBody {
     /// not yet linked). The device shows the reason instead of spinning
     /// on a list that will never arrive; the host pushes a fresh
     /// `SessionList` the moment the workspace recovers.
-    WorkspaceUnavailable { reason: String },
+    WorkspaceUnavailable {
+        reason: String,
+    },
     /// Host pushes one session's rendered transcript snapshot: the linear
     /// message list with each message's trailing tool activity already
     /// interleaved. The device renders this as-is; live deltas arrive as
@@ -152,7 +172,9 @@ pub enum MessageBody {
     /// Host streams one sequenced driver event (transcript deltas,
     /// status, background work). Replayable desktop events only; live-only
     /// terminal output never enters this channel.
-    DriverEvent { event: DriverEventFrame },
+    DriverEvent {
+        event: DriverEventFrame,
+    },
     /// Host-initiated tool approval, bound to exactly one underlying
     /// request. Pauses the turn until decided or expired.
     PermissionOffer(PermissionOffer),
@@ -202,7 +224,8 @@ pub enum MessageBody {
     /// rides in the channel's remote static key; the routing id comes
     /// from the device's own relay registration, and the host binds the
     /// grant to the pair of them.
-    PairingHello {        /// The device's own routing id at the relay.
+    PairingHello {
+        /// The device's own routing id at the relay.
         device_id: Uuid,
         /// What the host shows the confirming user, e.g. "Pixel 9".
         device_name: Option<String>,
@@ -273,9 +296,7 @@ impl JsonSchema for DriverEventFrame {
         "DriverEventFrame".to_owned()
     }
 
-    fn json_schema(
-        _generator: &mut schemars::r#gen::SchemaGenerator,
-    ) -> schemars::schema::Schema {
+    fn json_schema(_generator: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
         schemars::schema::SchemaObject {
             metadata: Some(Box::new(schemars::schema::Metadata {
                 description: Some(

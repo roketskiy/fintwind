@@ -16,10 +16,10 @@
 use anyhow::bail;
 
 #[cfg(windows)]
-use windows_sys::Win32::Foundation::{LocalFree, HLOCAL};
+use windows_sys::Win32::Foundation::{HLOCAL, LocalFree};
 #[cfg(windows)]
 use windows_sys::Win32::Security::Cryptography::{
-    CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+    CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
 };
 
 /// Seal `secret` to the current user. The blob is opaque: it carries no
@@ -107,9 +107,7 @@ fn take_blob(blob: &mut CRYPT_INTEGER_BLOB) -> Vec<u8> {
     let bytes = if blob.pbData.is_null() {
         Vec::new()
     } else {
-        unsafe {
-            std::slice::from_raw_parts(blob.pbData, blob.cbData as usize).to_vec()
-        }
+        unsafe { std::slice::from_raw_parts(blob.pbData, blob.cbData as usize).to_vec() }
     };
     if !blob.pbData.is_null() {
         unsafe { LocalFree(blob.pbData as HLOCAL) };

@@ -1500,8 +1500,7 @@ impl Backend for E2EBackend {
             // here the command's effect on the registry is the behavior under
             // test, so it forwards straight to the tools.
             Command::UpdateSettings { settings } => {
-                self.tools
-                    .set_enabled(settings.browser_tools_enabled());
+                self.tools.set_enabled(settings.browser_tools_enabled());
                 Ok(ResponsePayload::Ack)
             }
             other => bail!("the browser tools e2e backend does not implement {other:?}"),

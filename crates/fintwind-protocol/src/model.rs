@@ -1136,7 +1136,8 @@ impl AgentSession {
             checkpoint: None,
             stats: None,
         });
-        self.messages.push(Message::new_for_turn(MessageRole::User, prompt, id));
+        self.messages
+            .push(Message::new_for_turn(MessageRole::User, prompt, id));
         self.last_reply_at = Some(now);
         id
     }

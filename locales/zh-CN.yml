@@ -1443,4 +1443,7 @@ usage_page.updated_at: "更新于 %{time}"
 tabs.new_session: 新建会话标签
 tabs.close: 关闭标签
 tabs.waiting: 等待你的输入
+tabs.permission: 待授权
+tabs.question: 待回答
+tabs.failed: 会话出错
 tabs.unread: 有新动态

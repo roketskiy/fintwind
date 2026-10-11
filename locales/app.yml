@@ -894,6 +894,8 @@ help.dismiss:
   en: Close
 help.menu_tooltip:
   en: Help
+help.submit_issue:
+  en: Submit issue
 
 sidebar.search:
   en: Search

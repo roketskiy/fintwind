@@ -457,6 +457,7 @@ help.changelog: 更新履歴
 help.changelog_empty: 更新履歴はまだありません。
 help.dismiss: 閉じる
 help.menu_tooltip: ヘルプ
+help.submit_issue: Issue を報告
 
 sidebar.search: 検索
 rail.sessions: セッション

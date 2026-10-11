@@ -3,11 +3,11 @@ use crate::theme::ui_px;
 use std::time::Duration;
 
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, BoxShadow, Context, Div, ElementId, Hsla, Img,
-    InteractiveElement, Interactivity, KeyDownEvent, ParentElement, PathBuilder, Pixels,
-    RenderOnce, Role, SharedString, Stateful, StyleRefinement, Styled, Svg, Window, canvas, div,
-    img, point, prelude::*, px, rgb, svg, transparent_black,
+    AnyElement, App, Context, Div, ElementId, Hsla, Img, InteractiveElement, Interactivity,
+    KeyDownEvent, ParentElement, PathBuilder, Pixels, RenderOnce, SharedString, Stateful,
+    StyleRefinement, Styled, Svg, Window, canvas, div, img, point, prelude::*, px, rgb, svg,
 };
+use gpui_kit::component::{Disableable, switch::Switch};
 
 pub mod menu;
 pub mod motion;
@@ -115,123 +115,49 @@ impl ActivationExt for Stateful<Div> {
 
 /// The shared pill switch used by settings and automation forms.
 ///
-/// Ported from Ely's `Switch` (Ely-GPUI-Components `src/forms/switch.rs`):
-/// a 32×18 rail whose fill cross-fades between a strong-border gray and the
-/// accent while a shadowed square thumb springs across with a small
-/// overshoot. Focus paints as a ring on the switch's own border. A switch
-/// mounting with its current value paints settled; only a real flip keys a
-/// fresh animation, so lists that rebuild rows never replay the slide.
+/// Backed by gpui-kit's `Switch`. The thumb's travel is a window-keyed
+/// spring that lives outside this helper: it mounts settled on the current
+/// value, reverses from wherever it is when a toggle arrives mid-travel, and
+/// settles instantly under the system reduce-motion setting. A resting
+/// switch costs one keyed-state read per frame and requests no frames, so
+/// lists that rebuild rows never replay the slide and a mounted switch never
+/// pins the pane to an animation clock.
 ///
-/// `activate` is ignored while `disabled` is true, but the control remains in
-/// the tab order so a pending operation does not move focus unexpectedly.
+/// `activate` still runs through the caller's entity via a weak handle, so
+/// business setters are reached exactly as before and the click stays one
+/// state round-trip. The checked fill keeps Fintwind's accent; the resting
+/// track and thumb come from the library theme, which the app projects its
+/// palette onto.
+///
+/// One behavior change from the hand-rolled version: a disabled switch no
+/// longer keeps its tab stop — the library removes disabled controls from
+/// focus traversal instead of leaving them focusable-but-inert. Every
+/// current call site passes `disabled: false`.
 pub fn toggle_switch<E>(
     id: impl Into<ElementId>,
     on: bool,
     disabled: bool,
     theme: Theme,
-    window: &mut Window,
+    _window: &mut Window,
     cx: &mut Context<E>,
     activate: impl Fn(&mut E, &mut Window, &mut Context<E>) + 'static,
-) -> Stateful<Div>
+) -> Switch
 where
     E: 'static,
 {
-    let id = id.into();
-    // Ely's geometry: a 32×18 rail with a 2px inset. The thumb fills the
-    // inset height as a square and travels the rail's height difference, so
-    // the switched-on frame lands flush against the far edge.
-    let (rail_w, rail_h, inset) = (px(32.0), px(18.0), px(2.0));
-    let travel = rail_w - rail_h;
-    // Off is a strong-border rail carrying a muted thumb; on fills with the
-    // accent and carries the accent's own foreground. Ely's
-    // `border_strong`/`fg_muted`/`accent`/`on_accent` map onto Fintwind's
-    // same-named or nearest tokens.
-    let (rail_off, rail_on) = (theme.border_strong, theme.accent);
-    let (thumb_off, thumb_on) = (theme.text_tertiary, theme.on_accent);
-    let (from, to, rail_from, rail_to, thumb_from, thumb_to) = if on {
-        (0.0, 1.0, rail_off, rail_on, thumb_off, thumb_on)
-    } else {
-        (1.0, 0.0, rail_on, rail_off, thumb_on, thumb_off)
-    };
-    // Zero changes means `on` arrived with this mount — paint the switch
-    // settled on its current end. Any real flip increments the count, and
-    // keying the animations on it restarts the slide from where the thumb
-    // actually was.
-    let changes = motion::changes(
-        SharedString::from(format!("{id}-changes")),
-        on,
-        window,
-        cx,
-    );
-    let thumb_animation_id = SharedString::from(format!("switch-thumb-{id}-{changes}"));
-    let fill_animation_id = SharedString::from(format!("switch-fill-{id}-{changes}"));
-
-    let thumb = div()
-        .h_full()
-        .aspect_square()
-        .flex_none()
-        .rounded_full()
-        .bg(thumb_to)
-        .shadow(vec![BoxShadow::new(
-            px(0.0),
-            px(1.0),
-            Hsla {
-                h: 0.0,
-                s: 0.0,
-                l: 0.0,
-                a: if theme.is_dark { 0.4 } else { 0.25 },
-            },
-        )
-        .blur_radius(px(2.0))]);
-
-    let rail = div()
-        .flex()
-        .flex_none()
-        .items_center()
-        .w(rail_w)
-        .h(rail_h)
-        .p(inset)
-        .rounded_full()
-        .border_1()
-        .border_color(transparent_black())
-        .bg(rail_to);
-    let rail = if changes == 0 {
-        rail.child(thumb.ml(travel * to)).into_any_element()
-    } else {
-        rail.child(thumb.with_animation(
-            thumb_animation_id,
-            Animation::new(motion::SWITCH_SLIDE),
-            move |thumb, t| {
-                thumb
-                    .ml(travel * motion::lerp(from, to, motion::spring(t)))
-                    .bg(motion::mix(thumb_from, thumb_to, t))
-            },
-        ))
-        .with_animation(
-            fill_animation_id,
-            Animation::new(motion::SWITCH_SLIDE),
-            move |rail, t| rail.bg(motion::mix(rail_from, rail_to, t)),
-        )
-        .into_any_element()
-    };
-
-    let base = div()
-        .id(id)
-        .role(Role::Switch)
-        .aria_toggled(on.into())
-        .tab_index(0)
-        .border_1()
-        .border_color(transparent_black())
-        .focus_visible(|style| style.border_color(theme.accent_focus))
-        .cursor_default()
-        .when(disabled, |element| element.opacity(0.5))
-        .child(rail);
-
-    if disabled {
-        base
-    } else {
-        base.on_activation(cx, activate)
+    let owner = cx.entity().downgrade();
+    let mut switch = Switch::new(id)
+        .checked(on)
+        .disabled(disabled)
+        // Controlled projection: the on state keeps Fintwind's accent even
+        // before the library theme bridge maps the rest of the palette.
+        .color(theme.accent);
+    if !disabled {
+        switch = switch.on_click(move |_, window, cx| {
+            let _ = owner.update(cx, |this, cx| activate(this, window, cx));
+        });
     }
+    switch
 }
 
 /// Neutral tint for a provider icon: near-ink in either theme, so the

@@ -35,6 +35,7 @@ mod browser;
 mod browser_poc;
 pub mod daemon;
 mod driver;
+mod ely;
 mod input;
 mod md;
 mod platform;
@@ -234,11 +235,28 @@ pub fn run() {
         crate::daemon::start_remote_host(&daemon);
     }
     gpui_platform::application()
-        .with_assets(crate::assets::Assets)
+        // Ely's embedded files first, Fintwind's icons and logos underneath:
+        // one source, so `ely_gpui_component::init` finds its assets and
+        // Fintwind keeps resolving its own.
+        .with_assets(ely_gpui_component::Assets::before(crate::assets::Assets))
         .with_main_window_reopen()
         .run(move |cx: &mut App| {
             cx.set_app_identity(APP_ID, APP_DISPLAY_NAME);
             crate::assets::register_fonts(cx).expect("failed to register bundled fonts");
+            // gpui-kit's component/base layers must exist before any kit
+            // component is built: it registers the per-window Root plugin that
+            // hosts popovers, dialogs, tooltips and the rem size, plus the
+            // key bindings those overlays dispatch through. Fintwind's own
+            // init order (input before menu) is unchanged below.
+            gpui_kit::init(cx);
+            // Ely second: it only adds its embedded fonts, its own theme
+            // global, and Tab/F6 bindings scoped to its `ElyFocus` context,
+            // none of which interact with the kit globals above. The focus
+            // scope plugin it pairs with must register before the first
+            // window opens, because a Root captures plugin factories at
+            // construction.
+            ely_gpui_component::init(cx).expect("failed to initialize Ely components");
+            crate::ely::init(cx);
             crate::input::init(cx);
             crate::ui::menu::init(cx);
             crate::app::init_composer_autocomplete(cx);
@@ -348,37 +366,42 @@ pub fn run() {
             .detach();
 
             let (window_bounds, display_id) = restored_window_placement(cx);
-            let window = cx
-                .open_window(
-                    WindowOptions {
-                        titlebar: Some(TitlebarOptions {
-                            title: Some(APP_DISPLAY_NAME.into()),
-                            // Windows creates the window without `WS_CAPTION`
-                            // either way; asking for the transparent titlebar
-                            // is what extends the client area over the frame
-                            // so Fintwind's own header can host the caption
-                            // buttons and drag region.
-                            appears_transparent: true,
-                            traffic_light_position: None,
-                        }),
-                        is_movable: true,
-                        app_owns_titlebar_drag: false,
-                        window_background: WindowBackgroundAppearance::Opaque,
-                        app_id: Some(APP_ID.to_owned()),
-                        window_bounds: Some(window_bounds),
-                        display_id,
-                        window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
-                        ..Default::default()
-                    },
-                    move |window, cx| {
-                        crate::platform::configure_main_window_close_behavior(window, cx);
-                        let fintwind = Fintwind::new(window, cx, daemon);
-                        let composer_focus = fintwind.read(cx).composer_focus(cx);
-                        window.focus(&composer_focus, cx);
-                        fintwind
-                    },
-                )
-                .expect("failed to open fintwind window");
+            // `gpui_kit::open_window` wraps the app view in the kit's Base
+            // Root, which hosts the component library's overlays (popovers,
+            // dialogs, tooltips, notifications) above Fintwind's own content.
+            // The returned entity is still Fintwind; the handle names the
+            // window whose root is the kit wrapper.
+            let (window, _) = gpui_kit::open_window(
+                WindowOptions {
+                    titlebar: Some(TitlebarOptions {
+                        title: Some(APP_DISPLAY_NAME.into()),
+                        // Windows creates the window without `WS_CAPTION`
+                        // either way; asking for the transparent titlebar
+                        // is what extends the client area over the frame
+                        // so Fintwind's own header can host the caption
+                        // buttons and drag region.
+                        appears_transparent: true,
+                        traffic_light_position: None,
+                    }),
+                    is_movable: true,
+                    app_owns_titlebar_drag: false,
+                    window_background: WindowBackgroundAppearance::Opaque,
+                    app_id: Some(APP_ID.to_owned()),
+                    window_bounds: Some(window_bounds),
+                    display_id,
+                    window_min_size: Some(size(px(MIN_WINDOW_WIDTH), px(MIN_WINDOW_HEIGHT))),
+                    ..Default::default()
+                },
+                cx,
+                move |window, cx| {
+                    crate::platform::configure_main_window_close_behavior(window, cx);
+                    let fintwind = Fintwind::new(window, cx, daemon);
+                    let composer_focus = fintwind.read(cx).composer_focus(cx);
+                    window.focus(&composer_focus, cx);
+                    fintwind
+                },
+            )
+            .expect("failed to open fintwind window");
 
             cx.on_system_notification_response({
                 let window = window;
@@ -388,8 +411,15 @@ pub fn run() {
                         return;
                     };
                     window
-                        .update(cx, |fintwind, window, cx| {
-                            fintwind.open_task_from_notification(session_id, cx);
+                        .update(cx, |root_view, window, cx| {
+                            // The kit Root wraps Fintwind; reach the app view
+                            // through the root AnyView rather than assuming
+                            // the window root type.
+                            if let Ok(fintwind) = root_view.downcast::<Fintwind>() {
+                                fintwind.update(cx, |fintwind, cx| {
+                                    fintwind.open_task_from_notification(session_id, cx);
+                                });
+                            }
                             window.activate_window();
                             cx.activate(true);
                         })

@@ -65,7 +65,10 @@ pub fn code_text_scale() -> f32 {
 /// snapped to the step, so the getter never reports an out-of-range width.
 /// Call again after the user changes the setting.
 pub fn set_transcript_width(width: f32) {
-    TRANSCRIPT_WIDTH.store(normalize_transcript_width(width).to_bits(), Ordering::Relaxed);
+    TRANSCRIPT_WIDTH.store(
+        normalize_transcript_width(width).to_bits(),
+        Ordering::Relaxed,
+    );
 }
 
 /// The current transcript column maximum content width, in the presets' range.
@@ -513,6 +516,80 @@ fn set_active_theme(theme: Theme, cx: &mut App) {
     cx.set_global(ActiveFintwindTheme(theme));
 }
 
+/// Project the resolved Fintwind palette onto gpui-kit's global theme, so kit
+/// components (and the overlays its Root plugin hosts) follow Fintwind's
+/// scheme, fonts and text scale instead of the library defaults.
+///
+/// One-way only: Fintwind's `Theme` stays the single source of truth. Called
+/// at startup and when the user or the system changes the appearance — never
+/// from render, because both write paths refresh every window.
+pub fn sync_gpui_kit_theme(cx: &mut App) {
+    use gpui_kit::component::{Theme as KitTheme, ThemeMode};
+
+    let theme = Theme::current(cx);
+    let mode = if theme.is_dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    // Mode first, colors second: switching the mode loads the registered
+    // theme of that mode and replaces the colors, so the projection below
+    // must land after it (gpui-kit's documented order).
+    KitTheme::change(mode, None, cx);
+    KitTheme::update(cx, |kit| {
+        let c = &mut kit.colors;
+        c.background = theme.canvas;
+        c.foreground = theme.text;
+        c.accent = theme.accent;
+        c.accent_foreground = theme.on_accent;
+        c.border = theme.border_strong;
+        c.input = theme.composer;
+        c.ring = theme.accent_focus;
+        c.muted = theme.raised;
+        c.muted_foreground = theme.text_secondary;
+        c.secondary = theme.raised;
+        c.secondary_foreground = theme.text;
+        c.secondary_hover = theme.sidebar_item_background;
+        c.popover = theme.raised;
+        c.popover_foreground = theme.text;
+        c.overlay = theme.overlay;
+        c.link = theme.link;
+        c.selection = theme.selection;
+        c.danger = theme.danger;
+        c.danger_foreground = theme.danger_text;
+        c.danger_hover = theme.danger_soft;
+        c.warning = theme.warning;
+        c.warning_foreground = theme.warning_text;
+        c.success = theme.success;
+        c.success_foreground = theme.success_text;
+        // Fintwind's primary buttons are a light fill with a dark glyph in
+        // both appearances (`inverse`), so project that pair rather than the
+        // accent the kit would otherwise reuse.
+        c.primary = theme.inverse;
+        c.primary_foreground = theme.on_inverse;
+        c.primary_hover = theme.inverse;
+        c.primary_active = theme.inverse;
+        c.sidebar = theme.sidebar;
+        c.sidebar_foreground = theme.text;
+        c.sidebar_border = theme.sidebar_border;
+        c.sidebar_accent = theme.sidebar_item_background;
+        c.sidebar_accent_foreground = theme.text;
+        c.title_bar = theme.rail;
+        c.title_bar_border = theme.border;
+        c.scrollbar = theme.overlay_strong;
+        c.scrollbar_thumb = theme.overlay_strong;
+        c.scrollbar_thumb_hover = theme.border_strong;
+
+        kit.font_family = ui_font_family();
+        kit.mono_font_family = code_font_family();
+        // The kit Root plugin pushes `font_size` into `window.set_rem_size`
+        // every frame, which is how kit components follow Fintwind's text
+        // scale; Fintwind's own chrome keeps measuring through `ui_px`.
+        kit.font_size = px(16.0 * ui_text_scale());
+        kit.mono_font_size = px(13.0 * code_text_scale());
+    });
+}
+
 /// Resolve and publish the startup palette, before any window exists.
 pub fn init(cx: &mut App) {
     let system_appearance = cx.window_appearance();
@@ -522,6 +599,7 @@ pub fn init(cx: &mut App) {
         Theme::light()
     };
     set_active_theme(theme, cx);
+    sync_gpui_kit_theme(cx);
 }
 
 pub fn apply_theme_preference(
@@ -534,5 +612,6 @@ pub fn apply_theme_preference(
     let is_dark = resolves_to_dark(preference, cx.window_appearance());
     set_active_theme(Theme::for_scheme(scheme, is_dark), cx);
     crate::platform::configure_sidebar_material(window, is_dark);
+    sync_gpui_kit_theme(cx);
     window.refresh();
 }

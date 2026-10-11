@@ -388,6 +388,18 @@ settings.browser_tools:
   en: Browser tools
 settings.browser_tools_description:
   en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context
+settings.auto_compact:
+  en: Auto compact
+settings.auto_compact_description:
+  en: Compact once when live context reaches the threshold below, for the session and its subagents
+settings.auto_compact_threshold:
+  en: Compaction threshold
+settings.auto_compact_threshold_description:
+  en: Windows below this usage never reach it and keep the provider default
+settings.auto_compact_threshold_placeholder:
+  en: e.g. 500K
+settings.auto_compact_threshold_invalid:
+  en: The threshold format is not recognized
 settings.app_version:
   en: fintwind %{version}
 
@@ -1596,6 +1608,8 @@ session.steer_rejected_plain:
   en: The agent couldn't be steered; the message was queued as a follow-up
 session.compaction_requested:
   en: Compaction requested — the provider will summarize at the next safe point
+session.auto_compaction_started:
+  en: Context reached the threshold; auto compaction started
 session.compaction_completed:
   en: Context compacted
 session.compaction_failed:

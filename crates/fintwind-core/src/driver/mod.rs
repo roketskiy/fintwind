@@ -121,6 +121,10 @@ impl DriverHandle {
         self.inner.stop_background_work(key, control_id);
     }
 
+    pub fn compact_child(&self, control_id: String) {
+        self.inner.compact_child(control_id);
+    }
+
     pub fn respond(&self, request_id: String, option_id: String) {
         self.inner.respond(request_id, option_id);
     }
@@ -162,6 +166,12 @@ pub trait DriverControl: Send + Sync {
     fn cancel(&self);
     fn refresh_background_work(&self) {}
     fn stop_background_work(&self, _key: BackgroundWorkKey, _control_id: String) {}
+    /// Ask the provider to compact a live subagent child session's context.
+    /// `control_id` is the child's provider-native session id. Same
+    /// admission semantics as [`DriverControl::compact`]; the outcome has no
+    /// per-child surface yet, so failures stay quiet and the provider's own
+    /// auto compaction remains the net.
+    fn compact_child(&self, _control_id: String) {}
     fn respond(&self, request_id: String, option_id: String);
     fn respond_user_input(&self, _request_id: String, _answers: Vec<UserInputAnswer>) {}
     /// Applies changed turn options to the live session, returning whether the

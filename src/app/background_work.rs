@@ -138,6 +138,14 @@ impl BackgroundWorkRegistry {
         registry
     }
 
+    /// Whether the card is still live. The client-side auto compaction
+    /// trigger reads this after applying the card Upsert.
+    pub(super) fn is_live(&self, key: &BackgroundWorkKey) -> bool {
+        self.items
+            .get(key)
+            .is_some_and(|item| item.status.is_live())
+    }
+
     fn snapshot(&self, key: &BackgroundWorkKey) -> Option<BackgroundWorkSnapshot> {
         let item = self.items.get(key)?.clone();
         Some(BackgroundWorkSnapshot {
@@ -225,6 +233,7 @@ impl BackgroundWorkRegistry {
             merge_option(&mut current.role, incoming.role);
             merge_option(&mut current.model, incoming.model);
             merge_option(&mut current.parent_id, incoming.parent_id);
+            merge_option(&mut current.context_tokens, incoming.context_tokens);
             current.started_at_ms = current.started_at_ms.min(incoming.started_at_ms);
             current.updated_at_ms = current.updated_at_ms.max(incoming.updated_at_ms);
             current.background |= incoming.background;
@@ -1094,9 +1103,32 @@ impl Fintwind {
             ) => Some(key.clone()),
             _ => None,
         };
-        let registry = self.background_work.entry(session_id).or_default();
-        registry.apply(event);
-        let snapshot = snapshot_key.and_then(|key| registry.snapshot(&key));
+        // Client-side early auto compaction probes the child's card Upsert:
+        // a settled child clears its one-shot flag so a later resume can
+        // fire again.
+        let auto_compact_probe = match &event {
+            BackgroundWorkEvent::Upsert(item) if item.key.kind == BackgroundWorkKind::Subagent => {
+                Some((item.key.clone(), item.context_tokens))
+            }
+            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
+                key, ..
+            }) => {
+                self.auto_compacted_children
+                    .retain(|(session, provider)| {
+                        *session != session_id || *provider != key.provider_id
+                    });
+                None
+            }
+            _ => None,
+        };
+        let snapshot = {
+            let registry = self.background_work.entry(session_id).or_default();
+            registry.apply(event);
+            snapshot_key.and_then(|key| registry.snapshot(&key))
+        };
+        if let Some((key, tokens)) = auto_compact_probe {
+            self.maybe_auto_compact_child(session_id, &key, tokens);
+        }
         if let Some(snapshot) = snapshot
             && let Some(session) = self.state.session_mut(session_id)
         {

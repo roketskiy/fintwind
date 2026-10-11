@@ -229,6 +229,10 @@ impl DriverControl for RemoteDriverControl {
         self.notify(fintwind_client::Command::CompactSession);
     }
 
+    fn compact_child(&self, control_id: String) {
+        self.notify(fintwind_client::Command::CompactChildSession { control_id });
+    }
+
     fn cancel(&self) {
         self.notify(fintwind_client::Command::Cancel);
     }

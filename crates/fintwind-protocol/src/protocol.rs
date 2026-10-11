@@ -160,6 +160,11 @@ pub enum Command {
         key: Value,
         control_id: String,
     },
+    /// Ask the provider to compact a live subagent child session's context.
+    /// `control_id` is the child's provider-native session id (the
+    /// background-work key's `provider_id`). Routed through the parent
+    /// session's driver, like `StopBackgroundWork`.
+    CompactChildSession { control_id: String },
     Respond {
         request_id: String,
         option_id: String,

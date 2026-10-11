@@ -65,6 +65,10 @@ impl DriverHandle {
         self.inner.compact();
     }
 
+    pub fn compact_child(&self, control_id: String) {
+        self.inner.compact_child(control_id);
+    }
+
     pub fn cancel(&self) {
         self.inner.cancel();
     }
@@ -113,6 +117,10 @@ pub trait DriverControl: Send + Sync {
     /// Ask the provider to compact this session's context. Outcomes arrive
     /// asynchronously as `DriverEvent::CompactionUpdated`.
     fn compact(&self) {}
+    /// Ask the provider to compact a live subagent child session's context.
+    /// `control_id` is the child's provider-native session id. Same
+    /// admission semantics as [`DriverControl::compact`].
+    fn compact_child(&self, _control_id: String) {}
     fn cancel(&self);
     fn refresh_background_work(&self) {}
     fn stop_background_work(&self, _key: BackgroundWorkKey, _control_id: String) {}

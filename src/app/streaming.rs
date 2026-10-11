@@ -1017,6 +1017,12 @@ impl Fintwind {
                     }
                     self.state.mark_session_dirty(session_id);
                 }
+                // Occupancy only arrives on settled steps (`session.usage.
+                // updated` carries totals, never the live context), so this
+                // is naturally once per step, not per delta.
+                if let Some(tokens) = context_tokens {
+                    self.maybe_auto_compact_session(session_id, tokens);
+                }
             }
             DriverEvent::CompactionUpdated(state) => {
                 // Compaction is conversation plumbing, not turn output: it can

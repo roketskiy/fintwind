@@ -246,6 +246,12 @@ fn directory_cache_key(directory: Option<&Path>) -> String {
 
 fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {
     use serde_json::Value;
+    // The models.dev catalog cached by the last fetch describes each model's
+    // thinking modes and which one to start on. Discovery already runs on a
+    // blocking thread, so the one cached-catalog read costs nothing here;
+    // the fetch itself stays the app's job, and a model the cache does not
+    // describe keeps the server's variant ids verbatim with no default.
+    let catalog = fintwind_client::models_dev::cached_catalog();
     value
         .get("data")
         .and_then(Value::as_array)
@@ -256,7 +262,9 @@ fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {
             let id = entry.get("id")?.as_str()?;
             let provider = entry.get("providerID")?.as_str()?;
             let name = entry.get("name").and_then(Value::as_str).unwrap_or(id);
-            let reference = fintwind_protocol::thinking_modes::find(id, Some(name));
+            let reference = catalog
+                .as_ref()
+                .and_then(|catalog| catalog.resolve_thinking_for(id, Some(provider)));
             let mut model = ProviderModel::new(format!("{provider}/{id}"), name)
                 .sub_provider(display_name_from_slug(provider));
             model.reasoning_efforts = entry
@@ -266,13 +274,7 @@ fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {
                 .flatten()
                 .filter_map(|variant| {
                     let id = variant.get("id")?.as_str()?;
-                    let label = reference
-                        .and_then(|model| {
-                            model.thinking_modes.iter().find(|mode| mode.mode_key == id)
-                        })
-                        .map(|mode| mode.name_en.as_str())
-                        .unwrap_or(id);
-                    Some(ProviderModelOption::new(id, label))
+                    Some(ProviderModelOption::new(id, id))
                 })
                 .collect();
             // Only select defaults that actually exist in this server's catalog.
@@ -299,8 +301,9 @@ fn parse_opencode_catalog(value: &serde_json::Value) -> Vec<ProviderModel> {
             model.default_reasoning_effort = configured_default
                 .or_else(|| {
                     reference
-                        .and_then(|model| model.thinking_modes.iter().find(|mode| mode.is_default))
-                        .map(|mode| mode.mode_key.clone())
+                        .as_ref()
+                        .and_then(|reference| reference.default_mode())
+                        .map(str::to_owned)
                 })
                 .filter(|id| {
                     model

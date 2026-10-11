@@ -263,13 +263,13 @@ mod tests {
 
         // Released sections render with bracket-free headings, in file order.
         assert!(markdown.contains(&heading("0.2.6")));
-        assert!(markdown.starts_with(&heading("0.2.6")));
+        assert!(markdown.starts_with(&heading("0.2.7")));
 
         // The header prose and the unreleased scratch section never ship.
         assert!(!markdown.contains("source of truth"));
         assert!(!markdown.contains("unreleased"));
 
         // The first released section's bullets survive.
-        assert!(markdown.contains("全新双层侧栏"));
+        assert!(markdown.contains("用量页「模型用量」改为矩形树图"));
     }
 }

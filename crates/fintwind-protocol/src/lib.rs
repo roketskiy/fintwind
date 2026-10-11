@@ -46,7 +46,6 @@ pub mod settings;
 pub mod skills;
 pub mod submission;
 pub mod theme;
-pub mod thinking_modes;
 pub mod usage;
 pub mod workspace;
 

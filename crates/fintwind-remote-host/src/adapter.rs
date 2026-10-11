@@ -657,8 +657,14 @@ fn apply_session_options(
             }
         }
     };
-    let state = load_task_state(daemon)?;
-    let Some(session) = state.sessions.iter().find(|session| session.id == session_id) else {
+    // List projections omit permission and option detail. Echo only the
+    // hydrated computer-owned settings, never the list's default posture.
+    let Ok(ResponsePayload::Session { session }) =
+        daemon.request(session_id, Uuid::nil(), Command::HydrateSession { session_id })
+    else {
+        return refused(RejectCode::UnknownRoute, "this session's options are unavailable on this computer");
+    };
+    let Some(session) = session else {
         return refused(RejectCode::UnknownRoute, "this session is unknown to this host");
     };
     let project_id = session_project(daemon, session_id)?;
@@ -669,6 +675,11 @@ fn apply_session_options(
     // actually applied: it reaches the session record and the driver, so a
     // preset the computer offers is the one the next turn uses.
     let agent_preset = vetted_catalog_id(&operation.payload, "agentPreset", &probe.agent_presets)?;
+    if (session.runtime_mode == RuntimeMode::Plan || interaction_mode.as_deref() == Some("plan"))
+        && agent_preset.as_deref().is_some_and(|agent| agent != "plan")
+    {
+        return refused(RejectCode::Malformed, "this task is restricted to the plan agent on this computer");
+    }
     // The effective model is what traits are checked against: the one this
     // change selects, or the one the session already runs.
     let effective_model = model.clone().or_else(|| session.model.clone());
@@ -723,6 +734,7 @@ fn apply_session_options(
                 provenance,
                 session_id,
                 options,
+                agent_preset: agent_preset.clone(),
             },
         )
         .map_err(|error| (RejectCode::Malformed, error.to_string()))?;
@@ -859,9 +871,25 @@ fn read_task_output(
     let Some(session) = session else {
         return refused(RejectCode::UnknownRoute, "this session is unknown to this host");
     };
+    // Started tasks keep their authoritative conversation in the provider;
+    // the local hydrated record can still contain only the admitted prompt.
+    // Do not silently substitute that stale projection on a failed fetch.
+    let messages = if session.native_session_id.is_some() {
+        let Some((binary, directory, native_session_id)) = session_coordinates(daemon, session_id) else {
+            return refused(RejectCode::UnknownRoute, "this session's output coordinates are unavailable on this computer");
+        };
+        match daemon.request(Uuid::nil(), Uuid::nil(), Command::FetchNativeTranscript {
+            binary, directory, session_id: native_session_id,
+        }) {
+            Ok(ResponsePayload::NativeTranscript { transcript }) => transcript.messages,
+            Err(error) if error.to_string().contains("superseded") =>
+                return refused(RejectCode::UnknownRoute, "this session's output read was superseded; retry the read"),
+            _ => return refused(RejectCode::UnknownRoute, "this session's provider output is unavailable on this computer"),
+        }
+    } else { session.messages };
     let mut body = String::new();
     let mut truncated = false;
-    for message in &session.messages {
+    for message in &messages {
         let line = format!("{}: {}", role_label(message.role), message.content.trim());
         if body.len() + line.len() + 1 > MAX_TASK_OUTPUT_BYTES {
             truncated = true;

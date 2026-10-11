@@ -15,13 +15,14 @@
 //! version and one TTL, and all of them claiming the same underlying
 //! driver request so exactly one decision can ever reach the provider.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use fintwind_client::{Command, DaemonClient, ResponsePayload};
 use fintwind_protocol::provider_session::NativeTranscript;
 use fintwind_protocol::{
-    model::{ActivityItem, Message as NativeMessage, MessageRole},
+    model::{ActivityItem, AgentSession, Message as NativeMessage, MessageRole, SessionStatus},
     SequencedEvent,
 };
 use fintwind_remote_protocol::{
@@ -475,7 +476,7 @@ pub fn push_session_list(state: &Arc<HostState>, device_id: Uuid, force: bool) {
                 .iter()
                 .find(|project| project.id == session.project_id)
                 .map(|project| project.name.clone()),
-            title: session.title.clone(),
+            title: session.display_title().to_owned(),
             status: serde_json::to_value(&session.status)
                 .ok()
                 .and_then(|value| value.as_str().map(|text| text.to_owned()))
@@ -595,6 +596,18 @@ pub fn fetch_and_send_transcript(state: &Arc<HostState>, daemon: &Arc<DaemonClie
     let Some((binary, directory, native_session_id)) =
         crate::adapter::session_coordinates(daemon, session_id)
     else {
+        // Only a trusted, persisted task with no provider session has a
+        // known empty transcript. A failed provider lookup is not emptiness.
+        if let Ok(ResponsePayload::TaskState { sessions, .. }) =
+            daemon.request(Uuid::nil(), Uuid::nil(), Command::LoadTaskState)
+        {
+            if sessions.iter().any(|session| session.id == session_id && session.native_session_id.is_none()) {
+                for device_id in owners {
+                    state.send_to_device(MessageBody::Transcript { session_id, messages: Vec::new() },
+                        device_id, PendingKind::Event);
+                }
+            }
+        }
         return;
     };
     let transcript = match daemon.request(
@@ -603,7 +616,7 @@ pub fn fetch_and_send_transcript(state: &Arc<HostState>, daemon: &Arc<DaemonClie
         Command::FetchNativeTranscript {
             binary,
             directory,
-            session_id: native_session_id,
+            session_id: native_session_id.clone(),
         },
     ) {
         Ok(ResponsePayload::NativeTranscript { transcript }) => transcript,
@@ -617,8 +630,13 @@ pub fn fetch_and_send_transcript(state: &Arc<HostState>, daemon: &Arc<DaemonClie
     // rule, computed from its own session status — a device never guesses
     // eligibility, and the host never offers an action that would be
     // refused here.
-    let actionable = session_actionable(daemon, session_id);
-    let messages = map_transcript(&transcript, actionable);
+    let saved = match daemon.request(session_id, Uuid::nil(), Command::HydrateSession { session_id }) {
+        Ok(ResponsePayload::Session { session: Some(session) })
+            if session.native_session_id.as_deref() == Some(native_session_id.as_str())
+                || session.provider_cursor.as_ref().is_some_and(|cursor| cursor.native_id() == native_session_id) => Some(session),
+        _ => None,
+    };
+    let messages = map_transcript(&transcript, saved.as_ref());
     for device_id in owners {
         state.send_to_device(
             MessageBody::Transcript {
@@ -628,25 +646,6 @@ pub fn fetch_and_send_transcript(state: &Arc<HostState>, daemon: &Arc<DaemonClie
             device_id,
             PendingKind::Event,
         );
-    }
-}
-
-/// Whether this computer would currently accept a fork or a rewind on this
-/// session. Read once per snapshot: the desktop refuses both while a turn is
-/// running, so a busy session offers neither.
-fn session_actionable(daemon: &Arc<DaemonClient>, session_id: Uuid) -> bool {
-    match daemon.request(Uuid::nil(), Uuid::nil(), Command::LoadTaskState) {
-        Ok(ResponsePayload::TaskState { sessions, .. }) => sessions
-            .iter()
-            .find(|session| session.id == session_id)
-            .is_some_and(|session| {
-                matches!(
-                    session.status,
-                    fintwind_protocol::model::SessionStatus::Idle
-                        | fintwind_protocol::model::SessionStatus::Failed
-                )
-            }),
-        _ => false,
     }
 }
 
@@ -660,8 +659,33 @@ fn session_actionable(daemon: &Arc<DaemonClient>, session_id: Uuid) -> bool {
 /// bound to that turn's own id and count, and to whether this computer would
 /// branch or rewind to it. A device therefore never counts messages or roles
 /// to work out which turn it is looking at.
-fn map_transcript(transcript: &NativeTranscript, actionable: bool) -> Vec<TranscriptMessage> {
+fn map_transcript(transcript: &NativeTranscript, saved: Option<&AgentSession>) -> Vec<TranscriptMessage> {
     use std::collections::BTreeMap;
+
+    // Native history parsers create fresh UUIDs on every read. Bind actions
+    // by the provider's acknowledged input id to the daemon's durable turn,
+    // never by ordinal or text. Ambiguous inputs offer no action.
+    let mut saved_inputs = HashMap::new();
+    if let Some(saved) = saved {
+        for turn in &saved.turns {
+            let input = turn.submission.as_ref().map(|receipt| receipt.input_id.as_str())
+                .or(turn.provider_resume_at.as_deref());
+            if let Some(input) = input {
+                saved_inputs.entry(input).and_modify(|entry| *entry = None).or_insert(Some(turn));
+            }
+        }
+    }
+    let actionable = saved.is_some_and(|session| matches!(session.status, SessionStatus::Idle | SessionStatus::Failed));
+    let bindings = transcript.turns.iter().filter_map(|native| {
+        let input = native.provider_resume_at.as_deref()?;
+        let turn = saved_inputs.get(input).copied().flatten()?;
+        Some((native.id, TranscriptTurn {
+            turn_id: turn.id,
+            turn_count: turn.turn_count,
+            can_fork: actionable && turn.provider_turn_started && native.provider_turn_started,
+            can_rewind: actionable,
+        }))
+    }).collect::<HashMap<_, _>>();
 
     let mut activities_by_position: BTreeMap<usize, Vec<TranscriptActivity>> = BTreeMap::new();
     for block in &transcript.blocks {
@@ -682,7 +706,7 @@ fn map_transcript(transcript: &NativeTranscript, actionable: bool) -> Vec<Transc
                 turn: None,
             });
         }
-        messages.push(map_message(message, transcript, actionable));
+        messages.push(map_message(message, &bindings));
     }
     if let Some(trailing) = activities_by_position.remove(&transcript.messages.len()) {
         messages.push(TranscriptMessage {
@@ -698,30 +722,15 @@ fn map_transcript(transcript: &NativeTranscript, actionable: bool) -> Vec<Transc
 
 fn map_message(
     message: &NativeMessage,
-    transcript: &NativeTranscript,
-    actionable: bool,
+    bindings: &HashMap<Uuid, TranscriptTurn>,
 ) -> TranscriptMessage {
     // The turn this message belongs to, resolved from the desktop's own
     // association. A message with no turn keeps `None` rather than a guessed
     // position.
-    let turn = message.turn_id.and_then(|turn_id| {
-        transcript
-            .turns
-            .iter()
-            .find(|turn| turn.id == turn_id)
-            .map(|turn| TranscriptTurn {
-                turn_id: turn.id,
-                turn_count: turn.turn_count,
-                // A response may be branched only from a turn that actually
-                // reached the provider; a rewind targets the user message
-                // that starts a turn.
-                can_fork: actionable && turn.provider_turn_started,
-                can_rewind: actionable
-                    && message.role == MessageRole::User
-                    && transcript.messages.iter().any(|candidate| {
-                        candidate.turn_id == Some(turn.id) && candidate.role == MessageRole::User
-                    }),
-            })
+    let turn = message.turn_id.and_then(|turn_id| bindings.get(&turn_id)).map(|binding| {
+        let mut binding = binding.clone();
+        binding.can_rewind &= message.role == MessageRole::User;
+        binding
     });
     TranscriptMessage {
         role: match message.role {

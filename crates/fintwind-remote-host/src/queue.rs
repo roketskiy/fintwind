@@ -130,6 +130,20 @@ pub enum EnqueueRefusal {
 }
 
 impl PromptQueues {
+    /// Reconcile one authoritative daemon row without adding another copy.
+    /// A local projection may have settled during the lost-link window; the
+    /// durable queued row is still pending. Preserve an accepted local cancel.
+    pub fn restore(&mut self, mut item: QueuedPrompt) -> Result<usize, EnqueueRefusal> {
+        if let Some(queue) = self.sessions.get_mut(&item.session_id)
+            && let Some(position) = queue.iter().position(|known| known.operation_id == item.operation_id)
+        {
+            item.cancel_requested = item.cancel_requested.or(queue[position].cancel_requested);
+            queue[position] = item;
+            return Ok(position);
+        }
+        self.enqueue(item)
+    }
+
     /// Queue one prompt, returning its zero-based position.
     pub fn enqueue(&mut self, item: QueuedPrompt) -> Result<usize, EnqueueRefusal> {
         if self.total_pending() >= MAX_TOTAL_QUEUE_ITEMS {

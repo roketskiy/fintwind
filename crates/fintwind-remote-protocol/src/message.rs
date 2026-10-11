@@ -84,6 +84,10 @@ pub enum MessageBody {
     /// delivery in the sender's unacked buffer: acking the ack would
     /// recurse forever.
     Acknowledged { upto_seq: u64 },
+    /// Authenticated host transport liveness, not relay or execution receipt.
+    /// Exactly one bounded UUID probe per device; no workspace I/O.
+    LivenessProbe { probe_id: Uuid },
+    LivenessReply { probe_id: Uuid },
     /// One fragment of a sealed message whose JSON is too large for a
     /// single Noise transport frame. Noise caps a transport message at
     /// 65535 bytes, so a `SessionList` for a workspace with hundreds of

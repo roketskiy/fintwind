@@ -682,7 +682,9 @@ mod win {
         let mut attributes = HandleAttributes::new(&mut inherited)?;
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES
+            | windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
+        startup.StartupInfo.wShowWindow = 0;
         startup.StartupInfo.hStdInput = pipes.stdin_read;
         startup.StartupInfo.hStdOutput = pipes.stdout_write;
         startup.StartupInfo.hStdError = pipes.stderr_write;
@@ -932,6 +934,7 @@ mod observer {
 
         let nonce = take("--nonce", &mut arguments).unwrap_or_default();
         let crash_boundary = take("--crash-boundary", &mut arguments).map(PathBuf::from);
+        let debug_crash_boundary = take("--debug-crash-boundary", &mut arguments).map(PathBuf::from);
         let mut handoffs_seen = 0_u64;
         let mut job_copies_closed_flag = false;
         let observation_request =
@@ -953,6 +956,7 @@ mod observer {
                 observation_response.map(|value| value as win::Handle),
                 deadline,
                 crash_boundary.as_deref(),
+                debug_crash_boundary.as_deref(),
             ),
             "control-before" => control_before(
                 &mut checks,
@@ -1099,6 +1103,7 @@ mod observer {
         response_write: Option<win::Handle>,
         deadline: Instant,
         crash_boundary: Option<&Path>,
+        debug_crash_boundary: Option<&Path>,
     ) {
         use std::collections::BTreeMap;
         let (Some(request_read), Some(response_write)) = (request_read, response_write) else {
@@ -1248,6 +1253,7 @@ mod observer {
                             if let Some(job) = job {
                                 let held: Vec<u32> = processes
                                     .iter()
+                                    .filter(|handle| win::still_active(**handle))
                                     .map(|handle| {
                                         unsafe {
                                             windows_sys::Win32::System::Threading::GetProcessId(
@@ -1286,7 +1292,6 @@ mod observer {
                             }
                             // Close every job copy and say so. Holding one
                             // would delay the tested job's kill-on-close.
-                            job = None;
                             hub.close_job_copies();
                             job_copies_closed = true;
                             *job_copies_closed_flag = true;
@@ -1296,7 +1301,35 @@ mod observer {
                                 "every job query handle copy was closed before the crash phase, so nothing this observer holds can delay the tested job's kill-on-close",
                             );
                         }
-                                            }
+                    }
+                    // Pure synthetic debug-crash only: the frozen fixture
+                    // source creates exactly one child and then waits. With
+                    // its child's CREATE_PROCESS event still paused, compare
+                    // both real handles with the exact job list, close copies
+                    // and withhold the ACK. This is NOT a Chrome freeze rule.
+                    if let Some(path) = debug_crash_boundary {
+                        if verified.kind == observation::Kind::Descendant && processes.len() == 2 {
+                            let held: Vec<u32> = processes.iter().map(|handle| unsafe {
+                                windows_sys::Win32::System::Threading::GetProcessId(*handle)
+                            }).collect();
+                            let complete = job.and_then(|handle| win::job_process_ids(handle).ok())
+                                .map(|members| members.len() == 2 && members.iter().all(|pid| held.contains(pid)))
+                                .unwrap_or(false);
+                            checks.verify("observation.syntheticDebugTopology", complete,
+                                "the fixed two-process synthetic tree matches the exact job before debugger crash");
+                            job = None;
+                            hub.close_job_copies();
+                            job_copies_closed = true;
+                            *job_copies_closed_flag = true;
+                            frozen = true; // Fixed synthetic topology, not a production freeze claim.
+                            let ready = complete && checks.outcome() == "pass" &&
+                                processes.iter().all(|handle| win::still_active(*handle));
+                            if std::fs::write(path, if ready { b"ready".as_slice() } else { b"failed".as_slice() }).is_err() {
+                                checks.verify("observation.debugCrashPublished", false, "could not publish debug crash boundary");
+                            }
+                            break; // No ACK: creation event remains paused.
+                        }
+                    }
                     if frozen {
                         if let Some(path) = crash_boundary {
                             // Withhold the final ACK in the observer, not the
@@ -1312,7 +1345,10 @@ mod observer {
                             break;
                         }
                     }
-                    let _ = hub.ack(&id, &message, true, "accepted", deadline);
+                    let accepted = checks.outcome() != "fail";
+                    let _ = hub.ack(&id, &message, accepted,
+                        if accepted { "accepted" } else { "observer invariant failed" }, deadline);
+                    if !accepted { break; }
                     // Frozen topology is the protocol boundary. The runner
                     // still owns pipe copies, so EOF is not an exit signal.
                     if frozen { break; }
@@ -1579,6 +1615,7 @@ impl Observation {
 
 #[cfg(windows)]
 struct Harness {
+    browser_plan: Option<PathBuf>,
     /// The one independent directory this round owns.
     dir: PathBuf,
     supervisor: PathBuf,
@@ -1618,6 +1655,7 @@ impl Harness {
         let outsider_job = win::Job::new()?;
         let runner_in_job = Some(win::is_in_job(win::current_process(), std::ptr::null_mut())?);
         Ok(Self {
+            browser_plan: None,
             dir,
             supervisor,
             fixture,
@@ -1844,6 +1882,9 @@ impl Harness {
         ];
         if name == "supervisor-crash" {
             observer_argv.extend(["--crash-boundary".to_owned(), self.path(name, "crash-boundary.txt").to_string_lossy().into_owned()]);
+        }
+        if name == "debug-supervisor-crash" {
+            observer_argv.extend(["--debug-crash-boundary".to_owned(), self.path(name, "crash-boundary.txt").to_string_lossy().into_owned()]);
         }
         let env = self.whitelist_env();
         let request_read = channel.request_read().unwrap_or(std::ptr::null_mut());
@@ -2271,6 +2312,11 @@ const SCENARIOS: &[&str] = &[
     "status-unwritable",
     "spawn-fail",
     "supervisor-crash",
+    "debug-normal",
+    "debug-exit-3",
+    "debug-deadline",
+    "debug-supervisor-crash",
+    "debug-browser",
     "outsider-final",
 ];
 
@@ -2293,7 +2339,9 @@ fn run_scenario(h: &mut Harness, name: &str) -> Value {
         "invalid-plan" => scenario_invalid_plan(h),
         "status-unwritable" => scenario_status_unwritable(h),
         "spawn-fail" => scenario_spawn_fail(h),
-        "supervisor-crash" => scenario_supervisor_crash(h),
+        "supervisor-crash" | "debug-supervisor-crash" => scenario_supervisor_crash(h, name),
+        "debug-normal" | "debug-exit-3" | "debug-deadline" => scenario_debug_tree(h, name),
+        "debug-browser" => scenario_debug_browser(h),
         "outsider-final" => scenario_outsider_final(h),
         other => {
             let mut checks = Checks::new();
@@ -2905,6 +2953,98 @@ fn scenario_exit_three(h: &mut Harness) -> Checks {
         h.outsider_alive(),
         "the controlled outsider survived the failed run untouched",
     );
+    checks
+}
+
+/// The descendant cannot cooperate with observer IPC: its creation handle
+/// must come from the kernel debug event instead of the fixture grant.
+#[cfg(windows)]
+fn scenario_debug_tree(h: &mut Harness, name: &str) -> Checks {
+    let mut checks = Checks::new();
+    let dir = h.scenario_dir(name);
+    let mut args = vec![
+        "--facts".to_owned(), h.path(name, "root.facts.json").to_string_lossy().into_owned(),
+        "--grandchild".to_owned(), "--grandchild-facts".to_owned(),
+        h.path(name, "descendant.facts.json").to_string_lossy().into_owned(),
+    ];
+    let deadline = if name == "debug-deadline" { 4_000 } else { 15_000 };
+    if name == "debug-deadline" { args.push("--stay-alive".to_owned()); }
+    if name == "debug-exit-3" { args.extend(["--exit-code".to_owned(), "3".to_owned()]); }
+    let plan = json!({"steps": [step_json("debug-tree", "run",
+        &h.fixture.to_string_lossy(), &args, &dir, &json!(h.whitelist_env()),
+        json!({"debugDescendants": true}))]});
+    let run = match h.run_supervisor(name, &serde_json::to_string_pretty(&plan).unwrap_or_default(),
+        deadline, &[], None, true) {
+        Ok(run) => run,
+        Err(error) => { checks.verify("debug.supervisor", false, format!("{error:#}")); return checks; }
+    };
+    checks.verify("debug.exitCode", run.exit_code == Some(if name == "debug-normal" { 0 } else { 1 }),
+        "success exits zero; nonzero root or deadline fails the plan");
+    if let Some(event) = final_event(&run.events) {
+        checks.verify("debug.handles", event["debugProcessHandles"] == json!(2),
+            "kernel events supplied root and descendant query/wait handles");
+        checks.verify("debug.cleanup", event["debugTreeRequested"] == json!(true)
+            && event["debugCleanupVerified"] == json!(true) && containment_consistent(event),
+            "debug events were drained; every handle exited; the owned job and IO workers settled");
+        let expected_failure = match name { "debug-exit-3" => Some("exit-3"),
+            "debug-deadline" => Some("total-deadline"), _ => None };
+        checks.verify("debug.failureClass", event["failureClass"].as_str() == expected_failure,
+            "the expected root failure is not confused with cleanup failure");
+        checks.verify("debug.deadline", event["totalDeadlineExceeded"] == json!(name == "debug-deadline"),
+            "execution deadline and bounded cleanup remain separate");
+    } else { checks.verify("debug.finalEvent", false, "no final containment verdict"); }
+    checks.verify("debug.rootSynthetic", fixture_bool(&h.path(name, "root.facts.json"), "inAnyJob") == Some(true),
+        "the synthetic root wrote its facts inside the controlled job");
+    checks.verify("debug.planFrozen", run.plan_sha_before == run.plan_sha_after, "plan bytes did not change");
+    checks.verify("debug.noOuterJob", !run.supervisor_in_any_job, "supervisor was not contained by a masking outer job");
+    checks.verify("outsider.alive", h.outsider_alive(), "the independent controlled outsider survived");
+    match run.observation {
+        Some(mut observer) => {
+            checks.verify("debug.observerHandleCount", observer.items.iter()
+                .filter(|item| item["name"] == "observer.observation.inExactJob" && item["verdict"] == "verified").count() == 2,
+                "the independent observer verified both real handles against the exact job");
+            checks.items.append(&mut observer.items);
+        }
+        None => checks.verify("debug.observer", false, "independent observer missing"),
+    }
+    checks
+}
+
+#[cfg(windows)]
+fn scenario_debug_browser(h: &mut Harness) -> Checks {
+    let mut checks = Checks::new();
+    let result = (|| -> Result<SupervisorRun> {
+        let plan_path = h.browser_plan.as_ref().context("browser plan missing")?;
+        let text = std::fs::read_to_string(plan_path)?;
+        let mut plan: Value = serde_json::from_str(&text)?;
+        let steps = plan["steps"].as_array().context("steps missing")?;
+        if steps.len() != 1 || steps[0]["debugDescendants"] != json!(true)
+            || steps[0]["mode"] != "run" { bail!("browser probe must be one debug run step"); }
+        let deadline_ms = plan["acceptanceDeadlineMs"].as_u64().unwrap_or(45_000);
+        if !(45_000..=180_000).contains(&deadline_ms) { bail!("browser acceptance deadline is outside its bound"); }
+        plan.as_object_mut().context("plan must be an object")?.remove("acceptanceDeadlineMs");
+        h.run_supervisor("debug-browser", &serde_json::to_string(&plan)?, deadline_ms, &[], None, true)
+    })();
+    let run = match result {
+        Ok(run) => run,
+        Err(error) => { checks.verify("browser.started", false, format!("{error:#}")); return checks; }
+    };
+    checks.verify("browser.driverExit", run.exit_code == Some(0), "isolated blank-page driver exited successfully");
+    let count = final_event(&run.events).and_then(|event| event["debugProcessHandles"].as_u64()).unwrap_or(0);
+    checks.verify("browser.descendantsObserved", count >= 4, "kernel creation handles cover driver, Chrome and multiple internal descendants");
+    checks.verify("browser.cleanup", final_event(&run.events).map(|event|
+        event["debugCleanupVerified"] == json!(true) && containment_consistent(event)
+        && event["failureClass"].is_null()).unwrap_or(false), "debug tree settled without degrading sandbox or cleanup");
+    checks.verify("browser.planFrozen", run.plan_sha_before == run.plan_sha_after, "probe plan remained unchanged");
+    match run.observation {
+        Some(mut observer) => {
+            checks.verify("browser.independentHandles", observer.items.iter().filter(|item|
+                item["name"] == "observer.observation.inExactJob" && item["verdict"] == "verified").count() as u64 == count,
+                "observer received every kernel creation handle and checked exact-job membership");
+            checks.items.append(&mut observer.items);
+        }
+        None => checks.verify("browser.observer", false, "independent observer absent"),
+    }
     checks
 }
 
@@ -3611,8 +3751,7 @@ fn scenario_spawn_fail(h: &mut Harness) -> Checks {
 /// it owns, then proves what it can with the handles it owns and reports the
 /// rest as blocked.
 #[cfg(windows)]
-fn scenario_supervisor_crash(h: &mut Harness) -> Checks {
-    let name = "supervisor-crash";
+fn scenario_supervisor_crash(h: &mut Harness, name: &str) -> Checks {
     let mut checks = Checks::new();
     let dir = h.scenario_dir(name);
     if std::fs::create_dir_all(&dir).is_err() {
@@ -3643,10 +3782,17 @@ fn scenario_supervisor_crash(h: &mut Harness) -> Checks {
         "--exit-code".to_owned(),
         "0".to_owned(),
     ];
-    let plan = json!({"steps": [
+    let mut plan = json!({"steps": [
         step_json("live", "spawn", &program, &args, &dir, &env, json!({"readyFromLog": true})),
         step_json("observe", "run", &program, &observe_args, &dir, &env, json!({"observeDescendants": true})),
     ]});
+    if name == "debug-supervisor-crash" {
+        let debug_args = vec!["--facts".to_owned(), h.path(name, "live.facts.json").to_string_lossy().into_owned(),
+            "--grandchild".to_owned(), "--grandchild-facts".to_owned(),
+            h.path(name, "debug.grandchild.facts.json").to_string_lossy().into_owned(), "--stay-alive".to_owned()];
+        plan = json!({"steps": [step_json("debug-live", "run", &program, &debug_args, &dir, &env,
+            json!({"debugDescendants": true}))]});
+    }
     let plan_text = serde_json::to_string_pretty(&plan).unwrap_or_default();
     let plan_sha_before = sha256_hex(plan_text.as_bytes());
     let plan_path = dir.join("plan.json");
@@ -3753,8 +3899,8 @@ fn scenario_supervisor_crash(h: &mut Harness) -> Checks {
     );
     checks.verify(
         "status.wellFormed",
-        status_present && !events.is_empty(),
-        "every complete line the supervisor did write is well-formed JSON",
+        status_present && (name == "debug-supervisor-crash" || !events.is_empty()),
+        "all completed status lines are valid; a debug crash before the first run completes may leave an empty status file",
     );
     let plan_sha_after = std::fs::read(&plan_path)
         .map(|bytes| sha256_hex(&bytes))
@@ -3808,6 +3954,7 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
     let mut workdir: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut examples_dir: Option<PathBuf> = None;
+    let mut browser_plan: Option<PathBuf> = None;
     let mut selected: Vec<String> = Vec::new();
     let mut list = false;
 
@@ -3832,6 +3979,7 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
             "--workdir" => workdir = value.map(PathBuf::from),
             "--out" => out = value.map(PathBuf::from),
             "--examples-dir" => examples_dir = value.map(PathBuf::from),
+            "--browser-plan" => browser_plan = value.map(PathBuf::from),
             "--scenario" => {
                 if let Some(name) = value {
                     selected.push(name);
@@ -3878,6 +4026,7 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
         .with_context(|| format!("could not create the run directory {}", dir.display()))?;
 
     let mut harness = Harness::new(dir.clone(), supervisor.clone(), fixture.clone())?;
+    harness.browser_plan = browser_plan;
     harness.spawn_outsider()?;
 
     let self_exe = std::env::current_exe()
@@ -3910,6 +4059,7 @@ fn runner_main(arguments: &[String]) -> Result<i32> {
     // reported as what it is, never converted into a pass.
     let round = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<i32> {
         for name in SCENARIOS {
+            if *name == "debug-browser" && harness.browser_plan.is_none() { continue; }
             if !selected.is_empty() && !selected.iter().any(|selected| selected == name) {
                 continue;
             }

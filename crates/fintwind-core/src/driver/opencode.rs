@@ -634,7 +634,7 @@ impl OpenCodeDriver {
             reasoning_effort,
             service_tier: _,
             context_window: _,
-            agent_preset: _,
+            agent_preset,
             provider_cursor,
             task_id,
         } = options;
@@ -755,13 +755,13 @@ impl OpenCodeDriver {
         let agent = if interaction_mode == InteractionMode::Plan || mode == RuntimeMode::Plan {
             "plan"
         } else {
-            "build"
+            agent_preset.as_deref().unwrap_or("build")
         };
-        let _ = server.request(
+        server.request(
             "POST",
             &format!("/api/session/{}/agent", encode_path_segment(&session_id)),
             Some(&json!({"agent": agent})),
-        );
+        ).context("switch OpenCode agent")?;
         apply_opencode_session_permissions(&server, &session_id, mode, interaction_mode);
 
         // opencode keeps the model on the session instead of on every

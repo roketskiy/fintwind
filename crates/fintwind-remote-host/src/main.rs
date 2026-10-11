@@ -357,12 +357,12 @@ fn run_daemon(config: HostConfig) -> anyhow::Result<()> {
                         match DaemonClient::connect(&state.config().daemon_address, token) {
                             Ok(client) => {
                                 let client = Arc::new(client);
-                                state.set_daemon(Some(Arc::clone(&client)));
                                 log::info!(target: "audit", "daemon connected");
                                 // Rebuild the queue view from the daemon's
                                 // durable rows: a prompt admitted before the
                                 // host went away is still queued there.
                                 state.recover_queues(&client);
+                                state.set_daemon(Some(Arc::clone(&client)));
                                 // Re-arm the cancellations this host accepted
                                 // but never finished delivering, straight from
                                 // its own durable records. A restarted host
@@ -412,6 +412,7 @@ fn run_daemon(config: HostConfig) -> anyhow::Result<()> {
                                             runtime_id,
                                         );
                                         events::fetch_and_send_transcript(&state, &client, session_id);
+                                        push_queue_view(&state, session_id, device_id);
                                     }
                                 }
                                 for device in state.online_devices() {
@@ -647,15 +648,12 @@ fn run_operation(state: &Arc<HostState>, device_id: Uuid, operation: OperationRe
         return;
     }
 
-    // An ordinary send to a busy session is accepted and queued — never
-    // silently turned into a steer, never dropped.
+    // Every ordinary send uses durable admission. Idle and not-yet-started
+    // sessions dispatch through the same queue pump as busy sessions; they
+    // must not require an existing runtime or bypass operation provenance.
     if let OperationKind::SendPrompt = operation.kind {
-        if let Some(session_id) = operation.session_id {
-            if state.is_session_busy(session_id) {
-                enqueue_prompt(state, device_id, &operation);
-                return;
-            }
-        }
+        enqueue_prompt(state, device_id, &operation);
+        return;
     }
 
     // Accept durably **before** any side effect.
@@ -690,7 +688,7 @@ fn run_operation(state: &Arc<HostState>, device_id: Uuid, operation: OperationRe
                     .approvals()
                     .invalidate_session(session_id, "the device closed the session view");
                 if state.session_owners(session_id).is_empty() {
-                    if let Some(daemon) = state.daemon() {
+                    if let Some(daemon) = state.daemon().filter(|_| !view.runtime_id.is_nil()) {
                         daemon.unsubscribe(session_id, view.runtime_id);
                     }
                 }
@@ -787,13 +785,29 @@ fn run_operation(state: &Arc<HostState>, device_id: Uuid, operation: OperationRe
                     if fresh || state.session_owners(session_id).contains(&device_id) {
                         events::fetch_and_send_transcript(state, &daemon, session_id);
                     }
+                } else {
+                    // A persisted task can have an open view before its
+                    // first runtime exists. Keep ownership for queue admission
+                    // without inventing a runtime or starting a provider.
+                    state.attach_view(session_id, device_id, Uuid::nil());
+                    events::fetch_and_send_transcript(state, &daemon, session_id);
                 }
+                push_queue_view(state, session_id, device_id);
+                events::push_pending_offers(state, device_id);
             }
             // A batch delete carries its per-item results in `detail`; the
             // overall `Executed` below is only reached when every item
             // succeeded, because a partial batch arrives as a rejection
             // whose detail keeps the per-item truth.
             complete_with_detail(state, device_id, &operation, OperationState::Executed, Some(detail));
+            if matches!(operation.kind, OperationKind::CreateSession | OperationKind::RenameSession
+                | OperationKind::ArchiveSession | OperationKind::RestoreArchivedSession | OperationKind::DeleteSessions
+                | OperationKind::ForkFromResponse | OperationKind::RewindToMessage)
+            {
+                for device in state.online_devices() {
+                    events::push_session_list(state, device.device_id, true);
+                }
+            }
         }
         Err((code, message)) => {
             // A batch's partial failure arrives as a rejection whose detail
@@ -1511,10 +1525,10 @@ fn run_options_catalog(state: &Arc<HostState>, device_id: Uuid, operation: Opera
                         .map(|model| fintwind_remote_protocol::ModelOptionEntry {
                             id: model.get("id").and_then(Value::as_str).unwrap_or_default().to_owned(),
                             name: model.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                            is_default: model.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
-                            reasoning_efforts: string_list(model, "reasoningEfforts"),
-                            service_tiers: string_list(model, "serviceTiers"),
-                            context_windows: string_list(model, "contextWindows"),
+                            is_default: model.get("is_default").and_then(Value::as_bool).unwrap_or(false),
+                            reasoning_efforts: string_list(model, "reasoning_efforts"),
+                            service_tiers: string_list(model, "service_tiers"),
+                            context_windows: string_list(model, "context_windows"),
                         })
                         .collect()
                 })
@@ -1528,7 +1542,7 @@ fn run_options_catalog(state: &Arc<HostState>, device_id: Uuid, operation: Opera
                         .map(|preset| fintwind_remote_protocol::AgentPresetEntry {
                             id: preset.get("id").and_then(Value::as_str).unwrap_or_default().to_owned(),
                             name: preset.get("name").and_then(Value::as_str).unwrap_or_default().to_owned(),
-                            is_default: preset.get("isDefault").and_then(Value::as_bool).unwrap_or(false),
+                            is_default: preset.get("is_default").and_then(Value::as_bool).unwrap_or(false),
                         })
                         .collect()
                 })
@@ -1658,9 +1672,15 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                 push_queue_view(state, session_id, item.device_id);
                 continue;
             }
-            // A deleted, archived or ownerless target must never run.
-            if state.session_owners(session_id).is_empty() || state.is_session_archived(session_id) {
-                for dropped in state.queues().lock().drop_session(session_id) {
+            // A disconnected view is not deletion. Restored durable prompts
+            // wait for an owner to re-attach instead of being cancelled during
+            // the host's startup gap.
+            if state.session_owners(session_id).is_empty() {
+                break;
+            }
+            if state.is_session_archived(session_id) {
+                let dropped_items = state.queues().lock().drop_session(session_id);
+                for dropped in dropped_items {
                     state.cancel_remote_prompt_as_recorded(dropped.device_id, dropped.operation_id);
                     settle_released_cancel(state, &dropped);
                     report_dropped_queue_item(state, &dropped, "the session was removed or archived");
@@ -1699,6 +1719,20 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                 Ok(fintwind_client::ResponsePayload::RemotePromptState { state: label, .. })
                     if label == "dispatched" =>
                 {
+                    // Dispatch may create the first runtime. Upgrade every
+                    // already-open pre-runtime view before delivering events.
+                    if let Ok(fintwind_client::ResponsePayload::SessionRuntime { runtime_id: Some(runtime_id), .. }) =
+                        daemon.request(session_id, Uuid::nil(), fintwind_client::Command::AttachSession)
+                    {
+                        let mut changed = false;
+                        for owner in state.session_owners(session_id) {
+                            if state.session_runtime_for(session_id, owner) != Some(runtime_id) {
+                                state.attach_view(session_id, owner, runtime_id);
+                                changed = true;
+                            }
+                        }
+                        if changed { events::spawn_session_pump(Arc::clone(state), session_id, runtime_id); }
+                    }
                     state
                         .queues()
                         .lock()

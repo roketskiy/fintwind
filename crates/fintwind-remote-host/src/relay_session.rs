@@ -808,6 +808,11 @@ fn handle_sealed(
     message: SealedMessage,
 ) -> Handled {
     match message.body {
+        MessageBody::LivenessProbe { probe_id } => {
+            links.state.send_to_device(MessageBody::LivenessReply { probe_id },
+                device_id, PendingKind::Event);
+            Handled::Continue
+        }
         MessageBody::Acknowledged { upto_seq } => {
             // Only this device's end-to-end acknowledgement releases this
             // device's unacked frames — and an ack is never itself queued
@@ -935,7 +940,8 @@ fn handle_sealed(
         // violation of direction, and pairing bodies belong to the pairing
         // session, never to a live business channel; produce no control
         // effect for either, keep going.
-        MessageBody::SessionList { .. }
+        MessageBody::LivenessReply { .. }
+        | MessageBody::SessionList { .. }
         | MessageBody::ProjectList { .. }
         | MessageBody::WorkspaceUnavailable { .. }
         | MessageBody::DriverEvent { .. }

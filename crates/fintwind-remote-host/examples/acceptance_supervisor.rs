@@ -76,6 +76,10 @@
 #[path = "support/acceptance_observation.rs"]
 mod observation;
 
+#[cfg(windows)]
+#[path = "support/acceptance_debug_tree.rs"]
+mod debug_tree;
+
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -535,6 +539,7 @@ mod create {
         cwd: Option<&std::path::Path>,
         stdin_text: bool,
         extra_inherit: &[HANDLE],
+        debug_descendants: bool,
     ) -> Result<Created> {
         let mut command_line = String::from(&quote(program));
         for argument in args {
@@ -559,7 +564,9 @@ mod create {
         let mut attributes = HandleAttributes::new(&mut inherited)?;
         let mut startup = STARTUPINFOEXW::default();
         startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
-        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES
+            | windows_sys::Win32::System::Threading::STARTF_USESHOWWINDOW;
+        startup.StartupInfo.wShowWindow = 0; // SW_HIDE; preserve the inherited console.
         startup.StartupInfo.hStdInput = pipes.stdin_read;
         startup.StartupInfo.hStdOutput = pipes.stdout_write;
         startup.StartupInfo.hStdError = pipes.stderr_write;
@@ -573,7 +580,8 @@ mod create {
                 std::ptr::null(),
                 std::ptr::null(),
                 1, // inherit the child's pipe ends
-                CREATE_SUSPENDED_FLAG | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT,
+                CREATE_SUSPENDED_FLAG | CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT
+                    | if debug_descendants { windows_sys::Win32::System::Threading::DEBUG_PROCESS } else { 0 },
                 environment.as_mut_ptr() as *mut _,
                 cwd_wide
                     .as_mut()
@@ -683,6 +691,10 @@ struct Step {
     /// freeze that follows never has to be guessed from a sleep.
     #[serde(default)]
     observe_descendants: bool,
+    /// Kernel-provided creation handles for a non-cooperating descendant tree.
+    /// Only the final run step, with an independent observer, may use this.
+    #[serde(default)]
+    debug_descendants: bool,
 }
 
 #[cfg(windows)]
@@ -822,6 +834,18 @@ impl Observation {
             None,
             deadline,
         )
+    }
+
+    fn report_descendant(
+        &mut self,
+        pid: u32,
+        process: windows_sys::Win32::Foundation::HANDLE,
+        deadline: Instant,
+    ) -> Result<bool> {
+        let duplicated = observation::duplicate_for_observer(
+            self.observer, process, observation::OBSERVER_PROCESS_ACCESS,
+        )?;
+        self.offer(observation::Kind::Descendant, pid, Some(duplicated as u64), None, deadline)
     }
 
     /// Offer the exact job query handle, before the freeze marker.
@@ -985,7 +1009,7 @@ fn supervisor_main() -> Result<()> {
             bail!("an acceptance plan must contain at least one step");
         }
         let mut seen = BTreeMap::new();
-        for step in &plan.steps {
+        for (index, step) in plan.steps.iter().enumerate() {
             if step.mode != "spawn" && step.mode != "run" {
                 bail!("step {:?} has an invalid mode {:?} (spawn|run)", step.tag, step.mode);
             }
@@ -1007,6 +1031,10 @@ fn supervisor_main() -> Result<()> {
                     "step {:?} asks for descendant observation but is not a run step",
                     step.tag
                 );
+            }
+            if step.debug_descendants && (step.mode != "run" || index + 1 != plan.steps.len()
+                || step.observe_descendants || observation_args.is_none()) {
+                bail!("debugDescendants requires an independent observer and the final run step, without observeDescendants");
             }
         }
     }
@@ -1034,6 +1062,40 @@ struct Verdict {
     failed_step: Option<String>,
     failure_class: Option<String>,
     containment_verified: bool,
+}
+
+/// One kernel event stays paused while its real descendant handle is offered
+/// to the independent observer. A refused hand-off is continued only after
+/// the caller has terminated its own Job in the cleanup path.
+#[cfg(windows)]
+fn pump_debug_event(
+    tree: &mut debug_tree::DebugTree,
+    job: &job::Job,
+    root_pid: u32,
+    observer: &mut Option<Observation>,
+    handles: &mut Vec<debug_tree::ProcessHandle>,
+    deadline: Instant,
+) -> Result<()> {
+    if let Some(event) = tree.poll(job.handle())? {
+        match event {
+            debug_tree::Event::Created(process) => {
+                let pid = process.pid;
+                let first = handles.is_empty();
+                handles.push(process.handle);
+                if first && pid != root_pid { bail!("debug root does not match the creation handle"); }
+                if !first {
+                    let observer = observer.as_mut().context("debug tree has no observer")?;
+                    if !observer.report_descendant(pid, handles.last().unwrap().raw(), deadline)? {
+                        bail!("observer refused the debug descendant");
+                    }
+                }
+            }
+            debug_tree::Event::Exited { pid, code } => { let _ = (pid, code); }
+            debug_tree::Event::Other => {}
+        }
+        tree.continue_event()?;
+    }
+    Ok(())
 }
 
 /// Execute the frozen plan. Returns the verdict only after the job has
@@ -1141,6 +1203,9 @@ fn run_steps(
     let mut held: Vec<create::ChildGuard> = Vec::new();
     let mut startup_cleanup_ok = true;
     let mut io_workers: Vec<std::thread::JoinHandle<()>> = Vec::new();
+    let mut debug_state: Option<(debug_tree::DebugTree, u32)> = None;
+    let mut debug_handles = Vec::new();
+    let mut debug_cleanup_ok = true;
 
     'steps: for step in &plan.steps {
         if failed_step.is_some() {
@@ -1246,6 +1311,8 @@ fn run_steps(
                 grant.response_read,
             ]);
         }
+        // Debug events must be consumed on this same creating thread.
+        let debug = step.debug_descendants.then(debug_tree::DebugTree::new);
         let mut created = match create::create_suspended(
             &step.program,
             &step.args,
@@ -1253,6 +1320,7 @@ fn run_steps(
             step.cwd.as_deref(),
             step.stdin_text.is_some(),
             &extra_inherit,
+            step.debug_descendants,
         ) {
             Ok(created) => created,
             Err(_) => {
@@ -1273,6 +1341,7 @@ fn run_steps(
             }
         };
         let pid = created.guard.pid;
+        if let Some(debug) = debug { debug_state = Some((debug, pid)); }
         if job.assign_handle(created.guard.process).is_err() {
             // It never ran an instruction and was never in the job: end it
             // through the creation handle and wait, verified.
@@ -1564,6 +1633,28 @@ fn run_steps(
                 .saturating_duration_since(Instant::now())
                 .as_millis()
                 .min(u32::MAX as u128) as u32;
+            if let Some((tree, root_pid)) = debug_state.as_mut() {
+                if Instant::now() >= total_deadline {
+                    verdict.deadline_exceeded = true;
+                    failed_step.get_or_insert_with(|| step.tag.clone());
+                    failure_class.get_or_insert_with(|| "total-deadline".to_owned());
+                    break None;
+                }
+                if pump_debug_event(tree, &job, *root_pid, &mut observation, &mut debug_handles, total_deadline).is_err() {
+                    failed_step.get_or_insert_with(|| step.tag.clone());
+                    failure_class.get_or_insert_with(|| "debug-observation".to_owned());
+                    break None;
+                }
+                match create::wait_handle(held.last().expect("pushed above").process, 0) {
+                    Ok(Some(code)) => break Some(code),
+                    Ok(None) => continue,
+                    Err(_) => {
+                        failed_step.get_or_insert_with(|| step.tag.clone());
+                        failure_class.get_or_insert_with(|| "debug-wait".to_owned());
+                        break None;
+                    }
+                }
+            }
             match create::wait_handle(
                 held.last().expect("pushed above").process,
                 remaining.max(1),
@@ -1631,6 +1722,32 @@ fn run_steps(
         }
     }
 
+    // A non-cooperating debug tree cannot be frozen while it can still spawn.
+    // This is always the final step. End only our Job, drain kernel events on
+    // the creating thread and wait on every duplicate BEFORE topology freeze.
+    if let Some((tree, root_pid)) = debug_state.as_mut() {
+        debug_cleanup_ok &= job.terminate().is_ok();
+        let debug_deadline = Instant::now() + Duration::from_secs(10);
+        let _ = tree.continue_event(); // Pending event: Job termination came first.
+        while Instant::now() < debug_deadline {
+            if pump_debug_event(tree, &job, *root_pid, &mut observation, &mut debug_handles, debug_deadline).is_err() {
+                debug_cleanup_ok = false;
+                break;
+            }
+            if tree.active_count() == 0 && matches!(job.active_processes_is_zero(), Ok(true)) { break; }
+        }
+        debug_cleanup_ok &= tree.active_count() == 0 && !debug_handles.is_empty();
+        for handle in &debug_handles {
+            let remaining = debug_deadline.saturating_duration_since(Instant::now())
+                .as_millis().min(u32::MAX as u128) as u32;
+            debug_cleanup_ok &= matches!(create::wait_handle(handle.raw(), remaining), Ok(Some(_)));
+        }
+        if !debug_cleanup_ok {
+            failed_step.get_or_insert_with(|| "*:debug-cleanup".to_owned());
+            failure_class.get_or_insert_with(|| "debug-cleanup".to_owned());
+        }
+    }
+
     // ---- freeze the observed topology, then tear down ---------------------
     // Sent exactly once, only after the step loop ended: the exact job
     // query handle first, then the freeze marker. From here on this
@@ -1640,7 +1757,12 @@ fn run_steps(
     // form — is a failed run, and because the observer may hold job-handle
     // copies that delay kill-on-close, the job is terminated explicitly.
     if let Some(observation) = observation.as_mut() {
-        let frozen = observation.report_topology_frozen(total_deadline);
+        // Debug cleanup can legitimately extend beyond the execution deadline.
+        // The observer's separate lifetime covers this bounded cleanup phase.
+        let freeze_deadline = if debug_state.is_some() {
+            Instant::now() + Duration::from_secs(5)
+        } else { total_deadline };
+        let frozen = observation.report_topology_frozen(freeze_deadline);
         if !matches!(frozen, Ok(true)) {
             failed_step.get_or_insert_with(|| "*:freeze".to_owned());
             failure_class.get_or_insert_with(|| "observation".to_owned());
@@ -1716,7 +1838,7 @@ fn run_steps(
     };
 
     let containment_verified = terminated && startup_cleanup_ok && all_exited
-        && active_zero && io_workers_exited;
+        && active_zero && io_workers_exited && debug_cleanup_ok;
 
     let final_event = serde_json::json!({
         "event": "final",
@@ -1731,6 +1853,9 @@ fn run_steps(
         "ioWorkersExited": io_workers_exited,
         "terminated": terminated,
         "observation": observation_outcome,
+        "debugTreeRequested": debug_state.is_some(),
+        "debugProcessHandles": debug_handles.len(),
+        "debugCleanupVerified": debug_cleanup_ok,
     });
     status_emit(&mut status, &mut status_ok, &final_event);
     if !status_ok {

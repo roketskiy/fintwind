@@ -240,12 +240,33 @@ impl FintwindBackend {
             })
             .unwrap_or_default();
         let server = crate::opencode_pool::acquire(binary, directory)?;
+        let read_runtime = local.as_ref().and_then(|local| {
+            self.sessions.lock().get(&local.id).map(|(runtime_id, _)| *runtime_id)
+        });
         let mut transcript = driver::native::fetch_transcript(
             &server,
             native_id,
             &self.task_store.blobs(),
             &inputs,
         )?;
+        // Live transcript reads must not enter the cold-history recovery
+        // writeback below. A completed turn may still have a resident driver.
+        // Re-check the native binding after I/O; a removed/replaced task must
+        // never receive a snapshot fetched for its previous native session.
+        {
+            let state = self.task_state.lock();
+            let runtimes = self.sessions.lock();
+            if let (Some(local), Some(read_runtime)) = (local.as_ref(), read_runtime) {
+                let current = state.sessions.iter().find(|session| session.id == local.id)
+                    .ok_or_else(|| anyhow!("native history target was removed"))?;
+                if current.native_session_id.as_deref() != Some(native_id)
+                    || runtimes.get(&local.id).map(|(runtime_id, _)| *runtime_id) != Some(read_runtime)
+                {
+                    bail!("native history target changed during read");
+                }
+                return Ok(transcript);
+            }
+        }
         let Some(mut local) = local else {
             if self.native_transcript_generations.lock().get(native_id) != Some(&generation) {
                 bail!("native history read was superseded");
@@ -1545,7 +1566,53 @@ impl FintwindBackend {
         std::thread::Builder::new()
             .name(format!("fintwind-daemon-remote-events-{session_id}"))
             .spawn(move || {
+                let mut continuation_start = None;
                 while let Ok(event) = event_receiver.recv() {
+                    if matches!(&event, DriverEvent::TurnStarted | DriverEvent::TurnTranscriptReconciled { .. }) {
+                        let mut state = task_state.lock();
+                        let current_runtime = active_runtimes.lock().get(&session_id)
+                            .is_some_and(|(active, _)| *active == runtime_id);
+                        if let Some(session) = state.sessions.iter_mut()
+                            .find(|session| session.id == session_id && current_runtime)
+                        {
+                            let changed = match &event {
+                                DriverEvent::TurnStarted => {
+                                    continuation_start = session.active_turn_id().is_none()
+                                        .then_some((session.messages.len(), session.transcript_blocks.len()));
+                                    session.resume_provider_turn();
+                                    session.active_turn_id().is_some()
+                                }
+                                DriverEvent::TurnTranscriptReconciled { transcript, continuation } => {
+                                    let input = session.turns.last().and_then(|turn| turn.submission.as_ref())
+                                        .map(|receipt| receipt.input_id.clone());
+                                    // The driver validated this window against the active input.
+                                    // Verify its binding again before replacing durable history.
+                                    let matched = input.as_ref().is_some_and(|input| transcript.turns.iter()
+                                        .any(|turn| turn.provider_resume_at.as_deref() == Some(input.as_str())));
+                                    let applied = if *continuation {
+                                        continuation_start.is_some_and(|(messages, blocks)| session
+                                            .reconcile_active_transcript_from(transcript.clone(), messages, blocks))
+                                    } else {
+                                        matched && session.reconcile_active_transcript(transcript.clone())
+                                    };
+                                    if applied && matched {
+                                        session.mark_active_turn_provider_started();
+                                        if let Some(input) = input {
+                                            session.mark_active_turn_provider_resume_at(input);
+                                        }
+                                    }
+                                    applied
+                                }
+                                _ => false,
+                            };
+                            if changed {
+                                state.mark_session_dirty(session_id);
+                                if task_store.save(&mut state).is_err() {
+                                    eprintln!("remote execution projection persistence failed");
+                                }
+                            }
+                        }
+                    }
                     if let crate::model::DriverEvent::SubmissionUpdated(receipt) = &event {
                         let mut state = task_state.lock();
                         let current_runtime = active_runtimes
@@ -1880,11 +1947,12 @@ impl FintwindBackend {
         provenance: &fintwind_protocol::submission::RemoteProvenance,
         session_id: Uuid,
         options: crate::WireSessionOptions,
+        agent_preset: Option<String>,
     ) -> anyhow::Result<ResponsePayload> {
         let mode = decode_enum(&options.mode)?;
         let interaction_mode = decode_enum(&options.interaction_mode)?;
         let mut state = self.task_state.lock();
-        let recorded = {
+        let (recorded, agent_changed) = {
             let Some(session) = state
                 .sessions
                 .iter_mut()
@@ -1893,30 +1961,46 @@ impl FintwindBackend {
                 bail!("the session is unknown to this computer");
             };
             self.hydrate_submission_session(session)?;
+            if !matches!(session.status, SessionStatus::Idle | SessionStatus::Failed)
+                || fintwind_protocol::submission::has_unsettled_submissions(session)
+            {
+                bail!("stop the task before changing its options");
+            }
+            if mode != session.runtime_mode {
+                bail!("the task permission mode changed on this computer");
+            }
+            let agent_changed = agent_preset.as_ref().is_some_and(|agent| session.agent_preset.as_ref() != Some(agent));
+            if let Some(agent) = agent_preset {
+                session.agent_preset = Some(agent);
+            }
             session.runtime_mode = mode;
             session.interaction_mode = interaction_mode;
             session.model = options.model;
             session.reasoning_effort = options.reasoning_effort;
             session.service_tier = options.service_tier;
             session.context_window = options.context_window;
-            crate::driver::SessionOptions {
+            (crate::driver::SessionOptions {
                 mode,
                 interaction_mode,
                 model: session.model.clone(),
                 reasoning_effort: session.reasoning_effort.clone(),
                 service_tier: session.service_tier.clone(),
                 context_window: session.context_window.clone(),
-            }
+            }, agent_changed)
         };
         state.mark_session_dirty(session_id);
         self.task_store.save(&mut state)?;
+        let (applied, retired) = {
+            let mut runtimes = self.sessions.lock();
+            let applied = runtimes.get(&session_id)
+                .is_some_and(|(_, driver)| !agent_changed && driver.apply_options(recorded));
+            // Keep the task-state lock through retirement so a new prompt
+            // cannot start on the old runtime after these options were saved.
+            let retired = (!applied).then(|| runtimes.remove(&session_id)).flatten();
+            (applied, retired)
+        };
         drop(state);
-        let applied = self
-            .sessions
-            .lock()
-            .get(&session_id)
-            .map(|(_, driver)| driver.apply_options(recorded))
-            .unwrap_or(false);
+        drop(retired);
         crate::opencode_diagnostics::record("remote_session_options_set", 0, 0);
         let _ = provenance;
         Ok(ResponsePayload::OptionsApplied { applied })
@@ -2724,7 +2808,8 @@ impl Backend for FintwindBackend {
                 provenance,
                 session_id,
                 options,
-            } => self.set_remote_session_options(&provenance, session_id, options),
+                agent_preset,
+            } => self.set_remote_session_options(&provenance, session_id, options, agent_preset),
             Command::HydrateSession { session_id } => {
                 let mut state = self.task_state.lock();
                 let session = if let Some(session) = state

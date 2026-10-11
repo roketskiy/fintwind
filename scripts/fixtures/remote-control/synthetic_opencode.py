@@ -28,6 +28,10 @@ pattern, never a prompt. Conventions the harness relies on:
 * every route enforces the private Basic auth the driver injects;
 * ``await_reply`` steps block the timeline until the named reply lands, so
   an approval or answer is observed before the turn continues.
+* optional ``expected_reply`` refuses a missing/wrong decision or answer
+  without logging its body; only a matched boolean is recorded.
+* ``interruptible`` scenarios must end an awaiting reply as interrupted,
+  never emit scripted success, and publish idle only after interruption.
 """
 
 import base64
@@ -37,6 +41,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
 
 LOCK = threading.Condition()
 STATE = {
@@ -47,6 +52,8 @@ STATE = {
     "replies": {},          # request id -> the recorded decision/answer
     "reply_arrived": {},    # request id -> bool, released with LOCK
     "active": {},
+    "history_sessions": {},
+    "history_forks": 0,
 }
 
 BEHAVIOR = {}
@@ -114,6 +121,33 @@ def turn_by_index(index):
     return turns[index]
 
 
+def rendered_turn_messages():
+    """Return the native newest-first records for the current scripted turn."""
+    turn = turn_by_index(current_turn()) or {}
+    messages = json.loads(json.dumps(turn.get("durable_messages", [])))
+    accepted = STATE.get("accepted_id")
+    prompt_text = STATE.get("prompt_text")
+    prompt_created = STATE.get("prompt_created_ms")
+    idle_at = STATE.get("idle_at_ms")
+    if idle_at is None:
+        messages = [message for message in messages if message.get("type") == "user"]
+    for message in messages:
+        if prompt_created is not None:
+            kind = message.get("type")
+            message.setdefault("time", {})["created"] = (
+                idle_at if kind == "idle" else prompt_created + (1 if kind == "assistant" else 0)
+            )
+        if message.get("type") == "user":
+            if accepted:
+                message["id"] = accepted
+            if prompt_text is not None:
+                message["text"] = prompt_text
+                for part in message.get("content", []):
+                    if part.get("type") == "text":
+                        part["text"] = prompt_text
+    return messages
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "synthetic-opencode/1.0"
@@ -165,38 +199,27 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_active()
         if path == "/api/model":
             return self._json(200, {"data": BEHAVIOR.get("models", [])})
+        if path == "/api/agent":
+            return self._json(200, {"data": BEHAVIOR.get("agents", [])})
         if path in ("/api/permission/request", "/api/form", "/api/form/request"):
             return self._json(200, {"data": []})
         if path.endswith("/message"):
-            turn = turn_by_index(current_turn()) or {}
-            messages = json.loads(json.dumps(turn.get("durable_messages", [])))
-            # Restate the acknowledged native id and the real prompt text on
-            # the durable user row, the way a real server persists client
-            # messages, so the reconciliation walk finds the input by id.
-            accepted = STATE.get("accepted_id")
-            prompt_text = STATE.get("prompt_text")
-            prompt_created = STATE.get("prompt_created_ms")
-            idle_at = STATE.get("idle_at_ms")
-            if idle_at is None:
-                messages = [message for message in messages if message.get("type") == "user"]
-            for message in messages:
-                if prompt_created is not None:
-                    kind = message.get("type")
-                    message.setdefault("time", {})["created"] = (
-                        idle_at if kind == "idle" else prompt_created + (1 if kind == "assistant" else 0)
-                    )
-            for message in messages:
-                if not (isinstance(message, dict) and message.get("type") == "user"):
-                    continue
-                if accepted:
-                    message["id"] = accepted
-                if prompt_text is not None:
-                    message["text"] = prompt_text
-                    if isinstance(message.get("content"), list):
-                        for part in message["content"]:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                part["text"] = prompt_text
+            with LOCK:
+                if BEHAVIOR.get("history_acceptance"):
+                    session = STATE["history_sessions"].get(self._session_id())
+                    if session is None:
+                        return self._json(404, {"error": "session_not_found"})
+                    messages = json.loads(json.dumps(session["messages"]))
+                    if self._session_id() == STATE.get("session_id") and STATE.get("idle_at_ms") is None:
+                        messages = rendered_turn_messages() + messages
+                else:
+                    messages = rendered_turn_messages()
             log({"event": "messages", "count": len(messages)})
+            if BEHAVIOR.get("history_acceptance"):
+                params = parse_qs(urlsplit(self.path).query)
+                if params.get("order") == ["asc"]:
+                    messages.reverse()
+                messages = messages[:int(params.get("limit", [len(messages) or 1])[0])]
             return self._json(200, {"data": messages})
         if path == "/api/session" or path.startswith("/api/session/"):
             return self.handle_session_get()
@@ -212,10 +235,37 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/session":
             with LOCK:
                 STATE["session_id"] = BEHAVIOR.get("session_id", "ses_synthetic")
+                if BEHAVIOR.get("history_acceptance"):
+                    STATE["history_sessions"].setdefault(STATE["session_id"], {"messages": [], "revert": None})
             return self._json(200, {"data": {"id": STATE["session_id"]}})
+        if BEHAVIOR.get("history_acceptance") and (path.endswith("/fork") or path.endswith("/revert/stage") or path.endswith("/revert/commit")):
+            return self.handle_history(body)
+        if path.endswith("/agent") or path.endswith("/model"):
+            parsed = json.loads(body.decode("utf-8"))
+            if path.endswith("/agent"):
+                agent = parsed.get("agent")
+                if not any(entry.get("id") == agent for entry in BEHAVIOR.get("agents", [])):
+                    return self._json(400, {"error": "agent_not_found"})
+                with LOCK:
+                    STATE["selected_agent"] = agent
+                log({"event": "agent_selected", "agent": agent})
+            else:
+                model = parsed.get("model", {})
+                if not any(entry.get("id") == model.get("id") and entry.get("providerID") == model.get("providerID")
+                           for entry in BEHAVIOR.get("models", [])):
+                    return self._json(400, {"error": "model_not_found"})
+                with LOCK:
+                    STATE["selected_model"] = model
+                log({"event": "model_selected", "model": model["id"], "variant": model.get("variant")})
+            return self._empty(204)
         if path.endswith("/prompt"):
             return self.handle_prompt(body)
         if path.endswith("/interrupt"):
+            if BEHAVIOR.get("interruptible"):
+                with LOCK:
+                    STATE["interrupted"] = True
+                    LOCK.notify_all()
+                log({"event": "interrupt_received"})
             return self._empty(200)
         if "permission" in path and path.endswith("/reply"):
             return self.handle_permission_reply(body)
@@ -234,7 +284,62 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         if not self._require_auth():
             return
+        # Record only a fixed route category. Deleting an isolated native
+        # session is a normal control action, not a filesystem operation.
+        parts = self._path().strip('/').split('/')
+        if BEHAVIOR.get("history_acceptance") and len(parts) == 4 and parts[-1] == 'revert':
+            with LOCK:
+                session = STATE["history_sessions"].get(self._session_id())
+                if session is None:
+                    return self._json(404, {"error": "session_not_found"})
+                session["revert"] = None
+            log({"event": "revert_cleared"})
+            return self._empty(204)
+        if len(parts) == 3 and parts[:2] == ['api', 'session']:
+            log({"event": "session_deleted"})
         return self._empty(200)
+
+    def handle_history(self, body):
+        """Normal V2 fork/revert semantics on synthetic in-memory native history."""
+        parsed = json.loads(body.decode("utf-8")) if body else {}
+        path = self._path()
+        with LOCK:
+            session = STATE["history_sessions"].get(self._session_id())
+            if session is None:
+                return self._json(404, {"error": "session_not_found"})
+            if STATE.get("session_id") == self._session_id() and STATE.get("idle_at_ms") is None:
+                return self._json(409, {"error": "session_busy"})
+            oldest = list(reversed(session["messages"]))
+            if path.endswith("/fork"):
+                boundary = parsed.get("before")
+                if boundary is not None:
+                    index = next((i for i, message in enumerate(oldest) if message["id"] == boundary), None)
+                    if index is None:
+                        return self._json(404, {"error": "message_not_found"})
+                    oldest = oldest[:index]
+                STATE["history_forks"] += 1
+                fork_id = 'ses_history_fork_' + str(STATE["history_forks"])
+                STATE["history_sessions"][fork_id] = {"messages": json.loads(json.dumps(list(reversed(oldest)))), "revert": None}
+                log({"event": "history_fork", "retainedUsers": sum(message["type"] == "user" for message in oldest),
+                     "sourceUsers": sum(message["type"] == "user" for message in session["messages"]), "bounded": boundary is not None})
+                return self._json(200, {"data": {"id": fork_id}})
+            if path.endswith("/revert/stage"):
+                boundary = parsed.get("messageID")
+                if not any(message["id"] == boundary and message["type"] == "user" for message in oldest):
+                    return self._json(404, {"error": "message_not_found"})
+                session["revert"] = boundary
+                log({"event": "revert_staged", "boundaryOrdinal": next(i for i, message in enumerate(oldest) if message["id"] == boundary)})
+                return self._json(200, {"data": {"messageID": boundary}})
+            boundary = session["revert"]
+            if boundary is None:
+                return self._json(400, {"error": "no_staged_revert"})
+            index = next(i for i, message in enumerate(oldest) if message["id"] == boundary)
+            retained = oldest[:index]
+            session["messages"] = list(reversed(retained))
+            session["revert"] = None
+            log({"event": "revert_committed", "retainedUsers": sum(message["type"] == "user" for message in retained),
+                 "removedUsers": sum(message["type"] == "user" for message in oldest[index:])})
+            return self._empty(204)
 
     def handle_prompt(self, body):
         log({"event": "prompt-enter", "len": len(body)})
@@ -245,6 +350,11 @@ class Handler(BaseHTTPRequestHandler):
         body_id = parsed.get("id") if isinstance(parsed, dict) else None
         body_text = parsed.get("text") if isinstance(parsed, dict) else None
         with LOCK:
+            if BEHAVIOR.get("history_acceptance"):
+                sid = self._session_id()
+                if sid not in STATE["history_sessions"]:
+                    return self._json(404, {"error": "session_not_found"})
+                STATE["session_id"] = sid
             index = STATE["signaled_turns"]
             STATE["current_turn"] = index
             STATE["signaled_turns"] = index + 1
@@ -260,6 +370,15 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["prompt_text"] = body_text
             LOCK.notify_all()
         log({"event": "prompt", "turn": index})
+        if BEHAVIOR.get("options_acceptance"):
+            with LOCK:
+                model = parsed.get("model") or STATE.get("selected_model", {})
+                known_model = next((entry for entry in BEHAVIOR.get("models", [])
+                                   if entry.get("id") == model.get("id") and entry.get("providerID") == model.get("providerID")), None)
+                agent = STATE.get("selected_agent")
+                known_agent = any(entry.get("id") == agent for entry in BEHAVIOR.get("agents", []))
+            log({"event": "prompt_options", "turn": index, "model": known_model["id"] if known_model else None,
+                 "agent": agent if known_agent else None, "variant": model.get("variant") if known_model else None})
         turn = turn_by_index(index) or {}
         return self._json(200, {
             "data": {"id": STATE.get("accepted_id") or turn.get("user_msg_id", "msg_user"),
@@ -283,6 +402,14 @@ class Handler(BaseHTTPRequestHandler):
         idle_at = STATE.get("idle_at_ms")
         if idle_at is not None:
             status = "idle"
+        if BEHAVIOR.get("history_acceptance"):
+            with LOCK:
+                session = STATE["history_sessions"].get(sid)
+                if session is None:
+                    return self._json(404, {"error": "session_not_found"})
+                status = "busy" if sid == STATE.get("session_id") and idle_at is None else "idle"
+                revert = {"messageID": session["revert"]} if session["revert"] else None
+            return self._json(200, {"data": {"id": sid, "status": {"type": status}, "revert": revert}})
         return self._json(200, {
             "data": {
                 "id": sid,
@@ -326,6 +453,12 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             STATE["conn_count"] += 1
             gen = STATE["conn_count"]
+            self.sse_generation = gen
+            # A new idle driver's subscription observes future turns. It
+            # must not execute completed turns or append their history again.
+            self.timeline_index = (STATE["signaled_turns"] if STATE.get("idle_at_ms") is not None
+                                   else (STATE.get("current_turn") or 0))
+            LOCK.notify_all()
         log({"event": "sse_open", "conn": gen})
         head = ("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\n\r\n")
         try:
@@ -342,13 +475,18 @@ class Handler(BaseHTTPRequestHandler):
         deadline = time.time() + 30.0
         with LOCK:
             while STATE["signaled_turns"] <= index:
+                if self.sse_generation != STATE["conn_count"]:
+                    return False
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     return False
                 LOCK.wait(remaining)
-            return True
+            return self.sse_generation == STATE["conn_count"]
 
     def _emit(self, obj):
+        with LOCK:
+            if self.sse_generation != STATE["conn_count"]:
+                raise ConnectionResetError('Superseded synthetic event subscription')
         frame = ("data: " + json.dumps(obj) + "\n\n").encode("utf-8")
         self.connection.sendall(frame)
 
@@ -356,6 +494,8 @@ class Handler(BaseHTTPRequestHandler):
         deadline = time.time() + timeout
         with LOCK:
             while not STATE["reply_arrived"].get(request_id):
+                if STATE.get("interrupted"):
+                    return {"interrupted": True}
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     return None
@@ -363,7 +503,7 @@ class Handler(BaseHTTPRequestHandler):
             return STATE["replies"].get(request_id)
 
     def _serve_timeline(self):
-        index = 0
+        index = self.timeline_index
         total = len(BEHAVIOR.get("turns", []))
         while True:
             turn = turn_by_index(index) or {}
@@ -380,6 +520,9 @@ class Handler(BaseHTTPRequestHandler):
         turn = turn_by_index(current_turn()) or {}
         sid = STATE.get("session_id") or "ses_synthetic"
         for step in steps or []:
+            with LOCK:
+                if self.sse_generation != STATE["conn_count"]:
+                    return True
             if "sleep_ms" in step:
                 time.sleep(step["sleep_ms"] / 1000.0)
             if step.get("execution_started"):
@@ -414,6 +557,20 @@ class Handler(BaseHTTPRequestHandler):
                 log({"event": "question_asked", "request": spec["id"]})
             if "await_reply" in step:
                 reply = self._await_reply(step["await_reply"], step.get("await_timeout_ms", 20000) / 1000.0)
+                if reply == {"interrupted": True} and BEHAVIOR.get("interruptible"):
+                    with LOCK:
+                        STATE["terminal_outcome"] = "interrupted"
+                        STATE["idle_at_ms"] = max(int(time.time() * 1000), STATE.get("prompt_created_ms", 0) + 2)
+                    self._emit({"type": "session.execution.interrupted", "data": {"sessionID": sid}})
+                    log({"event": "terminal_sent", "kind": "session.execution.interrupted"})
+                    self._emit({"type": "session.idle", "data": {"sessionID": sid}})
+                    log({"event": "idle_sent"})
+                    return False
+                if "expected_reply" in step:
+                    matched = reply == step["expected_reply"]
+                    log({"event": "reply_verified", "request": step["await_reply"], "matched": matched})
+                    if not matched:
+                        return False
                 if reply is None:
                     log({"event": "reply_timeout", "request": step["await_reply"]})
                     return True
@@ -427,6 +584,8 @@ class Handler(BaseHTTPRequestHandler):
             if step.get("idle"):
                 with LOCK:
                     STATE["idle_at_ms"] = max(int(time.time() * 1000), STATE.get("prompt_created_ms", 0) + 2)
+                    if BEHAVIOR.get("history_acceptance"):
+                        STATE["history_sessions"][sid]["messages"] = rendered_turn_messages() + STATE["history_sessions"][sid]["messages"]
                 # A real server publishes the idle companion of the terminal
                 # transition; the driver settles the turn on it.
                 self._emit({"type": "session.idle", "data": {"sessionID": sid}})

@@ -174,6 +174,9 @@ pub struct OrphanedCancel {
     /// from the host's own dedup store carry it too, so the restarted host
     /// can deliver the ending without the device replaying anything.
     pub device_id: Option<Uuid>,
+    /// The grant under which the cancellation was recorded. This is needed
+    /// for a read-only recovery query after the device has been re-paired.
+    pub grant_version: Option<u64>,
 }
 
 pub struct HostState {
@@ -426,9 +429,35 @@ impl HostState {
         operation_id: Uuid,
         cancel_operation_id: Option<Uuid>,
     ) -> Option<(Option<Uuid>, String)> {
+        let grant_version = self.grant_version(device_id);
+        (grant_version != 0).then(|| {
+            self.query_remote_cancel_at_grant(
+                device_id,
+                grant_version,
+                operation_id,
+                cancel_operation_id,
+            )
+        })?
+    }
+
+    /// Ask using a grant recorded with the prompt or cancellation. This is a
+    /// read-only recovery path: it must still be possible to read the ending
+    /// of an old operation after the device's live grant has changed.
+    pub fn query_remote_cancel_at_grant(
+        &self,
+        device_id: Uuid,
+        grant_version: u64,
+        operation_id: Uuid,
+        cancel_operation_id: Option<Uuid>,
+    ) -> Option<(Option<Uuid>, String)> {
         let daemon = self.daemon()?;
-        let Ok(provenance) = crate::adapter::device_provenance(self, device_id) else {
+        let Ok(host_id) = self.host_id().parse::<Uuid>() else {
             return None;
+        };
+        let provenance = fintwind_protocol::submission::RemoteProvenance {
+            host_id,
+            device_id,
+            grant_version,
         };
         match daemon.request(
             Uuid::nil(),
@@ -731,6 +760,26 @@ impl HostState {
         let Ok(host_id) = self.host_id().parse::<Uuid>() else {
             return;
         };
+        // A host can crash after persisting a cancel operation but before the
+        // daemon records the cancel binding. Such a cancellation has no
+        // daemon-side proof yet, so its prompt must be restored as a local
+        // terminal unknown, never as dispatchable work. The accepted cancel
+        // itself is recovered below from the host dedup store.
+        let pending_cancel_targets = match self.dedup.pending_cancel_targets() {
+            Ok(records) => records
+                .into_iter()
+                .map(|record| record.prompt_operation_id)
+                .collect::<HashSet<_>>(),
+            Err(error) => {
+                log::warn!(
+                    target: "audit",
+                    "could not inspect accepted cancellations before queue recovery: {error}"
+                );
+                // Do not restore any prompt when the host cannot prove that
+                // no accepted cancellation is waiting for it.
+                return;
+            }
+        };
         let provenance = fintwind_protocol::submission::RemoteProvenance {
             host_id,
             device_id: Uuid::nil(),
@@ -758,6 +807,7 @@ impl HostState {
                     prompt_operation_id: prompt.operation_id,
                     cancel_operation_id,
                     device_id: Some(prompt.device_id),
+                    grant_version: Some(prompt.grant_version),
                 });
             }
         }
@@ -767,6 +817,8 @@ impl HostState {
                 // would risk running a prompt that already ran.
                 continue;
             }
+            let local_unknown = pending_cancel_targets.contains(&prompt.operation_id)
+                && prompt.cancel_operation_id.is_none();
             let item = crate::queue::QueuedPrompt {
                 operation_id: prompt.operation_id,
                 device_id: prompt.device_id,
@@ -779,12 +831,20 @@ impl HostState {
                 // admitted under, restored with it: the cleanup paths quote
                 // it, so a re-paired device's newer grant cannot strand it.
                 grant_version: prompt.grant_version,
-                state: crate::queue::QueueItemState::Queued,
+                state: if local_unknown {
+                    crate::queue::QueueItemState::Unknown
+                } else {
+                    crate::queue::QueueItemState::Queued
+                },
                 // The daemon's own durable cancel binding, restored with the
                 // prompt: a cancellation promised before a crash is still
                 // promised, and the prompt must not be dispatched while it
                 // waits.
-                cancel_requested: prompt.cancel_operation_id,
+                cancel_requested: if local_unknown {
+                    None
+                } else {
+                    prompt.cancel_operation_id
+                },
             };
             if self.queues().lock().total_pending() >= crate::queue::MAX_TOTAL_QUEUE_ITEMS {
                 log::warn!(
@@ -816,7 +876,22 @@ impl HostState {
     /// prompt already ran, or its row is going away. What remains is to ask
     /// the daemon what it recorded and answer the device.
     pub fn record_orphaned_cancels(&self, cancels: Vec<OrphanedCancel>) {
-        self.orphaned_cancels.lock().extend(cancels);
+        let mut guard = self.orphaned_cancels.lock();
+        for cancel in cancels {
+            let existing = guard.iter().find(|entry| {
+                entry.prompt_operation_id == cancel.prompt_operation_id
+                    && entry.cancel_operation_id == cancel.cancel_operation_id
+            }).copied();
+            if let Some(existing) = existing {
+                // Prefer the daemon row's original grant over an older host
+                // record that predates grant persistence.
+                if existing.grant_version.is_some() || cancel.grant_version.is_none() {
+                    continue;
+                }
+                guard.remove(&existing);
+            }
+            guard.insert(cancel);
+        }
     }
 
     /// The undelivered cancellations, without taking them.
@@ -835,6 +910,18 @@ impl HostState {
         for cancel in delivered {
             guard.remove(cancel);
         }
+    }
+
+    /// Forget one recovered cancellation after another queue path already
+    /// delivered its ending. Match only the two operation ids so an entry
+    /// recovered once from the daemon row and once from host dedup cannot
+    /// produce duplicate results merely because one copy lacks old grant
+    /// metadata.
+    pub fn forget_orphaned_cancel(&self, prompt_operation_id: Uuid, cancel_operation_id: Uuid) {
+        self.orphaned_cancels.lock().retain(|entry| {
+            entry.prompt_operation_id != prompt_operation_id
+                || entry.cancel_operation_id != cancel_operation_id
+        });
     }
 
 

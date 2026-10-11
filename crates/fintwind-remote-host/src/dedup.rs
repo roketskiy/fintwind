@@ -72,6 +72,9 @@ pub struct PendingCancelRecord {
     pub prompt_operation_id: Uuid,
     /// The device that raised it — the only one its ending may go to.
     pub device_id: Uuid,
+    /// The grant under which the cancel was accepted. It remains usable for
+    /// recovery queries after the device is re-paired.
+    pub grant_version: Option<u64>,
 }
 
 /// Decode a stored state row into the wire state. Shared by the replay
@@ -174,7 +177,8 @@ impl OperationStore {
                 reject_code TEXT,
                 detail TEXT,
                 content_hash TEXT,
-                cancel_target TEXT
+                cancel_target TEXT,
+                cancel_grant_version INTEGER
             ) STRICT;
             CREATE INDEX IF NOT EXISTS operations_expiry ON operations(accepted_at_ms);",
         )?;
@@ -190,7 +194,7 @@ impl OperationStore {
             // survive this host's restart, and the target is what lets the
             // restarted host find its truth without the device replaying the
             // cancellation.
-            &["content_hash", "cancel_target"],
+            &["content_hash", "cancel_target", "cancel_grant_version"],
         )?;
         Ok(Self {
             connection: Mutex::new(connection),
@@ -337,10 +341,16 @@ impl OperationStore {
     /// replay its cancellation just to be told what happened. Returns
     /// `false` when no such operation row exists, which the caller reports
     /// as an unknown outcome rather than pretending the promise is stored.
-    pub fn set_cancel_target(&self, operation_id: &str, target: &str) -> anyhow::Result<bool> {
+    pub fn set_cancel_target(
+        &self,
+        operation_id: &str,
+        target: &str,
+        grant_version: u64,
+    ) -> anyhow::Result<bool> {
         let changed = self.connection.lock().execute(
-            "UPDATE operations SET cancel_target = ?2 WHERE operation_id = ?1",
-            params![operation_id, target],
+            "UPDATE operations SET cancel_target = ?2, cancel_grant_version = ?3
+              WHERE operation_id = ?1 AND state = 'accepted'",
+            params![operation_id, target, grant_version as i64],
         )?;
         Ok(changed == 1)
     }
@@ -354,10 +364,10 @@ impl OperationStore {
     pub fn pending_cancel_targets(&self) -> anyhow::Result<Vec<PendingCancelRecord>> {
         let connection = self.connection.lock();
         let mut rows = connection.prepare(
-            "SELECT operation_id, cancel_target, device_id FROM operations
-              WHERE kind = 'CancelQueuedPrompt'
-                AND state = 'accepted'
-                AND cancel_target IS NOT NULL",
+            "SELECT operation_id, cancel_target, device_id, cancel_grant_version FROM operations
+               WHERE kind = 'CancelQueuedPrompt'
+                 AND state = 'accepted'
+                 AND cancel_target IS NOT NULL",
         )?;
         let mut pending = Vec::new();
         let mut rows = rows.query([])?;
@@ -365,6 +375,9 @@ impl OperationStore {
             let cancel_id: String = row.get(0)?;
             let target: String = row.get(1)?;
             let device: String = row.get(2)?;
+            let grant_version = row
+                .get::<_, Option<i64>>(3)?
+                .and_then(|value| u64::try_from(value).ok());
             let (Some(cancel_operation_id), Some(prompt_operation_id), Ok(device_id)) = (
                 Uuid::parse_str(&cancel_id).ok(),
                 Uuid::parse_str(&target).ok(),
@@ -378,9 +391,46 @@ impl OperationStore {
                 cancel_operation_id,
                 prompt_operation_id,
                 device_id,
+                grant_version,
             });
         }
         Ok(pending)
+    }
+
+    /// The grant version recorded with one accepted cancellation, if this
+    /// host version stored it. Older accepted records return `None` and are
+    /// fail-closed during recovery because their original provenance cannot
+    /// be reconstructed safely.
+    pub fn cancel_grant_version(&self, operation_id: &str) -> Option<u64> {
+        self.connection
+            .lock()
+            .query_row(
+                "SELECT cancel_grant_version FROM operations WHERE operation_id = ?1",
+                params![operation_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .flatten()
+            .and_then(|value| u64::try_from(value).ok())
+    }
+
+    /// Read the prompt target frozen with an accepted cancellation. A replay
+    /// must not be allowed to reuse the cancel operation id for a different
+    /// prompt.
+    pub fn cancel_target(&self, operation_id: &str) -> Option<String> {
+        self.connection
+            .lock()
+            .query_row(
+                "SELECT cancel_target FROM operations WHERE operation_id = ?1",
+                params![operation_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .ok()
+            .flatten()
+            .flatten()
     }
 
     /// Freeze the final answer. The full state is passed so a rejection
@@ -407,6 +457,36 @@ impl OperationStore {
             params![operation_id, state_text, reject_code, detail],
         )?;
         Ok(())
+    }
+
+    /// Settle an operation only while its durable record is still accepted.
+    ///
+    /// Recovery and replay can race with the worker that first observed a
+    /// terminal daemon state. The compare-and-set prevents the losing path
+    /// from overwriting the first answer or sending the same result again.
+    pub fn record_finished_if_accepted(
+        &self,
+        operation_id: &str,
+        state: &OperationState,
+        detail: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let (state_text, reject_code) = match state {
+            OperationState::Executed => ("executed", None),
+            OperationState::Rejected { code } => (
+                "failed",
+                Some(serde_json::to_string(code).expect("reject code serializes")),
+            ),
+            OperationState::Accepted => ("accepted", None),
+            OperationState::Unknown => ("unknown", None),
+            OperationState::Expired => ("expired", None),
+        };
+        let changed = self.connection.lock().execute(
+            "UPDATE operations
+                SET state = ?2, reject_code = ?3, detail = ?4
+              WHERE operation_id = ?1 AND state = 'accepted'",
+            params![operation_id, state_text, reject_code, detail],
+        )?;
+        Ok(changed == 1)
     }
 
     /// Read one operation's record for a device's result query. Executes

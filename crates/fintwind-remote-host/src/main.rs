@@ -273,6 +273,35 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Map the daemon's prompt row state to the operation result for the original
+/// prompt. A prompt that was cancelled, expired, or never sent is not an
+/// executed prompt; only `dispatched` (and its in-flight equivalent) proves
+/// that it reached the driver.
+fn prompt_result_for_cancel_state(state: &str) -> OperationState {
+    match state {
+        "dispatched" | "dispatching" => OperationState::Executed,
+        "expired" => OperationState::Expired,
+        "cancelled" | "notSent" => OperationState::Rejected {
+            code: RejectCode::Malformed,
+        },
+        _ => OperationState::Unknown,
+    }
+}
+
+/// Map the daemon's prompt row state to the cancel operation's result.
+fn cancel_result_for_prompt_state(state: &str) -> (OperationState, bool) {
+    match state {
+        "cancelled" | "expired" | "notSent" => (OperationState::Executed, true),
+        "dispatched" | "dispatching" => (
+            OperationState::Rejected {
+                code: RejectCode::Malformed,
+            },
+            false,
+        ),
+        _ => (OperationState::Unknown, false),
+    }
+}
+
 fn run_daemon(config: HostConfig) -> anyhow::Result<()> {
     // Identity: load or create keys, register on first start.
     let mut identity = identity::load_or_create(&config.data_dir)?;
@@ -380,6 +409,7 @@ fn run_daemon(config: HostConfig) -> anyhow::Result<()> {
                                                     prompt_operation_id: record.prompt_operation_id,
                                                     cancel_operation_id: record.cancel_operation_id,
                                                     device_id: Some(record.device_id),
+                                                    grant_version: record.grant_version,
                                                 })
                                                 .collect(),
                                         );
@@ -565,11 +595,6 @@ fn prompt_content_hash(operation: &OperationRequest) -> Option<String> {
 }
 
 fn run_operation(state: &Arc<HostState>, device_id: Uuid, operation: OperationRequest) {
-    // A queue cancellation touches no workspace and no driver.
-    if let OperationKind::CancelQueuedPrompt = operation.kind {
-        run_cancel_queued(state, device_id, operation);
-        return;
-    }
     if matches!(
         operation.kind,
         OperationKind::ReadFile
@@ -617,12 +642,77 @@ fn run_operation(state: &Arc<HostState>, device_id: Uuid, operation: OperationRe
         // not a cancellation.
         if let OperationKind::CancelQueuedPrompt = operation.kind
             && matches!(check.state, OperationState::Accepted)
-            && let Some(target) = operation
+        {
+            let stored_target = state.dedup().cancel_target(&operation_id);
+            let Some(stored_target) = stored_target else {
+                // The host may have crashed between accepting C and freezing
+                // its target. There is no durable identity to replay safely,
+                // so fail closed instead of trusting a new payload target.
+                let finished = state
+                    .dedup()
+                    .record_finished_if_accepted(
+                        &operation_id,
+                        &OperationState::Unknown,
+                        Some("the cancellation target was not durably recorded"),
+                    )
+                    .unwrap_or(false);
+                if finished {
+                    complete(
+                        state,
+                        device_id,
+                        &operation,
+                        OperationState::Unknown,
+                        Some(serde_json::json!({
+                            "message": "the cancellation target was not durably recorded",
+                        })),
+                    );
+                }
+                return;
+            };
+            let Some(target) = operation
                 .payload
                 .get("operationId")
                 .and_then(serde_json::Value::as_str)
                 .and_then(|text| Uuid::parse_str(text).ok())
-        {
+            else {
+                let finished = state
+                    .dedup()
+                    .record_finished_if_accepted(
+                        &operation_id,
+                        &OperationState::Unknown,
+                        Some("the cancellation target could not be verified"),
+                    )
+                    .unwrap_or(false);
+                if finished {
+                    complete(
+                        state,
+                        device_id,
+                        &operation,
+                        OperationState::Unknown,
+                        Some(serde_json::json!({
+                            "message": "the cancellation target could not be verified",
+                        })),
+                    );
+                }
+                return;
+            };
+            if stored_target != target.to_string() {
+                // The operation id is bound to the first prompt target. Do
+                // not mutate that durable record or query a different prompt
+                // on behalf of a conflicting replay.
+                complete(
+                    state,
+                    device_id,
+                    &operation,
+                    OperationState::Rejected {
+                        code: RejectCode::Malformed,
+                    },
+                    Some(serde_json::json!({
+                        "message": "this cancellation operation is bound to another prompt",
+                    })),
+                );
+                return;
+            }
             resolve_replayed_cancel(state, device_id, &operation, target);
             return;
         }
@@ -653,6 +743,14 @@ fn run_operation(state: &Arc<HostState>, device_id: Uuid, operation: OperationRe
     // must not require an existing runtime or bypass operation provenance.
     if let OperationKind::SendPrompt = operation.kind {
         enqueue_prompt(state, device_id, &operation);
+        return;
+    }
+
+    // Cancellation now passes through the same replay gate as every other
+    // operation. A replay of an accepted cancellation must query its durable
+    // ending, never attempt to record or execute the side effect again.
+    if let OperationKind::CancelQueuedPrompt = operation.kind {
+        run_cancel_queued(state, device_id, operation);
         return;
     }
 
@@ -1138,22 +1236,42 @@ fn run_cancel_queued(state: &Arc<HostState>, device_id: Uuid, operation: Operati
     // just to learn what happened to it. A record that failed to bind
     // cannot promise an ending after a restart, so the request is answered
     // unknown instead of accepted-in-spirit.
-    if let Err(error) =
-        state
-            .dedup()
-            .set_cancel_target(&cancel_operation_id, &target.to_string())
-    {
-        log::warn!(target: "audit", "could not bind cancellation target: {error}");
-        state
-            .dedup()
-            .record_finished(
-                &cancel_operation_id,
-                &OperationState::Unknown,
-                None,
-            )
-            .ok();
-        complete(state, device_id, &operation, OperationState::Unknown, None);
-        return;
+    match state.dedup().set_cancel_target(
+        &cancel_operation_id,
+        &target.to_string(),
+        provenance.grant_version,
+    ) {
+        Ok(true) => {}
+        Ok(false) => {
+            log::warn!(target: "audit", "could not bind cancellation target: record disappeared");
+            let finished = state
+                .dedup()
+                .record_finished_if_accepted(
+                    &cancel_operation_id,
+                    &OperationState::Unknown,
+                    Some("the cancellation target was not durably recorded"),
+                )
+                .unwrap_or(false);
+            if finished {
+                complete(state, device_id, &operation, OperationState::Unknown, None);
+            }
+            return;
+        }
+        Err(error) => {
+            log::warn!(target: "audit", "could not bind cancellation target: {error}");
+            let finished = state
+                .dedup()
+                .record_finished_if_accepted(
+                    &cancel_operation_id,
+                    &OperationState::Unknown,
+                    Some("the cancellation target was not durably recorded"),
+                )
+                .unwrap_or(false);
+            if finished {
+                complete(state, device_id, &operation, OperationState::Unknown, None);
+            }
+            return;
+        }
     }
     // The intent is recorded first, so a `dispatching` refusal cannot lose
     // it. A prompt this host does not hold for this device is refused
@@ -1163,23 +1281,29 @@ fn run_cancel_queued(state: &Arc<HostState>, device_id: Uuid, operation: Operati
         .lock()
         .request_cancel(session_id, target, device_id, operation.operation_id);
     if !known {
-        state
+        let finished = state
             .dedup()
-            .record_finished(
+            .record_finished_if_accepted(
                 &cancel_operation_id,
                 &OperationState::Rejected {
                     code: RejectCode::Malformed,
                 },
                 Some("that prompt is no longer waiting in the queue"),
             )
-            .ok();
-        refuse_operation(
-            state,
-            device_id,
-            &operation,
-            RejectCode::Malformed,
-            "that prompt is no longer waiting in the queue",
-        );
+            .unwrap_or(false);
+        if finished {
+            complete_with_detail(
+                state,
+                device_id,
+                &operation,
+                OperationState::Rejected {
+                    code: RejectCode::Malformed,
+                },
+                Some(serde_json::json!({
+                    "message": "that prompt is no longer waiting in the queue",
+                })),
+            );
+        }
         return;
     }
     let settled = daemon.request(
@@ -1201,43 +1325,68 @@ fn run_cancel_queued(state: &Arc<HostState>, device_id: Uuid, operation: Operati
                 state,
                 device_id,
                 &operation,
-                OperationState::Unknown,
+                OperationState::Accepted,
                 Some(serde_json::json!({
                     "cancelled": false,
                     "operationId": target,
-                    "message": "the workspace did not confirm the cancellation",
+                    "message": "the cancellation is recorded; retrying the workspace query",
                 })),
             );
             return;
         }
     };
     match label.as_str() {
-        "cancelled" => {
+        "cancelled" | "expired" | "notSent" => {
             state
                 .queues()
                 .lock()
                 .cancel(session_id, target, device_id);
-            state
+            let prompt_result = prompt_result_for_cancel_state(&label);
+            let prompt_finished = state
                 .dedup()
-                .record_finished(&target.to_string(), &OperationState::Executed, None)
-                .ok();
+                .record_finished_if_accepted(
+                    &target.to_string(),
+                    &prompt_result,
+                    Some("the prompt was not sent because it was cancelled"),
+                )
+                .unwrap_or(false);
+            let cancel_finished = state
+                .dedup()
+                .record_finished_if_accepted(
+                    &cancel_operation_id,
+                    &OperationState::Executed,
+                    None,
+                )
+                .unwrap_or(false);
             // The cancel operation itself is finished too, so a retry of it
             // is answered from this record rather than run again.
-            state
-                .dedup()
-                .record_finished(&cancel_operation_id, &OperationState::Executed, None)
-                .ok();
+            if prompt_finished {
+                complete_by_id(
+                    state,
+                    device_id,
+                    &target,
+                    prompt_result,
+                    Some(serde_json::json!({
+                        "cancelled": true,
+                        "operationId": target,
+                        "queueState": label,
+                    })),
+                );
+            }
             push_queue_view(state, session_id, device_id);
-            complete_with_detail(
-                state,
-                device_id,
-                &operation,
-                OperationState::Executed,
-                Some(serde_json::json!({
-                    "cancelled": true,
-                    "operationId": target,
-                })),
-            );
+            if cancel_finished {
+                complete_with_detail(
+                    state,
+                    device_id,
+                    &operation,
+                    OperationState::Executed,
+                    Some(serde_json::json!({
+                        "cancelled": true,
+                        "operationId": target,
+                        "queueState": label,
+                    })),
+                );
+            }
         }
         "dispatching" => {
             // The outcome is being decided right now. The intent stays on the
@@ -1257,57 +1406,119 @@ fn run_cancel_queued(state: &Arc<HostState>, device_id: Uuid, operation: Operati
                 })),
             );
         }
-        _ => {
-            // The daemon settled the row without dispatching it (expired,
-            // never sent, unknown). Nothing ran, so the prompt is settled
-            // here too and the device is told the truth it can act on.
-            let ran = label == "dispatched";
+        "dispatched" => {
+            // The prompt reached the driver. The cancel came too late and
+            // must not be reported as a successful cancellation.
             state
                 .queues()
                 .lock()
-                .cancel(session_id, target, device_id);
+                .take_cancel_request(session_id, target);
             state
+                .queues()
+                .lock()
+                .mark_dispatched(session_id, target);
+            let prompt_finished = state
                 .dedup()
-                .record_finished(
+                .record_finished_if_accepted(
                     &target.to_string(),
-                    if ran {
-                        &OperationState::Executed
-                    } else {
-                        &OperationState::Expired
-                    },
+                    &OperationState::Executed,
                     None,
                 )
-                .ok();
-            state
+                .unwrap_or(false);
+            let cancel_finished = state
                 .dedup()
-                .record_finished(
+                .record_finished_if_accepted(
                     &cancel_operation_id,
-                    if ran {
-                        &OperationState::Rejected {
-                            code: RejectCode::Malformed,
-                        }
-                    } else {
-                        &OperationState::Executed
+                    &OperationState::Rejected {
+                        code: RejectCode::Malformed,
                     },
-                    None,
+                    Some("the prompt had already reached the driver"),
                 )
-                .ok();
+                .unwrap_or(false);
             push_queue_view(state, session_id, device_id);
-            complete_with_detail(
-                state,
-                device_id,
-                &operation,
-                if ran {
-                    OperationState::Executed
-                } else {
-                    OperationState::Expired
-                },
-                Some(serde_json::json!({
-                    "cancelled": !ran,
-                    "operationId": target,
-                    "queueState": label,
-                })),
-            );
+            if prompt_finished {
+                complete_by_id(
+                    state,
+                    device_id,
+                    &target,
+                    OperationState::Executed,
+                    Some(serde_json::json!({ "dispatched": true })),
+                );
+            }
+            if cancel_finished {
+                complete_with_detail(
+                    state,
+                    device_id,
+                    &operation,
+                    OperationState::Rejected {
+                        code: RejectCode::Malformed,
+                    },
+                    Some(serde_json::json!({
+                        "cancelled": false,
+                        "operationId": target,
+                        "message": "the prompt had already reached the driver",
+                    })),
+                );
+            }
+            state.forget_orphaned_cancel(target, operation.operation_id);
+        }
+        _ => {
+            // The daemon could not prove what happened. Keep the original
+            // prompt non-dispatchable and preserve the honest unknown result;
+            // an unrecognised label must never become a cancellation success.
+            state.cancel_remote_prompt_as_recorded(device_id, target);
+            state
+                .queues()
+                .lock()
+                .take_cancel_request(session_id, target);
+            state
+                .queues()
+                .lock()
+                .settle_unknown(session_id, target);
+            let prompt_finished = state
+                .dedup()
+                .record_finished_if_accepted(
+                    &target.to_string(),
+                    &OperationState::Unknown,
+                    Some("the prompt outcome could not be confirmed"),
+                )
+                .unwrap_or(false);
+            let cancel_finished = state
+                .dedup()
+                .record_finished_if_accepted(
+                    &cancel_operation_id,
+                    &OperationState::Unknown,
+                    Some("the cancellation outcome could not be confirmed"),
+                )
+                .unwrap_or(false);
+            push_queue_view(state, session_id, device_id);
+            if prompt_finished {
+                complete_by_id(
+                    state,
+                    device_id,
+                    &target,
+                    OperationState::Unknown,
+                    Some(serde_json::json!({
+                        "cancelled": false,
+                        "operationId": target,
+                        "message": "the prompt outcome could not be confirmed",
+                    })),
+                );
+            }
+            if cancel_finished {
+                complete_with_detail(
+                    state,
+                    device_id,
+                    &operation,
+                    OperationState::Unknown,
+                    Some(serde_json::json!({
+                        "cancelled": false,
+                        "operationId": target,
+                        "message": "the cancellation outcome could not be confirmed",
+                    })),
+                );
+            }
+            state.forget_orphaned_cancel(target, operation.operation_id);
         }
     }
 }
@@ -1336,8 +1547,9 @@ fn honour_pending_cancel(state: &Arc<HostState>, item: &queue::QueuedPrompt) {
         Some(operation_id) => operation_id,
         None => return,
     };
-    let Some((recorded, cancel_state)) = state.query_remote_cancel(
+    let Some((recorded, cancel_state)) = state.query_remote_cancel_at_grant(
         item.device_id,
+        item.grant_version,
         item.operation_id,
         Some(cancel_operation_id),
     ) else {
@@ -1352,39 +1564,58 @@ fn honour_pending_cancel(state: &Arc<HostState>, item: &queue::QueuedPrompt) {
         return;
     }
     match cancel_state.as_str() {
+        // The daemon still owns the prompt and the cancellation is still
+        // pending. Keep both records untouched and query again next tick.
+        "pending" => return,
         "cancelled" => {
+            let _ = state
+                .queues()
+                .lock()
+                .take_cancel_request(item.session_id, item.operation_id);
             state
                 .queues()
                 .lock()
                 .cancel(item.session_id, item.operation_id, item.device_id);
-            state
+            let prompt_result = prompt_result_for_cancel_state(cancel_state.as_str());
+            let prompt_finished = state
                 .dedup()
-                .record_finished(&item.operation_id.to_string(), &OperationState::Executed, None)
-                .ok();
-            state
+                .record_finished_if_accepted(
+                    &item.operation_id.to_string(),
+                    &prompt_result,
+                    Some("the prompt was not sent because it was cancelled"),
+                )
+                .unwrap_or(false);
+            let cancel_finished = state
                 .dedup()
-                .record_finished(&cancel_operation_id.to_string(), &OperationState::Executed, None)
-                .ok();
+                .record_finished_if_accepted(
+                    &cancel_operation_id.to_string(),
+                    &OperationState::Executed,
+                    None,
+                )
+                .unwrap_or(false);
             push_queue_view(state, item.session_id, item.device_id);
-            // The prompt's own outcome, and the cancel operation's final
-            // answer — both pushed, so the device never has to retry.
-            complete_by_id(
-                state,
-                item.device_id,
-                &item.operation_id,
-                OperationState::Executed,
-                Some(serde_json::json!({ "cancelled": true })),
-            );
-            complete_by_id(
-                state,
-                item.device_id,
-                &cancel_operation_id,
-                OperationState::Executed,
-                Some(serde_json::json!({
-                    "cancelled": true,
-                    "operationId": item.operation_id,
-                })),
-            );
+            if prompt_finished {
+                complete_by_id(
+                    state,
+                    item.device_id,
+                    &item.operation_id,
+                    prompt_result,
+                    Some(serde_json::json!({ "cancelled": true })),
+                );
+            }
+            if cancel_finished {
+                complete_by_id(
+                    state,
+                    item.device_id,
+                    &cancel_operation_id,
+                    OperationState::Executed,
+                    Some(serde_json::json!({
+                        "cancelled": true,
+                        "operationId": item.operation_id,
+                    })),
+                );
+            }
+            state.forget_orphaned_cancel(item.operation_id, cancel_operation_id);
         }
         // The prompt reached the driver. It ran; saying otherwise would be a
         // lie, and cancelling it now is impossible.
@@ -1394,28 +1625,55 @@ fn honour_pending_cancel(state: &Arc<HostState>, item: &queue::QueuedPrompt) {
                 .lock()
                 .take_cancel_request(item.session_id, item.operation_id);
             state
+                .queues()
+                .lock()
+                .mark_dispatched(item.session_id, item.operation_id);
+            // The normal dispatch path may already have recorded and pushed
+            // the prompt's `Executed` result. CAS the record so this cancel
+            // path sends that prompt result only when it is the first owner.
+            let prompt_finished = state
                 .dedup()
-                .record_finished(
+                .record_finished_if_accepted(
+                    &item.operation_id.to_string(),
+                    &OperationState::Executed,
+                    None,
+                )
+                .unwrap_or(false);
+            let cancel_finished = state
+                .dedup()
+                .record_finished_if_accepted(
                     &cancel_operation_id.to_string(),
                     &OperationState::Rejected {
                         code: RejectCode::Malformed,
                     },
                     Some("the prompt had already reached the driver"),
                 )
-                .ok();
-            complete_by_id(
-                state,
-                item.device_id,
-                &cancel_operation_id,
-                OperationState::Rejected {
-                    code: RejectCode::Malformed,
-                },
-                Some(serde_json::json!({
-                    "cancelled": false,
-                    "operationId": item.operation_id,
-                    "message": "the prompt had already reached the driver",
-                })),
-            );
+                .unwrap_or(false);
+            if prompt_finished {
+                complete_by_id(
+                    state,
+                    item.device_id,
+                    &item.operation_id,
+                    OperationState::Executed,
+                    Some(serde_json::json!({ "dispatched": true })),
+                );
+            }
+            if cancel_finished {
+                complete_by_id(
+                    state,
+                    item.device_id,
+                    &cancel_operation_id,
+                    OperationState::Rejected {
+                        code: RejectCode::Malformed,
+                    },
+                    Some(serde_json::json!({
+                        "cancelled": false,
+                        "operationId": item.operation_id,
+                        "message": "the prompt had already reached the driver",
+                    })),
+                );
+            }
+            state.forget_orphaned_cancel(item.operation_id, cancel_operation_id);
         }
         // The row is gone, or the daemon holds no recorded ending for it. A
         // missing row proves nothing — rows are deleted when a session goes
@@ -1432,25 +1690,50 @@ fn honour_pending_cancel(state: &Arc<HostState>, item: &queue::QueuedPrompt) {
                 .queues()
                 .lock()
                 .cancel(item.session_id, item.operation_id, item.device_id);
-            state
+            let prompt_result = prompt_result_for_cancel_state(cancel_state.as_str());
+            let prompt_finished = state
                 .dedup()
-                .record_finished(&item.operation_id.to_string(), &OperationState::Executed, None)
-                .ok();
-            state
+                .record_finished_if_accepted(
+                    &item.operation_id.to_string(),
+                    &prompt_result,
+                    Some("the prompt did not reach the driver"),
+                )
+                .unwrap_or(false);
+            let cancel_finished = state
                 .dedup()
-                .record_finished(&cancel_operation_id.to_string(), &OperationState::Executed, None)
-                .ok();
+                .record_finished_if_accepted(
+                    &cancel_operation_id.to_string(),
+                    &OperationState::Executed,
+                    None,
+                )
+                .unwrap_or(false);
             push_queue_view(state, item.session_id, item.device_id);
-            complete_by_id(
-                state,
-                item.device_id,
-                &cancel_operation_id,
-                OperationState::Executed,
-                Some(serde_json::json!({
-                    "cancelled": true,
-                    "operationId": item.operation_id,
-                })),
-            );
+            if prompt_finished {
+                complete_by_id(
+                    state,
+                    item.device_id,
+                    &item.operation_id,
+                    prompt_result,
+                    Some(serde_json::json!({
+                        "cancelled": true,
+                        "operationId": item.operation_id,
+                        "queueState": cancel_state,
+                    })),
+                );
+            }
+            if cancel_finished {
+                complete_by_id(
+                    state,
+                    item.device_id,
+                    &cancel_operation_id,
+                    OperationState::Executed,
+                    Some(serde_json::json!({
+                        "cancelled": true,
+                        "operationId": item.operation_id,
+                    })),
+                );
+            }
+            state.forget_orphaned_cancel(item.operation_id, cancel_operation_id);
         }
         // `unknown`, a bare absence, or a state this host does not
         // interpret. The honest ending is unknown: the evidence ran out and
@@ -1462,25 +1745,58 @@ fn honour_pending_cancel(state: &Arc<HostState>, item: &queue::QueuedPrompt) {
                 .queues()
                 .lock()
                 .take_cancel_request(item.session_id, item.operation_id);
+            // If the daemon has no terminal record, also release any live
+            // prompt row under its recorded grant. The local unknown tombstone
+            // prevents this process from dispatching it; this cleanup keeps a
+            // later restart from resurrecting the daemon row.
+            state.cancel_remote_prompt_as_recorded(item.device_id, item.operation_id);
             state
+                .queues()
+                .lock()
+                .settle_unknown(item.session_id, item.operation_id);
+            let prompt_finished = state
                 .dedup()
-                .record_finished(
+                .record_finished_if_accepted(
+                    &item.operation_id.to_string(),
+                    &OperationState::Unknown,
+                    Some("the prompt outcome could not be confirmed"),
+                )
+                .unwrap_or(false);
+            let cancel_finished = state
+                .dedup()
+                .record_finished_if_accepted(
                     &cancel_operation_id.to_string(),
                     &OperationState::Unknown,
                     Some("the workspace could not confirm the cancellation"),
                 )
-                .ok();
-            complete_by_id(
-                state,
-                item.device_id,
-                &cancel_operation_id,
-                OperationState::Unknown,
-                Some(serde_json::json!({
-                    "cancelled": false,
-                    "operationId": item.operation_id,
-                    "message": "the workspace could not confirm the cancellation",
-                })),
-            );
+                .unwrap_or(false);
+            if prompt_finished {
+                complete_by_id(
+                    state,
+                    item.device_id,
+                    &item.operation_id,
+                    OperationState::Unknown,
+                    Some(serde_json::json!({
+                        "cancelled": false,
+                        "message": "the prompt outcome could not be confirmed",
+                    })),
+                );
+            }
+            if cancel_finished {
+                complete_by_id(
+                    state,
+                    item.device_id,
+                    &cancel_operation_id,
+                    OperationState::Unknown,
+                    Some(serde_json::json!({
+                        "cancelled": false,
+                        "operationId": item.operation_id,
+                        "message": "the workspace could not confirm the cancellation",
+                    })),
+                );
+            }
+            state.forget_orphaned_cancel(item.operation_id, cancel_operation_id);
+            push_queue_view(state, item.session_id, item.device_id);
         }
     }
 }
@@ -1737,17 +2053,23 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                         .queues()
                         .lock()
                         .mark_dispatched(session_id, item.operation_id);
-                    state
+                    let prompt_finished = state
                         .dedup()
-                        .record_finished(&item.operation_id.to_string(), &OperationState::Executed, None)
-                        .ok();
-                    complete_by_id(
-                        state,
-                        item.device_id,
-                        &item.operation_id,
-                        OperationState::Executed,
-                        Some(serde_json::json!({ "dispatched": true })),
-                    );
+                        .record_finished_if_accepted(
+                            &item.operation_id.to_string(),
+                            &OperationState::Executed,
+                            None,
+                        )
+                        .unwrap_or(false);
+                    if prompt_finished {
+                        complete_by_id(
+                            state,
+                            item.device_id,
+                            &item.operation_id,
+                            OperationState::Executed,
+                            Some(serde_json::json!({ "dispatched": true })),
+                        );
+                    }
                     // A cancel that arrived while this dispatch was in
                     // flight came too late: the prompt ran. Say so, rather
                     // than letting the device believe its cancel held.
@@ -1784,29 +2106,98 @@ fn dispatch_ready_queues(state: &Arc<HostState>) {
                     }
                     push_queue_view(state, session_id, item.device_id);
                 }
+                Ok(fintwind_client::ResponsePayload::RemotePromptState { state: label, .. })
+                    if label == "unknown" =>
+                {
+                    // The daemon could not prove the dispatch outcome. A
+                    // local dispatch retry is forbidden; if a cancel was
+                    // waiting, keep it in the orphan set for query-only
+                    // recovery instead of dropping the device's intent.
+                    if state
+                        .queues()
+                        .lock()
+                        .cancel_requested(session_id, item.operation_id)
+                    {
+                        honour_pending_cancel(state, &item);
+                        if state
+                            .queues()
+                            .lock()
+                            .pending_cancel_operation(session_id, item.operation_id)
+                            .is_some()
+                        {
+                            if let Some(cancel_operation_id) = state
+                                .queues()
+                                .lock()
+                                .take_cancel_request(session_id, item.operation_id)
+                            {
+                                state.record_orphaned_cancels(vec![OrphanedCancel {
+                                    prompt_operation_id: item.operation_id,
+                                    cancel_operation_id,
+                                    device_id: Some(item.device_id),
+                                    grant_version: Some(item.grant_version),
+                                }]);
+                            }
+                        }
+                    }
+                    let still_live = state
+                        .queues()
+                        .lock()
+                        .state_for(item.operation_id)
+                        .is_some_and(|queue_state| !queue_state.is_terminal());
+                    if still_live {
+                        state.cancel_remote_prompt_as_recorded(item.device_id, item.operation_id);
+                        state
+                            .queues()
+                            .lock()
+                            .settle_unknown(session_id, item.operation_id);
+                        let prompt_finished = state
+                            .dedup()
+                            .record_finished_if_accepted(
+                                &item.operation_id.to_string(),
+                                &OperationState::Unknown,
+                                Some("the dispatch outcome could not be confirmed"),
+                            )
+                            .unwrap_or(false);
+                        if prompt_finished {
+                            complete_by_id(
+                                state,
+                                item.device_id,
+                                &item.operation_id,
+                                OperationState::Unknown,
+                                Some(serde_json::json!({
+                                    "message": "the dispatch outcome could not be confirmed",
+                                })),
+                            );
+                        }
+                    }
+                    push_queue_view(state, session_id, item.device_id);
+                }
                 Ok(fintwind_client::ResponsePayload::RemotePromptState { state: label, .. }) => {
                     // The daemon settled it without dispatching (expired,
                     // cancelled, never sent). Nothing ran, so nothing is
                     // reported as executed.
+                    let prompt_result = prompt_result_for_cancel_state(&label);
                     state
                         .queues()
                         .lock()
                         .cancel(session_id, item.operation_id, item.device_id);
-                    state
+                    let prompt_finished = state
                         .dedup()
-                        .record_finished(
+                        .record_finished_if_accepted(
                             &item.operation_id.to_string(),
-                            &OperationState::Expired,
+                            &prompt_result,
                             None,
                         )
-                        .ok();
-                    complete_by_id(
-                        state,
-                        item.device_id,
-                        &item.operation_id,
-                        OperationState::Expired,
-                        Some(serde_json::json!({ "queueState": label })),
-                    );
+                        .unwrap_or(false);
+                    if prompt_finished {
+                        complete_by_id(
+                            state,
+                            item.device_id,
+                            &item.operation_id,
+                            prompt_result,
+                            Some(serde_json::json!({ "queueState": label })),
+                        );
+                    }
                     push_queue_view(state, session_id, item.device_id);
                 }
                 Ok(_) => {
@@ -1834,20 +2225,27 @@ fn settle_released_cancel(state: &Arc<HostState>, item: &queue::QueuedPrompt) {
     else {
         return;
     };
-    state
+    let cancel_finished = state
         .dedup()
-        .record_finished(&cancel_operation_id.to_string(), &OperationState::Executed, None)
-        .ok();
-    complete_by_id(
-        state,
-        item.device_id,
-        &cancel_operation_id,
-        OperationState::Executed,
-        Some(serde_json::json!({
-            "cancelled": true,
-            "operationId": item.operation_id,
-        })),
-    );
+        .record_finished_if_accepted(
+            &cancel_operation_id.to_string(),
+            &OperationState::Executed,
+            None,
+        )
+        .unwrap_or(false);
+    if cancel_finished {
+        complete_by_id(
+            state,
+            item.device_id,
+            &cancel_operation_id,
+            OperationState::Executed,
+            Some(serde_json::json!({
+                "cancelled": true,
+                "operationId": item.operation_id,
+            })),
+        );
+    }
+    state.forget_orphaned_cancel(item.operation_id, cancel_operation_id);
 }
 
 /// Answer a replayed cancellation from the daemon's durable record.
@@ -1864,49 +2262,162 @@ fn resolve_replayed_cancel(
     operation: &OperationRequest,
     target: Uuid,
 ) {
-    let Some((_, cancel_state)) = state.query_remote_cancel(
+    let Some(grant_version) = state
+        .dedup()
+        .cancel_grant_version(&operation.operation_id.to_string())
+    else {
+        let finished = state
+            .dedup()
+            .record_finished_if_accepted(
+                &operation.operation_id.to_string(),
+                &OperationState::Unknown,
+                Some("the cancellation grant was not durably recorded"),
+            )
+            .unwrap_or(false);
+        if finished {
+            complete(
+                state,
+                device_id,
+                operation,
+                OperationState::Unknown,
+                Some(serde_json::json!({
+                    "cancelled": false,
+                    "operationId": target,
+                    "message": "the cancellation grant was not durably recorded",
+                })),
+            );
+        }
+        return;
+    };
+    let query = state.query_remote_cancel_at_grant(
         device_id,
+        grant_version,
         target,
         Some(operation.operation_id),
-    ) else {
+    );
+    let Some((recorded, cancel_state)) = query else {
         complete(
             state,
             device_id,
             operation,
-            OperationState::Unknown,
+            OperationState::Accepted,
             Some(serde_json::json!({
                 "cancelled": false,
                 "operationId": target,
-                "message": "the workspace did not answer the cancellation query",
+                "message": "the cancellation is recorded; retrying the workspace query",
             })),
         );
         return;
     };
-    let (result, cancelled) = match cancel_state.as_str() {
-        "cancelled" | "expired" | "notSent" => (OperationState::Executed, true),
-        "dispatched" => (
-            OperationState::Rejected {
-                code: RejectCode::Malformed,
-            },
-            false,
-        ),
-        _ => (OperationState::Unknown, false),
-    };
-    state
+    if recorded != Some(operation.operation_id) {
+        complete(
+            state,
+            device_id,
+            operation,
+            OperationState::Accepted,
+            Some(serde_json::json!({
+                "cancelled": false,
+                "operationId": target,
+                "message": "the workspace did not confirm this cancellation identity; retrying",
+            })),
+        );
+        return;
+    }
+    if cancel_state == "pending" {
+        complete(
+            state,
+            device_id,
+            operation,
+            OperationState::Accepted,
+            Some(serde_json::json!({
+                "cancelled": false,
+                "operationId": target,
+                "message": "the cancellation is still pending",
+            })),
+        );
+        return;
+    }
+    let (result, cancelled) = cancel_result_for_prompt_state(&cancel_state);
+    let prompt_result = prompt_result_for_cancel_state(&cancel_state);
+    if let Some(item) = state.queues().lock().item_for(target) {
+        state
+            .queues()
+            .lock()
+            .take_cancel_request(item.session_id, target);
+        match cancel_state.as_str() {
+            "cancelled" | "expired" | "notSent" => {
+                state
+                    .queues()
+                    .lock()
+                    .cancel(item.session_id, target, item.device_id);
+            }
+            "dispatched" | "dispatching" => {
+                state
+                    .queues()
+                    .lock()
+                    .mark_dispatched(item.session_id, target);
+            }
+            _ => {
+                state.cancel_remote_prompt_as_recorded(item.device_id, target);
+                state
+                    .queues()
+                    .lock()
+                    .settle_unknown(item.session_id, target);
+            }
+        }
+        push_queue_view(state, item.session_id, item.device_id);
+    }
+    let prompt_finished = state
         .dedup()
-        .record_finished(&operation.operation_id.to_string(), &result, None)
-        .ok();
-    complete_with_detail(
-        state,
-        device_id,
-        operation,
-        result,
-        Some(serde_json::json!({
-            "cancelled": cancelled,
-            "operationId": target,
-            "cancelState": cancel_state,
-        })),
-    );
+        .record_finished_if_accepted(
+            &target.to_string(),
+            &prompt_result,
+            Some("the prompt outcome was resolved from the daemon record"),
+        )
+        .unwrap_or(false);
+    if prompt_finished {
+        complete_by_id(
+            state,
+            device_id,
+            &target,
+            prompt_result,
+            Some(serde_json::json!({
+                "cancelled": cancelled,
+                "operationId": target,
+                "cancelState": cancel_state,
+            })),
+        );
+    }
+    let cancel_finished = state
+        .dedup()
+        .record_finished_if_accepted(
+            &operation.operation_id.to_string(),
+            &result,
+            None,
+        )
+        .unwrap_or(false);
+    if cancel_finished {
+        complete_with_detail(
+            state,
+            device_id,
+            operation,
+            result,
+            Some(serde_json::json!({
+                "cancelled": cancelled,
+                "operationId": target,
+                "cancelState": cancel_state,
+            })),
+        );
+        state.forget_orphaned_cancel(target, operation.operation_id);
+    } else if state
+        .dedup()
+        .lookup(&operation.operation_id.to_string())
+        .is_some_and(|record| !matches!(record.state, OperationState::Accepted))
+    {
+        // A concurrent recovery path already settled this C. Do not leave a
+        // stale orphan that could emit the same terminal answer later.
+        state.forget_orphaned_cancel(target, operation.operation_id);
+    }
 }
 
 /// Deliver the ending of every cancellation whose prompt is no longer in the
@@ -1939,14 +2450,25 @@ fn resolve_orphaned_cancels(state: &Arc<HostState>) {
         // Only a query, and only about *this* cancellation: a prompt can
         // carry more than one over its life, and the unnamed query answers
         // with whichever ended last.
-        let Some((recorded, cancel_state)) = state.query_remote_cancel(
-            device_id,
-            entry.prompt_operation_id,
-            Some(entry.cancel_operation_id),
-        ) else {
-            // The daemon did not answer. The entry stays; asking again is
-            // the whole recovery, and it never re-sends anything.
-            continue;
+        let (recorded, cancel_state) = match entry.grant_version {
+            Some(grant_version) => {
+                let Some(query) = state.query_remote_cancel_at_grant(
+                    device_id,
+                    grant_version,
+                    entry.prompt_operation_id,
+                    Some(entry.cancel_operation_id),
+                ) else {
+                    // The daemon did not answer. The entry stays; asking
+                    // again is the whole recovery, and it never re-sends
+                    // anything.
+                    continue;
+                };
+                query
+            }
+            None => (
+                Some(entry.cancel_operation_id),
+                "unknown".to_owned(),
+            ),
         };
         if recorded != Some(entry.cancel_operation_id) {
             // The daemon is not holding this cancellation under this id.
@@ -1958,57 +2480,107 @@ fn resolve_orphaned_cancels(state: &Arc<HostState>) {
             // Still waiting on a live row. The next tick asks again.
             continue;
         }
-        let (result, cancelled) = match cancel_state.as_str() {
-            "cancelled" | "expired" | "notSent" => (OperationState::Executed, true),
-            "dispatched" => (
-                OperationState::Rejected {
-                    code: RejectCode::Malformed,
-                },
-                false,
-            ),
-            // Unknown — including a daemon that holds no record at all — is
-            // delivered as what it is. The device learns the truth, the
-            // operation is finished as unknown, and nothing is re-driven.
-            _ => (OperationState::Unknown, false),
-        };
-        state
+        let (result, cancelled) = cancel_result_for_prompt_state(&cancel_state);
+        if matches!(&result, OperationState::Unknown)
+            && let Some(item) = state.queues().lock().item_for(entry.prompt_operation_id)
+        {
+            // This is the crash window where the host accepted C but the
+            // daemon never recorded C. The local prompt must become a
+            // durable non-dispatchable tombstone as well; otherwise the
+            // dispatch tick could run it before the next recovery query.
+            state.cancel_remote_prompt_as_recorded(item.device_id, item.operation_id);
+            state
+                .queues()
+                .lock()
+                .take_cancel_request(item.session_id, item.operation_id);
+            state
+                .queues()
+                .lock()
+                .settle_unknown(item.session_id, item.operation_id);
+            push_queue_view(state, item.session_id, item.device_id);
+        }
+        // A host crash may have left the original prompt accepted locally
+        // while only the cancellation's durable ending survived. Reconcile
+        // the prompt operation too, but do not emit a duplicate if it was
+        // already settled before the crash.
+        let prompt_state = prompt_result_for_cancel_state(&cancel_state);
+        let prompt_finished = state
             .dedup()
-            .record_finished(&entry.cancel_operation_id.to_string(), &result, None)
-            .ok();
-        complete_by_id(
-            state,
-            device_id,
-            &entry.cancel_operation_id,
-            result,
-            Some(serde_json::json!({
-                "cancelled": cancelled,
-                "operationId": entry.prompt_operation_id,
-                "cancelState": cancel_state,
-            })),
-        );
-        delivered.push(entry);
+            .record_finished_if_accepted(
+                &entry.prompt_operation_id.to_string(),
+                &prompt_state,
+                None,
+            )
+            .unwrap_or(false);
+        if prompt_finished {
+            complete_by_id(
+                state,
+                device_id,
+                &entry.prompt_operation_id,
+                prompt_state,
+                Some(serde_json::json!({
+                    "cancelled": cancelled,
+                    "operationId": entry.prompt_operation_id,
+                    "cancelState": cancel_state,
+                })),
+            );
+        }
+        let cancel_finished = state
+            .dedup()
+            .record_finished_if_accepted(&entry.cancel_operation_id.to_string(), &result, None)
+            .unwrap_or(false);
+        if cancel_finished {
+            complete_by_id(
+                state,
+                device_id,
+                &entry.cancel_operation_id,
+                result,
+                Some(serde_json::json!({
+                    "cancelled": cancelled,
+                    "operationId": entry.prompt_operation_id,
+                    "cancelState": cancel_state,
+                })),
+            );
+            delivered.push(entry);
+        } else if state
+            .dedup()
+            .lookup(&entry.cancel_operation_id.to_string())
+            .is_some_and(|record| !matches!(record.state, OperationState::Accepted))
+        {
+            // Another path already settled and delivered this cancellation.
+            delivered.push(entry);
+        }
     }
     // Only now are finished entries removed; everything else survives.
     state.remove_orphaned_cancels(&delivered);
 }
 
-/// A prompt the daemon did not dispatch is cancelled, never retried, and
-/// reported honestly: an unknown outcome is only ever answered by an
-/// explicit query, never by a second send.
+/// A dispatch response that did not prove a terminal state is unknown, never
+/// retried, and kept as a local tombstone. A waiting cancel is moved to the
+/// query-only orphan set instead of being guessed as successful.
 fn settle_undispatched(state: &Arc<HostState>, item: &queue::QueuedPrompt, reason: &str) {
     state.cancel_remote_prompt_as_recorded(item.device_id, item.operation_id);
-    settle_released_cancel(state, item);
+    if let Some(cancel_operation_id) = state
+        .queues()
+        .lock()
+        .take_cancel_request(item.session_id, item.operation_id)
+    {
+        state.record_orphaned_cancels(vec![OrphanedCancel {
+            prompt_operation_id: item.operation_id,
+            cancel_operation_id,
+            device_id: Some(item.device_id),
+            grant_version: Some(item.grant_version),
+        }]);
+    }
     state
         .queues()
         .lock()
-        .cancel(item.session_id, item.operation_id, item.device_id);
+        .settle_unknown(item.session_id, item.operation_id);
     state
         .dedup()
         .record_finished(
             &item.operation_id.to_string(),
-            &OperationState::Rejected {
-                code: RejectCode::Malformed,
-            },
+            &OperationState::Unknown,
             Some(reason),
         )
         .ok();
@@ -2016,9 +2588,7 @@ fn settle_undispatched(state: &Arc<HostState>, item: &queue::QueuedPrompt, reaso
         state,
         item.device_id,
         &item.operation_id,
-        OperationState::Rejected {
-            code: RejectCode::Malformed,
-        },
+        OperationState::Unknown,
         Some(serde_json::json!({ "message": reason })),
     );
     push_queue_view(state, item.session_id, item.device_id);

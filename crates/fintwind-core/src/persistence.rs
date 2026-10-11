@@ -1650,8 +1650,10 @@ impl StateStore {
         };
         if let Some(stored_existing) = existing {
             // A recorded cancel that is still waiting blocks a different
-            // one; the same one is a retry and succeeds.
-            if stored_existing != stored {
+            // device cancel. A host cleanup passes an empty id and must be
+            // allowed to settle the already-recorded device cancellation
+            // without replacing its binding.
+            if !stored.is_empty() && stored_existing != stored {
                 return Ok(CancelIntentOutcome::Conflict);
             }
             return Ok(CancelIntentOutcome::Recorded);

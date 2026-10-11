@@ -55,6 +55,9 @@ pub enum QueueItemState {
     Cancelled,
     /// Its validity window elapsed; it will never run.
     Expired,
+    /// The host could not prove whether the prompt ran. It is held as a
+    /// terminal local tombstone and must never be dispatched again.
+    Unknown,
 }
 
 impl QueueItemState {
@@ -65,7 +68,15 @@ impl QueueItemState {
             Self::Dispatched => "dispatched",
             Self::Cancelled => "cancelled",
             Self::Expired => "expired",
+            Self::Unknown => "unknown",
         }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Dispatched | Self::Cancelled | Self::Expired | Self::Unknown
+        )
     }
 }
 
@@ -108,10 +119,7 @@ impl QueuedPrompt {
     }
 
     pub fn is_terminal(&self) -> bool {
-        matches!(
-            self.state,
-            QueueItemState::Dispatched | QueueItemState::Cancelled | QueueItemState::Expired
-        )
+        self.state.is_terminal()
     }
 }
 
@@ -307,6 +315,25 @@ impl PromptQueues {
             .map(|item| item.device_id)
     }
 
+    /// Read one queue projection without changing it. Recovery paths use this
+    /// to reconcile an orphaned cancel with a prompt that was restored locally
+    /// before the cancel terminal was delivered.
+    pub fn item_for(&self, operation_id: Uuid) -> Option<QueuedPrompt> {
+        self.sessions
+            .values()
+            .flatten()
+            .find(|item| item.operation_id == operation_id)
+            .cloned()
+    }
+
+    pub fn state_for(&self, operation_id: Uuid) -> Option<QueueItemState> {
+        self.sessions
+            .values()
+            .flatten()
+            .find(|item| item.operation_id == operation_id)
+            .map(|item| item.state)
+    }
+
     pub fn recorded_grant_version(&self, operation_id: Uuid) -> Option<u64> {
         self.sessions
             .values()
@@ -337,6 +364,13 @@ impl PromptQueues {
 
     pub fn mark_dispatched(&mut self, session_id: Uuid, operation_id: Uuid) {
         self.settle(session_id, operation_id, QueueItemState::Dispatched);
+    }
+
+    /// Keep an unknown prompt as a non-dispatchable terminal tombstone. The
+    /// prompt is deliberately not returned to `Queued`: unknown is never a
+    /// permission to try the side effect again.
+    pub fn settle_unknown(&mut self, session_id: Uuid, operation_id: Uuid) {
+        self.settle(session_id, operation_id, QueueItemState::Unknown);
     }
 
     fn find_mut(&mut self, session_id: Uuid, operation_id: Uuid) -> Option<&mut QueuedPrompt> {

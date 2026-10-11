@@ -51,6 +51,25 @@ without those the script packages unsigned binaries and says so.
 [docs/windows.md](docs/windows.md) documents installing for users, and
 [RELEASING.md](RELEASING.md) the GitHub release process.
 
+The default package is the stable channel. The personal beta channel uses the
+same production application identity and data directory, but includes the
+forward-looking remote-control feature:
+
+```sh
+bun scripts/bundle-windows.ts --channel=beta
+```
+
+Debug builds are the `fintwind Dev` channel for agent development and use a
+separate data directory. Beta and stable must remain data-compatible because
+they intentionally share the production directory — which also means beta and
+stable must not run at the same time, and data a newer beta migrated is not
+guaranteed to reopen in an older stable. Both channels build into the same
+`target/release`, so building one after the other replaces those executables
+in place; each bundle run packages right after its own build. Builds outside
+the stable channel skip the in-app update check, so a beta is never replaced
+by a published stable behind your back; GitHub CI builds the stable channel
+only (`--channel=stable` is explicit in the Release workflow).
+
 ## Making changes
 
 - Before starting work on anything larger than a bug fix, open an issue and

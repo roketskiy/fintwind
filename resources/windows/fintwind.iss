@@ -20,6 +20,18 @@
 #ifndef OutputDir
   #define OutputDir "."
 #endif
+#ifndef Channel
+  #define Channel "stable"
+#endif
+#ifndef RemoteControl
+  #define RemoteControl "0"
+#endif
+
+#if Channel == "beta"
+  #define ChannelSuffix "-beta"
+#else
+  #define ChannelSuffix ""
+#endif
 
 ; An x64 build is worth allowing on Arm, where it runs emulated; an arm64
 ; build on x64 is not, so refuse it up front rather than installing something
@@ -47,7 +59,7 @@ UninstallDisplayName=fintwind
 UninstallDisplayIcon={app}\fintwind.exe
 LicenseFile={#StageDir}\LICENSE
 OutputDir={#OutputDir}
-OutputBaseFilename=fintwind-{#AppVersion}-{#Arch}-Setup
+OutputBaseFilename=fintwind-{#AppVersion}{#ChannelSuffix}-{#Arch}-Setup
 SetupIconFile=AppIcon.ico
 Compression=lzma2/max
 SolidCompression=yes
@@ -78,7 +90,9 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "{#StageDir}\fintwind.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\fintwind-daemon.exe"; DestDir: "{app}"; Flags: ignoreversion
+#if RemoteControl == "1"
 Source: "{#StageDir}\fintwind-remote-host.exe"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 Source: "{#StageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

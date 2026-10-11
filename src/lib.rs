@@ -64,7 +64,34 @@ use gpui::{
 };
 
 use crate::app::Fintwind;
-use crate::identity::{APP_ID, APP_NAME};
+use crate::identity::APP_ID;
+
+/// Build channels are intentionally separate from Cargo's optimization
+/// profile. A beta build is optimized like stable, but may carry a feature
+/// that stable does not expose. Debug builds are the agent/developer channel.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BuildChannel {
+    Dev,
+    Beta,
+    Stable,
+}
+
+pub(crate) const BUILD_CHANNEL: BuildChannel = if cfg!(debug_assertions) {
+    BuildChannel::Dev
+} else if cfg!(feature = "beta") {
+    BuildChannel::Beta
+} else {
+    BuildChannel::Stable
+};
+
+pub(crate) const REMOTE_CONTROL_ENABLED: bool =
+    matches!(BUILD_CHANNEL, BuildChannel::Dev | BuildChannel::Beta);
+
+pub(crate) const APP_DISPLAY_NAME: &str = match BUILD_CHANNEL {
+    BuildChannel::Dev => "fintwind Dev",
+    BuildChannel::Beta => "fintwind Beta",
+    BuildChannel::Stable => "fintwind",
+};
 actions!(
     fintwind,
     [
@@ -203,12 +230,14 @@ impl FintwindApplicationExt for Application {
 pub fn run() {
     let daemon = crate::daemon::start_process()
         .unwrap_or_else(|error| panic!("failed to start fintwind daemon: {error:#}"));
-    crate::daemon::start_remote_host(&daemon);
+    if REMOTE_CONTROL_ENABLED {
+        crate::daemon::start_remote_host(&daemon);
+    }
     gpui_platform::application()
         .with_assets(crate::assets::Assets)
         .with_main_window_reopen()
         .run(move |cx: &mut App| {
-            cx.set_app_identity(APP_ID, APP_NAME);
+            cx.set_app_identity(APP_ID, APP_DISPLAY_NAME);
             crate::assets::register_fonts(cx).expect("failed to register bundled fonts");
             crate::input::init(cx);
             crate::ui::menu::init(cx);
@@ -323,7 +352,7 @@ pub fn run() {
                 .open_window(
                     WindowOptions {
                         titlebar: Some(TitlebarOptions {
-                            title: Some(APP_NAME.into()),
+                            title: Some(APP_DISPLAY_NAME.into()),
                             // Windows creates the window without `WS_CAPTION`
                             // either way; asking for the transparent titlebar
                             // is what extends the client area over the frame
@@ -389,15 +418,15 @@ pub fn run() {
 pub(crate) fn set_app_menus(cx: &mut App) {
     cx.set_menus(vec![
         Menu {
-            name: APP_NAME.into(),
+            name: APP_DISPLAY_NAME.into(),
             disabled: false,
             items: {
                 vec![
-                    MenuItem::action(tr!("menu.about", app = APP_NAME), About),
+                    MenuItem::action(tr!("menu.about", app = APP_DISPLAY_NAME), About),
                     MenuItem::separator(),
                     MenuItem::action(tr!("menu.settings"), OpenSettings),
                     MenuItem::separator(),
-                    MenuItem::action(tr!("menu.quit", app = APP_NAME), Quit),
+                    MenuItem::action(tr!("menu.quit", app = APP_DISPLAY_NAME), Quit),
                 ]
             },
         },

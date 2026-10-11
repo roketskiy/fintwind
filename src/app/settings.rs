@@ -23,7 +23,7 @@ const SETTINGS_SEARCH_CONTEXT: &str = "SettingsSidebar > ComposerInput";
 
 /// The sidebar's rows in display order, each with the keyword haystack the
 /// search field filters against.
-const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
+const SETTINGS_PAGES: &[(SettingsPage, &str, &str, &str)] = &[
     (
         SettingsPage::General,
         "settings.general",
@@ -60,6 +60,7 @@ const SETTINGS_PAGES: [(SettingsPage, &str, &str, &str); 7] = [
         "icons/sparkle.svg",
         "settings.mcp_market_keywords",
     ),
+    #[cfg(any(debug_assertions, feature = "beta"))]
     (
         SettingsPage::Devices,
         "settings.devices",
@@ -176,7 +177,8 @@ pub(super) fn visible_settings_pages(
     query: &str,
 ) -> impl Iterator<Item = (SettingsPage, String, &'static str)> + '_ {
     SETTINGS_PAGES
-        .into_iter()
+        .iter()
+        .copied()
         .filter_map(move |(page, label_key, icon, keywords_key)| {
             let label = crate::i18n::translate(label_key);
             let keywords = crate::i18n::translate(keywords_key).to_lowercase();
@@ -189,6 +191,9 @@ impl Fintwind {
     /// Every entry point — the rail, the shortcut, the command palette —
     /// funnels through here, so the mode is the single navigation state.
     pub(super) fn open_settings_page(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
+        if page == SettingsPage::Devices && !crate::REMOTE_CONTROL_ENABLED {
+            return;
+        }
         self.mode = WorkspaceMode::Settings;
         self.settings_page = page;
         // Each page starts at its own top; a scroll position carried over
@@ -544,10 +549,20 @@ impl Fintwind {
                     .mt(px(12.0))
                     .text_size(ui_px(12.0))
                     .text_color(theme.text_tertiary)
-                    .child(tr!(
-                        "settings.app_version",
-                        version = crate::update::APP_VERSION
-                    )),
+                    .child({
+                        // The channel tag shows only where it matters: the
+                        // shared production directory means this line may be
+                        // running either stable or beta against the same data.
+                        let channel = match crate::BUILD_CHANNEL {
+                            crate::BuildChannel::Stable => "",
+                            crate::BuildChannel::Beta => " Beta",
+                            crate::BuildChannel::Dev => " Dev",
+                        };
+                        tr!(
+                            "settings.app_version",
+                            version = format!("{}{channel}", crate::update::APP_VERSION)
+                        )
+                    }),
             )
             .into_any_element()
     }

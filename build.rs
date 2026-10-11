@@ -42,6 +42,20 @@ fn embed_windows_resources() {
     );
     let description = std::env::var("CARGO_PKG_DESCRIPTION").unwrap_or_default();
 
+    // Match src/lib.rs's APP_DISPLAY_NAME: a debug build is the Dev channel,
+    // a release build with the `beta` feature is Beta, anything else is
+    // stable. Cargo hands both facts to build scripts as environment
+    // variables, so this reads them instead of cfg! (which here would
+    // describe the build script's own compilation, not the crate's).
+    let channel_suffix = if std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some() {
+        " Dev"
+    } else if std::env::var_os("CARGO_FEATURE_BETA").is_some() {
+        " Beta"
+    } else {
+        ""
+    };
+    let product = format!("fintwind{channel_suffix}");
+
     let resources = format!(
         r#"1 ICON "{icon}"
 
@@ -59,11 +73,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName", "fintwind\0"
-            VALUE "FileDescription", "{description}\0"
+            VALUE "FileDescription", "{description} ({product})\0"
             VALUE "FileVersion", "{package_version}\0"
             VALUE "InternalName", "fintwind\0"
             VALUE "OriginalFilename", "fintwind.exe\0"
-            VALUE "ProductName", "fintwind\0"
+            VALUE "ProductName", "{product}\0"
             VALUE "ProductVersion", "{package_version}\0"
         END
     END

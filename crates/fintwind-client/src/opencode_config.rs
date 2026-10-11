@@ -40,6 +40,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use crate::custom_providers::{CustomProvider, CustomProviderModel, ProviderApiFormat};
+use crate::models_dev::ModelsDevTable;
 
 /// OpenCode's output-token default, applied when a fresh `limit` is written.
 /// Matches what OpenCode itself reports for models without a configured
@@ -172,11 +173,18 @@ fn provider_from_config(key: &str, entry: &Value, disabled: &HashSet<String>) ->
 /// [`CustomProvider::raw`]); everything outside it is preserved, and the
 /// `disabled_providers` list keeps entries that name providers outside the
 /// roster (the CLI can disable catalog providers the UI never manages).
-pub fn save_providers(providers: &[CustomProvider]) -> io::Result<()> {
-    save_providers_at(&config_path(), providers)
+pub fn save_providers(
+    providers: &[CustomProvider],
+    catalog: Option<&ModelsDevTable>,
+) -> io::Result<()> {
+    save_providers_at(&config_path(), providers, catalog)
 }
 
-pub fn save_providers_at(path: &Path, providers: &[CustomProvider]) -> io::Result<()> {
+pub fn save_providers_at(
+    path: &Path,
+    providers: &[CustomProvider],
+    catalog: Option<&ModelsDevTable>,
+) -> io::Result<()> {
     let mut document: Map<String, Value> = match std::fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
@@ -199,7 +207,7 @@ pub fn save_providers_at(path: &Path, providers: &[CustomProvider]) -> io::Resul
 
     let mut provider_map = Map::new();
     for provider in providers {
-        provider_map.insert(provider.slug.clone(), provider_entry(provider));
+        provider_map.insert(provider.slug.clone(), provider_entry(provider, catalog));
     }
     document.insert("provider".into(), Value::Object(provider_map));
 
@@ -236,8 +244,10 @@ pub fn save_providers_at(path: &Path, providers: &[CustomProvider]) -> io::Resul
 }
 
 /// The provider entry as it should sit in the configuration: the original
-/// record with only the UI-owned keys rewritten.
-fn provider_entry(provider: &CustomProvider) -> Value {
+/// record with only the UI-owned keys rewritten. The models.dev catalog,
+/// when one could be had, fills each model's thinking variants; without it
+/// the models keep whatever variants their raw records already carry.
+fn provider_entry(provider: &CustomProvider, catalog: Option<&ModelsDevTable>) -> Value {
     let mut entry = match provider.raw.as_object() {
         Some(raw) => raw.clone(),
         None => Map::new(),
@@ -376,9 +386,18 @@ fn provider_entry(provider: &CustomProvider) -> Value {
         // The pre-OpenCode-config mirror wrote `contextWindow`; superseded
         // by `limit.context` and never read back once `limit` exists.
         spec.remove("contextWindow");
+        // The provider's own slug names the catalog entry to trust: a
+        // provider added as `zhipuai` reads zhipuai's copies of its models,
+        // not the relays' re-listings. A slug no catalog entry carries
+        // falls through to the cross-provider majority. A model the entry
+        // lists no modes for takes the standard effort ladder; a commit
+        // with no catalog at all leaves the spec untouched.
+        let thinking = catalog
+            .and_then(|catalog| catalog.resolve_thinking_for(&model.id, Some(&provider.slug)))
+            .unwrap_or_default();
         crate::provider_thinking::fill_model_variants(
             &mut spec,
-            &model.id,
+            catalog.map(|_| &thinking),
             model.display_name(),
             provider.api_format,
         );
@@ -776,7 +795,7 @@ pub fn migrate_legacy_override_file() -> bool {
             Some(providers)
         });
     let migrated = match migrated {
-        Some(providers) => save_providers_at(&config_path(), &providers).is_ok(),
+        Some(providers) => save_providers_at(&config_path(), &providers, None).is_ok(),
         None => false,
     };
     if migrated {
@@ -851,7 +870,7 @@ mod tests {
         // Saving without a format change keeps the original package.
         // Path-scoped save: the global `save_providers` would rewrite the
         // user's real configuration from this fixture's roster.
-        save_providers_at(&path, &providers).unwrap();
+        save_providers_at(&path, &providers, None).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["provider"]["my-relay"]["npm"], "@ai-sdk/openai");
 
@@ -866,6 +885,13 @@ mod tests {
             &directory,
             &serde_json::json!({"instructions": ["keep.md"]}),
         );
+        let catalog = crate::models_dev::parse_catalog(
+            r#"{"openai": {"id": "openai", "models": {"gpt-5.5": {"id": "gpt-5.5",
+                "reasoning_options": [
+                    {"type": "effort", "values": ["minimal", "low", "medium", "high"]}
+                ]}}}}"#,
+        )
+        .unwrap();
         let providers = vec![CustomProvider::new(
             "thinking-test".into(),
             "Thinking test".into(),
@@ -877,14 +903,16 @@ mod tests {
                 ..Default::default()
             }],
         )];
-        save_providers_at(&path, &providers).unwrap();
+        save_providers_at(&path, &providers, Some(&catalog)).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let model = &saved["provider"]["thinking-test"]["models"]["gpt-5.5"];
-        assert_eq!(model["variants"].as_object().unwrap().len(), 5);
+        assert_eq!(model["variants"].as_object().unwrap().len(), 4);
         assert_eq!(model["options"]["reasoningEffort"], "medium");
         assert_eq!(saved["instructions"], serde_json::json!(["keep.md"]));
         let loaded = load_providers_at(&path).unwrap();
-        save_providers_at(&path, &loaded).unwrap();
+        // A later save without the catalog keeps the variants already on
+        // record: they ride along in the raw spec.
+        save_providers_at(&path, &loaded, None).unwrap();
         let reloaded: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved, reloaded);
         let _ = std::fs::remove_dir_all(directory);
@@ -960,7 +988,7 @@ mod tests {
             }],
         ));
 
-        save_providers_at(&path, &providers).unwrap();
+        save_providers_at(&path, &providers, None).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
 
         // Unrelated top-level keys survive verbatim.
@@ -1019,7 +1047,7 @@ mod tests {
                 provider.enabled = true;
             }
         }
-        save_providers_at(&path, &providers).unwrap();
+        save_providers_at(&path, &providers, None).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         // The roster entry left the list; the catalog entry survives alone.
         assert_eq!(
@@ -1044,7 +1072,7 @@ mod tests {
             .find(|provider| provider.slug == "openrouter")
             .unwrap();
         openrouter.models[0].context_window = Some(1_000_000);
-        save_providers_at(&path, &providers).unwrap();
+        save_providers_at(&path, &providers, None).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(saved["provider"]["openrouter"].get("npm").is_none());
         assert_eq!(
@@ -1064,7 +1092,7 @@ mod tests {
             .find(|provider| provider.slug == "openrouter")
             .unwrap();
         openrouter.models[0].context_window = None;
-        save_providers_at(&path, &providers).unwrap();
+        save_providers_at(&path, &providers, None).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let limit = &saved["provider"]["openrouter"]["models"]["vendor/model"]["limit"];
         assert!(limit.get("context").is_none());
@@ -1077,7 +1105,7 @@ mod tests {
             .unwrap();
         openrouter.api_format = ProviderApiFormat::Anthropic;
         openrouter.npm_touched = true;
-        save_providers_at(&path, &providers).unwrap();
+        save_providers_at(&path, &providers, None).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["provider"]["openrouter"]["npm"], "@ai-sdk/anthropic");
 
@@ -1136,7 +1164,7 @@ mod tests {
             .find(|model| model.id == "plain-model")
             .unwrap();
         plain.input_modalities = vec!["text".into()];
-        save_providers_at(&path, &providers).unwrap();
+        save_providers_at(&path, &providers, None).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let models = &saved["provider"]["relay"]["models"];
         assert_eq!(
@@ -1161,7 +1189,7 @@ mod tests {
         for model in &mut relay.models {
             model.input_modalities.clear();
         }
-        save_providers_at(&path, &providers).unwrap();
+        save_providers_at(&path, &providers, None).unwrap();
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let models = &saved["provider"]["relay"]["models"];
         assert_eq!(
@@ -1517,7 +1545,7 @@ mod tests {
                 )
             });
         let migrated = match migrated {
-            Some(providers) => save_providers_at(config, &providers).is_ok(),
+            Some(providers) => save_providers_at(config, &providers, None).is_ok(),
             None => false,
         };
         if migrated {

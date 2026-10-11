@@ -2042,10 +2042,21 @@ fn pricing_table(cached: Option<Arc<ModelsDevTable>>) -> Option<Arc<ModelsDevTab
 /// and allocation-light — it runs on the background executor between the
 /// scan and the views, never in render.
 pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDevTable>) {
-    let price = |model: Option<&str>, input, output, reasoning, cache_read, cache_write| {
+    let price = |model: Option<&str>,
+                 model_provider: Option<&str>,
+                 input,
+                 output,
+                 reasoning,
+                 cache_read,
+                 cache_write| {
         model
             .and_then(model_id_part)
-            .and_then(|id| table.and_then(|table| table.resolve_model_cost(id)))
+            .and_then(|id| table.and_then(|table| table.resolve_model_cost_for(id, model_provider)))
+            // The tier follows the request's context — input plus cache
+            // tokens, the same basis OpenCode's own cost pass uses — so a
+            // long-context session prices at the catalog's long-context
+            // rates instead of the base ones.
+            .map(|rate| rate.for_context(input + cache_read + cache_write))
             .map(|rate| {
                 rate.charge(input, rate.input)
                     + rate.charge(output + reasoning, rate.output)
@@ -2077,6 +2088,7 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
             } else {
                 price(
                     child.model.as_deref(),
+                    child.model.as_deref().and_then(model_provider_part),
                     child.input_tokens,
                     child.output_tokens,
                     child.reasoning_tokens,
@@ -2097,6 +2109,7 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
             } else {
                 let cost = price(
                     Some(&lane.model),
+                    model_provider_part(&lane.model),
                     tokens[0],
                     tokens[1],
                     tokens[2],
@@ -2115,6 +2128,7 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
         } else {
             price(
                 entry.model.as_deref(),
+                entry.model.as_deref().and_then(model_provider_part),
                 missing[0],
                 missing[1],
                 missing[2],
@@ -2234,6 +2248,14 @@ fn model_id_part(model: &str) -> Option<&str> {
         None => model,
     };
     (!id.is_empty()).then_some(id)
+}
+
+/// The provider part of the `<providerID>/<modelID>` string the server
+/// records — the catalog provider whose copy of the model should answer
+/// for it, so a vendor's own entry outranks the relays' re-listings.
+fn model_provider_part(model: &str) -> Option<&str> {
+    let (provider, _) = model.split_once('/')?;
+    (!provider.is_empty()).then_some(provider)
 }
 
 /// Aggregate the scan into the page's view models for `range`. Pure and
@@ -2708,7 +2730,7 @@ mod tests {
     /// price reads as unpriced, not free.
     #[test]
     fn pricing_prices_from_the_catalog_and_conserves_the_splits() {
-        use fintwind_client::models_dev::{ModelsDevCost, parse_catalog};
+        use fintwind_client::models_dev::parse_catalog;
         let table = parse_catalog(
             r#"{"prov": {"id": "prov", "models": {
                 "m1": {"id": "m1", "cost": {"input": 3.0, "output": 15.0}},

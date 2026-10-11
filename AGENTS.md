@@ -15,7 +15,7 @@
 - Do not create regression tests for bug fixes without a genuine gap in behavior testing.
 
 ## UI
-- 构建新的，无法本项目复用的UI时 先到gpui conponent和ely上寻找相关组件
+- 对于新 UI 首先复用 Ely 组件
 
 ## 新模型信息
 - 详见docs/model-info-sources.md

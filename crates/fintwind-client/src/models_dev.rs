@@ -38,6 +38,13 @@ const MAX_CATALOG_BYTES: usize = 64 * 1024 * 1024;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelsDevModel {
     pub id: String,
+    /// The catalog provider this copy came from — the top-level key the
+    /// vendor's own entry sits under (`anthropic`, `deepseek`, …). A
+    /// resolution that names its provider reads only this copy: relays
+    /// re-list popular models with wrong levels and prices, and one honest
+    /// vendor entry must not be outvoted by them.
+    #[serde(default)]
+    pub provider: String,
     pub name: Option<String>,
     pub context_window: Option<u64>,
     pub output_limit: Option<u64>,
@@ -53,14 +60,55 @@ pub struct ModelsDevModel {
     /// majority vote in [`ModelsDevTable::resolve_model_cost`] skips them.
     #[serde(default)]
     pub cost: Option<ModelsDevCost>,
+    /// The thinking modes the catalog describes, e.g. one `effort` entry
+    /// naming `low`/`medium`/`high`. Empty when the catalog says nothing;
+    /// resolved through the same majority vote as every other field.
+    #[serde(default)]
+    pub reasoning_options: Vec<ModelsDevReasoningOption>,
+}
+
+/// One entry of a model's `reasoning_options`, exactly as the catalog states
+/// it. The three shapes mirror the catalog's own schema; one model's list can
+/// carry several entries, which [`ModelsDevTable::resolve_thinking`]
+/// reconciles into one mode list.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ModelsDevReasoningOption {
+    /// The model exposes named effort levels, e.g. `["low", "medium", "high"]`.
+    Effort { values: Vec<String> },
+    /// The model can only switch thinking on or off.
+    Toggle,
+    /// The model exposes a token budget; `min` is the catalog's floor.
+    BudgetTokens { min: Option<u64> },
 }
 
 /// A model's official API prices, USD per million tokens, exactly as the
 /// catalog states them. A rate the catalog omits is `None` and prices
 /// nothing, which is not the same as the whole record being absent: most
-/// catalogs state input and output only.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+/// catalogs state input and output only. `tiers` carries the catalog's
+/// context-priced tiers — rates that apply once a request's context passes
+/// the tier's size; [`ModelsDevCost::for_context`] picks the tier.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ModelsDevCost {
+    #[serde(default)]
+    pub input: Option<f64>,
+    #[serde(default)]
+    pub output: Option<f64>,
+    #[serde(default)]
+    pub cache_read: Option<f64>,
+    #[serde(default)]
+    pub cache_write: Option<f64>,
+    #[serde(default)]
+    pub tiers: Vec<ModelsDevCostTier>,
+}
+
+/// One context-priced tier: the rates that apply once the request's context
+/// (input plus cache tokens) exceeds `size`, exactly as the catalog states
+/// them. A rate the tier omits falls back to the base rate.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelsDevCostTier {
+    #[serde(default)]
+    pub size: u64,
     #[serde(default)]
     pub input: Option<f64>,
     #[serde(default)]
@@ -72,9 +120,29 @@ pub struct ModelsDevCost {
 }
 
 impl ModelsDevCost {
+    /// The rates that apply once the request's context reaches `context_tokens`:
+    /// the costliest tier whose size the context passes replaces its stated
+    /// rates, and every rate the tier omits keeps the base value. A request
+    /// under every tier's size, or against a tier-less record, keeps the base
+    /// rates. The catalog's `context_over_200k` convenience field is parsed
+    /// as a 200000-sized tier, so both spellings answer here.
+    pub fn for_context(mut self, context_tokens: u64) -> ModelsDevCost {
+        let mut tiers = std::mem::take(&mut self.tiers);
+        tiers.sort_by_key(|tier| tier.size);
+        for tier in tiers {
+            if tier.size > 0 && context_tokens > tier.size {
+                self.input = tier.input.or(self.input);
+                self.output = tier.output.or(self.output);
+                self.cache_read = tier.cache_read.or(self.cache_read);
+                self.cache_write = tier.cache_write.or(self.cache_write);
+            }
+        }
+        self
+    }
+
     /// The price of `tokens` under this rate. `None` prices as free: the
     /// catalog not stating a rate is a gap in the catalog, not a charge.
-    pub fn charge(self, tokens: u64, rate: Option<f64>) -> f64 {
+    pub fn charge(&self, tokens: u64, rate: Option<f64>) -> f64 {
         // f64::EPSILON of precision is irrelevant next to a per-million
         // multiplier; the multiply is exact enough for a statistics page.
         rate.map_or(0.0, |rate| rate * tokens as f64 / 1_000_000.0)
@@ -82,7 +150,7 @@ impl ModelsDevCost {
 
     /// Whether any rate is stated at all. A record whose every field is
     /// `None` prices nothing and reads as absent.
-    pub fn is_empty(self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.input.is_none()
             && self.output.is_none()
             && self.cache_read.is_none()
@@ -192,30 +260,18 @@ impl ModelsDevTable {
         self.models
             .values()
             .flatten()
-            .any(|model| model.cost.is_some_and(|cost| !cost.is_empty()))
+            .any(|model| model.cost.as_ref().is_some_and(|cost| !cost.is_empty()))
     }
 
-    /// The official API price one model id resolves to: exact ids first,
-    /// then separator-insensitive ones, each field the majority value across
-    /// the matches — copies that state no price do not vote, the way
-    /// modalities resolve. `None` when no match states any rate.
-    pub fn resolve_model_cost(&self, id: &str) -> Option<ModelsDevCost> {
-        let group = self.models.get(&normalize_model_id(id))?;
-        let exact: Vec<&ModelsDevModel> = group.iter().filter(|model| model.id == id).collect();
-        let matches: Vec<&ModelsDevModel> = if exact.is_empty() {
-            group.iter().collect()
-        } else {
-            exact
-        };
-        let cost = mode(matches.iter().map(|model| model.cost))?;
-        (!cost.is_empty()).then_some(cost)
-    }
-
-    /// The input modalities one model id resolves to, same matching as
-    /// [`resolve_model_basics`]. Separate from it because the modality badge
-    /// runs per visible row per frame and should not pay for the fields it
-    /// does not read.
-    pub fn resolve_input_modalities(&self, id: &str) -> Vec<String> {
+    /// The catalog copies one model id resolves to: the group under its
+    /// normalized id, preferring exact spellings over separator-insensitive
+    /// ones. With `preferred` — the catalog provider id the request is
+    /// tied to (`anthropic`, `deepseek`, …) — copies from that provider
+    /// answer alone when they exist: relays re-list popular models with
+    /// invented levels and prices, and the vendor's own entry must not be
+    /// outvoted by them. Without one, every matching copy folds in by
+    /// majority.
+    fn resolve_matches(&self, id: &str, preferred: Option<&str>) -> Vec<&ModelsDevModel> {
         let Some(group) = self.models.get(&normalize_model_id(id)) else {
             return Vec::new();
         };
@@ -225,26 +281,66 @@ impl ModelsDevTable {
         } else {
             exact
         };
-        mode(matches.iter().map(|model| {
+        match preferred {
+            Some(provider) => {
+                let own: Vec<&ModelsDevModel> = matches
+                    .iter()
+                    .copied()
+                    .filter(|model| model.provider == provider)
+                    .collect();
+                if own.is_empty() { matches } else { own }
+            }
+            None => matches,
+        }
+    }
+
+    /// The official API price one model id resolves to: the preferred
+    /// provider's copy when there is one, otherwise the majority value
+    /// across every matching copy — copies that state no price do not
+    /// vote. The tiers ride along; [`ModelsDevCost::for_context`] picks
+    /// the tier that applies to one request. `None` when no match states
+    /// any rate.
+    pub fn resolve_model_cost_for(
+        &self,
+        id: &str,
+        preferred: Option<&str>,
+    ) -> Option<ModelsDevCost> {
+        let cost = mode(
+            self.resolve_matches(id, preferred)
+                .iter()
+                .map(|model| model.cost.clone()),
+        )?;
+        (!cost.is_empty()).then_some(cost)
+    }
+
+    /// [`Self::resolve_model_cost_for`] across every provider.
+    pub fn resolve_model_cost(&self, id: &str) -> Option<ModelsDevCost> {
+        self.resolve_model_cost_for(id, None)
+    }
+
+    /// The input modalities one model id resolves to, same matching as
+    /// [`resolve_model_basics_for`]. Separate from it because the modality
+    /// badge runs per visible row per frame and should not pay for the
+    /// fields it does not read.
+    pub fn resolve_input_modalities_for(&self, id: &str, preferred: Option<&str>) -> Vec<String> {
+        mode(self.resolve_matches(id, preferred).iter().map(|model| {
             (!model.input_modalities.is_empty()).then(|| model.input_modalities.clone())
         }))
         .unwrap_or_default()
     }
 
-    /// The basics every catalog copy of one model id agrees on: exact ids
-    /// first, then separator-insensitive ones; each field is the majority
-    /// value across the matches (ties take the later value in sorted-table
-    /// order, which is deterministic).
-    pub fn resolve_model_basics(&self, id: &str) -> RecordBasics {
-        let Some(group) = self.models.get(&normalize_model_id(id)) else {
-            return RecordBasics::default();
-        };
-        let exact: Vec<&ModelsDevModel> = group.iter().filter(|model| model.id == id).collect();
-        let matches: Vec<&ModelsDevModel> = if exact.is_empty() {
-            group.iter().collect()
-        } else {
-            exact
-        };
+    /// [`Self::resolve_input_modalities_for`] across every provider.
+    pub fn resolve_input_modalities(&self, id: &str) -> Vec<String> {
+        self.resolve_input_modalities_for(id, None)
+    }
+
+    /// The basics one model id resolves to: the preferred provider's copy
+    /// when there is one, otherwise exact ids first and
+    /// separator-insensitive ones after; each field is the majority value
+    /// (ties take the later value in sorted-table order, which is
+    /// deterministic).
+    pub fn resolve_model_basics_for(&self, id: &str, preferred: Option<&str>) -> RecordBasics {
+        let matches = self.resolve_matches(id, preferred);
         RecordBasics {
             name: mode(matches.iter().map(|model| model.name.clone())),
             context_window: mode(matches.iter().map(|model| model.context_window)),
@@ -260,6 +356,148 @@ impl ModelsDevTable {
             }))
             .unwrap_or_default(),
         }
+    }
+
+    /// [`Self::resolve_model_basics_for`] across every provider.
+    pub fn resolve_model_basics(&self, id: &str) -> RecordBasics {
+        self.resolve_model_basics_for(id, None)
+    }
+
+    /// The thinking modes one model id resolves to, taken from the
+    /// preferred provider's copy when there is one and from the majority
+    /// copy otherwise, then reconciled into one mode list. `None` when no
+    /// copy describes any: the model offers no thinking switch as far as
+    /// the catalog says.
+    ///
+    /// The catalog lists raw option entries and one model's list can carry
+    /// several (a relay copies another provider's entry beside its own), so
+    /// one list is voted first and then reconciled: effort levels win, a
+    /// token budget alone expands into the bounded low/medium/max presets,
+    /// and a plain toggle becomes the on/off pair. `none` effort levels and
+    /// toggle entries both surface as the `nothinking` key, the key the
+    /// protocol mapping expects for a disabled mode.
+    pub fn resolve_thinking_for(
+        &self,
+        id: &str,
+        preferred: Option<&str>,
+    ) -> Option<ModelsDevThinking> {
+        let options = mode(self.resolve_matches(id, preferred).iter().map(|model| {
+            (!model.reasoning_options.is_empty()).then(|| model.reasoning_options.clone())
+        }))?;
+        Some(reconcile_reasoning_options(&options))
+    }
+
+    /// [`Self::resolve_thinking_for`] across every provider.
+    pub fn resolve_thinking(&self, id: &str) -> Option<ModelsDevThinking> {
+        self.resolve_thinking_for(id, None)
+    }
+}
+
+/// The thinking modes one model offers: the mode keys the wire mapping
+/// consumes, each with the token budget a budget-shaped model carries.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelsDevThinking {
+    pub modes: Vec<ModelsDevThinkingMode>,
+}
+
+/// One thinking mode. `mode_key` is the catalog's effort level verbatim
+/// (`low`, `medium`, `xhigh`, …) or `nothinking`/`thinking` for the on/off
+/// shapes; `thinking_budget_tokens` is only set by the budget expansion.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModelsDevThinkingMode {
+    pub mode_key: String,
+    #[serde(default)]
+    pub thinking_budget_tokens: Option<u64>,
+}
+
+/// The budget presets the budget-shaped expansion offers, mirroring what the
+/// catalog's `min` floor leaves reachable: the floor, a middle setting, and
+/// a high one.
+const BUDGET_PRESETS: [(&str, u64); 3] = [("low", 1024), ("medium", 8192), ("max", 24576)];
+
+/// Collapse one model's `reasoning_options` list into one mode list. An
+/// effort entry dominates; a toggle entry beside it adds the off key; a
+/// token budget alone expands into bounded presets whose floors never drop
+/// below the catalog's `min`.
+pub(crate) fn reconcile_reasoning_options(
+    options: &[ModelsDevReasoningOption],
+) -> ModelsDevThinking {
+    let effort = options.iter().find_map(|option| match option {
+        ModelsDevReasoningOption::Effort { values } if !values.is_empty() => Some(values),
+        _ => None,
+    });
+    let toggle = options
+        .iter()
+        .any(|option| matches!(option, ModelsDevReasoningOption::Toggle));
+    let budget = options.iter().find_map(|option| match option {
+        ModelsDevReasoningOption::BudgetTokens { min } => Some(min.unwrap_or(0)),
+        _ => None,
+    });
+
+    let mut modes: Vec<ModelsDevThinkingMode> = Vec::new();
+    let mut push = |mode_key: &str, budget: Option<u64>| {
+        if !modes.iter().any(|mode| mode.mode_key == mode_key) {
+            modes.push(ModelsDevThinkingMode {
+                mode_key: mode_key.to_owned(),
+                thinking_budget_tokens: budget,
+            });
+        }
+    };
+
+    if let Some(values) = effort {
+        if toggle {
+            push("nothinking", None);
+        }
+        for value in values {
+            // The catalog spells the disabled level `none`; the wire mapping
+            // keys the disabled mode `nothinking`.
+            let key = if value == "none" { "nothinking" } else { value };
+            push(key, None);
+        }
+    } else if let Some(min) = budget {
+        // A budget the caller can set is a switch they can also leave off:
+        // the budget shapes (Anthropic budgetTokens, Gemini thinkingBudget)
+        // all accept a disabled request, so the off key rides along even
+        // when the catalog lists the budget alone.
+        push("nothinking", None);
+        for (key, preset) in BUDGET_PRESETS {
+            push(key, Some(preset.max(min)));
+        }
+    } else if toggle {
+        push("nothinking", None);
+        push("thinking", None);
+    } else {
+        return ModelsDevThinking::default();
+    }
+    ModelsDevThinking { modes }
+}
+
+impl ModelsDevThinking {
+    /// The mode a fresh session starts on. See [`default_mode_of`].
+    pub fn default_mode(&self) -> Option<&str> {
+        default_mode_of(&self.modes)
+    }
+}
+
+/// The default mode of a mode list, derived heuristically — the catalog
+/// does not name one. `medium` wins when offered; effort lists without it
+/// take the upper-middle level so a thinking model still thinks by
+/// default; the on/off shapes default to on; the budget presets default to
+/// their middle setting.
+pub(crate) fn default_mode_of(modes: &[ModelsDevThinkingMode]) -> Option<&str> {
+    let keys: Vec<&str> = modes.iter().map(|mode| mode.mode_key.as_str()).collect();
+    if keys.contains(&"medium") {
+        return Some("medium");
+    }
+    let settings: Vec<&str> = keys
+        .iter()
+        .copied()
+        .filter(|key| *key != "nothinking")
+        .collect();
+    match settings.len() {
+        0 => None,
+        1 => Some(settings[0]),
+        _ => Some(settings[settings.len() / 2]),
     }
 }
 
@@ -284,6 +522,10 @@ pub fn merge_api_models(
     api_models: &[crate::custom_providers::ProviderApiModel],
     table: Option<&ModelsDevTable>,
 ) -> ModelsDevApplyOutcome {
+    // The provider's own slug names the catalog entry whose copies answer
+    // for its models; a slug outside the catalog folds back into the
+    // cross-provider majority.
+    let preferred = Some(provider.slug.as_str());
     let mut outcome = ModelsDevApplyOutcome::default();
     let mut seen: Vec<String> = Vec::with_capacity(api_models.len());
     for model in &mut provider.models {
@@ -296,7 +538,7 @@ pub fn merge_api_models(
         {
             seen.push(api_model.id.clone());
             let basics = table
-                .map(|table| table.resolve_model_basics(&model.id))
+                .map(|table| table.resolve_model_basics_for(&model.id, preferred))
                 .unwrap_or_default();
             let mut touched = false;
             if model.context_window.is_none()
@@ -331,7 +573,7 @@ pub fn merge_api_models(
         }
         seen.push(api_model.id.clone());
         let basics = table
-            .map(|table| table.resolve_model_basics(&api_model.id))
+            .map(|table| table.resolve_model_basics_for(&api_model.id, preferred))
             .unwrap_or_default();
         provider.models.push(CustomProviderModel {
             id: api_model.id.clone(),
@@ -521,12 +763,12 @@ pub fn parse_catalog(body: &str) -> anyhow::Result<ModelsDevTable> {
         .map(|since_epoch| since_epoch.as_millis() as u64)
         .unwrap_or_default();
     let mut models: BTreeMap<String, Vec<ModelsDevModel>> = BTreeMap::new();
-    for entry in entries.values() {
+    for (provider_id, entry) in entries {
         let Some(specs) = entry.get("models").and_then(Value::as_object) else {
             continue;
         };
         for (id, spec) in specs {
-            if let Some(record) = parse_model(id, spec) {
+            if let Some(record) = parse_model(id, spec, provider_id) {
                 models
                     .entry(normalize_model_id(&record.id))
                     .or_default()
@@ -566,7 +808,7 @@ pub fn parse_providers(body: &str) -> anyhow::Result<ModelsDevProviders> {
         };
         let models: Vec<ModelsDevModel> = models
             .iter()
-            .filter_map(|(model_id, spec)| parse_model(model_id, spec))
+            .filter_map(|(model_id, spec)| parse_model(model_id, spec, &id))
             .collect();
         if models.is_empty() {
             continue;
@@ -612,7 +854,7 @@ pub fn parse_providers(body: &str) -> anyhow::Result<ModelsDevProviders> {
     })
 }
 
-fn parse_model(id: &str, spec: &Value) -> Option<ModelsDevModel> {
+fn parse_model(id: &str, spec: &Value, provider_id: &str) -> Option<ModelsDevModel> {
     let spec = spec.as_object()?;
     let limit = |key: &str| {
         spec.get("limit")
@@ -633,25 +875,73 @@ fn parse_model(id: &str, spec: &Value) -> Option<ModelsDevModel> {
     };
     let cost = spec.get("cost").and_then(Value::as_object).map(|cost| {
         let rate = |key: &str| cost.get(key).and_then(Value::as_f64);
+        let tier = |value: &Value| {
+            let rate = |key: &str| value.get(key).and_then(Value::as_f64);
+            ModelsDevCostTier {
+                // The catalog spells the threshold `tier.size`; the request
+                // context that passes it prices at this tier's rates.
+                size: value
+                    .get("tier")
+                    .and_then(|tier| tier.get("size"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                input: rate("input"),
+                output: rate("output"),
+                cache_read: rate("cache_read"),
+                cache_write: rate("cache_write"),
+            }
+        };
+        let mut tiers: Vec<ModelsDevCostTier> = cost
+            .get("tiers")
+            .and_then(Value::as_array)
+            .map(|list| list.iter().map(tier).collect())
+            .unwrap_or_default();
+        // The catalog also spells the common surcharge as a flat field; fold
+        // it in so both spellings price the same long-context request.
+        if let Some(over_200k) = cost.get("context_over_200k").and_then(Value::as_object) {
+            let rate = |key: &str| over_200k.get(key).and_then(Value::as_f64);
+            let spelled = !tiers.iter().any(|tier| tier.size == 200_000);
+            if spelled && over_200k.values().any(|value| value.is_number()) {
+                tiers.push(ModelsDevCostTier {
+                    size: 200_000,
+                    input: rate("input"),
+                    output: rate("output"),
+                    cache_read: rate("cache_read"),
+                    cache_write: rate("cache_write"),
+                });
+            }
+        }
         ModelsDevCost {
             input: rate("input"),
             output: rate("output"),
             cache_read: rate("cache_read"),
             cache_write: rate("cache_write"),
+            tiers,
         }
     });
+    let reasoning_options = spec
+        .get("reasoning_options")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|option| serde_json::from_value(option.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
     Some(ModelsDevModel {
         id: spec
             .get("id")
             .and_then(Value::as_str)
             .unwrap_or(id)
             .to_owned(),
+        provider: provider_id.to_owned(),
         name: string_field(spec, "name"),
         context_window: limit("context"),
         output_limit: limit("output"),
         input_modalities: modalities("input"),
         output_modalities: modalities("output"),
         cost,
+        reasoning_options,
     })
 }
 
@@ -858,6 +1148,7 @@ mod tests {
                 output: Some(15.0),
                 cache_read: Some(0.3),
                 cache_write: None,
+                tiers: Vec::new(),
             })
         );
         // Nothing anywhere states a price: `None`, not a record of zeros.
@@ -892,12 +1183,119 @@ mod tests {
             output: Some(15.0),
             cache_read: Some(0.3),
             cache_write: None,
+            tiers: Vec::new(),
         };
         assert_eq!(cost.charge(1_000_000, cost.input), 3.0);
         assert_eq!(cost.charge(500_000, cost.output), 7.5);
         assert_eq!(cost.charge(2_000_000, cost.cache_read), 0.6);
         // A rate the catalog omits prices nothing rather than panicking.
         assert_eq!(cost.charge(1_000_000, cost.cache_write), 0.0);
+    }
+
+    #[test]
+    fn context_tiers_price_long_requests_at_the_tiered_rates() {
+        let document = r#"{
+            "deepinfra": {"id": "deepinfra", "models": {
+                "m": {"id": "m", "cost": {
+                    "input": 5.0, "output": 15.0, "cache_read": 1.0,
+                    "tiers": [
+                        {"input": 6.25, "output": 18.5, "cache_read": 1.25,
+                         "tier": {"type": "context", "size": 32000}},
+                        {"input": 8.0, "output": 24.0, "tier": {"type": "context", "size": 128000}}
+                    ]
+                }}
+            }},
+            "p": {"id": "p", "models": {
+                "gem": {"id": "gem", "cost": {
+                    "input": 2.0, "output": 12.0,
+                    "context_over_200k": {"input": 4.0, "output": 18.0}
+                }}
+            }}
+        }"#;
+        let table = parse_catalog(document).unwrap();
+        let rate = table.resolve_model_cost("m").unwrap();
+
+        // Under every tier: the base rates.
+        let base = rate.clone().for_context(30_000);
+        assert_eq!(base.input, Some(5.0));
+        assert_eq!(base.output, Some(15.0));
+        // Past the first tier only: the first tier's rates, with the second
+        // still ahead.
+        let mid = rate.clone().for_context(32_001);
+        assert_eq!(mid.input, Some(6.25));
+        assert_eq!(mid.output, Some(18.5));
+        assert_eq!(mid.cache_read, Some(1.25));
+        // Past both tiers: the costliest tier's rates. The 128000 tier omits
+        // `cache_read`, so the earlier tier's rate stays.
+        let top = rate.clone().for_context(200_000);
+        assert_eq!(top.input, Some(8.0));
+        assert_eq!(top.output, Some(24.0));
+        assert_eq!(top.cache_read, Some(1.25));
+        // The convenience field prices the same as a spelled tier.
+        let gem = table
+            .resolve_model_cost("gem")
+            .unwrap()
+            .for_context(300_000);
+        assert_eq!(gem.input, Some(4.0));
+        assert_eq!(gem.output, Some(18.0));
+        // A request under the tier keeps the base rates.
+        let small = table.resolve_model_cost("gem").unwrap().for_context(100);
+        assert_eq!(small.input, Some(2.0));
+        assert_eq!(small.output, Some(12.0));
+    }
+
+    #[test]
+    fn reasoning_options_resolve_into_modes_and_defaults() {
+        let document = r#"{
+            "gpt": {"id": "gpt", "models": {
+                "m": {"id": "m", "reasoning_options": [
+                    {"type": "toggle"},
+                    {"type": "effort", "values": ["none", "low", "medium", "high"]}
+                ]}
+            }},
+            "anthropic": {"id": "anthropic", "models": {
+                "b": {"id": "b", "reasoning_options": [{"type": "budget_tokens", "min": 2048}]}
+            }},
+            "toggle-only": {"id": "toggle-only", "models": {
+                "t": {"id": "t", "reasoning_options": [{"type": "toggle"}]}
+            }}
+        }"#;
+        let table = parse_catalog(document).unwrap();
+
+        // The effort list dominates; the toggle beside it adds the off key;
+        // the catalog's `none` surfaces as the off key.
+        let m = table.resolve_thinking("m").unwrap();
+        let keys: Vec<&str> = m.modes.iter().map(|mode| mode.mode_key.as_str()).collect();
+        assert_eq!(keys, vec!["nothinking", "low", "medium", "high"]);
+        assert_eq!(m.default_mode(), Some("medium"));
+
+        // A budget expands into the off key plus the bounded presets, each
+        // raised above the catalog's floor, defaulting to the middle one.
+        let b = table.resolve_thinking("b").unwrap();
+        assert_eq!(b.modes[0].mode_key, "nothinking");
+        assert_eq!(b.modes[1].mode_key, "low");
+        assert_eq!(b.modes[1].thinking_budget_tokens, Some(2048));
+        assert_eq!(b.modes[3].mode_key, "max");
+        assert_eq!(b.default_mode(), Some("medium"));
+
+        // The plain toggle is the on/off pair, defaulting to on.
+        let t = table.resolve_thinking("t").unwrap();
+        assert_eq!(
+            t.modes
+                .iter()
+                .map(|mode| mode.mode_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nothinking", "thinking"]
+        );
+        assert_eq!(t.default_mode(), Some("thinking"));
+
+        // A model the catalog says nothing about offers no modes at all.
+        assert_eq!(table.resolve_thinking("unknown"), None);
+        let silent = parse_catalog(
+            r#"{"a": {"id": "a", "models": {"m": {"id": "m", "reasoning_options": []}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(silent.resolve_thinking("m"), None);
     }
 
     #[test]
@@ -968,6 +1366,56 @@ mod tests {
         let basics = table.resolve_model_basics("Test-Model");
         assert_eq!(basics.name.as_deref(), Some("Exact Spelling"));
         assert_eq!(basics.context_window, Some(1_000));
+    }
+
+    #[test]
+    fn the_preferred_provider_copy_answers_alone_and_the_vote_falls_back() {
+        // Two relays re-list a vendor's model with invented effort levels;
+        // their majority would outvote the vendor's own entry.
+        let document = r#"{
+            "vendor": {"id": "vendor", "models": {
+                "m": {"id": "m", "reasoning_options": [{"type": "toggle"}],
+                      "cost": {"input": 1.0, "output": 2.0}}
+            }},
+            "relay-a": {"id": "relay-a", "models": {
+                "m": {"id": "m", "reasoning_options": [
+                    {"type": "effort", "values": ["low", "medium", "xhigh"]}],
+                    "cost": {"input": 9.0, "output": 9.0}}
+            }},
+            "relay-b": {"id": "relay-b", "models": {
+                "m": {"id": "m", "reasoning_options": [
+                    {"type": "effort", "values": ["low", "medium", "xhigh"]}]
+                }
+            }},
+            "unrelated": {"id": "unrelated", "models": {
+                "other": {"id": "other", "reasoning_options": [{"type": "toggle"}]}}
+            }
+        }"#;
+        let table = parse_catalog(document).unwrap();
+
+        // Naming the vendor reads the vendor's copy alone: the plain
+        // toggle, not the relays' invented effort levels.
+        let own = table.resolve_thinking_for("m", Some("vendor")).unwrap();
+        assert_eq!(
+            own.modes
+                .iter()
+                .map(|mode| mode.mode_key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nothinking", "thinking"]
+        );
+        // The vendor's price survives the relays' majority too.
+        let cost = table.resolve_model_cost_for("m", Some("vendor")).unwrap();
+        assert_eq!(cost.input, Some(1.0));
+
+        // A provider with no copy of the id folds back into the majority:
+        // the relays' effort levels win, as they would without a preference.
+        let fallback = table.resolve_thinking_for("m", Some("ghost")).unwrap();
+        assert!(
+            fallback.modes.iter().any(|mode| mode.mode_key == "xhigh"),
+            "the relay levels answer when no preferred copy exists"
+        );
+        // So does no preference at all.
+        assert!(table.resolve_thinking("m").unwrap().modes.len() > 2);
     }
 
     #[test]
@@ -1043,5 +1491,95 @@ mod tests {
         assert_eq!(outcome.added, 0);
         assert_eq!(outcome.filled, 1, "the API's display name still fills in");
         assert_eq!(roster.models[0].name.as_deref(), Some("DeepSeek Chat"));
+    }
+
+    /// A live check against the real catalog, skipped by default. It guards
+    /// the wire shapes this parser must survive — the `reasoning_options`
+    /// tagged entries and the `cost.tiers` objects above all — against the
+    /// document as it is actually served today.
+    #[test]
+    #[ignore = "network"]
+    fn live_catalog_parses_and_resolves() {
+        let (status, body) = http_get(MODELS_DEV_CATALOG_URL).unwrap();
+        assert_eq!(status, 200);
+
+        // The shapes the parser maps exist as served: tiered costs carry
+        // their `tier.size` thresholds, and the option lists are tagged.
+        let document: Value = serde_json::from_str(&body).unwrap();
+        let mut tiered = 0;
+        let mut described = 0;
+        for entry in document.as_object().unwrap().values() {
+            let Some(models) = entry.get("models").and_then(Value::as_object) else {
+                continue;
+            };
+            for spec in models.values() {
+                let Some(spec) = spec.as_object() else {
+                    continue;
+                };
+                if spec.get("reasoning_options").is_some_and(Value::is_array) {
+                    described += 1;
+                }
+                if let Some(tiers) = spec.get("cost").and_then(|cost| cost.get("tiers")) {
+                    if tiers.as_array().is_some_and(|tiers| {
+                        tiers.iter().any(|tier| {
+                            tier.get("tier").and_then(|tier| tier.get("size")).is_some()
+                        })
+                    }) {
+                        tiered += 1;
+                    }
+                }
+            }
+        }
+        assert!(tiered > 100, "{tiered} models carry tiers");
+        assert!(described > 1000, "{described} models describe options");
+
+        // The whole document parses, and each model's own vendor entry —
+        // not the relays' re-listings — answers for it. Every level the
+        // resolution offers must be one the vendor states.
+        let table = parse_catalog(&body).unwrap();
+        assert!(table.has_any_cost());
+        for (provider, id) in [
+            ("openai", "gpt-5.5"),
+            ("anthropic", "claude-opus-4-7"),
+            ("alibaba", "qwen3.6-27b"),
+            ("xai", "grok-4.7"),
+        ] {
+            let thinking = table
+                .resolve_thinking_for(id, Some(provider))
+                .unwrap_or_else(|| panic!("{provider}/{id} should carry reasoning_options"));
+            assert!(
+                thinking.default_mode().is_some(),
+                "{provider}/{id}: a default mode should derive"
+            );
+            let vendor_levels: Vec<String> = document[provider]["models"][id]["reasoning_options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|option| option["values"].as_array())
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(|value| {
+                    if value == "none" {
+                        "nothinking".to_owned()
+                    } else {
+                        value.to_owned()
+                    }
+                })
+                // The reconciliation's own vocabulary: the on/off keys and
+                // the bounded presets a budget entry expands into.
+                .chain(
+                    ["nothinking", "thinking", "low", "medium", "max"]
+                        .iter()
+                        .map(|key| key.to_string()),
+                )
+                .collect();
+            for mode in &thinking.modes {
+                assert!(
+                    vendor_levels.contains(&mode.mode_key),
+                    "{provider}/{id}: level {} is not the vendor's",
+                    mode.mode_key
+                );
+            }
+        }
     }
 }

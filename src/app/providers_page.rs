@@ -285,10 +285,13 @@ impl Fintwind {
     /// Commit the working roster straight into OpenCode's configuration, then
     /// re-probe so the composer's picker picks up the new catalog. OpenCode
     /// watches the file and hot-reloads, so running serves pick the change up
-    /// without a restart.
+    /// without a restart. Thinking variants come from the models.dev table
+    /// the session holds; a commit before any fetch keeps raw variants only.
     pub(super) fn commit_custom_providers(&mut self, cx: &mut Context<Self>) {
-        if let Err(error) = fintwind_client::opencode_config::save_providers(&self.providers_store)
-        {
+        if let Err(error) = fintwind_client::opencode_config::save_providers(
+            &self.providers_store,
+            self.models_dev_table.as_deref(),
+        ) {
             self.show_toast(tr!("providers.sync_failed", error = error.to_string()));
         }
         self.refresh_provider_detection();

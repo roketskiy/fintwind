@@ -2767,7 +2767,7 @@ impl Fintwind {
                                             this.providers_form_models.remove(index);
                                             // A dropped draft's field may hold focus; let
                                             // it go instead of parking it nowhere.
-                                            window.blur();
+                                            window.blur(cx);
                                             cx.notify();
                                         }
                                     },

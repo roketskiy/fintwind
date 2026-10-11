@@ -188,6 +188,8 @@ pub fn try_run_browser_poc(args: &[String]) -> Result<()> {
             // The same minimal startup the application performs, minus every
             // persistent key binding: this host owns no shortcuts.
             assets::register_fonts(cx).expect("failed to register bundled fonts");
+            // Kit globals must exist before the theme projects onto them.
+            gpui_kit::init(cx);
             crate::theme::init(cx);
             crate::platform::init_reduce_motion(cx);
             crate::input::init(cx);

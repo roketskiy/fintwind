@@ -49,12 +49,22 @@ base64 = "0.22"
 chrono = "0.4"
 crossbeam-channel = "0.5"
 dirs = "6.0"
-# The egoist/zed fork is upstream main plus PR #61945 (layered scene
-# rendering), which lets GPUI composite menus and tooltips above native child
-# views — the browser surface's WebView2. Drop back to upstream once the PR
-# merges.
-gpui = { git = "https://github.com/egoist/zed", branch = "waku-webview" }
-gpui_platform = { git = "https://github.com/egoist/zed", branch = "waku-webview", features = [
+# The GPUI crates.io snapshot family (`gpui-pre` = zed@279fe07), shared with
+# gpui-kit 0.7.1. The `vendor/gpui-pre` copies are patched with zed PR #61945
+# (layered scene rendering) so GPUI menus, tooltips and popovers keep drawing
+# above the browser surface's WebView2 composition visual — the snapshot has no
+# such API, and the old git fork's types are incompatible with gpui-kit.
+gpui = { package = "gpui-pre", version = "=0.3.8" }
+# Longbridge's component library. Re-exports the same gpui-pre types, so no
+# adapter layer is needed between Fintwind code and kit components.
+gpui-kit = "0.7.1"
+# Ely's components, pinned to the main-branch revision reviewed at adoption.
+# It shares this project's gpui-pre =0.3.8 / gpui-pre-platform =0.3.8, so the
+# `[patch.crates-io]` overlay below applies to its GPUI too — one type system,
+# no second gpui. `runtime_shaders` (its default) only reaches the macOS
+# platform backend, so it stays off.
+ely-gpui-component = { git = "https://git.zacharyzhang.com/ZacharyZhang-NY/Ely-GPUI-Components", rev = "bd014707fd47cd9d0651a9af8c1db6033718a6ea", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.8", features = [
     "font-kit",
 ] }
 parking_lot = "0.12"
@@ -95,7 +105,7 @@ nucleo-matcher = "0.3.1"
 # happens instead of coalescing into the display link's next one — a panel
 # resize drew once per mouse-move event rather than once per displayed frame.
 [dev-dependencies]
-gpui = { git = "https://github.com/egoist/zed", branch = "waku-webview", features = [
+gpui = { package = "gpui-pre", version = "=0.3.8", features = [
     "test-support",
 ] }
 
@@ -109,21 +119,25 @@ raw-window-handle = "0.6"
 # *composition* controller, which renders into a DirectComposition visual
 # instead of a child HWND — see `browser::host` for why, and note that only
 # the environment can create one, so it cannot be reached from wry's
-# `WebViewExtWindows` after the fact.
-webview2-com = "0.38"
-# Same version GPUI is built against, so the portal's `IDCompositionVisual`
+# `WebViewExtWindows` after the fact. 0.39 is the first release built against
+# `windows` 0.62, matching gpui-pre 0.3.8, so the portal's `IDCompositionVisual`
+# hands to `SetRootVisualTarget` with one shared type system.
+webview2-com = "0.39"
+# Same version gpui-pre is built against, so the portal's `IDCompositionVisual`
 # hands straight to `SetRootVisualTarget` with no ABI bridging. `windows-sys`
 # stays for the plain Win32 calls that do not need COM.
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_DirectComposition",
     "Win32_System_Com",
     "Win32_UI_WindowsAndMessaging",
 ] }
-windows-core = "0.61"
+windows-core = "0.62"
 # GPUI does not read the Windows animation preference, so Fintwind asks
-# `SystemParametersInfoW` itself. Same major version as the one already in the
-# graph through GPUI.
+# `SystemParametersInfoW` itself. `windows-sys` numbers its releases
+# independently of `windows`; 0.61 is the newest line at the time of this
+# migration and only carries plain Win32 FFI, so it shares nothing with the
+# COM types above.
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_UI_Input_KeyboardAndMouse",
@@ -147,3 +161,11 @@ opt-level = 2
 # is the crates.io release plus the future-incompatibility fix only.
 [patch.crates-io]
 block = { git = "https://github.com/Dicklesworthstone/rust-block", rev = "b39ae859d1ee8e8cb5eef6a516471f1578d26b96" }
+# The gpui-pre 0.3.8 snapshot plus zed PR #61945 (layered scene rendering:
+# `enable_scene_overlay`, `create_native_surface`, `PlatformNativeSurface`,
+# `Scene::is_empty`, the DirectComposition portal visual tree). The published
+# snapshot does not carry the overlay API, and Fintwind's browser surface
+# depends on it. gpui-pre-windows must be patched together with gpui-pre:
+# the Windows renderer hosts the overlay swap chain and the portal.
+gpui-pre = { path = "vendor/gpui-pre/gpui-pre-0.3.8" }
+gpui-pre-windows = { path = "vendor/gpui-pre/gpui-pre-windows-0.3.8" }

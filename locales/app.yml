@@ -2886,5 +2886,11 @@ tabs.close:
   en: Close tab
 tabs.waiting:
   en: Waiting for your input
+tabs.permission:
+  en: Awaiting approval
+tabs.question:
+  en: Awaiting answer
+tabs.failed:
+  en: Session failed
 tabs.unread:
   en: New activity

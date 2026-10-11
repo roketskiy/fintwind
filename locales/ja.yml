@@ -1493,4 +1493,7 @@ usage_page.updated_at: "%{time} 更新"
 tabs.new_session: 新規セッションタブ
 tabs.close: タブを閉じる
 tabs.waiting: 入力を待っています
+tabs.permission: 承認待ち
+tabs.question: 回答待ち
+tabs.failed: セッションエラー
 tabs.unread: 新しいアクティビティ

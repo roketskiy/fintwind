@@ -454,6 +454,7 @@ session.reveal_project_folder: ファイルマネージャーでプロジェク�
 session.reveal_project_folder_unavailable: この画面で開けるフォルダはありません
 
 help.changelog: 更新履歴
+help.performance: パフォーマンス
 help.changelog_empty: 更新履歴はまだありません。
 help.dismiss: 閉じる
 help.menu_tooltip: ヘルプ
@@ -1498,3 +1499,13 @@ tabs.permission: 承認待ち
 tabs.question: 回答待ち
 tabs.failed: セッションエラー
 tabs.unread: 新しいアクティビティ
+
+perf.window_title: パフォーマンス
+perf.col_process: プロセス
+perf.col_cpu: CPU
+perf.col_private: 専用メモリ
+perf.col_working_set: ワーキングセット
+perf.col_io_read: I/O 累計読み取り
+perf.col_io_write: I/O 累計書き込み
+perf.total: 合計
+perf.sample_failed: "サンプリングに失敗しました: %{error}"

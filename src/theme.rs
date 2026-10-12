@@ -590,6 +590,73 @@ pub fn sync_gpui_kit_theme(cx: &mut App) {
     });
 }
 
+/// Project the resolved Fintwind palette onto Ely's global theme, so Ely
+/// components render in Fintwind's scheme instead of the library defaults
+/// (the performance viewer consumes the projected border, text, hover, and
+/// selection colors through Ely's own primitives).
+///
+/// Colors travel through Ely's official custom-palette channel
+/// (`Theme::set_palette`) for the mode that is showing, so a later Ely mode
+/// switch keeps resolving to the projected palette instead of the library
+/// default. `set_palette` starts a color fade; the `set_mode_now` right
+/// after it advances Ely's transition counter, which cancels that fade on
+/// its first tick and lands the colors immediately — no visible animation,
+/// so reduce-motion is respected and nothing refreshes repeatedly. Font
+/// tokens are not colors and go through `Theme::update`, which is their
+/// documented channel.
+///
+/// One-way only: Fintwind's `Theme` stays the single source of truth. Same
+/// rhythm as [`sync_gpui_kit_theme`]: startup and appearance changes, never
+/// from render.
+pub fn sync_ely_theme(cx: &mut App) {
+    use ely_gpui_component::theme::{
+        ActiveTheme as _, Mode as ElyMode, Palette as ElyPalette, Theme as ElyTheme,
+    };
+
+    // Ely registers its theme global in its own init; the browser PoC host
+    // runs the Fintwind theme startup without that init, and there is
+    // nothing to project onto there.
+    if !cx.has_global::<ElyTheme>() {
+        return;
+    }
+    let theme = Theme::current(cx);
+    let mode = if theme.is_dark {
+        ElyMode::Dark
+    } else {
+        ElyMode::Light
+    };
+    // Project onto the corresponding Ely baseline, never onto a palette
+    // captured earlier: each sync starts from Ely's own mode palette so no
+    // stale custom value can leak through a scheme change.
+    let mut palette = match mode {
+        ElyMode::Light => ElyPalette::light(false),
+        ElyMode::Dark => ElyPalette::dark(false),
+    };
+    let colors = &mut palette;
+    colors.bg = theme.canvas;
+    colors.surface = theme.raised;
+    colors.hover = theme.overlay;
+    colors.active = theme.overlay_strong;
+    colors.border = theme.border_strong;
+    colors.fg = theme.text;
+    colors.fg_muted = theme.text_secondary;
+    colors.fg_subtle = theme.text_tertiary;
+    colors.accent = theme.accent;
+    colors.focus = theme.accent_focus;
+    colors.selection = theme.selection;
+    if cx.theme().palette() != palette {
+        ElyTheme::set_palette(mode, Some(palette), cx);
+    }
+    // Advances Ely's transition counter: cancels the fade `set_palette` may
+    // have started and lands the colors on the custom palette at once.
+    ElyTheme::set_mode_now(mode, cx);
+    let (ui_font, mono_font) = (ui_font_family(), code_font_family());
+    ElyTheme::update(cx, |ely| {
+        ely.font_family = ui_font;
+        ely.mono_family = mono_font;
+    });
+}
+
 /// Resolve and publish the startup palette, before any window exists.
 pub fn init(cx: &mut App) {
     let system_appearance = cx.window_appearance();
@@ -600,6 +667,7 @@ pub fn init(cx: &mut App) {
     };
     set_active_theme(theme, cx);
     sync_gpui_kit_theme(cx);
+    sync_ely_theme(cx);
 }
 
 pub fn apply_theme_preference(
@@ -613,5 +681,6 @@ pub fn apply_theme_preference(
     set_active_theme(Theme::for_scheme(scheme, is_dark), cx);
     crate::platform::configure_sidebar_material(window, is_dark);
     sync_gpui_kit_theme(cx);
+    sync_ely_theme(cx);
     window.refresh();
 }

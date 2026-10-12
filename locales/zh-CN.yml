@@ -442,6 +442,7 @@ session.new_task: 新任务
 session.reveal_project_folder: 在文件管理器中显示项目文件夹
 session.reveal_project_folder_unavailable: 当前页面没有可打开的文件夹
 help.changelog: 更新日志
+help.performance: 性能开销
 help.changelog_empty: 暂无更新日志。
 help.dismiss: 关闭
 help.menu_tooltip: 帮助
@@ -1447,3 +1448,13 @@ tabs.permission: 待授权
 tabs.question: 待回答
 tabs.failed: 会话出错
 tabs.unread: 有新动态
+
+perf.window_title: 性能开销
+perf.col_process: 进程
+perf.col_cpu: CPU
+perf.col_private: 专用内存
+perf.col_working_set: 工作集
+perf.col_io_read: I/O 累计读取
+perf.col_io_write: I/O 累计写入
+perf.total: 合计
+perf.sample_failed: 采样失败：%{error}

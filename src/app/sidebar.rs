@@ -346,12 +346,18 @@ impl Fintwind {
             &self.help_menu,
             MenuAlign::AboveLeft,
             move |_| {
-                let weak = weak.clone();
+                let changelog_weak = weak.clone();
+                let perf_weak = weak.clone();
                 vec![
                     MenuItem::new(tr!("help.changelog"), move |window, cx| {
-                        let _ = weak.update(cx, |fintwind, cx| fintwind.open_changelog(window, cx));
+                        let _ = changelog_weak
+                            .update(cx, |fintwind, cx| fintwind.open_changelog(window, cx));
                     })
                     .icon("icons/history.svg"),
+                    MenuItem::new(tr!("help.performance"), move |_, cx| {
+                        let _ = perf_weak.update(cx, |fintwind, cx| fintwind.open_perf_monitor(cx));
+                    })
+                    .icon("icons/gauge.svg"),
                     MenuItem::new(tr!("help.submit_issue"), |_, cx| {
                         cx.open_url("https://github.com/roketskiy/fintwind/issues/new");
                     })

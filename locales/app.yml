@@ -888,6 +888,8 @@ rail.source_control:
 
 help.changelog:
   en: Changelog
+help.performance:
+  en: Performance Overhead
 help.changelog_empty:
   en: No release notes yet.
 help.dismiss:
@@ -2896,3 +2898,22 @@ tabs.failed:
   en: Session failed
 tabs.unread:
   en: New activity
+
+perf.window_title:
+  en: Performance Overhead
+perf.col_process:
+  en: Process
+perf.col_cpu:
+  en: CPU
+perf.col_private:
+  en: Private memory
+perf.col_working_set:
+  en: Working set
+perf.col_io_read:
+  en: Total I/O read
+perf.col_io_write:
+  en: Total I/O write
+perf.total:
+  en: Total
+perf.sample_failed:
+  en: "Sampling failed: %{error}"

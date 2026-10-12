@@ -11,13 +11,13 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local, Utc};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, Bounds, ClipboardEntry, ClipboardItem, Context, Div,
-    Entity, ExternalPaths, FocusHandle, Focusable, FontWeight, Hsla, IntoElement, KeyDownEvent,
-    ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, NavigationDirection, ObjectFit, PathPromptOptions, Pixels, Render, ScrollHandle,
-    SharedString, Stateful, StyleRefinement, TextRun, WeakEntity, Window, WindowBounds, canvas,
-    div, ease_out_quint, fill, font, img, linear_color_stop, linear_gradient, list, point,
-    prelude::*, pulsating_between, px, rgb,
+    Animation, AnimationExt, AnyElement, AnyWindowHandle, App, Bounds, ClipboardEntry,
+    ClipboardItem, Context, Div, Entity, ExternalPaths, FocusHandle, Focusable, FontWeight, Hsla,
+    IntoElement, KeyDownEvent, ListAlignment, ListOffset, ListState, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, NavigationDirection, ObjectFit, PathPromptOptions, Pixels,
+    Render, ScrollHandle, SharedString, Stateful, StyleRefinement, TextRun, WeakEntity, Window,
+    WindowBounds, canvas, div, ease_out_quint, fill, font, img, linear_color_stop, linear_gradient,
+    list, point, prelude::*, pulsating_between, px, rgb,
 };
 use uuid::Uuid;
 
@@ -1344,6 +1344,9 @@ pub struct Fintwind {
     help_menu: ContextMenuHandle,
     /// Window-modal changelog card, opened from the help menu.
     changelog: Option<help::ChangelogCard>,
+    /// The "Performance Overhead" tool window, when open. The help menu
+    /// re-activates it instead of stacking a second one.
+    perf_window: Option<AnyWindowHandle>,
     onboarding_add_project_focus: FocusHandle,
     onboarding_projectless_focus: FocusHandle,
     sidebar_add_project_focus: FocusHandle,
@@ -3451,6 +3454,7 @@ impl Fintwind {
                 update_button_focus: cx.focus_handle(),
                 help_menu: ContextMenuHandle::new(cx),
                 changelog: None,
+                perf_window: None,
                 onboarding_add_project_focus,
                 onboarding_projectless_focus,
                 sidebar_add_project_focus,
@@ -3833,6 +3837,17 @@ impl Fintwind {
         // that there is an entity to notify and deliberately not before the
         // first frame.
         entity.update(cx, |this, cx| {
+            // The Performance Overhead window belongs to this window's app
+            // view: when the main window goes away, its sampler must not
+            // outlive the workspace or the daemon it reports on. Only this
+            // instance's own handle is closed; no window is looked up by
+            // name and no other window is touched.
+            cx.on_release(|fintwind: &mut Fintwind, cx: &mut App| {
+                if let Some(handle) = fintwind.perf_window.take() {
+                    let _ = handle.update(cx, |_, window, _| window.remove_window());
+                }
+            })
+            .detach();
             if let Some(session_id) = this.state.selected_session {
                 this.restore_background_work(session_id);
                 if this

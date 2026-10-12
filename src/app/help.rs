@@ -70,6 +70,27 @@ pub(super) struct ChangelogCard {
 }
 
 impl Fintwind {
+    /// Open the "Performance Overhead" tool window, or raise the one that is
+    /// already open. The window owns its own sampling loop, so the app only
+    /// keeps the handle for re-activation.
+    pub(super) fn open_perf_monitor(&mut self, cx: &mut Context<Self>) {
+        if let Some(handle) = self.perf_window.as_ref() {
+            let raised = handle
+                .update(cx, |_, window, cx| {
+                    window.activate_window();
+                    cx.activate(true);
+                })
+                .is_ok();
+            if raised {
+                return;
+            }
+        }
+        match crate::perf_monitor::open_window(cx) {
+            Ok(handle) => self.perf_window = Some(handle),
+            Err(error) => eprintln!("[perf-monitor] {error:#}"),
+        }
+    }
+
     pub(super) fn open_changelog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.changelog.is_some() {
             return;

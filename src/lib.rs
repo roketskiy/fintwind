@@ -87,9 +87,6 @@ pub(crate) const BUILD_CHANNEL: BuildChannel = if cfg!(debug_assertions) {
     BuildChannel::Stable
 };
 
-pub(crate) const REMOTE_CONTROL_ENABLED: bool =
-    matches!(BUILD_CHANNEL, BuildChannel::Dev | BuildChannel::Beta);
-
 pub(crate) const APP_DISPLAY_NAME: &str = match BUILD_CHANNEL {
     BuildChannel::Dev => "fintwind Dev",
     BuildChannel::Beta => "fintwind Beta",
@@ -233,9 +230,6 @@ impl FintwindApplicationExt for Application {
 pub fn run() {
     let daemon = crate::daemon::start_process()
         .unwrap_or_else(|error| panic!("failed to start fintwind daemon: {error:#}"));
-    if REMOTE_CONTROL_ENABLED {
-        crate::daemon::start_remote_host(&daemon);
-    }
     gpui_platform::application()
         // Ely's embedded files first, Fintwind's icons and logos underneath:
         // one source, so `ely_gpui_component::init` finds its assets and

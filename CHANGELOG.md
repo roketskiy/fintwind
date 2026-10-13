@@ -18,6 +18,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- 移除实验性手机远程控制、设备配对入口及配套 PWA、中继和验收工具
 - 修复：模型思考档位改从 models.dev 解析后，转售商条目的乱标副本会在跨供应商投票中投掉厂商自家条目，导致部分模型显示错误档位；现在解析一律优先读取所配供应商对应的厂商条目，命中即用，匹配不到才回退多数投票。已写入配置的错误档位会在下次保存供应商时按厂商数据重算并清除
 - 目录未描述档位的模型（含 models.dev 尚未收录的新模型）退到标准六档 none / low / medium / high / xhigh / max（默认 medium，Anthropic 按预算预设落参数），不再无档可选；目录本身不可得时保留原有档位不动
 - 模型元数据完全以 models.dev 为唯一来源：删除内置的 298 条思考档位参考表（`models_thinking_modes.json`），思考档位改从 models.dev 的 `reasoning_options` 运行时解析——effort 枚举直接成为档位，可关思考的补「关闭」档，token 预算型展开为三档预算且不低于目录标注的下限；默认档由启发式推导（含 medium 选 medium，其余取中位档），用户或服务器的显式设置始终优先

@@ -269,7 +269,6 @@ enum SettingsPage {
     McpServers,
     McpMarket,
     Appearance,
-    Devices,
 }
 
 /// Which page the workspace shows. The fixed first column (mode rail)
@@ -1701,19 +1700,6 @@ pub struct Fintwind {
     /// The settings category shown while the workspace is in the settings
     /// mode. It survives leaving and re-entering settings.
     settings_page: SettingsPage,
-    /// The Devices page's pairing session state and the running session's
-    /// channels; `pairing` is `Some` only while a session is in flight.
-    devices_pairing: Option<devices_page::PairingSession>,
-    /// How the devices page's grant list was last loaded and when, so the
-    /// page re-reads on entry instead of on every frame.
-    devices_grants: Option<(fintwind_remote_host::GrantFile, Instant)>,
-    devices_busy: bool,
-    /// The device a revocation is currently in flight for; the row shows
-    /// a working state instead of staying silent until the task lands.
-    devices_revoking: Option<String>,
-    /// Last pairing/revocation failure, shown on the Devices page until
-    /// the next attempt clears it.
-    devices_error: Option<String>,
     /// The Skills page's library snapshot, scanned off-thread. Frames read
     /// only this; `None` means the first scan has not landed yet.
     skills_catalog: Option<Rc<crate::skills::SkillsCatalog>>,
@@ -2160,7 +2146,6 @@ mod command_palette;
 mod commit_dialog;
 mod components;
 mod composer;
-mod devices_page;
 mod drafts;
 mod file_search;
 mod git_history;
@@ -3615,11 +3600,6 @@ impl Fintwind {
                 scene_overlay_enabled,
                 mode: WorkspaceMode::default(),
                 settings_page: SettingsPage::General,
-                devices_pairing: None,
-                devices_grants: None,
-                devices_busy: false,
-                devices_revoking: None,
-                devices_error: None,
                 skills_catalog: None,
                 skills_scan_generation: 0,
                 skills_scan_pending: false,

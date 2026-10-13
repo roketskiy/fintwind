@@ -12,8 +12,7 @@ path = "src/main.rs"
 [features]
 # Developer-only WebView2 / Playwright validation; never enabled by default.
 browser-poc = ["windows-sys/Win32_System_Registry"]
-# The beta channel is a production-data build with the forward-looking
-# remote-control surface enabled. Stable builds deliberately do not enable it.
+# Local beta channel; uses production data but skips automatic updates.
 beta = []
 
 [workspace]
@@ -22,11 +21,6 @@ members = [
     "crates/fintwind-core",
     "crates/fintwind-daemon",
     "crates/fintwind-protocol",
-    "crates/fintwind-relay",
-    "crates/fintwind-remote-crypto",
-    "crates/fintwind-remote-crypto-wasm",
-    "crates/fintwind-remote-host",
-    "crates/fintwind-remote-protocol",
 ]
 default-members = [
     ".",
@@ -34,11 +28,6 @@ default-members = [
     "crates/fintwind-core",
     "crates/fintwind-daemon",
     "crates/fintwind-protocol",
-    "crates/fintwind-relay",
-    "crates/fintwind-remote-crypto",
-    "crates/fintwind-remote-crypto-wasm",
-    "crates/fintwind-remote-host",
-    "crates/fintwind-remote-protocol",
 ]
 resolver = "2"
 
@@ -76,11 +65,6 @@ url = "2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-client = { path = "crates/fintwind-client" }
 fintwind-protocol = { path = "crates/fintwind-protocol" }
-fintwind-remote-host = { path = "crates/fintwind-remote-host" }
-fintwind-remote-protocol = { path = "crates/fintwind-remote-protocol" }
-# Pairing QR: matrix generation only (no image codecs); the UI draws the
-# modules itself.
-qrcode = { version = "0.14", default-features = false }
 pulldown-cmark = "0.13"
 # Native, offline math typesetting; all layout and raster work runs on workers.
 ratex-parser = "=0.1.14"

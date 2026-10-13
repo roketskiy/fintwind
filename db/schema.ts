@@ -112,17 +112,9 @@ export const submissions = sqliteTable(
 );
 
 /**
- * The daemon's durable half of the remote queue (0005, 0006).
- *
- * One row is one admitted prompt: the operation id the phone knows, the
- * submission id the submission store knows, and where the prompt belongs.
- * The prompt text itself lives here and is read only by the daemon at
- * dispatch; the host and the phone never see it through this table.
- *
- * `cancelOperationId` / `cancelState` are the durable cancel binding: a
- * cancellation the host answered `Accepted` is recorded on the row so a
- * crash cannot turn it back into a dispatch. `cancelState` is `pending`
- * until the wait resolves.
+ * Retired remote-control table (0005, 0006). No runtime code reads or
+ * writes it. Retain this declaration and the applied migrations so schema
+ * generation cannot silently delete existing user data.
  */
 export const remotePrompts = sqliteTable(
   "remote_prompts",
@@ -145,12 +137,7 @@ export const remotePrompts = sqliteTable(
 );
 
 /**
- * How one prompt's cancellation ended, kept after the prompt row is gone
- * (0007).
- *
- * The prompt row is temporary; an answered cancellation must stay
- * answerable. The record carries only the ending and the provenance it was
- * admitted under — never any prompt text.
+ * Retired remote-control table (0007); retained only for schema compatibility.
  */
 export const remoteCancelTerms = sqliteTable(
   "remote_cancel_terms",

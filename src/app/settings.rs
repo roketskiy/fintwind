@@ -60,13 +60,6 @@ const SETTINGS_PAGES: &[(SettingsPage, &str, &str, &str)] = &[
         "icons/sparkle.svg",
         "settings.mcp_market_keywords",
     ),
-    #[cfg(any(debug_assertions, feature = "beta"))]
-    (
-        SettingsPage::Devices,
-        "settings.devices",
-        "icons/smartphone.svg",
-        "settings.devices_keywords",
-    ),
 ];
 
 /// Bind the search field's list-navigation keys. Called once at startup.
@@ -191,9 +184,6 @@ impl Fintwind {
     /// Every entry point — the rail, the shortcut, the command palette —
     /// funnels through here, so the mode is the single navigation state.
     pub(super) fn open_settings_page(&mut self, page: SettingsPage, cx: &mut Context<Self>) {
-        if page == SettingsPage::Devices && !crate::REMOTE_CONTROL_ENABLED {
-            return;
-        }
         self.mode = WorkspaceMode::Settings;
         self.settings_page = page;
         // Each page starts at its own top; a scroll position carried over
@@ -222,12 +212,6 @@ impl Fintwind {
             self.mcp_list_scroll.set_offset(gpui::Point::default());
             self.mcp_detail_scroll.set_offset(gpui::Point::default());
             self.load_mcp_servers_from_config(cx);
-        }
-        if page == SettingsPage::Devices {
-            // The grant file is the shared source of truth; re-read on every
-            // visit so external changes (the CLI, a hand edit) show up.
-            self.devices_grants = None;
-            self.refresh_device_grants(cx);
         }
         cx.notify();
     }
@@ -422,7 +406,6 @@ impl Fintwind {
                         SettingsPage::McpServers => tr!("settings.mcp_servers"),
                         SettingsPage::McpMarket => tr!("settings.mcp_market"),
                         SettingsPage::Appearance => tr!("settings.appearance"),
-                        SettingsPage::Devices => tr!("settings.devices"),
                     }),
             )
             .child(match page {
@@ -432,7 +415,6 @@ impl Fintwind {
                 SettingsPage::McpServers => self.render_mcp_page(window, cx),
                 SettingsPage::McpMarket => self.render_mcp_market_page(cx),
                 SettingsPage::Appearance => self.render_appearance_settings(cx),
-                SettingsPage::Devices => devices_page::render_devices_page(self, window, cx),
             });
 
         div()

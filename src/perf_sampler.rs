@@ -4,7 +4,7 @@
 //! the parent-child tree outward from this process using a Toolhelp snapshot,
 //! and every membership decision is guarded by process creation times, so a
 //! reused PID can never adopt an unrelated process. That covers the daemon,
-//! the remote-control host, the pooled OpenCode servers, and whatever they
+//! the pooled OpenCode servers, and whatever they
 //! spawn (terminals, tools, browser helpers) — all descendants, nothing else
 //! on the machine.
 //!

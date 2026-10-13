@@ -46,7 +46,7 @@
 
 ## Windows release 构建
 
-dev watcher 占用的是 `target/debug/fintwind.exe`，release 写到 `target/release`，两者不冲突，不必停 watcher。稳定版只需要应用和 `fintwind-daemon.exe`；beta 版另外携带 `fintwind-remote-host.exe`。应用从自身旁边启动 `fintwind-daemon.exe`。
+dev watcher 占用的是 `target/debug/fintwind.exe`，release 写到 `target/release`，两者不冲突，不必停 watcher。所有渠道只需要应用和 `fintwind-daemon.exe`。应用从自身旁边启动 `fintwind-daemon.exe`。
 
 三渠道规则：GitHub CI 只构建和发布 stable（release.yml 显式 `--channel=stable`，无 beta job/输入/tag/制品，不要新增）；beta 只在本地构建，与 stable 共用生产数据目录（不可同开两版，新 beta 迁移过的数据不保证旧 stable 可读）；dev 是 debug 构建，数据目录 `Fintwind Debug` 隔离。非 stable 构建不执行自动更新检查，beta 靠重新构建更新。stable 与 beta 的 release 产物写同一个 `target/release`，先后构建会互相覆盖，属预期。
 
@@ -60,10 +60,10 @@ cargo build --locked --release --package fintwind --bin fintwind --package fintw
 
 产物：`target/release/fintwind.exe`、`target/release/fintwind-daemon.exe`。
 
-beta 版使用相同的生产数据目录，但打开远控功能：
+beta 版使用相同的生产数据目录，但不执行自动更新检查：
 
 ```sh
-cargo build --locked --release --features beta --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon --package fintwind-remote-host --bin fintwind-remote-host
+cargo build --locked --release --features beta --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon
 ```
 
 ### 带安装包
@@ -84,7 +84,7 @@ bun scripts/bundle-windows.ts --channel=beta
 
 - 稳定版：`fintwind-<version>-<target-triple>.zip`（目录内两个 exe 并排）和
   `fintwind-<version>-<arch>-Setup.exe`
-- beta 版：文件名带 `-beta`，目录内增加 `fintwind-remote-host.exe`
+- beta 版：文件名带 `-beta`，目录内仍只有应用和 daemon 两个 exe
 
 未设置 `WINDOWS_CERTIFICATE`（base64 `.pfx`）和 `WINDOWS_CERTIFICATE_PASSWORD` 时打出的是未签名包，脚本会打印说明。细节见 [CONTRIBUTING.md](CONTRIBUTING.md) 的 Windows bundle 与 [RELEASING.md](RELEASING.md)。
 

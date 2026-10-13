@@ -29,11 +29,13 @@ draft, then publish it.
 
 ## Channels
 
-| Channel | Built by | Data directory | Remote control | In-app updates |
-| --- | --- | --- | --- | --- |
-| stable | CI on a `v*` tag, or a manual **Release** run | `Fintwind` (production) | hidden; the package carries no `fintwind-remote-host.exe` | checks GitHub releases |
-| beta | **local builds only** (`bun scripts/bundle-windows.ts --channel=beta`) | `Fintwind` — the same directory as stable | enabled; the package adds `fintwind-remote-host.exe` | disabled — there is no beta feed |
-| dev | plain `cargo build` (debug), for agent development | `Fintwind Debug` (isolated) | enabled | disabled |
+| Channel | Built by | Data directory | In-app updates |
+| --- | --- | --- | --- |
+| stable | CI on a `v*` tag, or a manual **Release** run | `Fintwind` (production) | checks GitHub releases |
+| beta | **local builds only** (`bun scripts/bundle-windows.ts --channel=beta`) | `Fintwind` — the same directory as stable | disabled — there is no beta feed |
+| dev | plain `cargo build` (debug), for agent development | `Fintwind Debug` (isolated) | disabled |
+
+Every channel packages only `fintwind.exe` and `fintwind-daemon.exe`.
 
 GitHub builds and publishes the **stable channel only**: the Release workflow
 passes `--channel=stable` explicitly, and there is no beta job, input, tag,

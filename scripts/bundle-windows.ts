@@ -166,22 +166,20 @@ const installer = join(
 );
 
 if (beta) {
-  await $`cargo build --locked --release --features beta --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon --package fintwind-remote-host --bin fintwind-remote-host`;
+  await $`cargo build --locked --release --features beta --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon`;
 } else {
   await $`cargo build --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon`;
 }
 
 const staging = await mkdtemp(join(tmpdir(), "fintwind-bundle-"));
 try {
-  // All executables stay side by side: the app resolves the daemon and the
-  // remote-host beside itself, so the layout is what makes an extracted zip
-  // runnable in place.
+  // The app resolves the daemon beside itself, so both executables stay
+  // side by side in an extracted zip.
   const packageDirectory = join(staging, packageDirectoryName);
   await mkdir(packageDirectory, { recursive: true });
   const executables = [
     "fintwind.exe",
     "fintwind-daemon.exe",
-    ...(beta ? ["fintwind-remote-host.exe"] : []),
   ];
   for (const file of executables) {
     await copyFile(join(releaseDirectory, file), join(packageDirectory, file));
@@ -216,7 +214,7 @@ try {
   // The installer is the primary download artifact, so it ships from the
   // same signed staging directory as the zip.
   await rm(installer, { force: true });
-  await $`${findInnoSetupCompiler()} ${`/DAppVersion=${version}`} ${`/DArch=${architecture}`} ${`/DChannel=${channel}`} ${`/DRemoteControl=${beta ? "1" : "0"}`} ${`/DStageDir=${packageDirectory}`} ${`/DOutputDir=${releaseDirectory}`} ${join(projectRoot, "resources", "windows", "fintwind.iss")}`;
+  await $`${findInnoSetupCompiler()} ${`/DAppVersion=${version}`} ${`/DArch=${architecture}`} ${`/DChannel=${channel}`} ${`/DStageDir=${packageDirectory}`} ${`/DOutputDir=${releaseDirectory}`} ${join(projectRoot, "resources", "windows", "fintwind.iss")}`;
   if (!existsSync(installer)) {
     throw new Error(`ISCC did not produce ${installer}`);
   }

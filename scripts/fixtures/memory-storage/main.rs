@@ -1,5 +1,5 @@
 //! The production storage module, exercised through its public API and SQLite
-//! side effects. This fixture avoids unrelated provider/remote-host compilation.
+//! side effects. This fixture avoids unrelated provider compilation.
 #![allow(dead_code)]
 
 #[path = "../../../crates/fintwind-core/src/attachments.rs"]

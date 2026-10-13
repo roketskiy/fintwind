@@ -23,9 +23,6 @@
 #ifndef Channel
   #define Channel "stable"
 #endif
-#ifndef RemoteControl
-  #define RemoteControl "0"
-#endif
 
 #if Channel == "beta"
   #define ChannelSuffix "-beta"
@@ -90,9 +87,6 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "{#StageDir}\fintwind.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#StageDir}\fintwind-daemon.exe"; DestDir: "{app}"; Flags: ignoreversion
-#if RemoteControl == "1"
-Source: "{#StageDir}\fintwind-remote-host.exe"; DestDir: "{app}"; Flags: ignoreversion
-#endif
 Source: "{#StageDir}\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]

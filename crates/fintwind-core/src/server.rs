@@ -99,47 +99,6 @@ impl EventSink {
         }
     }
 
-    /// A sink with no source connection.
-    ///
-    /// Preparation state registered under it is owned by the daemon itself
-    /// rather than by a client, so it is never invalidated by that client
-    /// going away. Used by the daemon-owned remote queue, where no GUI sits
-    /// between admission and dispatch.
-    pub(crate) fn detached(session_id: Uuid, runtime_id: Uuid) -> Self {
-        Self {
-            session_id,
-            runtime_id,
-            hub: Arc::new(Hub::default()),
-            source_subscriber_id: None,
-        }
-    }
-
-    /// The same hub, addressed to another session and runtime.
-    ///
-    /// A runtime the daemon starts on its own is started by a request that
-    /// cannot name it — a host asks for a queued prompt to be dispatched,
-    /// not for a runtime to be opened. The events that runtime publishes
-    /// must be addressed to the runtime the hub accepts, so the sink is
-    /// rebound rather than reused with the request's own coordinates.
-    pub(crate) fn rebound(&self, session_id: Uuid, runtime_id: Uuid) -> Self {
-        Self {
-            session_id,
-            runtime_id,
-            hub: self.hub.clone(),
-            source_subscriber_id: None,
-        }
-    }
-
-    /// Register the runtime this sink addresses as the session's active one.
-    ///
-    /// The dispatcher does this for a runtime a client started; a runtime
-    /// the daemon starts for the remote queue has no such request, so its
-    /// owner opens it here. Without it the hub would drop every event the
-    /// runtime publishes, and no client would ever see the turn.
-    pub(crate) fn open_runtime(&self) {
-        self.hub.begin_runtime(self.session_id, self.runtime_id);
-    }
-
     pub fn send(&self, event: WireDriverEvent) -> anyhow::Result<()> {
         self.hub.emit(self.session_id, self.runtime_id, event, true);
         Ok(())

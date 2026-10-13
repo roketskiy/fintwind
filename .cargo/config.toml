@@ -20,12 +20,5 @@ TS_RS_LARGE_INT = "number"
 [target.'cfg(target_os = "windows")']
 rustflags = ["-C", "target-feature=+crt-static"]
 
-# getrandom 0.3 (via uuid) refuses wasm32-unknown-unknown unless told which
-# backend to use. The PWA links fintwind-remote-crypto as wasm, and this flag
-# selects the browser's crypto.getRandomValues backend for that target only;
-# native targets are unaffected.
-[target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
-
 [build]
 jobs = 4

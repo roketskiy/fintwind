@@ -52,8 +52,8 @@ without those the script packages unsigned binaries and says so.
 [RELEASING.md](RELEASING.md) the GitHub release process.
 
 The default package is the stable channel. The personal beta channel uses the
-same production application identity and data directory, but includes the
-forward-looking remote-control feature:
+same production application identity and data directory, but skips automatic
+update checks:
 
 ```sh
 bun scripts/bundle-windows.ts --channel=beta

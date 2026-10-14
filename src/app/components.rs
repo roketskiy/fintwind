@@ -1330,7 +1330,18 @@ pub(super) fn activity_row_detail(activity: &ActivityItem, reasoning_live: bool)
 }
 
 pub(super) fn reasoning_activity_title(reasoning: &ReasoningBlock, live: bool) -> String {
-    if live {
+    reasoning_group_title(reasoning, live, 1)
+}
+
+/// Merged thinking-card title. Summaries from Claude/OpenAI arrive as many
+/// short fragments; the cluster renders them as one card, so the title names
+/// the group size instead of pretending each fragment took its own turn.
+pub(super) fn reasoning_group_title(
+    reasoning: &ReasoningBlock,
+    live: bool,
+    group_count: usize,
+) -> String {
+    let base = if live {
         tr!("transcript.thinking")
     } else {
         tr!(
@@ -1343,7 +1354,141 @@ pub(super) fn reasoning_activity_title(reasoning: &ReasoningBlock, live: bool) -
                     .max(1)
             )
         )
+    };
+    if group_count > 1 {
+        format!("{base} (×{group_count})")
+    } else {
+        base
     }
+}
+
+/// Whether this model's reasoning arrives as per-step summaries rather than
+/// one full chain of thought. Claude and OpenAI only expose summary fragments,
+/// so a turn sprays many near-empty thought cards; other families keep their
+/// own cards untouched.
+pub(super) fn summary_only_reasoning_model(model: Option<&str>) -> bool {
+    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
+        return false;
+    };
+    let lower = model.to_ascii_lowercase();
+    // `<providerID>/<modelID>` selections, e.g. `anthropic/claude-sonnet-4-5`.
+    // A bare display name (background items) carries no provider part, so the
+    // model-name heuristics below cover relays that hide the provider.
+    let (provider, id) = match lower.split_once('/') {
+        Some((provider, id)) => (provider, id),
+        None => ("", lower.as_str()),
+    };
+    matches!(provider, "anthropic" | "openai")
+        || id.starts_with("claude")
+        || id.starts_with("gpt")
+        || id.starts_with("o1")
+        || id.starts_with("o3")
+        || id.starts_with("o4")
+}
+
+/// Display units for one activity cluster. With `merge` (summary-only models),
+/// consecutive model reasoning with real content becomes a single card while
+/// empty thoughts vanish; tool work between thoughts still breaks a group, so
+/// one card never mixes reasoning from different steps. Without `merge` every
+/// activity passes through borrowed and untouched.
+pub(super) struct MergedActivity<'a> {
+    pub(super) item: std::borrow::Cow<'a, ActivityItem>,
+    pub(super) group_count: usize,
+    pub(super) live: bool,
+}
+
+pub(super) fn merge_consecutive_reasoning(
+    activities: &[ActivityItem],
+    live_reasoning_id: Option<Uuid>,
+    merge: bool,
+) -> Vec<MergedActivity<'_>> {
+    if !merge {
+        return activities
+            .iter()
+            .map(|activity| MergedActivity {
+                item: std::borrow::Cow::Borrowed(activity),
+                group_count: 1,
+                live: live_reasoning_id == Some(activity.id),
+            })
+            .collect();
+    }
+    let mut merged: Vec<MergedActivity<'_>> = Vec::with_capacity(activities.len());
+    // Pending thought group: item, fragment count, contains-live, live id.
+    let mut group: Option<(ActivityItem, usize, bool, Option<Uuid>)> = None;
+    for activity in activities {
+        let is_thought = activity.kind == crate::model::ActivityKind::Reasoning
+            && activity
+                .reasoning
+                .as_ref()
+                .is_some_and(|reasoning| !reasoning.content.trim().is_empty());
+        if !is_thought {
+            if let Some((mut item, count, live, live_id)) = group.take() {
+                if live
+                    && let Some(live_id) = live_id
+                {
+                    item.id = live_id;
+                }
+                merged.push(MergedActivity {
+                    item: std::borrow::Cow::Owned(item),
+                    group_count: count,
+                    live,
+                });
+            }
+            // An empty thought renders as a bare title row with no body.
+            // Skip it instead of spending a card on nothing.
+            let is_empty_thought = activity.kind == crate::model::ActivityKind::Reasoning;
+            if !is_empty_thought {
+                merged.push(MergedActivity {
+                    item: std::borrow::Cow::Borrowed(activity),
+                    group_count: 1,
+                    live: live_reasoning_id == Some(activity.id),
+                });
+            }
+            continue;
+        }
+        let reasoning = activity.reasoning.as_ref().expect("checked above");
+        let live = live_reasoning_id == Some(activity.id);
+        if let Some((item, count, group_live, live_id)) = group.as_mut() {
+            let group_reasoning = item.reasoning.as_mut().expect("group holds reasoning");
+            if !group_reasoning.content.is_empty() && !reasoning.content.is_empty() {
+                group_reasoning.content.push_str("\n\n");
+            }
+            group_reasoning.content.push_str(reasoning.content.trim());
+            group_reasoning.started_at_ms =
+                group_reasoning.started_at_ms.min(reasoning.started_at_ms);
+            group_reasoning.finished_at_ms =
+                group_reasoning.finished_at_ms.max(reasoning.finished_at_ms);
+            item.complete = item.complete && activity.complete;
+            item.failed = item.failed || activity.failed;
+            *count += 1;
+            *group_live = *group_live || live;
+            if live {
+                *live_id = Some(activity.id);
+                item.source_id = activity.source_id.clone();
+            }
+        } else {
+            let mut item = activity.clone();
+            if let Some(group_reasoning) = item.reasoning.as_mut() {
+                group_reasoning.content = reasoning.content.trim().to_owned();
+            }
+            group = Some((item, 1, live, live.then_some(activity.id)));
+        }
+    }
+    if let Some((mut item, count, live, live_id)) = group.take() {
+        if live
+            && let Some(live_id) = live_id
+        {
+            // Keep the streaming fragment's identity so the pulse,
+            // auto-expand, and markdown caches follow the live card.
+            item.id = live_id;
+        }
+        merged.push(MergedActivity {
+            item: std::borrow::Cow::Owned(item),
+            group_count: count,
+            live,
+        });
+    }
+    merged
 }
 
 fn activity_path_name(path: &str) -> String {

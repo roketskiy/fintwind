@@ -18,7 +18,12 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
-- 修复通过 HTTPS 代理检查更新时，代理连接响应头导致版本信息解析失败的问题
+## [0.2.9]
+
+- 内置供应商 DeepSeek、智谱（Z.ai）、Kimi、MiniMax 新增订阅使用情况显示，可查看订阅额度或 API 余额；密钥由 OpenCode 托管，不会写入日志
+- 修复通过 HTTPS 代理时请求可能失败的问题
+- 视觉打磨：工作区分层更清晰、选中色更中性；回复中的行内代码改为与正文同色，主题色更柔和
+- 修复侧边栏搜索按钮错位的问题
 
 ## [0.2.8]
 

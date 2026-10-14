@@ -916,6 +916,9 @@ pub(super) struct ActivityCardContext {
     /// The reasoning in this card streams right now: it stays open by default
     /// and its body follows the stream.
     pub(super) reasoning_live: bool,
+    /// Fragments merged into this card. Above one, the title names the group
+    /// size instead of repeating one fragment's timing.
+    pub(super) reasoning_group_count: usize,
 }
 
 impl Fintwind {
@@ -2465,11 +2468,27 @@ impl Fintwind {
             .flex()
             .flex_col()
             .gap(px(8.0));
-        for activity in activities {
+        // Summaries arrive as many short fragments on Claude/OpenAI; render
+        // consecutive thoughts as one card so a turn reads as work, not a
+        // wall of rails. Full chain-of-thought families keep their own cards.
+        let summary_model: Option<String> = match &context.surface {
+            ActivitySurface::Session => {
+                self.selected_session().and_then(|session| session.model.clone())
+            }
+            ActivitySurface::Background(key) => self.background_work_model(key),
+        };
+        let display = merge_consecutive_reasoning(
+            activities,
+            context.live_reasoning_id,
+            summary_only_reasoning_model(summary_model.as_deref()),
+        );
+        for merged in &display {
+            let activity = merged.item.as_ref();
             let card_context = ActivityCardContext {
                 surface: context.surface.clone(),
                 selection: context.selection.clone(),
-                reasoning_live: context.live_reasoning_id == Some(activity.id),
+                reasoning_live: merged.live,
+                reasoning_group_count: merged.group_count,
             };
             let card = self.render_activity_card(activity, &card_context, theme, window, cx);
             items = items.child(card);
@@ -2578,12 +2597,26 @@ impl Fintwind {
         } else {
             activity_preview(activity)
         };
-        let action_label = activity_action_label(activity);
+        let mut action_label = activity_action_label(activity);
         let action_label_running = subagent_work
             .as_ref()
             .map(|(_, _, status, ..)| status.is_live())
             .unwrap_or(reasoning_live || (!activity.complete && !activity.failed));
         let mut row_detail = activity_row_detail(activity, reasoning_live);
+        if let Some(reasoning) = reasoning
+            && context.reasoning_group_count > 1
+        {
+            row_detail = reasoning_group_title(
+                reasoning,
+                reasoning_live,
+                context.reasoning_group_count,
+            );
+        }
+        // A thought's title already names the work; keep the English action
+        // label out of the row instead of printing both.
+        if reasoning.is_some() && subagent_work.is_none() && !row_detail.trim().is_empty() {
+            action_label = std::mem::take(&mut row_detail);
+        }
         if row_detail.trim().is_empty() {
             row_detail = preview;
         }

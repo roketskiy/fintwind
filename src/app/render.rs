@@ -2,6 +2,8 @@ use crate::theme::ui_px;
 
 use super::*;
 
+const WORKSPACE_CORNER_RADIUS: f32 = 10.0;
+
 fn should_render_empty_state(session: Option<&AgentSession>) -> bool {
     session
         .map(|session| session.detail_loaded && session.messages.is_empty())
@@ -449,6 +451,7 @@ impl Render for Fintwind {
                     .flex_1()
                     .min_h_0()
                     .flex()
+                    .bg(theme.rail)
                     // The fixed first column. It never leaves the tree, so
                     // every mode stays one click away no matter how narrow
                     // the window is.
@@ -464,6 +467,11 @@ impl Render for Fintwind {
                                 .h_full()
                                 .flex_none()
                                 .w(px(panels.sidebar))
+                                .bg(theme.sidebar)
+                                .rounded_tl(px(WORKSPACE_CORNER_RADIUS))
+                                .rounded_bl(px(WORKSPACE_CORNER_RADIUS))
+                                .py(px(WORKSPACE_CORNER_RADIUS))
+                                .shadow(theme.sidebar_shadow())
                                 .when(panels.sidebar_sliding, |element| element.overflow_hidden())
                                 .child(
                                     self.sidebar_pane.clone().cached(
@@ -475,7 +483,19 @@ impl Render for Fintwind {
                                 ),
                         )
                     })
-                    .child(main_area)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .flex()
+                            .bg(theme.surface)
+                            .rounded_tl(px(WORKSPACE_CORNER_RADIUS))
+                            .rounded_bl(px(WORKSPACE_CORNER_RADIUS))
+                            .py(px(WORKSPACE_CORNER_RADIUS))
+                            .shadow(theme.workspace_shadow())
+                            .child(main_area),
+                    )
                     // The right panel belongs to the session mode only; the
                     // other modes hide it without dropping its tabs or
                     // background state.

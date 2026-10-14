@@ -766,7 +766,7 @@ impl Fintwind {
     }
 
     fn render_providers_list_pane(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let accent = providers_accent(theme);
+        let accent = theme.neutral_fill;
         let selected_id = self.effective_provider_id();
         let mut rows = div().px(px(8.0)).flex().flex_col();
 

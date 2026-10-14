@@ -1013,7 +1013,7 @@ impl Fintwind {
                             .justify_center()
                             .cursor_default()
                             .when(favorites_selected, |element| {
-                                element.bg(theme.accent.opacity(0.12))
+                                element.bg(theme.neutral_fill.opacity(0.12))
                             })
                             .hover(|element| element.bg(theme.overlay))
                             .active(|element| element.bg(theme.overlay_strong))
@@ -1021,7 +1021,7 @@ impl Fintwind {
                                 "icons/star.svg",
                                 18.0,
                                 if favorites_selected {
-                                    theme.accent
+                                    theme.neutral_fill
                                 } else {
                                     theme.text_tertiary
                                 },
@@ -1069,7 +1069,7 @@ impl Fintwind {
                             .justify_center()
                             .cursor_default()
                             .when(is_selected, |element| {
-                                element.bg(theme.accent.opacity(0.12))
+                                element.bg(theme.neutral_fill.opacity(0.12))
                             })
                             .hover(|element| element.bg(theme.overlay))
                             .active(|element| element.bg(theme.overlay_strong))
@@ -1083,7 +1083,7 @@ impl Fintwind {
                                 icon_path,
                                 18.0,
                                 if is_selected {
-                                    theme.accent
+                                    theme.neutral_fill
                                 } else {
                                     theme.text.opacity(0.82)
                                 },
@@ -1171,20 +1171,20 @@ impl Fintwind {
                             // resize it and shift the list by a pixel.
                             .border_1()
                             .border_color(if is_selected {
-                                theme.accent.opacity(0.34)
+                                theme.neutral_fill.opacity(0.34)
                             } else {
                                 gpui::transparent_black()
                             })
                             .when(is_selected, |element| {
-                                element.bg(theme.accent.opacity(0.10))
+                                element.bg(theme.neutral_fill.opacity(0.10))
                             })
                             // The keyboard cursor reads as a ring rather than a
                             // fill, so it stays legible on the current model's
                             // already-filled row.
                             .when(is_highlighted, |element| {
                                 element
-                                    .bg(theme.accent.opacity(0.14))
-                                    .border_color(theme.accent)
+                                    .bg(theme.neutral_fill.opacity(0.14))
+                                    .border_color(theme.neutral_fill)
                             })
                             .hover(|element| element.bg(theme.overlay))
                             .active(|element| element.opacity(0.85))
@@ -1228,7 +1228,7 @@ impl Fintwind {
                                         },
                                         15.0,
                                         if is_favorite {
-                                            theme.favorite
+                                            theme.neutral_fill
                                         } else {
                                             theme.text_ghost
                                         },

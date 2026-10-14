@@ -899,7 +899,7 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Div {
-        let accent = mcp_accent(theme);
+        let accent = theme.neutral_fill;
         let query = self.mcp_search.read(cx).content().trim().to_lowercase();
 
         // Two fixed sections, local then remote, each hiding while the

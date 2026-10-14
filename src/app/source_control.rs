@@ -3561,19 +3561,6 @@ mod tests {
         }
     }
 
-    fn review_files() -> Vec<crate::review_diff::File> {
-        [
-            "README.md",
-            "src/app/runtime.rs",
-            "src/app/view.rs",
-            "src/lib.rs",
-            "tests/review.rs",
-        ]
-        .into_iter()
-        .map(review_file)
-        .collect()
-    }
-
     fn split_test_line(
         file_index: usize,
         kind: crate::review_diff::LineKind,

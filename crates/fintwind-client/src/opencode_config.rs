@@ -107,6 +107,7 @@ fn provider_from_config(key: &str, entry: &Value, disabled: &HashSet<String>) ->
     let api_format = match npm {
         Some("@ai-sdk/anthropic") => ProviderApiFormat::Anthropic,
         Some("@ai-sdk/openai") => ProviderApiFormat::OpenAiResponses,
+        Some("@ai-sdk/google") => ProviderApiFormat::Google,
         _ => ProviderApiFormat::OpenAi,
     };
     let options = entry.get("options");

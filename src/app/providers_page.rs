@@ -87,6 +87,7 @@ pub(super) fn api_format_label(format: ProviderApiFormat) -> String {
         ProviderApiFormat::OpenAi => tr!("providers.api_format_openai"),
         ProviderApiFormat::OpenAiResponses => tr!("providers.api_format_openai_responses"),
         ProviderApiFormat::Anthropic => tr!("providers.api_format_anthropic"),
+        ProviderApiFormat::Google => tr!("providers.api_format_google"),
     }
 }
 

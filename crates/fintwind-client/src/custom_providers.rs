@@ -26,10 +26,17 @@ pub enum ProviderApiFormat {
     OpenAiResponses,
     #[serde(rename = "anthropic")]
     Anthropic,
+    #[serde(rename = "google")]
+    Google,
 }
 
 impl ProviderApiFormat {
-    pub const ALL: [ProviderApiFormat; 3] = [Self::OpenAi, Self::OpenAiResponses, Self::Anthropic];
+    pub const ALL: [ProviderApiFormat; 4] = [
+        Self::OpenAi,
+        Self::OpenAiResponses,
+        Self::Anthropic,
+        Self::Google,
+    ];
 
     /// The OpenCode provider package that adapts this protocol. OpenCode
     /// instantiates `@ai-sdk/openai` with `.responses(...)`, so this package
@@ -39,6 +46,7 @@ impl ProviderApiFormat {
             Self::OpenAi => "@ai-sdk/openai-compatible",
             Self::OpenAiResponses => "@ai-sdk/openai",
             Self::Anthropic => "@ai-sdk/anthropic",
+            Self::Google => "@ai-sdk/google",
         }
     }
 }
@@ -399,6 +407,11 @@ fn first_token_request(provider: &CustomProvider, model_id: &str) -> (String, Ve
         ProviderApiFormat::OpenAi => format!("{base}/chat/completions"),
         ProviderApiFormat::OpenAiResponses => format!("{base}/responses"),
         ProviderApiFormat::Anthropic => format!("{}/messages", versioned_root(base)),
+        ProviderApiFormat::Google => format!(
+            "{}/{model_path}:streamGenerateContent?alt=sse",
+            beta_root(base),
+            model_path = gemini_model_path(model_id)
+        ),
     };
     let mut headers = auth_headers(provider);
     headers.push("Content-Type: application/json".to_owned());
@@ -417,6 +430,11 @@ fn first_token_request(provider: &CustomProvider, model_id: &str) -> (String, Ve
             r#"{{"model":{},"max_tokens":1,"stream":true,"messages":[{{"role":"user","content":"Hi"}}]}}"#,
             escape_json_string(model_id)
         ),
+        // Gemini needs no output budget and carries the model on the path;
+        // `alt=sse` makes it answer in the SSE shape the probe reads.
+        ProviderApiFormat::Google => {
+            r#"{"contents":[{"role":"user","parts":[{"text":"Hi"}]}]}"#.to_owned()
+        }
     };
     (url, headers, body)
 }
@@ -453,6 +471,7 @@ fn api_list_request(provider: &CustomProvider) -> (String, Vec<String>) {
             format!("{base}/models")
         }
         ProviderApiFormat::Anthropic => format!("{}/models", versioned_root(base)),
+        ProviderApiFormat::Google => format!("{}/models", beta_root(base)),
     };
     let mut headers = auth_headers(provider);
     headers.push("Accept: application/json".to_owned());
@@ -466,6 +485,27 @@ fn versioned_root(base: &str) -> String {
         base.to_owned()
     } else {
         format!("{base}/v1")
+    }
+}
+
+/// The Google SDK root omits the version path; requests add `v1beta`, where
+/// Gemini's generative API lives. A root that already carries `/v1beta` (or
+/// an explicit `/v1`) is not versioned twice.
+fn beta_root(base: &str) -> String {
+    if base.ends_with("/v1beta") || base.ends_with("/v1") {
+        base.to_owned()
+    } else {
+        format!("{base}/v1beta")
+    }
+}
+
+/// Gemini addresses models as `models/<id>` on the wire; an id that already
+/// carries that prefix passes through unchanged.
+fn gemini_model_path(model_id: &str) -> String {
+    if model_id.starts_with("models/") {
+        model_id.to_owned()
+    } else {
+        format!("models/{model_id}")
     }
 }
 
@@ -484,6 +524,11 @@ fn auth_headers(provider: &CustomProvider) -> Vec<String> {
                 headers.push(format!("x-api-key: {}", provider.api_key.trim()));
             }
             headers.push("anthropic-version: 2023-06-01".to_owned());
+        }
+        ProviderApiFormat::Google => {
+            if !provider.api_key.trim().is_empty() {
+                headers.push(format!("x-goog-api-key: {}", provider.api_key.trim()));
+            }
         }
     }
     headers
@@ -658,6 +703,30 @@ mod tests {
         ));
         assert_eq!(url, "https://relay.example.com/v1/models");
 
+        // Google: the beta-versioned model list with its key header.
+        let (url, headers) = api_list_request(&provider(
+            ProviderApiFormat::Google,
+            "https://generativelanguage.googleapis.com",
+            "g-key",
+        ));
+        assert_eq!(
+            url,
+            "https://generativelanguage.googleapis.com/v1beta/models"
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "x-goog-api-key: g-key")
+        );
+
+        // A Google root that already carries /v1beta is not versioned twice.
+        let (url, _) = api_list_request(&provider(
+            ProviderApiFormat::Google,
+            "https://relay.example.com/v1beta/",
+            "",
+        ));
+        assert_eq!(url, "https://relay.example.com/v1beta/models");
+
         // An empty key sends no credential header at all.
         let (_, headers) = api_list_request(&provider(
             ProviderApiFormat::OpenAi,
@@ -718,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn npm_packages_map_the_three_formats() {
+    fn npm_packages_map_the_four_formats() {
         assert_eq!(
             ProviderApiFormat::OpenAi.npm_package(),
             "@ai-sdk/openai-compatible"
@@ -731,6 +800,7 @@ mod tests {
             ProviderApiFormat::Anthropic.npm_package(),
             "@ai-sdk/anthropic"
         );
+        assert_eq!(ProviderApiFormat::Google.npm_package(), "@ai-sdk/google");
         // The round trip is what keeps a saved entry loading as it saved:
         // OpenCode reads the package and picks the API shape from it.
         for format in ProviderApiFormat::ALL {
@@ -741,6 +811,7 @@ mod tests {
                     ProviderApiFormat::OpenAi => "openai",
                     ProviderApiFormat::OpenAiResponses => "openai-responses",
                     ProviderApiFormat::Anthropic => "anthropic",
+                    ProviderApiFormat::Google => "google",
                 }
             );
         }
@@ -806,6 +877,40 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&body).unwrap()["model"],
             "we\"ird\\model"
+        );
+
+        // Google: the SSE-streaming generateContent endpoint, model on the
+        // path under models/, key header, no output budget.
+        let (url, headers, body) = first_token_request(
+            &provider(
+                ProviderApiFormat::Google,
+                "https://generativelanguage.googleapis.com",
+                "g-key",
+            ),
+            "gemini-2.0-flash",
+        );
+        assert_eq!(
+            url,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse"
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|header| header == "x-goog-api-key: g-key")
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            serde_json::json!({"contents":[{"role":"user","parts":[{"text":"Hi"}]}]})
+        );
+
+        // An id already carrying the models/ prefix is not doubled.
+        let (url, _, _) = first_token_request(
+            &provider(ProviderApiFormat::Google, "https://relay.example.com", ""),
+            "models/gemini-2.0-flash",
+        );
+        assert_eq!(
+            url,
+            "https://relay.example.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse"
         );
 
         // The Responses format posts to the responses path with the Responses

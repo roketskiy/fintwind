@@ -381,28 +381,36 @@ const CURL_TIMED_OUT_EXIT_CODE: i32 = 28;
 /// next read is pure body. Status `0` means no HTTP answer ever arrived
 /// (connection failed, curl killed mid-headers).
 fn read_response_status(reader: &mut impl BufRead) -> anyhow::Result<u16> {
-    let mut line = String::new();
-    let mut status = 0u16;
+    let mut final_status = 0;
     loop {
-        line.clear();
+        let mut line = String::new();
         match reader.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
+            Ok(0) | Err(_) => return Ok(final_status),
             Ok(_) => {}
         }
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            break;
+        let status_line = line.trim_end();
+        let (status, reason) = parse_http_status_line(status_line).unwrap_or((0, ""));
+        let intermediate = is_intermediate_response(status, reason);
+
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => return Ok(if status == 0 { final_status } else { status }),
+                Ok(_) => {}
+            }
+            if line.trim_end().is_empty() {
+                break;
+            }
         }
-        if status == 0
-            && let Some(code) = trimmed
-                .split_whitespace()
-                .nth(1)
-                .and_then(|code| code.parse::<u16>().ok())
-        {
-            status = code;
+
+        if status == 0 {
+            return Ok(final_status);
+        }
+        final_status = status;
+        if !intermediate {
+            return Ok(status);
         }
     }
-    Ok(status)
 }
 
 /// Read SSE lines until the first `data:` line that could carry a token;
@@ -471,21 +479,50 @@ fn curl_command() -> std::process::Command {
     command
 }
 
-/// `-D -` prefixes the body with the response headers; the status code is on
-/// the first line and the body follows the blank separator line.
+/// `-D -` prefixes the body with response headers. HTTPS proxies and
+/// informational responses can add a header block before the final response;
+/// discard those blocks so the returned body starts at the actual payload.
 fn split_status_and_body(raw: &str) -> anyhow::Result<(u16, String)> {
-    let status = raw
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| anyhow!("the response carries no HTTP status"))?;
-    let body = raw
-        .split_once("\r\n\r\n")
+    let mut response = raw;
+    loop {
+        let (headers, body) = split_header_block(response).unwrap_or((response, ""));
+        let status_line = headers.lines().next().unwrap_or_default();
+        let (status, reason) = parse_http_status_line(status_line)
+            .ok_or_else(|| anyhow!("the response carries no HTTP status"))?;
+        if is_intermediate_response(status, reason)
+            && split_header_block(body).is_some_and(|(headers, _)| {
+                headers
+                    .lines()
+                    .next()
+                    .and_then(parse_http_status_line)
+                    .is_some()
+            })
+        {
+            response = body;
+            continue;
+        }
+        return Ok((status, body.to_owned()));
+    }
+}
+
+fn split_header_block(raw: &str) -> Option<(&str, &str)> {
+    raw.split_once("\r\n\r\n")
         .or_else(|| raw.split_once("\n\n"))
-        .map(|(_, body)| body)
-        .unwrap_or_default();
-    Ok((status, body.to_owned()))
+}
+
+fn parse_http_status_line(line: &str) -> Option<(u16, &str)> {
+    let (protocol, remainder) = line.trim().split_once(' ')?;
+    if !protocol.starts_with("HTTP/") {
+        return None;
+    }
+    let remainder = remainder.trim_start();
+    let (status, reason) = remainder.split_once(' ').unwrap_or((remainder, ""));
+    Some((status.parse().ok()?, reason.trim()))
+}
+
+fn is_intermediate_response(status: u16, reason: &str) -> bool {
+    (100..200).contains(&status)
+        || (status == 200 && reason.eq_ignore_ascii_case("connection established"))
 }
 
 #[cfg(test)]
@@ -504,6 +541,28 @@ mod tests {
             (404, String::new())
         );
         assert!(split_status_and_body("garbage").is_err());
+    }
+
+    #[test]
+    fn status_and_body_split_skips_proxy_connect_headers() {
+        let raw = "HTTP/1.1 200 Connection established\r\nProxy-Agent: proxy\r\n\r\n\
+                    HTTP/2 200\r\ncontent-type: application/json\r\n\r\n\
+                    {\"tag_name\":\"v0.2.8\"}";
+        assert_eq!(
+            split_status_and_body(raw).unwrap(),
+            (200, "{\"tag_name\":\"v0.2.8\"}".to_owned())
+        );
+    }
+
+    #[test]
+    fn streamed_status_uses_the_response_after_proxy_connect() {
+        let raw = Cursor::new(
+            "HTTP/1.1 200 Connection established\r\n\r\n\
+             HTTP/1.1 403 Forbidden\r\ncontent-type: application/json\r\n\r\n\
+             {\"message\":\"rate limit\"}",
+        );
+        let mut reader = BufReader::new(raw);
+        assert_eq!(read_response_status(&mut reader).unwrap(), 403);
     }
 
     #[test]

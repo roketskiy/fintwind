@@ -20,7 +20,7 @@ use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 /// Desktop protocol version. Bumped when the `ClientMessage` or
 /// `ServerMessage` grammar changes; the handshake refuses a mismatch in
 /// either direction, so an old client and a new daemon never half-speak.
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes
@@ -304,6 +304,14 @@ pub enum Command {
     FetchIntegrations {
         binary: PathBuf,
         directory: PathBuf,
+    },
+    /// Read vendor-reported allowance with the server's selected credential.
+    /// Only a sanitized snapshot returns; authentication never leaves the daemon.
+    FetchProviderQuota {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        force: bool,
     },
     /// Authorize a catalog provider on the workspace's OpenCode server via
     /// its connect API. The running server picks the credential up
@@ -611,6 +619,9 @@ pub enum ResponsePayload {
     },
     Integrations {
         integrations: Vec<IntegrationSummary>,
+    },
+    ProviderQuota {
+        quota: crate::provider_quota::ProviderQuota,
     },
     BuiltinProviderProbed {
         models: usize,

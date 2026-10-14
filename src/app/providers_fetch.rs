@@ -660,7 +660,10 @@ impl Fintwind {
                 let _ = this.update(cx, |this, cx| {
                     this.providers_auth_loading = false;
                     match integrations {
-                        Ok(integrations) => this.apply_integrations(integrations),
+                        Ok(integrations) => {
+                            this.apply_integrations(integrations);
+                            this.load_selected_provider_quota(false, cx);
+                        }
                         Err(error) => this.show_toast(tr!(
                             "providers.auth_load_failed",
                             error = error.to_string()
@@ -716,7 +719,7 @@ impl Fintwind {
     /// binary and a project checkout. The credential store is shared by
     /// every server of the same OpenCode install, so the directory only
     /// picks which pool entry answers.
-    fn provider_workspace(&self) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    pub(super) fn provider_workspace(&self) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
         let binary = self.native_binary_path()?;
         let directory = self
             .state
@@ -808,6 +811,7 @@ impl Fintwind {
             return;
         };
         self.providers_auth_loading = true;
+        self.invalidate_provider_quota();
         self.providers_delete_arming = None;
         let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
@@ -876,6 +880,7 @@ impl Fintwind {
             let _ = this.update(cx, |this, cx| {
                 if let Ok(integrations) = integrations {
                     this.apply_integrations(integrations);
+                    this.load_selected_provider_quota(false, cx);
                     cx.notify();
                 }
             });

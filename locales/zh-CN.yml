@@ -216,6 +216,31 @@ providers.env_badge: 环境变量
 providers.env_note: "该供应商的凭据来自环境变量 %{vars}。环境变量由系统管理，此处不会显示密钥，登出也无法移除该连接。"
 providers.env_logout_toast: "该供应商仍通过环境变量 %{vars} 保持连接。环境变量凭据无法通过登出移除；如需断开，请从系统环境变量中删除该变量，然后重启应用。"
 providers.builtin_key_hidden: API Key 保存在 OpenCode 自己的凭据库中，由 opencode CLI 管理，此处不会显示。
+providers.quota_title: 额度与余额
+providers.quota_refresh: 刷新
+providers.quota_loading: 更新中…
+providers.quota_balance: API 余额
+providers.quota_credits: 额外积分
+providers.quota_unlimited: 不限量
+providers.quota_remaining: "剩余 %{percent}%"
+providers.quota_needs_auth: 凭据已失效，请重新连接
+providers.quota_access_denied: 查询被拒绝，请检查账户权限
+providers.quota_rate_limited: 查询频繁，请稍后重试
+providers.quota_unavailable: 更新失败
+providers.quota_no_data: 未返回额度数据
+providers.quota_measured: "更新于 %{time}"
+providers.quota_cached_measured: "上次成功更新 %{time}"
+providers.quota_resets: "%{time} 重置"
+providers.quota_hours: "%{count} 小时"
+providers.quota_days: "%{count} 天"
+providers.quota_minutes: "%{count} 分钟"
+providers.quota_window: 额度
+providers.quota_weekly: 每周
+providers.quota_monthly: 每月
+providers.quota_tool_calls: 工具调用
+providers.quota_chat: 对话请求
+providers.quota_completions: 代码补全
+providers.quota_premium: 高级请求
 providers.builtin_no_endpoint: 该供应商不支持 API Key 登录（走 OAuth、环境变量或 opencode CLI），此处没有可测试的连接。
 providers.builtin_models_truncated: 还有 %{count} 个模型未显示
 providers.oauth_cli_hint: "%{name} 通过 OAuth 登录。请在终端运行 opencode auth login，或在 TUI 中使用 /connect，然后刷新此页面。"

@@ -44,6 +44,7 @@ pub mod opencode_pool;
 pub mod opencode_session;
 pub mod persistence;
 pub mod projectless;
+pub mod provider_quota;
 mod session_generation;
 pub mod settings;
 pub mod skills;

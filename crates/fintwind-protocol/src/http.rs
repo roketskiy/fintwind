@@ -23,8 +23,7 @@ const CURL_PATH: &str = r"C:\Windows\System32\curl.exe";
 /// startup and again whenever settings change; the desktop app does the same
 /// for its own process. A process-level value means neither the fetch
 /// signatures nor their many call sites grow a proxy parameter.
-static ACTIVE_PROXY: std::sync::RwLock<Option<std::sync::Arc<str>>> =
-    std::sync::RwLock::new(None);
+static ACTIVE_PROXY: std::sync::RwLock<Option<std::sync::Arc<str>>> = std::sync::RwLock::new(None);
 
 /// Install (or clear, with `None`) the proxy every fetch in this module rides
 /// through. The value passes through [`normalize_proxy_url`], so a malformed
@@ -33,8 +32,7 @@ pub fn set_active_proxy(proxy: Option<String>) {
     let normalized = proxy.as_deref().and_then(normalize_proxy_url);
     *ACTIVE_PROXY
         .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
-        normalized.map(std::sync::Arc::from);
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = normalized.map(std::sync::Arc::from);
 }
 
 /// The proxy currently installed for this process, if any. Also the read side
@@ -119,6 +117,82 @@ pub fn http_get(
         return Err(curl_error(&output.stderr));
     }
     split_status_and_body(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// A bounded JSON request. Headers and the optional body ride stdin, never argv.
+/// Redirects are deliberately not followed: an account credential must stay on
+/// the exact allowlisted origin its caller selected. Blocking, no automatic retry.
+pub fn http_json(
+    method: &str,
+    url: &str,
+    headers: &[String],
+    body: Option<&str>,
+    max_time_secs: u64,
+) -> anyhow::Result<(u16, String, Option<u64>)> {
+    anyhow::ensure!(matches!(method, "GET" | "POST"), "unsupported JSON method");
+    // curl config values cannot contain raw line breaks, quotes, or escapes.
+    // Reject malformed credential headers instead of interpreting them as config.
+    anyhow::ensure!(
+        headers
+            .iter()
+            .all(|h| !h.chars().any(|c| c.is_control() || matches!(c, '"' | '\\'))),
+        "invalid JSON header"
+    );
+    let mut child = curl_command()
+        .args(["-q", "-sS", "--max-filesize", "1048576", "--max-time"])
+        .arg(max_time_secs.to_string())
+        .args(["-X", method, "-D", "-", "-K", "-"])
+        .arg(url)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("could not run curl")?;
+    // Both JSON and headers are encoded as curl config strings. -q disables
+    // user curlrc files, including verbose/trace options that could log secrets.
+    let configured = (|| -> anyhow::Result<()> {
+        let mut stdin = child.stdin.take().context("curl stdin is unavailable")?;
+        for header in headers {
+            writeln!(stdin, "header = \"{header}\"")?;
+        }
+        for line in proxy_config_lines() {
+            writeln!(stdin, "{line}")?;
+        }
+        if let Some(body) = body {
+            let escaped = body
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\r', "\\r")
+                .replace('\n', "\\n");
+            writeln!(stdin, "data = \"{escaped}\"")?;
+        }
+        Ok(())
+    })();
+    if configured.is_err() {
+        // This exact Child was created above; never search for other processes.
+        let _ = child.kill();
+        let _ = child.wait();
+        anyhow::bail!("could not configure JSON request");
+    }
+    let output = child.wait_with_output().context("curl did not finish")?;
+    // stderr can contain upstream-controlled text; callers get no raw body/error.
+    anyhow::ensure!(output.status.success(), "JSON request failed");
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let (status, body) = split_status_and_body(&raw)?;
+    let header_bytes = raw.len().saturating_sub(body.len());
+    let retry = raw[..header_bytes].lines().rev().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        if !name.eq_ignore_ascii_case("retry-after") {
+            return None;
+        }
+        let value = value.trim();
+        value.parse::<u64>().ok().or_else(|| {
+            chrono::DateTime::parse_from_rfc2822(value)
+                .ok()
+                .map(|at| (at.timestamp() - chrono::Utc::now().timestamp()).max(0) as u64)
+        })
+    });
+    Ok((status, body, retry))
 }
 
 /// One HTTPS download written straight to `destination`, returning the number

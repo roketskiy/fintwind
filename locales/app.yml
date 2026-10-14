@@ -464,6 +464,8 @@ providers.api_format_openai_responses:
   en: Responses API (OpenAI)
 providers.api_format_anthropic:
   en: Anthropic Messages
+providers.api_format_google:
+  en: Gemini API (Google)
 providers.models_label:
   en: Models
 providers.models_empty:

@@ -241,6 +241,7 @@ providers.api_format_label: API 形式
 providers.api_format_openai: Chat Completions（OpenAI 互換）
 providers.api_format_openai_responses: Responses API（OpenAI）
 providers.api_format_anthropic: Anthropic Messages
+providers.api_format_google: Gemini API（Google）
 providers.models_label: モデル一覧
 providers.models_empty: モデルが未設定です。追加するとチャットで使用できます。
 providers.add_model: モデルを追加

@@ -113,7 +113,10 @@ fn mode_options(
         };
         return json!({"thinking": {"type": "enabled", "budgetTokens": budget}});
     }
-    if name.starts_with("gemini") {
+    // The Google wire keys thinkingConfig regardless of the model's name;
+    // a gemini-named model behind an OpenAI-compatible relay keeps the same
+    // mapping, since relays forward the option name verbatim.
+    if matches!(format, ProviderApiFormat::Google) || name.starts_with("gemini") {
         if off {
             return json!({"thinkingConfig": {"thinkingBudget": 0, "includeThoughts": false}});
         }
@@ -234,6 +237,31 @@ mod tests {
         assert_eq!(
             anthropic["variants"]["nothinking"]["thinking"]["type"],
             "disabled"
+        );
+    }
+
+    #[test]
+    fn google_format_keys_the_ladder_through_thinking_config() {
+        // On Google's wire an undescribed model keys the ladder through
+        // thinkingLevel rather than a budget, whatever the model is named.
+        let mut google = Map::new();
+        fill_model_variants(
+            &mut google,
+            Some(&ModelsDevThinking::default()),
+            Some("custom-named-model"),
+            ProviderApiFormat::Google,
+        );
+        assert_eq!(
+            google["variants"]["nothinking"]["thinkingConfig"]["thinkingBudget"],
+            0
+        );
+        assert_eq!(
+            google["variants"]["low"]["thinkingConfig"]["thinkingLevel"],
+            "low"
+        );
+        assert_eq!(
+            google["variants"]["high"]["thinkingConfig"]["thinkingLevel"],
+            "high"
         );
     }
 

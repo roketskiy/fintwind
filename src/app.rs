@@ -1870,6 +1870,10 @@ pub struct Fintwind {
     /// General settings' early-compaction threshold field. Commits on Enter;
     /// accepts the same `128k`/`1M` forms as the provider window field.
     auto_compact_threshold_input: Entity<ComposerInput>,
+    /// General settings' HTTP proxy field. Commits on Enter; an empty value
+    /// disables the proxy, an unusable address toasts and restores the stored
+    /// one.
+    network_proxy_input: Entity<ComposerInput>,
     provider_form_name: Entity<ComposerInput>,
     provider_form_base_url: Entity<ComposerInput>,
     provider_form_api_key: Entity<ComposerInput>,
@@ -2535,6 +2539,9 @@ impl Fintwind {
             eprintln!("could not normalize daemon settings after migration: {error:#}");
         }
         crate::i18n::set_language(state.language);
+        // The app process's own fetches (update checks, the model catalog,
+        // provider probes) ride the stored proxy from the first request on.
+        fintwind_protocol::http::set_active_proxy(state.network_proxy_url());
         crate::theme::set_ui_text_scale(state.ui_text_scale);
         crate::theme::set_code_text_scale(state.code_text_scale);
         crate::theme::set_transcript_width(state.transcript_width);
@@ -2602,6 +2609,11 @@ impl Fintwind {
             ComposerInput::new(window, cx)
                 .search_field()
                 .placeholder(tr!("settings.auto_compact_threshold_placeholder"))
+        });
+        let network_proxy_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("settings.network_proxy_placeholder"))
         });
         let provider_form_name = cx.new(|cx| {
             ComposerInput::new(window, cx)
@@ -3196,6 +3208,15 @@ impl Fintwind {
                 },
             )
             .detach();
+            cx.subscribe(
+                &network_proxy_input,
+                |this, _, event: &ComposerEvent, cx| match event {
+                    ComposerEvent::Submit(_) => this.confirm_network_proxy(cx),
+                    ComposerEvent::Edited => cx.notify(),
+                    _ => {}
+                },
+            )
+            .detach();
             for form_input in [
                 &provider_form_name,
                 &provider_form_base_url,
@@ -3662,6 +3683,7 @@ impl Fintwind {
                 provider_model_id_input,
                 provider_model_context_input,
                 auto_compact_threshold_input,
+                network_proxy_input,
                 provider_form_name,
                 provider_form_base_url,
                 provider_form_api_key,

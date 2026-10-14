@@ -18,6 +18,82 @@ const CURL_PATH: &str = "/usr/bin/curl";
 #[cfg(windows)]
 const CURL_PATH: &str = r"C:\Windows\System32\curl.exe";
 
+/// The process-wide HTTP proxy every fetch in this module rides through, as a
+/// normalized URL like `http://127.0.0.1:7897`. The daemon installs it at
+/// startup and again whenever settings change; the desktop app does the same
+/// for its own process. A process-level value means neither the fetch
+/// signatures nor their many call sites grow a proxy parameter.
+static ACTIVE_PROXY: std::sync::RwLock<Option<std::sync::Arc<str>>> =
+    std::sync::RwLock::new(None);
+
+/// Install (or clear, with `None`) the proxy every fetch in this module rides
+/// through. The value passes through [`normalize_proxy_url`], so a malformed
+/// address degrades to "no proxy" rather than failing every later fetch.
+pub fn set_active_proxy(proxy: Option<String>) {
+    let normalized = proxy.as_deref().and_then(normalize_proxy_url);
+    *ACTIVE_PROXY
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+        normalized.map(std::sync::Arc::from);
+}
+
+/// The proxy currently installed for this process, if any. Also the read side
+/// for consumers outside this module that must point other programs at the
+/// same proxy: the daemon's `opencode serve` children read it to set the
+/// conventional proxy environment variables.
+pub fn active_proxy() -> Option<String> {
+    ACTIVE_PROXY
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .as_ref()
+        .map(|proxy| proxy.to_string())
+}
+
+/// Validate a user-supplied proxy address and return it in the form curl's
+/// `proxy` option expects. An empty input reads as "no proxy"; a bare
+/// `host:port` gains the `http://` scheme. Characters that cannot ride a curl
+/// config value — quotes, whitespace, control characters — are refused rather
+/// than escaped, so a bad address fails validation instead of corrupting the
+/// request.
+pub fn normalize_proxy_url(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = if trimmed.contains("://") {
+        trimmed.to_owned()
+    } else {
+        let (_host, port) = trimmed.rsplit_once(':')?;
+        if port.is_empty() || !port.bytes().all(|byte| byte.is_ascii_digit()) {
+            return None;
+        }
+        // A bare `host:port` is an HTTP proxy by convention; curl assumes the
+        // scheme too.
+        format!("http://{trimmed}")
+    };
+    if candidate
+        .chars()
+        .any(|character| character.is_whitespace() || character == '"' || character.is_control())
+    {
+        return None;
+    }
+    let (scheme, host) = candidate.split_once("://")?;
+    if !matches!(scheme, "http" | "https") || host.is_empty() || host.contains('/') {
+        return None;
+    }
+    Some(candidate)
+}
+
+/// The `-K` config lines that point curl at the active proxy. Every request
+/// builder appends these next to the headers, so the proxy address rides the
+/// same stdin channel and never appears in a process list.
+fn proxy_config_lines() -> Vec<String> {
+    match active_proxy() {
+        Some(proxy) => vec![format!(r#"proxy = "{proxy}""#)],
+        None => Vec::new(),
+    }
+}
+
 /// One HTTPS GET through curl, returning `(status, body)`. Headers ride the
 /// same `-K` config-file mechanism, so credentials never appear in a process
 /// list. `max_time_secs` bounds the whole request. Blocking.
@@ -187,6 +263,9 @@ fn take_stdin(child: &mut std::process::Child, headers: &[String]) -> anyhow::Re
         .ok_or_else(|| anyhow!("curl stdin is unavailable"))?;
     for header in headers {
         writeln!(stdin, "header = \"{header}\"").context("could not configure curl")?;
+    }
+    for line in proxy_config_lines() {
+        writeln!(stdin, "{line}").context("could not configure curl")?;
     }
     Ok(())
 }

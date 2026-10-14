@@ -168,6 +168,10 @@ settings.auto_compact_threshold: 压缩阈值
 settings.auto_compact_threshold_description: 用量到不了阈值的窗口不受影响，仍走服务商默认压缩
 settings.auto_compact_threshold_placeholder: 如 500K
 settings.auto_compact_threshold_invalid: 阈值格式不对
+settings.network_proxy: 网络代理
+settings.network_proxy_description: 作用于更新检查、模型目录与新建会话
+settings.network_proxy_placeholder: 如 http://127.0.0.1:7897
+settings.network_proxy_invalid: 代理地址格式不对
 settings.app_version: fintwind %{version}
 providers.coding_agents: 编程智能体
 providers.description: fintwind 调用安装在本机上的智能体命令行工具。请先安装相应工具或完成登录，然后刷新

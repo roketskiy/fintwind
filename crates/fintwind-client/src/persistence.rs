@@ -292,6 +292,10 @@ pub struct AppSettings {
     pub auto_compact_enabled: bool,
     /// Absolute live-context tokens triggering the early auto compaction.
     pub auto_compact_threshold_tokens: u64,
+    /// HTTP proxy address the app's own fetches and `opencode serve` children
+    /// ride through, already validated into the `http://host:port` form the
+    /// fetch layer expects. Empty reads as "no proxy".
+    pub network_proxy_url: String,
     pub transcript_width: f32,
 }
 
@@ -310,6 +314,7 @@ impl Default for AppSettings {
             auto_compact_enabled: true,
             auto_compact_threshold_tokens:
                 fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
+            network_proxy_url: String::new(),
             transcript_width: DEFAULT_TRANSCRIPT_WIDTH,
         }
     }
@@ -394,6 +399,10 @@ pub struct PersistedState {
     /// Absolute live-context tokens triggering the early auto compaction.
     #[serde(default = "default_auto_compact_threshold_tokens")]
     pub auto_compact_threshold_tokens: u64,
+    /// HTTP proxy address, validated on write; a hand-edited value is
+    /// re-validated on load and an unusable one reads as empty.
+    #[serde(default)]
+    pub network_proxy_url: String,
     #[serde(default = "default_transcript_width")]
     pub transcript_width: f32,
     #[serde(default = "default_sidebar_visibility")]
@@ -457,6 +466,7 @@ impl PersistedState {
             auto_compact_enabled: true,
             auto_compact_threshold_tokens:
                 fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
+            network_proxy_url: String::new(),
             transcript_width: DEFAULT_TRANSCRIPT_WIDTH,
             sidebar_visible: true,
             right_panel_visible: false,
@@ -542,6 +552,12 @@ impl PersistedState {
             .unwrap_or_default()
     }
 
+    /// The stored proxy address, re-validated on read so a hand-edited
+    /// unusable value degrades to "no proxy" instead of failing every fetch.
+    pub fn network_proxy_url(&self) -> Option<String> {
+        fintwind_protocol::http::normalize_proxy_url(&self.network_proxy_url)
+    }
+
     pub fn daemon_settings(&self) -> DaemonSettings {
         let mut extra = self.daemon_settings_extra.clone();
         // The app-side toggle is the source of truth: whatever the daemon
@@ -557,6 +573,10 @@ impl PersistedState {
         extra.insert(
             fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_KEY.to_owned(),
             serde_json::Value::from(self.auto_compact_threshold_tokens),
+        );
+        extra.insert(
+            fintwind_protocol::settings::NETWORK_PROXY_URL_KEY.to_owned(),
+            serde_json::Value::from(self.network_proxy_url.as_str()),
         );
         DaemonSettings { extra }
     }
@@ -578,6 +598,7 @@ impl PersistedState {
             browser_tools_enabled: self.browser_tools_enabled,
             auto_compact_enabled: self.auto_compact_enabled,
             auto_compact_threshold_tokens: self.auto_compact_threshold_tokens,
+            network_proxy_url: self.network_proxy_url.clone(),
             transcript_width: self.transcript_width,
         }
     }
@@ -615,6 +636,7 @@ impl PersistedState {
         self.browser_tools_enabled = settings.browser_tools_enabled;
         self.auto_compact_enabled = settings.auto_compact_enabled;
         self.auto_compact_threshold_tokens = settings.auto_compact_threshold_tokens;
+        self.network_proxy_url = settings.network_proxy_url;
         self.transcript_width = settings.transcript_width;
     }
 

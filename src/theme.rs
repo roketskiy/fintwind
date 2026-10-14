@@ -320,8 +320,7 @@ pub struct Theme {
     /// translucent and deliberately reads as the familiar browser blue rather
     /// than as brand color.
     pub selection: Hsla,
-    /// Inline `code` foreground and its rounded wash.
-    pub code_text: Hsla,
+    /// Inline `code` rounded wash.
     pub code_wash: Hsla,
     /// Syntax colors for code blocks and the code editor, one per token
     /// class. Every palette family supplies both appearances so transcript
@@ -357,6 +356,10 @@ impl Theme {
     }
 
     pub fn dark() -> Self {
+        Self::for_scheme(ThemeScheme::Default, true)
+    }
+
+    fn base_dark() -> Self {
         Self {
             is_dark: true,
             scheme: ThemeScheme::Default,
@@ -393,7 +396,6 @@ impl Theme {
             gauge: rgb(0x3B82F6).into(),
 
             selection: hsla(211.0 / 360.0, 1.0, 0.50, 0.55),
-            code_text: rgb(0xE0A882).into(),
             code_wash: hsla(220.0 / 360.0, 0.10, 0.90, 0.08),
             code_keyword: rgb(0xC98BC0).into(),
             code_literal: rgb(0xD9A05B).into(),
@@ -417,6 +419,10 @@ impl Theme {
     }
 
     pub fn light() -> Self {
+        Self::for_scheme(ThemeScheme::Default, false)
+    }
+
+    fn base_light() -> Self {
         Self {
             is_dark: false,
             scheme: ThemeScheme::Default,
@@ -453,7 +459,6 @@ impl Theme {
             gauge: rgb(0x2563EB).into(),
 
             selection: hsla(211.0 / 360.0, 1.0, 0.50, 0.35),
-            code_text: rgb(0x9A5528).into(),
             code_wash: hsla(0.0, 0.0, 0.12, 0.07),
             code_keyword: rgb(0x9A4B92).into(),
             code_literal: rgb(0x9A6019).into(),
@@ -481,12 +486,12 @@ impl Theme {
     /// New families use a light/dark base and override the semantics they
     /// restyle; the original presets remain explicit (see `palettes`).
     pub fn for_scheme(scheme: ThemeScheme, is_dark: bool) -> Self {
-        match scheme {
+        let theme = match scheme {
             ThemeScheme::Default => {
                 if is_dark {
-                    Self::dark()
+                    Self::base_dark()
                 } else {
-                    Self::light()
+                    Self::base_light()
                 }
             }
             ThemeScheme::VsCode => Self::vs_code(is_dark),
@@ -501,7 +506,24 @@ impl Theme {
             ThemeScheme::Solarized => Self::solarized(is_dark),
             ThemeScheme::Vercel => Self::vercel(is_dark),
             ThemeScheme::VsCodePlus => Self::vs_code_plus(is_dark),
+        };
+        theme.with_muted_accents()
+    }
+
+    fn with_muted_accents(mut self) -> Self {
+        for color in [
+            &mut self.accent,
+            &mut self.accent_text,
+            &mut self.accent_fill,
+            &mut self.accent_focus,
+            &mut self.link,
+            &mut self.resize_handle,
+            &mut self.gauge,
+            &mut self.selection,
+        ] {
+            color.s *= 0.75;
         }
+        self
     }
 }
 
@@ -554,6 +576,8 @@ pub fn sync_gpui_kit_theme(cx: &mut App) {
         c.popover_foreground = theme.text;
         c.overlay = theme.overlay;
         c.link = theme.link;
+        c.link_active = theme.link;
+        c.link_hover = theme.link;
         c.selection = theme.selection;
         c.danger = theme.danger;
         c.danger_foreground = theme.danger_text;
@@ -643,6 +667,7 @@ pub fn sync_ely_theme(cx: &mut App) {
     colors.fg_subtle = theme.text_tertiary;
     colors.accent = theme.accent;
     colors.focus = theme.accent_focus;
+    colors.link = theme.link;
     colors.selection = theme.selection;
     if cx.theme().palette() != palette {
         ElyTheme::set_palette(mode, Some(palette), cx);

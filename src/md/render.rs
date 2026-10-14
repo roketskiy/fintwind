@@ -219,7 +219,6 @@ pub struct Palette {
     pub border: Hsla,
     pub inset: Hsla,
     pub overlay: Hsla,
-    pub code_text: Hsla,
     pub code_wash: Hsla,
     pub selection: Hsla,
     pub accent: Hsla,
@@ -248,7 +247,6 @@ impl Palette {
             border: theme.border,
             inset: theme.inset,
             overlay: theme.overlay,
-            code_text: theme.code_text,
             code_wash: theme.code_wash,
             selection: theme.selection,
             accent: theme.accent,
@@ -361,7 +359,7 @@ pub fn flatten(
             len: run.text.len(),
             font: run_font,
             color: if run.style.code {
-                palette.code_text
+                base_color
             } else if run.style.link.is_some() {
                 palette.link
             } else {

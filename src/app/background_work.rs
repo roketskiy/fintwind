@@ -1244,6 +1244,18 @@ impl Fintwind {
             .get(registry.activity_index.get(activity_id)?)
     }
 
+    /// The model behind one background item's own transcript, for display
+    /// decisions (e.g. summary-only thinking) that differ per model family.
+    pub(super) fn background_work_model(&self, key: &BackgroundWorkKey) -> Option<String> {
+        let session_id = self.state.selected_session?;
+        self.background_work
+            .get(&session_id)?
+            .items
+            .get(key)?
+            .model
+            .clone()
+    }
+
     /// An item's stored cluster disclosure for one of its transcript blocks,
     /// if the user toggled it. `None` leaves the default — open for the newest
     /// group in a live turn, closed otherwise — to the shared cluster renderer.

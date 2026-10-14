@@ -284,7 +284,7 @@ mod tests {
 
         // Released sections render with bracket-free headings, in file order.
         assert!(markdown.contains(&heading("0.2.6")));
-        assert!(markdown.starts_with(&heading("0.2.7")));
+        assert!(markdown.starts_with(&heading(crate::update::APP_VERSION)));
 
         // The header prose and the unreleased scratch section never ship.
         assert!(!markdown.contains("source of truth"));

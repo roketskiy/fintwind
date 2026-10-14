@@ -9,6 +9,8 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::path::Path;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::model::ReportedCommand;
 pub use fintwind_protocol::composer::{CommandScope, FileEntry, SlashCommand};
@@ -151,8 +153,9 @@ fn builtin_fintwind_commands() -> Vec<SlashCommand> {
 /// Filesystem work throughout — background executor only. Sources follow
 /// OpenCode's conventions:
 ///
-/// - OpenCode: `.opencode/command` and `~/.config/opencode/command`, expanded
-///   by Fintwind — its server transport takes plain prompt text.
+/// - OpenCode: `.opencode/commands` and `~/.config/opencode/commands`
+///   (singular `command` kept for pre-rename layouts), expanded by Fintwind —
+///   its server transport takes plain prompt text.
 ///
 /// Skills — `SKILL.md` directories in OpenCode's locations and the cross-tool
 /// `.agents/skills` / `~/.agents/skills` — are always sent raw:
@@ -164,10 +167,18 @@ fn builtin_fintwind_commands() -> Vec<SlashCommand> {
 /// ([`builtin_fintwind_commands`]), always expanded by Fintwind, so a template
 /// written once works over any transport. Native files scan first, so they
 /// win a same-scope name collision. Live processes may add more at runtime
-/// ([`merge_reported_commands`]).
+/// ([`merge_reported_commands`], [`server_commands`]).
 pub fn discover_slash_commands(project_root: &Path) -> Vec<SlashCommand> {
     let home = dirs::home_dir();
     let mut commands = Vec::new();
+    // The renamed plural directory is OpenCode's documented layout; the
+    // singular predecessor stays discovered behind it.
+    scan_command_files(
+        &project_root.join(".opencode/commands"),
+        CommandScope::Project,
+        true,
+        &mut commands,
+    );
     scan_command_files(
         &project_root.join(".opencode/command"),
         CommandScope::Project,
@@ -178,6 +189,12 @@ pub fn discover_slash_commands(project_root: &Path) -> Vec<SlashCommand> {
     // OpenCode also loads Claude-compatible skill trees.
     scan_skill_files(&project_root.join(".claude/skills"), &mut commands);
     if let Some(home) = home.as_deref() {
+        scan_command_files(
+            &home.join(".config/opencode/commands"),
+            CommandScope::User,
+            true,
+            &mut commands,
+        );
         scan_command_files(
             &home.join(".config/opencode/command"),
             CommandScope::User,
@@ -262,8 +279,106 @@ fn sort_commands_for_display(commands: &mut [SlashCommand]) {
         .sort_by(|a, b| (a.scope.display_rank(), &a.name).cmp(&(b.scope.display_rank(), &b.name)));
 }
 
+/// The commands the OpenCode server itself has loaded: markdown files,
+/// `opencode.json` entries, and everything plugins registered. The server
+/// registry is the only view that can see those last two, so it folds into
+/// filesystem discovery ([`merge_reported_commands`]) rather than replacing
+/// it — a discovered entry keeps its template, which Fintwind expands at
+/// submit because the server transport takes plain prompt text.
+///
+/// The pooled server builds the registry asynchronously: naming the location
+/// on `/api/config` starts the workspace load, built-ins can surface first,
+/// and the project's own commands join later. So this triggers the load and
+/// polls `/api/command` until two consecutive polls agree — including two
+/// agreeing empty polls, which is a workspace with no commands at all — on a
+/// bounded budget. An unreachable server degrades to an empty report and
+/// discovery stands alone. Blocking (it may start the resident process), so
+/// callers must already run off the UI thread.
+pub fn server_commands(binary: &Path, directory: &Path) -> Vec<ReportedCommand> {
+    const COMMAND_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+    const COMMAND_DISCOVERY_BUDGET: Duration = Duration::from_secs(30);
+    const COMMAND_DISCOVERY_INITIAL_DELAY: Duration = Duration::from_millis(500);
+    const COMMAND_DISCOVERY_MAX_DELAY: Duration = Duration::from_secs(2);
+    let Ok(server) = crate::opencode_pool::acquire(binary, directory) else {
+        return Vec::new();
+    };
+    // The pooled server runs in its own data directory; the workspace rides
+    // along as normalized per-request location data (see the model catalog).
+    let location = crate::opencode_session::resolve_request_directory(directory);
+    // `location[directory]` percent-encodes to the deepObject query form the
+    // API documents, which both routes accept.
+    let query = |route: &str| {
+        url::Url::parse_with_params(
+            &format!("http://localhost{route}"),
+            &[("location[directory]", location.as_str())],
+        )
+        .ok()
+        .and_then(|url| url.query().map(|query| format!("{route}?{query}")))
+        .unwrap_or_else(|| route.to_owned())
+    };
+    // Naming the location here starts the workspace load; the response body
+    // itself is not needed.
+    let _ = server.request_for_directory_with_timeout(
+        &location,
+        "GET",
+        &query("/api/config"),
+        None,
+        COMMAND_REQUEST_TIMEOUT,
+    );
+    let started = Instant::now();
+    let mut delay = COMMAND_DISCOVERY_INITIAL_DELAY;
+    // The registry is built asynchronously after the config scan, and it can
+    // surface OpenCode's built-ins before the project's own commands join.
+    // The load is complete when two consecutive polls agree — including two
+    // agreeing empty polls, which is a workspace with no commands at all.
+    let mut previous: Option<Vec<ReportedCommand>> = None;
+    let mut stable_polls = 0;
+    loop {
+        let parsed = server
+            .request_for_directory_with_timeout(
+                &location,
+                "GET",
+                &query("/api/command"),
+                None,
+                COMMAND_REQUEST_TIMEOUT,
+            )
+            .ok()
+            .map(|value| {
+                value
+                    .get("data")
+                    .and_then(serde_json::Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|entry| {
+                        let name = entry.get("name")?.as_str()?;
+                        Some(ReportedCommand {
+                            name: name.to_owned(),
+                            description: entry
+                                .get("description")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned(),
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            });
+        stable_polls = match (&previous, &parsed) {
+            (Some(previous), Some(parsed)) if previous == parsed => stable_polls + 1,
+            _ => 0,
+        };
+        let settled = parsed.is_some() && stable_polls >= 2;
+        if settled || started.elapsed() >= COMMAND_DISCOVERY_BUDGET {
+            return parsed.unwrap_or_default();
+        }
+        previous = parsed;
+        thread::sleep(delay);
+        delay = (delay * 2).min(COMMAND_DISCOVERY_MAX_DELAY);
+    }
+}
+
 /// Collect `*.md` command files under `root`, one command per file, with
-/// subdirectories namespacing the name (`a/b.md` → `a:b`).
+/// subdirectories namespacing the name (`a/b.md` → `a/b`) — the same
+/// path-derived names OpenCode resolves its own nested commands by.
 fn scan_command_files(
     root: &Path,
     scope: CommandScope,
@@ -313,7 +428,7 @@ fn scan_command_files(
                 .map(String::as_str)
                 .chain([stem])
                 .collect::<Vec<_>>()
-                .join(":");
+                .join("/");
             commands.push(SlashCommand {
                 name,
                 description: front
@@ -1061,6 +1176,120 @@ mod tests {
                 .unwrap_or_default()
                 .contains("AGENTS.md")
         }));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn opencode_commands_plural_directory_is_discovered() {
+        let root = std::env::temp_dir().join(format!("fintwind-cmds-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        // OpenCode v2's documented layout: plural directory, nested paths
+        // naming commands with `/` separators.
+        std::fs::create_dir_all(root.join(".opencode/commands/team")).unwrap();
+        std::fs::write(
+            root.join(".opencode/commands/audit.md"),
+            "---\ndescription: Audit a package\n---\nAudit $ARGUMENTS.",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(".opencode/commands/team/review.md"),
+            "Review $ARGUMENTS using the team's checklist.",
+        )
+        .unwrap();
+        let commands = discover_slash_commands(&root);
+        let audit = commands
+            .iter()
+            .find(|command| command.name == "audit")
+            .unwrap_or_else(|| panic!("missing the plural-directory command"));
+        assert_eq!(audit.scope, CommandScope::Project);
+        assert_eq!(audit.description, "Audit a package");
+        assert_eq!(
+            expanded_submission("/audit auth", &commands).as_deref(),
+            Some("Audit auth.")
+        );
+        let nested = commands
+            .iter()
+            .find(|command| command.name == "team/review")
+            .unwrap_or_else(|| panic!("nested commands must name with '/'"));
+
+        // The legacy singular directory stays discovered, but a same-named
+        // plural entry — the newer layout — wins the collision.
+        std::fs::create_dir_all(root.join(".opencode/command")).unwrap();
+        std::fs::write(
+            root.join(".opencode/command/audit.md"),
+            "---\ndescription: Legacy audit\n---\nOld audit.",
+        )
+        .unwrap();
+        let commands = discover_slash_commands(&root);
+        let audit = commands
+            .iter()
+            .find(|command| command.name == "audit")
+            .unwrap_or_else(|| panic!("missing the plural-directory command"));
+        assert_eq!(audit.description, "Audit a package");
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.name == "team/review")
+                .count(),
+            1,
+            "the nested command is listed once: {nested:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn server_reported_commands_join_without_displacing_templates() {
+        let root = std::env::temp_dir().join(format!("fintwind-srv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join(".opencode/commands")).unwrap();
+        std::fs::write(
+            root.join(".opencode/commands/review.md"),
+            "Review $ARGUMENTS.",
+        )
+        .unwrap();
+        let discovered = discover_slash_commands(&root);
+        // The server also lists the markdown command plus a plugin-registered
+        // and a config-defined one that no filesystem scan can see.
+        let reported = vec![
+            ReportedCommand {
+                name: "review".to_owned(),
+                description: "Server gloss".to_owned(),
+            },
+            ReportedCommand {
+                name: "plugin-tool".to_owned(),
+                description: "Registered by a plugin".to_owned(),
+            },
+            ReportedCommand {
+                name: "config-cmd".to_owned(),
+                description: String::new(),
+            },
+        ];
+        let merged = merge_reported_commands(&discovered, &reported);
+        let review = merged
+            .iter()
+            .find(|command| command.name == "review")
+            .unwrap();
+        assert_eq!(
+            review.template.as_deref(),
+            Some("Review $ARGUMENTS."),
+            "the discovered template survives the server's report"
+        );
+        assert_eq!(review.description, "Review $ARGUMENTS.");
+        let plugin = merged
+            .iter()
+            .find(|command| command.name == "plugin-tool")
+            .unwrap();
+        assert_eq!(plugin.description, "Registered by a plugin");
+        assert!(plugin.template.is_none());
+        assert_eq!(
+            expanded_submission("/plugin-tool args", &merged),
+            None,
+            "server-owned commands are sent verbatim"
+        );
+        assert!(
+            merged.iter().any(|command| command.name == "config-cmd"),
+            "a descriptionless server command still lists"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

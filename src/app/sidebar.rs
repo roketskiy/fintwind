@@ -257,8 +257,6 @@ impl Fintwind {
             .flex()
             .flex_col()
             .bg(theme.rail)
-            .border_r_1()
-            .border_color(theme.sidebar_border)
             // The strip above the entries drags the window; with the second
             // column collapsed this is the only top-left drag surface.
             .child(

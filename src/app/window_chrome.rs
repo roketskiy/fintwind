@@ -44,8 +44,6 @@ impl Fintwind {
             .flex()
             .items_center()
             .bg(theme.rail)
-            .border_b_1()
-            .border_color(theme.sidebar_border)
             // macOS draws its traffic lights over the bar's left edge; the
             // clearance keeps the logo out from under them.
             .when(cfg!(target_os = "macos"), |bar| {

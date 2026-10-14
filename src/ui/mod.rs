@@ -125,7 +125,7 @@ impl ActivationExt for Stateful<Div> {
 ///
 /// `activate` still runs through the caller's entity via a weak handle, so
 /// business setters are reached exactly as before and the click stays one
-/// state round-trip. The checked fill keeps Fintwind's accent; the resting
+/// state round-trip. The checked fill uses neutral emphasis; the resting
 /// track and thumb come from the library theme, which the app projects its
 /// palette onto.
 ///
@@ -149,9 +149,7 @@ where
     let mut switch = Switch::new(id)
         .checked(on)
         .disabled(disabled)
-        // Controlled projection: the on state keeps Fintwind's accent even
-        // before the library theme bridge maps the rest of the palette.
-        .color(theme.accent);
+        .color(theme.neutral_fill);
     if !disabled {
         switch = switch.on_click(move |_, window, cx| {
             let _ = owner.update(cx, |this, cx| activate(this, window, cx));

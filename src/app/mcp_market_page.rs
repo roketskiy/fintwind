@@ -437,7 +437,7 @@ impl Fintwind {
     }
 
     fn render_market_list_pane(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let accent = market_accent(theme);
+        let accent = theme.neutral_fill;
         let visible = self.visible_market_entries(cx);
         let selected = self.effective_market_entry(cx);
         let grouped = self.mcp_market_category == McpMarketCategory::All;
@@ -607,8 +607,8 @@ impl Fintwind {
                     .text_size(ui_px(10.5))
                     .when(selected, |element| {
                         element
-                            .text_color(theme.accent_text)
-                            .bg(theme.accent_fill.opacity(0.14))
+                            .text_color(theme.neutral_fill)
+                            .bg(theme.neutral_fill.opacity(0.14))
                     })
                     .when(!selected, |element| {
                         element

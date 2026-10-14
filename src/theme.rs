@@ -1,6 +1,8 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use gpui::{App, Global, Hsla, Pixels, SharedString, Window, WindowAppearance, hsla, px, rgb};
+use gpui::{
+    App, BoxShadow, Global, Hsla, Pixels, SharedString, Window, WindowAppearance, hsla, px, rgb,
+};
 use parking_lot::Mutex;
 
 mod palettes;
@@ -288,6 +290,9 @@ pub struct Theme {
     pub terminal: Hsla,
     pub overlay: Hsla,
     pub overlay_strong: Hsla,
+    /// Neutral emphasis for selected controls and checked switches.
+    pub neutral_fill: Hsla,
+    pub on_neutral: Hsla,
 
     pub border: Hsla,
     pub border_strong: Hsla,
@@ -347,6 +352,30 @@ pub struct Theme {
 }
 
 impl Theme {
+    pub fn sidebar_shadow(&self) -> Vec<BoxShadow> {
+        vec![
+            BoxShadow::new(
+                px(-1.0),
+                px(0.0),
+                hsla(0.0, 0.0, 0.0, if self.is_dark { 0.14 } else { 0.04 }),
+            )
+            .blur_radius(px(4.0)),
+        ]
+    }
+
+    /// A contact shadow and a soft cast shadow lift the workspace above navigation.
+    pub fn workspace_shadow(&self) -> Vec<BoxShadow> {
+        let (contact, ambient) = if self.is_dark {
+            (0.20, 0.14)
+        } else {
+            (0.08, 0.045)
+        };
+        vec![
+            BoxShadow::new(px(-1.0), px(0.0), hsla(0.0, 0.0, 0.0, contact)).blur_radius(px(2.0)),
+            BoxShadow::new(px(-2.0), px(0.0), hsla(0.0, 0.0, 0.0, ambient)).blur_radius(px(8.0)),
+        ]
+    }
+
     pub fn current(cx: &App) -> Self {
         if cx.has_global::<ActiveFintwindTheme>() {
             cx.global::<ActiveFintwindTheme>().0
@@ -363,18 +392,20 @@ impl Theme {
         Self {
             is_dark: true,
             scheme: ThemeScheme::Default,
-            canvas: rgb(0x1A1A1A).into(),
-            sidebar: rgb(0x181818).into(),
+            canvas: rgb(0x222222).into(),
+            sidebar: rgb(0x1A1A1A).into(),
             rail: rgb(0x141414).into(),
-            sidebar_drag_background: rgb(0x181818).into(),
+            sidebar_drag_background: rgb(0x1A1A1A).into(),
             sidebar_item_background: hsla(0.0, 0.0, 0.941, 0.06),
-            surface: rgb(0x1A1A1A).into(),
-            raised: rgb(0x232323).into(),
-            composer: rgb(0x212121).into(),
+            surface: rgb(0x222222).into(),
+            raised: rgb(0x2B2B2B).into(),
+            composer: rgb(0x282828).into(),
             inset: rgb(0x151515).into(),
             terminal: rgb(0x151515).into(),
             overlay: hsla(220.0 / 360.0, 0.10, 0.90, 0.05),
             overlay_strong: hsla(220.0 / 360.0, 0.10, 0.90, 0.09),
+            neutral_fill: rgb(0xD6D6D6).into(),
+            on_neutral: rgb(0x1A1A1A).into(),
 
             border: hsla(220.0 / 360.0, 0.10, 0.90, 0.07),
             border_strong: hsla(220.0 / 360.0, 0.10, 0.90, 0.14),
@@ -383,7 +414,7 @@ impl Theme {
             text: rgb(0xE2E2E2).into(),
             text_secondary: rgb(0xA3A3A3).into(),
             text_tertiary: rgb(0x929292).into(),
-            text_muted: rgb(0x8B8B8B).into(),
+            text_muted: rgb(0x929292).into(),
             text_ghost: rgb(0x575757).into(),
 
             accent: rgb(0xD97757).into(),
@@ -426,18 +457,20 @@ impl Theme {
         Self {
             is_dark: false,
             scheme: ThemeScheme::Default,
-            canvas: rgb(0xFFFFFF).into(),
-            sidebar: rgb(0xF9F9F9).into(),
-            rail: rgb(0xF1F1F1).into(),
-            sidebar_drag_background: rgb(0xF9F9F9).into(),
+            canvas: rgb(0xF7F7F7).into(),
+            sidebar: rgb(0xF3F3F3).into(),
+            rail: rgb(0xEAEAEA).into(),
+            sidebar_drag_background: rgb(0xF3F3F3).into(),
             sidebar_item_background: hsla(0.0, 0.0, 0.078, 0.10),
-            surface: rgb(0xFFFFFF).into(),
+            surface: rgb(0xF7F7F7).into(),
             raised: rgb(0xF4F4F4).into(),
-            composer: rgb(0xFFFFFF).into(),
+            composer: rgb(0xFAFAFA).into(),
             inset: rgb(0xEFEFEF).into(),
             terminal: rgb(0xFFFFFF).into(),
             overlay: hsla(0.0, 0.0, 0.12, 0.05),
             overlay_strong: hsla(0.0, 0.0, 0.12, 0.09),
+            neutral_fill: rgb(0x343434).into(),
+            on_neutral: rgb(0xFFFFFF).into(),
 
             border: hsla(0.0, 0.0, 0.12, 0.12),
             border_strong: hsla(0.0, 0.0, 0.12, 0.18),
@@ -445,8 +478,8 @@ impl Theme {
 
             text: rgb(0x141414).into(),
             text_secondary: rgb(0x5C5C5C).into(),
-            text_tertiary: rgb(0x707070).into(),
-            text_muted: rgb(0x6B6B6B).into(),
+            text_tertiary: rgb(0x696969).into(),
+            text_muted: rgb(0x686868).into(),
             text_ghost: rgb(0xA3A3A3).into(),
 
             accent: rgb(0xB25A39).into(),
@@ -566,7 +599,11 @@ pub fn sync_gpui_kit_theme(cx: &mut App) {
         c.accent_foreground = theme.on_accent;
         c.border = theme.border_strong;
         c.input = theme.composer;
-        c.ring = theme.accent_focus;
+        c.ring = theme.neutral_fill;
+        c.switch = theme
+            .neutral_fill
+            .opacity(if theme.is_dark { 0.4 } else { 0.55 });
+        c.switch_thumb = theme.on_neutral;
         c.muted = theme.raised;
         c.muted_foreground = theme.text_secondary;
         c.secondary = theme.raised;

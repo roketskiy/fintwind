@@ -54,8 +54,6 @@ struct PaletteSeed {
     favorite: Option<u32>,
     danger: Option<u32>,
     danger_text: Option<u32>,
-    // Inline code and the syntax tokens shared with code blocks
-    code_text: Option<u32>,
     code_keyword: Option<u32>,
     code_literal: Option<u32>,
     code_string: Option<u32>,
@@ -86,7 +84,11 @@ impl Theme {
     /// overrides. `on_accent` is paired with both `accent_fill` and
     /// `accent_text`: some colored controls use the latter as their fill.
     fn family(scheme: ThemeScheme, is_dark: bool, seed: PaletteSeed) -> Self {
-        let mut theme = if is_dark { Self::dark() } else { Self::light() };
+        let mut theme = if is_dark {
+            Self::base_dark()
+        } else {
+            Self::base_light()
+        };
         theme.scheme = scheme;
 
         theme.canvas = seed.canvas.map_or(theme.canvas, color);
@@ -119,8 +121,6 @@ impl Theme {
         theme.favorite = seed.favorite.map_or(theme.favorite, color);
         theme.danger = seed.danger.map_or(theme.danger, color);
         theme.danger_text = seed.danger_text.map_or(theme.danger_text, color);
-
-        theme.code_text = seed.code_text.map_or(theme.code_text, color);
         theme.code_keyword = seed.code_keyword.map_or(theme.code_keyword, color);
         theme.code_literal = seed.code_literal.map_or(theme.code_literal, color);
         theme.code_string = seed.code_string.map_or(theme.code_string, color);
@@ -140,7 +140,11 @@ impl Theme {
     }
 
     pub(super) fn vs_code(is_dark: bool) -> Self {
-        let mut theme = if is_dark { Self::dark() } else { Self::light() };
+        let mut theme = if is_dark {
+            Self::base_dark()
+        } else {
+            Self::base_light()
+        };
         theme.scheme = ThemeScheme::VsCode;
         if is_dark {
             // VS Code Dark Modern workbench surfaces; high-emphasis text and
@@ -166,7 +170,6 @@ impl Theme {
             theme.success_text = rgb(0x73CD80).into();
             theme.danger = rgb(0xF85149).into();
             theme.danger_text = rgb(0xFF817A).into();
-            theme.code_text = rgb(0xCE9178).into();
             // Dark+ token colors (VS Code theme reference).
             theme.code_keyword = rgb(0xC586C0).into();
             theme.code_literal = rgb(0xB5CEA8).into();
@@ -196,7 +199,6 @@ impl Theme {
             theme.accent_focus = theme.accent;
             theme.on_accent = rgb(0xFFFFFF).into();
             theme.link = theme.accent;
-            theme.code_text = rgb(0xA31515).into();
             // Light+ token colors (VS Code theme reference).
             theme.code_keyword = rgb(0xAF00DB).into();
             theme.code_literal = rgb(0x087044).into();
@@ -216,7 +218,11 @@ impl Theme {
     }
 
     pub(super) fn codex(is_dark: bool) -> Self {
-        let mut theme = if is_dark { Self::dark() } else { Self::light() };
+        let mut theme = if is_dark {
+            Self::base_dark()
+        } else {
+            Self::base_light()
+        };
         theme.scheme = ThemeScheme::Codex;
         // Codex-inspired desktop surfaces, not the CLI's terminal background.
         // The CLI provides accent values but inherits its terminal's surface.
@@ -238,7 +244,6 @@ impl Theme {
             theme.accent_focus = theme.accent_text;
             theme.on_accent = rgb(0x111827).into();
             theme.link = theme.accent_text;
-            theme.code_text = rgb(0xA8CBF7).into();
             theme.code_keyword = rgb(0xB5A0E6).into();
             theme.code_literal = rgb(0xD9B872).into();
             theme.code_string = rgb(0x8EC8A6).into();
@@ -263,7 +268,6 @@ impl Theme {
             theme.accent_focus = theme.accent;
             theme.on_accent = rgb(0xFFFFFF).into();
             theme.link = theme.accent;
-            theme.code_text = rgb(0x245C9E).into();
             theme.code_keyword = rgb(0x6C3EA1).into();
             theme.code_literal = rgb(0x844E0B).into();
             theme.code_string = rgb(0x246A48).into();
@@ -282,7 +286,11 @@ impl Theme {
     }
 
     pub(super) fn nord(is_dark: bool) -> Self {
-        let mut theme = if is_dark { Self::dark() } else { Self::light() };
+        let mut theme = if is_dark {
+            Self::base_dark()
+        } else {
+            Self::base_light()
+        };
         theme.scheme = ThemeScheme::Nord;
         if is_dark {
             theme.canvas = rgb(0x2E3440).into();
@@ -308,7 +316,6 @@ impl Theme {
             theme.success_text = theme.success;
             theme.danger = rgb(0xBF616A).into();
             theme.danger_text = rgb(0xE5949B).into();
-            theme.code_text = rgb(0xEBCB8B).into();
             theme.code_keyword = rgb(0xB48EAD).into();
             theme.code_literal = rgb(0xB48EAD).into();
             theme.code_string = rgb(0xA3BE8C).into();
@@ -345,7 +352,6 @@ impl Theme {
             theme.success_text = rgb(0x46652E).into();
             theme.danger = rgb(0xA44450).into();
             theme.danger_text = rgb(0x923641).into();
-            theme.code_text = rgb(0x82520E).into();
             theme.code_keyword = rgb(0x70446A).into();
             theme.code_literal = rgb(0x70446A).into();
             theme.code_string = rgb(0x46652E).into();
@@ -398,7 +404,6 @@ impl Theme {
                 favorite: Some(0xF2C94C),
                 danger: Some(0xEB5757),
                 danger_text: Some(0xF07B7B),
-                code_text: Some(0xE0C08C),
                 code_keyword: Some(0xC39AF0),
                 code_literal: Some(0xE8C57A),
                 code_string: Some(0x7FC8A0),
@@ -435,7 +440,6 @@ impl Theme {
                 favorite: Some(0xB08400),
                 danger: Some(0xC2453F),
                 danger_text: Some(0xB23A36),
-                code_text: Some(0x95591C),
                 code_keyword: Some(0x7A4FC9),
                 code_literal: Some(0x795106),
                 code_string: Some(0x246846),
@@ -481,7 +485,6 @@ impl Theme {
                 favorite: Some(0xE9C46A),
                 danger: Some(0xEB6A5E),
                 danger_text: Some(0xF58A80),
-                code_text: Some(0xDFC08A),
                 code_keyword: Some(0xC395E8),
                 code_literal: Some(0xE0B457),
                 code_string: Some(0x7CC49B),
@@ -518,7 +521,6 @@ impl Theme {
                 favorite: Some(0xA67C00),
                 danger: Some(0xC2453F),
                 danger_text: Some(0xB23A36),
-                code_text: Some(0x8A6114),
                 code_keyword: Some(0x7B3FA8),
                 code_literal: Some(0x79531E),
                 code_string: Some(0x246844),
@@ -564,7 +566,6 @@ impl Theme {
                 favorite: Some(0xE5C07B),
                 danger: Some(0xE06C75),
                 danger_text: Some(0xE89096),
-                code_text: Some(0xE5C07B),
                 code_keyword: Some(0xC678DD),
                 code_literal: Some(0xD19A66),
                 code_string: Some(0x98C379),
@@ -601,7 +602,6 @@ impl Theme {
                 favorite: Some(0xA67C00),
                 danger: Some(0xC2453F),
                 danger_text: Some(0xB23A36),
-                code_text: Some(0x94612A),
                 code_keyword: Some(0xA626A4),
                 code_literal: Some(0x8E6100),
                 code_string: Some(0x356B2D),
@@ -649,7 +649,6 @@ impl Theme {
                 favorite: Some(0xD9B25C),
                 danger: Some(0xDB6B52),
                 danger_text: Some(0xE5836C),
-                code_text: Some(0xDEA86E),
                 code_keyword: Some(0xB88BC8),
                 code_literal: Some(0xDCA45E),
                 code_string: Some(0x9CBF7E),
@@ -686,7 +685,6 @@ impl Theme {
                 favorite: Some(0x9C7500),
                 danger: Some(0xB23A36),
                 danger_text: Some(0x9E3330),
-                code_text: Some(0x8A6114),
                 code_keyword: Some(0x7A4B92),
                 code_literal: Some(0x795106),
                 code_string: Some(0x40703A),
@@ -731,7 +729,6 @@ impl Theme {
                 favorite: Some(0xF0B429),
                 danger: Some(0xE5484D),
                 danger_text: Some(0xF2777A),
-                code_text: Some(0xE59C86),
                 code_keyword: Some(0xC792EA),
                 code_literal: Some(0xF2C14E),
                 code_string: Some(0x8FD694),
@@ -768,7 +765,6 @@ impl Theme {
                 favorite: Some(0xA67C00),
                 danger: Some(0xB23A36),
                 danger_text: Some(0x9E3330),
-                code_text: Some(0xB03A36),
                 code_keyword: Some(0x9B3FB0),
                 code_literal: Some(0x795106),
                 code_string: Some(0x246846),
@@ -815,7 +811,6 @@ impl Theme {
                 favorite: Some(0xF6C177),
                 danger: Some(0xEB6F92),
                 danger_text: Some(0xEB6F92),
-                code_text: Some(0xEBBCBA),
                 code_keyword: Some(0xC4A7E7),
                 code_literal: Some(0xF6C177),
                 code_string: Some(0x56919F),
@@ -852,7 +847,6 @@ impl Theme {
                 favorite: Some(0xB97B22),
                 danger: Some(0xB4637A),
                 danger_text: Some(0x9E4F66),
-                code_text: Some(0x9E4F66),
                 code_keyword: Some(0x69507D),
                 code_literal: Some(0x8A5E12),
                 code_string: Some(0x286983),
@@ -898,7 +892,6 @@ impl Theme {
                 favorite: Some(0xB58900),
                 danger: Some(0xDC322F),
                 danger_text: Some(0xF0706D),
-                code_text: Some(0xD9762F),
                 code_keyword: Some(0x9A93E8),
                 code_literal: Some(0xC79A1E),
                 code_string: Some(0x2AA198),
@@ -935,7 +928,6 @@ impl Theme {
                 favorite: Some(0x8A6A00),
                 danger: Some(0xC43B39),
                 danger_text: Some(0xA82A28),
-                code_text: Some(0xA33C14),
                 code_keyword: Some(0x4D55A6),
                 code_literal: Some(0x705400),
                 code_string: Some(0x0E756B),
@@ -979,7 +971,6 @@ impl Theme {
                 favorite: Some(0xF5A623),
                 danger: Some(0xF2555A),
                 danger_text: Some(0xF2777A),
-                code_text: Some(0x5AA2F0),
                 code_keyword: Some(0x8B7CF6),
                 code_literal: Some(0xF5A623),
                 code_string: Some(0x3ECF8E),
@@ -1016,7 +1007,6 @@ impl Theme {
                 favorite: Some(0xA16207),
                 danger: Some(0xC22A34),
                 danger_text: Some(0xAB2430),
-                code_text: Some(0x0B5FC0),
                 code_keyword: Some(0x6B3FC9),
                 code_literal: Some(0x8A5A00),
                 code_string: Some(0x0F7B52),
@@ -1063,7 +1053,6 @@ impl Theme {
                 favorite: Some(0xD7BA7D),
                 danger: Some(0xF14C4C),
                 danger_text: Some(0xF48771),
-                code_text: Some(0xCE9178),
                 code_keyword: Some(0xC586C0),
                 code_literal: Some(0xB5CEA8),
                 code_string: Some(0xCE9178),
@@ -1100,7 +1089,6 @@ impl Theme {
                 favorite: Some(0x8A6A00),
                 danger: Some(0xC4314B),
                 danger_text: Some(0xAB2440),
-                code_text: Some(0xA31515),
                 code_keyword: Some(0xAF00DB),
                 code_literal: Some(0x087044),
                 code_string: Some(0xA31515),

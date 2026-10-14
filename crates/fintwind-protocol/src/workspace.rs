@@ -67,6 +67,11 @@ pub enum WorkspaceOperation {
     },
     DiscoverSlashCommands {
         project_root: PathBuf,
+        /// The OpenCode binary the client probed, when it has one. The daemon
+        /// folds the server's own command registry — `opencode.json` entries
+        /// and everything plugins registered — into the filesystem discovery
+        /// through it. `None` keeps discovery filesystem-only.
+        binary: Option<PathBuf>,
     },
     CreateProjectlessWorkspace {
         prompt: Option<String>,

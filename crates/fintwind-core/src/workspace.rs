@@ -66,10 +66,17 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
         WorkspaceOperation::ListProjectFiles { root, cap } => WorkspaceResult::ProjectFiles {
             entries: crate::composer_complete::list_project_files(&root, cap),
         },
-        WorkspaceOperation::DiscoverSlashCommands { project_root } => {
-            WorkspaceResult::SlashCommands {
-                commands: crate::composer_complete::discover_slash_commands(&project_root),
+        WorkspaceOperation::DiscoverSlashCommands { project_root, binary } => {
+            let mut commands = crate::composer_complete::discover_slash_commands(&project_root);
+            // The server's registry names config and plugin commands no
+            // filesystem scan can see; its entries never carry a template, so
+            // a discovered one always keeps its own.
+            if let Some(binary) = binary {
+                let reported =
+                    crate::composer_complete::server_commands(&binary, &project_root);
+                commands = crate::composer_complete::merge_reported_commands(&commands, &reported);
             }
+            WorkspaceResult::SlashCommands { commands }
         }
         WorkspaceOperation::CreateProjectlessWorkspace { prompt } => {
             WorkspaceResult::ProjectlessWorkspace {

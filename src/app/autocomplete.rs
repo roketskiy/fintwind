@@ -147,6 +147,10 @@ impl Fintwind {
                     self.slash_command_index_key = None;
                 }
                 let path = project_path.clone();
+                let binary = self
+                    .probes
+                    .first()
+                    .and_then(|probe| probe.path.clone());
                 let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
                 cx.spawn(async move |fintwind, cx| {
                     let commands = cx
@@ -155,6 +159,7 @@ impl Fintwind {
                             match workspace.request(
                                 fintwind_client::WorkspaceOperation::DiscoverSlashCommands {
                                     project_root: path,
+                                    binary,
                                 },
                             ) {
                                 Ok(fintwind_client::WorkspaceResult::SlashCommands {

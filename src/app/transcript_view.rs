@@ -20,6 +20,7 @@ const ACTIVITY_DETAIL_MAX_HEIGHT: f32 = 800.0;
 /// Aligns a hunk separator with the line numbers in the rows below it; see
 /// `DiffRowStyle::ACTIVITY`.
 const ACTIVITY_DIFF_GUTTER_WIDTH: f32 = 52.0;
+const ACTIVITY_OPACITY: f32 = 0.70;
 
 #[derive(Clone, Debug)]
 struct ConversationNavigationRailSnapshot {
@@ -2401,6 +2402,7 @@ impl Fintwind {
             .child(
                 div()
                     .id(SharedString::from(control_id))
+                    .opacity(ACTIVITY_OPACITY)
                     .track_focus(&header_focus)
                     .tab_index(0)
                     .w_full()
@@ -3259,7 +3261,7 @@ impl Fintwind {
                     .child(activity_scroll_guard(detail_viewport, !activity.complete)),
             );
         }
-        item.into_any_element()
+        item.opacity(ACTIVITY_OPACITY).into_any_element()
     }
 
     /// The diff for an expanded file-change activity.

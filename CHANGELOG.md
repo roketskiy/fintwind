@@ -18,6 +18,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- 修复通过 HTTPS 代理检查更新时，代理连接响应头导致版本信息解析失败的问题
+
 ## [0.2.8]
 
 - 新增 Google（Gemini）API 格式，可用于自定义供应商

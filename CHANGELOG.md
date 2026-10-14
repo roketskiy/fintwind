@@ -18,12 +18,16 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
-- 移除实验性手机远程控制、设备配对入口及配套 PWA、中继和验收工具
-- 修复：模型思考档位改从 models.dev 解析后，转售商条目的乱标副本会在跨供应商投票中投掉厂商自家条目，导致部分模型显示错误档位；现在解析一律优先读取所配供应商对应的厂商条目，命中即用，匹配不到才回退多数投票。已写入配置的错误档位会在下次保存供应商时按厂商数据重算并清除
-- 目录未描述档位的模型（含 models.dev 尚未收录的新模型）退到标准六档 none / low / medium / high / xhigh / max（默认 medium，Anthropic 按预算预设落参数），不再无档可选；目录本身不可得时保留原有档位不动
-- 模型元数据完全以 models.dev 为唯一来源：删除内置的 298 条思考档位参考表（`models_thinking_modes.json`），思考档位改从 models.dev 的 `reasoning_options` 运行时解析——effort 枚举直接成为档位，可关思考的补「关闭」档，token 预算型展开为三档预算且不低于目录标注的下限；默认档由启发式推导（含 medium 选 medium，其余取中位档），用户或服务器的显式设置始终优先
-- 费用估算补齐阶梯计价：解析 models.dev 的 `cost.tiers` 与 `context_over_200k`，长上下文会话按本次请求的上下文量（input + cache token）落档计价，与 OpenCode 官方口径一致；此前一律按基础价，超 20 万 token 的会话费用被低估
-- 档位匹配从「按名称查静态表」改为「按模型 id 查 models.dev 表」，同名不同版本不再有匹配歧义；新增 live 校验测试（默认跳过）对线上 `api.json` 验证解析形状
+## [0.2.8]
+
+- 新增 Google（Gemini）API 格式，可用于自定义供应商
+- 新增 HTTP 代理设置，应用与模型请求可使用代理
+- 帮助菜单新增应用进程浏览功能
+- 新增上下文提前自动压缩，可按 token 数设置触发阈值
+- 模型思考档位改由 models.dev 动态解析，优先使用对应厂商数据；未收录的模型提供标准六档
+- 用量估算支持阶梯价格和长上下文价格，按本次请求的上下文量计算费用
+- 修复第三方插件命令和自定义斜杠命令不显示的问题
+- 移除实验性手机远程控制与设备配对功能
 
 ## [0.2.7]
 

@@ -163,8 +163,6 @@ fn sidebar_project_groups(
 /// so a group's height and its internal scroll belong to one list item.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum SidebarRow {
-    /// Opens the window-wide command palette and scrolls with history.
-    Search,
     /// A project group carrying its id and its started sessions.
     Group(Rc<SidebarGroup>),
     /// Spacing between project groups.
@@ -774,6 +772,12 @@ impl Fintwind {
             )
             .child(
                 div()
+                    .flex_none()
+                    .px(px(10.0))
+                    .child(self.render_sidebar_search(cx)),
+            )
+            .child(
+                div()
                     .id("sidebar-scroll")
                     .flex_1()
                     .min_h_0()
@@ -861,7 +865,7 @@ impl Fintwind {
     /// sessions inside a project keep global recency order, newest first.
     /// Projects without history keep a bare header so they stay reachable.
     fn sidebar_rows(&self) -> Vec<SidebarRow> {
-        let mut rows = vec![SidebarRow::Search];
+        let mut rows = Vec::new();
         for (project_id, sessions) in
             sidebar_project_groups(&self.state.sessions, &self.state.projects)
         {
@@ -922,7 +926,6 @@ impl Fintwind {
             return div().into_any_element();
         };
         match row {
-            SidebarRow::Search => self.render_sidebar_search(cx).into_any_element(),
             SidebarRow::Group(group) => self.render_sidebar_group(group, cx).into_any_element(),
             SidebarRow::GroupSpacer => div().w_full().h(px(10.0)).into_any_element(),
         }

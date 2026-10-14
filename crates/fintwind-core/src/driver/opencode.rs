@@ -55,6 +55,7 @@ use crate::opencode_events::EventFeed;
 use crate::opencode_pool::PooledServer;
 use crate::opencode_session::{
     encode_path_segment, fork_session_removing_turns_on_server, request_json_on_port_with_directory,
+    OpenCodeServer,
 };
 
 mod recovery;
@@ -483,6 +484,51 @@ fn file_uri(path: &Path) -> anyhow::Result<String> {
 fn fintwind_task_metadata(task_id: Option<&str>) -> Option<Value> {
     let task = task_id.map(str::trim).filter(|task| !task.is_empty())?;
     Some(json!({ "source": "fintwind", "task": task }))
+}
+
+/// How long a command-route submit may take. The endpoint expands the
+/// template and admits the turn, so it answers in prompt-acknowledgement
+/// time, not turn time.
+const HTTP_SUBMIT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A `/name arguments` line standing alone as the whole text — the shape a
+/// server-owned command reaches this driver in, because the composer expands
+/// every template it holds locally before submission. A multi-line body is
+/// prose, whatever its first line looks like.
+fn slash_invocation(text: &str) -> Option<(&str, &str)> {
+    let invocation = text.strip_prefix('/')?;
+    if invocation.contains('\n') {
+        return None;
+    }
+    let (name, arguments) = match invocation.split_once(char::is_whitespace) {
+        Some((name, arguments)) => (name, arguments.trim()),
+        None => (invocation, ""),
+    };
+    (!name.is_empty()).then_some((name, arguments))
+}
+
+/// The command names the server's own registry carries — `opencode.json`
+/// entries and everything plugins registered; the markdown ones Fintwind
+/// discovered itself are listed there too, but those never reach a submit
+/// unexpanded. `None` on any failure: the submission then stays a plain
+/// prompt and the typed text is preserved.
+fn server_command_names(server: &OpenCodeServer, directory: &str) -> Option<HashSet<String>> {
+    let query = url::Url::parse_with_params(
+        "http://localhost/api/command",
+        &[("location[directory]", directory)],
+    )
+    .ok()
+    .and_then(|url| url.query().map(|query| format!("/api/command?{query}")))?;
+    let value = server
+        .request_for_directory_with_timeout(directory, "GET", &query, None, HTTP_SUBMIT_TIMEOUT)
+        .ok()?;
+    let names = value.get("data")?.as_array()?;
+    Some(
+        names
+            .iter()
+            .filter_map(|entry| entry.get("name")?.as_str().map(str::to_owned))
+            .collect(),
+    )
 }
 
 /// The prompt bodies both turn starts and steers post: the current shape,
@@ -1147,6 +1193,7 @@ impl OpenCodeDriver {
 
         let worker_server = server.clone();
         let worker_session = session_id.clone();
+        let worker_location = location_directory.clone();
         let worker_task_id = task_id.clone();
         let worker_events = events;
         let worker_turn = turn_active;
@@ -1200,38 +1247,63 @@ impl OpenCodeDriver {
                                 generation
                             };
                             let _ = worker_events.send(DriverEvent::TurnStarted);
-                            // `prompt` acknowledges as soon as the prompt
-                            // is accepted; completion arrives as
-                            // `session.execution.succeeded` (or `failed`) on
-                            // the event stream. The blocking message route
-                            // holds its response for the whole turn, which no
-                            // sane read timeout survives — a turn longer than
-                            // the HTTP timeout would be falsely failed.
+                            // A typed `/name args` whose name the server's
+                            // own registry carries is a server-owned command:
+                            // its template, agent/model selection, shell
+                            // blocks, and plugin callbacks all live
+                            // server-side, so it must run through the command
+                            // route — a plain prompt would deliver the typed
+                            // text literally. Locally expanded templates never
+                            // reach this branch (the composer already expanded
+                            // them), and an unknown name falls through as the
+                            // prompt it may well be.
+                            let invocation = slash_invocation(&text).and_then(|(name, arguments)| {
+                                let names =
+                                    server_command_names(&worker_server, &worker_location)?;
+                                names
+                                    .contains(name)
+                                    .then(|| (name.to_owned(), arguments.to_owned()))
+                            });
                             let path = format!(
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let bodies = prompt_bodies(&text, &files, worker_task_id.as_deref());
-                            let invalid_input = bodies.is_err();
-                            let posted = bodies.and_then(|(mut current, legacy)| {
-                                // The V2 API admits a client message ID.
-                                // Retain it across a lost acknowledgement
-                                // so reconciliation can identify this input
-                                // without repeating a side-effecting prompt.
-                                if let Some(id) = submissions.lock().input_id() {
-                                    current["id"] = json!(id);
-                                }
-                                if durable.is_some() {
-                                    // Durable admission needs the V2 ID contract;
-                                    // never retry with a shape that drops it.
-                                    return worker_server.request("POST", &path, Some(&current));
-                                }
-                                crate::opencode_session::post_current_or_legacy(
-                                    |body| worker_server.request("POST", &path, Some(body)),
-                                    &current,
-                                    Some(&legacy),
+                            let mut invalid_input = false;
+                            let posted = if let Some((name, arguments)) = invocation {
+                                worker_server.request_for_directory_with_timeout(
+                                    &worker_location,
+                                    "POST",
+                                    &format!(
+                                        "/api/session/{}/command",
+                                        encode_path_segment(&worker_session)
+                                    ),
+                                    Some(&json!({ "name": name, "text": arguments })),
+                                    HTTP_SUBMIT_TIMEOUT,
                                 )
-                            });
+                            } else {
+                                let bodies =
+                                    prompt_bodies(&text, &files, worker_task_id.as_deref());
+                                invalid_input = bodies.is_err();
+                                bodies.and_then(|(mut current, legacy)| {
+                                    // The V2 API admits a client message ID.
+                                    // Retain it across a lost acknowledgement
+                                    // so reconciliation can identify this input
+                                    // without repeating a side-effecting prompt.
+                                    if let Some(id) = submissions.lock().input_id() {
+                                        current["id"] = json!(id);
+                                    }
+                                    if durable.is_some() {
+                                        // Durable admission needs the V2 ID contract;
+                                        // never retry with a shape that drops it.
+                                        return worker_server.request("POST", &path, Some(&current));
+                                    }
+                                    crate::opencode_session::post_current_or_legacy(
+                                        |body| worker_server.request("POST", &path, Some(body)),
+                                        &current,
+                                        Some(&legacy),
+                                    )
+                                })
+                            };
                             if let Ok(response) = &posted {
                                 submissions.lock().accepted(submission, response);
                             }

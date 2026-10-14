@@ -175,6 +175,10 @@ settings.auto_compact_threshold: 圧縮のしきい値
 settings.auto_compact_threshold_description: 使用量がしきい値に届かないウィンドウには影響せず、プロバイダーの既定の圧縮のままです
 settings.auto_compact_threshold_placeholder: 例：500K
 settings.auto_compact_threshold_invalid: しきい値の形式が正しくありません
+settings.network_proxy: ネットワークプロキシ
+settings.network_proxy_description: 更新確認・モデルカタログ・新規セッションに適用されます
+settings.network_proxy_placeholder: 例：http://127.0.0.1:7897
+settings.network_proxy_invalid: プロキシアドレスの形式が正しくありません
 settings.app_version: fintwind %{version}
 
 providers.coding_agents: コーディングエージェント

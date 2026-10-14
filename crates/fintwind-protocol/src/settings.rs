@@ -50,6 +50,17 @@ impl DaemonSettings {
             .unwrap_or(false)
     }
 
+    /// The HTTP proxy address (for example `http://127.0.0.1:7897`) that
+    /// Fintwind's own fetches and `opencode serve` children ride through.
+    /// A missing, empty, or non-string value reads as "no proxy".
+    pub fn network_proxy_url(&self) -> Option<&str> {
+        self.extra
+            .get(NETWORK_PROXY_URL_KEY)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|url| !url.is_empty())
+    }
+
     /// Whether the client compacts a session whose live context occupancy
     /// reaches [`AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT`]. On by default: the
     /// provider's own near-limit auto compaction stays armed as the net, so
@@ -81,6 +92,7 @@ impl DaemonSettings {
 }
 
 pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";
+pub const NETWORK_PROXY_URL_KEY: &str = "network_proxy_url";
 pub const AUTO_COMPACT_ENABLED_KEY: &str = "auto_compact_enabled";
 pub const AUTO_COMPACT_THRESHOLD_TOKENS_KEY: &str = "auto_compact_threshold_tokens";
 /// Default trigger: half of a 1M window. Smaller windows never reach it and

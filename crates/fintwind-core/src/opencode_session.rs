@@ -511,6 +511,19 @@ impl OpenCodeServer {
         for (name, value) in environment {
             command.env(name, value);
         }
+        // The model traffic this server makes rides the configured proxy.
+        // Setting the conventional variables overrides anything inherited from
+        // the user's shell, and the loopback exemption keeps the server's own
+        // requests to local addresses (Fintwind's browser-tool endpoint, MCP
+        // servers on 127.0.0.1) out of the proxy. When no proxy is configured
+        // the environment stays exactly as inherited.
+        if let Some(proxy) = fintwind_protocol::http::active_proxy() {
+            command
+                .env("HTTP_PROXY", &proxy)
+                .env("HTTPS_PROXY", &proxy)
+                .env("ALL_PROXY", &proxy)
+                .env("NO_PROXY", "localhost,127.0.0.1,::1");
+        }
         // opencode serves enforce Basic auth and generate their own random
         // password when none is provided (an empty value behaves the same as
         // unset), so Fintwind injects its own random password and authenticates

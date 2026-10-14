@@ -62,6 +62,11 @@ impl FintwindBackend {
         // Seed from the persisted setting so a daemon that comes up before
         // the app connects already exposes the right state to plugins.
         browser_tools.set_enabled(settings.get().browser_tools_enabled());
+        // Same for the proxy: fetches and later `opencode serve` children must
+        // ride it even when no client ever pushes settings in this run.
+        fintwind_protocol::http::set_active_proxy(
+            settings.get().network_proxy_url().map(str::to_owned),
+        );
         Ok(Self {
             browser_tools,
             sessions: Arc::new(Mutex::new(HashMap::new())),
@@ -749,6 +754,11 @@ impl Backend for FintwindBackend {
                 // apply it so the change reaches models on the next request.
                 self.browser_tools
                     .set_enabled(self.settings.get().browser_tools_enabled());
+                // Reinstall the proxy so later fetches and `opencode serve`
+                // children pick the new address up without a daemon restart.
+                fintwind_protocol::http::set_active_proxy(
+                    self.settings.get().network_proxy_url().map(str::to_owned),
+                );
                 Ok(ResponsePayload::Ack)
             }
             Command::ProbeProvider {

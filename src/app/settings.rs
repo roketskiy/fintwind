@@ -201,6 +201,7 @@ impl Fintwind {
             // The threshold field always shows the stored value on entry;
             // a rejected edit restores it here as well as on commit.
             self.sync_auto_compact_threshold_input(cx);
+            self.sync_network_proxy_input(cx);
         }
         if page == SettingsPage::McpServers {
             // Same contract as Providers: transient editors drop, the roster
@@ -613,6 +614,43 @@ impl Fintwind {
                             self.auto_compact_threshold_input.clone(),
                         )
                         .w(px(120.0)),
+                    ),
+            )
+            .child(
+                div()
+                    .mt(px(12.0))
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .rounded(px(13.0))
+                    .bg(theme.raised)
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.network_proxy")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.network_proxy_description")),
+                            ),
+                    )
+                    .child(
+                        TextField::new("network-proxy-field", self.network_proxy_input.clone())
+                            .w(px(220.0)),
                     ),
             )
             .child(
@@ -1223,6 +1261,45 @@ impl Fintwind {
             self.state.auto_compact_threshold_tokens,
         );
         self.auto_compact_threshold_input.update(cx, |input, cx| {
+            input.set_content(text, cx);
+        });
+    }
+
+    /// Apply a validated proxy address. An empty field disables the proxy;
+    /// `None` means the text was not a usable address, which keeps the stored
+    /// value.
+    fn set_network_proxy_url(&mut self, url: Option<String>, cx: &mut Context<Self>) {
+        let stored = url.unwrap_or_default();
+        if self.state.network_proxy_url == stored {
+            self.sync_network_proxy_input(cx);
+            return;
+        }
+        self.state.network_proxy_url = stored;
+        fintwind_protocol::http::set_active_proxy(self.state.network_proxy_url());
+        self.sync_network_proxy_input(cx);
+        self.save();
+        cx.notify();
+    }
+
+    /// Commit the proxy field on Enter. Accepts `127.0.0.1:7897` (the HTTP
+    /// scheme is assumed) and explicit `http(s)://` addresses; an empty field
+    /// clears the proxy; anything else toasts and restores the stored value.
+    pub(super) fn confirm_network_proxy(&mut self, cx: &mut Context<Self>) {
+        let text = self.network_proxy_input.read(cx).content().to_owned();
+        match fintwind_protocol::http::normalize_proxy_url(&text) {
+            Some(url) => self.set_network_proxy_url(Some(url), cx),
+            None if text.trim().is_empty() => self.set_network_proxy_url(None, cx),
+            None => {
+                self.show_toast(tr!("settings.network_proxy_invalid"));
+                self.sync_network_proxy_input(cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn sync_network_proxy_input(&mut self, cx: &mut Context<Self>) {
+        let text = self.state.network_proxy_url.clone();
+        self.network_proxy_input.update(cx, |input, cx| {
             input.set_content(text, cx);
         });
     }

@@ -38,6 +38,7 @@ pub struct FintwindBackend {
     active_preparations: Mutex<HashMap<Uuid, EventSink>>,
     native_transcript_generations: Mutex<HashMap<String, u64>>,
     side_generations: crate::session_generation::SessionGenerations,
+    provider_quotas: crate::provider_quota::QuotaService,
     composer_drafts: ComposerDraftStore,
     attachments: AttachmentStore,
     checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
@@ -79,6 +80,7 @@ impl FintwindBackend {
             active_preparations: Mutex::new(HashMap::new()),
             native_transcript_generations: Mutex::new(HashMap::new()),
             side_generations: Default::default(),
+            provider_quotas: Default::default(),
             composer_drafts,
             attachments,
             checkpoint_capture_locks: Mutex::new(HashMap::new()),
@@ -1222,6 +1224,18 @@ impl Backend for FintwindBackend {
                 crate::driver::native::authorize_integration(&server, &provider_id, &key)?;
                 Ok(ResponsePayload::Ack)
             }
+            Command::FetchProviderQuota {
+                binary,
+                directory,
+                provider_id,
+                force,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let quota = self
+                    .provider_quotas
+                    .fetch_from_server(&server, &provider_id, force);
+                Ok(ResponsePayload::ProviderQuota { quota })
+            }
             Command::LogoutProvider {
                 binary,
                 directory,
@@ -2014,6 +2028,7 @@ fn handle_driver_command(
         | Command::RenameProviderSession { .. }
         | Command::DeleteProviderSession { .. }
         | Command::FetchIntegrations { .. }
+        | Command::FetchProviderQuota { .. }
         | Command::AuthorizeProvider { .. }
         | Command::LogoutProvider { .. }
         | Command::ProbeBuiltinProvider { .. }

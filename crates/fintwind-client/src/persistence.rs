@@ -1309,6 +1309,37 @@ impl StateStore {
         )
     }
 
+    /// Fetch sanitized account quota. Blocking RPC; never call from rendering.
+    pub fn fetch_provider_quota(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        force: bool,
+    ) -> io::Result<fintwind_protocol::provider_quota::ProviderQuota> {
+        match self
+            .daemon
+            .client()
+            .request_with_timeout(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::FetchProviderQuota {
+                    binary,
+                    directory,
+                    provider_id,
+                    force,
+                },
+                Duration::from_secs(90),
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::ProviderQuota { quota } => Ok(quota),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an invalid quota snapshot",
+            )),
+        }
+    }
+
     /// Remove a provider's credential from the OpenCode server — the
     /// logout. Blocking RPC; call off the UI thread.
     pub fn logout_provider(

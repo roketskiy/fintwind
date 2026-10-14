@@ -430,6 +430,56 @@ providers.env_logout_toast:
   en: "This provider stays connected through the environment variable %{vars}. Env credentials cannot be removed by logging out — delete the variable from your system environment and restart to disconnect."
 providers.builtin_key_hidden:
   en: The API key is stored in OpenCode's own credential store and managed by the opencode CLI; it is never shown here.
+providers.quota_title:
+  en: Allowance and balance
+providers.quota_refresh:
+  en: Refresh
+providers.quota_loading:
+  en: Refreshing…
+providers.quota_balance:
+  en: API balance
+providers.quota_credits:
+  en: Extra credits
+providers.quota_unlimited:
+  en: Unlimited
+providers.quota_remaining:
+  en: "%{percent}% left"
+providers.quota_needs_auth:
+  en: Credential invalid or expired. Reconnect to try again.
+providers.quota_access_denied:
+  en: Request denied. Check account access.
+providers.quota_rate_limited:
+  en: Too many requests. Try again later.
+providers.quota_unavailable:
+  en: Could not refresh
+providers.quota_no_data:
+  en: No allowance data returned
+providers.quota_measured:
+  en: "Updated %{time}"
+providers.quota_cached_measured:
+  en: "Last successful refresh: %{time}"
+providers.quota_resets:
+  en: "Resets %{time}"
+providers.quota_hours:
+  en: "%{count} hours"
+providers.quota_days:
+  en: "%{count} days"
+providers.quota_minutes:
+  en: "%{count} minutes"
+providers.quota_window:
+  en: Allowance
+providers.quota_weekly:
+  en: Weekly
+providers.quota_monthly:
+  en: Monthly
+providers.quota_tool_calls:
+  en: Tool calls
+providers.quota_chat:
+  en: Chat requests
+providers.quota_completions:
+  en: Code completions
+providers.quota_premium:
+  en: Premium requests
 providers.builtin_no_endpoint:
   en: This provider has no API-key sign-in (it uses OAuth, an environment variable, or the opencode CLI), so there is no connection to test here.
 providers.builtin_models_truncated:

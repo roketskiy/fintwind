@@ -41,6 +41,7 @@ pub mod model;
 pub mod model_catalog;
 pub mod persistence;
 pub mod projectless;
+pub mod provider_quota;
 pub mod provider_session;
 pub mod settings;
 pub mod skills;

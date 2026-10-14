@@ -224,6 +224,31 @@ providers.env_badge: 環境変数
 providers.env_note: "このプロバイダーの資格情報は環境変数 %{vars} から提供されています。環境変数はシステム側で管理されており、ここにキーは表示されず、ログアウトでも接続を解除できません。"
 providers.env_logout_toast: "このプロバイダーは環境変数 %{vars} で接続を維持しています。環境変数の資格情報はログアウトでは削除できません。切断するには、システムの環境変数から該当変数を削除し、アプリを再起動してください。"
 providers.builtin_key_hidden: API Key は OpenCode 独自の認証ストアに保存され、opencode CLI が管理します。ここでは表示されません。
+providers.quota_title: 利用枠と残高
+providers.quota_refresh: 更新
+providers.quota_loading: 更新中…
+providers.quota_balance: API 残高
+providers.quota_credits: 追加クレジット
+providers.quota_unlimited: 無制限
+providers.quota_remaining: "残り %{percent}%"
+providers.quota_needs_auth: 認証情報が無効です。再接続してください。
+providers.quota_access_denied: 照会が拒否されました。アカウントの権限を確認してください。
+providers.quota_rate_limited: リクエストが多すぎます。しばらくしてから再試行してください。
+providers.quota_unavailable: 更新できませんでした
+providers.quota_no_data: 利用枠データがありません
+providers.quota_measured: "%{time} 更新"
+providers.quota_cached_measured: "前回正常に取得した結果 %{time}"
+providers.quota_resets: "%{time} リセット"
+providers.quota_hours: "%{count} 時間"
+providers.quota_days: "%{count} 日"
+providers.quota_minutes: "%{count} 分"
+providers.quota_window: 利用枠
+providers.quota_weekly: 週間
+providers.quota_monthly: 月間
+providers.quota_tool_calls: ツール呼び出し
+providers.quota_chat: チャットリクエスト
+providers.quota_completions: コード補完
+providers.quota_premium: プレミアムリクエスト
 providers.builtin_no_endpoint: このプロバイダーは API Key でのサインインに対応していません（OAuth・環境変数・opencode CLI を使用）。ここでテストできる接続がありません。
 providers.builtin_models_truncated: 他 %{count} 件のモデルは表示されていません
 providers.oauth_cli_hint: "%{name} は OAuth でサインインします。ターミナルで opencode auth login を実行するか、TUI の /connect を使ってから、このページを更新してください。"

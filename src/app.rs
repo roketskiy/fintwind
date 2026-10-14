@@ -1800,6 +1800,7 @@ pub struct Fintwind {
     /// The id of the built-in provider the current connectivity probe names;
     /// a stale result for a different provider never renders.
     providers_builtin_catalog_check_id: Option<String>,
+    provider_quota: providers_quota::QuotaViewState,
     /// Which provider the add form has picked — the picker page, the custom
     /// free-endpoint form, or a chosen built-in provider's key form.
     providers_form_stage: providers_page::ProviderFormStage,
@@ -2160,6 +2161,7 @@ mod mcp_page;
 mod native_sessions;
 mod providers_fetch;
 mod providers_page;
+mod providers_quota;
 mod quote;
 mod render;
 mod right_panel;
@@ -3656,6 +3658,7 @@ impl Fintwind {
                 providers_auth_loading: false,
                 providers_builtin_catalog_check: None,
                 providers_builtin_catalog_check_id: None,
+                provider_quota: Default::default(),
                 providers_form_stage: Default::default(),
                 models_dev_table: None,
                 models_dev_fetching: false,

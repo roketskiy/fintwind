@@ -687,7 +687,11 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                         .flex_col()
                         .flex_none()
                         .rounded(px(12.0))
-                        .bg(theme.raised)
+                        .bg(if theme.is_dark {
+                            theme.raised
+                        } else {
+                            theme.inset
+                        })
                         .pt(px(9.0))
                         .pb(px(8.0))
                         .child(div().w_full().flex_none().child(edit_input))
@@ -772,7 +776,11 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                         .min_w_0()
                         .when(user_message_fill_width, |element| element.w_full())
                         .rounded(px(12.0))
-                        .bg(theme.raised)
+                        .bg(if theme.is_dark {
+                            theme.raised
+                        } else {
+                            theme.inset
+                        })
                         .px(px(12.0))
                         .py(px(8.0))
                         .text_size(ui_px(14.0))

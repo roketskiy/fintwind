@@ -973,6 +973,9 @@ browser_collaboration.running: ブラウザ操作を実行中
 browser_collaboration.shared_status: 現在のセッションに共有中。操作には承認が必要です。共有を停止すると引き継げます。
 browser_collaboration.approve_once: 今回のみ許可
 browser_collaboration.reject: 拒否
+browser_collaboration.open_approval_title: このページを開くことを許可しますか？
+browser_collaboration.open_approval_detail: この新しいページだけを許可します。
+browser_collaboration.open_approval_allow: 今回のみ許可
 browser_collaboration.take_over: 共有を停止
 browser_collaboration.share: 共有
 browser_collaboration.shared: 共有中

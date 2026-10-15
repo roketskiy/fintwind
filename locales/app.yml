@@ -1863,6 +1863,12 @@ browser_collaboration.approve_once:
   en: Approve once
 browser_collaboration.reject:
   en: Reject
+browser_collaboration.open_approval_title:
+  en: Allow browser to open this page?
+browser_collaboration.open_approval_detail:
+  en: This grants access to this new page only.
+browser_collaboration.open_approval_allow:
+  en: Allow once
 browser_collaboration.take_over:
   en: Stop sharing
 browser_collaboration.share:

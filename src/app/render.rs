@@ -267,6 +267,7 @@ impl Render for Fintwind {
         let permission = self.render_permission(cx);
         let command_palette = self.render_command_palette(window, cx);
         let commit_dialog = self.render_commit_dialog(cx);
+        let browser_open_approval = self.render_browser_open_approval(cx);
         let discard_dialog = self.render_source_control_discard_dialog(cx);
         let review_commit_dialog = self.render_source_control_commit_dialog(cx);
         let toast = self.render_active_toast(cx);
@@ -533,6 +534,7 @@ impl Render for Fintwind {
             .children(toast)
             .children(command_palette)
             .children(commit_dialog)
+            .children(browser_open_approval)
             .children(changelog)
             .children(discard_dialog)
             .children(review_commit_dialog)

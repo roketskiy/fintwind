@@ -165,7 +165,7 @@ const BROWSER_INSTRUCTION =
   "- An empty fintwind_browser_list result means no page is shared with this session yet. " +
   "It does not mean the browser is disconnected, broken or unavailable; never report that and never ask the user to reconnect anything.\n" +
   "- OpenCode's built-in browser_* tools are not connected to Fintwind and are removed from this session. Never call them, never report them as failing, and never fall back to them.\n" +
-  "- Use fintwind_browser_open to open a page for this session. It needs this session's full-access browser permission; without it the Fintwind window refuses an automatic tab, so ask the user to share a tab instead.\n" +
+  "- In a local build session, use fintwind_browser_open to open a page. Full access opens automatically. Otherwise Fintwind requests the user's approval for the new page; call the tool to request permission instead of asking the user to open or share a tab manually. After a human takeover, opening a new page needs approval and never restores access to the old page. If the tool reports no browser host, explain that this chat must be active in the local Fintwind window in build mode; do not diagnose a disconnected external browser.\n" +
   "- After list or open, call fintwind_browser_snapshot and work from the controls it returns. Prefer each control's exact opaque ref (or its selector); never invent or guess a selector. A ref names one observed element and expires after navigation or the next snapshot.\n" +
   "- Read every tool result before the next action and act on what it says. Never retry an uncertain action automatically.\n" +
   "- Do not fetch or read the page's source with webfetch, bash or any other tool as a substitute for the live page: only fintwind_browser_snapshot reflects what the user actually sees.\n" +
@@ -431,8 +431,8 @@ export default {
       createTool(name, description, properties, required, command, sessions);
     const tools = [
       define("fintwind_browser_open",
-        "Open a page in Fintwind's in-app browser for this exact session and wait until it has loaded. " +
-        "Needs this session's full-access browser permission: in manual-share or per-approval mode the Fintwind window refuses an automatic tab, so ask the user to share a tab instead. " +
+        "Open a page in Fintwind's in-app browser for this exact local build session and wait until it has loaded. " +
+        "Full-access build sessions open automatically. Otherwise the Fintwind window requests permission for this new page, including after a human takeover. Approval never restores access to an old page. " +
         "The returned page is the only page the other fintwind_browser_* tools may operate on, and it is never shared with another session.",
         { url: { type: "string", minLength: 1, maxLength: 4096 } }, ["url"],
         (input) => ({ type: "open", url: input.url })),

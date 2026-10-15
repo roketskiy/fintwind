@@ -935,6 +935,9 @@ browser_collaboration.running: 正在操作浏览器
 browser_collaboration.shared_status: 已共享给当前会话，操作需逐次确认；停止共享即可接管。
 browser_collaboration.approve_once: 允许这一次
 browser_collaboration.reject: 拒绝
+browser_collaboration.open_approval_title: 允许打开此页面？
+browser_collaboration.open_approval_detail: 仅授权此新页面。
+browser_collaboration.open_approval_allow: 允许一次
 browser_collaboration.take_over: 停止共享
 browser_collaboration.share: 共享
 browser_collaboration.shared: 已共享

@@ -61,6 +61,10 @@ impl DriverHandle {
         self.inner.steer(prompt, files);
     }
 
+    pub fn goal(&self, action: fintwind_protocol::goal::GoalAction) {
+        self.inner.goal(action);
+    }
+
     pub fn compact(&self) {
         self.inner.compact();
     }
@@ -117,6 +121,7 @@ pub trait DriverControl: Send + Sync {
     /// Ask the provider to compact this session's context. Outcomes arrive
     /// asynchronously as `DriverEvent::CompactionUpdated`.
     fn compact(&self) {}
+    fn goal(&self, _action: fintwind_protocol::goal::GoalAction) {}
     /// Ask the provider to compact a live subagent child session's context.
     /// `control_id` is the child's provider-native session id. Same
     /// admission semantics as [`DriverControl::compact`].

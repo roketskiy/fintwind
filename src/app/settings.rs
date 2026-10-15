@@ -548,6 +548,39 @@ impl Fintwind {
                         div()
                             .flex_1()
                             .min_w_0()
+                            .text_size(ui_px(13.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .child(tr!("goal.title")),
+                    )
+                    .child(toggle_switch(
+                        "goal-toggle",
+                        self.state.goal_enabled,
+                        false,
+                        theme,
+                        window,
+                        cx,
+                        |this: &mut Self, _, cx| {
+                            this.set_goal_enabled(!this.state.goal_enabled, cx)
+                        },
+                    )),
+            )
+            .child(
+                div()
+                    .mt(px(12.0))
+                    .w_full()
+                    .min_h(px(60.0))
+                    .px(px(20.0))
+                    .py(px(12.0))
+                    .rounded(px(13.0))
+                    .bg(theme.raised)
+                    .flex()
+                    .items_center()
+                    .gap(px(24.0))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
                             .child(
                                 div()
                                     .text_size(ui_px(13.5))
@@ -1197,6 +1230,35 @@ impl Fintwind {
                     .child(transcript_width_selector),
             )
             .into_any_element()
+    }
+
+    fn set_goal_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.state.goal_enabled == enabled {
+            return;
+        }
+        self.state.goal_enabled = enabled;
+        if !enabled {
+            for action in self.pending_goal_actions.values_mut() {
+                if matches!(
+                    action,
+                    fintwind_client::goal::GoalAction::Start { .. }
+                        | fintwind_client::goal::GoalAction::Resume
+                ) {
+                    *action = fintwind_client::goal::GoalAction::Pause;
+                }
+            }
+            for runtime in self.runtimes.values() {
+                runtime
+                    .driver
+                    .goal(fintwind_client::goal::GoalAction::Pause);
+            }
+            self.expanded_goal = None;
+        }
+        self.slash_command_index =
+            Rc::new(self.composer_goal_commands(self.slash_command_index.as_ref(), &[]));
+        self.refresh_composer_sources(cx);
+        self.save();
+        cx.notify();
     }
 
     /// While off, the plugin keeps its tools and instruction out of model

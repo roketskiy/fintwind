@@ -285,6 +285,8 @@ pub struct AppSettings {
     /// Off by default: browser tools cost model context, so enabling them
     /// is an explicit act.
     pub browser_tools_enabled: bool,
+    #[serde(default)]
+    pub goal_enabled: bool,
     /// Client-side early auto compaction: compact once live context
     /// occupancy reaches the threshold below, for the foreground session
     /// and live subagents alike. On by default; the provider's own
@@ -311,6 +313,7 @@ impl Default for AppSettings {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
+            goal_enabled: false,
             auto_compact_enabled: true,
             auto_compact_threshold_tokens:
                 fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
@@ -393,6 +396,8 @@ pub struct PersistedState {
     /// is an explicit act.
     #[serde(default)]
     pub browser_tools_enabled: bool,
+    #[serde(default)]
+    pub goal_enabled: bool,
     /// Client-side early auto compaction switch. On by default.
     #[serde(default = "default_auto_compact_enabled")]
     pub auto_compact_enabled: bool,
@@ -463,6 +468,7 @@ impl PersistedState {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
+            goal_enabled: false,
             auto_compact_enabled: true,
             auto_compact_threshold_tokens:
                 fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
@@ -567,6 +573,10 @@ impl PersistedState {
             serde_json::Value::Bool(self.browser_tools_enabled),
         );
         extra.insert(
+            fintwind_protocol::settings::GOAL_ENABLED_KEY.to_owned(),
+            serde_json::Value::Bool(self.goal_enabled),
+        );
+        extra.insert(
             fintwind_protocol::settings::AUTO_COMPACT_ENABLED_KEY.to_owned(),
             serde_json::Value::Bool(self.auto_compact_enabled),
         );
@@ -596,6 +606,7 @@ impl PersistedState {
             ui_font_family: self.ui_font_family.clone(),
             code_font_family: self.code_font_family.clone(),
             browser_tools_enabled: self.browser_tools_enabled,
+            goal_enabled: self.goal_enabled,
             auto_compact_enabled: self.auto_compact_enabled,
             auto_compact_threshold_tokens: self.auto_compact_threshold_tokens,
             network_proxy_url: self.network_proxy_url.clone(),
@@ -634,6 +645,7 @@ impl PersistedState {
         self.ui_font_family = settings.ui_font_family;
         self.code_font_family = settings.code_font_family;
         self.browser_tools_enabled = settings.browser_tools_enabled;
+        self.goal_enabled = settings.goal_enabled;
         self.auto_compact_enabled = settings.auto_compact_enabled;
         self.auto_compact_threshold_tokens = settings.auto_compact_threshold_tokens;
         self.network_proxy_url = settings.network_proxy_url;

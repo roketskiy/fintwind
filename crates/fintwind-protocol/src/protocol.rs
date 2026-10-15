@@ -20,7 +20,7 @@ use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 /// Desktop protocol version. Bumped when the `ClientMessage` or
 /// `ServerMessage` grammar changes; the handshake refuses a mismatch in
 /// either direction, so an old client and a new daemon never half-speak.
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes
@@ -154,6 +154,9 @@ pub enum Command {
     /// asynchronous: outcomes arrive as `DriverEvent::CompactionUpdated`,
     /// and the provider coalesces repeated requests while one is pending.
     CompactSession,
+    Goal {
+        action: crate::goal::GoalAction,
+    },
     Cancel,
     RefreshBackgroundWork,
     StopBackgroundWork {

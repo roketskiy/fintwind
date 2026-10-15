@@ -2247,6 +2247,7 @@ impl Fintwind {
         let weak = cx.entity().downgrade();
         let handle = self.menu_handle("composer-quote", cx);
         let quotable = self.has_quotable_editor_selection(cx);
+        let goal_enabled = self.state.goal_enabled;
         let chip = MenuChip::new("composer-quote")
             .icon("icons/plus.svg", theme.text_tertiary)
             .label(String::new())
@@ -2262,7 +2263,18 @@ impl Fintwind {
             move |_| {
                 let quote_file = weak.clone();
                 let quote_selection = weak.clone();
-                vec![
+                let goal = weak.clone();
+                let mut items = Vec::new();
+                if goal_enabled {
+                    items.push(
+                        MenuItem::new(tr!("goal.set"), move |window, cx| {
+                            let _ = goal.update(cx, |this, cx| this.stage_goal(false, window, cx));
+                        })
+                        .icon("icons/target.svg"),
+                    );
+                    items.push(MenuItem::Separator);
+                }
+                items.extend([
                     MenuItem::new(tr!("quote.add_file"), move |window, cx| {
                         let _ = quote_file.update(cx, |this, cx| {
                             this.quote_file_from_picker(window, cx);
@@ -2277,7 +2289,8 @@ impl Fintwind {
                     })
                     .icon("icons/file-bottom-left-arrow.svg")
                     .disabled(!quotable),
-                ]
+                ]);
+                items
             },
         )
     }
@@ -2804,12 +2817,23 @@ impl Fintwind {
         let preparing = session.is_some_and(|session| {
             self.submission_preparations.contains(&session.id)
                 || self.response_fork_preparations.contains_key(&session.id)
+                || self.pending_goal_actions.contains_key(&session.id)
         });
         let side_question = super::btw::question(self.composer.read(cx).content()).is_some();
         let submit_action = if side_question {
             ComposerSubmitAction::Send
         } else {
-            composer_submit_action(session.map(|session| session.status), preparing)
+            if self.state.goal_enabled
+                && session.is_some_and(|session| {
+                    session.goal.as_ref().is_some_and(|goal| {
+                        goal.status == fintwind_client::goal::GoalStatus::Active
+                    })
+                })
+            {
+                ComposerSubmitAction::Stop
+            } else {
+                composer_submit_action(session.map(|session| session.status), preparing)
+            }
         };
         let escape_stop_armed = session.is_some_and(|session| {
             self.escape_stop_confirmation
@@ -2882,6 +2906,7 @@ impl Fintwind {
                 .when(!self.composer_references.is_empty(), |card| {
                     card.child(self.render_composer_references(cx))
                 })
+                .children(self.render_goal(cx))
                 .child(div().pt(px(2.0)).child(self.composer.clone()))
                 .child(
                     div()

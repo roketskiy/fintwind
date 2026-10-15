@@ -442,6 +442,10 @@ fn session_is_reapable(
         && idle_for >= IDLE_SESSION_TIMEOUT
         && session.is_none_or(|session| {
             session.active_turn_id().is_none()
+                && !session
+                    .goal
+                    .as_ref()
+                    .is_some_and(|goal| goal.status == fintwind_client::goal::GoalStatus::Active)
                 && matches!(session.status, SessionStatus::Idle | SessionStatus::Failed)
         })
 }
@@ -2120,6 +2124,9 @@ pub struct Fintwind {
     /// Measured widths for the composer's control-row labels, reused across
     /// frames so a redraw that changes no label shapes no text.
     composer_row_cache: RefCell<composer::ComposerRowCache>,
+    expanded_goal: Option<Uuid>,
+    goal_details_scroll: gpui::ScrollHandle,
+    pending_goal_actions: HashMap<Uuid, fintwind_client::goal::GoalAction>,
     navigation_rail: Entity<ConversationNavigationRail>,
     navigation_rail_reset_generation: Cell<u64>,
     /// Cached islands of the root view; see [`FintwindPane`].
@@ -2154,6 +2161,7 @@ mod composer;
 mod drafts;
 mod file_search;
 mod git_history;
+mod goal;
 mod help;
 mod image_preview;
 mod mcp_market_page;
@@ -3804,6 +3812,9 @@ impl Fintwind {
                 transcript_scrollbar: ScrollbarState::new(),
                 menus: RefCell::new(HashMap::new()),
                 composer_row_cache: RefCell::new(composer::ComposerRowCache::default()),
+                expanded_goal: None,
+                goal_details_scroll: gpui::ScrollHandle::new(),
+                pending_goal_actions: HashMap::new(),
                 navigation_rail: navigation_rail.clone(),
                 navigation_rail_reset_generation: Cell::new(0),
                 open_tabs,

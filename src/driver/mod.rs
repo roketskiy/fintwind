@@ -225,6 +225,10 @@ impl DriverControl for RemoteDriverControl {
         self.notify(fintwind_client::Command::Steer { prompt, files });
     }
 
+    fn goal(&self, action: fintwind_protocol::goal::GoalAction) {
+        self.notify(fintwind_client::Command::Goal { action });
+    }
+
     fn compact(&self) {
         self.notify(fintwind_client::Command::CompactSession);
     }

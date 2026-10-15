@@ -102,7 +102,7 @@ pub(super) struct AppBrowserCollaborationState {
     /// disconnect and the supervisor's replacement, and after a failed
     /// publish until then.
     client: Option<DaemonClient>,
-    /// Connection-scoped launcher for the selected full-access session. It is
+    /// Connection-scoped launcher for the selected local build session. It is
     /// not a browser page and never appears in the shared-page list.
     host: Option<BrowserScope>,
     /// A daemon-retired cursor cannot be republished while its replacement's
@@ -111,6 +111,7 @@ pub(super) struct AppBrowserCollaborationState {
     retired_browser_runtime: Option<(Uuid, Uuid)>,
     automation_pages: std::collections::HashSet<Uuid>,
     automation_paused: bool,
+    open_approval: Option<automation::BrowserOpenApproval>,
     /// A cancelled opening must never share its page when loading finishes.
     openings: HashMap<Uuid, Uuid>,
     /// Keep completed opens linked to their exact page grant while it lives:
@@ -135,6 +136,7 @@ impl AppBrowserCollaborationState {
             retired_browser_runtime: None,
             automation_pages: Default::default(),
             automation_paused: false,
+            open_approval: None,
             openings: HashMap::new(),
             opened_pages: HashMap::new(),
             stop_tx,
@@ -241,7 +243,7 @@ fn run_browser_bridge(
 
 impl Fintwind {
     /// Start the bridge once the app entity exists. Called once from
-    /// [`Fintwind::new`]. FullAccess publishes a session launcher, while
+    /// [`Fintwind::new`]. Local build sessions publish a launcher, while
     /// existing manual pages remain unshared until the user asks for it.
     pub(super) fn start_browser_collaboration(
         &mut self,
@@ -323,7 +325,13 @@ impl Fintwind {
                             .as_ref()
                             .is_some_and(|host| scopes.contains(host));
                         if host_rejected {
+                            self.browser_collaboration.retired_browser_runtime = self
+                                .browser_collaboration
+                                .host
+                                .as_ref()
+                                .map(|host| (host.session_id, host.runtime_id));
                             self.pause_browser_automation(cx);
+                            self.withdraw_browser_automation_host();
                         }
                         let revoked = self.revoke_receipt_scopes(&scopes, cx);
                         if revoked || host_rejected {
@@ -351,6 +359,7 @@ impl Fintwind {
                             self.pause_browser_automation(cx);
                             self.browser_collaboration.retired_browser_runtime = retired;
                             self.browser_collaboration.automation_paused = false;
+                            self.withdraw_browser_automation_host();
                         }
                         let revoked = self.revoke_receipt_scopes(&scopes, cx);
                         if revoked || host_revoked {
@@ -365,20 +374,16 @@ impl Fintwind {
 
     /// Adopt a daemon client. A reconnect never inherits a grant: every
     /// share is revoked first and the previous connection's consumer is
-    /// already retired by the bridge thread. The new connection is not
-    /// re-published anything automatically.
+    /// already retired by the bridge thread.
     fn rebind_browser_collaboration(
         &mut self,
         client: DaemonClient,
         generation: u64,
         cx: &mut Context<Self>,
     ) {
-        let replacement = self.browser_collaboration.generation != 0;
         self.drop_browser_connection(cx);
-        if replacement {
-            self.browser_collaboration.automation_paused = true;
-        }
         self.browser_collaboration.generation = generation;
+        self.browser_collaboration.retired_browser_runtime = None;
         self.browser_collaboration.client = Some(client);
         self.sync_browser_automation_host(cx);
     }
@@ -386,15 +391,12 @@ impl Fintwind {
     /// Drop the current connection's publishing ability and every grant.
     /// Used on disconnect, on a failed publish, and before a rebind.
     fn drop_browser_connection(&mut self, cx: &mut Context<Self>) {
-        if self.browser_collaboration.generation != 0 {
-            self.browser_collaboration.automation_paused = true;
-        }
         self.browser_collaboration.client = None;
         self.browser_collaboration.host = None;
         self.browser_collaboration.shares.clear();
-        self.browser_collaboration.pending.clear();
         self.browser_collaboration.openings.clear();
         self.revoke_all_browser_shares(cx);
+        self.browser_collaboration.pending.clear();
     }
 
     /// Subscribe to one browser entity's collaboration events. Called where
@@ -605,7 +607,7 @@ impl Fintwind {
     /// below would otherwise start — their `ShareChanged` events re-enter the
     /// publish path and find no client to publish on.
     fn fail_browser_connection(&mut self, error: String, cx: &mut Context<Self>) {
-        self.browser_collaboration.automation_paused = true;
+        self.browser_collaboration.host = None;
         self.browser_collaboration.client = None;
         self.browser_collaboration.shares.clear();
         self.revoke_all_browser_shares(cx);
@@ -724,6 +726,7 @@ impl Fintwind {
     /// The daemon gave up on a request: retire it wherever it sits.
     fn cancel_browser_request(&mut self, request_id: Uuid, cx: &mut Context<Self>) {
         self.browser_collaboration.pending.remove(&request_id);
+        self.cancel_browser_open_approval(request_id, cx);
         if let Some(page_id) = self.browser_collaboration.openings.remove(&request_id)
             && let Some(browser) = self.right_panel_browsers.get(&page_id)
         {
@@ -758,6 +761,10 @@ impl Fintwind {
     /// the publish those revocations trigger, so an empty set is published.
     pub(super) fn revoke_all_browser_shares(&mut self, cx: &mut Context<Self>) {
         self.withdraw_browser_automation_host();
+        self.dismiss_browser_open_approval(
+            "The session changed before the browser request was approved.",
+            cx,
+        );
         self.browser_collaboration.openings.clear();
         self.browser_collaboration.opened_pages.clear();
         self.browser_collaboration.automation_pages.clear();

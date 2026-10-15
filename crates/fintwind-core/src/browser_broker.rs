@@ -77,6 +77,8 @@ pub const MAX_BROWSER_TOMBSTONES_PER_CONNECTION: usize = 1024;
 pub const MAX_BROWSER_TOMBSTONES_TOTAL: usize = 4096;
 
 const BROWSER_REQUEST_TIMEOUT: Duration = Duration::from_millis(BROWSER_REQUEST_TIMEOUT_MS);
+const BROWSER_HOST_REGISTRATION_TIMEOUT: Duration = Duration::from_secs(2);
+const BROWSER_HOST_REGISTRATION_POLL: Duration = Duration::from_millis(25);
 
 struct Publication {
     share: BrowserShare,
@@ -747,13 +749,26 @@ impl BrowserBroker {
         if let Err(message) = BrowserAction::validate_url(url) {
             return BrowserResult::error(message);
         }
-        let scope = {
+        if requestor_request_id.is_nil() {
+            return BrowserResult::error("a browser open requires a request id");
+        }
+        let deadline = std::time::Instant::now() + BROWSER_HOST_REGISTRATION_TIMEOUT;
+        let scope = loop {
             let state = self.state.lock();
             if !state.connected_callers.contains(&requestor_subscriber_id) {
                 return BrowserResult::error("the browser caller disconnected before execution");
             }
             if state.active_runtimes.get(&session_id) != Some(&runtime_id) {
                 return BrowserResult::error("the session runtime is no longer active");
+            }
+            if state
+                .cancelled_rpc_ids
+                .get(&requestor_subscriber_id)
+                .is_some_and(|ids| ids.contains(&requestor_request_id))
+            {
+                return BrowserResult::error(
+                    "this browser request was cancelled before it started",
+                );
             }
             let mut launchers = state
                 .hosts
@@ -763,18 +778,24 @@ impl BrowserBroker {
                 })
                 .map(|host| host.scope.clone());
             let Some(scope) = launchers.next() else {
-                return BrowserResult::error(
-                    "no live browser launcher is registered for this session runtime",
-                );
+                if std::time::Instant::now() >= deadline {
+                    return BrowserResult::error(
+                        "no browser host (launcher) is connected to the current chat; return to this chat and authorize browser access",
+                    );
+                }
+                let wait = deadline
+                    .saturating_duration_since(std::time::Instant::now())
+                    .min(BROWSER_HOST_REGISTRATION_POLL);
+                drop(state);
+                std::thread::sleep(wait);
+                continue;
             };
             if launchers.next().is_some() {
-                // More than one launcher for one session runtime has no safe
-                // answer, so none is chosen.
                 return BrowserResult::error(
-                    "more than one browser launcher is registered for this session runtime",
+                    "more than one browser host is registered for this chat runtime",
                 );
             }
-            scope
+            break scope;
         };
         self.invoke(
             scope,

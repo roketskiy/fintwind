@@ -158,7 +158,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 const WATCHDOG_SECONDS: u64 = 420;
 /// The behavioral checks this run performs; a run that executes fewer is a
 /// failure, not a partial pass.
-const EXPECTED_CHECKS: usize = 30;
+const EXPECTED_CHECKS: usize = 33;
 
 // ---------------------------------------------------------------------------
 // Report
@@ -2662,7 +2662,14 @@ fn run_checks(e2e: &mut E2E) {
             let outcome = h.tool()?.open(Uuid::new_v4(), &h.native_session, url)?;
             expect_refused(
                 &outcome,
-                &["launcher", "http and https", "credentials", "size limit"],
+                &[
+                    "browser host",
+                    "launcher",
+                    "return to this chat",
+                    "http and https",
+                    "credentials",
+                    "size limit",
+                ],
             )?;
         }
         if h.owner.events_of("browserRequest").len() != requests_before {
@@ -3112,6 +3119,102 @@ fn run_checks(e2e: &mut E2E) {
     );
 
     // -- 28 ------------------------------------------------------------------
+    e2e.check("an-open-waits-for-a-late-browser-host", |h| {
+        let host_scope = BrowserScope {
+            session_id: h.session,
+            runtime_id: h.active_runtime,
+            page_id: Uuid::new_v4(),
+            grant_id: Uuid::new_v4(),
+        };
+        let request_id = Uuid::new_v4();
+        let tool = h.tool()?;
+        tool.send(&BrowserToolMessage::Open {
+            request_id,
+            session_id: h.native_session.clone(),
+            url: "https://example.invalid/late-host".to_owned(),
+        })?;
+        // A later request is answered only after the endpoint has consumed
+        // the open frame and started its worker.
+        expect_ok(&tool.list(Uuid::new_v4(), &h.native_session)?)?;
+        std::thread::sleep(Duration::from_millis(50));
+        h.owner.register_host(&host_scope)?;
+        let delivered = h.owner.wait_event(
+            |event| {
+                event["event"] == "browserRequest"
+                    && json_id(&event["scope"]["pageId"], &host_scope.page_id)
+            },
+            INVOKE_TIMEOUT,
+        )?;
+        approve_held(&h.owner, internal_request_id(&delivered)?)?;
+        let (result, _) = tool.result_frame(request_id, INVOKE_TIMEOUT)?;
+        let value = expect_ok(&result)?;
+        if delivered["action"]["url"] != json!("https://example.invalid/late-host")
+            || value["issued"] != json!(true)
+        {
+            bail!("the delayed host did not receive and answer the original open: {delivered}");
+        }
+        h.owner.clear_host()?;
+        Ok("an open stayed pending until the host registered, then routed once and returned its answer".to_owned())
+    });
+
+    // -- 29 ------------------------------------------------------------------
+    e2e.check("cancelling-an-open-waiting-for-host-stops-late-routing", |h| {
+        let host_scope = BrowserScope {
+            session_id: h.session,
+            runtime_id: h.active_runtime,
+            page_id: Uuid::new_v4(),
+            grant_id: Uuid::new_v4(),
+        };
+        let requests_before = h.owner.events_of("browserRequest").len();
+        let performed_before = h.owner.performed().len();
+        let request_id = Uuid::new_v4();
+        let tool = h.tool()?;
+        tool.send(&BrowserToolMessage::Open {
+            request_id,
+            session_id: h.native_session.clone(),
+            url: "https://example.invalid/cancel-before-host".to_owned(),
+        })?;
+        expect_ok(&tool.list(Uuid::new_v4(), &h.native_session)?)?;
+        std::thread::sleep(Duration::from_millis(50));
+        tool.cancel(request_id)?;
+        let (outcome, _) = tool.result_frame(request_id, INVOKE_TIMEOUT)?;
+        h.owner.register_host(&host_scope)?;
+        std::thread::sleep(Duration::from_millis(50));
+        expect_refused(&outcome, &["cancelled"])?;
+        if h.owner.events_of("browserRequest").len() != requests_before {
+            bail!("the late host received an open cancelled while waiting");
+        }
+        if h.owner.performed().len() != performed_before {
+            bail!("the cancelled open performed after the host registered");
+        }
+        h.owner.clear_host()?;
+        Ok("cancelling while no host was registered ended the wait, and a later host received no request".to_owned())
+    });
+
+    // -- 30 ------------------------------------------------------------------
+    e2e.check("an-open-without-a-host-times-out-with-chat-guidance", |h| {
+        let started = std::time::Instant::now();
+        let outcome = h.tool()?.open(
+            Uuid::new_v4(),
+            &h.native_session,
+            "https://example.invalid/no-host-timeout",
+        )?;
+        let message = expect_refused(
+            &outcome,
+            &[
+                "current chat",
+                "browser host",
+                "return to this chat",
+                "authorize",
+            ],
+        )?;
+        if started.elapsed() < Duration::from_secs(2) {
+            bail!("a missing host was rejected before the registration wait elapsed: {message}");
+        }
+        Ok(message.to_owned())
+    });
+
+    // -- 31 ------------------------------------------------------------------
     e2e.check("dropping-the-binding-cancels-a-pending-invoke", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let performed_before = h.owner.performed().len();
@@ -3165,7 +3268,7 @@ fn run_checks(e2e: &mut E2E) {
         Ok("dropping the runtime binding ended the pending call, told the owner to stop, and left no usable connection".to_owned())
     });
 
-    // -- 29 ------------------------------------------------------------------
+    // -- 32 ------------------------------------------------------------------
     e2e.check("revoking-the-server-stops-new-connections-and-fails-pending", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         h.rebind(h.session, h.active_runtime)?;
@@ -3229,7 +3332,7 @@ fn run_checks(e2e: &mut E2E) {
         Ok("revoking the capability ended the pending call, told the owner to stop, and refused every new connection".to_owned())
     });
 
-    // -- 30 ------------------------------------------------------------------
+    // -- 33 ------------------------------------------------------------------
     e2e.check("the-report-holds-no-credentials", |h| {
         let owner_events = h.dir.join("owner-events.json");
         let mut combined = h.owner.events();

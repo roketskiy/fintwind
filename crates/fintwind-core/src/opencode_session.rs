@@ -457,6 +457,7 @@ pub(crate) struct OpenCodeServer {
     child: Arc<Mutex<Child>>,
     pub(crate) browser_tools: Option<Arc<crate::browser_tools::BrowserToolServer>>,
     _browser_plugin: Option<crate::browser_plugin::BrowserPlugin>,
+    _goal_plugin: crate::goal_plugin::GoalPlugin,
     pub(crate) port: u16,
 }
 
@@ -507,10 +508,17 @@ impl OpenCodeServer {
         let port = listener.local_addr()?.port();
         drop(listener);
 
+        let goal_plugin = crate::goal_plugin::GoalPlugin::create(cwd)?;
+        let inherited_config = environment
+            .iter()
+            .find(|(name, _)| name == "OPENCODE_CONFIG_CONTENT")
+            .map(|(_, value)| value.as_str());
+        let config = goal_plugin.config(inherited_config)?;
         let mut command = crate::command_env::command(binary);
         for (name, value) in environment {
             command.env(name, value);
         }
+        command.env("OPENCODE_CONFIG_CONTENT", config);
         // The model traffic this server makes rides the configured proxy.
         // Setting the conventional variables overrides anything inherited from
         // the user's shell, and the loopback exemption keeps the server's own
@@ -552,6 +560,7 @@ impl OpenCodeServer {
             child: Arc::new(Mutex::new(child)),
             browser_tools,
             _browser_plugin: browser_plugin,
+            _goal_plugin: goal_plugin,
             port,
         };
         if let Some(tools) = &server.browser_tools {

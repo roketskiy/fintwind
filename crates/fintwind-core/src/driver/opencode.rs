@@ -54,8 +54,8 @@ use crate::model::{
 use crate::opencode_events::EventFeed;
 use crate::opencode_pool::PooledServer;
 use crate::opencode_session::{
-    encode_path_segment, fork_session_removing_turns_on_server, request_json_on_port_with_directory,
-    OpenCodeServer,
+    OpenCodeServer, encode_path_segment, fork_session_removing_turns_on_server,
+    request_json_on_port_with_directory,
 };
 
 mod recovery;
@@ -170,6 +170,7 @@ enum CommandMessage {
         files: Vec<PromptFile>,
     },
     Compact,
+    Goal(fintwind_protocol::goal::GoalAction),
     Cancel,
     CompactChild {
         session_id: String,
@@ -1201,13 +1202,61 @@ impl OpenCodeDriver {
         thread::Builder::new()
             .name("fintwind-opencode-driver".into())
             .spawn(move || {
-                while let Ok(message) = command_rx.recv() {
+                let mut goal = None;
+                let mut first_goal_read = true;
+                let mut initial_goal_attempts = 0;
+                let mut poll_goal = true;
+                loop {
+                    if poll_goal {
+                        match crate::goal_plugin::control(
+                            &worker_server,
+                            &worker_location,
+                            &worker_session,
+                            fintwind_protocol::goal::GoalAction::Get,
+                        ) {
+                            Ok(next) => {
+                                if first_goal_read || next != goal {
+                                    first_goal_read = false;
+                                    goal = next;
+                                    let _ =
+                                        worker_events.send(DriverEvent::GoalUpdated(goal.clone()));
+                                }
+                            }
+                            Err(error) if first_goal_read => {
+                                initial_goal_attempts += 1;
+                                if initial_goal_attempts >= 5 {
+                                    first_goal_read = false;
+                                    let _ = worker_events.send(DriverEvent::GoalUpdated(None));
+                                    let _ =
+                                        worker_events.send(DriverEvent::Error(error.to_string()));
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    poll_goal = first_goal_read
+                        || goal.as_ref().is_some_and(|state| {
+                            state.status == fintwind_protocol::goal::GoalStatus::Active
+                        });
+                    let message = if poll_goal {
+                        match command_rx.recv_timeout(Duration::from_secs(1)) {
+                            Ok(message) => message,
+                            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
+                            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
+                        }
+                    } else {
+                        match command_rx.recv() {
+                            Ok(message) => message,
+                            Err(_) => break,
+                        }
+                    };
                     match message {
                         CommandMessage::Prompt {
                             text,
                             files,
                             durable,
                         } => {
+                            poll_goal = true;
                             if let Some((record, store)) = &durable {
                                 // Persist the native session association before
                                 // the side effect; failed storage forbids POST.
@@ -1257,13 +1306,14 @@ impl OpenCodeDriver {
                             // reach this branch (the composer already expanded
                             // them), and an unknown name falls through as the
                             // prompt it may well be.
-                            let invocation = slash_invocation(&text).and_then(|(name, arguments)| {
-                                let names =
-                                    server_command_names(&worker_server, &worker_location)?;
-                                names
-                                    .contains(name)
-                                    .then(|| (name.to_owned(), arguments.to_owned()))
-                            });
+                            let invocation =
+                                slash_invocation(&text).and_then(|(name, arguments)| {
+                                    let names =
+                                        server_command_names(&worker_server, &worker_location)?;
+                                    names
+                                        .contains(name)
+                                        .then(|| (name.to_owned(), arguments.to_owned()))
+                                });
                             let path = format!(
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
@@ -1295,7 +1345,11 @@ impl OpenCodeDriver {
                                     if durable.is_some() {
                                         // Durable admission needs the V2 ID contract;
                                         // never retry with a shape that drops it.
-                                        return worker_server.request("POST", &path, Some(&current));
+                                        return worker_server.request(
+                                            "POST",
+                                            &path,
+                                            Some(&current),
+                                        );
                                     }
                                     crate::opencode_session::post_current_or_legacy(
                                         |body| worker_server.request("POST", &path, Some(body)),
@@ -1383,6 +1437,7 @@ impl OpenCodeDriver {
                             }
                         }
                         CommandMessage::Steer { text, files } => {
+                            poll_goal = true;
                             // A prompt posted into a busy session is a steer:
                             // the server folds it into the running turn and one
                             // `session.execution.succeeded` still settles
@@ -1503,7 +1558,84 @@ impl OpenCodeDriver {
                             );
                             let _ = worker_server.request("POST", &path, Some(&json!({})));
                         }
+                        CommandMessage::Goal(action) => {
+                            poll_goal = true;
+                            let submission = if matches!(
+                                action,
+                                fintwind_protocol::goal::GoalAction::Start { .. }
+                            ) {
+                                let mut active = worker_turn.lock();
+                                let mut fence = submissions.lock();
+                                let generation = fence.begin();
+                                *active = true;
+                                let _ = worker_events.send(DriverEvent::TurnStarted);
+                                Some((generation, fence.input_id()))
+                            } else {
+                                None
+                            };
+                            let starts_turn = matches!(
+                                action,
+                                fintwind_protocol::goal::GoalAction::Start { .. }
+                                    | fintwind_protocol::goal::GoalAction::Resume
+                            );
+                            match crate::goal_plugin::control_with_input(
+                                &worker_server,
+                                &worker_location,
+                                &worker_session,
+                                action,
+                                submission.as_ref().and_then(|(_, input)| input.as_deref()),
+                            ) {
+                                Ok(next) => {
+                                    if let Some((generation, _)) = submission {
+                                        submissions.lock().unconfirmed(generation);
+                                    }
+                                    goal = next;
+                                    let _ =
+                                        worker_events.send(DriverEvent::GoalUpdated(goal.clone()));
+                                }
+                                Err(error) => {
+                                    if let Some((generation, _)) = submission.as_ref()
+                                        && !(error.to_string().contains("HTTP 4")
+                                            && !error.to_string().contains("HTTP 409"))
+                                    {
+                                        submissions.lock().unconfirmed(*generation);
+                                        let _ = worker_events.send(DriverEvent::Error(tr!(
+                                            "errors.provider_prompt_unconfirmed_detail",
+                                            provider = "OpenCode",
+                                            error = error
+                                        )));
+                                        continue;
+                                    }
+                                    if submission.is_some() {
+                                        let mut active = worker_turn.lock();
+                                        let mut fence = submissions.lock();
+                                        *active = false;
+                                        fence.clear();
+                                    }
+                                    let _ =
+                                        worker_events.send(DriverEvent::Error(error.to_string()));
+                                    if starts_turn {
+                                        let _ = worker_events.send(DriverEvent::TurnFinished {
+                                            success: false,
+                                            summary: None,
+                                        });
+                                    }
+                                }
+                            }
+                        }
                         CommandMessage::Cancel => {
+                            poll_goal = true;
+                            {
+                                if let Err(error) = crate::goal_plugin::control(
+                                    &worker_server,
+                                    &worker_location,
+                                    &worker_session,
+                                    fintwind_protocol::goal::GoalAction::Pause,
+                                ) {
+                                    let _ =
+                                        worker_events.send(DriverEvent::Error(error.to_string()));
+                                }
+                            }
                             let path = format!(
                                 "/api/session/{}/interrupt",
                                 encode_path_segment(&worker_session)
@@ -1684,6 +1816,10 @@ impl DriverControl for OpenCodeDriver {
             files,
             durable: None,
         });
+    }
+
+    fn goal(&self, action: fintwind_protocol::goal::GoalAction) {
+        let _ = self.commands.send(CommandMessage::Goal(action));
     }
 
     fn compact(&self) {
@@ -3878,11 +4014,34 @@ fn apply_recovered_turn(
     for message in recovered.acknowledged_steers {
         let _ = events.send(DriverEvent::SteerAccepted { message });
     }
+    let mut native_stats: Option<TurnStats> = None;
+    for stats in recovered
+        .transcript
+        .turns
+        .iter()
+        .filter_map(|turn| turn.stats.as_ref())
+    {
+        let total = native_stats.get_or_insert_with(TurnStats::default);
+        if stats.model.is_some() {
+            total.model = stats.model.clone();
+        }
+        if stats.agent.is_some() {
+            total.agent = stats.agent.clone();
+        }
+        total.output_tokens = total.output_tokens.saturating_add(stats.output_tokens);
+        total.stream_ms = total.stream_ms.saturating_add(stats.stream_ms);
+        total.stream_verified |= stats.stream_verified;
+    }
     let _ = events.send(DriverEvent::TurnTranscriptReconciled {
         transcript: recovered.transcript,
         continuation: recovered.continuation,
     });
     clear_foreground_turn_state(state, events);
+    // The validated durable window supersedes live step IDs, including steps
+    // missed during reconnect. Empty IDs prevent a second asynchronous fold.
+    if let Some(stats) = native_stats {
+        let _ = events.send(DriverEvent::TurnStatsUpdated(stats));
+    }
     *active = false;
     fence.clear();
     crate::opencode_diagnostics::record("turn_reconciled", port, recovered.generation);

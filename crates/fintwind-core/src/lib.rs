@@ -33,6 +33,7 @@ pub mod git_branch;
 pub mod git_commit;
 pub mod git_log;
 pub mod git_status;
+mod goal_plugin;
 pub mod i18n;
 pub mod identity;
 pub mod mcp_auth;

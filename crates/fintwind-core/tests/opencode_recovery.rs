@@ -2117,7 +2117,11 @@ fn scenario_server_initiated_continuation(harness: &Harness, run: &Run) -> Fact 
                 // the previous turn's idle (id < start), which bounds the window.
                 "durable_messages": [
                     idle_msg(&idle_id, base + 5000, "succeeded"),
-                    assistant_msg(&assistant_id, base + 4000, "continued answer"),
+                    {"id": assistant_id, "type": "assistant",
+                     "time": {"created": base + 4000, "streamed": base + 4500, "completed": base + 4900},
+                     "model": {"providerID": "fake", "id": "model-a"}, "agent": "build",
+                     "tokens": {"output": 17, "reasoning": 3},
+                     "content": [{"type": "text", "text": "continued answer"}]},
                     idle_msg(&prev_idle_id, base + 2000, "succeeded"),
                     assistant_msg("msg_asst_1", base + 1000, "first answer"),
                     user_msg("msg_user_1", base, "first prompt"),
@@ -2205,6 +2209,27 @@ fn scenario_server_initiated_continuation(harness: &Harness, run: &Run) -> Fact 
         })
         .collect::<Vec<_>>();
     if let [first, continuation] = snapshots.as_slice() {
+        report.expect(
+            continuation.turns.first().and_then(|turn| turn.stats.as_ref())
+                .is_some_and(|stats| stats.output_tokens == 20 && stats.stream_ms == 500
+                    && stats.stream_verified),
+            "an assistant-only native window retains its first step's tokens and elapsed stream time",
+        );
+        let last_stats = report
+            .collected
+            .timeline
+            .iter()
+            .rev()
+            .find(|event| event.get("kind").and_then(Value::as_str) == Some("turnStatsUpdated"))
+            .and_then(|event| event.get("payload"))
+            .and_then(|payload| {
+                serde_json::from_value::<fintwind_protocol::model::TurnStats>(payload.clone()).ok()
+            });
+        report.expect(
+            last_stats.is_some_and(|stats| stats.output_tokens == 20 && stats.stream_ms == 500
+                && stats.stream_verified && stats.step_ids.is_empty()),
+            "the daemon publishes authoritative continuation statistics once without asynchronous recount IDs",
+        );
         let mut session = AgentSession::new(Uuid::new_v4());
         session.begin_turn("first prompt");
         report.expect(

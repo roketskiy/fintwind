@@ -666,10 +666,8 @@ impl Fintwind {
                 runtime.provider_phase = None;
                 self.provider_retries.remove(&session_id);
                 if let Some(session) = self.state.session_mut(session_id) {
-                    runtime.continuation_projection_start = session
-                        .active_turn_id()
-                        .is_none()
-                        .then_some((session.messages.len(), session.transcript_blocks.len()));
+                    runtime.continuation_projection_start =
+                        Some((session.messages.len(), session.transcript_blocks.len()));
                     session.resume_provider_turn();
                 }
             }
@@ -1026,6 +1024,23 @@ impl Fintwind {
                 if let Some(tokens) = context_tokens {
                     self.maybe_auto_compact_session(session_id, tokens);
                 }
+            }
+            DriverEvent::GoalUpdated(goal) => {
+                if let Some(session) = self.state.session_mut(session_id) {
+                    let newer = match (&session.goal, &goal) {
+                        (Some(old), Some(next)) => {
+                            old.session_id != next.session_id || next.revision >= old.revision
+                        }
+                        _ => true,
+                    };
+                    if newer {
+                        session.goal = goal;
+                    }
+                }
+                if self.state.selected_session == Some(session_id) {
+                    self.sync_transcript_rows();
+                }
+                cx.notify();
             }
             DriverEvent::CompactionUpdated(state) => {
                 // Compaction is conversation plumbing, not turn output: it can

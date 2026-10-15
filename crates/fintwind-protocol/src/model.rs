@@ -755,6 +755,8 @@ pub struct AgentSession {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<CompactionState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal: Option<crate::goal::GoalSnapshot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime_event_cursor: Option<RuntimeEventCursor>,
     /// The session was discovered on the OpenCode server (created by the CLI,
     /// the TUI, or another client) rather than in this app. Imported sessions
@@ -837,6 +839,7 @@ impl AgentSession {
             available_commands: Vec::new(),
             context_usage: None,
             compaction: None,
+            goal: None,
             runtime_event_cursor: None,
             imported: false,
             native_session_id: None,
@@ -878,6 +881,7 @@ impl AgentSession {
             available_commands: Vec::new(),
             context_usage: None,
             compaction: None,
+            goal: None,
             runtime_event_cursor: None,
             imported: self.imported,
             native_session_id: self.native_session_id.clone(),
@@ -1348,11 +1352,15 @@ impl AgentSession {
             self.status = SessionStatus::Working;
             return;
         }
+        self.begin_provider_turn();
+    }
+
+    pub fn begin_provider_turn(&mut self) {
         let now = unix_time();
         self.turns.push(AgentTurn {
             id: Uuid::new_v4(),
             submission: None,
-            turn_count: 1,
+            turn_count: self.turns.len() + 1,
             status: TurnStatus::Running,
             provider_turn_started: true,
             provider_resume_at: None,
@@ -1886,6 +1894,7 @@ pub enum DriverEvent {
     /// not turn output: it can start, settle, or fail while no turn is live,
     /// and it arrives for the provider's own automatic compaction too.
     CompactionUpdated(CompactionState),
+    GoalUpdated(Option<crate::goal::GoalSnapshot>),
     /// The provider runtime announced a model call in flight (opencode
     /// `session.status busy`): at the turn's start and again at every step
     /// start. This is the transcript's signal to label the wait before the

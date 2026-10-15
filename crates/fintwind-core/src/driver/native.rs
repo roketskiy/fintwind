@@ -1789,6 +1789,23 @@ fn translate_native_rows(
             }
             Some("assistant") => {
                 let parts = row.get("content").and_then(Value::as_array);
+                // A synthetic continuation has no visible user row. Establish
+                // its owner before folding the first model step's statistics.
+                if transcript.turns.is_empty() {
+                    transcript.turns.push(AgentTurn {
+                        id: uuid::Uuid::new_v4(),
+                        submission: None,
+                        turn_count: 1,
+                        status: TurnStatus::Completed,
+                        provider_turn_started: true,
+                        provider_resume_at: None,
+                        provider_prompt: None,
+                        started_at: created_at,
+                        completed_at: Some(created_at),
+                        checkpoint: None,
+                        stats: None,
+                    });
+                }
                 // Every assistant row is one model step of the turn above it,
                 // and the fold happens before the content gate: a row with no
                 // visible text still ran a model step whose tokens and
@@ -1831,34 +1848,9 @@ fn translate_native_rows(
                 // that is when the turn ended.
                 let completed_at =
                     ms_to_seconds(row.pointer("/time/completed")).unwrap_or(created_at);
-                // The response belongs to the last open turn; an assistant
-                // message without a user turn above it (a pre-title or
-                // synthetic open) models its own turn so block/turn
-                // references stay consistent.
-                let turn_id = match transcript.turns.last_mut() {
-                    Some(turn) => {
-                        turn.completed_at = Some(completed_at.max(turn.completed_at.unwrap_or(0)));
-                        turn.id
-                    }
-                    None => {
-                        let turn = AgentTurn {
-                            id: uuid::Uuid::new_v4(),
-                            submission: None,
-                            turn_count: transcript.turns.len() + 1,
-                            status: TurnStatus::Completed,
-                            provider_turn_started: true,
-                            provider_resume_at: None,
-                            provider_prompt: None,
-                            started_at: created_at,
-                            completed_at: Some(completed_at),
-                            checkpoint: None,
-                            stats: None,
-                        };
-                        let id = turn.id;
-                        transcript.turns.push(turn);
-                        id
-                    }
-                };
+                let turn = transcript.turns.last_mut().expect("assistant turn owner");
+                turn.completed_at = Some(completed_at.max(turn.completed_at.unwrap_or(0)));
+                let turn_id = turn.id;
                 // Parts stay in stored order. Text that a tool sits between is
                 // two messages with the tool block between them; consecutive
                 // text parts with nothing between them still join. Hoisting

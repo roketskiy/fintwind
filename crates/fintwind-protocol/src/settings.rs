@@ -40,6 +40,13 @@ impl DaemonSettings {
         }
     }
 
+    pub fn goal_enabled(&self) -> bool {
+        self.extra
+            .get(GOAL_ENABLED_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
     /// Whether the daemon lets the browser plugin expose its tools to models.
     /// The default is off: browser tools cost model context, so enabling them
     /// is an explicit act. A missing or non-boolean value reads as off.
@@ -91,6 +98,7 @@ impl DaemonSettings {
     }
 }
 
+pub const GOAL_ENABLED_KEY: &str = "goal_enabled";
 pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";
 pub const NETWORK_PROXY_URL_KEY: &str = "network_proxy_url";
 pub const AUTO_COMPACT_ENABLED_KEY: &str = "auto_compact_enabled";

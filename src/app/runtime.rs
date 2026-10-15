@@ -637,8 +637,19 @@ impl Fintwind {
                         session.project_id = self.state.sessions[index].project_id;
                         session.workspace = self.state.sessions[index].workspace.clone();
                     }
+                    if self.pending_goal_actions.contains_key(&session_id) {
+                        session.queued_messages =
+                            self.state.sessions[index].queued_messages.clone();
+                        session.title = self.state.sessions[index].title.clone();
+                    }
                     self.state.sessions[index] = session;
                     self.install_prepared_driver(session_id, prepared);
+                    if let Some(action) = self.pending_goal_actions.remove(&session_id) {
+                        self.control_goal(session_id, action, cx);
+                    }
+                    if !self.state.sessions[index].queued_messages.is_empty() {
+                        self.defer_queue_drain(session_id);
+                    }
                     if self.state.selected_session == Some(session_id) {
                         // The authoritative session replaced the local row.
                         // Disclosures and scroll machinery reset (their
@@ -653,6 +664,10 @@ impl Fintwind {
                 }
             }
             Ok(None) => {
+                if self.pending_goal_actions.contains_key(&session_id) {
+                    self.start_goal_runtime(session_id, placement_generation, cx);
+                    return;
+                }
                 let busy = self
                     .state
                     .sessions
@@ -681,9 +696,61 @@ impl Fintwind {
                 }
             }
             Err(error) => {
+                if self.pending_goal_actions.remove(&session_id).is_some() {
+                    self.show_toast(error.to_string());
+                    cx.notify();
+                }
                 eprintln!("could not attach desktop to daemon session {session_id}: {error:#}");
             }
         }
+    }
+
+    fn start_goal_runtime(
+        &mut self,
+        session_id: Uuid,
+        placement_generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let request = self
+            .state
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Session is unavailable"))
+            .and_then(|session| {
+                let cwd = self
+                    .workspace_path_for_session(&session)
+                    .map(std::path::Path::to_path_buf)
+                    .ok_or_else(|| anyhow::anyhow!("Session workspace is unavailable"))?;
+                Ok((
+                    self.driver_start_request_for_session(&session, cwd.clone())?,
+                    cwd,
+                    session,
+                ))
+            });
+        let (request, cwd, session) = match request {
+            Ok(value) => value,
+            Err(error) => {
+                self.pending_goal_actions.remove(&session_id);
+                self.show_toast(error.to_string());
+                cx.notify();
+                return;
+            }
+        };
+        self.runtime_attach_pending.insert(session_id);
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(
+                    async move { start_driver(request, cwd).map(|driver| Some((session, driver))) },
+                )
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.finish_runtime_attachment(session_id, placement_generation, result, cx)
+            });
+        })
+        .detach();
     }
 
     fn interrupt_orphaned_runtime(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
@@ -2296,7 +2363,7 @@ impl Fintwind {
         submission: ComposerSubmission,
         cx: &mut Context<Self>,
     ) {
-        if self.try_submit_btw(&submission, cx) {
+        if self.try_submit_goal(&submission, cx) || self.try_submit_btw(&submission, cx) {
             return;
         }
         let Some(session) = self.selected_session() else {
@@ -2317,7 +2384,7 @@ impl Fintwind {
             self.request_context_compaction(session.id, cx);
             return;
         }
-        if session.is_busy() {
+        if session.is_busy() || self.pending_goal_actions.contains_key(&session.id) {
             // While the agent is working, Enter queues a follow-up instead of
             // refusing the message. The queue drains once the turn settles.
             self.enqueue_follow_up_submission(session.id, submission, cx);
@@ -2334,7 +2401,7 @@ impl Fintwind {
         submission: ComposerSubmission,
         cx: &mut Context<Self>,
     ) {
-        if self.try_submit_btw(&submission, cx) {
+        if self.try_submit_goal(&submission, cx) || self.try_submit_btw(&submission, cx) {
             return;
         }
         let Some(session) = self.selected_session().cloned() else {
@@ -3278,6 +3345,7 @@ impl Fintwind {
             | DriverEvent::PlanUsageUpdated(_)
             | DriverEvent::TurnStatsUpdated(_)
             | DriverEvent::CompactionUpdated(_)
+            | DriverEvent::GoalUpdated(_)
             | DriverEvent::ProviderBusy
             | DriverEvent::ProviderRetry { .. }
             | DriverEvent::NativeSessionsChanged

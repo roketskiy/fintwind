@@ -1172,6 +1172,7 @@ impl StateStore {
         session.context_window = stored.context_window;
         session.context_usage = stored.context_usage;
         session.compaction = stored.compaction;
+        session.goal = stored.goal;
         session.runtime_event_cursor = stored.runtime_event_cursor;
         // Tidy-up state survives hydration: an archived session that is
         // opened still reports as archived, so restoring it is a decision
@@ -1612,6 +1613,7 @@ fn session_skeleton(row: SessionColumns) -> Option<AgentSession> {
         context_usage: None,
         // The detail blob carries it; a list skeleton re-seeds on hydration.
         compaction: None,
+        goal: None,
         runtime_event_cursor: None,
         imported,
         native_session_id,

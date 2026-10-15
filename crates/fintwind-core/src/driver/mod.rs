@@ -105,6 +105,10 @@ impl DriverHandle {
         self.inner.steer(prompt, files);
     }
 
+    pub fn goal(&self, action: fintwind_protocol::goal::GoalAction) {
+        self.inner.goal(action);
+    }
+
     pub fn compact(&self) {
         self.inner.compact();
     }
@@ -163,6 +167,7 @@ pub trait DriverControl: Send + Sync {
     /// or immediately when idle — and reports every outcome asynchronously
     /// through `DriverEvent::CompactionUpdated`.
     fn compact(&self) {}
+    fn goal(&self, _action: fintwind_protocol::goal::GoalAction) {}
     fn cancel(&self);
     fn refresh_background_work(&self) {}
     fn stop_background_work(&self, _key: BackgroundWorkKey, _control_id: String) {}

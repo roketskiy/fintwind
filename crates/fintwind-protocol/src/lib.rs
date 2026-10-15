@@ -34,6 +34,7 @@ pub mod checkpoint;
 pub mod composer;
 mod driver_wire;
 pub mod git;
+pub mod goal;
 pub mod http;
 pub mod i18n;
 pub mod identity;

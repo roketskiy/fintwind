@@ -524,6 +524,9 @@ pub(super) enum TranscriptRowKind {
     /// the turn settled or failed, and it presents as its own compact card
     /// rather than a working-row suffix so it stays visible either way.
     ProviderRetry,
+    /// A completed Goal's result card, placed after the final response so the
+    /// run result and its metadata stay attached to the work.
+    GoalCompletion,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -733,7 +736,8 @@ pub(super) fn assistant_response_footer(
                 | TranscriptRowKind::ChangedFiles(_)
                 | TranscriptRowKind::WorkingIndicator
                 | TranscriptRowKind::Compacting
-                | TranscriptRowKind::ProviderRetry => None,
+                | TranscriptRowKind::ProviderRetry
+                | TranscriptRowKind::GoalCompletion => None,
             })
             .filter(|part| !part.content.trim().is_empty())
             .map(|part| part.content.as_str())
@@ -1091,6 +1095,15 @@ pub(super) fn transcript_rows_fingerprint_with_retry(
     // turn statuses below would hold still while the rows moved.
     hash = mix(hash, session.status.is_busy() as u64);
 
+    // The completion card changes only with a new durable Goal revision.
+    hash = mix(
+        hash,
+        session
+            .goal
+            .as_ref()
+            .map_or(0, |goal| goal.revision.wrapping_mul(2) + goal.status as u64),
+    );
+
     // The compacting row exists only while a compaction runs, and no turn
     // status changes when it settles — this flip must move the rows too.
     hash = mix(
@@ -1278,27 +1291,54 @@ pub(super) fn folded_transcript_row_kinds_with_retry(
         })
         .map(|turn| turn.id)
         .collect::<HashSet<_>>();
-    if changed_turns.is_empty() {
-        return rows;
-    }
-
-    let mut last_row_by_turn = HashMap::new();
-    for (index, row) in rows.iter().copied().enumerate() {
-        if let Some(turn_id) = row_turn_id(session, row)
-            && changed_turns.contains(&turn_id)
-        {
-            last_row_by_turn.insert(turn_id, index);
+    let mut with_changes = rows;
+    if !changed_turns.is_empty() {
+        let mut last_row_by_turn = HashMap::new();
+        for (index, row) in with_changes.iter().copied().enumerate() {
+            if let Some(turn_id) = row_turn_id(session, row)
+                && changed_turns.contains(&turn_id)
+            {
+                last_row_by_turn.insert(turn_id, index);
+            }
         }
+        let changed_after_row = last_row_by_turn
+            .into_iter()
+            .map(|(turn_id, index)| (index, turn_id))
+            .collect::<HashMap<_, _>>();
+        let mut spliced = Vec::with_capacity(with_changes.len() + changed_after_row.len());
+        for (index, row) in with_changes.into_iter().enumerate() {
+            spliced.push(row);
+            if let Some(turn_id) = changed_after_row.get(&index).copied() {
+                spliced.push(TranscriptRowKind::ChangedFiles(turn_id));
+            }
+        }
+        with_changes = spliced;
     }
-    let changed_after_row = last_row_by_turn
-        .into_iter()
-        .map(|(turn_id, index)| (index, turn_id))
-        .collect::<HashMap<_, _>>();
-    let mut with_changes = Vec::with_capacity(rows.len() + changed_after_row.len());
-    for (index, row) in rows.into_iter().enumerate() {
-        with_changes.push(row);
-        if let Some(turn_id) = changed_after_row.get(&index).copied() {
-            with_changes.push(TranscriptRowKind::ChangedFiles(turn_id));
+    if let Some(goal) = session
+        .goal
+        .as_ref()
+        .filter(|goal| goal.status == fintwind_client::goal::GoalStatus::Done)
+    {
+        let completion_turn = goal.completed_at.and_then(|completed_at| {
+            session
+                .turns
+                .iter()
+                .filter(|turn| {
+                    turn.status != TurnStatus::Running
+                        && turn.completed_at.is_some_and(|at| at <= completed_at)
+                })
+                .max_by_key(|turn| turn.completed_at.unwrap_or_default())
+                .map(|turn| turn.id)
+        });
+        let insert_after = completion_turn.and_then(|turn_id| {
+            with_changes
+                .iter()
+                .rposition(|row| row_turn_id(session, *row) == Some(turn_id))
+        });
+        if let Some(index) = insert_after {
+            with_changes.insert(index + 1, TranscriptRowKind::GoalCompletion);
+        } else {
+            with_changes.push(TranscriptRowKind::GoalCompletion);
         }
     }
     with_changes
@@ -1358,7 +1398,8 @@ fn turn_answer_start(session: &AgentSession, turn_rows: &[TranscriptRowKind]) ->
         | TranscriptRowKind::ChangedFiles(_)
         | TranscriptRowKind::WorkingIndicator
         | TranscriptRowKind::Compacting
-        | TranscriptRowKind::ProviderRetry => false,
+        | TranscriptRowKind::ProviderRetry
+        | TranscriptRowKind::GoalCompletion => false,
     };
     let Some(last_text) = turn_rows.iter().rposition(is_answer_text) else {
         return turn_rows.len();
@@ -1375,6 +1416,7 @@ fn row_turn_id(session: &AgentSession, row: TranscriptRowKind) -> Option<Uuid> {
         TranscriptRowKind::TurnBlock(index) => session.transcript_blocks.get(index)?.turn_id,
         TranscriptRowKind::TurnFold(turn_id) => Some(turn_id),
         TranscriptRowKind::ChangedFiles(turn_id) => Some(turn_id),
+        TranscriptRowKind::GoalCompletion => None,
         TranscriptRowKind::WorkingIndicator
         | TranscriptRowKind::Compacting
         | TranscriptRowKind::ProviderRetry => None,

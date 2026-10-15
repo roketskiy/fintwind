@@ -63,6 +63,7 @@ impl FintwindBackend {
         // Seed from the persisted setting so a daemon that comes up before
         // the app connects already exposes the right state to plugins.
         browser_tools.set_enabled(settings.get().browser_tools_enabled());
+        crate::goal_plugin::set_enabled(settings.get().goal_enabled())?;
         // Same for the proxy: fetches and later `opencode serve` children must
         // ride it even when no client ever pushes settings in this run.
         fintwind_protocol::http::set_active_proxy(
@@ -756,6 +757,7 @@ impl Backend for FintwindBackend {
                 // apply it so the change reaches models on the next request.
                 self.browser_tools
                     .set_enabled(self.settings.get().browser_tools_enabled());
+                crate::goal_plugin::set_enabled(self.settings.get().goal_enabled())?;
                 // Reinstall the proxy so later fetches and `opencode serve`
                 // children pick the new address up without a daemon restart.
                 fintwind_protocol::http::set_active_proxy(
@@ -1955,6 +1957,7 @@ fn handle_driver_command(
         Command::Prompt { prompt, files } => driver.prompt(prompt, files),
         Command::Steer { prompt, files } => driver.steer(prompt, files),
         Command::CompactSession => driver.compact(),
+        Command::Goal { action } => driver.goal(action),
         Command::Cancel => driver.cancel(),
         Command::RefreshBackgroundWork => driver.refresh_background_work(),
         Command::StopBackgroundWork { key, control_id } => {
@@ -2182,6 +2185,7 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
         ),
         DriverEvent::PlanUsageUpdated(usage) => ("planUsageUpdated", serde_json::to_value(usage)?),
         DriverEvent::TurnStatsUpdated(stats) => ("turnStatsUpdated", serde_json::to_value(stats)?),
+        DriverEvent::GoalUpdated(state) => ("goalUpdated", serde_json::to_value(state)?),
         DriverEvent::CompactionUpdated(state) => {
             ("compactionUpdated", serde_json::to_value(state)?)
         }
@@ -2359,6 +2363,7 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         }
         "planUsageUpdated" => DriverEvent::PlanUsageUpdated(serde_json::from_value(payload)?),
         "turnStatsUpdated" => DriverEvent::TurnStatsUpdated(serde_json::from_value(payload)?),
+        "goalUpdated" => DriverEvent::GoalUpdated(serde_json::from_value(payload)?),
         "compactionUpdated" => DriverEvent::CompactionUpdated(serde_json::from_value(payload)?),
         "providerBusy" => DriverEvent::ProviderBusy,
         "providerRetry" => {

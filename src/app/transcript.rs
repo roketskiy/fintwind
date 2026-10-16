@@ -1135,6 +1135,7 @@ pub(super) fn transcript_rows_fingerprint_with_retry(
     hash = mix(hash, session.turns.len() as u64);
     for turn in &session.turns {
         hash = mix_uuid(hash, turn.id);
+        hash = mix(hash, turn.started_at);
         hash = mix(hash, turn.status as u64);
         hash = mix(
             hash,
@@ -1323,17 +1324,16 @@ pub(super) fn folded_transcript_row_kinds_with_retry(
             session
                 .turns
                 .iter()
-                .filter(|turn| {
-                    turn.status != TurnStatus::Running
-                        && turn.completed_at.is_some_and(|at| at <= completed_at)
-                })
-                .max_by_key(|turn| turn.completed_at.unwrap_or_default())
-                .map(|turn| turn.id)
+                .rev()
+                .find(|turn| turn.started_at <= completed_at)
         });
-        let insert_after = completion_turn.and_then(|turn_id| {
+        if completion_turn.is_some_and(|turn| turn.status == TurnStatus::Running) {
+            return with_changes;
+        }
+        let insert_after = completion_turn.and_then(|turn| {
             with_changes
                 .iter()
-                .rposition(|row| row_turn_id(session, *row) == Some(turn_id))
+                .rposition(|row| row_turn_id(session, *row) == Some(turn.id))
         });
         if let Some(index) = insert_after {
             with_changes.insert(index + 1, TranscriptRowKind::GoalCompletion);

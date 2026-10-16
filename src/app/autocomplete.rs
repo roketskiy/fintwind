@@ -117,6 +117,7 @@ impl Fintwind {
             self.slash_command_index_key = None;
             self.mention_file_index = Rc::new(Vec::new());
             self.mention_file_index_path = None;
+            self.sync_composer_reference_catalog(cx);
             return;
         };
         let provider = self
@@ -227,6 +228,29 @@ impl Fintwind {
                 })
                 .detach();
             }
+        }
+        self.sync_composer_reference_catalog(cx);
+    }
+
+    fn sync_composer_reference_catalog(&mut self, cx: &mut Context<Self>) {
+        if self
+            .composer_reference_catalog
+            .has_sources(&self.slash_command_index, &self.mention_file_index)
+        {
+            return;
+        }
+        let catalog = Rc::new(crate::mentions::Catalog::new(
+            self.slash_command_index.clone(),
+            self.mention_file_index.clone(),
+            super::right_panel::file_icon_for_path,
+        ));
+        self.composer_reference_catalog = catalog.clone();
+        self.composer.update(cx, |input, cx| {
+            input.set_reference_catalog(catalog.clone(), cx)
+        });
+        if let Some(edit) = &self.message_edit {
+            edit.input
+                .update(cx, |input, cx| input.set_reference_catalog(catalog, cx));
         }
     }
 
@@ -500,7 +524,7 @@ impl Fintwind {
                     '/'
                 };
                 let icon_path = if command.scope == composer_complete::CommandScope::Skill {
-                    "icons/sparkle.svg"
+                    crate::mentions::SKILL_ICON
                 } else {
                     "icons/command.svg"
                 };
@@ -575,43 +599,43 @@ impl Fintwind {
                 let name = &file.path[name_start..];
                 let parent = &file.path[..name_start.saturating_sub(1)];
                 let name_char_offset = file.path[..name_start].chars().count();
-                let icon_path = if file.is_dir {
-                    "icons/folder.svg"
-                } else {
-                    super::right_panel::file_icon_for_path(&file.path)
-                };
-                base.child(icon(icon_path, 13.0, theme.text_tertiary))
-                    .child(
+                base.when(!file.is_dir, |element| {
+                    element.child(crate::ui::file_icon(
+                        super::right_panel::file_icon_for_path(&file.path),
+                        13.0,
+                    ))
+                })
+                .child(
+                    div()
+                        .flex_none()
+                        .max_w(px(300.0))
+                        .truncate()
+                        .text_size(ui_px(12.0))
+                        .child(matched_text(
+                            name.to_owned(),
+                            highlight_byte_ranges(name, &scored.positions, name_char_offset),
+                            theme.text,
+                            theme.accent,
+                            font.clone(),
+                        )),
+                )
+                .when(!parent.is_empty(), |element| {
+                    element.child(
                         div()
-                            .flex_none()
-                            .max_w(px(300.0))
+                            .flex_1()
+                            .min_w_0()
                             .truncate()
-                            .text_size(ui_px(12.0))
+                            .text_size(ui_px(11.0))
                             .child(matched_text(
-                                name.to_owned(),
-                                highlight_byte_ranges(name, &scored.positions, name_char_offset),
-                                theme.text,
+                                parent.to_owned(),
+                                highlight_byte_ranges(parent, &scored.positions, 0),
+                                theme.text_ghost,
                                 theme.accent,
-                                font.clone(),
+                                font,
                             )),
                     )
-                    .when(!parent.is_empty(), |element| {
-                        element.child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .truncate()
-                                .text_size(ui_px(11.0))
-                                .child(matched_text(
-                                    parent.to_owned(),
-                                    highlight_byte_ranges(parent, &scored.positions, 0),
-                                    theme.text_ghost,
-                                    theme.accent,
-                                    font,
-                                )),
-                        )
-                    })
-                    .into_any_element()
+                })
+                .into_any_element()
             }
         }
     }

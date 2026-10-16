@@ -401,8 +401,6 @@ pub(super) fn composer_row_plan(available: f32, widths: ComposerRowWidths) -> Co
 }
 
 impl Fintwind {
-    // ── Permission ─────────────────────────────────────────────────────────
-
     pub(super) fn render_permission(&self, cx: &mut Context<Self>) -> Option<Div> {
         if let Some(input) = self.selected_runtime()?.pending_user_input.clone() {
             return Some(self.render_user_input(input, cx));
@@ -833,9 +831,6 @@ impl Fintwind {
                 }),
         )
     }
-
-    // ── Composer ───────────────────────────────────────────────────────────
-
     pub(super) fn render_provider_model_control(
         &self,
         label: bool,

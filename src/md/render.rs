@@ -206,9 +206,6 @@ fn heading_metrics(level: u8, metrics: &Metrics) -> (f32, f32, FontWeight) {
     let size = (metrics.text_size * scale).round();
     (size, (size * 1.42).round(), weight)
 }
-
-// ── Palette ────────────────────────────────────────────────────────────────
-
 /// Colors for markdown paint, resolved once per render from the theme.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Palette {
@@ -279,9 +276,6 @@ impl Palette {
         }
     }
 }
-
-// ── Flattened inline text ──────────────────────────────────────────────────
-
 /// One block's inline content, ready to shape: a flat string, the `TextRun`s
 /// that tile it exactly, plus the byte ranges that need paint-only decoration.
 #[derive(Debug)]
@@ -425,9 +419,6 @@ pub fn flatten_plain(
         allow_references: true,
     }
 }
-
-// ── Per-message state ──────────────────────────────────────────────────────
-
 /// Everything the renderer keeps between frames for one markdown body.
 ///
 /// The flatten cache is keyed by element ordinal and pruned only back to the
@@ -585,9 +576,6 @@ impl MarkdownView {
             .map(|top| &top.block)
     }
 }
-
-// ── Render context ─────────────────────────────────────────────────────────
-
 /// Everything a render pass needs, plus the element counter that assigns
 /// document-ordered keys. Keys stay stable frame to frame as long as the block
 /// structure does, which is what lets a selection survive scrolling.
@@ -741,9 +729,6 @@ impl<'a> Ctx<'a> {
         }
     }
 }
-
-// ── The shared text primitive ──────────────────────────────────────────────
-
 /// One selectable, decorated text element.
 ///
 /// The `canvas` underlay is an *earlier sibling* than the text, so GPUI paints
@@ -927,9 +912,6 @@ pub fn frame_reset(selection: TranscriptSelection) -> impl IntoElement {
     .w(px(0.0))
     .h(px(0.0))
 }
-
-// ── Selection geometry and input ───────────────────────────────────────────
-
 /// Wash boxes for one byte range: one box per visual row the range covers, in
 /// window coordinates, from the laid-out text's own geometry. `pad_x` overhangs
 /// horizontally (inline code) and `inset_y` shrinks vertically; a selection
@@ -1146,9 +1128,6 @@ pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection)
         }
     });
 }
-
-// ── Blocks ─────────────────────────────────────────────────────────────────
-
 /// Per-top-level-block ordinal stride: an element's ordinal is
 /// `block_index << 16 | position_within_block`. Deriving keys from the
 /// block's document index rather than a running document counter means a

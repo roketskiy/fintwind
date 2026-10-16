@@ -102,9 +102,6 @@ pub fn lang_for_tag(tag: &str) -> Option<Lang> {
         _ => return None,
     })
 }
-
-// ── Language specs ─────────────────────────────────────────────────────────
-
 struct StringSpec {
     delimiter: &'static str,
     multiline: bool,
@@ -753,9 +750,6 @@ fn spec(lang: Lang) -> LangSpec {
         },
     }
 }
-
-// ── Lexer ──────────────────────────────────────────────────────────────────
-
 /// Tokenize one line. Returns its spans plus the carry for the next line.
 pub fn tokenize_line(lang: Lang, line: &str, carry: Carry) -> (Vec<Token>, Carry) {
     let spec = spec(lang);

@@ -162,8 +162,6 @@ impl ConversationNavigationRail {
 }
 
 impl Fintwind {
-    // ── Transcript ─────────────────────────────────────────────────────────
-
     pub(super) fn transcript_control_focus(
         &self,
         key: impl Into<String>,

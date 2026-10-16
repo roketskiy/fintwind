@@ -28,9 +28,6 @@ pub const FILE_INDEX_CAP: usize = 50_000;
 const COMMAND_SCAN_CAP: usize = 500;
 const COMMAND_FILE_MAX_BYTES: u64 = 64 * 1024;
 const WALK_MAX_DEPTH: usize = 8;
-
-// ── Trigger detection ──────────────────────────────────────────────────────
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TriggerKind {
     Command,
@@ -83,9 +80,6 @@ pub fn detect_trigger(text: &str, cursor: usize) -> Option<Trigger> {
         range: token_start..cursor,
     })
 }
-
-// ── Slash commands ─────────────────────────────────────────────────────────
-
 /// Where a command came from, in the order groups are listed.
 /// Fintwind's own built-ins. The shared commands are plain prompt templates Fintwind
 /// expands at submit, so they work over any transport — unlike a CLI's native
@@ -533,9 +527,6 @@ fn first_line_summary(body: &str) -> String {
     }
     summary
 }
-
-// ── Template expansion ─────────────────────────────────────────────────────
-
 /// Substitute `$ARGUMENTS` and `$1`–`$9` — the dialect Claude Code and Codex
 /// share — plus Pi's `$@`, in a command template. A template that consumes
 /// nothing gets the arguments appended instead, so plain prompt files still
@@ -600,9 +591,6 @@ pub fn expanded_submission(prompt: &str, commands: &[SlashCommand]) -> Option<St
         args,
     ))
 }
-
-// ── Workspace file index ───────────────────────────────────────────────────
-
 /// Index the project's files for `@` mentions. Background executor only.
 ///
 /// `git ls-files` — tracked plus unignored untracked — is the authoritative
@@ -716,9 +704,6 @@ fn walked_files(root: &Path, cap: usize) -> Vec<String> {
     }
     files
 }
-
-// ── Fuzzy filtering ────────────────────────────────────────────────────────
-
 /// The matcher every filter call shares, so its internal scoring buffers are
 /// allocated once for the window rather than once per keystroke.
 pub fn matcher() -> Matcher {

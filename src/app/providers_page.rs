@@ -92,8 +92,6 @@ pub(super) fn api_format_label(format: ProviderApiFormat) -> String {
 }
 
 impl Fintwind {
-    // ── Selection & state ──────────────────────────────────────────────────
-
     /// The provider id the detail pane shows: the stored selection while it
     /// still resolves, the built-in provider otherwise. Catalog providers
     /// are namespaced (`builtin:<id>`) so they can never collide with the
@@ -231,9 +229,6 @@ impl Fintwind {
         // metadata table all load for the visit.
         self.ensure_builtin_providers(cx);
     }
-
-    // ── Persistence ────────────────────────────────────────────────────────
-
     /// Load the roster from OpenCode's own configuration off-thread, after
     /// migrating the old app-managed mirror file once. The result replaces
     /// the working store unless a newer load started or a debounced field
@@ -362,9 +357,6 @@ impl Fintwind {
             cx.notify();
         }
     }
-
-    // ── Mutations ──────────────────────────────────────────────────────────
-
     fn begin_add_provider(&mut self, cx: &mut Context<Self>) {
         self.providers_adding = true;
         // The form opens on the picker: built-in first, Custom as the
@@ -746,9 +738,6 @@ impl Fintwind {
             .find(|provider| Some(&provider.id) == selected.as_ref())
             .cloned()
     }
-
-    // ── Page ───────────────────────────────────────────────────────────────
-
     pub(super) fn render_providers_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         div()
@@ -1033,9 +1022,6 @@ impl Fintwind {
             )
             .into_any_element()
     }
-
-    // ── Detail pane ────────────────────────────────────────────────────────
-
     fn render_providers_detail(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         if self.providers_adding {
             return self.render_provider_form(theme, cx);
@@ -1572,7 +1558,6 @@ impl Fintwind {
         let enabled = provider.enabled;
         let id = provider.id.clone();
 
-        // Header: tile, name (or rename editor), enable badge, and actions.
         let name_area: AnyElement = if self.providers_renaming {
             div()
                 .flex()
@@ -1746,7 +1731,6 @@ impl Fintwind {
                 }
             }));
 
-        // Endpoint fields.
         let base_url_field = labeled_field(
             theme,
             tr!("providers.base_url_label"),
@@ -1762,7 +1746,6 @@ impl Fintwind {
             self.render_api_key_field(theme, cx),
         );
 
-        // API format dropdown.
         let current_format = provider.api_format;
         let weak = cx.entity().downgrade();
         let format_handle = self.menu_handle("provider-format-selector", cx);
@@ -2287,9 +2270,6 @@ impl Fintwind {
         }
         row
     }
-
-    // ── Add-provider form ──────────────────────────────────────────────────
-
     fn select_form_builtin(&mut self, provider_id: Option<String>, cx: &mut Context<Self>) {
         self.providers_form_stage = match provider_id {
             Some(id) => ProviderFormStage::Builtin(id),
@@ -3035,9 +3015,6 @@ impl Fintwind {
         )
     }
 }
-
-// ── Small shared pieces ────────────────────────────────────────────────────
-
 /// A Models section header without a button — the built-in page's model
 /// list is read-only, so the label carries the row alone.
 fn models_header_with_label(theme: &Theme, label: String) -> Div {
@@ -3120,9 +3097,6 @@ pub(super) fn small_pill(theme: &Theme, label: String, color: Option<Hsla>) -> D
         .bg(theme.overlay)
         .child(SharedString::from(label))
 }
-
-// ── Modality badges ────────────────────────────────────────────────────────
-
 /// The stroke icon for a catalog modality; `None` for anything the catalog
 /// may add later — unknown modalities still appear in the pill's tooltip.
 fn modality_icon_path(modality: &str) -> Option<&'static str> {

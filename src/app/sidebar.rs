@@ -209,7 +209,6 @@ impl Fintwind {
                 }
             }))
     }
-    // ── Sidebar ────────────────────────────────────────────────────────────
 
     pub(super) fn render_fps_counter(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
@@ -1671,9 +1670,6 @@ impl Fintwind {
             .child(row)
             .into_any_element()
     }
-
-    // ── Header ─────────────────────────────────────────────────────────────
-
     /// The session tab row beneath the unified top bar. Window controls,
     /// layout toggles, history, and the reveal-folder action moved up into
     /// the top bar; this row keeps only the tabs — at their existing height,
@@ -1699,9 +1695,6 @@ impl Fintwind {
                     .cached(StyleRefinement::default().flex_1().min_w(px(0.0)).h_full()),
             )
     }
-
-    // ── Empty states ───────────────────────────────────────────────────────
-
     pub(super) fn render_empty_state(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         if self.selected_project().is_none() {

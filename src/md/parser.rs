@@ -27,9 +27,6 @@ use regex::Regex;
 static BARE_WEB_URL: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"(?i)\bhttps?://[[!-~]&&[^<>"`\\]]+"#).expect("bare web URL regex should compile")
 });
-
-// ── Tree model ─────────────────────────────────────────────────────────────
-
 /// Inline styling threaded through nested emphasis and links.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct InlineStyle {
@@ -142,9 +139,6 @@ impl BlockTree {
         self.blocks.len()
     }
 }
-
-// ── Full parse ─────────────────────────────────────────────────────────────
-
 fn options() -> Options {
     Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
@@ -927,9 +921,6 @@ fn merge_runs(runs: Vec<InlineRun>) -> Vec<InlineRun> {
     }
     merged
 }
-
-// ── Incremental parse ──────────────────────────────────────────────────────
-
 /// Streaming parser over an append-only source.
 ///
 /// Keeps the settled prefix of top-level blocks and reparses only the tail from

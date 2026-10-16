@@ -21,9 +21,6 @@ use super::providers_page::{
 };
 
 use super::*;
-
-// ── Probe state ────────────────────────────────────────────────────────────
-
 /// A provider connectivity probe's lifecycle on the page.
 #[derive(Clone, Debug)]
 pub(super) enum ProviderConnectivityState {
@@ -224,9 +221,6 @@ impl Fintwind {
 
         models_header_with_button(theme, tr!("providers.models_label"), fetch_button)
     }
-
-    // ── Connectivity & first-token probes ──────────────────────────────────
-
     /// Make sure a metadata table is available for the page's modality
     /// badges: the session's copy while fresh, else the disk cache, else one
     /// background download; a stale copy is shown at once while a refresh is
@@ -609,9 +603,6 @@ impl Fintwind {
         self.model_latency
             .retain(|(owner, _), _| owner != provider_id);
     }
-
-    // ── Built-in providers: catalog, auth state, authorize & logout ────────
-
     /// Make sure the built-in provider roster and the authorized set are
     /// loaded for the page visit. Both run off the UI thread; render reads
     /// only what they store and degrades to "unknown" until then.

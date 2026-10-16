@@ -159,11 +159,6 @@ const WATCHDOG_SECONDS: u64 = 420;
 /// The behavioral checks this run performs; a run that executes fewer is a
 /// failure, not a partial pass.
 const EXPECTED_CHECKS: usize = 33;
-
-// ---------------------------------------------------------------------------
-// Report
-// ---------------------------------------------------------------------------
-
 #[derive(Serialize)]
 struct CheckEntry {
     name: String,
@@ -299,11 +294,6 @@ impl Report {
         self.errors.push(format!("cleanup {step}: {details}"));
     }
 }
-
-// ---------------------------------------------------------------------------
-// Small utilities
-// ---------------------------------------------------------------------------
-
 fn retryable(error: &std::io::Error) -> bool {
     matches!(
         error.kind(),
@@ -458,11 +448,6 @@ fn sha256_file(path: &PathBuf) -> anyhow::Result<String> {
     let bytes = fs::read(path).with_context(|| format!("could not read {}", path.display()))?;
     Ok(sha256_hex(&bytes))
 }
-
-// ---------------------------------------------------------------------------
-// WebSocket helpers shared by the tool client and the probes
-// ---------------------------------------------------------------------------
-
 enum ReadOutcome {
     Text(String),
     Timeout,
@@ -533,11 +518,6 @@ fn first_reply_text(url: &str, hello: &Value, timeout: Duration) -> anyhow::Resu
         ReadOutcome::Closed => bail!("{url} closed before answering the hello"),
     }
 }
-
-// ---------------------------------------------------------------------------
-// The native browser-tool client (the plugin side of the wire)
-// ---------------------------------------------------------------------------
-
 /// One reply that arrived for a request id the caller is not currently
 /// awaiting. The frame is kept whole — id, result and raw text — so the await
 /// that does want it still finds it.
@@ -921,11 +901,6 @@ fn probe_origin(address: &str) -> anyhow::Result<(String, String)> {
     let status = text.lines().next().unwrap_or_default().to_owned();
     Ok((status, text))
 }
-
-// ---------------------------------------------------------------------------
-// The fake GUI page owner
-// ---------------------------------------------------------------------------
-
 #[derive(Clone, Copy)]
 enum OwnerCommand {
     Approve(Uuid),
@@ -1354,11 +1329,6 @@ fn wire_options() -> fintwind_protocol::WireDriverStartOptions {
         provider_cursor: None,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Harness
-// ---------------------------------------------------------------------------
-
 struct Harness {
     dir: PathBuf,
     address: String,
@@ -1473,11 +1443,6 @@ impl Harness {
         Ok(())
     }
 }
-
-// ---------------------------------------------------------------------------
-// Backend
-// ---------------------------------------------------------------------------
-
 /// The one backend the E2E needs. Browser commands never reach it — the
 /// server answers those through the broker — so it only has to activate a
 /// runtime without starting a provider, and hand `serve` the registry it
@@ -1507,11 +1472,6 @@ impl Backend for E2EBackend {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// The run
-// ---------------------------------------------------------------------------
-
 struct E2E {
     dir: PathBuf,
     report: Report,
@@ -1770,7 +1730,6 @@ fn build_harness(report: &mut Report, dir: &PathBuf) -> anyhow::Result<Harness> 
 }
 
 fn run_checks(e2e: &mut E2E) {
-    // -- 1 -------------------------------------------------------------------
     e2e.check(
         "an-unshared-mapping-lists-nothing-and-refuses-an-action",
         |h| {
@@ -1803,7 +1762,6 @@ fn run_checks(e2e: &mut E2E) {
         },
     );
 
-    // -- 2 -------------------------------------------------------------------
     e2e.check("an-unknown-opencode-session-is-refused", |h| {
         let unknown = format!("ses_unknown_{}", Uuid::new_v4().simple());
         let empty = String::new();
@@ -1829,7 +1787,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("three unmapped identities (unknown, empty, over-long) were refused for list and invoke, and none reached a page owner".to_owned())
     });
 
-    // -- 3 -------------------------------------------------------------------
     e2e.check("a-child-session-does-not-inherit-and-a-connection-cannot-switch", |h| {
         let child = format!("ses_child_{}", Uuid::new_v4().simple());
         let inherited = h.tool()?.list(Uuid::new_v4(), &child)?;
@@ -1855,7 +1812,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("an unmapped child is refused, an explicitly bound child resolves, and a connection cannot switch to another session".to_owned())
     });
 
-    // -- 4 -------------------------------------------------------------------
     e2e.check("the-mapped-session-invokes-exactly-its-own-page", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let (listed, frame) = h.tool()?.list_frame(Uuid::new_v4(), &h.native_session)?;
@@ -1907,7 +1863,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("the mapped session listed only its own page without Fintwind ids, and its snapshot routed through the exact scope and back".to_owned())
     });
 
-    // -- 5 -------------------------------------------------------------------
     e2e.check("another-fintwind-sessions-page-is-invisible", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let scope_b = h.share(&h.owner_b, h.session_b, h.runtime_b)?;
@@ -1971,7 +1926,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("each mapping listed and reached only its own page; naming the other session's page from this mapping was refused".to_owned())
     });
 
-    // -- 6 -------------------------------------------------------------------
     e2e.check("a-wrong-or-superseded-grant-is-refused", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let cases = [
@@ -2019,7 +1973,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("wrong page, wrong grant, nil ids and an unknown grant were all refused, while the current lease still worked".to_owned())
     });
 
-    // -- 7 -------------------------------------------------------------------
     e2e.check("the-browser-token-cannot-authenticate-the-desktop-endpoint", |h| {
         let hello = serde_json::to_value(&ClientMessage::Hello {
             protocol_version: PROTOCOL_VERSION,
@@ -2048,7 +2001,6 @@ fn run_checks(e2e: &mut E2E) {
         ))
     });
 
-    // -- 8 -------------------------------------------------------------------
     e2e.check(
         "the-daemon-token-cannot-authenticate-the-browser-endpoint",
         |h| {
@@ -2071,7 +2023,6 @@ fn run_checks(e2e: &mut E2E) {
         },
     );
 
-    // -- 9 -------------------------------------------------------------------
     e2e.check("an-origin-header-is-refused-before-any-frame", |h| {
         let (status, body) = probe_origin(&h.address)?;
         if !status.contains("403") {
@@ -2085,7 +2036,6 @@ fn run_checks(e2e: &mut E2E) {
         ))
     });
 
-    // -- 10 ------------------------------------------------------------------
     e2e.check("the-browser-endpoint-refuses-desktop-rpc-publish-and-shutdown", |h| {
         let session = h.session;
         let runtime = h.active_runtime;
@@ -2141,7 +2091,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("task RPC, page publish, a forged result and shutdown were each refused on the browser endpoint, and the daemon kept running".to_owned())
     });
 
-    // -- 11 ------------------------------------------------------------------
     e2e.check("a-replaced-runtime-purges-the-old-mapping", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         expect_ok(&h.tool()?.invoke(
@@ -2207,7 +2156,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("the replaced runtime revoked the old grant, the stale connection was retired, and the rebind served only the new runtime".to_owned())
     });
 
-    // -- 12 ------------------------------------------------------------------
     e2e.check("dropping-the-superseded-binding-keeps-the-replacement", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let guard = h
@@ -2232,7 +2180,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("the late drop of the superseded guard left the replacement binding and its page intact".to_owned())
     });
 
-    // -- 13 ------------------------------------------------------------------
     e2e.check("a-cancel-before-dispatch-refuses-the-late-invoke", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let requests_before = h.owner.events_of("browserRequest").len();
@@ -2257,7 +2204,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("the early cancel was remembered, so the late invoke was refused and never reached the page owner".to_owned())
     });
 
-    // -- 14 ------------------------------------------------------------------
     e2e.check("a-cancel-during-approval-stops-the-owner", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let performed_before = h.owner.performed().len();
@@ -2308,7 +2254,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("the caller's cancel failed the call, told the owner to stop, and a late approval had no effect".to_owned())
     });
 
-    // -- 15 ------------------------------------------------------------------
     e2e.check("a-repeated-request-id-is-refused", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let request_id = Uuid::new_v4();
@@ -2348,7 +2293,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("the spent request id was refused with an observe-again error and reached no owner a second time".to_owned())
     });
 
-    // -- 16 ------------------------------------------------------------------
     e2e.check("an-oversized-owner-result-is-capped", |h| {
         // A second GUI owner on a raw socket answers with an oversized value:
         // DaemonClient refuses that locally, so this is the only way to prove
@@ -2407,7 +2351,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("an owner answer above the wire bound was replaced by a size-limit error, and no payload crossed".to_owned())
     });
 
-    // -- 17 ------------------------------------------------------------------
     e2e.check("unknown-fields-nil-ids-and-repeated-hello-are-refused", |h| {
         // Unknown fields widen the grammar; they are refused, not ignored.
         let unknown_field = json!({
@@ -2485,7 +2428,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("unknown fields, a nil request id, an incompatible version and a repeated hello were each refused, and the endpoint kept serving".to_owned())
     });
 
-    // -- 18 ------------------------------------------------------------------
     e2e.check("a-large-list-is-refused-without-leaking-its-pages", |h| {
         // Sixteen legal pages is the most one connection may share, and each
         // URL is long but inside MAX_BROWSER_URL_BYTES. Serialized, that list
@@ -2560,7 +2502,6 @@ fn run_checks(e2e: &mut E2E) {
         ))
     });
 
-    // -- 19 ------------------------------------------------------------------
     e2e.check("a-reply-for-another-request-survives-while-one-awaits", |h| {
         // Two calls in flight on one connection: a mutation the owner has not
         // approved, and a list the endpoint answers right away. The list's
@@ -2684,7 +2625,6 @@ fn run_checks(e2e: &mut E2E) {
         ))
     });
 
-    // -- 21 ------------------------------------------------------------------
     e2e.check("a-registered-launcher-receives-and-answers-the-open", |h| {
         // The GUI registers one launcher for the live session runtime. Its
         // page and grant ids are launcher identities, not a tab: they must
@@ -2746,7 +2686,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("the registered launcher received the open on its exact scope with the exact URL, held it for approval, and its answer came back unchanged".to_owned())
     });
 
-    // -- 22 ------------------------------------------------------------------
     e2e.check("only-the-launcher-owner-may-answer-an-open", |h| {
         let host_scope = BrowserScope {
             session_id: h.session,
@@ -2819,7 +2758,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("another connection's forged answer was refused, and only the launcher owner's answer completed the open".to_owned())
     });
 
-    // -- 23 ------------------------------------------------------------------
     e2e.check("an-open-cancelled-before-dispatch-is-refused", |h| {
         let host_scope = BrowserScope {
             session_id: h.session,
@@ -2850,7 +2788,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("the early cancel was remembered, so the late open was refused and never reached the launcher".to_owned())
     });
 
-    // -- 24 ------------------------------------------------------------------
     e2e.check(
         "unregistering-the-launcher-fails-a-pending-open-but-keeps-pages",
         |h| {
@@ -2925,7 +2862,6 @@ fn run_checks(e2e: &mut E2E) {
         },
     );
 
-    // -- 25 ------------------------------------------------------------------
     e2e.check(
         "a-duplicate-launcher-is-refused-and-another-session-launcher-is-invisible",
         |h| {
@@ -3011,7 +2947,6 @@ fn run_checks(e2e: &mut E2E) {
         },
     );
 
-    // -- 26 ------------------------------------------------------------------
     e2e.check("a-stale-runtime-mapping-cannot-open", |h| {
         // A valid launcher exists for the active runtime...
         let host_scope = BrowserScope {
@@ -3038,7 +2973,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("a mapping to a never-started runtime was refused with no GUI work, even while a valid launcher existed for the active runtime".to_owned())
     });
 
-    // -- 27 ------------------------------------------------------------------
     e2e.check(
         "a-page-grant-cannot-open-and-a-launcher-cannot-scroll",
         |h| {
@@ -3118,7 +3052,6 @@ fn run_checks(e2e: &mut E2E) {
         },
     );
 
-    // -- 28 ------------------------------------------------------------------
     e2e.check("an-open-waits-for-a-late-browser-host", |h| {
         let host_scope = BrowserScope {
             session_id: h.session,
@@ -3157,7 +3090,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("an open stayed pending until the host registered, then routed once and returned its answer".to_owned())
     });
 
-    // -- 29 ------------------------------------------------------------------
     e2e.check("cancelling-an-open-waiting-for-host-stops-late-routing", |h| {
         let host_scope = BrowserScope {
             session_id: h.session,
@@ -3191,7 +3123,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("cancelling while no host was registered ended the wait, and a later host received no request".to_owned())
     });
 
-    // -- 30 ------------------------------------------------------------------
     e2e.check("an-open-without-a-host-times-out-with-chat-guidance", |h| {
         let started = std::time::Instant::now();
         let outcome = h.tool()?.open(
@@ -3214,7 +3145,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok(message.to_owned())
     });
 
-    // -- 31 ------------------------------------------------------------------
     e2e.check("dropping-the-binding-cancels-a-pending-invoke", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let performed_before = h.owner.performed().len();
@@ -3268,7 +3198,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("dropping the runtime binding ended the pending call, told the owner to stop, and left no usable connection".to_owned())
     });
 
-    // -- 32 ------------------------------------------------------------------
     e2e.check("revoking-the-server-stops-new-connections-and-fails-pending", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         h.rebind(h.session, h.active_runtime)?;
@@ -3332,7 +3261,6 @@ fn run_checks(e2e: &mut E2E) {
         Ok("revoking the capability ended the pending call, told the owner to stop, and refused every new connection".to_owned())
     });
 
-    // -- 33 ------------------------------------------------------------------
     e2e.check("the-report-holds-no-credentials", |h| {
         let owner_events = h.dir.join("owner-events.json");
         let mut combined = h.owner.events();
@@ -3364,11 +3292,6 @@ fn run_checks(e2e: &mut E2E) {
         )
     });
 }
-
-// ---------------------------------------------------------------------------
-// Cleanup and entry point
-// ---------------------------------------------------------------------------
-
 /// Tear every owned transport down in dependency order. Each step is recorded,
 /// so a run that leaked a socket, a thread or a process is visible in the
 /// report instead of hidden by a forced exit.

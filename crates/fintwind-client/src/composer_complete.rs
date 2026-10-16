@@ -28,6 +28,18 @@ pub fn detect_trigger(text: &str, cursor: usize) -> Option<Trigger> {
     if !text.is_char_boundary(cursor) {
         return None;
     }
+    // Mentions can start directly after prose (including non-ASCII text),
+    // inside a slash command's arguments, or after another mention.
+    if let Some(start) = text[..cursor].rfind('@') {
+        let query = &text[start + 1..cursor];
+        if !query.chars().any(char::is_whitespace) {
+            return Some(Trigger {
+                kind: TriggerKind::File,
+                query: query.to_owned(),
+                range: start..cursor,
+            });
+        }
+    }
     let line_start = text[..cursor].rfind('\n').map_or(0, |index| index + 1);
     let line_prefix = &text[line_start..cursor];
     if let Some(query) = line_prefix.strip_prefix('/') {
@@ -40,17 +52,7 @@ pub fn detect_trigger(text: &str, cursor: usize) -> Option<Trigger> {
         }
         return None;
     }
-    let token_start = text[..cursor]
-        .rfind(char::is_whitespace)
-        .map_or(0, |index| {
-            index + text[index..].chars().next().unwrap().len_utf8()
-        });
-    let token = &text[token_start..cursor];
-    Some(Trigger {
-        kind: TriggerKind::File,
-        query: token.strip_prefix('@')?.to_owned(),
-        range: token_start..cursor,
-    })
+    None
 }
 
 pub fn merge_reported_commands(

@@ -216,6 +216,13 @@ class Model:
             if results == 0:
                 return self.settle_call("continue")
             return self.text()
+        if mode == "wait-stall":
+            # Settle-only waiter: reports wait without any tool work,
+            # replaying the orchestrator pattern that waits on background
+            # children instead of calling tools in the goal session.
+            if results == 0:
+                return self.settle_call("wait")
+            return self.text()
         if results == 0 and has_tool(payload, "goal_fixture_step"):
             return self.tool_call("goal_fixture_step", {})
         if guided:
@@ -350,10 +357,16 @@ def main():
         async execute() { return {content: `Fixture step ${++step}`}; }
       }));
       const rpc = await ctx.rpc.register({id: "goal.fixture", methods: {
-        finish: {input: {type: "object", properties: {sessionID: {type: "string"}}, required: ["sessionID"]}, output: {}}
-      }, events: {}}, {async finish({sessionID}) {
-        await ctx.session.synthetic({sessionID, text: "Background fixture completed. Verify the result.",
-          description: "Background completion", metadata: {goalFixture: true}});
+        finish: {input: {type: "object", properties: {sessionID: {type: "string"}, childID: {type: "string"}}, required: ["sessionID"]}, output: {}}
+      }, events: {}}, {async finish({sessionID, childID}) {
+        const notification = {sessionID, text: "Background fixture completed. Verify the result.",
+          description: "Background completion", metadata: {goalFixture: true}};
+        if (childID) {
+          notification.text = `<subagent sessionID="${childID}" state="completed" description="Fixture batch">\nFixture background batch completed.\n</subagent>`;
+          notification.description = "Fixture batch completion";
+          notification.metadata = {source: "subagent", childID, agent: "General", state: "completed"};
+        }
+        await ctx.session.synthetic(notification);
         return {};
       }});
       return async () => { await rpc.dispose(); await registration.dispose(); };
@@ -539,6 +552,25 @@ def main():
                             lambda state: state and state["status"] == "done")
         assert awakened["turns"] == 2 and awakened["tools"] == 2, awakened
         check("a background notification resumes the waiting goal and can complete it")
+        waiting_session = session()
+        MODEL.configure("wait-stall")
+        control(waiting_session, "start", objective="Wait for staged background batches without stalling.")
+        for index in range(3):
+            staged = wait_for(f"staged wait settlement {index}", lambda: control(waiting_session, "get"),
+                              lambda state: state and state["turns"] >= index + 1)
+            assert staged["status"] == "active", staged
+            api("POST", "/api/rpc/goal.fixture/finish" + query,
+                {"input": {"sessionID": waiting_session, "childID": f"ses_fixture_batch_{index}"}})
+        assert control(waiting_session, "get")["status"] == "active"
+        check("wait settlements backed by fresh subagent completions never stall")
+        wait_for("final staged settlement", lambda: control(waiting_session, "get"),
+                 lambda state: state and state["turns"] >= 4 and state["status"] == "active")
+        MODEL.configure("done")
+        api("POST", "/api/rpc/goal.fixture/finish" + query, {"input": {"sessionID": waiting_session}})
+        finished = wait_for("staged waiter completion", lambda: control(waiting_session, "get"),
+                            lambda state: state and state["status"] == "done")
+        assert finished["turns"] == 5, finished
+        check("a staged waiter finishes normally once the model reports done")
         MODEL.configure("done")
         calls_mark = len(MODEL.calls)
         api("POST", f"/api/session/{second}/prompt" + query, {"text": "Hello without a goal."})
@@ -654,6 +686,17 @@ def main():
         stalled = wait_for("no-tools stall", lambda: control(first, "get"), lambda state: state and state["status"] == "blocked")
         assert stalled["turns"] == 3 and MODEL.settles == 3, (stalled, MODEL.settles)
         check("the no-progress guard stops a settle-only worker")
+        MODEL.configure("wait-stall")
+        control(first, "start", objective="Stop a waiter that cites no background progress.")
+        for index in range(2):
+            wait_for(f"idle waiter turn {index}", lambda: control(first, "get"),
+                     lambda state: state and state["turns"] >= index + 1)
+            api("POST", "/api/rpc/goal.fixture/finish" + query, {"input": {"sessionID": first}})
+        idle_blocked = wait_for("idle waiter stall", lambda: control(first, "get"),
+                                lambda state: state and state["status"] == "blocked")
+        assert idle_blocked["turns"] == 3 and MODEL.settles == 3, (idle_blocked, MODEL.settles)
+        assert idle_blocked["reason"] == "No further progress detected", idle_blocked
+        check("wait reports without background evidence still hit the stall guard")
         MODEL.configure("repeat")
         control(first, "start", objective="Stop repeated replies despite real tool calls.")
         repeat = wait_for("repeat guard", lambda: control(first, "get"), lambda state: state and state["status"] == "blocked")
@@ -721,7 +764,7 @@ def main():
         assert len(MODEL.calls) == frozen, MODEL.calls[frozen:]
         check("a previously active goal requires explicit resume after server restart")
         assert MODEL.judges == 0, MODEL.calls[-5:]
-        assert len(checks) == 29, checks
+        assert len(checks) == 32, checks
         (OUTPUT / "report.json").write_text(json.dumps({"status": "passed", "surface": "real-opencode-scripted-provider",
               "nativeUI": "not exercised", "checks": checks, "info": info, "pluginState": plugins,
               "completedGoal": done}, indent=2), encoding="utf-8")

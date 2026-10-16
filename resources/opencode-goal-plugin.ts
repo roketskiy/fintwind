@@ -146,7 +146,7 @@ const rpcDefinition = { id: "fintwind.goal", methods: { control: { input: schema
 export default {
   id: "fintwind.goal",
   async setup(ctx: Context) {
-    type Slot = { generation: number; tail: Promise<unknown>; hydrated: boolean; settled: Settlement | undefined; reminded: boolean };
+    type Slot = { generation: number; tail: Promise<unknown>; hydrated: boolean; settled: Settlement | undefined; reminded: boolean; children: Map<string, number>; windowID: string; windowTools: number };
     const slots = new Map<string, Slot>();
     // Sessions whose Goal is active right now. The context hook needs a
     // synchronous answer per model request, so state writes keep this set
@@ -160,7 +160,7 @@ export default {
     let settingsTail: Promise<unknown> = Promise.resolve();
     const slotFor = (id: string) => {
       let slot = slots.get(id);
-      if (!slot) { slot = { generation: 0, tail: Promise.resolve(), hydrated: false, settled: undefined, reminded: false }; slots.set(id, slot); }
+      if (!slot) { slot = { generation: 0, tail: Promise.resolve(), hydrated: false, settled: undefined, reminded: false, children: new Map(), windowID: "", windowTools: 0 }; slots.set(id, slot); }
       return slot;
     };
     // A generation bump discards a settlement reported by an older attempt and
@@ -217,13 +217,25 @@ export default {
       await ctx.session.synthetic({ sessionID: id, description: "Goal continuation", metadata: { fintwindGoal: true }, text: `Continue working toward this goal: ${state.objective}\n\n${state.reason || "Work until the outcome is achieved. Verify the result and report concrete evidence."}` });
     };
     // Progress evidence of the latest attempt. The settlement call itself is
-    // bookkeeping, not work, so it never counts as a tool call here.
+    // bookkeeping, not work, so it never counts as a tool call here. A turn
+    // window opens at the objective prompt and at the plugin's own synthetic
+    // continuations and reminders. Foreign synthetic injections (background
+    // task notifications) must not split the window: work done before a
+    // notification still belongs to this attempt, and a wake-up that only
+    // delivers a notification is not evidence by itself.
     const summarize = async (id: string) => {
       const messages = await ctx.session.context({ sessionID: id });
-      let text = ""; let tools = 0; let model: unknown;
+      let text = ""; let tools = 0; let model: unknown; let windowID = "";
       for (const rawMessage of messages) {
         const message = object(rawMessage);
-        if (message.type === "user" || message.type === "synthetic") { text = ""; tools = 0; continue; }
+        if (message.type === "user") { text = ""; tools = 0; windowID = typeof message.id === "string" ? message.id : windowID; continue; }
+        if (message.type === "synthetic") {
+          const rawMetadata = message.metadata;
+          const own = typeof rawMetadata === "object" && rawMetadata !== null && !Array.isArray(rawMetadata)
+            && object(rawMetadata).fintwindGoal === true;
+          if (!own) continue;
+          text = ""; tools = 0; windowID = typeof message.id === "string" ? message.id : windowID; continue;
+        }
         if (message.type !== "assistant") continue;
         model = message.model ?? model;
         if (!Array.isArray(message.content)) continue;
@@ -233,7 +245,60 @@ export default {
           if (part.type === "tool" && part.name !== SETTLE_TOOL) tools++;
         }
       }
-      return { text: text.trim().slice(-24000), tools, model: modelKey(model) };
+      return { text: text.trim().slice(-24000), tools, model: modelKey(model), windowID };
+    };
+    // Evidence that a "wait" settlement cites real background work: a child
+    // session whose completion notification appeared since the previous
+    // check, or a known child session that produced fresh tool calls. Only
+    // the notification metadata (source "subagent", childID) is read; the
+    // notification text is never parsed. The cumulative per-child tool counts
+    // live in the slot, so they reset whenever the attempt restarts.
+    const childProgress = async (id: string, slot: Slot) => {
+      let messages: readonly unknown[];
+      try { messages = await ctx.session.context({ sessionID: id }); } catch { return false; }
+      let progress = false;
+      for (const rawMessage of messages) {
+        const message = object(rawMessage);
+        if (message.type !== "synthetic") continue;
+        const rawMetadata = message.metadata;
+        if (typeof rawMetadata !== "object" || rawMetadata === null || Array.isArray(rawMetadata)) continue;
+        const metadata = object(rawMetadata);
+        if (metadata.source !== "subagent" || typeof metadata.childID !== "string" || !metadata.childID) continue;
+        const childID = metadata.childID;
+        if (!slot.children.has(childID)) {
+          // First sight of a completed child: its work happened since the
+          // last settlement, so it counts as progress on its own.
+          let tools = 0;
+          try {
+            const child = await ctx.session.context({ sessionID: childID });
+            for (const rawChildMessage of child) {
+              const childMessage = object(rawChildMessage);
+              if (childMessage.type !== "assistant" || !Array.isArray(childMessage.content)) continue;
+              for (const rawPart of childMessage.content) {
+                if (object(rawPart).type === "tool") tools++;
+              }
+            }
+          } catch { /* a child we cannot read still proved its completion */ }
+          slot.children.set(childID, tools);
+          progress = true;
+          continue;
+        }
+        if (progress) continue;
+        try {
+          const child = await ctx.session.context({ sessionID: childID });
+          let tools = 0;
+          for (const rawChildMessage of child) {
+            const childMessage = object(rawChildMessage);
+            if (childMessage.type !== "assistant" || !Array.isArray(childMessage.content)) continue;
+            for (const rawPart of childMessage.content) {
+              if (object(rawPart).type === "tool") tools++;
+            }
+          }
+          if (tools > (slot.children.get(childID) ?? 0)) progress = true;
+          slot.children.set(childID, tools);
+        } catch { /* keep the last known count */ }
+      }
+      return progress;
     };
     const settleTool: Tool = {
       name: SETTLE_TOOL,
@@ -290,9 +355,9 @@ export default {
         if ((action.type === "start" || action.type === "resume") && !enabled) throw new Error("Enable Goal in settings first");
         if (action.type === "get") return record.goal;
         if (action.type === "clear") return write(id, record, null);
-        if (action.type === "start") return write(id, record, { sessionId: id, objective: action.objective, status: "active", turns: 0, maxTurns: 20,
+        if (action.type === "start") { slot.children.clear(); slot.windowID = ""; slot.windowTools = 0; return write(id, record, { sessionId: id, objective: action.objective, status: "active", turns: 0, maxTurns: 20,
           reason: "", revision: 0, lastEvent: "", lastText: "", stalled: 0, repeats: 0, result: undefined, model: undefined, tools: undefined,
-          startedAt: Math.floor(Date.now() / 1000), completedAt: undefined });
+          startedAt: Math.floor(Date.now() / 1000), completedAt: undefined }); }
         if (!record.goal) { if (action.type === "pause") return null; throw new Error("No goal in this session"); }
         if (action.type === "pause") return record.goal.status === "active" ? write(id, record, { ...record.goal, status: "paused", reason: "Paused by the user" }) : record.goal;
         if (action.type === "complete") return write(id, record, { ...record.goal, status: "done", reason: "Completed by the user" });
@@ -300,6 +365,9 @@ export default {
         invalidate(slot);
         generation = slot.generation;
         shouldSend = true;
+        slot.children.clear();
+        slot.windowID = "";
+        slot.windowTools = 0;
         return write(id, record, { ...record.goal, status: "active", turns: 0, stalled: 0, repeats: 0, reason: "", lastText: "", result: undefined, model: undefined, tools: undefined,
           startedAt: Math.floor(Date.now() / 1000), completedAt: undefined });
       });
@@ -401,8 +469,13 @@ export default {
           next.lastText = scan.text;
           next.model = scan.model;
           // The card reports the Goal's whole effort, so tool calls add up
-          // across attempts instead of describing only the final one.
-          next.tools = scan.tools + (next.tools ?? 0);
+          // across attempts instead of describing only the final one. When a
+          // foreign notification extended the same window, only the growth
+          // since the previous settlement is new evidence.
+          const sameWindow = scan.windowID !== "" && scan.windowID === slot.windowID;
+          next.tools = (sameWindow ? Math.max(scan.tools - slot.windowTools, 0) : scan.tools) + (next.tools ?? 0);
+          slot.windowID = scan.windowID;
+          slot.windowTools = scan.tools;
           next.result = undefined;
           report = slot.settled && slot.settled.generation === generation ? slot.settled : undefined;
           slot.settled = undefined;
@@ -419,6 +492,13 @@ export default {
             next.reason = "No settlement was reported";
           } else {
             slot.reminded = true;
+          }
+          // A "wait" verdict only suspends the stall guard when the
+          // background work it cites is real: without fresh child evidence a
+          // settle-only waiter accumulates stalls like any other idle loop.
+          if (report?.verdict === "wait" && next.stalled > 0 && await childProgress(id, slot)) {
+            next.stalled = 0;
+            next.repeats = 0;
           }
         }
         if (next.status === "active") {

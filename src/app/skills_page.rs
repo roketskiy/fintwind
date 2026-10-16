@@ -77,8 +77,6 @@ pub(super) enum SkillsRow {
 }
 
 impl Fintwind {
-    // ── Catalog ────────────────────────────────────────────────────────────
-
     /// Start a background library scan unless a current-enough catalog (or an
     /// in-flight scan) already covers it. Results from superseded scans are
     /// discarded by generation.
@@ -151,9 +149,6 @@ impl Fintwind {
             .map(|project| (project.display_name(), project.path.clone()))
             .collect()
     }
-
-    // ── Mutations ──────────────────────────────────────────────────────────
-
     /// Flip every copy of the skill keyed by `primary_dir`. A skill installed
     /// into several roots is one skill; the switch converges all of them.
     fn toggle_skill_enabled(
@@ -340,9 +335,6 @@ impl Fintwind {
         self.skills_list_state.scroll_to_reveal_item(row_index);
         cx.notify();
     }
-
-    // ── Page ───────────────────────────────────────────────────────────────
-
     pub(super) fn render_skills_settings(
         &self,
         window: &mut Window,
@@ -614,9 +606,6 @@ impl Fintwind {
             },
         )
     }
-
-    // ── List rows ──────────────────────────────────────────────────────────
-
     /// Catalog indices the query and source filter leave visible, in catalog
     /// order. A grouped skill passes a source filter when any of its copies
     /// lives in that source's tree.
@@ -856,9 +845,6 @@ impl Fintwind {
             )
             .into_any_element()
     }
-
-    // ── Detail pane ────────────────────────────────────────────────────────
-
     fn render_skill_detail_pane(
         &self,
         skill: &SkillEntry,

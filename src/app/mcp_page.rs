@@ -197,8 +197,6 @@ fn mcp_status_label(entry: &McpStatusEntry) -> String {
 }
 
 impl Fintwind {
-    // ── Selection & state ──────────────────────────────────────────────────
-
     /// The server the detail pane shows: the stored selection while it still
     /// resolves, the first server on the roster otherwise, so the pane never
     /// opens empty while any server exists.
@@ -291,9 +289,6 @@ impl Fintwind {
         self.load_mcp_servers_from_config(cx);
         self.refresh_mcp_statuses(cx);
     }
-
-    // ── Persistence ────────────────────────────────────────────────────────
-
     /// Load the roster from `mcp.servers` in OpenCode's own configuration
     /// off-thread. The result replaces the working store unless a newer load
     /// started or a debounced field edit is pending.
@@ -482,9 +477,6 @@ impl Fintwind {
         }
         cx.notify();
     }
-
-    // ── Mutations ──────────────────────────────────────────────────────────
-
     fn begin_add_mcp_server(&mut self, cx: &mut Context<Self>) {
         self.mcp_adding = true;
         self.mcp_renaming = false;
@@ -764,9 +756,6 @@ impl Fintwind {
         self.mcp_renaming = false;
         cx.notify();
     }
-
-    // ── Variable editor (environment / headers) ────────────────────────────
-
     fn begin_mcp_variable_editor(&mut self, editor: McpVariableEditor, cx: &mut Context<Self>) {
         let existing = match (editor.row, self.effective_mcp_server()) {
             (McpVariableRow::Edit(index), Some(server)) => {
@@ -868,9 +857,6 @@ impl Fintwind {
         }
         self.commit_mcp_servers(cx);
     }
-
-    // ── Page ───────────────────────────────────────────────────────────────
-
     pub(super) fn render_mcp_page(
         &self,
         window: &mut Window,
@@ -1188,9 +1174,6 @@ impl Fintwind {
             )
             .into_any_element()
     }
-
-    // ── Detail pane ────────────────────────────────────────────────────────
-
     fn render_mcp_detail(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         if self.mcp_adding {
             return self.render_mcp_form(theme, cx);
@@ -2043,9 +2026,6 @@ impl Fintwind {
             )
             .into_any_element()
     }
-
-    // ── Add-server form ────────────────────────────────────────────────────
-
     fn render_mcp_form(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let accent = mcp_accent(theme);
         let name = self.mcp_form_name.read(cx).content().trim().to_owned();

@@ -1434,6 +1434,8 @@ usage_page.unknown_model: 未知模型
 usage_page.kpi_sessions: 会话数
 usage_page.subagent_sessions_value: 含 %{count} 个子代理会话 · %{tokens}
 usage_page.kpi_cost: 费用
+usage_page.kpi_cache_hit: 平均缓存命中率
+usage_page.cache_read_tokens: "缓存读取 %{tokens}"
 usage_page.cost_sessions: "%{count} 个会话按 API 价计费"
 usage_page.cost_unavailable: 无法获取价格目录
 usage_page.cache_hit_short: 命中

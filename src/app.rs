@@ -1954,7 +1954,9 @@ pub struct Fintwind {
     mcp_market_selected: Option<String>,
     /// The Usage page's scan snapshot, fetched off the UI thread. `None`
     /// until the first scan lands; frames never touch the entries inside.
-    usage_stats: Option<Rc<fintwind_client::provider_session::UsageStats>>,
+    usage_stats: Option<std::sync::Arc<fintwind_client::provider_session::UsageStats>>,
+    usage_stats_source: Option<PathBuf>,
+    usage_views_generation: u64,
     /// The models.dev price table the last scan priced against, shared with
     /// the pricing pass so a scan inside the table's reuse window answers
     /// without touching the disk. `None` until one catalog lands; a page
@@ -1965,9 +1967,9 @@ pub struct Fintwind {
     /// Bumped per scan; a result from a superseded scan is discarded.
     usage_stats_generation: u64,
     usage_stats_pending: bool,
+    usage_price_pending: bool,
+    usage_price_checked_at: Option<Instant>,
     usage_stats_loaded_at: Option<Instant>,
-    /// Calendar day with full hourly attribution in the last scan.
-    usage_detail_day: Option<chrono::NaiveDate>,
     /// Wall-clock reading of when the last successful scan landed, shown in
     /// the toolbar so a silent refresh is visible as an update rather than a
     /// page that never changes. `None` before the first scan.
@@ -3758,12 +3760,15 @@ impl Fintwind {
                 mcp_market_category: Default::default(),
                 mcp_market_selected: None,
                 usage_stats: None,
+                usage_stats_source: None,
+                usage_views_generation: 0,
                 usage_price_table: None,
                 usage_stats_error: None,
                 usage_stats_generation: 0,
                 usage_stats_pending: false,
+                usage_price_pending: false,
+                usage_price_checked_at: None,
                 usage_stats_loaded_at: None,
-                usage_detail_day: None,
                 usage_loaded_label: None,
                 usage_refresh_running: false,
                 usage_range: Default::default(),

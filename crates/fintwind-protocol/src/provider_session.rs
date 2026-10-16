@@ -206,10 +206,8 @@ pub struct UsageEntry {
     /// Per-hour message usage for the recent single-day chart.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hours: Vec<UsageHourShare>,
-    /// Per-model split, present only for the same refined sessions. A
-    /// session's own `model` is whichever model it ended on, so a session
-    /// that switched models mid-way would otherwise attribute all of its
-    /// usage to the last one.
+    /// Message-verified model attribution, independent of the selected date.
+    /// Unindexed or unidentifiable usage is never assigned to the selected model.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_lanes: Vec<UsageModelLane>,
     /// Folded sub-agents retain their own model and token mix for rankings and
@@ -236,6 +234,8 @@ pub struct UsageSubagentModel {
     pub days: Vec<UsageDayShare>,
     #[serde(default)]
     pub hours: Vec<UsageHourShare>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requests: Vec<UsageRequest>,
 }
 
 impl UsageSubagentModel {
@@ -289,9 +289,7 @@ pub struct UsageHourShare {
     pub cost: f64,
 }
 
-/// One model's share of a refined session. Only produced when the session's
-/// messages were walked, so sessions that never switched models keep the
-/// cheaper session-level attribution.
+/// One model's message-verified share of a session.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageModelLane {
@@ -309,6 +307,16 @@ pub struct UsageModelLane {
     pub days: Vec<UsageDayShare>,
     #[serde(default)]
     pub hours: Vec<UsageHourShare>,
+    /// Request-sized facts preserve context pricing tiers across aggregation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requests: Vec<UsageRequest>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageRequest {
+    pub timestamp: u64,
+    pub tokens: [u64; 5],
 }
 
 impl UsageEntry {
@@ -339,4 +347,10 @@ pub struct UsageStats {
     /// How many session rows the scan actually saw.
     #[serde(default)]
     pub sessions_scanned: usize,
+    /// A daemon-owned background scan is updating this snapshot.
+    #[serde(default)]
+    pub refreshing: bool,
+    /// Last refresh failed; previously verified usage remains available.
+    #[serde(default)]
+    pub refresh_error: Option<String>,
 }

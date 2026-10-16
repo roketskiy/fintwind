@@ -1123,15 +1123,15 @@ impl StateStore {
         }
     }
 
-    /// The whole OpenCode store's usage scan: one entry per top-level
-    /// session, collected in a single daemon-side pass over the session
-    /// list. `directory` only anchors which resident server to ask. Blocking
-    /// RPC; call off the UI thread.
+    /// Cached whole-store usage snapshot. A stale snapshot schedules a daemon
+    /// background reconciliation without waiting for it. Blocking RPC; call
+    /// off the UI thread. The legacy day hint no longer scopes the index.
     pub fn fetch_usage_stats(
         &self,
         binary: PathBuf,
         directory: PathBuf,
         detailed_day: Option<i64>,
+        force_refresh: bool,
     ) -> io::Result<UsageStats> {
         match self
             .daemon
@@ -1143,6 +1143,7 @@ impl StateStore {
                     binary,
                     directory,
                     detailed_day,
+                    force_refresh,
                 },
             )
             .map_err(to_io_error)?

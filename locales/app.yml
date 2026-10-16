@@ -2880,6 +2880,10 @@ usage_page.kpi_sessions:
   en: Sessions
 usage_page.kpi_cost:
   en: Cost
+usage_page.kpi_cache_hit:
+  en: Average cache hit rate
+usage_page.cache_read_tokens:
+  en: "Cache read %{tokens}"
 usage_page.cost_sessions:
   en: "%{count} sessions at API price"
 usage_page.cost_unavailable:

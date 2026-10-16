@@ -45,7 +45,6 @@ const STALE_AFTER: Duration = Duration::from_secs(60);
 /// While the page is open, how often to look for newer sessions. The scan
 /// itself is daemon-side and cached, so a quiet interval is cheap; a session
 /// that is actively streaming lands within half a minute of its next hop.
-const AUTO_REFRESH: Duration = Duration::from_secs(30);
 /// Model rows drawn before the rest collapse into the header's model count.
 const MAX_MODEL_ROWS: usize = 8;
 
@@ -220,25 +219,81 @@ pub(super) struct UsageViews {
 }
 
 impl Fintwind {
+    /// Price-network latency must never gate token snapshots. Stale prices
+    /// remain usable while this independent task refreshes the catalog.
+    fn refresh_usage_pricing(&mut self, cx: &mut Context<Self>) {
+        let retry_after = if self
+            .usage_price_table
+            .as_ref()
+            .is_some_and(|table| table.age() < PRICE_TTL)
+        {
+            PRICE_TTL
+        } else {
+            Duration::from_secs(60)
+        };
+        if self.usage_price_pending
+            || self
+                .usage_price_checked_at
+                .is_some_and(|at| at.elapsed() < retry_after)
+        {
+            return;
+        }
+        self.usage_price_pending = true;
+        let cached = self.usage_price_table.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let local = pricing_table(cached);
+                    if local.as_ref().is_some_and(|table| table.age() < PRICE_TTL) {
+                        return local;
+                    }
+                    models_dev::fetch_catalog().ok().map(Arc::new).or(local)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.usage_price_pending = false;
+                // Failed downloads retry later rather than on every poll.
+                this.usage_price_checked_at = Some(Instant::now());
+                if let Some(table) = result {
+                    this.usage_price_table = Some(table);
+                    this.usage_stats_loaded_at = None;
+                    if this.mode == WorkspaceMode::Usage {
+                        this.ensure_usage_stats(false, cx);
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Load the usage scan if none is stored or the stored one went stale.
-    /// The scan covers the whole OpenCode store, so no per-project state
-    /// matters here — only freshness does. One blocking traversal runs on
-    /// the background executor; a refresh button call bypasses the
-    /// staleness window.
+    /// Snapshots cover the whole source rather than the selected project.
+    /// Provider reconciliation belongs to the daemon; this path only reads
+    /// its snapshot and prices it off the UI thread.
     ///
     /// A scan that is already in flight is never started twice, and a stale
     /// scan is never discarded while it is being replaced: the page keeps
     /// drawing the previous numbers, so a refresh reads as the page updating
     /// rather than emptying.
     pub(super) fn ensure_usage_stats(&mut self, force: bool, cx: &mut Context<Self>) {
-        if self.usage_stats_pending {
-            return;
-        }
+        self.refresh_usage_pricing(cx);
         // The directory only anchors which resident server the daemon asks;
         // the scan itself is global.
         let Some(binary) = self.native_binary_path() else {
             return;
         };
+        if self.usage_stats_source.as_ref() != Some(&binary) {
+            self.usage_stats_source = Some(binary.clone());
+            self.usage_stats = None;
+            self.usage_stats_loaded_at = None;
+            self.usage_stats_pending = false;
+            self.usage_stats_generation += 1;
+            self.rebuild_usage_views(cx);
+        }
+        if self.usage_stats_pending {
+            return;
+        }
         let Some(project_id) = self.state.selected_project else {
             return;
         };
@@ -251,15 +306,11 @@ impl Fintwind {
         else {
             return;
         };
-        let detailed_date = match self.usage_range {
-            UsageRange::Day(offset) => {
-                Some(Local::now().date_naive() - ChronoDuration::days(i64::from(offset)))
-            }
-            _ => None,
-        };
         if !force
-            && self.usage_stats.is_some()
-            && detailed_date.map_or(true, |date| self.usage_detail_day == Some(date))
+            && !self
+                .usage_stats
+                .as_ref()
+                .is_some_and(|stats| stats.refreshing)
             && self
                 .usage_stats_loaded_at
                 .is_some_and(|loaded_at| loaded_at.elapsed() < STALE_AFTER)
@@ -271,7 +322,7 @@ impl Fintwind {
         self.usage_stats_generation += 1;
         let generation = self.usage_stats_generation;
         let daemon = self.daemon.clone();
-        let detailed_day = detailed_date.map(|date| i64::from(date.num_days_from_ce()));
+        let detailed_day = None;
         let cached_table = self.usage_price_table.clone();
         cx.spawn(async move |this, cx| {
             let (scanned, table) =
@@ -280,18 +331,24 @@ impl Fintwind {
                     let scan =
                         executor.spawn(async move {
                             fintwind_client::persistence::StateStore::remote(daemon)
-                                .fetch_usage_stats(binary, directory, detailed_day)
+                                .fetch_usage_stats(binary, directory, detailed_day, force)
                         });
-                    // The catalog runs beside the scan: a first visit pays one
-                    // download, a later one reads the disk cache, and either is
-                    // hidden under the scan's own session traversal.
+                    // Local prices only. Network refresh is independent and
+                    // cannot delay token availability.
                     let pricing = executor.spawn(async move { pricing_table(cached_table) });
                     (scan.await, pricing.await)
                 };
-            let mut priced = scanned;
-            if let (Ok(stats), table) = (&mut priced, table.as_deref()) {
-                price_usage_stats(stats, table);
-            }
+            let used_table = table.clone();
+            let priced = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut priced = scanned;
+                    if let Ok(stats) = &mut priced {
+                        price_usage_stats(stats, used_table.as_deref());
+                    }
+                    priced
+                })
+                .await;
             let _ = this.update(cx, |this, cx| {
                 // A newer scan superseded this one.
                 if this.usage_stats_generation != generation {
@@ -303,31 +360,31 @@ impl Fintwind {
                         // The table and the stats land together, so the
                         // cost KPI's claim of "priced" is always true of
                         // the numbers above it.
-                        this.usage_price_table = table;
-                        this.usage_stats_error = None;
+                        let newer_prices = this.usage_price_table.as_ref().is_some_and(|current| {
+                            table
+                                .as_ref()
+                                .is_none_or(|used| current.fetched_at > used.fetched_at)
+                        });
+                        if !newer_prices {
+                            this.usage_price_table = table;
+                        }
+                        this.usage_stats_error = stats.refresh_error.clone();
                         this.usage_stats_loaded_at = Some(Instant::now());
-                        this.usage_detail_day = detailed_date;
-                        this.usage_loaded_label = Some(clock_label());
-                        this.usage_stats = Some(Rc::new(stats));
+                        if !stats.refreshing && stats.refresh_error.is_none() {
+                            this.usage_loaded_label = Some(clock_label());
+                        }
+                        this.usage_stats = Some(Arc::new(stats));
                         this.rebuild_usage_views(cx);
-                        if matches!(this.usage_range, UsageRange::Day(_)) {
+                        if newer_prices {
+                            this.usage_stats_loaded_at = None;
                             this.ensure_usage_stats(false, cx);
                         }
                     }
                     Err(error) => {
-                        // `loaded_at` stays put, so reopening the page
-                        // retries instead of waiting out the staleness
-                        // window on a failed scan. A cached scan is kept on
-                        // screen: an error is reported, not displayed by
-                        // blanking numbers the user was still reading.
+                        // Keep the old snapshot and back off before another
+                        // transport request rather than retrying every poll.
                         this.usage_stats_error = Some(error.to_string());
-                        if let UsageRange::Day(offset) = this.usage_range {
-                            let wanted =
-                                Local::now().date_naive() - ChronoDuration::days(i64::from(offset));
-                            if Some(wanted) != detailed_date {
-                                this.ensure_usage_stats(false, cx);
-                            }
-                        }
+                        this.usage_stats_loaded_at = Some(Instant::now());
                         cx.notify();
                     }
                 }
@@ -350,7 +407,7 @@ impl Fintwind {
         self.usage_refresh_running = true;
         cx.spawn(async move |this, cx| {
             loop {
-                cx.background_executor().timer(AUTO_REFRESH).await;
+                cx.background_executor().timer(Duration::from_secs(1)).await;
                 let still_open = this
                     .update(cx, |this, cx| {
                         if this.mode != WorkspaceMode::Usage {
@@ -385,9 +442,6 @@ impl Fintwind {
         }
         self.usage_range = range;
         self.rebuild_usage_views(cx);
-        if matches!(range, UsageRange::Day(_)) {
-            self.ensure_usage_stats(false, cx);
-        }
     }
 
     fn shift_usage_day(&mut self, delta: i64, cx: &mut Context<Self>) {
@@ -398,8 +452,23 @@ impl Fintwind {
     }
 
     fn rebuild_usage_views(&mut self, cx: &mut Context<Self>) {
-        self.usage_views = build_views(self.usage_stats.as_deref(), self.usage_range);
-        cx.notify();
+        self.usage_views_generation += 1;
+        let generation = self.usage_views_generation;
+        let stats = self.usage_stats.clone();
+        let range = self.usage_range;
+        cx.spawn(async move |this, cx| {
+            let views = cx
+                .background_executor()
+                .spawn(async move { build_views(stats.as_deref(), range) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.usage_views_generation == generation {
+                    this.usage_views = views;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn render_usage_page(
@@ -408,7 +477,10 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::current(cx);
-        let first_load = self.usage_stats.is_none();
+        let first_load = self
+            .usage_stats
+            .as_ref()
+            .is_none_or(|stats| stats.entries.is_empty() && stats.refreshing);
         let no_workspace =
             self.native_binary_path().is_none() || self.state.selected_project.is_none();
 
@@ -426,7 +498,13 @@ impl Fintwind {
                 )
                 .child(usage_retry_button(&theme, cx)),
             );
-        } else if self.usage_stats_pending && first_load {
+        } else if first_load
+            && (self.usage_stats_pending
+                || self
+                    .usage_stats
+                    .as_ref()
+                    .is_some_and(|stats| stats.refreshing))
+        {
             let label = tr!("usage_page.loading").to_owned();
             column = column.child(
                 motion::pulse(Duration::from_millis(1400), move |phase| {
@@ -452,8 +530,12 @@ impl Fintwind {
                 tr!("usage_page.no_workspace_title"),
                 tr!("usage_page.no_workspace_body"),
             ));
-        } else if let Some(stats) = &self.usage_stats {
-            if stats.entries.is_empty() {
+        } else if let Some(stats) = self
+            .usage_stats
+            .as_ref()
+            .filter(|stats| !stats.entries.is_empty() || !stats.refreshing)
+        {
+            if stats.entries.is_empty() && !stats.refreshing {
                 column = column.child(usage_empty_card(
                     &theme,
                     tr!("usage_page.empty_title"),
@@ -476,31 +558,12 @@ impl Fintwind {
                     ));
                 }
                 let views = &self.usage_views;
-                let needs_hourly = match self.usage_range {
-                    UsageRange::Day(offset) => {
-                        self.usage_detail_day
-                            != Some(
-                                Local::now().date_naive() - ChronoDuration::days(i64::from(offset)),
-                            )
-                    }
-                    _ => false,
-                };
                 column = column.child(self.render_usage_kpis(views, &theme));
                 if !matches!(self.usage_range, UsageRange::Day(_)) {
                     column = column.child(self.render_usage_heatmap(views, &theme));
                 }
                 column = column
-                    .child(if needs_hourly {
-                        usage_notice(
-                            &theme,
-                            "icons/loader-circle.svg",
-                            theme.text_secondary,
-                            tr!("usage_page.hourly_loading"),
-                        )
-                        .into_any_element()
-                    } else {
-                        self.render_usage_daily(views, &theme).into_any_element()
-                    })
+                    .child(self.render_usage_daily(views, &theme))
                     .child(self.render_usage_models(window, cx, views, &theme))
                     .child(self.render_usage_providers(views, &theme))
                     .child(self.render_usage_projects(views, &theme));
@@ -625,26 +688,6 @@ impl Fintwind {
             .child(refresh)
     }
 
-    /// The cost KPI's value. A scan priced without a catalog shows a dash —
-    /// a $0.00 there would read as a free month when it is really a missing
-    /// price list.
-    fn usage_cost_value(&self, cost: f64) -> String {
-        if self.usage_price_table.is_some() {
-            format_cost(cost)
-        } else {
-            "—".to_owned()
-        }
-    }
-
-    /// The cost KPI's subtitle: how many sessions the catalog could price.
-    fn usage_cost_subtitle(&self, totals: &UsageTotals) -> String {
-        if self.usage_price_table.is_some() {
-            tr!("usage_page.cost_sessions", count = totals.costed_sessions)
-        } else {
-            tr!("usage_page.cost_unavailable")
-        }
-    }
-
     fn render_usage_kpis(&self, views: &UsageViews, theme: &Theme) -> Div {
         let totals = &views.totals;
         let hit = cache_hit_percent(
@@ -655,15 +698,13 @@ impl Fintwind {
                 .saturating_add(totals.cache_write),
         );
         let breakdown = format!(
-            "{} {} · {} {} · {} {} · {} {}",
+            "{} {} · {} {} · {} {}",
             tr!("usage_page.tokens_input"),
             format_tokens(totals.input),
             tr!("usage_page.tokens_output"),
             format_tokens(totals.output),
             tr!("usage_page.tokens_cache"),
             format_tokens(totals.cache_read.saturating_add(totals.cache_write)),
-            tr!("usage_page.cache_hit_short"),
-            hit.map(format_percent).unwrap_or_else(|| "—".into()),
         );
         div()
             .flex()
@@ -693,9 +734,9 @@ impl Fintwind {
             ))
             .child(usage_kpi_card(
                 theme,
-                tr!("usage_page.kpi_cost"),
-                self.usage_cost_value(totals.cost),
-                self.usage_cost_subtitle(totals),
+                tr!("usage_page.kpi_cache_hit"),
+                hit.map(format_percent).unwrap_or_else(|| "—".into()),
+                tr!("usage_page.cache_read_tokens", tokens = format_tokens(totals.cache_read)),
             ))
     }
 
@@ -1810,9 +1851,14 @@ fn entry_day_lanes(entry: &UsageEntry) -> Vec<UsageDayShare> {
 /// Select only the spend on a local calendar day. Session-level totals cannot
 /// answer this for a conversation crossing midnight; its message buckets can.
 fn entry_on_day(entry: &UsageEntry, date: NaiveDate) -> Option<UsageEntry> {
+    entry_in_dates(entry, |candidate| candidate == date)
+}
+
+fn entry_in_dates(entry: &UsageEntry, includes: impl Fn(NaiveDate) -> bool) -> Option<UsageEntry> {
+    let accept = |timestamp| local_date(timestamp).is_some_and(&includes);
     let lanes: Vec<_> = entry_day_lanes(entry)
         .into_iter()
-        .filter(|lane| local_date(lane.timestamp) == Some(date))
+        .filter(|lane| accept(lane.timestamp))
         .collect();
     let last = lanes.iter().max_by_key(|lane| lane.timestamp)?;
     let child_days: Vec<_> = lanes.iter().filter(|lane| lane.subagent).collect();
@@ -1823,27 +1869,58 @@ fn entry_on_day(entry: &UsageEntry, date: NaiveDate) -> Option<UsageEntry> {
             let days: Vec<_> = child
                 .days
                 .iter()
-                .filter(|day| local_date(day.timestamp) == Some(date))
+                .filter(|day| accept(day.timestamp))
                 .copied()
                 .collect();
             let day_tokens: u64 = days.iter().map(|day| day.total).sum();
             (day_tokens > 0).then(|| {
                 let mut selected = child.clone();
-                let ratio = day_tokens as f64 / child.total_tokens().max(1) as f64;
                 selected.input_tokens = days.iter().map(|day| day.input).sum();
                 selected.output_tokens = days.iter().map(|day| day.output).sum();
                 selected.reasoning_tokens = 0;
                 selected.cache_read_tokens = days.iter().map(|day| day.cache_read).sum();
                 selected.cache_write_tokens = days.iter().map(|day| day.cache_write).sum();
-                selected.cost = selected.cost.map(|cost| cost * ratio);
+                selected.cost = selected.cost.map(|_| days.iter().map(|day| day.cost).sum());
+                selected
+                    .requests
+                    .retain(|request| accept(request.timestamp));
                 selected.days = days;
                 selected
             })
         })
         .collect();
-    // Model shares span the whole session; scaling them to this day's spend
-    // would invent per-model timestamps the scan does not have. Construct the
-    // day's entry without cloning message/hour vectors on the UI thread.
+    let model_lanes = entry
+        .model_lanes
+        .iter()
+        .filter_map(|lane| {
+            let days: Vec<_> = lane
+                .days
+                .iter()
+                .filter(|day| accept(day.timestamp))
+                .copied()
+                .collect();
+            let total = days.iter().map(|day| day.total).sum::<u64>();
+            if total == 0 {
+                return None;
+            }
+            let mut selected = lane.clone();
+            selected.total = total;
+            selected.cost = days.iter().map(|day| day.cost).sum();
+            selected.tokens = [
+                days.iter().map(|day| day.input).sum(),
+                days.iter().map(|day| day.output).sum(),
+                0,
+                days.iter().map(|day| day.cache_read).sum(),
+                days.iter().map(|day| day.cache_write).sum(),
+            ];
+            selected.days = days;
+            selected.hours.clear();
+            selected
+                .requests
+                .retain(|request| accept(request.timestamp));
+            Some(selected)
+        })
+        .collect();
     Some(UsageEntry {
         timestamp: last.timestamp,
         model: entry.model.clone(),
@@ -1861,12 +1938,7 @@ fn entry_on_day(entry: &UsageEntry, date: NaiveDate) -> Option<UsageEntry> {
                 entry
                     .subagent_models
                     .iter()
-                    .filter(|child| {
-                        child
-                            .days
-                            .iter()
-                            .any(|day| local_date(day.timestamp) == Some(date))
-                    })
+                    .filter(|child| child.days.iter().any(|day| accept(day.timestamp)))
                     .map(|child| child.session_id.as_str())
                     .collect::<std::collections::HashSet<_>>()
                     .len() as u32
@@ -1882,7 +1954,7 @@ fn entry_on_day(entry: &UsageEntry, date: NaiveDate) -> Option<UsageEntry> {
         subagent_direct: 0,
         days: None,
         hours: Vec::new(),
-        model_lanes: Vec::new(),
+        model_lanes,
         subagent_models,
     })
 }
@@ -2005,25 +2077,15 @@ fn entry_model_shares(entry: &UsageEntry) -> Vec<ModelShare> {
 /// is still far closer to the truth than the server's own numbers.
 const PRICE_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// The price table for the pricing pass, or `None` when no catalog could be
-/// had — the pass then prices nothing, so no server-side number leaks
-/// through as an official-API estimate. The session copy inside its reuse
-/// window answers without I/O; then a disk cache that states any price,
-/// fresh enough not to need a download; then one network fetch, with the
-/// stale disk cache still answering when it fails. Blocking; background
-/// executor only.
+/// Local prices, including stale ones. Never downloads; token snapshots must
+/// not wait for the independent catalog refresh. Background executor only.
 fn pricing_table(cached: Option<Arc<ModelsDevTable>>) -> Option<Arc<ModelsDevTable>> {
     if let Some(table) = cached.filter(|table| table.age() < models_dev::TABLE_REUSE_WINDOW) {
         return Some(table);
     }
-    let disk = models_dev::cached_catalog().filter(|table| table.has_any_cost());
-    match disk {
-        Some(table) if table.age() < PRICE_TTL => Some(Arc::new(table)),
-        disk => models_dev::fetch_catalog()
-            .ok()
-            .map(Arc::new)
-            .or_else(|| disk.map(Arc::new)),
-    }
+    models_dev::cached_catalog()
+        .filter(|table| table.has_any_cost())
+        .map(Arc::new)
 }
 
 /// Rewrite every cost the scan carries into official-API estimates.
@@ -2036,11 +2098,9 @@ fn pricing_table(cached: Option<Arc<ModelsDevTable>>) -> Option<Arc<ModelsDevTab
 /// its cost entirely: it reads as unpriced through the `None` rather than
 /// as free, and no server number survives anywhere on the page.
 ///
-/// The day, hour, and model splits are re-derived from the session's single
-/// price by token share, so every view on the page conserves the same
-/// total; the split-repair logic downstream of here sees zero gaps. Pure
-/// and allocation-light — it runs on the background executor between the
-/// scan and the views, never in render.
+/// Indexed requests are priced individually (including context tiers), then
+/// bucketed by model/day/hour. Older snapshots without request facts retain
+/// proportional fallback pricing. Runs on the background executor.
 pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDevTable>) {
     let price = |model: Option<&str>,
                  model_provider: Option<&str>,
@@ -2064,6 +2124,36 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
                     + rate.charge(cache_write, rate.cache_write)
             })
     };
+    let price_requests = |model: Option<&str>,
+                          requests: &[fintwind_client::provider_session::UsageRequest],
+                          tokens: [u64; 5]| {
+        if requests.is_empty() {
+            return price(
+                model,
+                model.and_then(model_provider_part),
+                tokens[0],
+                tokens[1],
+                tokens[2],
+                tokens[3],
+                tokens[4],
+            );
+        }
+        requests.iter().try_fold(0.0, |total, request| {
+            let tokens = request.tokens;
+            Some(
+                total
+                    + price(
+                        model,
+                        model.and_then(model_provider_part),
+                        tokens[0],
+                        tokens[1],
+                        tokens[2],
+                        tokens[3],
+                        tokens[4],
+                    )?,
+            )
+        })
+    };
     for entry in &mut stats.entries {
         let mut parent_tokens = [
             entry.input_tokens,
@@ -2086,16 +2176,24 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
             child.cost = if child.total_tokens() == 0 {
                 Some(0.0)
             } else {
-                price(
-                    child.model.as_deref(),
-                    child.model.as_deref().and_then(model_provider_part),
-                    child.input_tokens,
-                    child.output_tokens,
-                    child.reasoning_tokens,
-                    child.cache_read_tokens,
-                    child.cache_write_tokens,
-                )
+                price_requests(child.model.as_deref(), &child.requests, child_tokens)
             };
+            reprice_request_buckets(
+                &child.requests,
+                &mut child.days,
+                &mut child.hours,
+                |tokens| {
+                    price(
+                        child.model.as_deref(),
+                        child.model.as_deref().and_then(model_provider_part),
+                        tokens[0],
+                        tokens[1],
+                        tokens[2],
+                        tokens[3],
+                        tokens[4],
+                    )
+                },
+            );
         }
         let mut assigned = [0u64; 5];
         let mut lane_cost = Some(0.0);
@@ -2107,7 +2205,12 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
             lane.cost = if tokens.iter().all(|count| *count == 0) {
                 0.0
             } else {
-                let cost = price(
+                let cost = price_requests(Some(&lane.model), &lane.requests, tokens);
+                lane_cost = lane_cost.and_then(|subtotal| Some(subtotal + cost?));
+                cost.unwrap_or_default()
+            };
+            reprice_request_buckets(&lane.requests, &mut lane.days, &mut lane.hours, |tokens| {
+                price(
                     Some(&lane.model),
                     model_provider_part(&lane.model),
                     tokens[0],
@@ -2115,10 +2218,8 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
                     tokens[2],
                     tokens[3],
                     tokens[4],
-                );
-                lane_cost = lane_cost.and_then(|subtotal| Some(subtotal + cost?));
-                cost.unwrap_or_default()
-            };
+                )
+            });
         }
         let missing = std::array::from_fn::<_, 5, _>(|index| {
             parent_tokens[index].saturating_sub(assigned[index])
@@ -2171,13 +2272,34 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
             }
         };
         entry.cost = Some(cost);
+        let exact_parent = missing.iter().all(|tokens| *tokens == 0)
+            && entry
+                .model_lanes
+                .iter()
+                .all(|lane| !lane.requests.is_empty());
+        let mut parent_days = HashMap::<NaiveDate, f64>::new();
+        let mut parent_hours = HashMap::<u64, f64>::new();
+        if exact_parent {
+            for lane in &entry.model_lanes {
+                for day in &lane.days {
+                    if let Some(date) = local_date(day.timestamp) {
+                        *parent_days.entry(date).or_default() += day.cost;
+                    }
+                }
+                for hour in &lane.hours {
+                    *parent_hours.entry(hour.timestamp / 3600).or_default() += hour.cost;
+                }
+            }
+        }
         if let Some(days) = &mut entry.days {
             let mut child_costs: HashMap<NaiveDate, f64> = HashMap::new();
             for child in &entry.subagent_models {
                 let total = child.total_tokens();
                 for day in &child.days {
                     if let Some(date) = local_date(day.timestamp) {
-                        *child_costs.entry(date).or_default() += if total == 0 {
+                        *child_costs.entry(date).or_default() += if !child.requests.is_empty() {
+                            day.cost
+                        } else if total == 0 {
                             0.0
                         } else {
                             child.cost.unwrap_or_default() * day.total as f64 / total as f64
@@ -2203,7 +2325,13 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
                         }
                     })
                 } else {
-                    own_share(day.total)
+                    if exact_parent {
+                        local_date(day.timestamp)
+                            .and_then(|date| parent_days.get(&date).copied())
+                            .unwrap_or_default()
+                    } else {
+                        own_share(day.total)
+                    }
                 };
             }
         }
@@ -2214,7 +2342,14 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
             .sum();
         let own_hours = entry.hours.len().saturating_sub(child_hours);
         for hour in &mut entry.hours[..own_hours] {
-            hour.cost = own_share(hour.input + hour.output + hour.cache_read + hour.cache_write);
+            hour.cost = if exact_parent {
+                parent_hours
+                    .get(&(hour.timestamp / 3600))
+                    .copied()
+                    .unwrap_or_default()
+            } else {
+                own_share(hour.input + hour.output + hour.cache_read + hour.cache_write)
+            };
         }
         let mut remaining_hours = &mut entry.hours[own_hours..];
         for child in &entry.subagent_models {
@@ -2222,9 +2357,11 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
             let (child_hours, rest) = remaining_hours.split_at_mut(count);
             remaining_hours = rest;
             let child_total = child.total_tokens();
-            for hour in child_hours {
+            for (hour, source) in child_hours.iter_mut().zip(&child.hours) {
                 let tokens = hour.input + hour.output + hour.cache_read + hour.cache_write;
-                hour.cost = if child_total == 0 {
+                hour.cost = if !child.requests.is_empty() {
+                    source.cost
+                } else if child_total == 0 {
                     0.0
                 } else {
                     child.cost.unwrap_or_default() * tokens as f64 / child_total as f64
@@ -2236,6 +2373,37 @@ pub(super) fn price_usage_stats(stats: &mut UsageStats, table: Option<&ModelsDev
                 lane.cost = own_share(lane.total);
             }
         }
+    }
+}
+
+fn reprice_request_buckets(
+    requests: &[fintwind_client::provider_session::UsageRequest],
+    days: &mut [UsageDayShare],
+    hours: &mut [fintwind_client::provider_session::UsageHourShare],
+    price: impl Fn([u64; 5]) -> Option<f64>,
+) {
+    if requests.is_empty() {
+        return;
+    }
+    let mut daily = HashMap::<NaiveDate, f64>::new();
+    let mut hourly = HashMap::<u64, f64>::new();
+    for request in requests {
+        let cost = price(request.tokens).unwrap_or_default();
+        if let Some(date) = local_date(request.timestamp) {
+            *daily.entry(date).or_default() += cost;
+        }
+        *hourly.entry(request.timestamp / 3600).or_default() += cost;
+    }
+    for day in days {
+        day.cost = local_date(day.timestamp)
+            .and_then(|date| daily.get(&date).copied())
+            .unwrap_or_default();
+    }
+    for hour in hours {
+        hour.cost = hourly
+            .get(&(hour.timestamp / 3600))
+            .copied()
+            .unwrap_or_default();
     }
 }
 
@@ -2258,9 +2426,7 @@ fn model_provider_part(model: &str) -> Option<&str> {
     (!provider.is_empty()).then_some(provider)
 }
 
-/// Aggregate the scan into the page's view models for `range`. Pure and
-/// allocation-light: it runs on the UI thread when a scan lands or the range
-/// changes, never per frame.
+/// Aggregate a snapshot for `range` on the background executor, never per frame.
 pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> UsageViews {
     let Some(stats) = stats else {
         return UsageViews::default();
@@ -2309,16 +2475,18 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
 
     for entry in &stats.entries {
         let mut session_days = std::collections::HashSet::new();
-        // Totals, rankings, and the active-day count stay gated by the whole
-        // session's last touch, not by where its messages landed: a session
-        // that began before the window and continued into it spent that usage
-        // in the window, and splitting it would need per-message aggregation
-        // the scan deliberately does not do for totals.
-        let day_entry = selected_day.and_then(|date| entry_on_day(entry, date));
-        let in_range = match selected_day {
-            Some(_) => day_entry.as_ref(),
-            None if entry.timestamp >= range_cutoff => Some(entry),
-            None => None,
+        let selected = if let Some(date) = selected_day {
+            entry_on_day(entry, date)
+        } else if let Some(days) = range.days() {
+            let start = today - ChronoDuration::days(days - 1);
+            entry_in_dates(entry, |date| date >= start)
+        } else {
+            None
+        };
+        let in_range = if matches!(range, UsageRange::All) {
+            Some(entry)
+        } else {
+            selected.as_ref()
         };
         if let Some(in_range) = in_range {
             totals.add(in_range);
@@ -2784,6 +2952,7 @@ mod tests {
             tokens: [0; 5],
             days: Vec::new(),
             hours: Vec::new(),
+            requests: Vec::new(),
         }];
 
         let mut unpriced = entry(1_800_000, "prov/other", 10);
@@ -2804,6 +2973,7 @@ mod tests {
             entries: vec![priced, unpriced],
             truncated: false,
             sessions_scanned: 2,
+            ..Default::default()
         };
         price_usage_stats(&mut stats, Some(&table));
 
@@ -2837,6 +3007,7 @@ mod tests {
             entries: vec![entry(1_800_000, "prov/m1", 10)],
             truncated: false,
             sessions_scanned: 1,
+            ..Default::default()
         };
         stats.entries[0].cost = Some(2.5);
         price_usage_stats(&mut stats, None);
@@ -2865,6 +3036,7 @@ mod tests {
             entries: vec![entry(now - 86_400, "p/m1", 10), mid, old],
             truncated: false,
             sessions_scanned: 3,
+            ..Default::default()
         };
 
         let all = build_views(Some(&stats), UsageRange::All);
@@ -2906,6 +3078,7 @@ mod tests {
             entries: vec![entry(unix_time(), "p/m", 5)],
             truncated: false,
             sessions_scanned: 1,
+            ..Default::default()
         };
         let views = build_views(Some(&stats), UsageRange::All);
         let last = views.weeks.last().unwrap();
@@ -2984,6 +3157,7 @@ mod tests {
                 entries: Vec::new(),
                 truncated: false,
                 sessions_scanned: 0,
+                ..Default::default()
             }),
             UsageRange::All,
         );
@@ -3029,6 +3203,7 @@ mod tests {
             entries: vec![cache_heavy, direct_heavy],
             truncated: false,
             sessions_scanned: 2,
+            ..Default::default()
         };
         let views = build_views(Some(&stats), UsageRange::All);
         let cache_day = views.daily.iter().find(|day| day.date == today).unwrap();
@@ -3102,6 +3277,7 @@ mod tests {
             entries: vec![split],
             truncated: false,
             sessions_scanned: 1,
+            ..Default::default()
         };
         let views = build_views(Some(&stats), UsageRange::All);
         let day_of = |date: NaiveDate| {
@@ -3176,6 +3352,7 @@ mod tests {
             entries: vec![split, unsplit],
             truncated: false,
             sessions_scanned: 2,
+            ..Default::default()
         };
         let views = build_views(Some(&stats), UsageRange::All);
 
@@ -3213,6 +3390,7 @@ mod tests {
                 tokens: [0; 5],
                 days: Vec::new(),
                 hours: Vec::new(),
+                requests: Vec::new(),
             },
             UsageModelLane {
                 model: "p/second".to_owned(),
@@ -3221,6 +3399,7 @@ mod tests {
                 tokens: [0; 5],
                 days: Vec::new(),
                 hours: Vec::new(),
+                requests: Vec::new(),
             },
             UsageModelLane {
                 model: "p/third".to_owned(),
@@ -3229,6 +3408,7 @@ mod tests {
                 tokens: [0; 5],
                 days: Vec::new(),
                 hours: Vec::new(),
+                requests: Vec::new(),
             },
         ];
         // The session spent 160 of its own plus 50 folded in from a sub-agent,
@@ -3242,6 +3422,7 @@ mod tests {
             entries: vec![switched, plain],
             truncated: false,
             sessions_scanned: 2,
+            ..Default::default()
         };
         let views = build_views(Some(&stats), UsageRange::All);
 

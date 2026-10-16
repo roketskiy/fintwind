@@ -41,6 +41,7 @@ pub struct FintwindBackend {
     provider_quotas: crate::provider_quota::QuotaService,
     composer_drafts: ComposerDraftStore,
     attachments: AttachmentStore,
+    usage_index: crate::usage_index::UsageIndex,
     checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
     default_cwd: std::path::PathBuf,
 }
@@ -60,6 +61,8 @@ impl FintwindBackend {
                 .join("attachments"),
         );
         let browser_tools = Arc::new(crate::browser_tools::BrowserTools::default());
+        let usage_index =
+            crate::usage_index::UsageIndex::new(task_store.path().with_file_name("usage-index.db"));
         // Seed from the persisted setting so a daemon that comes up before
         // the app connects already exposes the right state to plugins.
         browser_tools.set_enabled(settings.get().browser_tools_enabled());
@@ -84,6 +87,7 @@ impl FintwindBackend {
             provider_quotas: Default::default(),
             composer_drafts,
             attachments,
+            usage_index,
             checkpoint_capture_locks: Mutex::new(HashMap::new()),
             default_cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
         })
@@ -1178,14 +1182,19 @@ impl Backend for FintwindBackend {
             Command::FetchUsageStats {
                 binary,
                 directory,
-                detailed_day,
+                detailed_day: _,
+                force_refresh,
             } => {
-                // One pass over the whole session store; `directory` only
-                // scopes the request's location. Blocking I/O, so
-                // this runs on the request thread like the other
-                // sessionless OpenCode reads.
-                let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let stats = crate::driver::native::fetch_usage_stats(&server, detailed_day)?;
+                // Return local facts before starting/acquiring a provider.
+                // The source-scoped service owns one incremental worker.
+                let stats = self.usage_index.snapshot(
+                    crate::usage_index::source_key(&binary),
+                    force_refresh,
+                    move || {
+                        let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                        Ok(Arc::new(server) as Arc<dyn crate::usage_index::UsageSource>)
+                    },
+                )?;
                 Ok(ResponsePayload::UsageStats { stats })
             }
             Command::RenameProviderSession {

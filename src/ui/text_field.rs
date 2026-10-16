@@ -74,7 +74,10 @@ impl RenderOnce for TextField {
             } else {
                 theme.border_strong
             })
-            .bg(theme.inset)
+            // The field sits a hair off whatever surface embeds it, matching
+            // the kit inputs that project `composer` as their fill; `inset`
+            // reads as a black hole on the settings cards in dark mode.
+            .bg(theme.composer)
             .flex()
             .items_center()
             .gap(px(7.0))

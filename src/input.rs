@@ -8,8 +8,8 @@ use crate::md::highlight::{self, Lang, TokenClass};
 use crate::ui::menu::{ContextMenuHandle, MenuItem, context_menu};
 use crate::ui::scrollbar::{self, ScrollbarState};
 use gpui::{
-    App, Bounds, ClipboardEntry, ClipboardItem, Context, CursorStyle, DispatchPhase, Element,
-    ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
+    AnyElement, App, Bounds, ClipboardEntry, ClipboardItem, Context, CursorStyle, DispatchPhase,
+    Element, ElementId, ElementInputHandler, Entity, EntityInputHandler, EventEmitter, FocusHandle,
     Focusable, GlobalElementId, Hsla, InspectorElementId, IntoElement, KeyBinding, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point,
     ScrollHandle, SharedString, StyledText, Subscription, Task, TextLayout, TextRun,
@@ -500,6 +500,8 @@ pub enum FieldMode {
 const COMPOSER_MAX_HEIGHT: Pixels = px(300.);
 
 pub struct ComposerInput {
+    reference_catalog: Rc<crate::mentions::Catalog>,
+    references: Vec<crate::mentions::Span>,
     focus_handle: FocusHandle,
     mode: FieldMode,
     read_only: bool,
@@ -604,6 +606,8 @@ impl ComposerInput {
             cx.on_blur(&focus_handle, window, Self::on_blur),
         ];
         Self {
+            reference_catalog: Rc::new(crate::mentions::Catalog::default()),
+            references: Vec::new(),
             focus_handle,
             mode: FieldMode::Composer,
             read_only: false,
@@ -801,6 +805,7 @@ impl ComposerInput {
     /// Re-tokenize after a content change. Cheap for a composer (no language),
     /// one linear pass for a code editor.
     fn refresh_highlight(&mut self) {
+        self.references = self.reference_catalog.find(&self.content);
         let Some(language) = self.language else {
             return;
         };
@@ -823,6 +828,19 @@ impl ComposerInput {
 
     pub fn content(&self) -> &str {
         &self.content
+    }
+
+    pub(crate) fn set_reference_catalog(
+        &mut self,
+        catalog: Rc<crate::mentions::Catalog>,
+        cx: &mut Context<Self>,
+    ) {
+        if Rc::ptr_eq(&self.reference_catalog, &catalog) {
+            return;
+        }
+        self.reference_catalog = catalog;
+        self.references = self.reference_catalog.find(&self.content);
+        cx.notify();
     }
 
     /// The caret's byte offset into `content`.
@@ -945,6 +963,7 @@ impl ComposerInput {
         self.marked_range = None;
         self.vertical_navigation = None;
         self.highlight.clear();
+        self.references.clear();
         // A programmatic clear is a new baseline, not an edit to step back
         // over — a submitted prompt should not resurface via the undo shortcut.
         if changed {
@@ -2007,6 +2026,7 @@ struct InputLayoutState {
 
 struct PrepaintState {
     cursor: Option<PaintQuad>,
+    reference_icons: Vec<AnyElement>,
 }
 
 /// Find-match washes layered into [`input_text_runs`]: every match gets
@@ -2202,6 +2222,13 @@ impl Element for InputElement {
             |class| palette.token(class),
             search,
         );
+        let references = if input.obscured || input.marked_range.is_some() {
+            &[][..]
+        } else {
+            &input.references
+        };
+        let runs = crate::mentions::style_runs(runs, references, theme.accent);
+        let display_text = crate::mentions::display_text(&display_text, references);
         let mut text = StyledText::new(display_text).with_runs(runs);
         let (layout_id, text_layout_state) = text.request_layout(id, inspector_id, window, cx);
         (
@@ -2287,7 +2314,18 @@ impl Element for InputElement {
             self.input
                 .update(cx, |input, _| input.caret_reconciled = Some(follow_state));
         }
-        PrepaintState { cursor }
+        let input = self.input.read(cx);
+        let references = if input.obscured || input.marked_range.is_some() {
+            Vec::new()
+        } else {
+            input.references.clone()
+        };
+        let reference_icons =
+            crate::mentions::prepaint_icons(&layout, &references, theme.accent, window, cx);
+        PrepaintState {
+            cursor,
+            reference_icons,
+        }
     }
 
     fn paint(
@@ -2331,6 +2369,9 @@ impl Element for InputElement {
             window,
             cx,
         );
+        for icon in &mut prepaint.reference_icons {
+            icon.paint(window, cx);
+        }
         if visually_focused && let Some(cursor) = prepaint.cursor.take() {
             window.paint_quad(cursor);
         }

@@ -2063,7 +2063,7 @@ impl Fintwind {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(icon("icons/file-types/image.svg", 16.0, theme.text_ghost)),
+                            .child(crate::ui::file_icon("icons/file-types/image.svg", 16.0)),
                     );
                 }
             } else {
@@ -2076,7 +2076,9 @@ impl Fintwind {
                         .items_center()
                         .justify_center()
                         .gap(px(5.0))
-                        .child(icon(icon_path, 16.0, theme.text_tertiary))
+                        .when(!attachment.is_dir, |element| {
+                            element.child(crate::ui::file_icon(icon_path, 16.0))
+                        })
                         .child(
                             div().w_full().flex().justify_center().child(
                                 div()

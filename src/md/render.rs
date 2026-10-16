@@ -291,6 +291,8 @@ pub struct FlatText {
     pub links: Vec<(Range<usize>, String)>,
     pub code_ranges: Vec<Range<usize>>,
     pub math: Option<Rc<math_text::MathData>>,
+    pub(crate) references: Vec<crate::mentions::Span>,
+    pub(crate) allow_references: bool,
 }
 
 /// Flatten inline runs for shaping. Pure given the palette and base weight.
@@ -386,6 +388,8 @@ pub fn flatten(
         links,
         code_ranges,
         math: (!math.is_empty()).then(|| Rc::new(math_text::MathData::new(math))),
+        references: Vec::new(),
+        allow_references: true,
     }
 }
 
@@ -417,6 +421,8 @@ pub fn flatten_plain(
         links: Vec::new(),
         code_ranges: Vec::new(),
         math: None,
+        references: Vec::new(),
+        allow_references: true,
     }
 }
 
@@ -428,6 +434,7 @@ pub fn flatten_plain(
 /// parser's stable prefix, so a streamed delta rebuilds the final block's
 /// elements and reuses every settled one.
 pub struct MarkdownView {
+    reference_catalog: RefCell<Option<Rc<crate::mentions::Catalog>>>,
     parser: IncrementalParser,
     /// Mended replacement for the final block while streaming.
     tail: Vec<TopBlock>,
@@ -459,6 +466,7 @@ impl Default for MarkdownView {
 impl MarkdownView {
     pub fn new() -> Self {
         Self {
+            reference_catalog: RefCell::new(None),
             parser: IncrementalParser::new(),
             tail: Vec::new(),
             flats: RefCell::new(HashMap::new()),
@@ -540,6 +548,19 @@ impl MarkdownView {
         }
     }
 
+    fn sync_references(&self, catalog: Option<&Rc<crate::mentions::Catalog>>) {
+        let mut previous = self.reference_catalog.borrow_mut();
+        let unchanged = match (previous.as_ref(), catalog) {
+            (Some(previous), Some(catalog)) => Rc::ptr_eq(previous, catalog),
+            (None, None) => true,
+            _ => false,
+        };
+        if !unchanged {
+            *previous = catalog.cloned();
+            self.flats.borrow_mut().clear();
+        }
+    }
+
     /// Flattened inline content for the element at `ordinal`, built on miss.
     fn flat(&self, ordinal: usize, build: impl FnOnce() -> FlatText) -> Rc<FlatText> {
         self.flats
@@ -572,6 +593,7 @@ impl MarkdownView {
 /// structure does, which is what lets a selection survive scrolling.
 #[derive(Clone)]
 pub struct Ctx<'a> {
+    reference_catalog: Option<Rc<crate::mentions::Catalog>>,
     row: Rc<str>,
     palette: &'a Palette,
     metrics: Metrics,
@@ -597,6 +619,7 @@ impl<'a> Ctx<'a> {
         selection: TranscriptSelection,
     ) -> Self {
         Self {
+            reference_catalog: None,
             row: row.into(),
             palette,
             metrics,
@@ -615,6 +638,11 @@ impl<'a> Ctx<'a> {
 
     pub fn selection(&self) -> &TranscriptSelection {
         &self.selection
+    }
+
+    pub(crate) fn with_references(mut self, catalog: Rc<crate::mentions::Catalog>) -> Self {
+        self.reference_catalog = Some(catalog);
+        self
     }
 
     pub fn with_link_handler(mut self, handler: LinkHandler) -> Self {
@@ -650,6 +678,7 @@ impl<'a> Ctx<'a> {
 
     fn with_cache(&self, view: &'a MarkdownView) -> Self {
         Self {
+            reference_catalog: self.reference_catalog.clone(),
             row: self.row.clone(),
             palette: self.palette,
             metrics: self.metrics,
@@ -680,6 +709,32 @@ impl<'a> Ctx<'a> {
     /// string and `TextRun`s untouched, so an unchanged paragraph costs one
     /// `Rc` clone per frame instead of a fresh allocation.
     fn flat(&self, ordinal: usize, build: impl FnOnce() -> FlatText) -> Rc<FlatText> {
+        let build = || {
+            let mut flat = build();
+            if flat.allow_references && flat.math.is_none() {
+                if let Some(catalog) = &self.reference_catalog {
+                    flat.references = catalog
+                        .find(&flat.text)
+                        .into_iter()
+                        .filter(|span| {
+                            !flat
+                                .code_ranges
+                                .iter()
+                                .chain(flat.links.iter().map(|(range, _)| range))
+                                .any(|range| {
+                                    range.start < span.range.end && range.end > span.range.start
+                                })
+                        })
+                        .collect();
+                    flat.runs = crate::mentions::style_runs(
+                        flat.runs,
+                        &flat.references,
+                        self.palette.accent,
+                    );
+                }
+            }
+            flat
+        };
         match self.cache {
             Some(view) => view.flat(ordinal, build),
             None => Rc::new(build()),
@@ -703,9 +758,11 @@ fn text_element_with_selection(
     link_handler: Option<LinkHandler>,
     code_wash: Hsla,
     selection_wash: Hsla,
+    reference_color: Hsla,
     block_break: bool,
 ) -> AnyElement {
-    let styled = StyledText::new(flat.text.clone()).with_runs(runs);
+    let styled = StyledText::new(crate::mentions::display_text(&flat.text, &flat.references))
+        .with_runs(runs);
     let layout = styled.layout().clone();
 
     let body: AnyElement = if flat.links.is_empty() {
@@ -776,6 +833,11 @@ fn text_element_with_selection(
         .cursor(CursorStyle::IBeam)
         .child(underlay)
         .child(body)
+        .children(
+            (!flat.references.is_empty()).then(|| {
+                crate::mentions::overlay(layout, flat.references.clone(), reference_color)
+            }),
+        )
         .into_any_element()
 }
 
@@ -804,6 +866,7 @@ fn text_element(flat: &Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement {
         ctx.link_handler.clone(),
         ctx.palette.code_wash,
         ctx.palette.selection,
+        ctx.palette.accent,
         ctx.take_block_break(),
     )
 }
@@ -829,6 +892,7 @@ pub fn selectable_flat_text(
         selection,
         None,
         code_wash,
+        selection_wash,
         selection_wash,
         block_break,
     )
@@ -1109,6 +1173,7 @@ pub fn markdown<'a>(view: &'a MarkdownView, ctx: &Ctx<'a>) -> Option<AnyElement>
     };
 
     view.sync_style(ctx.palette, &ctx.metrics);
+    view.sync_references(ctx.reference_catalog.as_ref());
     let ctx = ctx.with_cache(view);
     if ctx.animate_streaming && view.streaming.get() {
         view.veil.borrow_mut().begin_frame();
@@ -1173,6 +1238,7 @@ pub(super) fn virtual_row(
 ) -> AnyElement {
     use super::virtualized::Decoration;
     cache.sync_style(ctx.palette, &ctx.metrics);
+    cache.sync_references(ctx.reference_catalog.as_ref());
     let ctx = ctx.with_cache(cache);
     ctx.next_ordinal.set(block_ordinal_base(index));
     ctx.starts_block.set(row.gap);
@@ -1563,6 +1629,8 @@ fn render_code_fragment(
             links: Vec::new(),
             code_ranges: Vec::new(),
             math: None,
+            references: Vec::new(),
+            allow_references: false,
         }
     });
     let label = language

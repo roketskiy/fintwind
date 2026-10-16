@@ -1638,7 +1638,10 @@ impl Fintwind {
                 .padding_x(px(12.0))
                 .submit_empty()
         });
-        input.update(cx, |input, cx| input.set_content(initial_message, cx));
+        input.update(cx, |input, cx| {
+            input.set_reference_catalog(self.composer_reference_catalog.clone(), cx);
+            input.set_content(initial_message, cx);
+        });
         cx.subscribe(
             &input,
             |this: &mut Self, _, event: &ComposerEvent, cx| match event {

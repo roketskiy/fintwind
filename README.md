@@ -9,12 +9,6 @@ agent's replies, reasoning, and tool activity in one window.
 
 [Website](https://fintwind.xyz) · [Downloads](https://github.com/roketskiy/fintwind/releases/latest) · [Changelog](CHANGELOG.md)
 
-> [!IMPORTANT]
-> **fintwind 0.2.4 supports OpenCode 2.0.20.** OpenCode 2 is still evolving;
-> compatibility with newer versions is not guaranteed. Use the pinned version
-> below rather than installing the latest CLI without checking compatibility.
-> OpenCode 1 is not the supported backend.
-
 Session demo: switching models, a session in progress, and scrolling a long transcript.
 
 https://github.com/user-attachments/assets/beb2dcb5-88dd-4f2b-9415-153af9c93bf9
@@ -29,13 +23,13 @@ Choose **one** of these commands in PowerShell:
 With [Node.js and npm](https://nodejs.org/):
 
 ```powershell
-npm install -g @opencode/cli@2.0.20
+npm install -g @opencode/cli
 ```
 
 Or with [Bun](https://bun.sh/):
 
 ```powershell
-bun install -g --trust @opencode/cli@2.0.20
+bun install -g --trust @opencode/cli
 ```
 
 The Bun `--trust` flag allows the package's required install script.
@@ -49,11 +43,10 @@ opencode --version
 opencode
 ```
 
-Check that the version is `2.0.20`. In the OpenCode terminal interface, use
-`/connect` to connect a model provider, or use your existing provider configuration.
-fintwind uses OpenCode's models, provider credentials, and MCP configuration.
-You do not need to start `opencode serve` yourself: fintwind starts its own
-private local server.
+In the OpenCode terminal interface, use `/connect` to connect a model provider,
+or use your existing provider configuration. fintwind uses OpenCode's models,
+provider credentials, and MCP configuration. You do not need to start
+`opencode serve` yourself: fintwind starts its own private local server.
 
 ### 2. Install fintwind
 

@@ -468,48 +468,23 @@ impl Fintwind {
                 div()
                     .mt(px(15.0))
                     .w_full()
-                    .px(px(20.0))
-                    .py(px(14.0))
-                    .rounded(px(13.0))
-                    .bg(theme.raised)
-                    .child(
-                        div()
-                            .text_size(ui_px(13.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child(tr!("settings.local_by_default")),
-                    )
-                    .child(
-                        div()
-                            .mt(px(5.0))
-                            .text_size(ui_px(12.5))
-                            .line_height(ui_px(18.0))
-                            .text_color(theme.text_secondary)
-                            .child(tr!("settings.local_by_default_description")),
-                    ),
-            )
-            .child(
-                div()
-                    .mt(px(12.0))
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .rounded(px(13.0))
-                    .bg(theme.raised)
                     .flex()
-                    .items_center()
-                    .gap(px(24.0))
+                    .flex_col()
+                    .rounded(px(13.0))
+                    .overflow_hidden()
+                    .bg(theme.raised)
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
                             .child(
                                 div()
                                     .text_size(ui_px(13.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
-                                    .child(tr!("settings.browser_tools")),
+                                    .child(tr!("settings.local_by_default")),
                             )
                             .child(
                                 div()
@@ -517,173 +492,207 @@ impl Fintwind {
                                     .text_size(ui_px(12.5))
                                     .line_height(ui_px(18.0))
                                     .text_color(theme.text_secondary)
-                                    .child(tr!("settings.browser_tools_description")),
+                                    .child(tr!("settings.local_by_default_description")),
                             ),
                     )
-                    .child(toggle_switch(
-                        "browser-tools-toggle",
-                        self.state.browser_tools_enabled,
-                        false,
-                        theme,
-                        window,
-                        cx,
-                        move |this: &mut Self, _, cx| {
-                            this.set_browser_tools_enabled(!this.state.browser_tools_enabled, cx);
-                        },
-                    )),
-            )
-            .child(
-                div()
-                    .mt(px(12.0))
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .rounded(px(13.0))
-                    .bg(theme.raised)
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_size(ui_px(13.5))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child(tr!("goal.title")),
-                    )
-                    .child(toggle_switch(
-                        "goal-toggle",
-                        self.state.goal_enabled,
-                        false,
-                        theme,
-                        window,
-                        cx,
-                        |this: &mut Self, _, cx| {
-                            this.set_goal_enabled(!this.state.goal_enabled, cx)
-                        },
-                    )),
-            )
-            .child(
-                div()
-                    .mt(px(12.0))
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .rounded(px(13.0))
-                    .bg(theme.raised)
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
                             .child(
                                 div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.browser_tools")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.browser_tools_description")),
+                                    ),
+                            )
+                            .child(toggle_switch(
+                                "browser-tools-toggle",
+                                self.state.browser_tools_enabled,
+                                false,
+                                theme,
+                                window,
+                                cx,
+                                move |this: &mut Self, _, cx| {
+                                    this.set_browser_tools_enabled(
+                                        !this.state.browser_tools_enabled,
+                                        cx,
+                                    );
+                                },
+                            )),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
                                     .text_size(ui_px(13.5))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(theme.text)
-                                    .child(tr!("settings.auto_compact")),
+                                    .child(tr!("goal.title")),
                             )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.auto_compact_description")),
-                            ),
+                            .child(toggle_switch(
+                                "goal-toggle",
+                                self.state.goal_enabled,
+                                false,
+                                theme,
+                                window,
+                                cx,
+                                |this: &mut Self, _, cx| {
+                                    this.set_goal_enabled(!this.state.goal_enabled, cx)
+                                },
+                            )),
                     )
-                    .child(toggle_switch(
-                        "auto-compact-toggle",
-                        self.state.auto_compact_enabled,
-                        false,
-                        theme,
-                        window,
-                        cx,
-                        move |this: &mut Self, _, cx| {
-                            this.set_auto_compact_enabled(!this.state.auto_compact_enabled, cx);
-                        },
-                    )),
-            )
-            .child(
-                div()
-                    .mt(px(12.0))
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .rounded(px(13.0))
-                    .bg(theme.raised)
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
                             .child(
                                 div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.auto_compact_threshold")),
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.auto_compact")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.auto_compact_description")),
+                                    ),
                             )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.auto_compact_threshold_description")),
-                            ),
+                            .child(toggle_switch(
+                                "auto-compact-toggle",
+                                self.state.auto_compact_enabled,
+                                false,
+                                theme,
+                                window,
+                                cx,
+                                move |this: &mut Self, _, cx| {
+                                    this.set_auto_compact_enabled(
+                                        !this.state.auto_compact_enabled,
+                                        cx,
+                                    );
+                                },
+                            )),
                     )
-                    .child(
-                        TextField::new(
-                            "auto-compact-threshold-field",
-                            self.auto_compact_threshold_input.clone(),
-                        )
-                        .w(px(120.0)),
-                    ),
-            )
-            .child(
-                div()
-                    .mt(px(12.0))
-                    .w_full()
-                    .min_h(px(60.0))
-                    .px(px(20.0))
-                    .py(px(12.0))
-                    .rounded(px(13.0))
-                    .bg(theme.raised)
-                    .flex()
-                    .items_center()
-                    .gap(px(24.0))
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
                             .child(
                                 div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.network_proxy")),
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.auto_compact_threshold")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!(
+                                                "settings.auto_compact_threshold_description"
+                                            )),
+                                    ),
                             )
                             .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.network_proxy_description")),
+                                TextField::new(
+                                    "auto-compact-threshold-field",
+                                    self.auto_compact_threshold_input.clone(),
+                                )
+                                .w(px(120.0)),
                             ),
                     )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
                     .child(
-                        TextField::new("network-proxy-field", self.network_proxy_input.clone())
-                            .w(px(220.0)),
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.network_proxy")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.network_proxy_description")),
+                                    ),
+                            )
+                            .child(
+                                TextField::new(
+                                    "network-proxy-field",
+                                    self.network_proxy_input.clone(),
+                                )
+                                .w(px(220.0)),
+                            ),
                     ),
             )
             .child(

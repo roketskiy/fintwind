@@ -1789,9 +1789,13 @@ fn translate_native_rows(
             }
             Some("assistant") => {
                 let parts = row.get("content").and_then(Value::as_array);
+                let step = turn_stats_step(row);
+                let visible = assistant_parts_visible(parts);
                 // A synthetic continuation has no visible user row. Establish
-                // its owner before folding the first model step's statistics.
-                if transcript.turns.is_empty() {
+                // its owner before folding the first model step's statistics,
+                // but only when the row actually contributes: a blank row
+                // must not leave an orphan turn without any message.
+                if (step.is_some() || visible) && transcript.turns.is_empty() {
                     transcript.turns.push(AgentTurn {
                         id: uuid::Uuid::new_v4(),
                         submission: None,
@@ -1810,7 +1814,7 @@ fn translate_native_rows(
                 // and the fold happens before the content gate: a row with no
                 // visible text still ran a model step whose tokens and
                 // streaming time belong to the turn's footer statistics.
-                if let Some(step) = turn_stats_step(row)
+                if let Some(step) = step
                     && let Some(turn) = transcript.turns.last_mut()
                 {
                     let stats = turn.stats.get_or_insert_with(TurnStats::default);
@@ -1841,7 +1845,7 @@ fn translate_native_rows(
                         stats.stream_verified = true;
                     }
                 }
-                if !assistant_parts_visible(parts) {
+                if !visible {
                     continue;
                 }
                 // A settled assistant message carries its completion time;

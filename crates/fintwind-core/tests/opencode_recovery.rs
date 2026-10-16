@@ -54,6 +54,230 @@ use fintwind_protocol::provider_session::NativeTranscript;
 
 const DAEMON_TOKEN: &str = "opencode-recovery-e2e-token";
 
+/// Explicit skills must reach the provider as native attachments, not hints
+/// that force the model to search. Cover display-name/ID differences, nested
+/// mentions, repeated IDs, ordinary files, unknown IDs, and busy-session steer.
+#[test]
+#[ignore = "owns a private daemon/pool; run separately from the recovery matrix"]
+fn opencode_explicit_skills() {
+    let run = Run::new();
+    let workspace = run.workspace("explicit-skills");
+    let fixture = build_fixture(
+        &run,
+        "explicit-skills",
+        &json!({
+            "session_id": "ses_explicit_skills",
+            "steer_mode": true,
+            "skills": [
+                {"id": "poteto-mode", "name": "Poteto Mode", "description": "Brief replies", "path": "skill.md", "content": "Reply briefly."},
+                {"id": "hidden-mode", "name": "Hidden Mode", "autoinvoke": false, "path": "hidden.md", "content": "Be concise."}
+            ],
+            "turns": [{"active": true, "sse": [{"step_started": true, "text_started": true}, {"await_steer": true}]}]
+        }),
+    );
+    let harness = start_harness(&run.root);
+    let catalog = harness
+        .client
+        .request(
+            Uuid::nil(),
+            Uuid::nil(),
+            Command::Workspace {
+                operation:
+                    fintwind_protocol::workspace::WorkspaceOperation::DiscoverSlashCommands {
+                        project_root: workspace.clone(),
+                        binary: Some(fixture.bin.clone()),
+                    },
+            },
+        )
+        .unwrap();
+    let (session, runtime) = (Uuid::new_v4(), Uuid::new_v4());
+    harness
+        .client
+        .request(
+            session,
+            runtime,
+            Command::Start {
+                options: start_options(&fixture.bin, &workspace),
+            },
+        )
+        .unwrap();
+    let events = harness.client.subscribe(session, runtime);
+    let cases = [
+        ("/poteto-mode reply", vec!["poteto-mode"]),
+        ("\u{8bf7}\u{1f642}@poteto-mode reply", vec!["poteto-mode"]),
+        (
+            "@hidden-mode @poteto-mode @poteto-mode reply",
+            vec!["hidden-mode", "poteto-mode"],
+        ),
+        ("@src/main.rs @unknown @poteto-mode-extra user@host", vec![]),
+    ];
+    let mut facts = Vec::new();
+    for (index, (text, expected)) in cases.iter().enumerate() {
+        let command = if index == 0 {
+            Command::Prompt {
+                prompt: (*text).into(),
+                files: vec![],
+            }
+        } else {
+            Command::Steer {
+                prompt: (*text).into(),
+                files: vec![],
+            }
+        };
+        harness.client.request(session, runtime, command).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let row = loop {
+            let rows = read_jsonl(&fixture.server_log);
+            if let Some(row) = rows.iter().find(|row| {
+                matches!(row["event"].as_str(), Some("prompt" | "steer"))
+                    && row["body"]["text"] == *text
+            }) {
+                break row.clone();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "prompt missing: {text}; events: {:?}",
+                events.try_iter().collect::<Vec<_>>()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let ids = row["body"]["skills"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|skill| skill["id"].as_str())
+            .collect::<Vec<_>>();
+        facts.push(json!({"text": text, "expected": expected, "actual": ids, "request": row}));
+    }
+    let command_fixture = build_fixture(
+        &run,
+        "skill-command",
+        &json!({
+            "session_id": "ses_skill_command",
+            "commands": [{"name": "server-review", "description": "Server-owned command"}],
+            "skills": [{"id": "poteto-mode", "name": "Poteto Mode"}],
+        }),
+    );
+    let (command_session, command_runtime) = (Uuid::new_v4(), Uuid::new_v4());
+    harness
+        .client
+        .request(
+            command_session,
+            command_runtime,
+            Command::Start {
+                options: start_options(&command_fixture.bin, &workspace),
+            },
+        )
+        .unwrap();
+    let file = workspace.join("context.txt");
+    fs::write(&file, "Command attachment").unwrap();
+    harness
+        .client
+        .request(
+            command_session,
+            command_runtime,
+            Command::Prompt {
+                prompt: "/server-review @poteto-mode review".into(),
+                files: vec![PromptFile {
+                    path: file,
+                    name: "context.txt".into(),
+                }],
+            },
+        )
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let command_request = loop {
+        if let Some(row) = read_jsonl(&command_fixture.server_log)
+            .into_iter()
+            .find(|row| row["event"] == "command")
+        {
+            break row;
+        }
+        assert!(Instant::now() < deadline, "server command not received");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let command_passed = command_request["body"]["skills"][0]["id"] == "poteto-mode"
+        && command_request["body"]["files"][0]["name"] == "context.txt"
+        && command_request["body"]["name"] == "server-review";
+
+    let failed_fixture = build_fixture(
+        &run,
+        "skill-registry-unavailable",
+        &json!({
+            "session_id": "ses_skill_unavailable", "skills_status": 503,
+        }),
+    );
+    let (failed_session, failed_runtime) = (Uuid::new_v4(), Uuid::new_v4());
+    harness
+        .client
+        .request(
+            failed_session,
+            failed_runtime,
+            Command::Start {
+                options: start_options(&failed_fixture.bin, &workspace),
+            },
+        )
+        .unwrap();
+    let failed_events = harness.client.subscribe(failed_session, failed_runtime);
+    harness
+        .client
+        .request(
+            failed_session,
+            failed_runtime,
+            Command::Prompt {
+                prompt: "@poteto-mode reply".into(),
+                files: vec![],
+            },
+        )
+        .unwrap();
+    let mut rejected = Collected::default();
+    observe(
+        &failed_events,
+        Duration::from_secs(10),
+        Duration::from_millis(50),
+        &mut rejected,
+    );
+    let no_post_on_failure = rejected.finishes.iter().any(|(success, _)| !success)
+        && !read_jsonl(&failed_fixture.server_log).iter().any(|row| {
+            row["event"] == "post"
+                && row["path"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("/prompt"))
+        });
+    let artifact = run.root.join("result-explicit-skills.json");
+    let catalog = serde_json::to_value(catalog).unwrap();
+    let passed = command_passed
+        && no_post_on_failure
+        && catalog.to_string().contains("poteto-mode")
+        && facts.iter().all(|fact| fact["actual"] == fact["expected"]);
+    fs::write(
+        &artifact,
+        serde_json::to_vec_pretty(
+            &json!({"passed": passed, "catalog": catalog, "cases": facts,
+            "command": command_request, "registryFailureRejectedBeforePost": no_post_on_failure}),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    eprintln!("explicit skills artifact: {}", artifact.display());
+    assert!(
+        catalog.to_string().contains("poteto-mode"),
+        "server-defined skill must appear in the picker"
+    );
+    assert!(
+        !catalog.to_string().contains("Poteto Mode\""),
+        "display name must not replace the ID"
+    );
+    for fact in &facts {
+        assert_eq!(fact["actual"], fact["expected"], "{fact}");
+    }
+    assert!(command_passed, "command must retain skills and files");
+    assert!(
+        no_post_on_failure,
+        "registry failure must not send unloaded skill text"
+    );
+}
+
 #[test]
 #[ignore = "owns a private daemon/pool; run separately from the recovery matrix"]
 fn opencode_btw() {

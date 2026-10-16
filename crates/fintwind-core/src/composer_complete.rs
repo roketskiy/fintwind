@@ -157,10 +157,10 @@ fn builtin_fintwind_commands() -> Vec<SlashCommand> {
 ///   (singular `command` kept for pre-rename layouts), expanded by Fintwind —
 ///   its server transport takes plain prompt text.
 ///
-/// Skills — `SKILL.md` directories in OpenCode's locations and the cross-tool
-/// `.agents/skills` / `~/.agents/skills` — are always sent raw:
-/// `/skillname …` goes through verbatim and the provider's own skill
-/// machinery takes it from there.
+/// Skills in the standard local directories provide a fallback picker index.
+/// Workspace discovery replaces these with the live V2 skill registry when
+/// available. The driver resolves explicit references into native skill
+/// attachments; skill contents are never expanded as command templates here.
 ///
 /// On top of the native sources, Fintwind reads its own layer — `.fintwind/commands`
 /// in the project and `~/.config/fintwind/commands` — and adds Fintwind's built-ins
@@ -442,9 +442,8 @@ fn scan_command_files(
     }
 }
 
-/// Collect skills — one directory per skill with a `SKILL.md` — as slash
-/// commands. Always passthrough: the typed `/skillname …` goes to the
-/// provider verbatim, and its own skill machinery takes it from there.
+/// Collect fallback skill IDs (directory names, not frontmatter display names).
+/// The driver, not template expansion, loads their contents through OpenCode.
 fn scan_skill_files(root: &Path, commands: &mut Vec<SlashCommand>) {
     let Ok(entries) = std::fs::read_dir(root) else {
         return;
@@ -468,7 +467,7 @@ fn scan_skill_files(root: &Path, commands: &mut Vec<SlashCommand>) {
         };
         let front = parse_frontmatter(&contents);
         commands.push(SlashCommand {
-            name: front.name.unwrap_or(dir_name),
+            name: dir_name,
             description: front.description.unwrap_or_default(),
             scope: CommandScope::Skill,
             argument_hint: None,
@@ -478,7 +477,6 @@ fn scan_skill_files(root: &Path, commands: &mut Vec<SlashCommand>) {
 }
 
 struct Frontmatter<'a> {
-    name: Option<String>,
     description: Option<String>,
     argument_hint: Option<String>,
     body: &'a str,
@@ -489,7 +487,6 @@ struct Frontmatter<'a> {
 /// and an unparsed extra key must not cost the command its listing.
 fn parse_frontmatter(contents: &str) -> Frontmatter<'_> {
     let mut front = Frontmatter {
-        name: None,
         description: None,
         argument_hint: None,
         body: contents,
@@ -510,7 +507,6 @@ fn parse_frontmatter(contents: &str) -> Frontmatter<'_> {
             continue;
         }
         match key.trim() {
-            "name" => front.name = Some(value.to_owned()),
             "description" => front.description = Some(value.to_owned()),
             "argument-hint" => front.argument_hint = Some(value.to_owned()),
             _ => {}

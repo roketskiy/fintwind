@@ -569,6 +569,18 @@ fn prompt_bodies(
     Ok((current, legacy))
 }
 
+fn resolved_prompt_bodies(
+    server: &OpenCodeServer,
+    directory: &str,
+    text: &str,
+    files: &[PromptFile],
+    task_id: Option<&str>,
+) -> anyhow::Result<(Value, Value)> {
+    let (mut current, mut legacy) = prompt_bodies(text, files, task_id)?;
+    crate::skill_prompt::attach(server, directory, text, &mut current, &mut legacy)?;
+    Ok((current, legacy))
+}
+
 /// The `answer` object a form reply posts: every question's selections keyed
 /// by its field key. A multiselect field must answer with an array — the
 /// server rejects a bare string with `FormInvalidAnswerError` — so recorded
@@ -1318,23 +1330,30 @@ impl OpenCodeDriver {
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let mut invalid_input = false;
-                            let posted = if let Some((name, arguments)) = invocation {
-                                worker_server.request_for_directory_with_timeout(
-                                    &worker_location,
-                                    "POST",
-                                    &format!(
-                                        "/api/session/{}/command",
-                                        encode_path_segment(&worker_session)
-                                    ),
-                                    Some(&json!({ "name": name, "text": arguments })),
-                                    HTTP_SUBMIT_TIMEOUT,
-                                )
-                            } else {
-                                let bodies =
-                                    prompt_bodies(&text, &files, worker_task_id.as_deref());
-                                invalid_input = bodies.is_err();
-                                bodies.and_then(|(mut current, legacy)| {
+                            let bodies = resolved_prompt_bodies(
+                                &worker_server,
+                                &worker_location,
+                                &text,
+                                &files,
+                                worker_task_id.as_deref(),
+                            );
+                            let invalid_input = bodies.is_err();
+                            let posted = bodies.and_then(|(mut current, legacy)| {
+                                if let Some((name, arguments)) = invocation {
+                                    current.as_object_mut().unwrap().remove("metadata");
+                                    current["name"] = json!(name);
+                                    current["text"] = json!(arguments);
+                                    worker_server.request_for_directory_with_timeout(
+                                        &worker_location,
+                                        "POST",
+                                        &format!(
+                                            "/api/session/{}/command",
+                                            encode_path_segment(&worker_session)
+                                        ),
+                                        Some(&current),
+                                        HTTP_SUBMIT_TIMEOUT,
+                                    )
+                                } else {
                                     // The V2 API admits a client message ID.
                                     // Retain it across a lost acknowledgement
                                     // so reconciliation can identify this input
@@ -1356,8 +1375,8 @@ impl OpenCodeDriver {
                                         &current,
                                         Some(&legacy),
                                     )
-                                })
-                            };
+                                }
+                            });
                             if let Ok(response) = &posted {
                                 submissions.lock().accepted(submission, response);
                             }
@@ -1465,7 +1484,13 @@ impl OpenCodeDriver {
                                 "/api/session/{}/prompt",
                                 encode_path_segment(&worker_session)
                             );
-                            let bodies = prompt_bodies(&text, &files, worker_task_id.as_deref());
+                            let bodies = resolved_prompt_bodies(
+                                &worker_server,
+                                &worker_location,
+                                &text,
+                                &files,
+                                worker_task_id.as_deref(),
+                            );
                             let invalid_input = bodies.is_err();
                             let posted = bodies.and_then(|(mut current, legacy)| {
                                 current["id"] = json!(steering.input_id);

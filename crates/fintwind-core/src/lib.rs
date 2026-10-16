@@ -48,6 +48,7 @@ pub mod projectless;
 pub mod provider_quota;
 mod session_generation;
 pub mod settings;
+mod skill_prompt;
 pub mod skills;
 pub mod terminal;
 pub mod theme;

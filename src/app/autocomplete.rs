@@ -1,4 +1,4 @@
-//! The composer's autocompletion popup: slash commands and `@` file mentions.
+//! The composer's autocompletion popup: slash commands and `@` skill/file mentions.
 //!
 //! The popup is a pure view over prefetched data. Command and file indexes are
 //! discovered on the background executor into `QueryCache`s and mirrored into
@@ -50,6 +50,7 @@ pub fn init(cx: &mut App) {
 
 pub(super) enum AutocompleteRow {
     Command(Scored<SlashCommand>),
+    Skill(Scored<SlashCommand>),
     File(Scored<FileEntry>),
 }
 
@@ -59,7 +60,7 @@ struct ResultsMemo {
     kind: TriggerKind,
     query: String,
     /// `Rc::as_ptr` identity of the source index the rows were filtered from.
-    source: usize,
+    source: (usize, usize),
     rows: Rc<Vec<AutocompleteRow>>,
 }
 
@@ -148,10 +149,7 @@ impl Fintwind {
                     self.slash_command_index_key = None;
                 }
                 let path = project_path.clone();
-                let binary = self
-                    .probes
-                    .first()
-                    .and_then(|probe| probe.path.clone());
+                let binary = self.probes.first().and_then(|probe| probe.path.clone());
                 let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
                 cx.spawn(async move |fintwind, cx| {
                     let commands = cx
@@ -277,8 +275,11 @@ impl Fintwind {
     /// cursor and `enter` so an index always means the same row everywhere.
     fn autocomplete_rows(&self, trigger: &Trigger) -> Rc<Vec<AutocompleteRow>> {
         let source = match trigger.kind {
-            TriggerKind::Command => Rc::as_ptr(&self.slash_command_index) as usize,
-            TriggerKind::File => Rc::as_ptr(&self.mention_file_index) as usize,
+            TriggerKind::Command => (Rc::as_ptr(&self.slash_command_index) as usize, 0),
+            TriggerKind::File => (
+                Rc::as_ptr(&self.mention_file_index) as usize,
+                Rc::as_ptr(&self.slash_command_index) as usize,
+            ),
         };
         {
             let memo = self.composer_autocomplete.results.borrow();
@@ -298,14 +299,33 @@ impl Fintwind {
             .into_iter()
             .map(AutocompleteRow::Command)
             .collect::<Vec<_>>(),
-            TriggerKind::File => composer_complete::filter_files(
-                &self.mention_file_index,
-                &trigger.query,
-                &mut matcher,
-            )
-            .into_iter()
-            .map(AutocompleteRow::File)
-            .collect(),
+            TriggerKind::File => {
+                let skills = self
+                    .slash_command_index
+                    .iter()
+                    .filter(|command| command.scope == composer_complete::CommandScope::Skill)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                // Reserve room for both kinds even when the skill catalog is large.
+                let mut rows =
+                    composer_complete::filter_commands(&skills, &trigger.query, &mut matcher)
+                        .into_iter()
+                        .take(composer_complete::FILTER_CAP / 2)
+                        .map(AutocompleteRow::Skill)
+                        .collect::<Vec<_>>();
+                let remaining = composer_complete::FILTER_CAP - rows.len();
+                rows.extend(
+                    composer_complete::filter_files(
+                        &self.mention_file_index,
+                        &trigger.query,
+                        &mut matcher,
+                    )
+                    .into_iter()
+                    .take(remaining)
+                    .map(AutocompleteRow::File),
+                );
+                rows
+            }
         };
         let rows = Rc::new(rows);
         *self.composer_autocomplete.results.borrow_mut() = Some(ResultsMemo {
@@ -361,6 +381,7 @@ impl Fintwind {
         };
         let insert = match row {
             AutocompleteRow::Command(scored) => format!("/{} ", scored.item.name),
+            AutocompleteRow::Skill(scored) => format!("@{} ", scored.item.name),
             AutocompleteRow::File(scored) => format!("@{} ", scored.item.path),
         };
         self.composer.update(cx, |input, cx| {
@@ -471,8 +492,13 @@ impl Fintwind {
                 }),
             );
         match row {
-            AutocompleteRow::Command(scored) => {
+            AutocompleteRow::Command(scored) | AutocompleteRow::Skill(scored) => {
                 let command = &scored.item;
+                let sigil = if matches!(row, AutocompleteRow::Skill(_)) {
+                    '@'
+                } else {
+                    '/'
+                };
                 let icon_path = if command.scope == composer_complete::CommandScope::Skill {
                     "icons/sparkle.svg"
                 } else {
@@ -494,7 +520,7 @@ impl Fintwind {
                             .truncate()
                             .text_size(ui_px(12.0))
                             .child(matched_text(
-                                format!("/{}", command.name),
+                                format!("{sigil}{}", command.name),
                                 name_ranges,
                                 theme.text,
                                 theme.accent,

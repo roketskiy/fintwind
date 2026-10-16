@@ -1176,6 +1176,13 @@ fn retryable_error(error: &(dyn std::error::Error + 'static)) -> bool {
         {
             return true;
         }
+        #[cfg(windows)]
+        // ERROR_IO_PENDING (winerror.h): the overlapped read was started
+        // and has not completed. The next read observes the real outcome —
+        // a dead peer reports its own error then — so the socket stays up.
+        if error.raw_os_error() == Some(997) {
+            return true;
+        }
     }
     error.source().is_some_and(retryable_error)
 }

@@ -46,6 +46,9 @@ use crate::ui::tooltip::Tooltip;
 
 mod math_text;
 
+#[cfg(test)]
+mod copy_e2e;
+
 /// Selection geometry: the laid-out text handle for one painted element.
 #[derive(Clone)]
 pub enum TextGeometry {
@@ -1035,9 +1038,27 @@ fn registry_point(
 /// so three closures replace three-per-element and a mouse move costs one
 /// registry scan instead of one dispatch per visible paragraph.
 pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection) {
+    install_selection_input_inner(window, state, None);
+}
+
+/// Give a selectable surface keyboard focus only when its text is hit. An
+/// ancestor mouse handler would also steal focus from embedded editable fields.
+pub fn install_selection_input_with_focus(
+    window: &mut Window,
+    state: &TranscriptSelection,
+    focus: &gpui::FocusHandle,
+) {
+    install_selection_input_inner(window, state, Some(focus.clone()));
+}
+
+fn install_selection_input_inner(
+    window: &mut Window,
+    state: &TranscriptSelection,
+    focus: Option<gpui::FocusHandle>,
+) {
     window.on_mouse_event({
         let state = state.clone();
-        move |event: &MouseDownEvent, phase, window, _| {
+        move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                 return;
             }
@@ -1069,6 +1090,9 @@ pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection)
                     }
                     drop(selection);
                     drop(registry);
+                    if let Some(focus) = focus.as_ref() {
+                        window.focus(focus, cx);
+                    }
                     window.refresh();
                 }
                 None => {

@@ -343,6 +343,7 @@ impl Fintwind {
             )
         });
         div()
+            .track_focus(&self.transcript_selection_focus)
             .flex_1()
             .min_h_0()
             .w_full()
@@ -394,9 +395,9 @@ impl Fintwind {
 
     /// Copy the transcript's text selection.
     ///
-    /// This is the fallback leg of the copy shortcut: the composer holds focus almost
-    /// always, so it handles the keystroke first and propagates when it has
-    /// nothing selected of its own.
+    /// Selecting transcript text focuses its surface so an old input selection
+    /// cannot consume the shortcut. Other selectable surfaces can still use
+    /// the composer's propagated Copy action as a fallback.
     pub(super) fn copy_selection_action(
         &mut self,
         _: &CopySelection,
@@ -467,9 +468,12 @@ impl Fintwind {
             return div().into_any_element();
         }
         let selection = self.transcript_selection.clone();
+        let focus = self.transcript_selection_focus.clone();
         canvas(
             |_, _, _| (),
-            move |_, _, window, _| md::render::install_selection_input(window, &selection),
+            move |_, _, window, _| {
+                md::render::install_selection_input_with_focus(window, &selection, &focus)
+            },
         )
         .absolute()
         .w(px(0.0))

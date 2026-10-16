@@ -79,7 +79,7 @@ settings.general: 一般
 settings.appearance: 外観
 settings.providers: プロバイダー
 settings.usage: 使用状況
-settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン
+settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン opencode shell powershell cmd bash シェル
 settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語 文字サイズ コード フォント 幅 会話 メッセージ
 settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
 settings.skills: スキル
@@ -176,6 +176,9 @@ settings.auto_compact_threshold_description: 使用量がしきい値に届か�
 settings.auto_compact_threshold_placeholder: 例：500K
 settings.auto_compact_threshold_invalid: しきい値の形式が正しくありません
 settings.network_proxy: ネットワークプロキシ
+settings.opencode_shell: OpenCode シェル
+settings.shell_default: システムのデフォルト
+settings.shell_failed: "シェル設定を更新できませんでした: %{error}"
 settings.network_proxy_description: 更新確認・モデルカタログ・新規セッションに適用されます
 settings.network_proxy_placeholder: 例：http://127.0.0.1:7897
 settings.network_proxy_invalid: プロキシアドレスの形式が正しくありません

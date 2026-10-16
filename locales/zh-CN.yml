@@ -75,7 +75,7 @@ settings.general: 通用
 settings.appearance: 外观
 settings.providers: 服务商
 settings.usage: 用量
-settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本
+settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本 opencode shell powershell cmd bash 终端
 settings.appearance_keywords: 外观 主题 系统 浅色 深色 语言 英语 中文 简体 字号 文字大小 代码 界面 字体 等宽 宽度 对话宽度 消息宽度
 settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key Base URL 端点 模型列表 命令行 版本 安装 检测 获取模型 models.dev 连通 测试 延迟 首字 模态 responses claude codex cursor opencode amp grok pi
 settings.skills: 技能
@@ -169,6 +169,9 @@ settings.auto_compact_threshold_description: 用量到不了阈值的窗口不�
 settings.auto_compact_threshold_placeholder: 如 500K
 settings.auto_compact_threshold_invalid: 阈值格式不对
 settings.network_proxy: 网络代理
+settings.opencode_shell: OpenCode Shell
+settings.shell_default: 系统默认
+settings.shell_failed: "无法更新 Shell 设置：%{error}"
 settings.network_proxy_description: 作用于更新检查、模型目录与新建会话
 settings.network_proxy_placeholder: 如 http://127.0.0.1:7897
 settings.network_proxy_invalid: 代理地址格式不对

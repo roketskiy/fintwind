@@ -153,7 +153,7 @@ settings.appearance:
 settings.providers:
   en: Providers
 settings.general_keywords:
-  en: general local projects conversations privacy version proxy network
+  en: general local projects conversations privacy version proxy network opencode shell powershell cmd bash
 settings.appearance_keywords:
   en: appearance theme system light dark language english chinese simplified text size font code interface width conversation
 settings.providers_keywords:
@@ -342,6 +342,12 @@ settings.auto_compact_threshold_invalid:
   en: The threshold format is not recognized
 settings.network_proxy:
   en: Network proxy
+settings.opencode_shell:
+  en: OpenCode shell
+settings.shell_default:
+  en: System default
+settings.shell_failed:
+  en: "Could not update shell settings: %{error}"
 settings.network_proxy_description:
   en: Applied to update checks, the model catalog, and new sessions
 settings.network_proxy_placeholder:

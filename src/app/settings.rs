@@ -202,6 +202,7 @@ impl Fintwind {
             // a rejected edit restores it here as well as on commit.
             self.sync_auto_compact_threshold_input(cx);
             self.sync_network_proxy_input(cx);
+            self.load_opencode_shell(cx);
         }
         if page == SettingsPage::McpServers {
             // Same contract as Providers: transient editors drop, the roster
@@ -463,6 +464,55 @@ impl Fintwind {
 
     fn render_general_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
+        let selected = self.opencode_shell_selected.clone();
+        let label = selected
+            .as_ref()
+            .map(|path| {
+                self.opencode_shell_options
+                    .iter()
+                    .find(|option| option.path == *path)
+                    .map(|option| option.label.clone())
+                    .unwrap_or_else(|| path.clone())
+            })
+            .unwrap_or_else(|| tr!("settings.shell_default"));
+        let options = self.opencode_shell_options.clone();
+        let weak = cx.entity().downgrade();
+        let handle = self.menu_handle("opencode-shell-selector", cx);
+        let shell_selector = dropdown_menu(
+            MenuChip::new("opencode-shell-selector")
+                .label(label)
+                .outlined()
+                .selected(handle.is_open())
+                .w(px(220.0))
+                .justify_between()
+                .disabled(self.opencode_shell_busy || !self.opencode_shell_loaded),
+            "opencode-shell-menu",
+            &handle,
+            MenuAlign::BelowRight,
+            move |_| {
+                let weak_default = weak.clone();
+                let mut items = vec![
+                    MenuItem::new(tr!("settings.shell_default"), move |_, cx| {
+                        let _ =
+                            weak_default.update(cx, |this, cx| this.set_opencode_shell(None, cx));
+                    })
+                    .selected(selected.is_none()),
+                ];
+                for option in &options {
+                    let weak = weak.clone();
+                    let path = option.path.clone();
+                    items.push(
+                        MenuItem::new(option.label.clone(), move |_, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.set_opencode_shell(Some(path.clone()), cx)
+                            });
+                        })
+                        .selected(selected.as_deref() == Some(option.path.as_str())),
+                    );
+                }
+                items
+            },
+        );
         div()
             .child(
                 div()
@@ -693,6 +743,27 @@ impl Fintwind {
                                 )
                                 .w(px(220.0)),
                             ),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.opencode_shell")),
+                            )
+                            .child(shell_selector),
                     ),
             )
             .child(
@@ -1239,6 +1310,77 @@ impl Fintwind {
                     .child(transcript_width_selector),
             )
             .into_any_element()
+    }
+
+    fn load_opencode_shell(&mut self, cx: &mut Context<Self>) {
+        if self.opencode_shell_busy {
+            return;
+        }
+        self.opencode_shell_generation += 1;
+        let generation = self.opencode_shell_generation;
+        self.opencode_shell_busy = true;
+        cx.spawn(async move |this, cx| {
+            let (options, result) = cx
+                .background_executor()
+                .spawn(async {
+                    use fintwind_client::opencode_shell;
+                    (opencode_shell::detect(), opencode_shell::load())
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.opencode_shell_generation != generation {
+                    return;
+                }
+                this.opencode_shell_busy = false;
+                this.opencode_shell_options = options;
+                match result {
+                    Ok(selected) => {
+                        this.opencode_shell_selected = selected;
+                        this.opencode_shell_loaded = true;
+                    }
+                    Err(error) => {
+                        this.opencode_shell_loaded = false;
+                        this.show_toast(tr!("settings.shell_failed", error = error.to_string()));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn set_opencode_shell(&mut self, selected: Option<String>, cx: &mut Context<Self>) {
+        if self.opencode_shell_busy
+            || !self.opencode_shell_loaded
+            || self.opencode_shell_selected == selected
+        {
+            return;
+        }
+        self.opencode_shell_generation += 1;
+        let generation = self.opencode_shell_generation;
+        self.opencode_shell_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let value = selected.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { fintwind_client::opencode_shell::save(value.as_deref()) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.opencode_shell_generation != generation {
+                    return;
+                }
+                this.opencode_shell_busy = false;
+                match result {
+                    Ok(()) => this.opencode_shell_selected = selected,
+                    Err(error) => {
+                        this.show_toast(tr!("settings.shell_failed", error = error.to_string()))
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn set_goal_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {

@@ -12,6 +12,7 @@ pub mod driver;
 pub mod git_history;
 pub mod models_dev;
 pub mod opencode_config;
+pub mod opencode_shell;
 pub mod persistence;
 mod process;
 mod provider_thinking;

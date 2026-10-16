@@ -1988,6 +1988,11 @@ pub struct Fintwind {
     /// slides under it.
     settings_scroll: ScrollHandle,
     settings_scrollbar: Rc<ScrollbarState>,
+    opencode_shell_options: Vec<fintwind_client::opencode_shell::ShellOption>,
+    opencode_shell_selected: Option<String>,
+    opencode_shell_generation: u64,
+    opencode_shell_busy: bool,
+    opencode_shell_loaded: bool,
     header_drag_armed: bool,
     toast: Option<ToastState>,
     toast_generation: u64,
@@ -2458,11 +2463,7 @@ impl Fintwind {
             .and_then(|goal| goal.started_at)
             .map(|started_at| {
                 let elapsed = now.saturating_sub(started_at);
-                if elapsed < 60 {
-                    1
-                } else {
-                    60 - elapsed % 60
-                }
+                if elapsed < 60 { 1 } else { 60 - elapsed % 60 }
             });
         let target = next_time_label_change(&self.state.sessions, now)
             .into_iter()
@@ -3775,6 +3776,11 @@ impl Fintwind {
                 usage_views: Default::default(),
                 settings_scroll: ScrollHandle::new(),
                 settings_scrollbar: ScrollbarState::new(),
+                opencode_shell_options: Vec::new(),
+                opencode_shell_selected: None,
+                opencode_shell_generation: 0,
+                opencode_shell_busy: false,
+                opencode_shell_loaded: false,
                 header_drag_armed: false,
                 toast: startup_toast.map(|message| ToastState {
                     message,

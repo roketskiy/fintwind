@@ -2154,7 +2154,7 @@ impl Fintwind {
             .into_any_element()
     }
 
-    fn format_goal_duration(seconds: u64) -> String {
+    pub(super) fn format_goal_duration(seconds: u64) -> String {
         if seconds < 60 {
             tr!("goal.duration_seconds", count = seconds)
         } else if seconds < 3600 {

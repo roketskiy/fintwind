@@ -195,6 +195,16 @@ impl Fintwind {
             GoalStatus::Blocked => tr!("goal.blocked"),
         };
         let status_color = theme.text_secondary;
+        let duration = goal.started_at.map(|started_at| {
+            tr!(
+                "goal.card_duration",
+                duration = Self::format_goal_duration(
+                    goal.completed_at
+                        .unwrap_or_else(unix_time)
+                        .saturating_sub(started_at)
+                )
+            )
+        });
         let action = if active {
             GoalAction::Pause
         } else {
@@ -212,8 +222,6 @@ impl Fintwind {
             .gap(px(5.0))
             .rounded(px(6.0))
             .cursor_default()
-            .hover(|style| style.bg(theme.overlay))
-            .active(|style| style.bg(theme.overlay_strong))
             .child(icon(
                 if active {
                     "icons/pause.svg"
@@ -295,7 +303,6 @@ impl Fintwind {
                                 .gap(px(6.0))
                                 .rounded(px(6.0))
                                 .cursor_default()
-                                .hover(|style| style.bg(theme.overlay))
                                 .child(icon("icons/target.svg", 14.0, theme.text_secondary))
                                 .child(tr!("goal.title"))
                                 .child(
@@ -331,6 +338,14 @@ impl Fintwind {
                                 .text_color(status_color)
                                 .child(status),
                         )
+                        .when_some(duration, |row, duration| {
+                            row.child(
+                                div()
+                                    .flex_none()
+                                    .text_color(theme.text_tertiary)
+                                    .child(duration),
+                            )
+                        })
                         .when(goal.status != GoalStatus::Done, |row| row.child(primary))
                         .child(more),
                 )

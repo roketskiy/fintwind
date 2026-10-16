@@ -2446,7 +2446,26 @@ impl Fintwind {
     /// stream events.
     fn schedule_time_label_wake(&self, cx: &mut Context<Self>) {
         let now = unix_time();
-        let target = next_time_label_change(&self.state.sessions, now).map(|seconds| now + seconds);
+        let goal_seconds = self
+            .selected_session()
+            .and_then(|session| session.goal.as_ref())
+            .filter(|goal| {
+                self.state.goal_enabled && goal.status != fintwind_protocol::goal::GoalStatus::Done
+            })
+            .and_then(|goal| goal.started_at)
+            .map(|started_at| {
+                let elapsed = now.saturating_sub(started_at);
+                if elapsed < 60 {
+                    1
+                } else {
+                    60 - elapsed % 60
+                }
+            });
+        let target = next_time_label_change(&self.state.sessions, now)
+            .into_iter()
+            .chain(goal_seconds)
+            .min()
+            .map(|seconds| now + seconds);
         if self.time_label_wake.get() == target {
             return;
         }

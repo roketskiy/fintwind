@@ -2122,6 +2122,7 @@ pub struct Fintwind {
     markdown_link_handler: md::render::LinkHandler,
     /// Transcript-wide text selection, spanning messages and tool output.
     transcript_selection: TranscriptSelection,
+    transcript_selection_focus: FocusHandle,
     /// Independent selection for the transient toast message. Keeping it out
     /// of the transcript registry prevents an overlay from joining a drag to
     /// whatever happens to be painted beneath it.
@@ -3842,6 +3843,7 @@ impl Fintwind {
                 activity_detail_viewports: RefCell::new(HashMap::new()),
                 markdown_link_handler,
                 transcript_selection: TranscriptSelection::default(),
+                transcript_selection_focus: cx.focus_handle(),
                 toast_selection: TranscriptSelection::default(),
                 transcript_scrollbar: ScrollbarState::new(),
                 menus: RefCell::new(HashMap::new()),

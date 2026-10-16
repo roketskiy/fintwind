@@ -146,7 +146,7 @@ class Model:
     counted separately: the run must end with zero of them.
     """
 
-    SETTLING_MODES = ("done", "continue", "hold", "blocked", "budget", "repeat")
+    SETTLING_MODES = ("done", "continue", "hold", "blocked", "budget", "repeat", "wait")
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -238,6 +238,8 @@ class Model:
                 index = self.settles + 1
             if mode == "done":
                 verdict = "done"
+            elif mode == "wait":
+                verdict = "wait"
             elif mode in ("blocked", "stale"):
                 verdict = "blocked"
             elif index >= 2 and mode in ("continue", "hold"):
@@ -347,7 +349,14 @@ def main():
         input: {type:"object",properties:{},additionalProperties:false}, options:{codemode:false},
         async execute() { return {content: `Fixture step ${++step}`}; }
       }));
-      return () => registration.dispose();
+      const rpc = await ctx.rpc.register({id: "goal.fixture", methods: {
+        finish: {input: {type: "object", properties: {sessionID: {type: "string"}}, required: ["sessionID"]}, output: {}}
+      }, events: {}}, {async finish({sessionID}) {
+        await ctx.session.synthetic({sessionID, text: "Background fixture completed. Verify the result.",
+          description: "Background completion", metadata: {goalFixture: true}});
+        return {};
+      }});
+      return async () => { await rpc.dispose(); await registration.dispose(); };
     }};''', encoding="utf-8")
     provider = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     threading.Thread(target=provider.serve_forever, daemon=True).start()
@@ -512,6 +521,24 @@ def main():
         assert len(users) == 2, messages
         assert "Complete two fixture steps." in json.dumps(users[-1]), users
         check("automatic continuation is a synthetic input rather than a forged user message")
+        waiting_session = session()
+        MODEL.configure("wait")
+        control(waiting_session, "start", objective="Wait for the background completion notification.")
+        waiting = wait_for("waiting settlement", lambda: control(waiting_session, "get"),
+                           lambda state: state and state["turns"] >= 1)
+        time.sleep(1)
+        waiting = control(waiting_session, "get")
+        assert waiting["status"] == "active" and waiting["turns"] == 1, waiting
+        assert MODEL.settles == 1 and MODEL.replies == 1, (MODEL.settles, MODEL.replies)
+        assert not has_synthetic(waiting_session, CONTINUATION_MARKER), context_messages(waiting_session)
+        assert not has_synthetic(waiting_session, REMINDER_MARKER), context_messages(waiting_session)
+        check("a wait report keeps the goal active without forcing another turn")
+        MODEL.configure("done")
+        api("POST", "/api/rpc/goal.fixture/finish" + query, {"input": {"sessionID": waiting_session}})
+        awakened = wait_for("background completion settles goal", lambda: control(waiting_session, "get"),
+                            lambda state: state and state["status"] == "done")
+        assert awakened["turns"] == 2 and awakened["tools"] == 2, awakened
+        check("a background notification resumes the waiting goal and can complete it")
         MODEL.configure("done")
         calls_mark = len(MODEL.calls)
         api("POST", f"/api/session/{second}/prompt" + query, {"text": "Hello without a goal."})
@@ -694,7 +721,7 @@ def main():
         assert len(MODEL.calls) == frozen, MODEL.calls[frozen:]
         check("a previously active goal requires explicit resume after server restart")
         assert MODEL.judges == 0, MODEL.calls[-5:]
-        assert len(checks) == 27, checks
+        assert len(checks) == 29, checks
         (OUTPUT / "report.json").write_text(json.dumps({"status": "passed", "surface": "real-opencode-scripted-provider",
               "nativeUI": "not exercised", "checks": checks, "info": info, "pluginState": plugins,
               "completedGoal": done}, indent=2), encoding="utf-8")

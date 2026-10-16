@@ -28,7 +28,7 @@ import { watch } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 type Status = "active" | "paused" | "done" | "blocked";
-type Verdict = "done" | "continue" | "blocked";
+type Verdict = "done" | "continue" | "wait" | "blocked";
 type Snapshot = { sessionId: string; objective: string; status: Status; turns: number; maxTurns: number; reason: string; revision: number; result?: string; model?: string; tools?: number; startedAt?: number; completedAt?: number };
 type State = Snapshot & { lastEvent: string; lastText: string; stalled: number; repeats: number };
 type RecordState = { revision: number; goal: State | null };
@@ -132,7 +132,7 @@ const SETTLE_TOOL = "fintwind_goal_settle";
 const GOAL_INSTRUCTION =
   "This session has an active Goal set by the user. Work toward it across turns until it is fully achieved.\n" +
   `- At the end of every turn in which you worked toward the Goal, call ${SETTLE_TOOL} exactly once, after all other work.\n` +
-  '- Pass verdict "done" only when the objective is fully achieved and the evidence is in this session; "blocked" when you cannot proceed without external input or action; "continue" when more work remains.\n' +
+  '- Pass verdict "done" only when the objective is fully achieved and the evidence is in this session; "blocked" when you cannot proceed without external input or action; "continue" when more work is immediately actionable; "wait" when you have already scheduled a background task and should wait for its completion notification.\n' +
   "- Pass reason: one concise sentence justifying the verdict. When done, also pass summary: one concise sentence describing what was accomplished.\n" +
   "- After a done or blocked report the Goal stops; do not call the tool again.\n" +
   "- User messages during the Goal add guidance; follow them and keep working toward the Goal.";
@@ -239,12 +239,13 @@ export default {
       name: SETTLE_TOOL,
       description: "Report the outcome of this turn's work toward this session's Goal. " +
         "Call it exactly once at the end of every turn in which you worked toward the Goal, after all other work is finished. " +
+        'Use "continue" for immediately actionable work, or "wait" after scheduling a background task whose completion notification should resume the session. "done" means the Goal is fully achieved. ' +
         "Never call it in a session that has no Goal.",
       options: { codemode: false },
       input: {
         type: "object",
         properties: {
-          verdict: { type: "string", enum: ["done", "continue", "blocked"] },
+          verdict: { type: "string", enum: ["done", "continue", "wait", "blocked"] },
           reason: { type: "string", minLength: 1, maxLength: 2000 },
           summary: { type: "string", minLength: 1, maxLength: 2000 },
         },
@@ -254,7 +255,7 @@ export default {
       async execute(raw, context) {
         const input = object(raw);
         const verdict = input.verdict;
-        if (verdict !== "done" && verdict !== "continue" && verdict !== "blocked") throw new Error('verdict must be "done", "continue" or "blocked". No settlement was recorded.');
+        if (verdict !== "done" && verdict !== "continue" && verdict !== "wait" && verdict !== "blocked") throw new Error('verdict must be "done", "continue", "wait" or "blocked". No settlement was recorded.');
         const reason = typeof input.reason === "string" ? input.reason.trim().slice(0, 2000) : "";
         if (!reason) throw new Error("reason must be a non-empty sentence. No settlement was recorded.");
         const summary = typeof input.summary === "string" && input.summary.trim() ? input.summary.trim().slice(0, 2000) : undefined;
@@ -425,7 +426,7 @@ export default {
           else if (next.stalled >= 3 || next.repeats >= 2) { next.status = "blocked"; next.reason = "No further progress detected"; }
         }
         const saved = await write(id, record, next);
-        if (saved?.status === "active") followup = { kind: report ? "continue" : "remind", generation, state: saved };
+        if (saved?.status === "active" && report?.verdict !== "wait") followup = { kind: report ? "continue" : "remind", generation, state: saved };
       });
       if (followup) await send(id, slot, followup.generation, followup.state, followup.kind);
     };

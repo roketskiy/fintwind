@@ -172,6 +172,57 @@ pub fn list(
     Ok(Some(commits))
 }
 
+/// Read only the selected commit. NUL-delimited numstat keeps unusual paths
+/// and renames from being mistaken for additional files.
+pub fn stats(cwd: &Path, hash: &str) -> anyhow::Result<fintwind_protocol::git::CommitStats> {
+    anyhow::ensure!(
+        matches!(hash.len(), 40 | 64) && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "invalid commit hash"
+    );
+    let output = crate::command_env::plain_command("git")
+        .args([
+            "show",
+            "--format=",
+            "--numstat",
+            "-z",
+            "--root",
+            "--diff-merges=first-parent",
+            "--find-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            hash,
+            "--",
+        ])
+        .current_dir(cwd)
+        .output()
+        .context("failed to execute git show")?;
+    if !output.status.success() {
+        bail!("{}", command_error(&output));
+    }
+    let mut stats = fintwind_protocol::git::CommitStats::default();
+    let mut records = output.stdout.split(|byte| *byte == 0);
+    while let Some(record) = records.next() {
+        if record.is_empty() {
+            continue;
+        }
+        let mut fields = record.splitn(3, |byte| *byte == b'\t');
+        let added = fields.next().context("missing added count")?;
+        let deleted = fields.next().context("missing deleted count")?;
+        let path = fields.next().context("missing numstat path")?;
+        if path.is_empty() {
+            // A rename is: counts TAB NUL old-path NUL new-path NUL.
+            records.next().context("missing rename source")?;
+            records.next().context("missing rename destination")?;
+        }
+        stats.files += 1;
+        if added != b"-" && deleted != b"-" {
+            stats.additions += std::str::from_utf8(added)?.parse::<u64>()?;
+            stats.deletions += std::str::from_utf8(deleted)?.parse::<u64>()?;
+        }
+    }
+    Ok(stats)
+}
+
 fn command_error(output: &Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     if stderr.is_empty() {

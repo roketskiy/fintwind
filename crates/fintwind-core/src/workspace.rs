@@ -108,6 +108,9 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
         WorkspaceOperation::ListCommits { cwd, limit, branch } => WorkspaceResult::Commits {
             commits: crate::git_log::list(&cwd, limit, branch.as_deref())?,
         },
+        WorkspaceOperation::ReadCommitStats { cwd, hash } => WorkspaceResult::CommitStats {
+            stats: crate::git_log::stats(&cwd, &hash)?,
+        },
         WorkspaceOperation::CurrentBranch { cwd } => WorkspaceResult::CurrentBranch {
             branch: crate::git_branch::current(&cwd)?,
         },

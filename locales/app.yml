@@ -1953,6 +1953,14 @@ git_history.empty_description:
   en: This branch has no commits to show
 git_history.hash_copied:
   en: "Copied %{hash}"
+git_history.copy_hash:
+  en: Copy SHA
+git_history.files_changed:
+  en: "%{count} files changed"
+git_history.stats_loading:
+  en: Loading changes…
+git_history.stats_error:
+  en: Could not read changes
 git_history.refresh:
   en: Refresh history
 git_history.unpushed:
@@ -2699,6 +2707,8 @@ usage.session_total:
   en: Session total
 usage.window_section:
   en: Window
+usage.opencode_session_id:
+  en: OpenCode session ID
 usage.window_size:
   en: Size
 usage.compaction_section:

@@ -187,6 +187,9 @@ impl Fintwind {
             self.commit_log
                 .invalidate(&(path, self.history_branch.clone()));
         }
+        // Retry failed detail reads too; cached failures otherwise stay quiet
+        // instead of spawning a request on every frame.
+        self.history_stats.clear();
         cx.notify();
     }
 
@@ -226,19 +229,57 @@ impl Fintwind {
         cx.notify();
     }
 
-    /// Copies one row's full hash and confirms with a toast. Both the mouse
-    /// click and the keyboard path land here, reading the synced row cache so
-    /// neither path needs to carry the list around.
-    fn copy_history_hash(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(commit) = self.history_row_cache.commits.get(index) else {
-            return;
-        };
-        cx.write_to_clipboard(gpui::ClipboardItem::new_string(commit.hash.clone()));
-        self.show_success_toast(tr!(
-            "git_history.hash_copied",
-            hash = commit.short_hash.clone()
-        ));
+    /// Only the explicit copy control writes to the clipboard.
+    fn copy_history_hash(&mut self, hash: &str, short_hash: &str, cx: &mut Context<Self>) {
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(hash.to_owned()));
+        self.show_success_toast(tr!("git_history.hash_copied", hash = short_hash));
         cx.notify();
+    }
+
+    fn selected_commit_stats(
+        &mut self,
+        hash: &str,
+        cx: &mut Context<Self>,
+    ) -> Option<Result<fintwind_protocol::git::CommitStats, String>> {
+        let path = self.selected_workspace_path()?.to_path_buf();
+        let key = (path.clone(), hash.to_owned());
+        match self.history_stats.read(&key) {
+            Query::Ready(result) => Some(result.as_ref().clone()),
+            Query::Pending => None,
+            Query::Missing(token) => {
+                let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
+                let hash = hash.to_owned();
+                cx.spawn(async move |this, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            match workspace.request(
+                                fintwind_client::WorkspaceOperation::ReadCommitStats {
+                                    cwd: path,
+                                    hash,
+                                },
+                            ) {
+                                Ok(fintwind_client::WorkspaceResult::CommitStats { stats }) => {
+                                    Ok(stats)
+                                }
+                                Ok(_) => {
+                                    Err("the daemon returned an invalid commit stats response"
+                                        .to_owned())
+                                }
+                                Err(error) => Err(error.to_string()),
+                            }
+                        })
+                        .await;
+                    let _ = this.update(cx, |this, cx| {
+                        if this.history_stats.fulfill(token, result) {
+                            cx.notify();
+                        }
+                    });
+                })
+                .detach();
+                None
+            }
+        }
     }
 
     pub(super) fn render_right_panel_history(&mut self, cx: &mut Context<Self>) -> Div {
@@ -387,12 +428,6 @@ impl Fintwind {
                                 this.move_history_highlight(event.keystroke.key.as_str(), cx);
                                 cx.stop_propagation();
                             }
-                            "enter" | "space" => {
-                                if let Some(index) = this.history_highlight {
-                                    this.copy_history_hash(index, cx);
-                                }
-                                cx.stop_propagation();
-                            }
                             _ => {}
                         }
                     }))
@@ -441,7 +476,7 @@ impl Fintwind {
                                                 this.history_highlight = Some(index);
                                                 this.history_details_scroll
                                                     .set_offset(point(px(0.0), px(0.0)));
-                                                this.copy_history_hash(index, cx)
+                                                cx.notify();
                                             });
                                         }
                                     })
@@ -493,6 +528,21 @@ impl Fintwind {
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
         let focus = self.transcript_control_focus("history-selected-details", cx);
+        let stats = commit.and_then(|commit| self.selected_commit_stats(&commit.hash, cx));
+        let copy_button = commit.map(|commit| {
+            let hash = commit.hash.clone();
+            let short_hash = commit.short_hash.clone();
+            let focus = self.transcript_control_focus("history-copy-sha", cx);
+            crate::ui::icon_button("history-copy-sha", "icons/copy.svg", theme)
+                .flex_none()
+                .track_focus(&focus)
+                .tab_index(0)
+                .focus_visible(|style| style.border_1().border_color(theme.accent))
+                .tooltip(Tooltip::text(tr!("git_history.copy_hash")))
+                .on_activation(cx, move |this, _, cx| {
+                    this.copy_history_hash(&hash, &short_hash, cx);
+                })
+        });
         div()
             .id("history-selected-details")
             .track_focus(&focus)
@@ -501,7 +551,7 @@ impl Fintwind {
             .min_h_0()
             // Reserve the same viewport before and after first selection:
             // End/Up reveal uses the last measured list bounds.
-            .h(ui_px(112.0))
+            .h(ui_px(140.0))
             .flex()
             .flex_col()
             .overflow_y_scroll()
@@ -529,9 +579,46 @@ impl Fintwind {
                     .child(
                         div()
                             .flex_none()
-                            .font_family(crate::theme::code_font_family())
-                            .child(commit.hash.clone()),
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .font_family(crate::theme::code_font_family())
+                                    .child(commit.hash.clone()),
+                            )
+                            .children(copy_button),
                     )
+                    .child(match stats {
+                        Some(Ok(stats)) => div()
+                            .flex_none()
+                            .flex()
+                            .gap(px(8.0))
+                            .child(tr!("git_history.files_changed", count = stats.files))
+                            .child(
+                                div()
+                                    .text_color(theme.success)
+                                    .child(format!("+{}", stats.additions)),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme.danger_text)
+                                    .child(format!("−{}", stats.deletions)),
+                            )
+                            .into_any_element(),
+                        Some(Err(error)) => div()
+                            .id("history-stats-error")
+                            .flex_none()
+                            .text_color(theme.warning_text)
+                            .tooltip(Tooltip::text(error))
+                            .child(tr!("git_history.stats_error"))
+                            .into_any_element(),
+                        None => div()
+                            .flex_none()
+                            .child(tr!("git_history.stats_loading"))
+                            .into_any_element(),
+                    })
                     .child(div().flex_none().child(commit.author.clone()))
                     .children(
                         commit

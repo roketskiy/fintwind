@@ -1412,6 +1412,8 @@ pub struct Fintwind {
     /// executor. `Err` is cached as well so a broken path is not retried every
     /// frame.
     commit_log: QueryCache<git_history::HistoryKey, git_history::HistoryResult>,
+    history_stats:
+        QueryCache<(PathBuf, String), Result<fintwind_protocol::git::CommitStats, String>>,
     /// The history panel's branch filter; `None` follows HEAD.
     history_branch: Option<String>,
     history_list_state: ListState,
@@ -3527,6 +3529,7 @@ impl Fintwind {
                 sidebar_branches: QueryCache::new(4 * MAX_CACHED_WORKSPACES),
                 visible_branch_snapshot: None,
                 commit_log: QueryCache::new(MAX_CACHED_WORKSPACES),
+                history_stats: QueryCache::new(128),
                 history_branch: None,
                 history_list_state: ListState::new(0, ListAlignment::Top, px(96.0)),
                 history_row_cache: Arc::new(git_history::HistoryRows::default()),

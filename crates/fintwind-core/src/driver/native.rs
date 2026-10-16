@@ -24,7 +24,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use base64::Engine as _;
-use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use fintwind_protocol::model::unix_time;
@@ -49,14 +49,6 @@ const SESSION_LIST_LIMIT: usize = 500;
 /// and the scan reports when it is hit rather than stopping quietly.
 const MAX_SESSION_PAGES: usize = 50;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
-/// How far back a session's activity may reach and still be worth splitting
-/// per message. The page's charts read at most 26 weeks, so an older session's
-/// day attribution cannot change any mark it draws — only its own total,
-/// which the session row already carries.
-const DAY_SPLIT_HORIZON_DAYS: u64 = 26 * 7;
-/// Refinement cache ceiling. One entry per session seen, so this bounds the
-/// daemon's memory for a store far larger than any real one.
-const USAGE_CACHE_CEILING: usize = 20_000;
 /// Message pages one day split may walk. At 200 messages a page this covers
 /// 10 000 messages, past which a session is treated as unattributable rather
 /// than allowed to spend the whole scan on itself.
@@ -237,7 +229,7 @@ pub(crate) fn list_mcp_statuses(
 ///   include it. Measured on a real store: 103 sub-agent sessions holding
 ///   128.8M tokens that a `parentID`-only filter discards — 8.6% of the
 ///   store's total.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 enum SessionKind {
     TopLevel,
     Fork,
@@ -467,42 +459,52 @@ pub(crate) fn fetch_turn_stats(
 /// `directory` filter — so sessions from every project the CLI, TUI, or any
 /// client ever used are covered.
 ///
-/// Pass one walks the session list: the rows already carry tokens, cost,
-/// model, and timestamps, so the common case costs one request per page.
-/// Pass two is the exception — only the handful of sessions whose activity
-/// provably spans more than one calendar day are opened message by message,
-/// because a session row's `time.updated` would otherwise dump a week's spend
-/// onto its last day.
+/// Reconcile the global session listing, then read only uncached/changed
+/// histories in a bounded pool. Model attribution is independent of calendar
+/// range. Publish cached facts before waiting for any message history.
 pub(crate) fn fetch_usage_stats(
-    server: &OpenCodeServer,
-    detailed_day: Option<i64>,
+    request: &(impl Fn(&str) -> anyhow::Result<Value> + Sync),
+    cache: &crate::usage_index::UsageCache,
+    publish: &impl Fn(UsageStats),
 ) -> anyhow::Result<UsageStats> {
     let mut stats = UsageStats::default();
     let mut cursor: Option<String> = None;
     let mut rows_by_id: HashMap<String, RowFacts> = HashMap::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let mut page_cursors = HashSet::new();
+    let listing_started = std::time::Instant::now();
 
     for page in 0..MAX_SESSION_PAGES {
         let mut path = format!("/api/session?limit={SESSION_LIST_LIMIT}");
         if let Some(token) = &cursor {
             path.push_str(&format!("&cursor={}", encode_path_segment(token)));
         }
-        let response = server.request_with_timeout("GET", &path, None, HTTP_TIMEOUT)?;
+        let response = request(&path)?;
         let rows = response
             .pointer("/data")
             .and_then(Value::as_array)
             .cloned()
-            .unwrap_or_default();
+            .ok_or_else(|| anyhow::anyhow!("invalid usage session listing"))?;
         let exhausted = rows.is_empty();
-        let has_more = response
+        let next = response
             .pointer("/cursor/next")
             .and_then(Value::as_str)
-            .is_some_and(|next| Some(next) != cursor.as_deref());
+            .filter(|next| !next.is_empty());
+        if let Some(next) = next {
+            anyhow::ensure!(
+                page_cursors.insert(next.to_owned()),
+                "usage session cursor repeated; cached history retained"
+            );
+        }
+        let has_more = next.is_some();
+        anyhow::ensure!(
+            !exhausted || !has_more,
+            "empty usage page has a continuation cursor"
+        );
         stats.sessions_scanned += rows.len();
         for row in &rows {
-            let Some((id, facts)) = row_facts(row) else {
-                continue;
-            };
+            let (id, facts) =
+                row_facts(row).ok_or_else(|| anyhow::anyhow!("invalid usage session row"))?;
             seen.insert(id.clone());
             rows_by_id.insert(id, facts);
         }
@@ -524,7 +526,15 @@ pub(crate) fn fetch_usage_stats(
         }
     }
 
-    let mut entries = Vec::with_capacity(rows_by_id.len());
+    anyhow::ensure!(
+        !stats.truncated,
+        "usage session listing is incomplete; cached history retained"
+    );
+    eprintln!(
+        "usage listing: {} ms, {} sessions",
+        listing_started.elapsed().as_millis(),
+        stats.sessions_scanned
+    );
     // Parents before children: a sub-agent folds into its parent's entry, and
     // a HashMap's visit order cannot be relied on to bring them together. The
     // partition is also what makes the result deterministic — the same store
@@ -550,74 +560,100 @@ pub(crate) fn fetch_usage_stats(
         .partition(|(_, facts)| facts.kind == SessionKind::SubAgent);
     subagents.sort_by_key(|(id, _)| depths.get(id).copied().unwrap_or_default());
     let rows: Vec<_> = parents.into_iter().chain(subagents).collect();
-    // Fetch the selected day's independent sessions in a bounded batch so
-    // their HTTP latencies do not add up serially against the RPC deadline.
-    let detailed_splits = detailed_day
-        .map(|day| {
-            std::thread::scope(|scope| -> anyhow::Result<Vec<Option<SessionSplit>>> {
-                const WORKERS: usize = 8;
-                let handles: Vec<_> = (0..WORKERS)
-                    .map(|worker| {
-                        let rows = &rows;
-                        scope.spawn(move || {
-                            (worker..rows.len())
-                                .step_by(WORKERS)
-                                .map(|index| {
-                                    let (id, facts) = &rows[index];
-                                    let split = usage_entry_from_row(facts)
-                                        .map(|entry| {
-                                            split_entry_days(
-                                                server,
-                                                id,
-                                                &entry,
-                                                facts.created,
-                                                facts.updated,
-                                                facts.updated_millis,
-                                                Some(day),
-                                            )
-                                        })
-                                        .transpose()
-                                        .map(Option::flatten);
-                                    (index, split)
-                                })
-                                .collect::<Vec<_>>()
-                        })
+    let mut splits = Vec::with_capacity(rows.len());
+    let mut pending = Vec::new();
+    for (index, (id, facts)) in rows.iter().enumerate() {
+        let fingerprint = serde_json::to_string(facts)?;
+        let recent = unix_time().saturating_sub(facts.updated) < 7 * 86_400;
+        let cached = cache.split(id, &fingerprint, recent)?;
+        if cached.is_some() {
+            splits.push(cached);
+            continue;
+        }
+        let previous = cache.previous_split(id)?;
+        if cached.is_none() && (previous.is_some() || facts.tokens.iter().any(|tokens| *tokens > 0))
+        {
+            pending.push(index);
+        }
+        splits.push(cached.or(previous));
+    }
+    pending.sort_by_key(|index| std::cmp::Reverse(rows[*index].1.updated));
+    stats.refreshing = true;
+    stats.entries = assemble_usage_entries(&rows, &splits);
+    publish(stats.clone());
+    // Bounded batches persist progress and publish at most once per batch.
+    // All sessions need model attribution, not just cross-day sessions.
+    let mut published = std::time::Instant::now();
+    for batch in pending.chunks(16) {
+        let results = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..4)
+                .map(|worker| {
+                    let rows = &rows;
+                    scope.spawn(move || {
+                        batch
+                            .iter()
+                            .skip(worker)
+                            .step_by(4)
+                            .copied()
+                            .map(|index| {
+                                let (id, facts) = &rows[index];
+                                (index, indexed_session_split(request, cache, id, facts))
+                            })
+                            .collect::<Vec<_>>()
                     })
-                    .collect();
-                let mut splits = vec![None; rows.len()];
-                for handle in handles {
-                    for (index, split) in handle.join().expect("usage detail worker panicked") {
-                        splits[index] = split?;
-                    }
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("usage worker panicked"))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()
+        })?;
+        for (index, result) in results.into_iter().flatten() {
+            match result {
+                Ok(Some(split)) => splits[index] = Some(split),
+                Ok(None) => {}
+                Err(error) => {
+                    // A partial history must not turn an otherwise usable
+                    // snapshot into a page-level failure. Keep its cached split
+                    // (or unknown summary) and retry in a later reconciliation.
+                    eprintln!("usage history skipped for {}: {error}", rows[index].0);
                 }
-                Ok(splits)
-            })
-        })
-        .transpose()?;
+            }
+        }
+        if published.elapsed() >= Duration::from_secs(1) {
+            stats.entries = assemble_usage_entries(&rows, &splits);
+            cache.save_snapshot(&stats)?;
+            publish(stats.clone());
+            published = std::time::Instant::now();
+        }
+    }
+    stats.entries = assemble_usage_entries(&rows, &splits);
+    // An incomplete listing is not evidence that unseen sessions were deleted.
+    if !stats.truncated {
+        cache.retain(&seen)?;
+    }
+    Ok(stats)
+}
+
+fn assemble_usage_entries(
+    rows: &[(String, RowFacts)],
+    splits: &[Option<SessionSplit>],
+) -> Vec<UsageEntry> {
+    let mut entries = Vec::with_capacity(rows.len());
     let mut entry_index: HashMap<String, usize> = HashMap::new();
-    for (row_index, (id, facts)) in rows.into_iter().enumerate() {
-        let Some(mut entry) = usage_entry_from_row(&facts) else {
+    for (row_index, (id, facts)) in rows.iter().enumerate() {
+        let Some(mut entry) = usage_entry_from_row(facts) else {
             continue;
         };
-        let split = if let Some(splits) = &detailed_splits {
-            splits[row_index].clone()
-        } else {
-            split_entry_days(
-                server,
-                &id,
-                &entry,
-                facts.created,
-                facts.updated,
-                facts.updated_millis,
-                detailed_day,
-            )?
-        };
+        let split = splits[row_index].as_ref();
         if facts.kind == SessionKind::SubAgent {
             if let Some(&parent_index) = facts.parent.as_deref().and_then(|p| entry_index.get(p)) {
                 if let Some(split) = split {
-                    entry.days = Some(split.days);
-                    entry.hours = split.hours;
-                    entry.model_lanes = split.models;
+                    apply_usage_split(&mut entry, split);
                 }
                 fold_subagent_into(&mut entries[parent_index], &entry, &id);
                 entry_index.insert(id.clone(), parent_index);
@@ -630,20 +666,48 @@ pub(crate) fn fetch_usage_stats(
         }
         entry_index.insert(id.clone(), entries.len());
         if let Some(split) = split {
-            entry.days = Some(split.days);
-            entry.hours = split.hours;
-            entry.model_lanes = split.models;
+            apply_usage_split(&mut entry, split);
         }
         entries.push(entry);
     }
 
-    // Retire entries for sessions the listing no longer shows, so the cache
-    // tracks the store rather than growing forever.
-    usage_day_cache().lock().retain(|id, _| seen.contains(id));
+    entries.sort_by_key(|entry| entry.timestamp);
+    entries
+}
 
-    stats.entries = entries;
-    stats.entries.sort_by_key(|entry| entry.timestamp);
-    Ok(stats)
+fn apply_usage_split(entry: &mut UsageEntry, split: &SessionSplit) {
+    // A summary can lag behind a completed message. Never drop verified usage
+    // just because the session row has not caught up yet.
+    entry.input_tokens = entry
+        .input_tokens
+        .max(split.messages.iter().map(|message| message.input).sum());
+    entry.output_tokens = entry.output_tokens.max(
+        split
+            .messages
+            .iter()
+            .map(|message| message.output.saturating_sub(message.reasoning))
+            .sum(),
+    );
+    entry.reasoning_tokens = entry
+        .reasoning_tokens
+        .max(split.messages.iter().map(|message| message.reasoning).sum());
+    entry.cache_read_tokens = entry.cache_read_tokens.max(
+        split
+            .messages
+            .iter()
+            .map(|message| message.cache_read)
+            .sum(),
+    );
+    entry.cache_write_tokens = entry.cache_write_tokens.max(
+        split
+            .messages
+            .iter()
+            .map(|message| message.cache_write)
+            .sum(),
+    );
+    entry.days = Some(split.days.clone());
+    entry.hours = split.hours.clone();
+    entry.model_lanes = split.models.clone();
 }
 
 /// Fold a sub-agent's usage into its parent.
@@ -742,6 +806,7 @@ fn fold_subagent_into(parent: &mut UsageEntry, child: &UsageEntry, child_id: &st
                 cost: Some(lane.cost),
                 days: lane.days.clone(),
                 hours: lane.hours.clone(),
+                requests: lane.requests.clone(),
             },
         )
         .collect::<Vec<_>>();
@@ -863,6 +928,7 @@ fn fold_subagent_into(parent: &mut UsageEntry, child: &UsageEntry, child_id: &st
             }),
             days: remainder_days,
             hours: remainder_hours,
+            requests: Vec::new(),
         });
     }
     let priced_hours = model_parts
@@ -943,6 +1009,7 @@ fn entry_whole_hour(entry: &UsageEntry) -> fintwind_protocol::provider_session::
 
 /// The parts of a session row the scan needs. Only these are kept, so the
 /// scan never holds the session list's JSON alive past one page.
+#[derive(Serialize)]
 struct RowFacts {
     kind: SessionKind,
     /// `parentID` for a sub-agent; `None` otherwise.
@@ -1026,7 +1093,7 @@ fn usage_entry_from_row(facts: &RowFacts) -> Option<UsageEntry> {
     let timestamp = facts.updated.max(facts.created);
     Some(UsageEntry {
         timestamp,
-        model: facts.model.clone(),
+        model: None,
         directory: facts.directory.clone(),
         cost: facts.cost,
         input_tokens: facts.tokens[0],
@@ -1048,101 +1115,47 @@ fn usage_entry_from_row(facts: &RowFacts) -> Option<UsageEntry> {
 /// multi-day session's timeline, and the model split that repairs a
 /// model-switching one's ranking. Both come from the same walk, so neither
 /// costs an extra request.
-#[derive(Clone)]
-struct SessionSplit {
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub(crate) struct SessionSplit {
     days: Vec<UsageDayShare>,
     hours: Vec<fintwind_protocol::provider_session::UsageHourShare>,
     models: Vec<UsageModelLane>,
+    messages: Vec<MessageUsage>,
 }
 
-/// A session's per-day split, or `None` when every token already belongs to
-/// `entry.timestamp`'s day.
-///
-/// A session row reports one `time.updated`, so a session that ran from Monday
-/// into Wednesday has all of its spend land on Wednesday — a real distortion
-/// on a daily chart, and one a user can see. Splitting by message repairs it,
-/// but only a small minority of sessions need it: on a real store 486 of 494
-/// were opened and last touched on the same day, so the message walk is run
-/// only for the rest.
-///
-/// Two further gates keep the walk narrow. Sessions older than the chart's
-/// horizon cannot move any mark the page draws, and sessions with no tokens
-/// have nothing to attribute. Everything else is `None`: no request, no
-/// payload, no change to the drawing.
-fn split_entry_days(
-    server: &OpenCodeServer,
+/// Reuse a verified fingerprint or atomically replace the session's message
+/// facts after a complete walk. Failed reads leave the old facts untouched.
+fn indexed_session_split(
+    request: &impl Fn(&str) -> anyhow::Result<Value>,
+    cache: &crate::usage_index::UsageCache,
     session_id: &str,
-    entry: &UsageEntry,
-    created: u64,
-    updated: u64,
-    updated_millis: u64,
-    detailed_day: Option<i64>,
+    facts: &RowFacts,
 ) -> anyhow::Result<Option<SessionSplit>> {
-    if entry.total_tokens() == 0 {
-        return Ok(None);
+    let fingerprint = serde_json::to_string(facts)?;
+    let recent = unix_time().saturating_sub(facts.updated) < 7 * 86_400;
+    if let Some(split) = cache.split(session_id, &fingerprint, recent)? {
+        return Ok(Some(split));
     }
-    let spans_days = local_day(created) != local_day(updated);
-    // Beyond the 26-week heatmap the day split changes no mark, and a session
-    // that ended long ago will not gain activity.
-    let horizon = unix_time().saturating_sub(DAY_SPLIT_HORIZON_DAYS * 86_400);
-    if updated < horizon && created < horizon {
-        return Ok(None);
+    let split = session_day_split(request, session_id)?;
+    if split
+        .as_ref()
+        .is_some_and(|split| split.messages.is_empty())
+        && facts.tokens.iter().any(|tokens| *tokens > 0)
+    {
+        anyhow::bail!("usage messages have not caught up with session {session_id}");
     }
-    // A same-day session needs message timestamps for the hourly plot only
-    // while it overlaps the selectable 30-day window.
-    if !spans_days && detailed_day != Some(local_day(updated)) {
-        return Ok(None);
+    // An empty walk with nonzero summary was rejected above and stays retryable.
+    if let Some(split) = &split {
+        cache.save_split(session_id, &fingerprint, split)?;
     }
-
-    // Preserve milliseconds and row usage: a message can land inside the same
-    // second, and a provider may amend token/cost accounting without moving
-    // the session timestamp.
-    let fingerprint = (
-        updated_millis,
-        entry.total_tokens(),
-        entry.cost.map(f64::to_bits).unwrap_or(0),
-    );
-    let cached = {
-        let cache = usage_day_cache().lock();
-        cache
-            .get(session_id)
-            .and_then(|(cached_at, split)| (*cached_at == fingerprint).then(|| split.clone()))
-    };
-    if let Some(split) = cached {
-        return Ok(split);
-    }
-
-    // Do not cache a failed or empty walk. The message store can catch up to
-    // the session summary without changing its timestamp or token total.
-    let split = match session_day_split(server, session_id) {
-        Ok(split) => split,
-        Err(error)
-            if detailed_day
-                .is_some_and(|day| day >= local_day(created) && day <= local_day(updated)) =>
-        {
-            return Err(error);
-        }
-        Err(error) => {
-            eprintln!("usage day split failed for {session_id}: {error}");
-            return Ok(None);
-        }
-    };
-    let Some(split) = split else {
-        return Ok(None);
-    };
-    let mut cache = usage_day_cache().lock();
-    if cache.len() >= USAGE_CACHE_CEILING {
-        cache.clear();
-    }
-    cache.insert(session_id.to_owned(), (fingerprint, Some(split.clone())));
-    Ok(Some(split))
+    Ok(split)
 }
 
 /// Walk one session's assistant messages, bucketing their tokens by local day
 /// and by model. A failed detail walk is reported to the caller so the page
 /// cannot claim its hourly series is complete when one session was missed.
 fn session_day_split(
-    server: &OpenCodeServer,
+    request: &impl Fn(&str) -> anyhow::Result<Value>,
     session_id: &str,
 ) -> anyhow::Result<Option<SessionSplit>> {
     let mut cursor: Option<String> = None;
@@ -1152,7 +1165,15 @@ fn session_day_split(
     let mut index_of_hour: HashMap<u64, usize> = HashMap::new();
     let mut models: Vec<UsageModelLane> = Vec::new();
     let mut index_of_model: HashMap<String, usize> = HashMap::new();
+    let mut messages = Vec::new();
+    let mut seen = HashSet::new();
+    let mut page_cursors = HashSet::new();
+    let started = std::time::Instant::now();
     for page in 0..MAX_MESSAGE_PAGES {
+        anyhow::ensure!(
+            started.elapsed() < Duration::from_secs(45),
+            "usage message scan exceeded its time budget"
+        );
         let mut path = format!(
             "/api/session/{}/message?limit={PAGE_LIMIT}",
             encode_path_segment(session_id)
@@ -1160,23 +1181,37 @@ fn session_day_split(
         if let Some(token) = &cursor {
             path.push_str(&format!("&cursor={}", encode_path_segment(token)));
         }
-        let response = server
-            .request_with_timeout("GET", &path, None, HTTP_TIMEOUT)
+        let response = request(&path)
             .map_err(|error| anyhow::anyhow!("usage day split failed for {session_id}: {error}"))?;
         let rows = response
             .pointer("/data")
             .and_then(Value::as_array)
             .map(Vec::as_slice)
-            .unwrap_or(&[]);
-        let has_more = response
+            .ok_or_else(|| anyhow::anyhow!("invalid usage message listing for {session_id}"))?;
+        let next = response
             .pointer("/cursor/next")
             .and_then(Value::as_str)
-            .is_some_and(|next| Some(next) != cursor.as_deref());
+            .filter(|next| !next.is_empty());
+        if let Some(next) = next {
+            anyhow::ensure!(
+                page_cursors.insert(next.to_owned()),
+                "usage message cursor repeated for {session_id}"
+            );
+        }
+        let has_more = next.is_some();
+        anyhow::ensure!(
+            !rows.is_empty() || !has_more,
+            "empty usage message page has a continuation cursor"
+        );
 
         for row in rows {
             let Some(usage) = message_usage(row) else {
                 continue;
             };
+            if !seen.insert(usage.id.clone()) {
+                continue;
+            }
+            messages.push(usage.clone());
             let day = local_day(usage.timestamp) as u64;
             match index_of_day.get(&day) {
                 Some(&index) => {
@@ -1240,6 +1275,12 @@ fn session_day_split(
             match index_of_model.get(&model) {
                 Some(&index) => {
                     let existing = &mut models[index];
+                    existing
+                        .requests
+                        .push(fintwind_protocol::provider_session::UsageRequest {
+                            timestamp: usage.timestamp,
+                            tokens,
+                        });
                     existing.total = existing.total.saturating_add(usage.total);
                     existing.cost += usage.cost;
                     for (sum, part) in existing.tokens.iter_mut().zip(tokens) {
@@ -1301,6 +1342,10 @@ fn session_day_split(
                         total: usage.total,
                         cost: usage.cost,
                         tokens,
+                        requests: vec![fintwind_protocol::provider_session::UsageRequest {
+                            timestamp: usage.timestamp,
+                            tokens,
+                        }],
                         days: vec![UsageDayShare {
                             timestamp: usage.timestamp,
                             direct: usage.direct,
@@ -1343,10 +1388,11 @@ fn session_day_split(
     days.sort_by_key(|share| share.timestamp);
     hours.sort_by_key(|share| share.timestamp);
     models.sort_by(|a, b| b.total.cmp(&a.total));
-    Ok((!days.is_empty()).then_some(SessionSplit {
+    Ok(Some(SessionSplit {
         days,
         hours,
         models,
+        messages,
     }))
 }
 
@@ -1360,7 +1406,9 @@ fn message_body(row: &Value) -> &Value {
 /// One assistant message's tokens, the model that produced them, and its
 /// reported cost. User messages carry none, and an aborted turn's all-zero
 /// row would otherwise book a day with no spend, so both are filtered here.
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct MessageUsage {
+    id: String,
     timestamp: u64,
     direct: u64,
     total: u64,
@@ -1399,6 +1447,7 @@ fn message_usage(row: &Value) -> Option<MessageUsage> {
         return None;
     }
     Some(MessageUsage {
+        id: body.get("id").and_then(Value::as_str)?.to_owned(),
         timestamp,
         direct: input.saturating_add(output).saturating_add(reasoning),
         total,
@@ -1432,18 +1481,6 @@ fn message_model(body: &Value) -> Option<String> {
 /// the scan and the aggregation cannot drift apart on DST.
 fn local_day(unix_seconds: u64) -> i64 {
     fintwind_protocol::model::local_day(unix_seconds)
-}
-
-/// Session id → ((last-touched milliseconds, token total, cost bits), split). Keyed by session id
-/// alone because OpenCode's store is one store: ids are unique across
-/// projects, channels, and builds. Cleared wholesale rather than evicted by
-/// age — a full clear is cheaper than the bookkeeping and only costs one
-/// re-split of the spanning sessions.
-fn usage_day_cache() -> &'static Mutex<HashMap<String, ((u64, u64, u64), Option<SessionSplit>)>> {
-    static CACHE: std::sync::OnceLock<
-        Mutex<HashMap<String, ((u64, u64, u64), Option<SessionSplit>)>>,
-    > = std::sync::OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Rename a native session on the server. The GA endpoint table (verified

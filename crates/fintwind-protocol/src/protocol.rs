@@ -273,18 +273,16 @@ pub enum Command {
         session_id: String,
         step_ids: Vec<String>,
     },
-    /// Walk the OpenCode store's whole session list in one pass and collect
-    /// every top-level session's cumulative usage, for the usage statistics
-    /// page. `directory` only anchors which resident server to ask — the
-    /// listing itself is global, so every session in the store is covered
-    /// no matter which project the app is showing. Blocking traversal on
-    /// the daemon; the client aggregates the returned entries itself.
+    /// Read a source-scoped usage snapshot and schedule a single background
+    /// reconciliation if stale. Does not wait for provider or price networks.
     FetchUsageStats {
         binary: PathBuf,
         directory: PathBuf,
-        /// Only this local day needs message-level hourly attribution.
+        /// Legacy hint; all dates now share the same indexed message facts.
         #[serde(default)]
         detailed_day: Option<i64>,
+        #[serde(default)]
+        force_refresh: bool,
     },
     /// Rename a native session on the OpenCode server, so the title matches
     /// what the CLI and TUI show.

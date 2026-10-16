@@ -53,6 +53,7 @@ pub mod skills;
 pub mod terminal;
 pub mod theme;
 pub mod usage;
+pub mod usage_index;
 pub mod workspace;
 pub mod worktree;
 

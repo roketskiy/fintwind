@@ -2477,7 +2477,27 @@ impl Fintwind {
                 .into_any_element();
         }
         let entity = cx.entity().downgrade();
-        div()
+        let selection = self.right_panel_diff_selection.clone();
+        let focus = self.right_panel_diff_menu.trigger_focus_handle().clone();
+        let mouse_focus = focus.clone();
+        let keyboard_menu = self.right_panel_diff_menu.clone();
+        let theme = Theme::current(cx);
+        let reader = div()
+            .id("review-diff-reader")
+            .track_focus(&focus)
+            .tab_index(0)
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                window.focus(&mouse_focus, cx);
+            })
+            .on_key_down(move |event: &KeyDownEvent, window, cx| {
+                if event.keystroke.key == "menu"
+                    || (event.keystroke.key == "f10" && event.keystroke.modifiers.shift)
+                {
+                    keyboard_menu.open_context_menu(window, cx);
+                    cx.stop_propagation();
+                }
+            })
             .flex_1()
             .min_h_0()
             .min_w_0()
@@ -2501,8 +2521,24 @@ impl Fintwind {
             .child(scrollbar::vertical(
                 &self.right_panel_diff_list_state,
                 &self.right_panel_diff_scrollbar,
-            ))
-            .into_any_element()
+            ));
+        context_menu(
+            reader,
+            "review-diff-menu",
+            &self.right_panel_diff_menu,
+            move |_| {
+                let selected = selection.selection.borrow().selected_text();
+                let disabled = selected.is_none();
+                vec![
+                    MenuItem::new(tr!("common.copy_selection"), move |_, cx| {
+                        if let Some(text) = selected.as_ref() {
+                            cx.write_to_clipboard(ClipboardItem::new_string(text.clone()));
+                        }
+                    })
+                    .disabled(disabled),
+                ]
+            },
+        )
     }
 
     /// One reader row: a full-width unified line, or a side-by-side pair.

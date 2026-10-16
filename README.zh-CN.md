@@ -9,11 +9,6 @@
 
 [官网](https://fintwind.xyz) · [下载](https://github.com/roketskiy/fintwind/releases/latest) · [更新日志](CHANGELOG.md)
 
-> [!IMPORTANT]
-> **fintwind 0.2.4 支持 OpenCode 2.0.20。** OpenCode 2 仍在持续变化，
-> 无法保证与更新版本兼容。建议使用下方固定版本的安装命令，不要在未确认兼容性时
-> 直接安装最新版 CLI。OpenCode 1 不是本项目支持的后端。
-
 会话演示：切换模型、进行中的会话，以及滚动一条很长的对话记录。
 
 https://github.com/user-attachments/assets/beb2dcb5-88dd-4f2b-9415-153af9c93bf9
@@ -28,13 +23,13 @@ fintwind 依赖本机的 `opencode` CLI，应用安装包不包含它。
 使用 [Node.js 和 npm](https://nodejs.org/)：
 
 ```powershell
-npm install -g @opencode/cli@2.0.20
+npm install -g @opencode/cli
 ```
 
 或使用 [Bun](https://bun.sh/)：
 
 ```powershell
-bun install -g --trust @opencode/cli@2.0.20
+bun install -g --trust @opencode/cli
 ```
 
 Bun 的 `--trust` 用于允许运行这个包必需的安装脚本。
@@ -48,7 +43,7 @@ opencode --version
 opencode
 ```
 
-确认版本为 `2.0.20`。在 OpenCode 终端界面中通过 `/connect` 连接模型提供商，
+在 OpenCode 终端界面中通过 `/connect` 连接模型提供商，
 或使用已有的提供商配置。fintwind 使用 OpenCode 的模型、提供商凭据和 MCP 配置。
 **无需手动运行 `opencode serve`**：fintwind 会启动自己的本地私有服务。
 

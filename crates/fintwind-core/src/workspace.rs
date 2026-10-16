@@ -66,15 +66,29 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
         WorkspaceOperation::ListProjectFiles { root, cap } => WorkspaceResult::ProjectFiles {
             entries: crate::composer_complete::list_project_files(&root, cap),
         },
-        WorkspaceOperation::DiscoverSlashCommands { project_root, binary } => {
+        WorkspaceOperation::DiscoverSlashCommands {
+            project_root,
+            binary,
+        } => {
             let mut commands = crate::composer_complete::discover_slash_commands(&project_root);
             // The server's registry names config and plugin commands no
             // filesystem scan can see; its entries never carry a template, so
             // a discovered one always keeps its own.
             if let Some(binary) = binary {
-                let reported =
-                    crate::composer_complete::server_commands(&binary, &project_root);
+                let reported = crate::composer_complete::server_commands(&binary, &project_root);
                 commands = crate::composer_complete::merge_reported_commands(&commands, &reported);
+                if let Ok(skills) = crate::skill_prompt::discover_commands(&binary, &project_root) {
+                    // Filesystem discovery cannot reproduce V2 IDs, config
+                    // sources, overrides or built-in skills. The live registry
+                    // is authoritative; retain only non-skill local commands.
+                    commands.retain(|command| {
+                        command.scope != crate::composer_complete::CommandScope::Skill
+                    });
+                    commands.extend(skills);
+                    commands.sort_by(|a, b| {
+                        (a.scope.display_rank(), &a.name).cmp(&(b.scope.display_rank(), &b.name))
+                    });
+                }
             }
             WorkspaceResult::SlashCommands { commands }
         }

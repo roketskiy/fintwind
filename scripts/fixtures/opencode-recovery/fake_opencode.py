@@ -164,6 +164,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_active()
         if path == "/api/model":
             return self.handle_model()
+        if path == "/api/config":
+            return self._json(200, {"data": {}})
+        if path == "/api/command":
+            return self._json(200, {"data": BEHAVIOR.get("commands", [])})
+        if path == "/api/skill":
+            log({"event": "skill_list", "query": self.path})
+            return self._json(BEHAVIOR.get("skills_status", 200),
+                              {"data": BEHAVIOR.get("skills", [])})
         if path == "/api/permission/request":
             return self._json(200, {"data": []})
         if path in ("/api/form", "/api/form/request"):
@@ -184,6 +192,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.handle_create_session()
         if path.endswith("/prompt"):
             return self.handle_prompt(body)
+        if path.endswith("/command"):
+            log({"event": "command", "body": json.loads(body)})
+            return self._json(200, {"data": {"id": "msg_command"}})
         if path.endswith("/generate"):
             return self.handle_generate(body)
         if path.endswith("/agent"):
@@ -433,7 +444,7 @@ class Handler(BaseHTTPRequestHandler):
         if turn is None:
             return self._json(200, {"data": {"id": "msg_unknown", "time": {"created": 0}}})
         log({"event": "steer" if is_steer else "prompt", "turn": index,
-             "sid": sid, "input_id": accepted})
+             "sid": sid, "input_id": accepted, "body": parsed})
         if turn.get("drop_ack"):
             # The input is durably stored, but the acknowledgement never comes
             # back: the connection is torn down instead of answering. The driver

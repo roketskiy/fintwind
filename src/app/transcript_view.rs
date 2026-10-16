@@ -1493,6 +1493,11 @@ impl Fintwind {
                         animate_streaming,
                         &self.transcript_selection,
                     );
+                    let ctx = if message.role == MessageRole::User {
+                        ctx.with_references(self.composer_reference_catalog.clone())
+                    } else {
+                        ctx
+                    };
                     // Human and assistant messages share the Markdown path.
                     // Parse only visible rows rather than doing work for every
                     // driver delta or every off-screen prompt.

@@ -3544,6 +3544,8 @@ fn review_diff_flat_text(line: &crate::review_diff::Line, theme: &Theme) -> md::
         links: Vec::new(),
         code_ranges: Vec::new(),
         math: None,
+        references: Vec::new(),
+        allow_references: false,
     }
 }
 

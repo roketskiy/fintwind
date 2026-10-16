@@ -38,6 +38,7 @@ mod driver;
 mod ely;
 mod input;
 mod md;
+mod mentions;
 mod perf_monitor;
 mod perf_sampler;
 mod platform;

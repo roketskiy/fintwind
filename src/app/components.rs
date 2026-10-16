@@ -547,7 +547,7 @@ fn render_sent_message_attachments(
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(icon("icons/file-types/image.svg", 18.0, theme.text_ghost)),
+                            .child(crate::ui::file_icon("icons/file-types/image.svg", 18.0)),
                     )
                     .on_key_down(move |event: &KeyDownEvent, window, cx| {
                         if event.keystroke.key == "f10" && event.keystroke.modifiers.shift {
@@ -567,7 +567,9 @@ fn render_sent_message_attachments(
                     .items_center()
                     .justify_center()
                     .gap(px(7.0))
-                    .child(icon(icon_path, 18.0, theme.text_tertiary))
+                    .when(!attachment.is_dir, |element| {
+                        element.child(crate::ui::file_icon(icon_path, 18.0))
+                    })
                     .child(
                         div()
                             .w_full()

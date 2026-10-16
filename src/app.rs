@@ -1441,6 +1441,7 @@ pub struct Fintwind {
     mention_files: QueryCache<PathBuf, Vec<FileEntry>>,
     mention_file_index: Rc<Vec<FileEntry>>,
     mention_file_index_path: Option<PathBuf>,
+    composer_reference_catalog: Rc<crate::mentions::Catalog>,
     /// Set when a driver reports its command registry mid-drain; the drain
     /// has no `Context` to rebuild the drawn index itself.
     composer_sources_stale: bool,
@@ -3539,6 +3540,7 @@ impl Fintwind {
                 mention_files: QueryCache::new(MAX_CACHED_WORKSPACES),
                 mention_file_index: Rc::new(Vec::new()),
                 mention_file_index_path: None,
+                composer_reference_catalog: Rc::new(crate::mentions::Catalog::default()),
                 composer_sources_stale: false,
                 composer_autocomplete: autocomplete::AutocompleteUi::new(),
                 image_preview: None,

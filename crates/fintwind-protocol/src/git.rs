@@ -90,6 +90,15 @@ pub struct CommitEntry {
     pub pushed: bool,
 }
 
+/// Changes relative to the first parent, or the empty tree for a root commit.
+/// Binary files count toward `files`, but have no line counts.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CommitStats {
+    pub files: u64,
+    pub additions: u64,
+    pub deletions: u64,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CommitSnapshot {
     pub branch: String,

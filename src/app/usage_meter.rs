@@ -1,5 +1,6 @@
 //! Session context inspector and the compact footer gauge that opens it.
 use crate::theme::ui_px;
+use crate::ui::ActivationExt;
 
 use gpui::{PathBuilder, relative};
 
@@ -124,6 +125,14 @@ impl Fintwind {
             return div().into_any_element();
         };
         let session_id = session.id;
+        let native_session_id = session
+            .provider_cursor
+            .as_ref()
+            .map(ProviderResumeCursor::native_id)
+            .or(session.native_session_id.as_deref())
+            .filter(|id| !id.is_empty())
+            .unwrap_or("—")
+            .to_owned();
         let usage = self.effective_context_usage(session);
         let compaction = session.compaction.clone();
         let model_name = session.model.clone();
@@ -477,6 +486,42 @@ impl Fintwind {
             ));
         }
         body = body.child(model_section);
+        body = body.child(
+            inspector_section(&theme, tr!("usage.opencode_session_id")).child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(4.0))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .font_family(crate::theme::code_font_family())
+                            .child(native_session_id.clone()),
+                    )
+                    .when(native_session_id != "—", |row| {
+                        let focus = self.transcript_control_focus("context-copy-session-id", cx);
+                        row.child(
+                            crate::ui::icon_button(
+                                "context-copy-session-id",
+                                "icons/copy.svg",
+                                theme,
+                            )
+                            .flex_none()
+                            .track_focus(&focus)
+                            .tab_index(0)
+                            .focus_visible(|style| style.border_1().border_color(theme.accent))
+                            .tooltip(Tooltip::text(tr!("common.copy")))
+                            .on_activation(cx, move |this, _, cx| {
+                                cx.write_to_clipboard(ClipboardItem::new_string(
+                                    native_session_id.clone(),
+                                ));
+                                this.show_success_toast(tr!("common.copied"));
+                                cx.notify();
+                            }),
+                        )
+                    }),
+            ),
+        );
 
         if let Some(state) = compaction.filter(|state| state.status == CompactionStatus::Completed)
         {

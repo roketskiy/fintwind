@@ -106,6 +106,29 @@ fn verify_edges(commits: &[CommitEntry], graph: &CommitGraph) -> anyhow::Result<
     Ok(())
 }
 
+// Exercise the daemon entry and wire format, not a duplicate of its parser.
+fn verify_stats(
+    repo: &Path,
+    hash: &str,
+    expected: (u64, u64, u64),
+) -> anyhow::Result<serde_json::Value> {
+    let operation = WorkspaceOperation::ReadCommitStats {
+        cwd: repo.to_path_buf(),
+        hash: hash.to_owned(),
+    };
+    let operation = serde_json::from_slice(&serde_json::to_vec(&operation)?)?;
+    let result = fintwind_core::workspace::execute(operation)?;
+    let result = serde_json::from_slice(&serde_json::to_vec(&result)?)?;
+    let WorkspaceResult::CommitStats { stats } = result else {
+        anyhow::bail!("unexpected commit stats response");
+    };
+    ensure!(
+        (stats.files, stats.additions, stats.deletions) == expected,
+        "incorrect stats for {hash}: {stats:?}, expected {expected:?}"
+    );
+    Ok(json!({ "hash": hash, "stats": stats }))
+}
+
 fn main() -> anyhow::Result<()> {
     let output = std::env::args_os()
         .nth(1)
@@ -131,12 +154,21 @@ fn main() -> anyhow::Result<()> {
         fetch(&repo, 100, None)?.is_some_and(|c| c.is_empty()),
         "unborn repository is not empty"
     );
+    std::fs::write(repo.join("root.txt"), "one\ntwo\n")?;
+    git(&repo, &["add", "root.txt"], None)?;
     let root = commit(&repo, "Root", "2026-01-01T12:00:00Z")?;
+    let root_stats = verify_stats(&repo, &root, (1, 2, 0))?;
     git(&repo, &["branch", "feature"], None)?;
     // Deliberately skew dates; topology, not timestamps, must define row order.
+    std::fs::write(repo.join("root.txt"), "one\nthree\nfour\n")?;
+    git(&repo, &["add", "root.txt"], None)?;
     let main = commit(&repo, "Main change", "2026-01-05T12:00:00Z")?;
+    let main_stats = verify_stats(&repo, &main, (1, 2, 1))?;
     git(&repo, &["checkout", "feature"], None)?;
+    std::fs::write(repo.join("binary.dat"), [0, 1, 2, 0, 3])?;
+    git(&repo, &["add", "binary.dat"], None)?;
     let feature = commit(&repo, "Feature change", "2026-01-03T12:00:00Z")?;
+    let binary_stats = verify_stats(&repo, &feature, (1, 0, 0))?;
     git(&repo, &["checkout", "main"], None)?;
     git(
         &repo,
@@ -144,6 +176,7 @@ fn main() -> anyhow::Result<()> {
         Some("2026-01-02T12:00:00Z"),
     )?;
     let merge = git(&repo, &["rev-parse", "HEAD"], None)?;
+    let merge_stats = verify_stats(&repo, &merge, (1, 0, 0))?;
     git(
         &repo,
         &[
@@ -161,6 +194,7 @@ fn main() -> anyhow::Result<()> {
     )?;
     git(&repo, &["tag", "v1.0.0", &merge], None)?;
     let head = commit(&repo, "Unpushed tip", "2026-01-06T12:00:00Z")?;
+    let empty_stats = verify_stats(&repo, &head, (0, 0, 0))?;
     let commits = fetch(&repo, 100, None)?.context("fixture not recognized as repo")?;
     ensure!(
         commits.len() == 5 && commits[0].hash == head,
@@ -237,11 +271,35 @@ fn main() -> anyhow::Result<()> {
             })
         })
         .collect();
+    git(&repo, &["mv", "root.txt", "renamed.txt"], None)?;
+    let renamed = commit(&repo, "Rename", "2026-01-07T12:00:00Z")?;
+    let rename_stats = verify_stats(&repo, &renamed, (1, 0, 0))?;
+    git(&repo, &["rm", "renamed.txt"], None)?;
+    let deleted = commit(&repo, "Delete", "2026-01-08T12:00:00Z")?;
+    let delete_stats = verify_stats(&repo, &deleted, (1, 0, 3))?;
+    ensure!(
+        fintwind_core::workspace::execute(WorkspaceOperation::ReadCommitStats {
+            cwd: repo.clone(),
+            hash: "--output=unexpected".to_owned(),
+        })
+        .is_err(),
+        "option-shaped hash was accepted"
+    );
+    ensure!(
+        fintwind_core::workspace::execute(WorkspaceOperation::ReadCommitStats {
+            cwd: repo.clone(),
+            hash: "a".repeat(40),
+        })
+        .is_err(),
+        "missing commit was not an error"
+    );
     let report = output.join("commit-graph-report.json");
     std::fs::write(
         &report,
         serde_json::to_vec_pretty(&json!({
             "status": "passed", "fixture": repo, "width": graph.width, "rows": rows,
+            "stats_checks": ["root", "text additions and deletions", "binary", "first-parent merge", "empty commit", "rename", "delete", "invalid hash", "missing commit"],
+            "stats_results": [root_stats, main_stats, binary_stats, merge_stats, empty_stats, rename_stats, delete_stats],
             "checks": ["wire round trip", "empty repository", "clock-skew topology", "merge edges", "stable first-parent lane", "root", "refs and unpushed", "branch filter", "truncation", "invalid revision", "non-repository"],
         }))?,
     )?;

@@ -979,6 +979,10 @@ git_history.error: 无法读取历史
 git_history.empty: 暂无提交
 git_history.empty_description: 此分支没有可显示的提交
 git_history.hash_copied: 已复制 %{hash}
+git_history.copy_hash: 复制 SHA
+git_history.files_changed: "%{count} 个文件"
+git_history.stats_loading: 正在读取变更…
+git_history.stats_error: 无法读取变更
 git_history.refresh: 刷新历史
 git_history.unpushed: 未推送到远程
 git_history.remote_ref: 云端引用
@@ -1345,6 +1349,7 @@ usage.input: 未缓存输入
 usage.reasoning: 推理
 usage.session_total: 会话累计
 usage.window_section: 窗口
+usage.opencode_session_id: OpenCode 会话 ID
 usage.window_size: 档位
 usage.compaction_section: 压缩
 usage.last_compaction: 上次压缩

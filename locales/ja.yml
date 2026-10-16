@@ -1018,6 +1018,10 @@ git_history.error: 履歴を読み込めません
 git_history.empty: コミットはまだありません
 git_history.empty_description: このブランチに表示できるコミットがありません
 git_history.hash_copied: "%{hash} をコピーしました"
+git_history.copy_hash: SHA をコピー
+git_history.files_changed: "%{count} ファイル変更"
+git_history.stats_loading: 変更を読み込み中…
+git_history.stats_error: 変更を読み込めません
 git_history.refresh: 履歴を更新
 git_history.unpushed: リモートに未プッシュ
 git_history.remote_ref: リモート参照
@@ -1395,6 +1399,7 @@ usage.input: 非キャッシュ入力
 usage.reasoning: 推論
 usage.session_total: セッション累計
 usage.window_section: ウィンドウ
+usage.opencode_session_id: OpenCode セッション ID
 usage.window_size: サイズ
 usage.compaction_section: 圧縮
 usage.last_compaction: 前回の圧縮

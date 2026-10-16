@@ -415,6 +415,10 @@ impl Render for Fintwind {
             .on_action(cx.listener(Self::save_right_panel_file_action))
             .on_action(cx.listener(Self::cancel_turn_action))
             .on_action(cx.listener(Self::copy_selection_action))
+            // ComposerInput propagates its own Copy action, not CopySelection.
+            .on_action(cx.listener(|this, _: &crate::input::Copy, window, cx| {
+                this.copy_selection_action(&CopySelection, window, cx);
+            }))
             .on_action(cx.listener(Self::open_find_action))
             .on_action(cx.listener(Self::open_find_replace_action))
             .on_action(cx.listener(Self::close_find_action))

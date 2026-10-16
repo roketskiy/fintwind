@@ -1615,6 +1615,7 @@ pub struct Fintwind {
     /// Selection spans and visible glyph geometry for the Review surface.
     /// Kept separate from the transcript because both surfaces paint at once.
     right_panel_diff_selection: TranscriptSelection,
+    right_panel_diff_menu: ContextMenuHandle,
     right_panel_editor_scroll_handle: ScrollHandle,
     right_panel_editor_scrollbar: Rc<ScrollbarState>,
     right_panel_pending_tab_reveal: Option<usize>,
@@ -3610,6 +3611,7 @@ impl Fintwind {
                 right_panel_diff_list_state: ListState::new(0, ListAlignment::Top, px(512.0)),
                 right_panel_diff_scrollbar: ScrollbarState::new(),
                 right_panel_diff_selection: TranscriptSelection::default(),
+                right_panel_diff_menu: ContextMenuHandle::new(cx),
                 right_panel_editor_scroll_handle: ScrollHandle::new(),
                 right_panel_editor_scrollbar: ScrollbarState::new(),
                 right_panel_pending_tab_reveal: None,

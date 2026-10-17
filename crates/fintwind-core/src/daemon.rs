@@ -2192,6 +2192,10 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
                 "latest": latest,
             }),
         ),
+        DriverEvent::ContextCompositionUpdated(composition) => (
+            "contextCompositionUpdated",
+            serde_json::to_value(composition)?,
+        ),
         DriverEvent::PlanUsageUpdated(usage) => ("planUsageUpdated", serde_json::to_value(usage)?),
         DriverEvent::TurnStatsUpdated(stats) => ("turnStatsUpdated", serde_json::to_value(stats)?),
         DriverEvent::GoalUpdated(state) => ("goalUpdated", serde_json::to_value(state)?),
@@ -2369,6 +2373,9 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
                 prompt_tokens: usage.prompt_tokens,
                 latest: usage.latest,
             }
+        }
+        "contextCompositionUpdated" => {
+            DriverEvent::ContextCompositionUpdated(serde_json::from_value(payload)?)
         }
         "planUsageUpdated" => DriverEvent::PlanUsageUpdated(serde_json::from_value(payload)?),
         "turnStatsUpdated" => DriverEvent::TurnStatsUpdated(serde_json::from_value(payload)?),

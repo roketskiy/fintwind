@@ -62,7 +62,7 @@ impl Fintwind {
     /// driver cached another provider's limit.
     fn effective_context_usage(&self, session: &AgentSession) -> Option<ContextUsage> {
         let configured = self.configured_context_window(session.model.as_deref());
-        let mut usage = session.context_usage;
+        let mut usage = session.context_usage.clone();
         if let Some(window) = configured {
             usage.get_or_insert(ContextUsage::default()).window = Some(window);
         }
@@ -73,7 +73,7 @@ impl Fintwind {
         let session = self.selected_session()?;
         let usage = self.effective_context_usage(session);
         let theme = Theme::current(cx);
-        let percent = usage.and_then(context_percent);
+        let percent = usage.as_ref().and_then(context_percent);
         let fill = match percent {
             Some(percent) if percent >= 95.0 => theme.danger,
             Some(percent) if percent >= 80.0 => theme.warning,
@@ -139,7 +139,7 @@ impl Fintwind {
         let selected_window = session.context_window.clone();
         let model = self.model_metadata_for_session(session).cloned();
         let can_compact = self.runtimes.contains_key(&session_id);
-        let percent = usage.and_then(context_percent);
+        let percent = usage.as_ref().and_then(context_percent);
         let status = match percent {
             Some(value) if value >= 95.0 => Some(tr!("usage.full")),
             Some(value) if value >= 80.0 => Some(tr!("usage.near_full")),
@@ -151,7 +151,7 @@ impl Fintwind {
             Some(value) if value >= 80.0 => theme.warning_text,
             _ => theme.text_secondary,
         };
-        let (headline, capacity, hint) = match usage {
+        let (headline, capacity, hint) = match usage.as_ref() {
             Some(usage)
                 if (usage.measured || usage.tokens > 0)
                     && usage.window.is_some_and(|window| window > 0) =>
@@ -303,7 +303,7 @@ impl Fintwind {
             });
         body = body.child(hero);
 
-        if let Some(latest) = usage.and_then(|usage| usage.latest) {
+        if let Some(latest) = usage.as_ref().and_then(|usage| usage.latest) {
             // Providers may report `tokens.total` independently of the split.
             // Percentages in this section describe only the reported split.
             let total = latest
@@ -372,8 +372,9 @@ impl Fintwind {
             body = body.child(section);
         }
 
-        if let Some(usage) =
-            usage.filter(|usage| usage.total_tokens.is_some() || usage.prompt_tokens.is_some())
+        if let Some(usage) = usage
+            .as_ref()
+            .filter(|usage| usage.total_tokens.is_some() || usage.prompt_tokens.is_some())
         {
             let mut section = inspector_section(&theme, tr!("usage.session_total"));
             if let Some(total) = usage.total_tokens {
@@ -471,14 +472,14 @@ impl Fintwind {
                     .unwrap_or_else(|| selected.to_owned());
                 model_section =
                     model_section.child(inspector_row(&theme, tr!("usage.window_size"), label));
-            } else if let Some(window) = usage.and_then(|usage| usage.window) {
+            } else if let Some(window) = usage.as_ref().and_then(|usage| usage.window) {
                 model_section = model_section.child(inspector_row(
                     &theme,
                     tr!("usage.window_size"),
                     format_tokens(window),
                 ));
             }
-        } else if let Some(window) = usage.and_then(|usage| usage.window) {
+        } else if let Some(window) = usage.as_ref().and_then(|usage| usage.window) {
             model_section = model_section.child(inspector_row(
                 &theme,
                 tr!("usage.window_size"),
@@ -645,7 +646,7 @@ fn inspector_row(theme: &Theme, label: String, value: String) -> Div {
         .child(div().text_color(theme.text).child(value))
 }
 
-fn context_percent(usage: ContextUsage) -> Option<f64> {
+fn context_percent(usage: &ContextUsage) -> Option<f64> {
     if !usage.measured && usage.tokens == 0 {
         return None;
     }

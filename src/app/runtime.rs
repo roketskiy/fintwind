@@ -2288,10 +2288,19 @@ impl Fintwind {
     /// so one crossing compacts exactly once. The provider's own near-limit
     /// auto compaction stays armed regardless; a session that never reaches
     /// the threshold stays on that default.
-    pub(super) fn maybe_auto_compact_session(&mut self, session_id: Uuid, tokens: u64) {
+    pub(super) fn maybe_auto_compact_session(
+        &mut self,
+        session_id: Uuid,
+        tokens: u64,
+        driver: &DriverHandle,
+        allow_request: bool,
+    ) {
         let threshold = self.state.auto_compact_threshold_tokens.max(1);
         if !self.state.auto_compact_enabled || tokens < threshold {
             self.auto_compacted_sessions.remove(&session_id);
+            return;
+        }
+        if !allow_request {
             return;
         }
         let already_running = self
@@ -2304,14 +2313,6 @@ impl Fintwind {
         if already_running || !self.auto_compacted_sessions.insert(session_id) {
             return;
         }
-        let Some(driver) = self
-            .runtimes
-            .get(&session_id)
-            .map(|runtime| runtime.driver.clone())
-        else {
-            self.auto_compacted_sessions.remove(&session_id);
-            return;
-        };
         driver.compact();
         if self.state.selected_session == Some(session_id) {
             self.show_toast(tr!("session.auto_compaction_started"));
@@ -2327,6 +2328,8 @@ impl Fintwind {
         session_id: Uuid,
         key: &BackgroundWorkKey,
         tokens: Option<u64>,
+        driver: &DriverHandle,
+        allow_request: bool,
     ) {
         let fingerprint = (session_id, key.provider_id.clone());
         let threshold = self.state.auto_compact_threshold_tokens.max(1);
@@ -2336,25 +2339,16 @@ impl Fintwind {
             self.auto_compacted_children.remove(&fingerprint);
             return;
         }
-        if !self.auto_compacted_children.insert(fingerprint.clone()) {
+        if !allow_request {
             return;
         }
         let live = self
             .background_work
             .get(&session_id)
             .is_some_and(|registry| registry.is_live(key));
-        if !live {
+        if !live || !self.auto_compacted_children.insert(fingerprint) {
             return;
         }
-        let Some(driver) = self
-            .runtimes
-            .get(&session_id)
-            .map(|runtime| runtime.driver.clone())
-        else {
-            self.auto_compacted_children.remove(&fingerprint);
-            self.mark_background_work_lost(session_id);
-            return;
-        };
         driver.compact_child(key.provider_id.clone());
         if self.state.selected_session == Some(session_id) {
             self.show_toast(tr!("session.auto_compaction_started"));
@@ -3345,6 +3339,7 @@ impl Fintwind {
             | DriverEvent::SteerAccepted { .. }
             | DriverEvent::SteerRejected { .. }
             | DriverEvent::UsageUpdated { .. }
+            | DriverEvent::ContextCompositionUpdated(_)
             | DriverEvent::PlanUsageUpdated(_)
             | DriverEvent::TurnStatsUpdated(_)
             | DriverEvent::CompactionUpdated(_)

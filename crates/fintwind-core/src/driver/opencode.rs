@@ -864,6 +864,11 @@ impl OpenCodeDriver {
         let previous_info = previous_usage
             .as_ref()
             .and_then(|messages| latest_opencode_usage_message(messages).cloned());
+        if let Ok(Some(composition)) =
+            crate::context_plugin::get(&server, &location_directory, &session_id)
+        {
+            let _ = events.send(DriverEvent::ContextCompositionUpdated(composition));
+        }
         if let Some(info) = previous_info.as_ref() {
             if let Some(model) = opencode_message_model_key(info) {
                 *usage_metadata.last_model.lock() = Some(model);
@@ -1096,6 +1101,7 @@ impl OpenCodeDriver {
         // Readers do not own the private process. A weak liveness check
         // distinguishes actual process exit from a reconnectable SSE fault.
         let stream_port = server.port;
+        let stream_directory = location_directory.clone();
         let stream_session = session_id.clone();
         let stream_events = events.clone();
         let stream_event_sink = stream_events.clone();
@@ -1116,6 +1122,7 @@ impl OpenCodeDriver {
             .name("fintwind-opencode-events".into())
             .spawn(move || {
                 let mut state = OpenCodeStreamState {
+                    directory: stream_directory,
                     usage_metadata: stream_usage_metadata,
                     permissions: stream_permissions,
                     forms: stream_forms,
@@ -2241,6 +2248,7 @@ struct PendingSubagent {
 
 #[derive(Default)]
 struct OpenCodeStreamState {
+    directory: String,
     tools: HashMap<String, (ActivityKind, String)>,
     /// The command and workdir a shell tool call is running, keyed by call
     /// id. The success event names the detached shell but not the command
@@ -3685,6 +3693,12 @@ fn handle_event(
                     cache_read,
                     prompt_tokens,
                 });
+            }
+            if !state.directory.is_empty()
+                && let Ok(Some(composition)) =
+                    crate::context_plugin::get_on_port(port, &state.directory, session_id)
+            {
+                let _ = events.send(DriverEvent::ContextCompositionUpdated(composition));
             }
             step_ended_turn_stats(payload, state);
         }

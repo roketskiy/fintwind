@@ -26,6 +26,7 @@ mod browser_tools_transport;
 pub mod checkpoint;
 pub mod command_env;
 pub mod composer_complete;
+mod context_plugin;
 pub mod daemon;
 pub mod driver;
 pub mod git_actions;

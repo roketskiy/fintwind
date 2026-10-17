@@ -907,10 +907,12 @@ pub(super) fn changed_files_inline_message_index(
     }
 
     let message_index = session.messages.iter().rposition(|message| {
-        message.role == MessageRole::Assistant && message.turn_id == Some(turn_id)
+        matches!(message.role, MessageRole::User | MessageRole::Assistant)
+            && message.turn_id == Some(turn_id)
     })?;
     let message = &session.messages[message_index];
-    (!message.content.trim().is_empty()
+    (message.role == MessageRole::Assistant
+        && !message.content.trim().is_empty()
         && assistant_response_footer_index(session, message_index) == Some(message_index))
     .then_some(message_index)
 }
@@ -1194,7 +1196,7 @@ fn mix_turn_id(hash: u64, turn_id: Option<Uuid>) -> u64 {
 
 /// A settled turn presents its answer — the trailing run of assistant text —
 /// under a single work summary row standing in for everything that came
-/// before it: reasoning, tool activity and interim commentary alike.
+/// before it: reasoning, tool activity, interim commentary and user guidance alike.
 ///
 /// That summary belongs at the *top* of the turn, where the work began. It
 /// used to be anchored at the first row it hid, which left it stranded mid-turn
@@ -1344,11 +1346,9 @@ pub(super) fn folded_transcript_row_kinds_with_retry(
     with_changes
 }
 
-/// The rows the turn *produced*, in transcript order: its assistant text parts
-/// merged with its blocks at their anchors, exactly the turn's subsequence of
-/// [`transcript_row_kinds`]. The user's prompt opens a turn and carries its id,
-/// but it is the heading the fold sits under, never part of what folds away —
-/// so it is not one of the turn's rows.
+/// The turn's assistant text, in-turn user guidance and anchored blocks, in
+/// transcript order. Only the opening user prompt stays outside the fold as
+/// its heading; subsequent user messages belong to the work they guided.
 ///
 /// Both the fold and the response footer's copy content derive from this, so
 /// what gets copied is by construction what the fold leaves visible.
@@ -1368,12 +1368,19 @@ fn turn_rows(session: &AgentSession, turn_id: Uuid) -> Vec<TranscriptRowKind> {
     let mut blocks = blocks.into_iter().peekable();
 
     let mut rows = Vec::new();
+    let mut prompt_seen = false;
     for (message_index, message) in session.messages.iter().enumerate() {
         while let Some((_, block_index)) = blocks.next_if(|(anchor, _)| *anchor <= message_index) {
             rows.push(TranscriptRowKind::TurnBlock(block_index));
         }
-        if message.role == MessageRole::Assistant && message.turn_id == Some(turn_id) {
-            rows.push(TranscriptRowKind::Message(message_index));
+        if message.turn_id == Some(turn_id) {
+            match message.role {
+                MessageRole::User if !prompt_seen => prompt_seen = true,
+                MessageRole::User | MessageRole::Assistant => {
+                    rows.push(TranscriptRowKind::Message(message_index));
+                }
+                _ => {}
+            }
         }
     }
     rows.extend(blocks.map(|(_, block_index)| TranscriptRowKind::TurnBlock(block_index)));
@@ -1389,10 +1396,11 @@ fn turn_rows(session: &AgentSession, turn_id: Uuid) -> Vec<TranscriptRowKind> {
 /// no answer, and all of it folds.
 fn turn_answer_start(session: &AgentSession, turn_rows: &[TranscriptRowKind]) -> usize {
     let is_answer_text = |row: &TranscriptRowKind| match *row {
-        TranscriptRowKind::Message(message_index) => session
-            .messages
-            .get(message_index)
-            .is_some_and(|message| !message.content.trim().is_empty()),
+        TranscriptRowKind::Message(message_index) => {
+            session.messages.get(message_index).is_some_and(|message| {
+                message.role == MessageRole::Assistant && !message.content.trim().is_empty()
+            })
+        }
         TranscriptRowKind::TurnBlock(_)
         | TranscriptRowKind::TurnFold(_)
         | TranscriptRowKind::ChangedFiles(_)
@@ -1404,6 +1412,13 @@ fn turn_answer_start(session: &AgentSession, turn_rows: &[TranscriptRowKind]) ->
     let Some(last_text) = turn_rows.iter().rposition(is_answer_text) else {
         return turn_rows.len();
     };
+    // If the turn stopped after further guidance, its earlier text did not
+    // answer that guidance. Keep the whole unfinished exchange in the fold.
+    if turn_rows[last_text + 1..].iter().any(|row| {
+        matches!(*row, TranscriptRowKind::Message(index) if session.messages[index].role == MessageRole::User)
+    }) {
+        return turn_rows.len();
+    }
     turn_rows[..last_text]
         .iter()
         .rposition(|row| !is_answer_text(row))

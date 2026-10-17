@@ -3000,3 +3000,15 @@ goal.duration_hours:
   en: "%{h}h %{m}m"
 goal.last_result:
   en: "Latest result: %{reason}"
+usage.healthy:
+  en: Healthy
+usage.unclassified_context:
+  en: Unclassified
+usage.used_context:
+  en: Context used
+usage.available_context:
+  en: Available
+usage.unknown_context:
+  en: Unknown context
+usage.below_min_percent:
+  en: <0.001%

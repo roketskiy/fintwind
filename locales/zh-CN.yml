@@ -1500,3 +1500,9 @@ goal.duration_seconds: "%{count} 秒"
 goal.duration_minutes: "%{count} 分钟"
 goal.duration_hours: "%{h} 小时 %{m} 分"
 goal.last_result: "最近结果：%{reason}"
+usage.healthy: 正常
+usage.unclassified_context: 未分类
+usage.used_context: 已用上下文
+usage.available_context: 可用
+usage.unknown_context: 未知上下文
+usage.below_min_percent: <0.001%

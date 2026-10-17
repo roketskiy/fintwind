@@ -1551,3 +1551,9 @@ goal.duration_seconds: "%{count} 秒"
 goal.duration_minutes: "%{count} 分"
 goal.duration_hours: "%{h} 時間 %{m} 分"
 goal.last_result: "最新の結果：%{reason}"
+usage.healthy: 正常
+usage.unclassified_context: 未分類
+usage.used_context: 使用済みコンテキスト
+usage.available_context: 利用可能
+usage.unknown_context: 不明なコンテキスト
+usage.below_min_percent: <0.001%

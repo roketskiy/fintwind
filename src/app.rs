@@ -2462,13 +2462,11 @@ impl Fintwind {
             .selected_session()
             .and_then(|session| session.goal.as_ref())
             .filter(|goal| {
-                self.state.goal_enabled && goal.status != fintwind_protocol::goal::GoalStatus::Done
+                self.state.goal_enabled
+                    && goal.status == fintwind_protocol::goal::GoalStatus::Active
             })
-            .and_then(|goal| goal.started_at)
-            .map(|started_at| {
-                let elapsed = now.saturating_sub(started_at);
-                if elapsed < 60 { 1 } else { 60 - elapsed % 60 }
-            });
+            .and_then(|goal| goal.elapsed_seconds_at(now))
+            .map(|elapsed| if elapsed < 60 { 1 } else { 60 - elapsed % 60 });
         let target = next_time_label_change(&self.state.sessions, now)
             .into_iter()
             .chain(goal_seconds)

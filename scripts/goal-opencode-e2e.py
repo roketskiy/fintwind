@@ -424,6 +424,10 @@ def main():
                      {"input": {"sessionID": session, "action": {"type": action, **kwargs}}})
         return result["output"]
 
+    def goal_elapsed(state):
+        running = max(0, int(time.time()) - state["activeSince"]) if state["status"] == "active" else 0
+        return state["elapsedSeconds"] + running
+
     def context_messages(session):
         return api("GET", f"/api/session/{session}/context" + query)["data"]
 
@@ -641,6 +645,35 @@ def main():
         assert control(first, "get")["status"] == "paused" and len(MODEL.calls) == frozen, MODEL.calls[frozen - 3:]
         check("pausing while a settlement is pending prevents stale continuation")
         MODEL.configure("hold", hold_at=2)
+        timer_start = control(first, "start", objective="Accumulate active Goal time across pauses.")
+        assert timer_start["elapsedSeconds"] == 0, timer_start
+        assert MODEL.entered.wait(20)
+        running_clock = wait_for("active Goal clock", lambda: control(first, "get"),
+                                 lambda state: goal_elapsed(state) >= 2)
+        time.sleep(1.2)
+        assert control(first, "get") == running_clock, "Clock checkpoints must not publish new Goal revisions"
+        timer_pause = control(first, "pause")
+        assert timer_pause["startedAt"] == timer_start["startedAt"] and "activeSince" not in timer_pause
+        time.sleep(1.2)
+        assert control(first, "get") == timer_pause
+        MODEL.release.set()
+        time.sleep(1)
+        MODEL.configure("hold", hold_at=2)
+        timer_resume = control(first, "resume")
+        assert timer_resume["startedAt"] == timer_start["startedAt"], (timer_start, timer_resume)
+        assert timer_resume["elapsedSeconds"] == timer_pause["elapsedSeconds"], (timer_pause, timer_resume)
+        assert MODEL.entered.wait(20)
+        wait_for("resumed Goal clock", lambda: control(first, "get"),
+                 lambda state: goal_elapsed(state) >= timer_pause["elapsedSeconds"] + 2)
+        manual_done = control(first, "complete")
+        assert manual_done["status"] == "done" and manual_done["completedAt"] >= timer_start["startedAt"]
+        assert "activeSince" not in manual_done and manual_done["elapsedSeconds"] >= timer_pause["elapsedSeconds"] + 2
+        time.sleep(1.2)
+        assert control(first, "get") == manual_done
+        MODEL.release.set()
+        time.sleep(1)
+        check("Goal clock freezes on pause, resumes cumulatively, and freezes with a manual completion timestamp")
+        MODEL.configure("hold", hold_at=2)
         control(first, "start", objective="An old objective with a pending settlement.")
         assert MODEL.entered.wait(20)
         with MODEL.lock:
@@ -655,14 +688,20 @@ def main():
         check("a replacement goal settles on its own generation")
         control(first, "pause")
         MODEL.configure("done")
-        control(first, "resume")
-        wait_for("resume completion", lambda: control(first, "get"), lambda state: state and state["status"] == "done")
+        resumed = control(first, "resume")
+        assert resumed["startedAt"] == replacement["startedAt"] and resumed["elapsedSeconds"] == replacement["elapsedSeconds"]
+        resumed_done = wait_for("resume completion", lambda: control(first, "get"), lambda state: state and state["status"] == "done")
+        assert resumed_done["turns"] > replacement["turns"] and resumed_done["tools"] > replacement["tools"]
+        assert resumed_done["elapsedSeconds"] >= replacement["elapsedSeconds"]
         check("explicit resume starts a new execution")
         MODEL.configure("blocked")
         control(first, "start", objective="Recognize an external blocker.")
         blocked_state = wait_for("blocked report", lambda: control(first, "get"), lambda state: state and state["status"] == "blocked")
         assert blocked_state["reason"] == "Scripted verification.", blocked_state
         check("a blocked report stops automatic continuation")
+        time.sleep(1.2)
+        assert control(first, "get") == blocked_state and "activeSince" not in blocked_state
+        check("a blocked Goal freezes its active time")
         MODEL.configure("malformed")
         calls_mark = len(MODEL.calls)
         reminders_before = synthetic_count(first, REMINDER_MARKER)
@@ -708,6 +747,13 @@ def main():
                           lambda state: state and state["status"] == "paused", timeout=90)
         assert budget["turns"] == 20 and MODEL.replies == 20, (budget, MODEL.replies)
         check("the fixed twenty-turn budget stops a continuously progressing worker")
+        MODEL.configure("done")
+        control(first, "resume")
+        after_budget = wait_for("resume after budget", lambda: control(first, "get"),
+                                lambda state: state and state["status"] == "done")
+        assert after_budget["turns"] == budget["turns"] + 1 and after_budget["tools"] > budget["tools"]
+        assert after_budget["startedAt"] == budget["startedAt"] and after_budget["elapsedSeconds"] >= budget["elapsedSeconds"]
+        check("resume grants a new turn budget while preserving cumulative Goal metrics")
         saved = control(first, "pause")
         child.close()
         replacement_plugin = OUTPUT / "rematerialized-goal-plugin"
@@ -749,7 +795,12 @@ def main():
         MODEL.configure("hold", hold_at=2)
         control(first, "start", objective="Do not restart active goals automatically.")
         assert MODEL.entered.wait(20)
+        checkpoint = wait_for("durable Goal clock checkpoint", lambda: control(first, "get"),
+                              lambda state: goal_elapsed(state) >= 2)
+        checkpoint_elapsed = goal_elapsed(checkpoint)
+        assert control(first, "get") == checkpoint, "Clock polling must not change the public revision or snapshot"
         child.close()
+        time.sleep(1.2)
         MODEL.release.set()
         MODEL.configure("done")
         child = OwnedProcess(binary, ["serve", "--hostname", "127.0.0.1", "--port", str(port)], work, env)
@@ -759,12 +810,39 @@ def main():
                                     for p in result.get("data", [])))
         recovered = control(first, "get")
         assert recovered["status"] == "paused", recovered
+        assert abs(recovered["elapsedSeconds"] - checkpoint_elapsed) <= 1 and "activeSince" not in recovered
+        assert recovered["startedAt"] == checkpoint["startedAt"]
+        check("restart retains the saved Goal clock without counting offline time")
         frozen = len(MODEL.calls)
         time.sleep(0.5)
         assert len(MODEL.calls) == frozen, MODEL.calls[frozen:]
         check("a previously active goal requires explicit resume after server restart")
+        child.close()
+        legacy_goal = {**recovered, "startedAt": int(time.time()) - 120,
+                       "lastEvent": "", "lastText": "", "stalled": 0, "repeats": 0}
+        legacy_goal.pop("elapsedSeconds", None)
+        legacy_goal.pop("activeSince", None)
+        legacy_record = {"revision": recovered["revision"], "goal": legacy_goal}
+        migration_source = (ROOT / "resources/opencode-goal-plugin.ts").read_text(encoding="utf-8")
+        migration_source = migration_source.replace("export default {", "const goalPlugin = {", 1)
+        migration_source += ("\nexport default {id: goalPlugin.id, async setup(ctx: Context) {\n"
+                             + "await ctx.storage.set(" + json.dumps("session:" + first) + ", "
+                             + json.dumps(legacy_record) + ");\nreturn goalPlugin.setup(ctx);\n}};\n")
+        (replacement_plugin / "index.ts").write_text(migration_source, encoding="utf-8")
+        child = OwnedProcess(binary, ["serve", "--hostname", "127.0.0.1", "--port", str(port)], work, env)
+        wait_for("legacy migration OpenCode", ready, timeout=45)
+        api("GET", f"/api/session/{first}" + query)
+        wait_for("legacy migration plugin", lambda: api("GET", "/api/plugin" + query),
+                 lambda result: any(p.get("id") == "fintwind.goal" and p.get("state", {}).get("status") == "active"
+                                    for p in result.get("data", [])))
+        migrated = control(first, "get")
+        assert migrated["status"] == "paused" and migrated["elapsedSeconds"] >= 120, migrated
+        assert migrated["startedAt"] == legacy_goal["startedAt"] and "activeSince" not in migrated
+        time.sleep(1.2)
+        assert control(first, "get") == migrated
+        check("legacy paused Goals migrate once and stop accumulating paused time")
         assert MODEL.judges == 0, MODEL.calls[-5:]
-        assert len(checks) == 32, checks
+        assert len(checks) == 37, checks
         (OUTPUT / "report.json").write_text(json.dumps({"status": "passed", "surface": "real-opencode-scripted-provider",
               "nativeUI": "not exercised", "checks": checks, "info": info, "pluginState": plugins,
               "completedGoal": done}, indent=2), encoding="utf-8")

@@ -195,14 +195,10 @@ impl Fintwind {
             GoalStatus::Blocked => tr!("goal.blocked"),
         };
         let status_color = theme.text_secondary;
-        let duration = goal.started_at.map(|started_at| {
+        let duration = goal.elapsed_seconds_at(unix_time()).map(|elapsed| {
             tr!(
                 "goal.card_duration",
-                duration = Self::format_goal_duration(
-                    goal.completed_at
-                        .unwrap_or_else(unix_time)
-                        .saturating_sub(started_at)
-                )
+                duration = Self::format_goal_duration(elapsed)
             )
         });
         let action = if active {
@@ -388,11 +384,7 @@ impl Fintwind {
                             .flex_col()
                             .gap(px(5.0))
                             .child(div().text_color(theme.text).child(goal.objective.clone()))
-                            .child(tr!(
-                                "goal.executions",
-                                count = goal.turns,
-                                limit = goal.max_turns
-                            ))
+                            .child(tr!("goal.card_run", count = goal.turns))
                             .when(!goal.reason.is_empty(), |details| {
                                 details.child(tr!(
                                     "goal.last_result",

@@ -2071,9 +2071,7 @@ impl Fintwind {
             ));
         }
         if let Some(duration) = goal
-            .started_at
-            .zip(goal.completed_at)
-            .map(|(started, completed)| completed.saturating_sub(started))
+            .elapsed_seconds_at(unix_time())
             .filter(|seconds| *seconds > 0)
         {
             metadata.push(tr!(

@@ -605,7 +605,7 @@ pub struct AgentTurn {
 /// the meter degrades to a bare token count. The optional tail carries the
 /// session's cumulative token throughput and cache split; each stays `None`
 /// until the provider first reports it.
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct ContextUsage {
     pub tokens: u64,
     /// Window metadata may arrive before the first measured model call.
@@ -631,6 +631,22 @@ pub struct ContextUsage {
     /// Breakdown of the latest settled call, not session-wide throughput.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latest: Option<LatestCallUsage>,
+    /// Estimated composition of the latest captured OpenCode request. It is
+    /// separate from provider billing counters because those describe a
+    /// different domain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition: Option<ContextComposition>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ContextComposition {
+    pub model: String,
+    pub system: u64,
+    pub tools: u64,
+    pub memory: u64,
+    pub messages: u64,
+    #[serde(default)]
+    pub incomplete: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -1881,6 +1897,9 @@ pub enum DriverEvent {
         prompt_tokens: Option<u64>,
         latest: Option<LatestCallUsage>,
     },
+    /// Estimated semantic composition captured from OpenCode's assembled
+    /// context hook. These are relative estimates, not provider token counts.
+    ContextCompositionUpdated(ContextComposition),
     /// Account-level rate-limit meters carried by the provider's own stream
     /// (Codex's `account/rateLimits/updated`). Same shape the OAuth fetcher
     /// produces for Claude, so the panel renders both identically.

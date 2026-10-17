@@ -2566,8 +2566,17 @@ impl Fintwind {
         cx: &mut App,
         daemon: fintwind_client::DaemonSupervisor,
     ) -> Entity<Self> {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let store = StateStore::remote(daemon.clone());
+        Self::new_with_store(window, cx, daemon, store)
+    }
+
+    fn new_with_store(
+        window: &mut Window,
+        cx: &mut App,
+        daemon: fintwind_client::DaemonSupervisor,
+        store: StateStore,
+    ) -> Entity<Self> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let composer_draft_store = ComposerDraftStore::remote(daemon.clone());
         let composer_drafts = composer_draft_store.load().unwrap_or_default();
         let mut state = store.load_or_fresh(cwd);
@@ -3962,3 +3971,6 @@ impl Fintwind {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod auto_compaction_e2e;

@@ -507,7 +507,7 @@ impl Fintwind {
 
     /// Returns whether the runtime should remain attached after this event.
     ///
-    /// `allow_queue_drain` is false when the caller is flushing buffered
+    /// `allow_follow_up_work` is false when the caller is flushing buffered
     /// events for a turn the user just stopped: a settling event must not
     /// start queued follow-ups then, because the user asked to stop, not to
     /// continue.
@@ -516,7 +516,7 @@ impl Fintwind {
         session_id: Uuid,
         runtime: &mut SessionRuntime,
         event: DriverEvent,
-        allow_queue_drain: bool,
+        allow_follow_up_work: bool,
         cx: &mut Context<Self>,
     ) -> bool {
         let preparing = self.submission_preparations.contains(&session_id)
@@ -542,6 +542,7 @@ impl Fintwind {
                     | DriverEvent::AgentPresetSelected(_)
                     | DriverEvent::BackgroundWork(_)
                     | DriverEvent::UsageUpdated { .. }
+                    | DriverEvent::ContextCompositionUpdated(_)
                     | DriverEvent::PlanUsageUpdated(_)
                     | DriverEvent::ProcessExited
             )
@@ -845,7 +846,33 @@ impl Fintwind {
                 // Background work is session state, not turn output. It must
                 // survive a settled or rewound turn and therefore bypasses
                 // `accepts_turn_output` deliberately.
+                let auto_compact_probe = match &event {
+                    BackgroundWorkEvent::Upsert(item)
+                        if item.key.kind == BackgroundWorkKind::Subagent =>
+                    {
+                        Some((item.key.clone(), item.context_tokens))
+                    }
+                    BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
+                        key,
+                        ..
+                    }) => {
+                        self.auto_compacted_children.retain(|(session, provider)| {
+                            *session != session_id || *provider != key.provider_id
+                        });
+                        None
+                    }
+                    _ => None,
+                };
                 self.handle_background_work_event(session_id, event);
+                if let Some((key, tokens)) = auto_compact_probe {
+                    self.maybe_auto_compact_child(
+                        session_id,
+                        &key,
+                        tokens,
+                        &runtime.driver,
+                        allow_follow_up_work,
+                    );
+                }
             }
             DriverEvent::Permission {
                 request_id,
@@ -949,7 +976,7 @@ impl Fintwind {
                             .queued_messages
                             .insert(0, submission.into_queued_message());
                     }
-                    if allow_queue_drain {
+                    if allow_follow_up_work {
                         self.pending_queue_drains.push(session_id);
                     }
                 } else {
@@ -1022,7 +1049,27 @@ impl Fintwind {
                 // updated` carries totals, never the live context), so this
                 // is naturally once per step, not per delta.
                 if let Some(tokens) = context_tokens {
-                    self.maybe_auto_compact_session(session_id, tokens);
+                    self.maybe_auto_compact_session(
+                        session_id,
+                        tokens,
+                        &runtime.driver,
+                        allow_follow_up_work,
+                    );
+                }
+            }
+            DriverEvent::ContextCompositionUpdated(composition) => {
+                if let Some(session) = self.state.session_mut(session_id) {
+                    let model_matches = session
+                        .model
+                        .as_deref()
+                        .is_none_or(|model| model == composition.model);
+                    if model_matches {
+                        session
+                            .context_usage
+                            .get_or_insert(ContextUsage::default())
+                            .composition = Some(composition);
+                        self.state.mark_session_dirty(session_id);
+                    }
                 }
             }
             DriverEvent::GoalUpdated(goal) => {
@@ -1211,7 +1258,7 @@ impl Fintwind {
                 }
                 runtime.driver.refresh_background_work();
                 self.capture_latest_turn_checkpoint_for(session_id);
-                if allow_queue_drain && success {
+                if allow_follow_up_work && success {
                     // Start the next queued follow-up once the runtime has
                     // been re-inserted so the same process is reused.
                     self.pending_queue_drains.push(session_id);

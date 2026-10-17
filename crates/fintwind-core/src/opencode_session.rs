@@ -458,6 +458,7 @@ pub(crate) struct OpenCodeServer {
     pub(crate) browser_tools: Option<Arc<crate::browser_tools::BrowserToolServer>>,
     _browser_plugin: Option<crate::browser_plugin::BrowserPlugin>,
     _goal_plugin: crate::goal_plugin::GoalPlugin,
+    _context_plugin: crate::context_plugin::ContextPlugin,
     pub(crate) port: u16,
 }
 
@@ -508,12 +509,13 @@ impl OpenCodeServer {
         let port = listener.local_addr()?.port();
         drop(listener);
 
+        let context_plugin = crate::context_plugin::ContextPlugin::create(cwd)?;
         let goal_plugin = crate::goal_plugin::GoalPlugin::create(cwd)?;
         let inherited_config = environment
             .iter()
             .find(|(name, _)| name == "OPENCODE_CONFIG_CONTENT")
             .map(|(_, value)| value.as_str());
-        let config = goal_plugin.config(inherited_config)?;
+        let config = context_plugin.config(Some(&goal_plugin.config(inherited_config)?))?;
         let mut command = crate::command_env::command(binary);
         for (name, value) in environment {
             command.env(name, value);
@@ -561,6 +563,7 @@ impl OpenCodeServer {
             browser_tools,
             _browser_plugin: browser_plugin,
             _goal_plugin: goal_plugin,
+            _context_plugin: context_plugin,
             port,
         };
         if let Some(tools) = &server.browser_tools {

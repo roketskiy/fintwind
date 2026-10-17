@@ -1103,32 +1103,11 @@ impl Fintwind {
             ) => Some(key.clone()),
             _ => None,
         };
-        // Client-side early auto compaction probes the child's card Upsert:
-        // a settled child clears its one-shot flag so a later resume can
-        // fire again.
-        let auto_compact_probe = match &event {
-            BackgroundWorkEvent::Upsert(item) if item.key.kind == BackgroundWorkKind::Subagent => {
-                Some((item.key.clone(), item.context_tokens))
-            }
-            BackgroundWorkEvent::Transcript(BackgroundWorkTranscriptEvent::Finished {
-                key,
-                ..
-            }) => {
-                self.auto_compacted_children.retain(|(session, provider)| {
-                    *session != session_id || *provider != key.provider_id
-                });
-                None
-            }
-            _ => None,
-        };
         let snapshot = {
             let registry = self.background_work.entry(session_id).or_default();
             registry.apply(event);
             snapshot_key.and_then(|key| registry.snapshot(&key))
         };
-        if let Some((key, tokens)) = auto_compact_probe {
-            self.maybe_auto_compact_child(session_id, &key, tokens);
-        }
         if let Some(snapshot) = snapshot
             && let Some(session) = self.state.session_mut(session_id)
         {

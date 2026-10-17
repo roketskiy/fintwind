@@ -29,8 +29,8 @@ import { readFile } from "node:fs/promises";
 
 type Status = "active" | "paused" | "done" | "blocked";
 type Verdict = "done" | "continue" | "wait" | "blocked";
-type Snapshot = { sessionId: string; objective: string; status: Status; turns: number; maxTurns: number; reason: string; revision: number; result?: string; model?: string; tools?: number; startedAt?: number; completedAt?: number };
-type State = Snapshot & { lastEvent: string; lastText: string; stalled: number; repeats: number };
+type Snapshot = { sessionId: string; objective: string; status: Status; turns: number; maxTurns: number; reason: string; revision: number; result?: string; model?: string; tools?: number; startedAt?: number; completedAt?: number; elapsedSeconds?: number; activeSince?: number };
+type State = Snapshot & { lastEvent: string; lastText: string; stalled: number; repeats: number; attemptTurns: number; checkpointAt?: number };
 type RecordState = { revision: number; goal: State | null };
 type Settlement = { generation: number; verdict: Verdict; reason: string; summary?: string };
 type Action = { type: "get" | "pause" | "resume" | "complete" | "clear" } | { type: "start"; objective: string };
@@ -97,11 +97,14 @@ function parseRecord(raw: unknown): RecordState {
   const status = s.status;
   if (status !== "active" && status !== "paused" && status !== "done" && status !== "blocked") throw new Error("Invalid goal status");
   return { revision: record.revision, goal: { sessionId: s.sessionId, objective: s.objective, reason: s.reason, status, turns: s.turns,
-    maxTurns: s.maxTurns, revision: record.revision, lastEvent: s.lastEvent, lastText: s.lastText, stalled: s.stalled, repeats: s.repeats,
+    maxTurns: s.maxTurns, attemptTurns: typeof s.attemptTurns === "number" && Number.isSafeInteger(s.attemptTurns) && s.attemptTurns >= 0 ? s.attemptTurns : s.turns, revision: record.revision, lastEvent: s.lastEvent, lastText: s.lastText, stalled: s.stalled, repeats: s.repeats,
     result: typeof s.result === "string" ? s.result : undefined, model: typeof s.model === "string" ? s.model : undefined,
     tools: typeof s.tools === "number" && Number.isSafeInteger(s.tools) ? s.tools : undefined,
     startedAt: typeof s.startedAt === "number" && Number.isSafeInteger(s.startedAt) ? s.startedAt : undefined,
-    completedAt: typeof s.completedAt === "number" && Number.isSafeInteger(s.completedAt) ? s.completedAt : undefined } };
+    completedAt: typeof s.completedAt === "number" && Number.isSafeInteger(s.completedAt) ? s.completedAt : undefined,
+    elapsedSeconds: typeof s.elapsedSeconds === "number" && Number.isSafeInteger(s.elapsedSeconds) && s.elapsedSeconds >= 0 ? s.elapsedSeconds : undefined,
+    activeSince: typeof s.activeSince === "number" && Number.isSafeInteger(s.activeSince) && s.activeSince >= 0 ? s.activeSince : undefined,
+    checkpointAt: typeof s.checkpointAt === "number" && Number.isSafeInteger(s.checkpointAt) && s.checkpointAt >= 0 ? s.checkpointAt : undefined } };
 }
 function parseAction(value: unknown): Action {
   const action = object(value);
@@ -123,6 +126,8 @@ function view(state: State | null): Snapshot | null {
     ...(typeof outcome.tools === "number" ? { tools: outcome.tools } : {}),
     ...(typeof outcome.startedAt === "number" ? { startedAt: outcome.startedAt } : {}),
     ...(typeof outcome.completedAt === "number" ? { completedAt: outcome.completedAt } : {}),
+    ...(typeof outcome.elapsedSeconds === "number" ? { elapsedSeconds: outcome.elapsedSeconds } : {}),
+    ...(typeof outcome.activeSince === "number" ? { activeSince: outcome.activeSince } : {}),
   };
 }
 
@@ -177,15 +182,32 @@ export default {
       if (!slot.hydrated) {
         slot.hydrated = true;
         if (record.goal?.status === "active") {
-          const goal = await write(id, record, { ...record.goal, status: "paused", reason: "Goal runtime restarted" });
+          const saved = record.goal;
+          const elapsedSeconds = saved.elapsedSeconds === undefined ? undefined : saved.elapsedSeconds
+            + (saved.activeSince === undefined ? 0 : Math.max(0, (saved.checkpointAt ?? saved.activeSince) - saved.activeSince));
+          const goal = await write(id, record, { ...saved, status: "paused", elapsedSeconds, activeSince: undefined, reason: "Goal runtime restarted" });
           return { revision: record.revision + 1, goal };
         }
+      }
+      if (record.goal && record.goal.elapsedSeconds === undefined) {
+        const goal = await write(id, record, record.goal);
+        return { revision: record.revision + 1, goal };
       }
       return record;
     };
     const write = async (id: string, record: RecordState, goal: State | null) => {
       const revision = record.revision + 1;
-      const next = goal ? { ...goal, revision } : null;
+      const now = Math.floor(Date.now() / 1000);
+      let next: State | null = null;
+      if (goal) {
+        // Old records have no pause history. Preserve their known duration once.
+        const elapsed = goal.elapsedSeconds ?? (goal.startedAt === undefined ? 0 : Math.max(0, (goal.completedAt ?? now) - goal.startedAt));
+        const interval = goal.elapsedSeconds !== undefined && goal.activeSince !== undefined ? Math.max(0, now - goal.activeSince) : 0;
+        next = { ...goal, revision, elapsedSeconds: elapsed + interval,
+          activeSince: goal.status === "active" ? now : undefined,
+          checkpointAt: goal.status === "active" ? now : undefined,
+          completedAt: goal.status === "done" ? goal.completedAt ?? now : undefined };
+      }
       await ctx.storage.set(`session:${id}`, { revision, goal: next });
       if (next?.status === "active") driving.add(id); else driving.delete(id);
       return next;
@@ -353,11 +375,19 @@ export default {
         await owned(id);
         const record = await read(id);
         if ((action.type === "start" || action.type === "resume") && !enabled) throw new Error("Enable Goal in settings first");
-        if (action.type === "get") return record.goal;
+        if (action.type === "get") {
+          // Checkpoint without changing the public snapshot or revision: polling must not trigger UI rebuilds.
+          const goal = record.goal;
+          const now = Math.floor(Date.now() / 1000);
+          if (goal?.status === "active" && goal.checkpointAt !== now) {
+            await ctx.storage.set(`session:${id}`, { revision: record.revision, goal: { ...goal, checkpointAt: now } });
+          }
+          return goal;
+        }
         if (action.type === "clear") return write(id, record, null);
-        if (action.type === "start") { slot.children.clear(); slot.windowID = ""; slot.windowTools = 0; return write(id, record, { sessionId: id, objective: action.objective, status: "active", turns: 0, maxTurns: 20,
+        if (action.type === "start") { slot.children.clear(); slot.windowID = ""; slot.windowTools = 0; return write(id, record, { sessionId: id, objective: action.objective, status: "active", turns: 0, attemptTurns: 0, maxTurns: 20,
           reason: "", revision: 0, lastEvent: "", lastText: "", stalled: 0, repeats: 0, result: undefined, model: undefined, tools: undefined,
-          startedAt: Math.floor(Date.now() / 1000), completedAt: undefined }); }
+          startedAt: Math.floor(Date.now() / 1000), elapsedSeconds: 0, activeSince: Math.floor(Date.now() / 1000), completedAt: undefined }); }
         if (!record.goal) { if (action.type === "pause") return null; throw new Error("No goal in this session"); }
         if (action.type === "pause") return record.goal.status === "active" ? write(id, record, { ...record.goal, status: "paused", reason: "Paused by the user" }) : record.goal;
         if (action.type === "complete") return write(id, record, { ...record.goal, status: "done", reason: "Completed by the user" });
@@ -368,8 +398,8 @@ export default {
         slot.children.clear();
         slot.windowID = "";
         slot.windowTools = 0;
-        return write(id, record, { ...record.goal, status: "active", turns: 0, stalled: 0, repeats: 0, reason: "", lastText: "", result: undefined, model: undefined, tools: undefined,
-          startedAt: Math.floor(Date.now() / 1000), completedAt: undefined });
+        return write(id, record, { ...record.goal, status: "active", attemptTurns: 0, stalled: 0, repeats: 0, reason: "", lastText: "", result: undefined,
+          startedAt: record.goal.startedAt ?? Math.floor(Date.now() / 1000), completedAt: undefined });
       });
       if (shouldSend && state) {
         try { await send(id, slot, generation, state, "initial", inputID); }
@@ -459,7 +489,7 @@ export default {
         const record = await read(id);
         if (!record.goal || record.goal.status !== "active" || record.goal.lastEvent === String(event.id)) return;
         const generation = slot.generation;
-        let next: State = { ...record.goal, lastEvent: String(event.id), turns: record.goal.turns + 1 };
+        let next: State = { ...record.goal, lastEvent: String(event.id), turns: record.goal.turns + 1, attemptTurns: record.goal.attemptTurns + 1 };
         if (event.type !== "session.execution.succeeded") {
           next = { ...next, status: "paused", reason: event.type === "session.execution.failed" ? "The turn failed" : "The turn was interrupted" };
         } else {
@@ -485,7 +515,6 @@ export default {
             if (report.verdict === "done") {
               next.status = "done";
               next.result = report.summary;
-              next.completedAt = Math.floor(Date.now() / 1000);
             } else if (report.verdict === "blocked") next.status = "blocked";
           } else if (slot.reminded) {
             next.status = "paused";
@@ -502,7 +531,7 @@ export default {
           }
         }
         if (next.status === "active") {
-          if (next.turns >= next.maxTurns) { next.status = "paused"; next.reason = "Turn limit reached"; }
+          if (next.attemptTurns >= next.maxTurns) { next.status = "paused"; next.reason = "Turn limit reached"; }
           else if (next.stalled >= 3 || next.repeats >= 2) { next.status = "blocked"; next.reason = "No further progress detected"; }
         }
         const saved = await write(id, record, next);

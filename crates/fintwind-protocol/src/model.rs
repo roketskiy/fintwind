@@ -588,6 +588,9 @@ pub struct AgentTurn {
         alias = "providerPrompt"
     )]
     pub provider_prompt: Option<String>,
+    /// The turn's opening user message sets a Goal objective.
+    #[serde(default)]
+    pub goal_objective: bool,
     pub started_at: u64,
     pub completed_at: Option<u64>,
     #[serde(default)]
@@ -1120,6 +1123,7 @@ impl AgentSession {
                 provider_turn_started: true,
                 provider_resume_at: None,
                 provider_prompt: None,
+                goal_objective: false,
                 started_at,
                 completed_at: Some(completed_at),
                 checkpoint: None,
@@ -1151,6 +1155,7 @@ impl AgentSession {
             provider_turn_started: false,
             provider_resume_at: None,
             provider_prompt: None,
+            goal_objective: false,
             started_at: now,
             completed_at: None,
             checkpoint: None,
@@ -1178,6 +1183,7 @@ impl AgentSession {
             provider_turn_started: false,
             provider_resume_at: None,
             provider_prompt: None,
+            goal_objective: false,
             started_at: now,
             completed_at: None,
             checkpoint: None,
@@ -1189,6 +1195,16 @@ impl AgentSession {
         );
         self.last_reply_at = Some(now);
         id
+    }
+
+    pub fn mark_active_turn_goal(&mut self) {
+        if let Some(turn) = self
+            .turns
+            .last_mut()
+            .filter(|turn| turn.status == TurnStatus::Running)
+        {
+            turn.goal_objective = true;
+        }
     }
 
     pub fn active_turn_id(&self) -> Option<Uuid> {
@@ -1381,6 +1397,7 @@ impl AgentSession {
             provider_turn_started: true,
             provider_resume_at: None,
             provider_prompt: None,
+            goal_objective: false,
             started_at: now,
             completed_at: None,
             checkpoint: None,

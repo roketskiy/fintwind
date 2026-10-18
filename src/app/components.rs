@@ -425,6 +425,7 @@ pub(super) struct MessageRender<'a> {
     pub(super) assistant_message_action: Option<AssistantMessageAction>,
     pub(super) user_message_rewind: UserMessageRewind,
     pub(super) user_message_fill_width: bool,
+    pub(super) goal_objective: bool,
     pub(super) message_edit_input: Option<Entity<ComposerInput>>,
     pub(super) attachment_menus: Vec<ContextMenuHandle>,
     pub(super) attachment_images: Vec<Option<Arc<gpui::Image>>>,
@@ -630,6 +631,7 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         assistant_message_action,
         user_message_rewind,
         user_message_fill_width,
+        goal_objective,
         message_edit_input,
         attachment_menus,
         attachment_images,
@@ -663,7 +665,24 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                 .flex_col()
                 .items_end()
                 .gap(px(3.0))
-                .group(group_name.clone());
+                .group(group_name.clone())
+                .when(goal_objective, |column| {
+                    column.child(
+                        div()
+                            .h(px(20.0))
+                            .px(px(6.0))
+                            .rounded(px(5.0))
+                            .bg(theme.overlay)
+                            .flex()
+                            .items_center()
+                            .gap(px(4.0))
+                            .text_size(ui_px(11.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text_secondary)
+                            .child(icon("icons/target.svg", 12.0, theme.text_secondary))
+                            .child(tr!("goal.title")),
+                    )
+                });
             if let Some(attachments) = render_sent_message_attachments(
                 message_id,
                 &message.attachments,

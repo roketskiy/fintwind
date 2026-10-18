@@ -2025,6 +2025,7 @@ pub struct Fintwind {
     /// fresh and nothing lingers past the group it belongs to.
     sidebar_group_visible_counts: RefCell<HashMap<Uuid, usize>>,
     transcript_row_kinds: RefCell<Vec<TranscriptRowKind>>,
+    transcript_goal_objectives: RefCell<HashSet<usize>>,
     /// Fingerprint of the transcript inputs `transcript_row_kinds` was folded
     /// from, so an unchanged transcript costs nothing on a frame. `None` until
     /// the first fold. See `transcript_rows_fingerprint`.
@@ -3821,6 +3822,7 @@ impl Fintwind {
                 sidebar_rows_snapshot: RefCell::new(Rc::new(Vec::new())),
                 sidebar_group_visible_counts: RefCell::new(HashMap::new()),
                 transcript_row_kinds: RefCell::new(Vec::new()),
+                transcript_goal_objectives: RefCell::new(HashSet::new()),
                 transcript_row_kinds_fingerprint: Cell::new(None),
                 transcript_navigation_turns: RefCell::new(Rc::new(Vec::new())),
                 transcript_navigation_turns_fingerprint: Cell::new(None),

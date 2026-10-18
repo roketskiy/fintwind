@@ -121,22 +121,29 @@ pub fn merge_native_transcript(
         turn.submission = saved.submission.clone();
         turn.checkpoint = saved.checkpoint.clone();
         turn.provider_prompt = saved.provider_prompt.clone();
+        turn.goal_objective |= saved.goal_objective;
         // The history converter's completed model step is not an execution
         // terminal. Preserve the local status until receipt-aware proof arrives.
         turn.status = saved.status;
         turn.completed_at = saved.completed_at;
     }
+    let mut restored_openers = HashSet::new();
+    let mut restored_users = HashSet::new();
     for message in &mut native.messages {
         if let Some(id) = message.turn_id.and_then(|id| remapped.get(&id).copied()) {
             message.turn_id = Some(id);
             if message.role == MessageRole::User
-                && let Some(saved) = local
-                    .messages
-                    .iter()
-                    .find(|saved| saved.turn_id == Some(id) && saved.role == MessageRole::User)
+                && let Some(saved) = local.messages.iter().find(|saved| {
+                    saved.turn_id == Some(id)
+                        && saved.role == MessageRole::User
+                        && !restored_users.contains(&saved.id)
+                        && (!restored_openers.contains(&id) || saved.content == message.content)
+                })
             {
                 // Keep the typed command, display presentation and attachments,
                 // not the expanded transport text the provider stored.
+                restored_openers.insert(id);
+                restored_users.insert(saved.id);
                 *message = saved.clone();
             }
         }

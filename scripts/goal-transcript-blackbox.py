@@ -46,6 +46,7 @@ def main() -> None:
         extract_item(source, "pub(super) fn mix("),
         extract_item(source, "pub(super) fn mix_uuid("),
         extract_item(source, "fn mix_turn_id("),
+        extract_item(source, "pub(super) fn goal_objective_message_indexes("),
         extract_item(source, "fn turn_rows("),
         extract_item(source, "fn turn_answer_start("),
         extract_item(source, "fn row_turn_id("),
@@ -64,6 +65,7 @@ edition = "2024"
 [dependencies]
 fintwind-protocol = { path = "../../crates/fintwind-protocol" }
 serde_json = "1.0"
+base64 = "0.22"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 """.replace('name = "goal-transcript-blackbox"', f'name = "{TARGET.name}"'),
         encoding="utf-8",
@@ -79,6 +81,22 @@ use uuid::Uuid;
 mod fintwind_client { pub mod goal { pub use fintwind_protocol::goal::GoalStatus; } }
 
 '''
+    native_source = (ROOT / "crates/fintwind-core/src/driver/native.rs").read_text(encoding="utf-8")
+    native_functions = [extract_item(native_source, signature) for signature in (
+        "fn translate_native_rows(", "fn ms_to_seconds(", "fn native_image_attachment(",
+        "fn turn_stats_step(", "fn assistant_parts_visible(", "fn append_assistant_parts(",
+        "fn flush_assistant_text(", "fn flush_assistant_activities(", "fn parts_text(",
+        "fn reasoning_item(", "fn tool_item(",
+    )]
+    native_functions[0] = native_functions[0].replace("fn translate_native_rows(", "pub fn translate_native_rows(", 1)
+    rust += "\nmacro_rules! tr { ($key:expr) => { fintwind_protocol::i18n::translate($key) }; }\nmod model { pub use fintwind_protocol::model::*; }\n"
+    for module, path in (("blob_store", "crates/fintwind-core/src/blob_store.rs"),
+                         ("activity", "crates/fintwind-core/src/driver/activity.rs")):
+        rust += '#[path = ' + json.dumps((ROOT / path).as_posix()) + '] mod ' + module + ';\n'
+    rust += "\nmod native {\nuse std::collections::HashSet;\nuse base64::Engine as _;\nuse serde_json::Value;\n"
+    rust += "use crate::blob_store::BlobStore;\nuse crate::model::{ActivityItem, AgentTurn, Message, MessageAttachment, MessageRole, ReasoningBlock, TranscriptBlock, TurnStats, TurnStatus};\n"
+    rust += "use fintwind_protocol::provider_session::NativeTranscript;\nconst MAX_TRANSCRIPT_IMAGE_BYTES: usize = 128 * 1024 * 1024;\n"
+    rust += "\n\n".join(native_functions) + "\n}\n"
     rust += constants + "\n\n" + row_enum + "\n\n" + "\n\n".join(functions)
     rust += r'''
 
@@ -91,6 +109,7 @@ fn turn(id: Uuid, started_at: u64, completed_at: Option<u64>, status: TurnStatus
         provider_turn_started: true,
         provider_resume_at: None,
         provider_prompt: None,
+        goal_objective: false,
         started_at,
         completed_at,
         checkpoint: None,
@@ -254,6 +273,98 @@ fn main() {
         TranscriptRowKind::Message(0), TranscriptRowKind::TurnFold(interrupted_turn),
         TranscriptRowKind::ChangedFiles(interrupted_turn),
     ], "file changes remain visible when guidance arrived after the last assistant text");
+    assert_eq!(goal_objective_message_indexes(&guided), HashSet::new(), "normal prompts and steering are not Goals");
+    let mut marked = AgentSession::new(Uuid::from_u128(5));
+    marked.begin_turn("Ship the Goal.");
+    marked.mark_active_turn_goal();
+    marked.push_user_message_with_presentation("Steering within the Goal.", None, vec![]);
+    marked.push_message(MessageRole::Assistant, "Goal complete.");
+    marked.finish_active_turn(TurnStatus::Completed);
+    marked.begin_turn("An ordinary follow-up with the same text: Ship the Goal.");
+    marked.finish_active_turn(TurnStatus::Completed);
+    marked.begin_turn("A replacement Goal.");
+    marked.mark_active_turn_goal();
+    let marked: AgentSession = serde_json::from_value(serde_json::to_value(marked).unwrap()).unwrap();
+    assert_eq!(goal_objective_message_indexes(&marked), HashSet::from([0, 4]),
+               "Goal identity survives persistence and replacement without marking steering or normal prompts");
+    let mut legacy = serde_json::to_value(&marked).unwrap();
+    for saved_turn in legacy["turns"].as_array_mut().unwrap() {
+        saved_turn.as_object_mut().unwrap().remove("goal_objective");
+    }
+    let legacy: AgentSession = serde_json::from_value(legacy).unwrap();
+    assert_eq!(goal_objective_message_indexes(&legacy), HashSet::new(), "legacy unmarked turns load safely");
+    let native_rows = serde_json::json!([
+        {"type":"user","id":"msg_start","text":"Original request","time":{"created":1000}},
+        {"type":"assistant","id":"msg_work1","time":{"created":2000,"completed":2500},"content":[
+            {"type":"tool","id":"call_1","name":"read","state":{"status":"completed","input":{},"content":[{"type":"text","text":"source"}]}},
+            {"type":"text","text":"Progress before guidance"}
+        ]},
+        {"type":"user","id":"msg_steer1","text":"Find the actual desktop style","time":{"created":3000}},
+        {"type":"assistant","id":"msg_work2","time":{"created":4000,"completed":4500},"content":[
+            {"type":"tool","id":"call_2","name":"read","state":{"status":"completed","input":{},"content":[{"type":"text","text":"reference"}]}}
+        ]},
+        {"type":"user","id":"msg_steer2","text":"Do not invent it","time":{"created":5000}},
+        {"type":"assistant","id":"msg_final","time":{"created":6000,"completed":7000},"content":[{"type":"text","text":"Final answer"}]},
+        {"type":"idle","id":"msg_idle1","outcome":"succeeded","time":{"created":8000}},
+        {"type":"user","id":"msg_next","text":"A separate request","time":{"created":9000}},
+        {"type":"assistant","id":"msg_next_answer","time":{"created":10000,"completed":10500},"content":[{"type":"text","text":"Separate answer"}]},
+        {"type":"idle","id":"msg_idle2","outcome":"succeeded","time":{"created":11000}}
+    ]);
+    let imported = native::translate_native_rows(native_rows.as_array().unwrap(), None, false, None);
+    assert_eq!(imported.turns.len(), 2, "native idle boundaries, not each user prompt, define complete turns");
+    let imported_turn = imported.turns[0].id;
+    let mut restored = AgentSession::new(Uuid::from_u128(6));
+    restored.messages = imported.messages;
+    restored.transcript_blocks = imported.blocks;
+    restored.turns = imported.turns;
+    restored = serde_json::from_value(serde_json::to_value(restored).unwrap()).unwrap();
+    assert_eq!(folded_transcript_row_kinds_with_retry(&restored, &HashSet::new(), false), vec![
+        TranscriptRowKind::Message(0), TranscriptRowKind::TurnFold(imported_turn),
+        TranscriptRowKind::Message(4), TranscriptRowKind::Message(5), TranscriptRowKind::Message(6),
+    ], "history import and reload keep both steering messages inside one whole-turn fold");
+    assert_eq!(folded_transcript_row_kinds_with_retry(&restored, &HashSet::from([imported_turn]), false), vec![
+        TranscriptRowKind::Message(0), TranscriptRowKind::TurnFold(imported_turn),
+        TranscriptRowKind::TurnBlock(0), TranscriptRowKind::Message(1), TranscriptRowKind::Message(2),
+        TranscriptRowKind::TurnBlock(1), TranscriptRowKind::Message(3), TranscriptRowKind::Message(4),
+        TranscriptRowKind::Message(5), TranscriptRowKind::Message(6),
+    ], "expanding the imported fold restores guidance and activities together in exact order");
+    assert_eq!(assistant_response_footer(&restored, 4).as_deref(), Some("Final answer"));
+    let mut local = restored.clone();
+    local.turns[0].submission = Some(fintwind_protocol::submission::SubmissionReceipt {
+        id: imported_turn, input_id: "msg_start".into(),
+        state: fintwind_protocol::submission::SubmissionState::Accepted,
+        created_at: 1000, updated_at: 1000, native_session_id: None,
+    });
+    local.turns[0].provider_prompt = Some("Original request".into());
+    local.messages[0].content = "/original-command".into();
+    local.messages[2].display_content = Some("Steering presentation".into());
+    let merged = fintwind_protocol::submission::merge_native_transcript(&local,
+        native::translate_native_rows(native_rows.as_array().unwrap(), None, false, None));
+    assert_eq!(merged.messages.iter().filter(|m| m.role == MessageRole::User).map(|m| m.content.as_str()).collect::<Vec<_>>(),
+        vec!["/original-command", "Find the actual desktop style", "Do not invent it", "A separate request"],
+        "local merge must restore each steering message once instead of cloning the opener onto all users");
+    assert_eq!(merged.messages[2].display_content.as_deref(), Some("Steering presentation"));
+    local.messages.remove(3);
+    let merged = fintwind_protocol::submission::merge_native_transcript(&local,
+        native::translate_native_rows(native_rows.as_array().unwrap(), None, false, None));
+    assert_eq!(merged.messages[3].content, "Do not invent it", "new native steering survives a stale local snapshot");
+    let rows = native_rows.as_array().unwrap();
+    let unfinished = native::translate_native_rows(&rows[..9], None, false, None);
+    assert_eq!(unfinished.turns.len(), 2, "a missing final idle marker does not split an unfinished turn");
+    let recovery = native::translate_native_rows(&rows[..6], None, true, None);
+    assert_eq!(recovery.turns.len(), 1, "recovery retains all steering in the admitted execution window");
+    let legacy = native::translate_native_rows(&rows[..6], None, false, None);
+    assert_eq!(legacy.turns.len(), 3, "legacy histories without idle markers keep their original fallback");
+    let mut provider_only = rows[..7].to_vec();
+    provider_only.push(serde_json::json!({"type":"assistant", "time":{"created":9000,"completed":10000},
+        "content":[{"type":"text","text":"Synthetic continuation"}]}));
+    provider_only.push(serde_json::json!({"type":"idle","outcome":"interrupted","time":{"created":11000}}));
+    let continued = native::translate_native_rows(&provider_only, None, false, None);
+    assert_eq!(continued.turns.len(), 2, "provider-only execution after idle gets a separate owner");
+    assert_eq!(continued.turns[1].status, TurnStatus::Interrupted);
+    assert_eq!(continued.turns[0].completed_at, Some(8));
+    assert_eq!(continued.turns[1].completed_at, Some(11));
+    println!("raw native history -> import -> persisted reload -> whole-turn fold verified");
     println!("guided turn: collapsed={:?}, expanded={:?}; interrupted guidance verified", settled, expanded);
 }
 '''

@@ -1535,6 +1535,10 @@ impl Fintwind {
                             assistant_message_action,
                             user_message_rewind,
                             user_message_fill_width: false,
+                            goal_objective: self
+                                .transcript_goal_objectives
+                                .borrow()
+                                .contains(&message_index),
                             message_edit_input,
                             attachment_menus,
                             attachment_images,

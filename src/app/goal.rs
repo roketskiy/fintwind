@@ -65,10 +65,14 @@ impl Fintwind {
                 match &action {
                     GoalAction::Start { objective } => {
                         session.begin_turn(objective.clone());
+                        session.mark_active_turn_goal();
                         session.status = SessionStatus::Connecting;
                         session.updated_at = unix_time();
                     }
-                    GoalAction::Resume => session.begin_provider_turn(),
+                    GoalAction::Resume => {
+                        session.begin_provider_turn();
+                        session.mark_active_turn_goal();
+                    }
                     _ => {}
                 }
             }

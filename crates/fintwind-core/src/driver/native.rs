@@ -1733,6 +1733,14 @@ fn translate_native_rows(
         turns: Vec::new(),
     };
     let mut image_bytes_left = MAX_TRANSCRIPT_IMAGE_BYTES;
+    // Idle closes an execution, including prompts steered in while busy.
+    // Older histories without markers retain their per-prompt boundaries;
+    // recovery rows are already scoped to one admitted execution.
+    let explicit_boundaries = retain_empty_users
+        || rows
+            .iter()
+            .any(|row| row.get("type").and_then(Value::as_str) == Some("idle"));
+    let mut turn_closed = true;
 
     for row in rows {
         let created_at =
@@ -1799,19 +1807,35 @@ fn translate_native_rows(
                 {
                     continue;
                 }
-                let turn = AgentTurn {
-                    id: uuid::Uuid::new_v4(),
-                    submission: None,
-                    turn_count: transcript.turns.len() + 1,
-                    status: TurnStatus::Completed,
-                    provider_turn_started: true,
-                    provider_resume_at: row.get("id").and_then(Value::as_str).map(str::to_owned),
-                    provider_prompt: None,
-                    started_at: created_at,
-                    completed_at: Some(created_at),
-                    checkpoint: None,
-                    stats: None,
-                };
+                if turn_closed || !explicit_boundaries {
+                    let turn = AgentTurn {
+                        id: uuid::Uuid::new_v4(),
+                        submission: None,
+                        turn_count: transcript.turns.len() + 1,
+                        status: TurnStatus::Completed,
+                        provider_turn_started: true,
+                        provider_resume_at: row
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        provider_prompt: None,
+                        goal_objective: row
+                            .pointer("/metadata/fintwindGoal")
+                            .and_then(Value::as_bool)
+                            == Some(true),
+                        started_at: created_at,
+                        completed_at: Some(created_at),
+                        checkpoint: None,
+                        stats: None,
+                    };
+                    transcript.turns.push(turn);
+                    turn_closed = false;
+                }
+                let turn = transcript.turns.last_mut().expect("user turn owner");
+                turn.goal_objective |= row
+                    .pointer("/metadata/fintwindGoal")
+                    .and_then(Value::as_bool)
+                    == Some(true);
                 transcript.messages.push(Message {
                     id: uuid::Uuid::new_v4(),
                     turn_id: Some(turn.id),
@@ -1822,7 +1846,6 @@ fn translate_native_rows(
                     created_at,
                     streaming: false,
                 });
-                transcript.turns.push(turn);
             }
             Some("assistant") => {
                 let parts = row.get("content").and_then(Value::as_array);
@@ -1832,20 +1855,22 @@ fn translate_native_rows(
                 // its owner before folding the first model step's statistics,
                 // but only when the row actually contributes: a blank row
                 // must not leave an orphan turn without any message.
-                if (step.is_some() || visible) && transcript.turns.is_empty() {
+                if (step.is_some() || visible) && turn_closed {
                     transcript.turns.push(AgentTurn {
                         id: uuid::Uuid::new_v4(),
                         submission: None,
-                        turn_count: 1,
+                        turn_count: transcript.turns.len() + 1,
                         status: TurnStatus::Completed,
                         provider_turn_started: true,
                         provider_resume_at: None,
                         provider_prompt: None,
+                        goal_objective: false,
                         started_at: created_at,
                         completed_at: Some(created_at),
                         checkpoint: None,
                         stats: None,
                     });
+                    turn_closed = false;
                 }
                 // Every assistant row is one model step of the turn above it,
                 // and the fold happens before the content gate: a row with no
@@ -1885,8 +1910,7 @@ fn translate_native_rows(
                 if !visible {
                     continue;
                 }
-                // A settled assistant message carries its completion time;
-                // that is when the turn ended.
+                // Step completion is the fallback until the execution idle marker arrives.
                 let completed_at =
                     ms_to_seconds(row.pointer("/time/completed")).unwrap_or(created_at);
                 let turn = transcript.turns.last_mut().expect("assistant turn owner");
@@ -1898,6 +1922,17 @@ fn translate_native_rows(
                 // every tool above every text part is what made a restart hide
                 // a live split instead of reproducing the part order.
                 append_assistant_parts(&mut transcript, parts, turn_id, created_at);
+            }
+            Some("idle") => {
+                if !turn_closed && let Some(turn) = transcript.turns.last_mut() {
+                    turn.completed_at = Some(created_at.max(turn.completed_at.unwrap_or(0)));
+                    turn.status = match row.get("outcome").and_then(Value::as_str) {
+                        Some("failed") => TurnStatus::Failed,
+                        Some("interrupted") => TurnStatus::Interrupted,
+                        _ => TurnStatus::Completed,
+                    };
+                }
+                turn_closed = true;
             }
             _ => {}
         }

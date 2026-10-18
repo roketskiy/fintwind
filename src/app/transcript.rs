@@ -39,6 +39,10 @@ impl Fintwind {
         if self.transcript_row_kinds_fingerprint.get() != Some(fingerprint) {
             let next_kinds = self.selected_transcript_row_kinds();
             *self.transcript_row_kinds.borrow_mut() = next_kinds;
+            *self.transcript_goal_objectives.borrow_mut() = self
+                .selected_session()
+                .map(goal_objective_message_indexes)
+                .unwrap_or_default();
             self.transcript_row_kinds_fingerprint.set(Some(fingerprint));
         }
         self.transcript_row_kinds.borrow().len()
@@ -1138,6 +1142,7 @@ pub(super) fn transcript_rows_fingerprint_with_retry(
     for turn in &session.turns {
         hash = mix_uuid(hash, turn.id);
         hash = mix(hash, turn.started_at);
+        hash = mix(hash, turn.goal_objective as u64);
         hash = mix(hash, turn.status as u64);
         hash = mix(
             hash,
@@ -1524,6 +1529,23 @@ pub(super) fn format_working_elapsed(seconds: u64) -> String {
             }
         }
     }
+}
+
+pub(super) fn goal_objective_message_indexes(session: &AgentSession) -> HashSet<usize> {
+    let mut goals = session
+        .turns
+        .iter()
+        .filter(|turn| turn.goal_objective)
+        .map(|turn| turn.id)
+        .collect::<HashSet<_>>();
+    session
+        .messages
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message.role == MessageRole::User)
+        .filter(|(_, message)| message.turn_id.is_some_and(|id| goals.remove(&id)))
+        .map(|(index, _)| index)
+        .collect()
 }
 
 /// Whether this user message is the prompt that opened its turn.

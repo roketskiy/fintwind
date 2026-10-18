@@ -7,6 +7,7 @@ The native Fintwind UI is outside this runner's scope.
 import base64
 import ctypes
 from ctypes import wintypes
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -29,6 +30,7 @@ HTTP = build_opener(ProxyHandler({}))
 SETTLE_TOOL = "fintwind_goal_settle"
 JUDGE_MARKER = "goal completion judge"
 PROTOCOL_MARKER = "This session has an active Goal set by the user"
+INACTIVE_MARKER = "Goal mode is inactive for this request."
 REMINDER_MARKER = "Call it now with verdict"
 CONTINUATION_MARKER = "Continue working toward this goal"
 GUIDANCE_MARKER = "Manual instruction takes priority."
@@ -175,6 +177,9 @@ class Model:
         is_judge = JUDGE_MARKER in serialized.lower()
         has_settle = has_tool(payload, SETTLE_TOOL)
         has_fixture = has_tool(payload, "goal_fixture_step")
+        system = json.dumps([message for message in messages if message.get("role") == "system"])
+        inactive = INACTIVE_MARKER in system
+        goal_history = SETTLE_TOOL in json.dumps([message for message in messages if message.get("role") != "system"])
         results = 0
         for message in reversed(messages):
             role = message.get("role")
@@ -193,7 +198,10 @@ class Model:
         gate = None
         with self.lock:
             self.calls.append({"judge": is_judge, "settle": has_settle, "fixture": has_fixture,
-                               "protocol": PROTOCOL_MARKER in serialized, "results": results})
+                               "protocol": PROTOCOL_MARKER in serialized, "results": results,
+                               "inactiveGoal": inactive, "goalHistory": goal_history,
+                               "systemPrefix": hashlib.sha256(system.encode()).hexdigest(),
+                               "toolPrefix": hashlib.sha256(json.dumps(payload.get("tools", []), sort_keys=True).encode()).hexdigest()})
             if is_judge:
                 self.judges += 1
             elif self.hold_at is not None and results == self.hold_at:
@@ -209,6 +217,10 @@ class Model:
             # no tools and stay outside every turn counter.
             return {"role": "assistant", "content": "Fixture session."}
         if not has_settle:
+            # Replay the reported failure: historical tool use tempts a normal
+            # follow-up into another settlement unless the current system scope forbids it.
+            if mode == "stale-goal" and goal_history and not inactive and results == 0:
+                return self.settle_call("done")
             return self.text("Plain session reply.")
         if mode == "no-tools":
             # Settle-only worker: the settlement call is bookkeeping and must
@@ -223,6 +235,8 @@ class Model:
             if results == 0:
                 return self.settle_call("wait")
             return self.text()
+        if mode == "double-settle" and results == 2:
+            return self.settle_call("continue")
         if results == 0 and has_tool(payload, "goal_fixture_step"):
             return self.tool_call("goal_fixture_step", {})
         if guided:
@@ -243,7 +257,7 @@ class Model:
         if results == 1 and mode != "no-settle":
             with self.lock:
                 index = self.settles + 1
-            if mode == "done":
+            if mode in ("done", "double-settle"):
                 verdict = "done"
             elif mode == "wait":
                 verdict = "wait"
@@ -428,6 +442,29 @@ def main():
         running = max(0, int(time.time()) - state["activeSince"]) if state["status"] == "active" else 0
         return state["elapsedSeconds"] + running
 
+    ordinary_profiles = {}
+
+    def plain_after_goal(session_id, expected, expect_history=True, force_call=False):
+        MODEL.configure("stale-goal" if force_call else "done")
+        calls_mark = len(MODEL.calls)
+        history_before = context_messages(session_id)
+        api("POST", f"/api/session/{session_id}/prompt" + query,
+            {"text": "A new ordinary request. Describe the result without continuing the old Goal."})
+        wait_for("ordinary follow-up reply", lambda: MODEL.replies, lambda replies: replies >= 1)
+        time.sleep(0.5)
+        main_calls = [call for call in MODEL.calls[calls_mark:] if call["fixture"]]
+        assert main_calls and all(call["goalHistory"] == expect_history
+                                  and not call["inactiveGoal"] and not call["settle"]
+                                  and not call["protocol"] for call in main_calls), main_calls
+        profiles = {(call["systemPrefix"], call["toolPrefix"]) for call in main_calls}
+        if session_id not in ordinary_profiles:
+            assert not expect_history and len(profiles) == 1, main_calls
+            ordinary_profiles[session_id] = next(iter(profiles))
+        assert profiles == {ordinary_profiles[session_id]}, "Goal scope changed ordinary system/tool cache prefixes"
+        assert MODEL.settles == (1 if force_call else 0), MODEL.calls[calls_mark:]
+        assert control(session_id, "get") == expected, "Ordinary conversation changed the previous Goal"
+        assert context_messages(session_id)[:len(history_before)] == history_before, "Goal gating rewrote persisted history"
+
     def context_messages(session):
         return api("GET", f"/api/session/{session}/context" + query)["data"]
 
@@ -515,6 +552,7 @@ def main():
         first_users = [message for message in first_context if message.get("type") == "user"]
         assert len(first_users) == 1, first_context
         assert first_users[0]["id"] == first_input_id, first_users
+        assert first_users[0].get("metadata", {}).get("fintwindGoal") is True, first_users
         assert "Complete the first fixture step." in json.dumps(first_users), first_users
         assert done["result"] == "Fixture work completed.", done
         assert done["model"] == "fixture/fixture-model", done
@@ -538,6 +576,45 @@ def main():
         assert len(users) == 2, messages
         assert "Complete two fixture steps." in json.dumps(users[-1]), users
         check("automatic continuation is a synthetic input rather than a forged user message")
+        retired_session = session()
+        plain_after_goal(retired_session, None, expect_history=False)
+        MODEL.configure("done")
+        control(retired_session, "start", objective="Finish before a normal follow-up.")
+        retired_goal = wait_for("retired Goal completion", lambda: control(retired_session, "get"),
+                                lambda state: state and state["status"] == "done")
+        plain_after_goal(retired_session, retired_goal)
+        check("completed Goal follow-ups have no settlement tool or extra context and preserve cache prefixes")
+        plain_after_goal(retired_session, retired_goal, force_call=True)
+        check("a forced stale settlement is rejected without changing the completed Goal")
+        control(retired_session, "clear")
+        plain_after_goal(retired_session, None)
+        check("clearing a Goal keeps historical settlement tools out of ordinary requests")
+        MODEL.configure("wait")
+        control(retired_session, "start", objective="Pause before a normal follow-up.")
+        wait_for("retired Goal waits", lambda: control(retired_session, "get"),
+                 lambda state: state and state["turns"] == 1)
+        paused_goal = control(retired_session, "pause")
+        plain_after_goal(retired_session, paused_goal)
+        check("paused Goals do not authorize settlement in ordinary follow-ups")
+        MODEL.configure("blocked")
+        control(retired_session, "start", objective="Block before a normal follow-up.")
+        blocked_goal = wait_for("retired Goal blocked", lambda: control(retired_session, "get"),
+                               lambda state: state and state["status"] == "blocked")
+        plain_after_goal(retired_session, blocked_goal)
+        check("blocked Goals do not authorize settlement in ordinary follow-ups")
+        MODEL.configure("done")
+        control(retired_session, "start", objective="Explicitly create a new Goal after ordinary conversation.")
+        retired_goal = wait_for("explicit new Goal completion", lambda: control(retired_session, "get"),
+                                lambda state: state and state["status"] == "done")
+        assert MODEL.settles == 1
+        check("an explicit new Goal restores the settlement tool after inactive conversation")
+        MODEL.configure("double-settle")
+        control(retired_session, "start", objective="Accept only one settlement per execution.")
+        retired_goal = wait_for("duplicate settlement rejected", lambda: control(retired_session, "get"),
+                                lambda state: state and state["status"] == "done")
+        assert retired_goal["turns"] == 1 and MODEL.settles == 2, (retired_goal, MODEL.settles)
+        assert retired_goal["result"] == "Fixture work completed.", retired_goal
+        check("a duplicate settlement cannot overwrite the first verdict or extend a completed Goal")
         waiting_session = session()
         MODEL.configure("wait")
         control(waiting_session, "start", objective="Wait for the background completion notification.")
@@ -817,6 +894,8 @@ def main():
         time.sleep(0.5)
         assert len(MODEL.calls) == frozen, MODEL.calls[frozen:]
         check("a previously active goal requires explicit resume after server restart")
+        plain_after_goal(retired_session, retired_goal)
+        check("a cold ordinary request keeps historical Goals inactive without changing the prompt prefix")
         child.close()
         legacy_goal = {**recovered, "startedAt": int(time.time()) - 120,
                        "lastEvent": "", "lastText": "", "stalled": 0, "repeats": 0}
@@ -842,7 +921,7 @@ def main():
         assert control(first, "get") == migrated
         check("legacy paused Goals migrate once and stop accumulating paused time")
         assert MODEL.judges == 0, MODEL.calls[-5:]
-        assert len(checks) == 37, checks
+        assert len(checks) == 45, checks
         (OUTPUT / "report.json").write_text(json.dumps({"status": "passed", "surface": "real-opencode-scripted-provider",
               "nativeUI": "not exercised", "checks": checks, "info": info, "pluginState": plugins,
               "completedGoal": done}, indent=2), encoding="utf-8")

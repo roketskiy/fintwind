@@ -324,10 +324,10 @@ export default {
     };
     const settleTool: Tool = {
       name: SETTLE_TOOL,
-      description: "Report the outcome of this turn's work toward this session's Goal. " +
+      description: "Report this active Goal turn's outcome. " +
         "Call it exactly once at the end of every turn in which you worked toward the Goal, after all other work is finished. " +
         'Use "continue" for immediately actionable work, or "wait" after scheduling a background task whose completion notification should resume the session. "done" means the Goal is fully achieved. ' +
-        "Never call it in a session that has no Goal.",
+        "Only for an active Goal; never for ordinary follow-ups or historical Goals.",
       options: { codemode: false },
       input: {
         type: "object",
@@ -347,13 +347,18 @@ export default {
         if (!reason) throw new Error("reason must be a non-empty sentence. No settlement was recorded.");
         const summary = typeof input.summary === "string" && input.summary.trim() ? input.summary.trim().slice(0, 2000) : undefined;
         const slot = slots.get(context.sessionID);
-        if (!slot) throw new Error("This session has no Goal. Never call this tool without one.");
+        if (!slot) throw new Error("No active Goal.");
         await serialize(slot, async () => {
           const record = await read(context.sessionID);
-          if (!record.goal || record.goal.status !== "active") throw new Error("This session has no active Goal. Never call this tool without one.");
+          if (!enabled || context.signal.aborted || !record.goal || record.goal.status !== "active") {
+            throw new Error("Goal settlement is unavailable for this request.");
+          }
+          if (slot.settled?.generation === slot.generation) {
+            throw new Error("This turn already has a Goal outcome.");
+          }
           slot.settled = { generation: slot.generation, verdict, reason, summary };
         });
-        return { content: "Goal outcome recorded." };
+        return { content: verdict === "done" ? "Goal completed." : verdict === "blocked" ? "Goal blocked." : "Goal outcome recorded." };
       },
     };
     const control = async (raw: unknown): Promise<Snapshot | null> => {

@@ -48,10 +48,9 @@ const SIDEBAR_ACTION_ROW_GAP: f32 = 4.0;
 /// Separation beneath the search row, between the action column and the
 /// project list.
 const SIDEBAR_SEARCH_BOTTOM_GAP: f32 = 10.0;
-/// Project group header: a bordered card that is slightly taller than the
-/// old text-only row so the trailing new-session control has a usable hit area.
-const SIDEBAR_PROJECT_CARD_HEIGHT: f32 = 34.0;
-const SIDEBAR_PROJECT_CARD_BOTTOM_GAP: f32 = 6.0;
+/// Compact project header, retaining the new-session control's full hit area.
+const SIDEBAR_PROJECT_CARD_HEIGHT: f32 = 28.0;
+const SIDEBAR_PROJECT_CARD_BOTTOM_GAP: f32 = 2.0;
 /// Sessions an unfolded project group reveals before a "show more" affordance
 /// takes over. Six matches the previous in-group scroller's visible height, so
 /// the first screen of a busy project still reads exactly as it did before.
@@ -945,6 +944,7 @@ impl Fintwind {
         }
         let total = group.sessions.len();
         let visible = self.sidebar_group_visible(group.project_id).min(total);
+        let theme = Theme::current(cx);
         let mut body = div()
             .id(SharedString::from(format!(
                 "sidebar-group-body-{}",
@@ -952,12 +952,41 @@ impl Fintwind {
             )))
             .w_full()
             .min_w_0()
+            .relative()
+            .pl(px(22.0))
             .flex()
-            .flex_col();
+            .flex_col()
+            .child(
+                div()
+                    .absolute()
+                    .left(px(14.0))
+                    .top_0()
+                    .bottom(px(SIDEBAR_SESSION_ROW_GAP))
+                    .w(px(1.0))
+                    .bg(theme.border),
+            );
         // Session cards carry their own bottom rhythm, so a plain column keeps
         // the exact 52+2 spacing the old virtualized rows reserved.
-        for &session_id in group.sessions.iter().take(visible) {
+        for (index, &session_id) in group.sessions.iter().take(visible).enumerate() {
             body = body.child(self.render_sidebar_session_item(session_id, cx));
+            if sidebar_session_selected(
+                self.state.selected_session,
+                self.pending_session_activation
+                    .map(|pending| pending.session_id),
+                session_id,
+            ) {
+                body = body.child(
+                    div()
+                        .absolute()
+                        .left(px(13.0))
+                        .top(px(index as f32 * SIDEBAR_SESSION_ROW_HEIGHT
+                            + (SIDEBAR_SESSION_CARD_HEIGHT - 20.0) / 2.0))
+                        .w(px(3.0))
+                        .h(px(20.0))
+                        .rounded_full()
+                        .bg(theme.text),
+                );
+            }
         }
         if visible < total {
             body = body.child(self.render_sidebar_show_more(group.project_id, total, cx));
@@ -1175,8 +1204,6 @@ impl Fintwind {
                     .h(px(SIDEBAR_PROJECT_CARD_HEIGHT))
                     .px(px(4.0))
                     .rounded(px(8.0))
-                    .border_1()
-                    .border_color(theme.border_strong)
                     .cursor_default()
                     .hover(|element| element.bg(theme.sidebar_item_background))
                     .flex()

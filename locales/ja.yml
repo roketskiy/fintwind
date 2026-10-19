@@ -169,6 +169,8 @@ settings.local_by_default: デフォルトでローカルに保存
 settings.local_by_default_description: プロジェクト、会話、設定はこのコンピューターに保存されます
 settings.browser_tools: ブラウザツール
 settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します
+settings.goal: 目標モード
+settings.goal_description: 有効にすると /goal でセッションの目標を設定でき、実行の一時停止と再開ができます
 settings.auto_compact: 自動圧縮
 settings.auto_compact_description: コンテキストが下のしきい値に達したら1回圧縮します。セッションとサブエージェントの両方に適用されます
 settings.auto_compact_threshold: 圧縮のしきい値
@@ -177,6 +179,7 @@ settings.auto_compact_threshold_placeholder: 例：500K
 settings.auto_compact_threshold_invalid: しきい値の形式が正しくありません
 settings.network_proxy: ネットワークプロキシ
 settings.opencode_shell: OpenCode シェル
+settings.opencode_shell_description: OpenCode がコマンドの実行に使用するシェルを選択します
 settings.shell_default: システムのデフォルト
 settings.shell_failed: "シェル設定を更新できませんでした: %{error}"
 settings.network_proxy_description: 更新確認・モデルカタログ・新規セッションに適用されます

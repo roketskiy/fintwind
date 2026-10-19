@@ -328,6 +328,10 @@ settings.browser_tools:
   en: Browser tools
 settings.browser_tools_description:
   en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context
+settings.goal:
+  en: Goal mode
+settings.goal_description:
+  en: Use /goal to set a session objective, with controls to pause and resume execution
 settings.auto_compact:
   en: Auto compact
 settings.auto_compact_description:
@@ -344,6 +348,8 @@ settings.network_proxy:
   en: Network proxy
 settings.opencode_shell:
   en: OpenCode shell
+settings.opencode_shell_description:
+  en: Choose the shell OpenCode uses to run commands
 settings.shell_default:
   en: System default
 settings.shell_failed:

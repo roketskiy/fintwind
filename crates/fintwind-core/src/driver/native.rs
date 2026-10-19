@@ -2643,9 +2643,6 @@ mod tests {
         assert_eq!(parent.timestamp, 10);
     }
 
-    /// The session-row shape the global usage scan reduces: five token
-    /// lanes, the model pair, the project directory, and `time.updated` as
-    /// the preferred stamp.
     #[test]
     fn usage_entry_parses_the_session_row_shape() {
         let row = json!({
@@ -2659,7 +2656,8 @@ mod tests {
         let (_, facts) = row_facts(&row).unwrap();
         let entry = usage_entry_from_row(&facts).unwrap();
         assert_eq!(entry.timestamp, 1_788_253_300);
-        assert_eq!(entry.model.as_deref(), Some("glmcoding/glm-5.3"));
+        assert_eq!(facts.model.as_deref(), Some("glmcoding/glm-5.3"));
+        assert_eq!(entry.model, None);
         assert_eq!(entry.directory.as_deref(), Some("E:\\work\\x"));
         assert_eq!(entry.cost, Some(1.25));
         assert_eq!(entry.input_tokens, 130);

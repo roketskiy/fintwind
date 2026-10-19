@@ -107,6 +107,7 @@ enum PaletteAction {
     ToggleRightPanel,
     UndoLastTurn,
     RedoUndoneTurn,
+    ReloadOpenCodeServer,
     OpenSettings(SettingsPage),
     OpenUsage,
     SelectTask(Uuid),
@@ -413,6 +414,40 @@ impl Fintwind {
         cx.notify();
     }
 
+    /// Hot-reload the native OpenCode server through its `location.reload`
+    /// route: the daemon asks the server to shut down and rebuild every
+    /// loaded location in place, so edited configuration takes effect
+    /// without restarting the server process. The blocking RPC runs on the
+    /// background executor; the outcome lands as a toast.
+    fn reload_opencode_server_action(&mut self, cx: &mut Context<Self>) {
+        let Some(binary) = self.native_binary_path() else {
+            return;
+        };
+        let directory = self.native_server_directory();
+        self.show_toast(tr!("command_palette.reloading"));
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let reloaded = cx
+                .background_executor()
+                .spawn(async move {
+                    fintwind_client::persistence::StateStore::remote(daemon)
+                        .reload_opencode_server(binary, directory)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match reloaded {
+                    Ok(()) => this.show_success_toast(tr!("command_palette.reloaded")),
+                    Err(error) => this.show_toast(tr!(
+                        "command_palette.reload_failed",
+                        error = error.to_string()
+                    )),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn refresh_command_palette_localized_text(&mut self, cx: &mut Context<Self>) {
         self.command_palette.search.update(cx, |input, cx| {
             input.set_placeholder(tr!("command_palette.placeholder"), cx)
@@ -619,6 +654,17 @@ impl Fintwind {
                     None,
                     PaletteAction::CompactContext,
                     "compact summarize context window free tokens history",
+                    next(),
+                ));
+            }
+            if self.native_binary_path().is_some() {
+                commands.push(CommandPaletteItem::command(
+                    PaletteSection::Commands,
+                    tr!("command_palette.reload_server"),
+                    "icons/rotate-cw.svg",
+                    None,
+                    PaletteAction::ReloadOpenCodeServer,
+                    "reload opencode server hot configuration refresh restart providers mcp",
                     next(),
                 ));
             }
@@ -973,6 +1019,7 @@ impl Fintwind {
                     self.undo_last_turn(session_id, cx);
                 }
             }
+            PaletteAction::ReloadOpenCodeServer => self.reload_opencode_server_action(cx),
             PaletteAction::RedoUndoneTurn => {
                 if let Some(session_id) = self.selected_session().map(|session| session.id) {
                     self.redo_turn(session_id, cx);

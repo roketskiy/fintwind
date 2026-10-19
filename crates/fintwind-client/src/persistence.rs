@@ -1247,6 +1247,24 @@ impl StateStore {
         }
     }
 
+    /// Hot-reload the workspace's OpenCode server in place through its native
+    /// `location.reload` route, so edited configuration takes effect without
+    /// restarting the server process. Blocking RPC; the route answers only
+    /// after every replacement location has finished building.
+    pub fn reload_opencode_server(&self, binary: PathBuf, directory: PathBuf) -> io::Result<()> {
+        self.expect_ack(
+            self.daemon
+                .client()
+                .request_with_timeout(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    Command::ReloadOpenCodeServer { binary, directory },
+                    Duration::from_secs(90),
+                )
+                .map_err(to_io_error),
+        )
+    }
+
     /// Delete a native session on the OpenCode server. Blocking RPC.
     pub fn delete_provider_session(
         &self,

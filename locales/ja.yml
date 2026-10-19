@@ -71,6 +71,10 @@ command_palette.you: あなた
 command_palette.agent: エージェント
 command_palette.no_results: 一致するタスクやコマンドはありません
 command_palette.no_results_hint: タスク名、メッセージ、プロジェクト、設定、コマンドで検索してください
+command_palette.reload_server: OpenCode サーバーを再読み込み
+command_palette.reloading: OpenCode サーバーを再読み込み中…
+command_palette.reloaded: OpenCode サーバーを再読み込みしました
+command_palette.reload_failed: OpenCode サーバーを再読み込みできませんでした：%{error}
 
 language.title: 言語
 language.system: システム

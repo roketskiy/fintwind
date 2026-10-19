@@ -217,6 +217,18 @@ pub(crate) fn list_mcp_statuses(
     Ok(statuses)
 }
 
+/// Ask the server to hot-reload in place through its native `location.reload`
+/// route: every loaded location is shut down and rebuilt, so edited
+/// configuration takes effect without restarting the server process. The
+/// route answers 204 once all replacement builds settle; running sessions
+/// continue with fresh services at their next step boundary. Reload acts on
+/// every loaded location and never boots the caller's location first, so no
+/// directory header is sent.
+pub(crate) fn reload_server(server: &OpenCodeServer) -> anyhow::Result<()> {
+    server.request_with_timeout("POST", "/api/location/reload", None, HTTP_TIMEOUT)?;
+    Ok(())
+}
+
 /// What a session row is, in the only distinction that matters for usage.
 ///
 /// `parentID` alone conflates two very different things, and treating them

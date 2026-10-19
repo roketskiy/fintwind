@@ -140,6 +140,14 @@ command_palette.no_results:
   en: No matching tasks or commands
 command_palette.no_results_hint:
   en: Try a task title, message, project, setting, or command
+command_palette.reload_server:
+  en: Reload OpenCode server
+command_palette.reloading:
+  en: Reloading OpenCode server…
+command_palette.reloaded:
+  en: OpenCode server reloaded
+command_palette.reload_failed:
+  en: "Could not reload the OpenCode server: %{error}"
 
 language.title:
   en: Language

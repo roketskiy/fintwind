@@ -381,7 +381,7 @@ impl Fintwind {
         let Some(binary) = self.native_binary_path() else {
             return;
         };
-        let directory = self.mcp_auth_directory();
+        let directory = self.native_server_directory();
         self.mcp_status_generation += 1;
         let generation = self.mcp_status_generation;
         let daemon = self.daemon.clone();
@@ -612,7 +612,10 @@ impl Fintwind {
         }
     }
 
-    fn mcp_auth_directory(&self) -> PathBuf {
+    /// A workspace directory the native OpenCode server operations can name:
+    /// the selected project's checkout, else the first project, else home.
+    /// The server pool only needs an existing directory to resolve a server.
+    pub(super) fn native_server_directory(&self) -> PathBuf {
         self.state
             .selected_project
             .and_then(|project_id| {
@@ -643,7 +646,7 @@ impl Fintwind {
         self.mcp_oauth_auth_generation += 1;
         let generation = self.mcp_oauth_auth_generation;
         self.mcp_oauth_auth_name = Some(name.clone());
-        let directory = self.mcp_auth_directory();
+        let directory = self.native_server_directory();
         let daemon = self.daemon.clone();
         self.mcp_oauth_cancel_requested = false;
         cx.notify();

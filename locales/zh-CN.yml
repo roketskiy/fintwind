@@ -69,6 +69,10 @@ command_palette.you: 你
 command_palette.agent: 智能体
 command_palette.no_results: 未找到匹配的任务或命令
 command_palette.no_results_hint: 可尝试搜索任务标题、消息、项目、设置或命令
+command_palette.reload_server: 重载 OpenCode 服务器
+command_palette.reloading: 正在重载 OpenCode 服务器…
+command_palette.reloaded: OpenCode 服务器已重载
+command_palette.reload_failed: 无法重载 OpenCode 服务器：%{error}
 language.title: 语言
 language.system: 跟随系统
 language.description: 选择 fintwind 的界面语言

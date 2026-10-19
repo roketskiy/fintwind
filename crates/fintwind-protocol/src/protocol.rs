@@ -390,6 +390,14 @@ pub enum Command {
         binary: PathBuf,
         directory: PathBuf,
     },
+    /// Ask the workspace's OpenCode server to hot-reload in place through its
+    /// native `location.reload` route: every loaded location is shut down and
+    /// rebuilt so edited configuration takes effect without restarting the
+    /// server process. The daemon needs `directory` only to acquire the pool.
+    ReloadOpenCodeServer {
+        binary: PathBuf,
+        directory: PathBuf,
+    },
     /// Kill the pending `opencode mcp auth` child for `name`. Ack succeeds
     /// whether or not a flow was running, so the button is idempotent.
     CancelAuthenticateMcpServer {

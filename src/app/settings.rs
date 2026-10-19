@@ -604,10 +604,21 @@ impl Fintwind {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("goal.title")),
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.goal")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.goal_description")),
+                                    ),
                             )
                             .child(toggle_switch(
                                 "goal-toggle",
@@ -758,10 +769,21 @@ impl Fintwind {
                                 div()
                                     .flex_1()
                                     .min_w_0()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.opencode_shell")),
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.opencode_shell")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.opencode_shell_description")),
+                                    ),
                             )
                             .child(shell_selector),
                     ),

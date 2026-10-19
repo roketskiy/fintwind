@@ -4,6 +4,9 @@ target
 *.log
 .env
 
+# Python bytecode cache
+__pycache__/
+
 /dist
 node_modules
 temp/

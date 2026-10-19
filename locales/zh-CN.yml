@@ -162,6 +162,8 @@ settings.local_by_default: 默认存储在本地
 settings.local_by_default_description: 项目、对话和设置均存储在这台电脑上
 settings.browser_tools: 浏览器工具
 settings.browser_tools_description: 默认关闭。开启后向模型提供内置浏览器操作工具与使用说明，会占用少量上下文
+settings.goal: 目标模式
+settings.goal_description: 开启后可用 /goal 设置会话目标，支持暂停与恢复执行
 settings.auto_compact: 自动压缩
 settings.auto_compact_description: 上下文达到下方阈值时压缩一次，前台会话与子代理都适用
 settings.auto_compact_threshold: 压缩阈值
@@ -170,6 +172,7 @@ settings.auto_compact_threshold_placeholder: 如 500K
 settings.auto_compact_threshold_invalid: 阈值格式不对
 settings.network_proxy: 网络代理
 settings.opencode_shell: OpenCode Shell
+settings.opencode_shell_description: 选择 OpenCode 执行命令时使用的 Shell
 settings.shell_default: 系统默认
 settings.shell_failed: "无法更新 Shell 设置：%{error}"
 settings.network_proxy_description: 作用于更新检查、模型目录与新建会话

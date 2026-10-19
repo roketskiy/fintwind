@@ -48,10 +48,9 @@ const SIDEBAR_ACTION_ROW_GAP: f32 = 4.0;
 /// Separation beneath the search row, between the action column and the
 /// project list.
 const SIDEBAR_SEARCH_BOTTOM_GAP: f32 = 10.0;
-/// Project group header: a borderless card that is slightly taller than the
-/// old text-only row so the trailing new-session control has a usable hit area.
-const SIDEBAR_PROJECT_CARD_HEIGHT: f32 = 34.0;
-const SIDEBAR_PROJECT_CARD_BOTTOM_GAP: f32 = 6.0;
+/// Compact project header, retaining the new-session control's full hit area.
+const SIDEBAR_PROJECT_CARD_HEIGHT: f32 = 28.0;
+const SIDEBAR_PROJECT_CARD_BOTTOM_GAP: f32 = 2.0;
 /// Sessions an unfolded project group reveals before a "show more" affordance
 /// takes over. Six matches the previous in-group scroller's visible height, so
 /// the first screen of a busy project still reads exactly as it did before.

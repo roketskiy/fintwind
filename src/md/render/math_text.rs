@@ -303,7 +303,7 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
                 _ => return,
             }
             cx.stop_propagation();
-            cx.notify(window.current_view());
+            window.refresh();
         });
     }
     let has_links = !flat.links.is_empty();

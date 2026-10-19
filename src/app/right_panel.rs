@@ -1097,6 +1097,28 @@ mod tests {
 }
 
 impl Fintwind {
+    pub(super) fn show_transcript_file_menu(
+        &mut self,
+        target: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(path) = crate::file_target::resolve(target, self.selected_workspace_path()) else {
+            return false;
+        };
+        // Capture the resolved path now, so switching sessions cannot retarget
+        // the pending action to a different workspace.
+        let weak = cx.entity().downgrade();
+        self.transcript_file_menu.set_context_items(vec![
+            MenuItem::new(tr!("common.open_default_app"), move |_, cx| {
+                let _ = weak.update(cx, |this, cx| this.open_host_path(&path, cx));
+            })
+            .icon("icons/external-link.svg"),
+        ]);
+        self.transcript_file_menu.open_at_pointer(window, cx);
+        true
+    }
+
     pub(super) fn open_transcript_link(&mut self, target: &str, cx: &mut Context<Self>) -> bool {
         match transcript_link_route(target, self.selected_workspace_path()) {
             TranscriptLinkRoute::ProjectFile(relative_path) => {

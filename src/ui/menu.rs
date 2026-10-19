@@ -274,6 +274,18 @@ impl ContextMenuHandle {
         open_menu(self, position, SurfaceFocus::Card, false, window, cx);
     }
 
+    /// Open an action menu at the current pointer without using trigger bounds.
+    pub fn open_at_pointer(&self, window: &mut Window, cx: &mut App) {
+        open_menu(
+            self,
+            window.mouse_position(),
+            SurfaceFocus::Card,
+            false,
+            window,
+            cx,
+        );
+    }
+
     pub fn close(&self, window: &mut Window, cx: &mut App) {
         let was_open = {
             let mut state = self.state.borrow_mut();

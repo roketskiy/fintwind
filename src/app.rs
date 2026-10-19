@@ -1345,6 +1345,7 @@ pub struct Fintwind {
     update_button_focus: FocusHandle,
     /// The rail's help menu, anchored above its trigger while open.
     help_menu: ContextMenuHandle,
+    transcript_file_menu: ContextMenuHandle,
     /// Window-modal changelog card, opened from the help menu.
     changelog: Option<help::ChangelogCard>,
     /// The "Performance Overhead" tool window, when open. The help menu
@@ -3485,9 +3486,11 @@ impl Fintwind {
 
             let markdown_link_handler: md::render::LinkHandler = {
                 let fintwind = cx.entity().downgrade();
-                Rc::new(move |target, _, cx| {
+                Rc::new(move |target, window, cx| {
                     let handled = fintwind
-                        .update(cx, |fintwind, cx| fintwind.open_transcript_link(target, cx))
+                        .update(cx, |fintwind, cx| {
+                            fintwind.show_transcript_file_menu(target, window, cx)
+                        })
                         .unwrap_or(false);
                     if !handled {
                         cx.open_url(target);
@@ -3534,6 +3537,7 @@ impl Fintwind {
                 latest_available: None,
                 update_button_focus: cx.focus_handle(),
                 help_menu: ContextMenuHandle::new(cx),
+                transcript_file_menu: ContextMenuHandle::new(cx),
                 changelog: None,
                 perf_window: None,
                 onboarding_add_project_focus,

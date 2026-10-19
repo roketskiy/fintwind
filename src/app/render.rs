@@ -543,6 +543,12 @@ impl Render for Fintwind {
             .children(discard_dialog)
             .children(review_commit_dialog)
             .children(image_preview)
+            .child(crate::ui::menu::context_menu(
+                div().absolute().top_0().left_0(),
+                "transcript-file-menu",
+                &self.transcript_file_menu,
+                |_| Vec::new(),
+            ))
             .into_any_element();
 
         self.render_window_frame(content, window, cx)

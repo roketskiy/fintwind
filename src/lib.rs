@@ -36,6 +36,9 @@ mod browser_poc;
 pub mod daemon;
 mod driver;
 mod ely;
+#[cfg(test)]
+mod file_link_e2e;
+mod file_target;
 mod input;
 #[cfg(test)]
 mod input_hit_test_e2e;

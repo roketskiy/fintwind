@@ -250,11 +250,11 @@ impl Fintwind {
             Ok(Some(answer)) if !answer.trim().is_empty() => {
                 let selection = state.selection.clone();
                 let weak = cx.entity().downgrade();
-                let link = Rc::new(move |url: &str, _: &mut Window, cx: &mut App| {
+                let link = Rc::new(move |url: &str, window: &mut Window, cx: &mut App| {
                     let handled = weak
                         .update(cx, |this, cx| {
                             this.state.selected_session == Some(session_id)
-                                && this.open_transcript_link(url, cx)
+                                && this.show_transcript_file_menu(url, window, cx)
                         })
                         .unwrap_or(false);
                     if !handled {

@@ -16,8 +16,8 @@ use fintwind_client::custom_providers::{
 };
 
 use super::providers_page::{
-    ProviderFormModelDraft, ProviderFormStage, builtin_selection_id, info_note, outline_button,
-    small_pill,
+    ProviderFormModelDraft, ProviderFormStage, ProviderOAuthFlow, ProviderOAuthFormDraft,
+    builtin_selection_id, info_note, outline_button, small_pill,
 };
 
 use super::*;
@@ -537,6 +537,9 @@ impl Fintwind {
     /// are going away with it. The fetch flag is left alone so it keeps
     /// telling the truth about an in-flight request.
     pub(super) fn exit_provider_form(&mut self, cx: &mut Context<Self>) {
+        // A still-running OAuth flow would keep polling and, on success,
+        // close a form the user has already left; tear it down with the form.
+        self.tear_down_provider_oauth(cx);
         self.providers_adding = false;
         self.providers_form_stage = ProviderFormStage::Picking;
         self.providers_form_connectivity = None;
@@ -704,6 +707,11 @@ impl Fintwind {
             .filter(|integration| !integration.env_names.is_empty())
             .map(|integration| (integration.id.clone(), integration.env_names.clone()))
             .collect();
+        self.providers_oauth_methods = integrations
+            .iter()
+            .filter(|integration| !integration.oauth_methods.is_empty())
+            .map(|integration| (integration.id.clone(), integration.oauth_methods.clone()))
+            .collect();
     }
 
     /// The workspace the page's server RPCs anchor to: the probed OpenCode
@@ -849,6 +857,401 @@ impl Fintwind {
             });
         })
         .detach();
+    }
+
+    /// The user pressed one of the provider's OAuth sign-in buttons: a
+    /// method without visible fields starts right away, a method with them
+    /// first shows the answer form.
+    pub(super) fn start_provider_oauth_action(
+        &mut self,
+        provider_id: String,
+        method_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(method) = self
+            .provider_oauth_methods(&provider_id)
+            .iter()
+            .find(|method| method.id == method_id)
+            .cloned()
+        else {
+            return;
+        };
+        if method.form.iter().any(|field| !field.hidden) {
+            self.begin_provider_oauth_form(provider_id, method_id, window, cx);
+        } else {
+            self.start_provider_oauth(provider_id, method_id, serde_json::Value::Null, cx);
+        }
+    }
+
+    /// Open the pre-start form for one OAuth method: one input per visible
+    /// field, defaults prefilled.
+    fn begin_provider_oauth_form(
+        &mut self,
+        provider_id: String,
+        method_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(method) = self
+            .provider_oauth_methods(&provider_id)
+            .iter()
+            .find(|method| method.id == method_id)
+            .cloned()
+        else {
+            return;
+        };
+        let inputs = method
+            .form
+            .iter()
+            .filter(|field| !field.hidden)
+            .map(|field| {
+                let input = cx.new(|cx| {
+                    let mut input = ComposerInput::new(window, cx).search_field();
+                    if let Some(placeholder) = &field.placeholder {
+                        input = input.placeholder(placeholder.clone());
+                    }
+                    input
+                });
+                if let Some(default) = &field.default {
+                    input.update(cx, |input, cx| input.set_content(default.clone(), cx));
+                }
+                (field.key.clone(), input)
+            })
+            .collect::<Vec<_>>();
+        self.providers_oauth_draft = Some(ProviderOAuthFormDraft {
+            provider_id,
+            method_id,
+            fields: method.form,
+            inputs,
+            selections: std::collections::HashMap::new(),
+        });
+        cx.notify();
+    }
+
+    /// The user pressed the pre-start form's cancel: back to the method
+    /// buttons.
+    pub(super) fn cancel_provider_oauth_form(&mut self, cx: &mut Context<Self>) {
+        self.providers_oauth_draft = None;
+        cx.notify();
+    }
+
+    /// One choice field's option was picked.
+    pub(super) fn toggle_provider_oauth_selection(
+        &mut self,
+        key: String,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(draft) = self.providers_oauth_draft.as_mut() else {
+            return;
+        };
+        draft.selections.insert(key, value);
+        cx.notify();
+    }
+
+    /// The pre-start form's sign-in button: collect the active fields'
+    /// answers and start the attempt. Required-but-empty answers keep the
+    /// button dead, so every answer here is a complete one.
+    pub(super) fn submit_provider_oauth_form(&mut self, cx: &mut Context<Self>) {
+        let Some(draft) = self.providers_oauth_draft.as_ref() else {
+            return;
+        };
+        if !draft.ready(cx) {
+            return;
+        }
+        let mut answers = serde_json::Map::new();
+        for field in &draft.fields {
+            if field.hidden || !draft.field_is_active(field, cx) {
+                continue;
+            }
+            if let Some(answer) = draft.answer_of(&field.key, cx) {
+                answers.insert(field.key.clone(), serde_json::Value::String(answer));
+            }
+        }
+        let provider_id = draft.provider_id.clone();
+        let method_id = draft.method_id.clone();
+        self.start_provider_oauth(provider_id, method_id, serde_json::Value::Object(answers), cx);
+    }
+
+    /// Start one OAuth sign-in for `provider_id` through `method_id`: the
+    /// daemon asks the workspace server for an attempt, the app opens the
+    /// authorization URL, and an auto-mode flow then polls until the server
+    /// stores the credential. A code-mode flow instead shows the paste field.
+    pub(super) fn start_provider_oauth(
+        &mut self,
+        provider_id: String,
+        method_id: String,
+        answers: serde_json::Value,
+        cx: &mut Context<Self>,
+    ) {
+        // One flow at a time: the buttons are hidden while one runs, so a
+        // second start here would be a stale click.
+        if self.providers_oauth_flow.is_some() {
+            return;
+        }
+        let Some(workspace) = self.provider_workspace() else {
+            return;
+        };
+        self.providers_oauth_draft = None;
+        self.providers_oauth_generation += 1;
+        let generation = self.providers_oauth_generation;
+        self.providers_oauth_flow = Some(ProviderOAuthFlow {
+            provider_id: provider_id.clone(),
+            attempt: None,
+        });
+        cx.notify();
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let started = cx
+                .background_executor()
+                .spawn(async move {
+                    let (binary, directory) = workspace;
+                    fintwind_client::persistence::StateStore::remote(daemon).start_provider_oauth(
+                        binary,
+                        directory,
+                        provider_id.clone(),
+                        method_id,
+                        answers,
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.providers_oauth_generation != generation {
+                    return;
+                }
+                match started {
+                    Ok(attempt) => {
+                        cx.open_url(&attempt.url);
+                        let polls = attempt.mode
+                            == fintwind_protocol::provider_session::IntegrationOAuthMode::Auto;
+                        if let Some(flow) = this.providers_oauth_flow.as_mut() {
+                            flow.attempt = Some(attempt);
+                        }
+                        cx.notify();
+                        if polls {
+                            this.run_provider_oauth_poll(generation, cx);
+                        }
+                    }
+                    Err(error) => {
+                        this.providers_oauth_flow = None;
+                        this.show_toast(tr!(
+                            "providers.oauth_failed_toast",
+                            error = error.to_string()
+                        ));
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Poll the running OAuth attempt once a second until it completes,
+    /// fails, or expires. Short-lived network errors retry; the generation
+    /// guard ends the loop the moment the flow is replaced or torn down.
+    fn run_provider_oauth_poll(&mut self, generation: u64, cx: &mut Context<Self>) {
+        let Some(workspace) = self.provider_workspace() else {
+            return;
+        };
+        let Some(flow) = self.providers_oauth_flow.clone() else {
+            return;
+        };
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let mut transient_errors = 0u32;
+            loop {
+                let polled = cx
+                    .background_executor()
+                    .spawn({
+                        let (binary, directory) = workspace.clone();
+                        let daemon = daemon.clone();
+                        let provider_id = flow.provider_id.clone();
+                        let attempt_id = flow
+                            .attempt
+                            .as_ref()
+                            .map(|attempt| attempt.attempt_id.clone())
+                            .unwrap_or_default();
+                        async move {
+                            fintwind_client::persistence::StateStore::remote(daemon)
+                                .poll_provider_oauth(binary, directory, provider_id, attempt_id)
+                        }
+                    })
+                    .await;
+                let mut wait = false;
+                let alive = this.update(cx, |this, cx| {
+                    if this.providers_oauth_generation != generation {
+                        return false;
+                    }
+                    use fintwind_protocol::provider_session::IntegrationOAuthPoll;
+                    match polled {
+                        Ok(IntegrationOAuthPoll::Pending) => {
+                            transient_errors = 0;
+                            wait = true;
+                        }
+                        Ok(IntegrationOAuthPoll::Complete) => {
+                            this.finish_provider_oauth(cx);
+                        }
+                        Ok(IntegrationOAuthPoll::Expired) => {
+                            let detail = tr!("providers.oauth_expired").to_string();
+                            this.fail_provider_oauth(detail, cx);
+                        }
+                        Ok(IntegrationOAuthPoll::Failed { message }) => {
+                            this.fail_provider_oauth(message, cx);
+                        }
+                        Err(error) => {
+                            // A brief hiccup (server restarting under the
+                            // poll) should not kill a sign-in the user is
+                            // mid-way through; five in a row means it is down.
+                            transient_errors += 1;
+                            if transient_errors >= 5 {
+                                this.fail_provider_oauth(error.to_string(), cx);
+                            } else {
+                                wait = true;
+                            }
+                        }
+                    }
+                    true
+                });
+                if !wait || alive.is_err() {
+                    return;
+                }
+                cx.background_executor().timer(Duration::from_secs(1)).await;
+            }
+        })
+        .detach();
+    }
+
+    /// Complete a code-mode flow with the code field's content. An empty
+    /// field does nothing; a refused code toasts and leaves the flow up so
+    /// the code can be corrected.
+    pub(super) fn submit_provider_oauth_code(&mut self, cx: &mut Context<Self>) {
+        let Some(workspace) = self.provider_workspace() else {
+            return;
+        };
+        let Some(flow) = self.providers_oauth_flow.clone() else {
+            return;
+        };
+        let Some(attempt) = flow.attempt.as_ref() else {
+            return;
+        };
+        let code = self
+            .provider_oauth_code_input
+            .read(cx)
+            .content()
+            .trim()
+            .to_owned();
+        if code.is_empty() {
+            return;
+        }
+        let attempt_id = attempt.attempt_id.clone();
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let completed = cx
+                .background_executor()
+                .spawn(async move {
+                    let (binary, directory) = workspace;
+                    fintwind_client::persistence::StateStore::remote(daemon)
+                        .complete_provider_oauth(binary, directory, flow.provider_id, attempt_id, Some(code))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| match completed {
+                Ok(()) => this.finish_provider_oauth(cx),
+                Err(error) => {
+                    this.show_toast(tr!(
+                        "providers.oauth_failed_toast",
+                        error = error.to_string()
+                    ));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The user cancelled the running flow: stop the poll loop, clear the
+    /// form state, and tell the server to release the attempt.
+    pub(super) fn cancel_provider_oauth_flow(&mut self, cx: &mut Context<Self>) {
+        self.tear_down_provider_oauth(cx);
+        cx.notify();
+    }
+
+    /// Drop any running OAuth flow without ceremony: the generation bump
+    /// ends the poll loop, and the server-side attempt is cancelled in the
+    /// background — an uncancelled attempt expires on its own, so failure
+    /// here is silent. Used when the form closes over the flow.
+    fn tear_down_provider_oauth(&mut self, cx: &mut Context<Self>) {
+        self.providers_oauth_generation += 1;
+        self.providers_oauth_draft = None;
+        let Some(flow) = self.providers_oauth_flow.take() else {
+            return;
+        };
+        let Some(attempt) = flow.attempt else {
+            return;
+        };
+        let Some(workspace) = self.provider_workspace() else {
+            return;
+        };
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |_this, cx| {
+            let _ = cx
+                .background_executor()
+                .spawn(async move {
+                    let (binary, directory) = workspace;
+                    fintwind_client::persistence::StateStore::remote(daemon).cancel_provider_oauth(
+                        binary,
+                        directory,
+                        flow.provider_id,
+                        attempt.attempt_id,
+                    )
+                })
+                .await;
+        })
+        .detach();
+    }
+
+    /// The server stored the credential: drop the flow, refresh the
+    /// authorized set, and leave the form the way a finished key connect
+    /// does — unless the user has moved to another provider meanwhile.
+    fn finish_provider_oauth(&mut self, cx: &mut Context<Self>) {
+        let Some(flow) = self.providers_oauth_flow.take() else {
+            return;
+        };
+        self.providers_oauth_generation += 1;
+        self.providers_authorized.insert(flow.provider_id.clone());
+        self.clear_oauth_code_field(cx);
+        if matches!(
+            &self.providers_form_stage,
+            ProviderFormStage::Builtin(stage_id) if *stage_id == flow.provider_id
+        ) {
+            self.exit_provider_form(cx);
+            self.select_provider(builtin_selection_id(&flow.provider_id), cx);
+        }
+        self.show_success_toast(tr!("providers.oauth_done_toast"));
+        self.refresh_integrations(cx);
+    }
+
+    /// A poll or completion refused: toast the reason and return the form
+    /// to the sign-in buttons.
+    fn fail_provider_oauth(&mut self, detail: String, cx: &mut Context<Self>) {
+        self.providers_oauth_generation += 1;
+        self.providers_oauth_flow = None;
+        self.clear_oauth_code_field(cx);
+        self.show_toast(tr!("providers.oauth_failed_toast", error = detail));
+        cx.notify();
+    }
+
+    fn clear_oauth_code_field(&mut self, cx: &mut Context<Self>) {
+        self.provider_oauth_code_input
+            .update(cx, |input, cx| input.set_content(String::new(), cx));
+    }
+
+    /// Open the add form on one built-in provider — the re-login path for a
+    /// provider whose stored credential the server rejected. The OAuth
+    /// section there reconnects the same methods the first sign-in used.
+    pub(super) fn begin_provider_relogin(&mut self, provider_id: String, cx: &mut Context<Self>) {
+        self.begin_add_provider(cx);
+        self.select_form_builtin(Some(provider_id), cx);
     }
 
     /// Re-fetch the integration list in the background, so the authorized

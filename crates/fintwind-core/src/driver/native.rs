@@ -29,8 +29,10 @@ use serde_json::Value;
 
 use fintwind_protocol::model::unix_time;
 use fintwind_protocol::provider_session::{
-    IntegrationSummary, McpConnectionState, McpServerStatus, NativeSessionSummary,
-    NativeTranscript, UsageDayShare, UsageEntry, UsageModelLane, UsageStats,
+    IntegrationFormField, IntegrationFormFieldCondition, IntegrationFormFieldOption,
+    IntegrationOAuthAttempt, IntegrationOAuthMethod, IntegrationOAuthMode, IntegrationOAuthPoll,
+    IntegrationSummary, McpConnectionState, McpServerStatus, NativeSessionSummary, NativeTranscript,
+    UsageDayShare, UsageEntry, UsageModelLane, UsageStats,
 };
 
 use crate::blob_store::BlobStore;
@@ -1561,6 +1563,119 @@ pub(crate) fn list_integrations(
                 .filter_map(|connection| connection.get("name").and_then(Value::as_str))
                 .map(str::to_owned)
                 .collect();
+            // `Integration.OAuthMethod` rows: the sign-in methods the in-app
+            // OAuth flow connects with. The id names the connect route's
+            // method, the label is the server's own display text, and the
+            // form carries the method's string fields — visible ones render
+            // as inputs, hidden ones contribute their defaults silently.
+            let oauth_methods: Vec<IntegrationOAuthMethod> = row
+                .get("methods")
+                .and_then(Value::as_array)
+                .map(|methods| {
+                    methods
+                        .iter()
+                        .filter(|method| method.get("type").and_then(Value::as_str) == Some("oauth"))
+                        .filter_map(|method| {
+                            let form = method
+                                .get("form")
+                                .and_then(Value::as_array)
+                                .map(|fields| {
+                                    fields
+                                        .iter()
+                                        .filter(|field| {
+                                            field.get("type").and_then(Value::as_str) == Some("string")
+                                        })
+                                        .filter_map(|field| {
+                                            Some(IntegrationFormField {
+                                                key: field.get("key")?.as_str()?.to_owned(),
+                                                title: field
+                                                    .get("title")
+                                                    .and_then(Value::as_str)
+                                                    .map(str::to_owned),
+                                                description: field
+                                                    .get("description")
+                                                    .and_then(Value::as_str)
+                                                    .map(str::to_owned),
+                                                required: field
+                                                    .get("required")
+                                                    .and_then(Value::as_bool)
+                                                    .unwrap_or(false),
+                                                hidden: field
+                                                    .get("hidden")
+                                                    .and_then(Value::as_bool)
+                                                    .unwrap_or(false),
+                                                options: field
+                                                    .get("options")
+                                                    .and_then(Value::as_array)
+                                                    .map(|options| {
+                                                        options
+                                                            .iter()
+                                                            .filter_map(|option| {
+                                                                Some(IntegrationFormFieldOption {
+                                                                    value: option
+                                                                        .get("value")?
+                                                                        .as_str()?
+                                                                        .to_owned(),
+                                                                    label: option
+                                                                        .get("label")
+                                                                        .and_then(Value::as_str)
+                                                                        .unwrap_or_default()
+                                                                        .to_owned(),
+                                                                })
+                                                            })
+                                                            .collect()
+                                                    })
+                                                    .unwrap_or_default(),
+                                                when: field
+                                                    .get("when")
+                                                    .and_then(Value::as_array)
+                                                    .map(|conditions| {
+                                                        conditions
+                                                            .iter()
+                                                            .filter_map(|condition| {
+                                                                Some(IntegrationFormFieldCondition {
+                                                                    key: condition.get("key")?.as_str()?.to_owned(),
+                                                                    op: condition
+                                                                        .get("op")
+                                                                        .and_then(Value::as_str)
+                                                                        .unwrap_or("eq")
+                                                                        .to_owned(),
+                                                                    value: condition
+                                                                        .get("value")
+                                                                        .cloned()
+                                                                        .unwrap_or(Value::Null),
+                                                                })
+                                                            })
+                                                            .collect()
+                                                    })
+                                                    .unwrap_or_default(),
+                                                placeholder: field
+                                                    .get("placeholder")
+                                                    .and_then(Value::as_str)
+                                                    .map(str::to_owned),
+                                                default: field
+                                                    .get("default")
+                                                    .and_then(Value::as_str)
+                                                    .map(str::to_owned),
+                                                field_type: "string".to_owned(),
+                                            })
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            Some(IntegrationOAuthMethod {
+                                id: method.get("id")?.as_str()?.to_owned(),
+                                label: method
+                                    .get("label")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or_default()
+                                    .to_owned(),
+                                form,
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             IntegrationSummary {
                 id: row
                     .get("id")
@@ -1585,6 +1700,7 @@ pub(crate) fn list_integrations(
                     && auth_states.len() == connections.len()
                     && auth_states.iter().all(|state| *state == "needs_auth"),
                 env_names,
+                oauth_methods,
                 auth_url: connections
                     .iter()
                     .filter(|connection| {
@@ -1663,6 +1779,171 @@ pub(crate) fn logout_integration(server: &OpenCodeServer, provider_id: &str) -> 
         server.request("DELETE", &path, None)?;
     }
     Ok(())
+}
+
+/// Start one OAuth attempt for `provider_id` — the same path the CLI's
+/// `auth login` and the TUI's /connect take. Like the key connect, the
+/// OAuth connect route 404s until the integration list has activated the
+/// server's plugins once, so the roster is fetched first; it also doubles
+/// as the check that `method_id` really is one of the integration's OAuth
+/// methods. `answers` carries the visible form fields' answers; the
+/// method's hidden fields contribute their defaults on top, exactly like
+/// the OpenCode desktop app's form handling.
+pub(crate) fn start_integration_oauth(
+    server: &OpenCodeServer,
+    provider_id: &str,
+    method_id: &str,
+    answers: &Value,
+) -> anyhow::Result<IntegrationOAuthAttempt> {
+    let integrations = list_integrations(server)?;
+    let integration = integrations
+        .iter()
+        .find(|integration| integration.id == provider_id);
+    let Some(integration) = integration else {
+        anyhow::bail!("OpenCode does not provide the integration `{provider_id}`");
+    };
+    let method = integration
+        .oauth_methods
+        .iter()
+        .find(|method| method.id == method_id);
+    let Some(method) = method else {
+        anyhow::bail!(
+            "OpenCode does not provide the OAuth method `{method_id}` for `{provider_id}`"
+        );
+    };
+    // Fold the declared hidden fields' defaults into the answers, so the
+    // request matches what the CLI and desktop app send for methods whose
+    // forms hide server-side defaults (e.g. the Console URL).
+    let mut answer = serde_json::Map::new();
+    for field in &method.form {
+        if field.hidden {
+            if let Some(default) = &field.default {
+                answer.insert(field.key.clone(), Value::String(default.clone()));
+            }
+        }
+    }
+    if let Some(answers) = answers.as_object() {
+        for (key, value) in answers {
+            answer.insert(key.clone(), value.clone());
+        }
+    }
+    let path = format!(
+        "/api/integration/{}/connect/oauth",
+        encode_path_segment(provider_id)
+    );
+    let mut payload = serde_json::json!({ "methodID": method_id });
+    if !answer.is_empty() {
+        payload["answer"] = Value::Object(answer);
+    }
+    let response = server.request("POST", &path, Some(&payload))?;
+    parse_oauth_attempt(&response)
+}
+
+/// Poll one OAuth attempt: pending while the user signs in, then complete,
+/// failed, or expired. A vanished attempt reports expired rather than
+/// failing — the flow's wait is simply over.
+pub(crate) fn poll_integration_oauth(
+    server: &OpenCodeServer,
+    provider_id: &str,
+    attempt_id: &str,
+) -> anyhow::Result<IntegrationOAuthPoll> {
+    let path = format!(
+        "/api/integration/{}/connect/oauth/{}",
+        encode_path_segment(provider_id),
+        encode_path_segment(attempt_id)
+    );
+    let response = server.request("GET", &path, None)?;
+    let status = response.pointer("/data").unwrap_or(&response);
+    let state = status
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match state {
+        "pending" => Ok(IntegrationOAuthPoll::Pending),
+        "complete" => Ok(IntegrationOAuthPoll::Complete),
+        "expired" => Ok(IntegrationOAuthPoll::Expired),
+        "failed" => Ok(IntegrationOAuthPoll::Failed {
+            message: status
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("authorization failed")
+                .to_owned(),
+        }),
+        other => anyhow::bail!("OpenCode reported the OAuth attempt as `{other}`"),
+    }
+}
+
+/// Finish a code-mode OAuth attempt with the code the user pasted. The
+/// server stores the resulting credential, so the connection goes live
+/// without anything else.
+pub(crate) fn complete_integration_oauth(
+    server: &OpenCodeServer,
+    provider_id: &str,
+    attempt_id: &str,
+    code: Option<&str>,
+) -> anyhow::Result<()> {
+    let path = format!(
+        "/api/integration/{}/connect/oauth/{}/complete",
+        encode_path_segment(provider_id),
+        encode_path_segment(attempt_id)
+    );
+    server.request(
+        "POST",
+        &path,
+        Some(&serde_json::json!({ "code": code })),
+    )?;
+    Ok(())
+}
+
+/// Cancel one OAuth attempt and release its server-side resources. A
+/// cancelled or already-finished attempt answers 404 — the goal is met
+/// either way, so that is not an error.
+pub(crate) fn cancel_integration_oauth(
+    server: &OpenCodeServer,
+    provider_id: &str,
+    attempt_id: &str,
+) -> anyhow::Result<()> {
+    let path = format!(
+        "/api/integration/{}/connect/oauth/{}",
+        encode_path_segment(provider_id),
+        encode_path_segment(attempt_id)
+    );
+    match server.request("DELETE", &path, None) {
+        Ok(_) => Ok(()),
+        Err(error) if error.to_string().contains("HTTP 404") => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// `Integration.Attempt` inside a connect-oauth response: under `data` when
+/// enveloped, at the root otherwise.
+fn parse_oauth_attempt(response: &Value) -> anyhow::Result<IntegrationOAuthAttempt> {
+    let attempt = response.pointer("/data").unwrap_or(response);
+    let attempt_id = attempt
+        .get("attemptID")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let url = attempt
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if attempt_id.is_empty() || url.is_empty() {
+        anyhow::bail!("OpenCode returned an incomplete OAuth attempt");
+    }
+    let mode = match attempt.get("mode").and_then(Value::as_str) {
+        Some("code") => IntegrationOAuthMode::Code,
+        _ => IntegrationOAuthMode::Auto,
+    };
+    Ok(IntegrationOAuthAttempt {
+        attempt_id: attempt_id.to_owned(),
+        url: url.to_owned(),
+        instructions: attempt
+            .get("instructions")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        mode,
+    })
 }
 
 /// Count the models the local OpenCode server currently exposes for

@@ -333,6 +333,40 @@ pub enum Command {
         directory: PathBuf,
         provider_id: String,
     },
+    /// Start one OAuth attempt for `provider_id`'s integration — the server
+    /// returns the authorization URL and how the flow finishes. `answers`
+    /// carries the visible form fields' answers.
+    StartProviderOAuth {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        method_id: String,
+        #[serde(default)]
+        answers: Value,
+    },
+    /// Poll one OAuth attempt's status: pending while the user signs in,
+    /// then complete, failed, or expired.
+    PollProviderOAuth {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        attempt_id: String,
+    },
+    /// Finish a code-mode OAuth attempt with the code the user pasted.
+    CompleteProviderOAuth {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        attempt_id: String,
+        code: Option<String>,
+    },
+    /// Cancel one OAuth attempt and release its server-side resources.
+    CancelProviderOAuth {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        attempt_id: String,
+    },
     /// Count the models the workspace's OpenCode server currently exposes for
     /// `provider_id`. This inspects the local model catalog; it does not test
     /// remote connectivity or measure provider latency.
@@ -620,6 +654,14 @@ pub enum ResponsePayload {
     },
     Integrations {
         integrations: Vec<IntegrationSummary>,
+    },
+    /// One started OAuth attempt: the authorization URL and its finish mode.
+    ProviderOAuthStarted {
+        attempt: crate::provider_session::IntegrationOAuthAttempt,
+    },
+    /// One OAuth attempt poll result.
+    ProviderOAuthPolled {
+        poll: crate::provider_session::IntegrationOAuthPoll,
     },
     ProviderQuota {
         quota: crate::provider_quota::ProviderQuota,

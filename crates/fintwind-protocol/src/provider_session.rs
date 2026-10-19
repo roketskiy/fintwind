@@ -135,6 +135,107 @@ pub struct IntegrationSummary {
     /// explains instead of pretending.
     #[serde(default)]
     pub env_names: Vec<String>,
+    /// The OAuth sign-in methods the server offers for this integration, in
+    /// the roster order. Each is connectable through the in-app OAuth flow:
+    /// start an attempt, open its URL, then poll or submit a code.
+    #[serde(default)]
+    pub oauth_methods: Vec<IntegrationOAuthMethod>,
+}
+
+/// One OAuth sign-in method of an integration (`Integration.OAuthMethod`):
+/// the method id the connect API names and the label the server shows.
+/// `form` lists the method's visible string fields — the answers the user
+/// fills before the attempt starts. Hidden fields are not listed: the
+/// daemon folds their defaults into the request itself, the way the CLI and
+/// the OpenCode desktop app do.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationOAuthMethod {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub form: Vec<IntegrationFormField>,
+}
+
+/// One visible string field of an OAuth method's form (`Form.StringField`).
+/// Hidden fields (server-side defaults, not user input) are kept on the
+/// model so the start request can fold them in; the UI renders only the
+/// visible ones. Non-string fields are skipped at parse time — no live
+/// integration declares one, and the answer map is string-keyed anyway.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationFormField {
+    pub key: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub hidden: bool,
+    /// Predefined answers (`Form.Option`) — the field renders as a choice
+    /// between these instead of a free-text field.
+    #[serde(default)]
+    pub options: Vec<IntegrationFormFieldOption>,
+    /// The field stays inactive unless every condition holds against the
+    /// answers gathered so far.
+    #[serde(default)]
+    pub when: Vec<IntegrationFormFieldCondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    #[serde(rename = "type")]
+    pub field_type: String,
+}
+
+/// One predefined answer of a form field.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationFormFieldOption {
+    pub value: String,
+    pub label: String,
+}
+
+/// One visibility condition (`Form.When`): the referenced field's answer
+/// must match (`eq`) or differ from (`neq`) `value`.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationFormFieldCondition {
+    pub key: String,
+    pub op: String,
+    pub value: serde_json::Value,
+}
+
+/// One running OAuth attempt (`Integration.Attempt`): where to authorize and
+/// how the flow finishes. `Auto` completes on the server once the browser
+/// sign-in lands; `Code` waits for the user to paste an authorization code.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationOAuthAttempt {
+    pub attempt_id: String,
+    pub url: String,
+    #[serde(default)]
+    pub instructions: String,
+    pub mode: IntegrationOAuthMode,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationOAuthMode {
+    Auto,
+    Code,
+}
+
+/// One poll of an OAuth attempt (`Integration.AttemptStatus`).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum IntegrationOAuthPoll {
+    Pending,
+    Complete,
+    Failed { message: String },
+    Expired,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

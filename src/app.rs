@@ -1801,6 +1801,18 @@ pub struct Fintwind {
     /// for. Everything else in the roster authorizes through OAuth, an env
     /// var, or a command — never through this app's key form.
     providers_key_methods: std::collections::HashSet<String>,
+    /// Per integration id, the OAuth sign-in methods the server offers. The
+    /// built-in form renders them as the provider's sign-in buttons.
+    providers_oauth_methods:
+        HashMap<String, Vec<fintwind_protocol::provider_session::IntegrationOAuthMethod>>,
+    /// The Providers page's one in-flight OAuth sign-in, if any.
+    providers_oauth_flow: Option<providers_page::ProviderOAuthFlow>,
+    /// The OAuth method's pre-start form, if the user picked a method whose
+    /// fields need answers first.
+    providers_oauth_draft: Option<providers_page::ProviderOAuthFormDraft>,
+    /// Generation token guarding the OAuth poll loop: a newer start or a
+    /// teardown supersedes an older loop's results.
+    providers_oauth_generation: u64,
     /// The integration fetch (authorization set included) is in flight.
     providers_auth_loading: bool,
     /// A connectivity probe of the selected built-in provider is in flight.
@@ -1886,6 +1898,8 @@ pub struct Fintwind {
     provider_form_name: Entity<ComposerInput>,
     provider_form_base_url: Entity<ComposerInput>,
     provider_form_api_key: Entity<ComposerInput>,
+    /// The paste field of a code-mode OAuth sign-in.
+    provider_oauth_code_input: Entity<ComposerInput>,
     /// The add form's search over the built-in provider picker.
     provider_form_builtin_search: Entity<ComposerInput>,
     /// Scroll positions of the Providers page's panes, tracked so they can
@@ -2676,6 +2690,11 @@ impl Fintwind {
                 .obscured()
                 .placeholder(tr!("providers.api_key_placeholder"))
         });
+        let provider_oauth_code_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .search_field()
+                .placeholder(tr!("providers.oauth_code_placeholder"))
+        });
         let provider_form_builtin_search = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
@@ -3294,6 +3313,17 @@ impl Fintwind {
                 },
             )
             .detach();
+            cx.subscribe(
+                &provider_oauth_code_input,
+                |this, _, event: &ComposerEvent, cx| match event {
+                    // Return in the code field is an honest attempt to finish
+                    // the sign-in, like Return in the form's other fields.
+                    ComposerEvent::Submit(_) => this.submit_provider_oauth_code(cx),
+                    ComposerEvent::Edited => cx.notify(),
+                    _ => {}
+                },
+            )
+            .detach();
             cx.subscribe(&mcp_search, |_: &mut Self, _, event: &ComposerEvent, cx| {
                 if matches!(event, ComposerEvent::Edited) {
                     cx.notify();
@@ -3701,6 +3731,10 @@ impl Fintwind {
                 providers_auth_urls: HashMap::new(),
                 providers_env_names: HashMap::new(),
                 providers_key_methods: HashSet::new(),
+                providers_oauth_methods: HashMap::new(),
+                providers_oauth_flow: None,
+                providers_oauth_draft: None,
+                providers_oauth_generation: 0,
                 providers_auth_loading: false,
                 providers_builtin_catalog_check: None,
                 providers_builtin_catalog_check_id: None,
@@ -3736,6 +3770,7 @@ impl Fintwind {
                 provider_form_name,
                 provider_form_base_url,
                 provider_form_api_key,
+                provider_oauth_code_input,
                 provider_form_builtin_search,
                 providers_list_scroll: ScrollHandle::new(),
                 providers_list_scrollbar: ScrollbarState::new(),

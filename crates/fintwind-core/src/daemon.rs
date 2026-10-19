@@ -1256,6 +1256,59 @@ impl Backend for FintwindBackend {
                 crate::driver::native::logout_integration(&server, &provider_id)?;
                 Ok(ResponsePayload::Ack)
             }
+            Command::StartProviderOAuth {
+                binary,
+                directory,
+                provider_id,
+                method_id,
+                answers,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let attempt = crate::driver::native::start_integration_oauth(
+                    &server,
+                    &provider_id,
+                    &method_id,
+                    &answers,
+                )?;
+                Ok(ResponsePayload::ProviderOAuthStarted { attempt })
+            }
+            Command::PollProviderOAuth {
+                binary,
+                directory,
+                provider_id,
+                attempt_id,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let poll =
+                    crate::driver::native::poll_integration_oauth(&server, &provider_id, &attempt_id)?;
+                Ok(ResponsePayload::ProviderOAuthPolled { poll })
+            }
+            Command::CompleteProviderOAuth {
+                binary,
+                directory,
+                provider_id,
+                attempt_id,
+                code,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                crate::driver::native::complete_integration_oauth(
+                    &server,
+                    &provider_id,
+                    &attempt_id,
+                    code.as_deref(),
+                )?;
+                Ok(ResponsePayload::Ack)
+            }
+            Command::CancelProviderOAuth {
+                binary,
+                directory,
+                provider_id,
+                attempt_id,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                crate::driver::native::cancel_integration_oauth(&server, &provider_id, &attempt_id)?;
+                Ok(ResponsePayload::Ack)
+            }
             Command::ProbeBuiltinProvider {
                 binary,
                 directory,
@@ -2043,6 +2096,10 @@ fn handle_driver_command(
         | Command::FetchProviderQuota { .. }
         | Command::AuthorizeProvider { .. }
         | Command::LogoutProvider { .. }
+        | Command::StartProviderOAuth { .. }
+        | Command::PollProviderOAuth { .. }
+        | Command::CompleteProviderOAuth { .. }
+        | Command::CancelProviderOAuth { .. }
         | Command::ProbeBuiltinProvider { .. }
         | Command::AuthenticateMcpServer { .. }
         | Command::ListMcpServerStatuses { .. }

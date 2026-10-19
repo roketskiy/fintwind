@@ -944,6 +944,7 @@ impl Fintwind {
         }
         let total = group.sessions.len();
         let visible = self.sidebar_group_visible(group.project_id).min(total);
+        let theme = Theme::current(cx);
         let mut body = div()
             .id(SharedString::from(format!(
                 "sidebar-group-body-{}",
@@ -951,8 +952,19 @@ impl Fintwind {
             )))
             .w_full()
             .min_w_0()
+            .relative()
+            .pl(px(22.0))
             .flex()
-            .flex_col();
+            .flex_col()
+            .child(
+                div()
+                    .absolute()
+                    .left(px(14.0))
+                    .top_0()
+                    .bottom(px(SIDEBAR_SESSION_ROW_GAP))
+                    .w(px(1.0))
+                    .bg(theme.border),
+            );
         // Session cards carry their own bottom rhythm, so a plain column keeps
         // the exact 52+2 spacing the old virtualized rows reserved.
         for &session_id in group.sessions.iter().take(visible) {

@@ -48,7 +48,7 @@ const SIDEBAR_ACTION_ROW_GAP: f32 = 4.0;
 /// Separation beneath the search row, between the action column and the
 /// project list.
 const SIDEBAR_SEARCH_BOTTOM_GAP: f32 = 10.0;
-/// Project group header: a bordered card that is slightly taller than the
+/// Project group header: a borderless card that is slightly taller than the
 /// old text-only row so the trailing new-session control has a usable hit area.
 const SIDEBAR_PROJECT_CARD_HEIGHT: f32 = 34.0;
 const SIDEBAR_PROJECT_CARD_BOTTOM_GAP: f32 = 6.0;
@@ -1175,8 +1175,6 @@ impl Fintwind {
                     .h(px(SIDEBAR_PROJECT_CARD_HEIGHT))
                     .px(px(4.0))
                     .rounded(px(8.0))
-                    .border_1()
-                    .border_color(theme.border_strong)
                     .cursor_default()
                     .hover(|element| element.bg(theme.sidebar_item_background))
                     .flex()

@@ -280,7 +280,7 @@ impl Fintwind {
                     ))
                     .child(self.render_mode_rail_entry(
                         "rail-source-control",
-                        "icons/source-control.svg",
+                        "icons/file-diff.svg",
                         WorkspaceMode::SourceControl,
                         cx,
                     ))

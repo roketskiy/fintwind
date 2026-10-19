@@ -491,7 +491,25 @@ providers.builtin_no_endpoint:
 providers.builtin_models_truncated:
   en: "%{count} more models not shown"
 providers.oauth_cli_hint:
-  en: "%{name} signs in through OAuth. Run `opencode auth login` in a terminal or use /connect in the TUI, then refresh this page."
+  en: "%{name} has no key or OAuth sign-in here. Run `opencode auth login` in a terminal or use /connect in the TUI, then refresh this page."
+providers.oauth_connect:
+  en: Sign in
+providers.oauth_relogin:
+  en: Sign in again
+providers.oauth_open:
+  en: Open browser
+providers.oauth_waiting:
+  en: Waiting for authorization…
+providers.oauth_code_placeholder:
+  en: Paste the authorization code
+providers.oauth_code_submit:
+  en: Submit code
+providers.oauth_done_toast:
+  en: Provider connected
+providers.oauth_expired:
+  en: Authorization expired
+providers.oauth_failed_toast:
+  en: "OAuth sign-in failed: %{error}"
 providers.auth_load_failed:
   en: "Could not read OpenCode's connection state: %{error}"
 providers.auth_save_failed:

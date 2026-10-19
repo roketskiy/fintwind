@@ -254,7 +254,16 @@ providers.quota_completions: コード補完
 providers.quota_premium: プレミアムリクエスト
 providers.builtin_no_endpoint: このプロバイダーは API Key でのサインインに対応していません（OAuth・環境変数・opencode CLI を使用）。ここでテストできる接続がありません。
 providers.builtin_models_truncated: 他 %{count} 件のモデルは表示されていません
-providers.oauth_cli_hint: "%{name} は OAuth でサインインします。ターミナルで opencode auth login を実行するか、TUI の /connect を使ってから、このページを更新してください。"
+providers.oauth_cli_hint: "%{name} はここではキーも OAuth も使えません。ターミナルで opencode auth login を実行するか、TUI の /connect を使ってから、このページを更新してください。"
+providers.oauth_connect: サインイン
+providers.oauth_relogin: 再サインイン
+providers.oauth_open: ブラウザーを開く
+providers.oauth_waiting: 承認を待っています…
+providers.oauth_code_placeholder: 認証コードを貼り付け
+providers.oauth_code_submit: コードを送信
+providers.oauth_done_toast: プロバイダーに接続しました
+providers.oauth_expired: 承認の有効期限が切れました
+providers.oauth_failed_toast: "OAuth サインインに失敗しました：%{error}"
 providers.auth_load_failed: "OpenCode の接続状態を読み取れませんでした：%{error}"
 providers.auth_save_failed: "OpenCode の認証情報を更新できませんでした：%{error}"
 providers.custom_count_zero: カスタムプロバイダーはまだありません

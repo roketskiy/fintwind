@@ -1377,6 +1377,129 @@ impl StateStore {
         )
     }
 
+    /// Start one OAuth attempt for a provider: the server answers with the
+    /// authorization URL and how the flow finishes. `answers` carries the
+    /// visible form fields' answers. Blocking RPC; the daemon may need to
+    /// start the server first, so call off the UI thread.
+    pub fn start_provider_oauth(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        method_id: String,
+        answers: serde_json::Value,
+    ) -> io::Result<fintwind_protocol::provider_session::IntegrationOAuthAttempt> {
+        match self
+            .daemon
+            .client()
+            .request_with_timeout(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::StartProviderOAuth {
+                    binary,
+                    directory,
+                    provider_id,
+                    method_id,
+                    answers,
+                },
+                Duration::from_secs(90),
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::ProviderOAuthStarted { attempt } => Ok(attempt),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an invalid OAuth attempt",
+            )),
+        }
+    }
+
+    /// Poll one OAuth attempt's status. Blocking RPC; call off the UI thread.
+    pub fn poll_provider_oauth(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        attempt_id: String,
+    ) -> io::Result<fintwind_protocol::provider_session::IntegrationOAuthPoll> {
+        match self
+            .daemon
+            .client()
+            .request_with_timeout(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::PollProviderOAuth {
+                    binary,
+                    directory,
+                    provider_id,
+                    attempt_id,
+                },
+                Duration::from_secs(30),
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::ProviderOAuthPolled { poll } => Ok(poll),
+            _ => Err(io::Error::other(
+                "fintwind daemon returned an invalid OAuth poll",
+            )),
+        }
+    }
+
+    /// Finish a code-mode OAuth attempt with the pasted code. Blocking RPC;
+    /// call off the UI thread.
+    pub fn complete_provider_oauth(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        attempt_id: String,
+        code: Option<String>,
+    ) -> io::Result<()> {
+        self.expect_ack(
+            self.daemon
+                .client()
+                .request_with_timeout(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    Command::CompleteProviderOAuth {
+                        binary,
+                        directory,
+                        provider_id,
+                        attempt_id,
+                        code,
+                    },
+                    Duration::from_secs(30),
+                )
+                .map_err(to_io_error),
+        )
+    }
+
+    /// Cancel one OAuth attempt. Best effort: a finished or vanished attempt
+    /// also ends cancelled. Blocking RPC; call off the UI thread.
+    pub fn cancel_provider_oauth(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        attempt_id: String,
+    ) -> io::Result<()> {
+        self.expect_ack(
+            self.daemon
+                .client()
+                .request_with_timeout(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    Command::CancelProviderOAuth {
+                        binary,
+                        directory,
+                        provider_id,
+                        attempt_id,
+                    },
+                    Duration::from_secs(15),
+                )
+                .map_err(to_io_error),
+        )
+    }
+
     /// Count the models the local OpenCode server exposes for a built-in
     /// provider. This does not test remote provider connectivity. Blocking
     /// RPC; call off the UI thread.

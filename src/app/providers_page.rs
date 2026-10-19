@@ -72,6 +72,77 @@ pub(super) enum ProviderFormStage {
     Builtin(String),
 }
 
+/// One in-flight OAuth sign-in: from the start RPC until the server stores
+/// the credential, the flow fails, or the user cancels. `attempt` is `None`
+/// while the start RPC is running — the form then shows a plain waiting
+/// state with no URL yet.
+#[derive(Clone, Debug)]
+pub(super) struct ProviderOAuthFlow {
+    pub(super) provider_id: String,
+    pub(super) attempt: Option<fintwind_protocol::provider_session::IntegrationOAuthAttempt>,
+}
+
+/// One method's pre-start form: the visible string fields to answer before
+/// the attempt starts. `inputs` maps each visible field's key to its editor,
+/// so lookup never depends on the fields' order.
+pub(super) struct ProviderOAuthFormDraft {
+    pub(super) provider_id: String,
+    pub(super) method_id: String,
+    pub(super) fields: Vec<fintwind_protocol::provider_session::IntegrationFormField>,
+    pub(super) inputs: Vec<(String, Entity<ComposerInput>)>,
+    pub(super) selections: std::collections::HashMap<String, String>,
+}
+
+impl ProviderOAuthFormDraft {
+    /// The field's answer so far: the picked option, else the field's text.
+    pub(super) fn answer_of(&self, key: &str, cx: &App) -> Option<String> {
+        if let Some(selected) = self.selections.get(key) {
+            return Some(selected.clone());
+        }
+        let input = self
+            .inputs
+            .iter()
+            .find(|(field_key, _)| field_key == key)
+            .map(|(_, input)| input)?;
+        let content = input.read(cx).content().trim().to_owned();
+        if content.is_empty() {
+            None
+        } else {
+            Some(content)
+        }
+    }
+
+    /// Whether the field is answerable: every visibility condition holds
+    /// against the answers gathered so far (unanswered references fail).
+    pub(super) fn field_is_active(
+        &self,
+        field: &fintwind_protocol::provider_session::IntegrationFormField,
+        cx: &App,
+    ) -> bool {
+        field.when.iter().all(|condition| {
+            let Some(actual) = self.answer_of(&condition.key, cx) else {
+                return false;
+            };
+            let matches = condition.value.as_str() == Some(actual.as_str());
+            if condition.op == "neq" {
+                !matches
+            } else {
+                matches
+            }
+        })
+    }
+
+    /// Whether the form can start: every active required field has an
+    /// answer.
+    pub(super) fn ready(&self, cx: &App) -> bool {
+        self.fields
+            .iter()
+            .filter(|field| !field.hidden && field.required)
+            .filter(|field| self.field_is_active(field, cx))
+            .all(|field| self.answer_of(&field.key, cx).is_some())
+    }
+}
+
 /// One model draft row of the add-provider form: the id and context-window
 /// fields plus the input modalities picked for the model. A draft exists
 /// before its model does, so the selection lives here rather than on a
@@ -159,6 +230,19 @@ impl Fintwind {
         }
         self.builtin_provider(id)
             .is_some_and(|provider| provider.api.is_some())
+    }
+
+    /// The OAuth sign-in methods the server offers `id`, in roster order.
+    /// The integration list answers; until it lands the set is empty, so the
+    /// form's OAuth section waits for it like the key set does.
+    pub(super) fn provider_oauth_methods(
+        &self,
+        id: &str,
+    ) -> Vec<fintwind_protocol::provider_session::IntegrationOAuthMethod> {
+        self.providers_oauth_methods
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub(super) fn select_provider(&mut self, id: String, cx: &mut Context<Self>) {
@@ -357,7 +441,7 @@ impl Fintwind {
             cx.notify();
         }
     }
-    fn begin_add_provider(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn begin_add_provider(&mut self, cx: &mut Context<Self>) {
         self.providers_adding = true;
         // The form opens on the picker: built-in first, Custom as the
         // explicit escape hatch.
@@ -1502,6 +1586,32 @@ impl Fintwind {
                         .flex_col()
                         .gap(px(14.0))
                         .child(catalog_check)
+                        .when(
+                            needs_auth
+                                && !self.provider_oauth_methods(&provider.id).is_empty(),
+                            |element| {
+                                // The server has a URL for signing back in,
+                                // but the in-app flow reconnects the same
+                                // methods the first sign-in used.
+                                element.child(
+                                    outline_button(
+                                        "builtin-needs-auth-relogin",
+                                        tr!("providers.oauth_relogin"),
+                                        Some("icons/rotate-cw.svg"),
+                                        theme,
+                                    )
+                                    .on_click(cx.listener({
+                                        let provider_id = provider.id.clone();
+                                        move |this, _, _, cx| {
+                                            this.begin_provider_relogin(
+                                                provider_id.clone(),
+                                                cx,
+                                            );
+                                        }
+                                    })),
+                                )
+                            },
+                        )
                         .when(needs_auth, |element| {
                             let hint = match self.provider_auth_url(&provider.id) {
                                 Some(url) => {
@@ -2270,7 +2380,10 @@ impl Fintwind {
         }
         row
     }
-    fn select_form_builtin(&mut self, provider_id: Option<String>, cx: &mut Context<Self>) {
+    pub(super) fn select_form_builtin(&mut self, provider_id: Option<String>, cx: &mut Context<Self>) {
+        // A pre-start OAuth form belongs to the provider it was opened on;
+        // another choice discards it with the key field's content.
+        self.providers_oauth_draft = None;
         self.providers_form_stage = match provider_id {
             Some(id) => ProviderFormStage::Builtin(id),
             None => ProviderFormStage::Custom,
@@ -2552,9 +2665,13 @@ impl Fintwind {
             .trim()
             .to_owned();
         let authorized = self.provider_is_authorized(&provider_id);
-        // An OAuth-gated provider has no key to type; the form explains the
-        // CLI flow instead of accepting a credential it cannot store.
+        // An OAuth-gated provider has no key to type; its form offers the
+        // server's OAuth methods instead of a credential field it cannot
+        // store. A provider may carry both a key method and OAuth methods —
+        // the two sections then coexist.
         let is_oauth = !self.provider_supports_key(&provider_id);
+        let oauth_methods = self.provider_oauth_methods(&provider_id);
+        let has_oauth_methods = !oauth_methods.is_empty();
 
         let submit_button = div()
             .id("submit-builtin-form")
@@ -2650,7 +2767,18 @@ impl Fintwind {
                                 self.render_form_api_key_field(theme, cx),
                             ))
                         })
-                        .when(is_oauth, |element| {
+                        .when(has_oauth_methods, |element| {
+                            element.child(self.render_provider_oauth_section(
+                                &provider_id,
+                                oauth_methods,
+                                theme,
+                                cx,
+                            ))
+                        })
+                        .when(is_oauth && !has_oauth_methods, |element| {
+                            // A roster entry without a key or OAuth method
+                            // signs in through the CLI (command or external
+                            // methods this form does not host).
                             element.child(info_note(
                                 theme,
                                 "icons/info.svg",
@@ -2679,9 +2807,371 @@ impl Fintwind {
                                 this.exit_provider_form(cx);
                             })),
                         )
-                        .child(submit_button),
+                        // An OAuth-only provider has no key to submit; its
+                        // sign-in buttons live in the OAuth section above.
+                        .when(!is_oauth, |element| element.child(submit_button)),
                 ),
         )
+    }
+
+    /// The built-in form's OAuth section: the server's OAuth methods as
+    /// sign-in buttons, or the running flow's state — the opened browser
+    /// step, the code entry for `code`-mode flows, and the cancel action.
+    fn render_provider_oauth_section(
+        &self,
+        provider_id: &str,
+        methods: Vec<fintwind_protocol::provider_session::IntegrationOAuthMethod>,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let accent = providers_accent(theme);
+        let provider_id = provider_id.to_owned();
+        let flow = self
+            .providers_oauth_flow
+            .as_ref()
+            .filter(|flow| flow.provider_id == provider_id);
+
+        let mut section = div().flex().flex_col().gap(px(10.0));
+        match flow {
+            None => {
+                if let Some(draft) = self
+                    .providers_oauth_draft
+                    .as_ref()
+                    .filter(|draft| draft.provider_id == provider_id)
+                {
+                    return self.render_provider_oauth_form(draft, theme, cx);
+                }
+                let single = methods.len() == 1;
+                for method in &methods {
+                    let click_method_id = method.id.clone();
+                    let key_method_id = method.id.clone();
+                    let click_provider_id = provider_id.clone();
+                    let key_provider_id = provider_id.clone();
+                    let label = if single {
+                        tr!("providers.oauth_connect")
+                    } else {
+                        method.label.clone()
+                    };
+                    section = section.child(
+                        div()
+                            .id(SharedString::from(format!("oauth-start-{}", method.id)))
+                            .tab_index(0)
+                            .focus_visible(|style| style.border_color(accent))
+                            .h(px(32.0))
+                            .px(px(16.0))
+                            .rounded(px(8.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_default()
+                            .bg(accent)
+                            .text_color(on_providers_accent(theme))
+                            .hover(|element| element.bg(accent.opacity(0.85)))
+                            .active(|element| element.bg(accent.opacity(0.72)))
+                            .text_size(ui_px(12.0))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(label)
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.start_provider_oauth_action(
+                                        click_provider_id.clone(),
+                                        click_method_id.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                },
+                            ))
+                            .on_key_down(cx.listener(
+                                move |this, event: &KeyDownEvent, window, cx| {
+                                    if !event.keystroke.modifiers.modified()
+                                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                    {
+                                        this.start_provider_oauth_action(
+                                            key_provider_id.clone(),
+                                            key_method_id.clone(),
+                                            window,
+                                            cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            )),
+                    );
+                }
+            }
+            Some(flow) => match &flow.attempt {
+                None => {
+                    // The start RPC is running — likely waking the server.
+                    section = section.child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.0))
+                            .text_size(ui_px(12.0))
+                            .text_color(theme.text_secondary)
+                            .child(icon(
+                                "icons/loader-circle.svg",
+                                13.0,
+                                theme.text_secondary,
+                            ))
+                            .child(tr!("providers.oauth_waiting")),
+                    );
+                }
+                Some(attempt) => {
+                    if !attempt.instructions.is_empty() {
+                        section = section.child(info_note(
+                            theme,
+                            "icons/info.svg",
+                            attempt.instructions.clone(),
+                        ));
+                    }
+                    let mut row = div().flex().items_center().gap(px(8.0));
+                    row = row.child(
+                        outline_button(
+                            "oauth-open-browser",
+                            tr!("providers.oauth_open"),
+                            Some("icons/external-link.svg"),
+                            theme,
+                        )
+                        .on_click({
+                            let url = attempt.url.clone();
+                            cx.listener(move |_, _, _, cx| {
+                                cx.open_url(&url);
+                            })
+                        }),
+                    );
+                    if attempt.mode == fintwind_protocol::provider_session::IntegrationOAuthMode::Code
+                    {
+                        row = row.child(
+                            TextField::new(
+                                "oauth-code-field",
+                                self.provider_oauth_code_input.clone(),
+                            )
+                            .flex_1()
+                            .min_w(px(120.0)),
+                        );
+                        row = row.child(
+                            div()
+                                .id("oauth-code-submit")
+                                .tab_index(0)
+                                .focus_visible(|style| style.border_color(accent))
+                                .h(px(32.0))
+                                .px(px(16.0))
+                                .rounded(px(8.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_default()
+                                .bg(accent)
+                                .text_color(on_providers_accent(theme))
+                                .hover(|element| element.bg(accent.opacity(0.85)))
+                                .active(|element| element.bg(accent.opacity(0.72)))
+                                .text_size(ui_px(12.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .child(tr!("providers.oauth_code_submit"))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.submit_provider_oauth_code(cx);
+                                }))
+                                .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                                    if !event.keystroke.modifiers.modified()
+                                        && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                    {
+                                        this.submit_provider_oauth_code(cx);
+                                        cx.stop_propagation();
+                                    }
+                                })),
+                        );
+                    } else {
+                        row = row.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.0))
+                                .text_size(ui_px(12.0))
+                                .text_color(theme.text_secondary)
+                                .child(icon(
+                                    "icons/loader-circle.svg",
+                                    13.0,
+                                    theme.text_secondary,
+                                ))
+                                .child(tr!("providers.oauth_waiting")),
+                        );
+                    }
+                    row = row.child(
+                        outline_button(
+                            "oauth-cancel-flow",
+                            tr!("common.cancel"),
+                            None,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.cancel_provider_oauth_flow(cx);
+                        })),
+                    );
+                    section = section.child(row);
+                }
+            },
+        }
+        section.into_any_element()
+    }
+
+    /// The pre-start form of one OAuth method: the method's visible fields,
+    /// then the sign-in and back actions. Required-but-empty fields keep the
+    /// sign-in button dead.
+    fn render_provider_oauth_form(
+        &self,
+        draft: &ProviderOAuthFormDraft,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let accent = providers_accent(theme);
+        let ready = draft.ready(cx);
+        let mut column = div().flex().flex_col().gap(px(12.0));
+        for field in draft.fields.iter().filter(|field| !field.hidden) {
+            if !draft.field_is_active(field, cx) {
+                continue;
+            }
+            let mut field_col = div().flex().flex_col().gap(px(4.0));
+            field_col = field_col.child(
+                div()
+                    .text_size(ui_px(11.5))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_secondary)
+                    .child(field.title.clone().unwrap_or_else(|| field.key.clone())),
+            );
+            if let Some(description) = &field.description {
+                field_col = field_col.child(
+                    div()
+                        .text_size(ui_px(10.5))
+                        .line_height(ui_px(15.0))
+                        .text_color(theme.text_tertiary)
+                        .child(description.clone()),
+                );
+            }
+            if !field.options.is_empty() {
+                let mut row = div().flex().flex_wrap().gap(px(6.0));
+                let picked = draft.selections.get(&field.key).cloned();
+                for option in &field.options {
+                    let selected = picked.as_deref() == Some(option.value.as_str());
+                    let click_key = field.key.clone();
+                    let key_key = field.key.clone();
+                    let click_value = option.value.clone();
+                    let key_value = option.value.clone();
+                    row = row.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "oauth-opt-{}-{}",
+                                field.key, option.value
+                            )))
+                            .tab_index(0)
+                            .focus_visible(|style| style.border_1().border_color(accent))
+                            .px(px(10.0))
+                            .h(px(26.0))
+                            .rounded(px(6.0))
+                            .flex()
+                            .items_center()
+                            .cursor_default()
+                            .text_size(ui_px(11.0))
+                            .when(selected, |element| {
+                                element
+                                    .bg(accent)
+                                    .text_color(on_providers_accent(theme))
+                                    .hover(|element| element.bg(accent.opacity(0.85)))
+                            })
+                            .when(!selected, |element| {
+                                element
+                                    .border_1()
+                                    .border_color(theme.border)
+                                    .text_color(theme.text_secondary)
+                                    .hover(|element| element.bg(theme.overlay))
+                            })
+                            .child(option.label.clone())
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.toggle_provider_oauth_selection(
+                                    click_key.clone(),
+                                    click_value.clone(),
+                                    cx,
+                                );
+                            }))
+                            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                                if !event.keystroke.modifiers.modified()
+                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                {
+                                    this.toggle_provider_oauth_selection(
+                                        key_key.clone(),
+                                        key_value.clone(),
+                                        cx,
+                                    );
+                                    cx.stop_propagation();
+                                }
+                            })),
+                    );
+                }
+                field_col = field_col.child(row);
+            } else if let Some((_, input)) = draft
+                .inputs
+                .iter()
+                .find(|(key, _)| key == &field.key)
+            {
+                field_col = field_col.child(
+                    TextField::new(
+                        SharedString::from(format!("oauth-field-{}", field.key)),
+                        input.clone(),
+                    )
+                    .w_full(),
+                );
+            }
+            column = column.child(field_col);
+        }
+        let mut actions = div().flex().items_center().gap(px(8.0));
+        actions = actions.child(
+            div()
+                .id("oauth-form-start")
+                .tab_index(0)
+                .focus_visible(|style| style.border_color(accent))
+                .h(px(32.0))
+                .px(px(16.0))
+                .rounded(px(8.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_default()
+                .text_size(ui_px(12.0))
+                .font_weight(FontWeight::MEDIUM)
+                .when(ready, |element| {
+                    element
+                        .bg(accent)
+                        .text_color(on_providers_accent(theme))
+                        .hover(|element| element.bg(accent.opacity(0.85)))
+                        .active(|element| element.bg(accent.opacity(0.72)))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.submit_provider_oauth_form(cx);
+                        }))
+                        .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.submit_provider_oauth_form(cx);
+                                cx.stop_propagation();
+                            }
+                        }))
+                })
+                .when(!ready, |element| {
+                    element
+                        .border_1()
+                        .border_color(theme.border_strong)
+                        .text_color(theme.text_muted)
+                })
+                .child(tr!("providers.oauth_connect")),
+        );
+        actions = actions.child(
+            outline_button("oauth-form-back", tr!("common.cancel"), None, theme)
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.cancel_provider_oauth_form(cx);
+                })),
+        );
+        column = column.child(actions);
+        column.into_any_element()
     }
 
     fn render_custom_form(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {

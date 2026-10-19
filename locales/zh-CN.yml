@@ -246,7 +246,16 @@ providers.quota_completions: 代码补全
 providers.quota_premium: 高级请求
 providers.builtin_no_endpoint: 该供应商不支持 API Key 登录（走 OAuth、环境变量或 opencode CLI），此处没有可测试的连接。
 providers.builtin_models_truncated: 还有 %{count} 个模型未显示
-providers.oauth_cli_hint: "%{name} 通过 OAuth 登录。请在终端运行 opencode auth login，或在 TUI 中使用 /connect，然后刷新此页面。"
+providers.oauth_cli_hint: "%{name} 在此处没有密钥或 OAuth 登录入口。请在终端运行 opencode auth login，或在 TUI 中使用 /connect，然后刷新此页面。"
+providers.oauth_connect: 登录
+providers.oauth_relogin: 重新登录
+providers.oauth_open: 打开浏览器
+providers.oauth_waiting: 等待授权…
+providers.oauth_code_placeholder: 粘贴授权码
+providers.oauth_code_submit: 提交授权码
+providers.oauth_done_toast: 供应商已连接
+providers.oauth_expired: 授权已过期
+providers.oauth_failed_toast: "OAuth 登录失败：%{error}"
 providers.auth_load_failed: "无法读取 OpenCode 的连接状态：%{error}"
 providers.auth_save_failed: "无法更新 OpenCode 的凭据：%{error}"
 providers.custom_count_zero: 尚无自定义供应商

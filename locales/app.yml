@@ -1,4 +1,6 @@
 _version: 2
+common.open_default_app:
+  en: Open with default app
 btw.command_description:
   en: Ask a side question without adding to the conversation
 btw.argument_hint:

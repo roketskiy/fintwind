@@ -1,4 +1,5 @@
 _version: 1
+common.open_default_app: 用默认应用打开
 btw.command_description: 临时旁问，不加入主对话
 btw.argument_hint: 问题
 btw.question_required: 请在 /btw 后输入问题。

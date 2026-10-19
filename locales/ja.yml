@@ -1,4 +1,5 @@
 _version: 1
+common.open_default_app: 既定のアプリで開く
 btw.command_description: 会話に追加せずに補足質問する
 btw.argument_hint: 質問
 btw.question_required: /btw の後に質問を入力してください。

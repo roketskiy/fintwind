@@ -298,6 +298,7 @@ pub struct FlatText {
     pub text: SharedString,
     pub runs: Vec<TextRun>,
     pub links: Vec<(Range<usize>, String)>,
+    pub active_link: Rc<Cell<usize>>,
     pub code_ranges: Vec<Range<usize>>,
     pub math: Option<Rc<math_text::MathData>>,
     pub(crate) references: Vec<crate::mentions::Span>,
@@ -395,6 +396,7 @@ pub fn flatten(
         text: text.into(),
         runs: out,
         links,
+        active_link: Rc::default(),
         code_ranges,
         math: (!math.is_empty()).then(|| Rc::new(math_text::MathData::new(math))),
         references: Vec::new(),
@@ -428,6 +430,7 @@ pub fn flatten_plain(
         text,
         runs,
         links: Vec::new(),
+        active_link: Rc::default(),
         code_ranges: Vec::new(),
         math: None,
         references: Vec::new(),
@@ -714,6 +717,21 @@ impl<'a> Ctx<'a> {
     fn flat(&self, ordinal: usize, build: impl FnOnce() -> FlatText) -> Rc<FlatText> {
         let build = || {
             let mut flat = build();
+            if self.link_handler.is_some() {
+                for range in &flat.code_ranges {
+                    if !flat
+                        .links
+                        .iter()
+                        .any(|(link, _)| link.start < range.end && link.end > range.start)
+                    {
+                        let target = &flat.text[range.clone()];
+                        if crate::file_target::path(target).is_some() {
+                            flat.links.push((range.clone(), target.to_owned()));
+                        }
+                    }
+                }
+                flat.links.sort_by_key(|(range, _)| range.start);
+            }
             if flat.allow_references && flat.math.is_none() {
                 if let Some(catalog) = &self.reference_catalog {
                     flat.references = catalog
@@ -769,9 +787,14 @@ fn text_element_with_selection(
         styled.into_any_element()
     } else {
         let (ranges, urls): (Vec<_>, Vec<_>) = flat.links.iter().cloned().unzip();
+        let link_handler = link_handler.clone();
+        let selection = selection.clone();
         let id = SharedString::from(format!("{}-t{}", key.row, key.index));
         InteractiveText::new(id, styled)
             .on_click(ranges, move |clicked, window, cx| {
+                if !selection.selection.borrow().is_empty() {
+                    return;
+                }
                 if let Some(url) = urls.get(clicked) {
                     if let Some(handler) = &link_handler {
                         handler(url, window, cx);
@@ -832,7 +855,39 @@ fn text_element_with_selection(
     .absolute()
     .size_full();
 
+    let links = flat.links.clone();
+    let active_link = flat.active_link.clone();
     div()
+        .id(SharedString::from(format!(
+            "links-{}-{}",
+            key.row, key.index
+        )))
+        .when(!links.is_empty(), |element| {
+            element
+                .tab_group()
+                .tab_index(0)
+                .focus_visible(|style| style.bg(selection_wash))
+                .on_key_down(move |event, window, cx| {
+                    let current = active_link.get().min(links.len() - 1);
+                    match event.keystroke.key.as_str() {
+                        "right" | "down" => active_link.set((current + 1) % links.len()),
+                        "left" | "up" => active_link.set((current + links.len() - 1) % links.len()),
+                        "home" => active_link.set(0),
+                        "end" => active_link.set(links.len() - 1),
+                        "enter" | "space" => {
+                            let target = &links[current].1;
+                            if let Some(handler) = &link_handler {
+                                handler(target, window, cx);
+                            } else {
+                                cx.open_url(target);
+                            }
+                        }
+                        _ => return,
+                    }
+                    cx.stop_propagation();
+                    window.refresh();
+                })
+        })
         .relative()
         .w_full()
         .min_w_0()
@@ -1650,6 +1705,7 @@ fn render_code_fragment(
             text: SharedString::from(code.to_owned()),
             runs: code_runs(code, lang, &code_font, ctx.palette),
             links: Vec::new(),
+            active_link: Rc::default(),
             code_ranges: Vec::new(),
             math: None,
             references: Vec::new(),

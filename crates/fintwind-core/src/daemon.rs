@@ -1338,6 +1338,11 @@ impl Backend for FintwindBackend {
                 )?;
                 Ok(ResponsePayload::McpServerStatuses { statuses })
             }
+            Command::ReloadOpenCodeServer { binary, directory } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                crate::driver::native::reload_server(&server)?;
+                Ok(ResponsePayload::Ack)
+            }
             Command::CancelAuthenticateMcpServer { name } => {
                 crate::mcp_auth::cancel(&name);
                 Ok(ResponsePayload::Ack)
@@ -2103,6 +2108,7 @@ fn handle_driver_command(
         | Command::ProbeBuiltinProvider { .. }
         | Command::AuthenticateMcpServer { .. }
         | Command::ListMcpServerStatuses { .. }
+        | Command::ReloadOpenCodeServer { .. }
         | Command::CancelAuthenticateMcpServer { .. }
         | Command::Workspace { .. }
         | Command::OpenTerminal { .. }

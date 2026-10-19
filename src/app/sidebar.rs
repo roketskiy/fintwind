@@ -967,8 +967,26 @@ impl Fintwind {
             );
         // Session cards carry their own bottom rhythm, so a plain column keeps
         // the exact 52+2 spacing the old virtualized rows reserved.
-        for &session_id in group.sessions.iter().take(visible) {
+        for (index, &session_id) in group.sessions.iter().take(visible).enumerate() {
             body = body.child(self.render_sidebar_session_item(session_id, cx));
+            if sidebar_session_selected(
+                self.state.selected_session,
+                self.pending_session_activation
+                    .map(|pending| pending.session_id),
+                session_id,
+            ) {
+                body = body.child(
+                    div()
+                        .absolute()
+                        .left(px(13.0))
+                        .top(px(index as f32 * SIDEBAR_SESSION_ROW_HEIGHT
+                            + (SIDEBAR_SESSION_CARD_HEIGHT - 20.0) / 2.0))
+                        .w(px(3.0))
+                        .h(px(20.0))
+                        .rounded_full()
+                        .bg(theme.text),
+                );
+            }
         }
         if visible < total {
             body = body.child(self.render_sidebar_show_more(group.project_id, total, cx));

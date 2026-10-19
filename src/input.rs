@@ -2453,7 +2453,13 @@ impl Render for ComposerInput {
 
         let quote_selection = self.quote_selection.clone();
         context_menu(
-            div().w_full().child(field).children(scrollbar),
+            div()
+                .w_full()
+                .when(!cx.has_active_drag(), |element| {
+                    element.block_mouse_except_scroll()
+                })
+                .child(field)
+                .children(scrollbar),
             "composer-context-menu",
             &self.context_menu,
             move |cx| {

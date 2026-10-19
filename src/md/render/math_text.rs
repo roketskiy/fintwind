@@ -412,7 +412,7 @@ impl IntoElement for MathText {
 
 impl Element for MathText {
     type RequestLayoutState = Vec<Option<Arc<math::Rendered>>>;
-    type PrepaintState = ();
+    type PrepaintState = Hitbox;
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -524,12 +524,13 @@ impl Element for MathText {
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _: &mut Self::RequestLayoutState,
-        _: &mut Window,
+        window: &mut Window,
         _: &mut App,
-    ) {
+    ) -> Hitbox {
         if let Some((stored, _)) = self.geometry.0.borrow_mut().as_mut() {
             *stored = bounds;
         }
+        window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
     fn paint(
@@ -538,7 +539,7 @@ impl Element for MathText {
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         images: &mut Self::RequestLayoutState,
-        _: &mut (),
+        hitbox: &mut Hitbox,
         window: &mut Window,
         cx: &mut App,
     ) {
@@ -617,7 +618,10 @@ impl Element for MathText {
             key: self.key.clone(),
             text: Rc::from(self.flat.text.as_ref()),
             block_break: self.block_break,
-            geometry: TextGeometry::Math(self.geometry.clone()),
+            geometry: TextGeometry::Math {
+                geometry: self.geometry.clone(),
+                hitbox: hitbox.clone(),
+            },
         });
     }
 }
@@ -889,7 +893,7 @@ mod tests {
                     .borrow()
                     .entries()
                     .iter()
-                    .all(|entry| matches!(entry.geometry, TextGeometry::Text(_)))
+                    .all(|entry| matches!(entry.geometry, TextGeometry::Text { .. }))
             );
             for data in view
                 .markdown
@@ -916,7 +920,7 @@ mod tests {
                     .borrow()
                     .entries()
                     .iter()
-                    .filter(|entry| matches!(entry.geometry, TextGeometry::Math(_)))
+                    .filter(|entry| matches!(entry.geometry, TextGeometry::Math { .. }))
                     .count(),
                 2
             );
@@ -933,7 +937,7 @@ mod tests {
                     .borrow()
                     .entries()
                     .iter()
-                    .all(|entry| matches!(entry.geometry, TextGeometry::Text(_)))
+                    .all(|entry| matches!(entry.geometry, TextGeometry::Text { .. }))
             );
         });
     }
@@ -954,7 +958,7 @@ mod tests {
         cx.run_until_parked();
         let formula_point = view.read_with(cx, |view, _| {
             let registry = view.selection.registry.borrow();
-            let TextGeometry::Math(geometry) = &registry.entries()[0].geometry else {
+            let TextGeometry::Math { geometry, .. } = &registry.entries()[0].geometry else {
                 panic!()
             };
             let frame = geometry.0.borrow();

@@ -164,7 +164,7 @@ fn transcript_selection_keyboard_copy_e2e(cx: &mut TestAppContext) {
         if source == "selected-input" {
             let (start, end) = {
                 let registry = selection.registry.borrow();
-                let TextGeometry::Text(layout) = &registry.entries()[0].geometry else {
+                let TextGeometry::Text { layout, .. } = &registry.entries()[0].geometry else {
                     panic!("plain prose must use a text layout");
                 };
                 (

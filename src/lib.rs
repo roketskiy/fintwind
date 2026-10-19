@@ -37,6 +37,8 @@ pub mod daemon;
 mod driver;
 mod ely;
 mod input;
+#[cfg(test)]
+mod input_hit_test_e2e;
 mod md;
 mod mentions;
 mod perf_monitor;

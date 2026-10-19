@@ -27,10 +27,10 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     AnyElement, BorderStyle, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Font, FontStyle,
-    FontWeight, Hsla, InteractiveText, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point, SharedString, StrikethroughStyle,
-    StyledText, TextLayout, TextRun, UnderlineStyle, Window, canvas, div, font, img, point,
-    prelude::*, px, quad, relative, size,
+    FontWeight, Hitbox, HitboxBehavior, Hsla, InteractiveText, IntoElement, KeyDownEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Point,
+    SharedString, StrikethroughStyle, StyledText, TextLayout, TextRun, UnderlineStyle, Window,
+    canvas, div, font, img, point, prelude::*, px, quad, relative, size,
 };
 
 use super::highlight::{self, Lang, TokenClass};
@@ -52,36 +52,48 @@ mod copy_e2e;
 /// Selection geometry: the laid-out text handle for one painted element.
 #[derive(Clone)]
 pub enum TextGeometry {
-    Text(TextLayout),
-    Math(math_text::Geometry),
+    Text {
+        layout: TextLayout,
+        hitbox: Hitbox,
+    },
+    Math {
+        geometry: math_text::Geometry,
+        hitbox: Hitbox,
+    },
 }
 
 impl TextGeometry {
     fn bounds(&self) -> Bounds<Pixels> {
         match self {
-            Self::Text(layout) => layout.bounds(),
-            Self::Math(layout) => layout.bounds(),
+            Self::Text { layout, .. } => layout.bounds(),
+            Self::Math { geometry, .. } => geometry.bounds(),
         }
     }
 
     fn index_for_position(&self, position: Point<Pixels>) -> Result<usize, usize> {
         match self {
-            Self::Text(layout) => layout.index_for_position(position),
-            Self::Math(layout) => layout.index_for_position(position),
+            Self::Text { layout, .. } => layout.index_for_position(position),
+            Self::Math { geometry, .. } => geometry.index_for_position(position),
         }
     }
 
     fn is_missing(&self) -> bool {
         match self {
-            Self::Text(layout) => layout_missing(layout),
-            Self::Math(layout) => layout.is_missing(),
+            Self::Text { layout, .. } => layout_missing(layout),
+            Self::Math { geometry, .. } => geometry.is_missing(),
         }
     }
 
     fn formula_range_at(&self, position: Point<Pixels>) -> Option<Range<usize>> {
         match self {
-            Self::Text(_) => None,
-            Self::Math(layout) => layout.formula_range_at(position),
+            Self::Text { .. } => None,
+            Self::Math { geometry, .. } => geometry.formula_range_at(position),
+        }
+    }
+
+    fn native_hit(&self, window: &Window) -> bool {
+        match self {
+            Self::Text { hitbox, .. } | Self::Math { hitbox, .. } => hitbox.is_hovered(window),
         }
     }
 }
@@ -771,46 +783,52 @@ fn text_element_with_selection(
             .into_any_element()
     };
 
-    let underlay = canvas(|_, _, _| (), {
-        let text = flat.text.clone();
-        let code_ranges = flat.code_ranges.clone();
-        let layout = layout.clone();
-        let key = key.clone();
-        move |_, _, window, _| {
-            for range in &code_ranges {
-                for rect in range_rects(&layout, range, CODE_WASH_PAD_X, CODE_WASH_INSET_Y) {
-                    window.paint_quad(quad(
-                        rect,
-                        px(CODE_WASH_RADIUS),
-                        code_wash,
-                        px(0.0),
-                        gpui::transparent_black(),
-                        BorderStyle::default(),
-                    ));
+    let underlay = canvas(
+        |bounds, window, _| window.insert_hitbox(bounds, HitboxBehavior::Normal),
+        {
+            let text = flat.text.clone();
+            let code_ranges = flat.code_ranges.clone();
+            let layout = layout.clone();
+            let key = key.clone();
+            move |_, hitbox, window, _| {
+                for range in &code_ranges {
+                    for rect in range_rects(&layout, range, CODE_WASH_PAD_X, CODE_WASH_INSET_Y) {
+                        window.paint_quad(quad(
+                            rect,
+                            px(CODE_WASH_RADIUS),
+                            code_wash,
+                            px(0.0),
+                            gpui::transparent_black(),
+                            BorderStyle::default(),
+                        ));
+                    }
                 }
-            }
-            if let Some(range) = selection.selection.borrow().wash_range(&key) {
-                for rect in range_rects(&layout, &range, 0.0, 0.0) {
-                    window.paint_quad(quad(
-                        rect,
-                        px(0.0),
-                        selection_wash,
-                        px(0.0),
-                        gpui::transparent_black(),
-                        BorderStyle::default(),
-                    ));
+                if let Some(range) = selection.selection.borrow().wash_range(&key) {
+                    for rect in range_rects(&layout, &range, 0.0, 0.0) {
+                        window.paint_quad(quad(
+                            rect,
+                            px(0.0),
+                            selection_wash,
+                            px(0.0),
+                            gpui::transparent_black(),
+                            BorderStyle::default(),
+                        ));
+                    }
                 }
+                // Paint order is document order, so simply appending here
+                // rebuilds the frame's selection continuity.
+                selection.registry.borrow_mut().push(RegisteredText {
+                    key: key.clone(),
+                    text: Rc::from(text.as_ref()),
+                    block_break,
+                    geometry: TextGeometry::Text {
+                        layout: layout.clone(),
+                        hitbox,
+                    },
+                });
             }
-            // Paint order is document order, so simply appending here
-            // rebuilds the frame's selection continuity.
-            selection.registry.borrow_mut().push(RegisteredText {
-                key: key.clone(),
-                text: Rc::from(text.as_ref()),
-                block_break,
-                geometry: TextGeometry::Text(layout.clone()),
-            });
-        }
-    })
+        },
+    )
     .absolute()
     .size_full();
 
@@ -1064,7 +1082,9 @@ fn install_selection_input_inner(
             }
             let registry = state.registry.borrow();
             let hit = registry.entries().iter().enumerate().find(|(_, entry)| {
-                !entry.geometry.is_missing() && entry.geometry.bounds().contains(&event.position)
+                !entry.geometry.is_missing()
+                    && entry.geometry.native_hit(window)
+                    && entry.geometry.bounds().contains(&event.position)
             });
             let mut selection = state.selection.borrow_mut();
             match hit {

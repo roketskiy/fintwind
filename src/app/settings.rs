@@ -523,6 +523,7 @@ impl Fintwind {
                     .rounded(px(13.0))
                     .overflow_hidden()
                     .bg(theme.raised)
+                    .shadow_xs()
                     .child(
                         div()
                             .w_full()
@@ -1123,6 +1124,7 @@ impl Fintwind {
             .rounded(px(13.0))
             .overflow_hidden()
             .bg(theme.raised)
+            .shadow_xs()
             .child(
                 div()
                     .w_full()

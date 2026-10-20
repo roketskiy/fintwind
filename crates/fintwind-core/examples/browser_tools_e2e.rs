@@ -1327,6 +1327,7 @@ fn wire_options() -> fintwind_protocol::WireDriverStartOptions {
         context_window: None,
         agent_preset: None,
         provider_cursor: None,
+        mermaid_prompt_version: None,
     }
 }
 struct Harness {

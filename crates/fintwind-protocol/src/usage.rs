@@ -32,6 +32,16 @@ pub fn format_percent(percent: f64) -> String {
     format!("{:.1}%", percent)
 }
 
+/// A first-token latency label: whole milliseconds below one second, seconds
+/// with one decimal above it — the same precision the cache rate gives.
+pub fn format_first_token_ms(ms: u64) -> String {
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.1}s", ms as f64 / 1_000.0)
+    }
+}
+
 /// Session cache hit rate: cached prompt tokens over all input tokens.
 pub fn cache_hit_percent(cache_read: u64, prompt_tokens: u64) -> Option<f64> {
     (prompt_tokens > 0).then(|| cache_read.min(prompt_tokens) as f64 * 100.0 / prompt_tokens as f64)

@@ -1523,6 +1523,13 @@ impl Fintwind {
                     let compaction_focus = is_compaction.then(|| {
                         self.transcript_control_focus(format!("compaction-{}", message.id), cx)
                     });
+                    let user_message_toggle_focus =
+                        (message.role == MessageRole::User).then(|| {
+                            self.transcript_control_focus(
+                                format!("user-message-toggle-{}", message.id),
+                                cx,
+                            )
+                        });
                     let rendered = render_message(
                         MessageRender {
                             theme: &theme,
@@ -1535,6 +1542,11 @@ impl Fintwind {
                             assistant_message_action,
                             user_message_rewind,
                             user_message_fill_width: false,
+                            user_message_expanded: self
+                                .expanded_user_messages
+                                .contains(&message.id),
+                            user_message_toggle_focus,
+                            user_message_in_background: false,
                             goal_objective: self
                                 .transcript_goal_objectives
                                 .borrow()
@@ -1656,6 +1668,40 @@ impl Fintwind {
         cx.notify();
     }
 
+    /// Expand or collapse a long user message's folded preview, in the main
+    /// transcript or a subagent transcript. Same disclosure contract as the
+    /// compaction card: the caller passes the row's current state, this
+    /// inverts it, and the height change must not shift the reader's
+    /// position. The subagent surface keeps its own scroll anchor, so only
+    /// the main transcript needs the pin.
+    pub(super) fn toggle_user_message(
+        &mut self,
+        message_id: Uuid,
+        expanded: bool,
+        in_background: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if expanded {
+            self.expanded_user_messages.remove(&message_id);
+        } else {
+            self.expanded_user_messages.insert(message_id);
+        }
+        if in_background {
+            self.remeasure_background_user_message(message_id);
+        } else {
+            self.pin_transcript_for_disclosure();
+            if let Some(message_index) = self.selected_session().and_then(|session| {
+                session
+                    .messages
+                    .iter()
+                    .position(|message| message.id == message_id)
+            }) {
+                self.remeasure_transcript_message(message_index);
+            }
+        }
+        cx.notify();
+    }
+
     /// Expand or collapse the live provider-retry card. Same disclosure
     /// contract as the compaction card: the caller passes the row's current
     /// state, this inverts it, and the height change must not shift the
@@ -1754,6 +1800,9 @@ impl Fintwind {
             .min_w_0()
             .rounded(px(12.0))
             .bg(theme.raised)
+            .border_1()
+            .border_color(theme.border)
+            .shadow(theme.card_shadow())
             .tab_index(0)
             .tab_group()
             .tab_stop(false)
@@ -2054,7 +2103,11 @@ impl Fintwind {
         else {
             return div().into_any_element();
         };
-        let result = if goal.result.as_ref().is_some_and(|text| !text.trim().is_empty()) {
+        let result = if goal
+            .result
+            .as_ref()
+            .is_some_and(|text| !text.trim().is_empty())
+        {
             goal.result.as_deref().unwrap_or_default()
         } else {
             goal.reason.as_str()
@@ -2617,9 +2670,9 @@ impl Fintwind {
         // consecutive thoughts as one card so a turn reads as work, not a
         // wall of rails. Full chain-of-thought families keep their own cards.
         let summary_model: Option<String> = match &context.surface {
-            ActivitySurface::Session => {
-                self.selected_session().and_then(|session| session.model.clone())
-            }
+            ActivitySurface::Session => self
+                .selected_session()
+                .and_then(|session| session.model.clone()),
             ActivitySurface::Background(key) => self.background_work_model(key),
         };
         let display = merge_consecutive_reasoning(
@@ -2751,11 +2804,8 @@ impl Fintwind {
         if let Some(reasoning) = reasoning
             && context.reasoning_group_count > 1
         {
-            row_detail = reasoning_group_title(
-                reasoning,
-                reasoning_live,
-                context.reasoning_group_count,
-            );
+            row_detail =
+                reasoning_group_title(reasoning, reasoning_live, context.reasoning_group_count);
         }
         // A thought's title already names the work; keep the English action
         // label out of the row instead of printing both.

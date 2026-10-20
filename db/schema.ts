@@ -41,6 +41,9 @@ export const sessions = sqliteTable(
     /** OpenCode's native session id — list-level, so reconciliation can match
      *  a skeleton to its server record without hydrating the transcript. */
     nativeSessionId: text("native_session_id"),
+    /** Frozen Mermaid prompt version chosen when the session was created.
+     *  NULL means the session predates the preference, so it stays off. */
+    mermaidPromptVersion: text("mermaid_prompt_version"),
     /** Session creation time, unix seconds. */
     createdAt: integer("created_at").notNull(),
     /** Any mutation, unix seconds — including title edits and truncation. */

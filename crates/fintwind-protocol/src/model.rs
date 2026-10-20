@@ -639,6 +639,15 @@ pub struct ContextUsage {
     /// different domain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition: Option<ContextComposition>,
+    /// First-token latencies summed across measured turns, in milliseconds;
+    /// the numerator of the session's average first-token latency. Measured
+    /// by the desktop between the turn's `TurnStarted` and its first streamed
+    /// content, so a turn that settles without streaming records no sample.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_ms: Option<u64>,
+    /// Turns with a measured first-token latency; the denominator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_turns: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -714,6 +723,12 @@ pub struct RuntimeEventCursor {
     pub sequence: u64,
 }
 
+/// Versioned, immutable Mermaid instruction selected for newly created
+/// sessions. `v1` sessions keep their byte-identical instruction; `v2` adds
+/// the `fintwind_mermaid_check` validation loop. New sessions pick this
+/// constant, so it always names the latest version.
+pub const MERMAID_PROMPT_VERSION: &str = "v2";
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentSession {
     pub id: Uuid,
@@ -749,6 +764,10 @@ pub struct AgentSession {
     /// locks this value once conversation history exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_preset: Option<String>,
+    /// Immutable creation-time preference. Missing in old sessions means off.
+    /// Never refresh this field from the current global default on resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mermaid_prompt_version: Option<String>,
     pub status: SessionStatus,
     pub created_at: u64,
     /// Any mutation, including title edits and truncation. Use
@@ -849,6 +868,7 @@ impl AgentSession {
             service_tier: None,
             context_window: None,
             agent_preset: None,
+            mermaid_prompt_version: None,
             status: SessionStatus::Idle,
             created_at: now,
             updated_at: now,
@@ -892,6 +912,7 @@ impl AgentSession {
             service_tier: None,
             context_window: None,
             agent_preset: None,
+            mermaid_prompt_version: self.mermaid_prompt_version.clone(),
             status: self.status,
             created_at: self.created_at,
             updated_at: self.updated_at,
@@ -1806,6 +1827,13 @@ pub enum DriverEvent {
     /// the server starts a run on its own (opencode `session.execution.started`
     /// after a settled turn — background-task auto-continue).
     TurnStarted,
+    /// The context plugin measured this turn's first-token latency inside the
+    /// server (between its `http.request` and `http.response` hooks on the
+    /// turn's first step). Carries that sample in milliseconds; the desktop
+    /// prefers it over its own wall-clock measurement.
+    FirstTokenMeasured {
+        latency_ms: u64,
+    },
     /// A validated durable window, published before its TurnFinished. Kept
     /// atomic so a missing early part cannot be appended after a later one.
     TurnTranscriptReconciled {

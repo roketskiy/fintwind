@@ -252,6 +252,14 @@ const TEXT_FONTS: &[&[u8]] = &[
     include_bytes!("../assets/fonts/JetBrainsMono-BoldItalic.ttf"),
 ];
 
+// SVG text has its own font database, separate from GPUI's text system.
+const SVG_FONTS: &[(&str, &[u8])] = &[
+    ("fonts/JetBrainsMono-Regular.ttf", TEXT_FONTS[0]),
+    ("fonts/JetBrainsMono-Bold.ttf", TEXT_FONTS[1]),
+    ("fonts/JetBrainsMono-Italic.ttf", TEXT_FONTS[2]),
+    ("fonts/JetBrainsMono-BoldItalic.ttf", TEXT_FONTS[3]),
+];
+
 /// The app logo in its light- and dark-theme variants, rendered with `img`
 /// because the logo is polychrome — GPUI's `svg()` element can only tint a
 /// single alpha mask. The dark variant inverts the mark's ink so it keeps
@@ -299,6 +307,7 @@ impl AssetSource for Assets {
         Ok(ICONS
             .iter()
             .chain(LOGOS.iter())
+            .chain(SVG_FONTS.iter())
             .find(|(name, _)| *name == path)
             .map(|(_, bytes)| Cow::Borrowed(*bytes)))
     }
@@ -307,6 +316,7 @@ impl AssetSource for Assets {
         Ok(ICONS
             .iter()
             .chain(LOGOS.iter())
+            .chain(SVG_FONTS.iter())
             .filter(|(name, _)| name.starts_with(path))
             .map(|(name, _)| SharedString::from(*name))
             .collect())

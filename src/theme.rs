@@ -376,6 +376,20 @@ impl Theme {
         ]
     }
 
+    /// A quiet downward lift for the context panel's cards, in the same
+    /// two-layer idiom as the sidebar and workspace shadows but smaller.
+    pub fn card_shadow(&self) -> Vec<BoxShadow> {
+        let (key, ambient) = if self.is_dark {
+            (0.16, 0.09)
+        } else {
+            (0.05, 0.03)
+        };
+        vec![
+            BoxShadow::new(px(0.0), px(1.0), hsla(0.0, 0.0, 0.0, key)).blur_radius(px(2.0)),
+            BoxShadow::new(px(0.0), px(3.0), hsla(0.0, 0.0, 0.0, ambient)).blur_radius(px(7.0)),
+        ]
+    }
+
     pub fn current(cx: &App) -> Self {
         if cx.has_global::<ActiveFintwindTheme>() {
             cx.global::<ActiveFintwindTheme>().0

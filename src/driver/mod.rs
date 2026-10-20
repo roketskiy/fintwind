@@ -31,6 +31,7 @@ pub(crate) fn start_remote(
                 .provider_cursor
                 .map(serde_json::to_value)
                 .transpose()?,
+            mermaid_prompt_version: options.mermaid_prompt_version,
         },
     };
     let supports_steer = match client.request(session_id, runtime_id, command) {

@@ -11,6 +11,49 @@ impl Fintwind {
         }
     }
 
+    /// Remember when the turn's first streamed content arrived, text or
+    /// reasoning. The sample itself waits for the plugin's server-side
+    /// measurement; this wall-clock pair is the fallback when no plugin
+    /// sample lands by the time the turn settles.
+    fn note_first_content(&mut self, runtime: &mut SessionRuntime) {
+        if runtime.first_token_recorded {
+            return;
+        }
+        if runtime.first_content_at.is_none() {
+            runtime.first_content_at = Some(Instant::now());
+        }
+    }
+
+    /// Record one first-token latency sample against the session's usage.
+    fn add_first_token_sample(&mut self, session_id: Uuid, latency_ms: u64) {
+        if let Some(session) = self.state.session_mut(session_id) {
+            let usage = session.context_usage.get_or_insert(ContextUsage::default());
+            usage.first_token_ms =
+                Some(usage.first_token_ms.unwrap_or(0).saturating_add(latency_ms));
+            usage.first_token_turns = Some(usage.first_token_turns.unwrap_or(0).saturating_add(1));
+            self.state.mark_session_dirty(session_id);
+        }
+    }
+
+    /// The turn settled without a plugin measurement (the provider path
+    /// bypasses the HTTP hooks, or this OpenCode build lacks them), so the
+    /// wall-clock pair from `TurnStarted` to the first streamed content
+    /// becomes the sample. Includes the server's own dispatch cost, which is
+    /// exactly what the plugin path removes.
+    fn settle_first_token(&mut self, session_id: Uuid, runtime: &mut SessionRuntime) {
+        if runtime.first_token_recorded {
+            return;
+        }
+        runtime.first_token_recorded = true;
+        if let (Some(started_at), Some(content_at)) =
+            (runtime.turn_started_at, runtime.first_content_at)
+        {
+            let elapsed_ms = u64::try_from(content_at.duration_since(started_at).as_millis())
+                .unwrap_or(u64::MAX);
+            self.add_first_token_sample(session_id, elapsed_ms);
+        }
+    }
+
     pub(super) fn append_text_delta(
         &mut self,
         session_id: Uuid,
@@ -665,6 +708,9 @@ impl Fintwind {
                 runtime.last_driver_error = None;
                 runtime.transcript_reconciliation_failed = false;
                 runtime.provider_phase = None;
+                runtime.turn_started_at = Some(Instant::now());
+                runtime.first_content_at = None;
+                runtime.first_token_recorded = false;
                 self.provider_retries.remove(&session_id);
                 if let Some(session) = self.state.session_mut(session_id) {
                     runtime.continuation_projection_start =
@@ -766,10 +812,20 @@ impl Fintwind {
                     self.schedule_provider_retry_expiry(session_id, cx);
                 }
             }
+            DriverEvent::FirstTokenMeasured { latency_ms } => {
+                // The plugin's server-side sample outranks the wall-clock
+                // pair: it excludes the server's own dispatch cost, which the
+                // wall clock cannot see past. One sample per turn.
+                if self.accepts_turn_output(session_id) && !runtime.first_token_recorded {
+                    runtime.first_token_recorded = true;
+                    self.add_first_token_sample(session_id, latency_ms);
+                }
+            }
             DriverEvent::TextStarted { part } => {
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
+                    self.note_first_content(runtime);
                     self.open_text_fragment(session_id, runtime, part);
                 }
             }
@@ -777,6 +833,7 @@ impl Fintwind {
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
+                    self.note_first_content(runtime);
                     self.append_keyed_text_delta(session_id, runtime, part, delta);
                 }
             }
@@ -791,6 +848,7 @@ impl Fintwind {
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
+                    self.note_first_content(runtime);
                     self.open_reasoning_fragment(session_id, runtime, part);
                 }
             }
@@ -798,6 +856,7 @@ impl Fintwind {
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
+                    self.note_first_content(runtime);
                     self.append_reasoning_delta(session_id, runtime, part, delta);
                 }
             }
@@ -1148,6 +1207,10 @@ impl Fintwind {
                 }
             }
             DriverEvent::TurnFinished { success, summary } => {
+                // Last chance for this turn's first-token sample: the plugin
+                // measurement should already have landed with its step, so
+                // this only fires for provider paths that bypass it.
+                self.settle_first_token(session_id, runtime);
                 let (success, summary) =
                     if std::mem::take(&mut runtime.transcript_reconciliation_failed) {
                         (

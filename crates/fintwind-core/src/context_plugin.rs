@@ -39,6 +39,20 @@ impl ContextPlugin {
             .as_array_mut()
             .context("inline OpenCode plugins must be an array")?
             .push(json!(self.directory));
+        // The check is read-only compilation with no side effects, so sitting
+        // behind a per-call approval would only stall diagram turns.
+        match object.entry("permission") {
+            serde_json::map::Entry::Vacant(entry) => {
+                entry.insert(json!({ "fintwind_mermaid_check": "allow" }));
+            }
+            serde_json::map::Entry::Occupied(mut entry) => {
+                if let Some(permissions) = entry.get_mut().as_object_mut() {
+                    permissions
+                        .entry("fintwind_mermaid_check".to_owned())
+                        .or_insert_with(|| json!("allow"));
+                }
+            }
+        }
         Ok(serde_json::to_string(&config)?)
     }
 }
@@ -91,4 +105,31 @@ pub(crate) fn get_on_port(
     let composition =
         serde_json::from_value(output).context("invalid context composition snapshot")?;
     Ok(Some(composition))
+}
+
+/// Consume the plugin's server-side first-token latency for `session_id`, in
+/// milliseconds. The plugin measures it between its `http.request` and
+/// `http.response` hooks and answers `null` when the provider path never
+/// produced a sample (WebSocket streaming, or hooks missing on this build).
+pub(crate) fn first_token_on_port(
+    port: u16,
+    directory: &str,
+    session_id: &str,
+) -> anyhow::Result<Option<u64>> {
+    let response = crate::opencode_session::request_json_on_port_with_directory(
+        port,
+        "POST",
+        "/api/rpc/fintwind.context/ttft",
+        Some(&json!({ "input": { "sessionID": session_id } })),
+        std::time::Duration::from_secs(5),
+        Some(directory),
+    )?;
+    let output = response.get("output").cloned().unwrap_or(response);
+    if output.is_null() {
+        return Ok(None);
+    }
+    let latency = output
+        .as_u64()
+        .context("invalid first-token latency sample")?;
+    Ok(Some(latency))
 }

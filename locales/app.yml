@@ -163,7 +163,7 @@ settings.appearance:
 settings.providers:
   en: Providers
 settings.general_keywords:
-  en: general local projects conversations privacy version proxy network opencode shell powershell cmd bash
+  en: general local projects conversations privacy version proxy network opencode shell powershell cmd bash mermaid diagram visualization
 settings.appearance_keywords:
   en: appearance theme system light dark language english chinese simplified text size font code interface width conversation
 settings.providers_keywords:
@@ -338,6 +338,10 @@ settings.browser_tools:
   en: Browser tools
 settings.browser_tools_description:
   en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context
+settings.mermaid_visualization:
+  en: Mermaid visualization prompt
+settings.mermaid_visualization_description:
+  en: New sessions only
 settings.goal:
   en: Goal mode
 settings.goal_description:
@@ -1026,6 +1030,10 @@ common.copy_to_composer:
   en: Copy to Composer
 common.copy_code:
   en: Copy Code
+common.show_source:
+  en: Show Source
+common.show_diagram:
+  en: Show Diagram
 common.copy_expression:
   en: Copy Expression
 quote.add_title:
@@ -1538,6 +1546,8 @@ commands.fast_description:
   en: Toggle fast mode
 commands.compact_description:
   en: Summarize the conversation to free up context
+commands.reload_server_description:
+  en: Hot-reload the OpenCode server
 commands.claude_context:
   en: Show what is occupying the context window
 commands.claude_cost:
@@ -2502,6 +2512,10 @@ transcript.show_more_files:
   en: Show %{count} more files
 transcript.show_fewer_files:
   en: Show fewer files
+transcript.show_long_message:
+  en: Show more
+transcript.hide_long_message:
+  en: Show less
 transcript.showing_first_files:
   en: Showing first %{count} of %{total}
 transcript.scroll_to_bottom:
@@ -2695,6 +2709,8 @@ usage.total_tokens:
   en: Total tokens
 usage.cache_hit_rate:
   en: Cache hit rate
+usage.first_token_latency:
+  en: Avg first token
 usage.compacting:
   en: Compacting context…
 usage.compaction_failed:

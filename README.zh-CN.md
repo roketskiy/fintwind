@@ -123,7 +123,7 @@ daemon 的提供商设置位于 `~/.fintwind/settings.json`。
 ## 开发
 
 需要 Windows、MSVC C++ 工具链与 Windows SDK、
-[Rust 1.96 或更新版本](https://www.rust-lang.org/tools/install)，以及 [Bun](https://bun.sh/)。
+[Rust 1.97 或更新版本](https://www.rust-lang.org/tools/install)，以及 [Bun](https://bun.sh/)。
 环境配置与检查要求见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ```sh

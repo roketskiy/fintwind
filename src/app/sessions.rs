@@ -1211,6 +1211,7 @@ impl Fintwind {
         self.expanded_turns.clear();
         self.expanded_changed_files.clear();
         self.expanded_compactions.clear();
+        self.expanded_user_messages.clear();
         self.expanded_provider_retries.clear();
         self.activity_markdown.borrow_mut().clear();
         self.reasoning_views.borrow_mut().clear();

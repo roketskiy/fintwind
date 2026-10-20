@@ -37,7 +37,12 @@ pub mod git_status;
 mod goal_plugin;
 pub mod i18n;
 pub mod identity;
+/// The mermaid check capability a private OpenCode process receives. Public
+/// only for the harness that stands in for that process; values are loopback
+/// addresses and per-daemon tokens.
+pub use mermaid_check::environment as mermaid_check_environment;
 pub mod mcp_auth;
+mod mermaid_check;
 pub mod model;
 pub mod model_catalog;
 mod opencode_diagnostics;

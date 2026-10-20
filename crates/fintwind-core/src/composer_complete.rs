@@ -139,6 +139,16 @@ fn builtin_fintwind_commands() -> Vec<SlashCommand> {
         argument_hint: None,
         template: None,
     });
+    // `/reload-server` is intercepted the same way: it hot-reloads the native
+    // OpenCode server through its `location.reload` route instead of
+    // prompting the model.
+    commands.push(SlashCommand {
+        name: "reload-server".to_owned(),
+        description: tr!("commands.reload_server_description"),
+        scope: CommandScope::Builtin,
+        argument_hint: None,
+        template: None,
+    });
     commands
 }
 

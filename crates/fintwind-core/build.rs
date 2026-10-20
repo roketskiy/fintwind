@@ -10,7 +10,10 @@ use std::path::Path;
 use std::{env, fs};
 
 fn main() {
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // A shared Cargo target can reuse this executable across worktrees. Resolve
+    // the manifest at execution time, not where build.rs was first compiled.
+    let manifest = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let repository = Path::new(&manifest).join("../..");
     let directory = repository.join("db/migrations");
     println!("cargo:rerun-if-changed={}", directory.display());
     println!(

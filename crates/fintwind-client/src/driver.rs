@@ -151,6 +151,8 @@ pub struct DriverStartOptions {
     pub context_window: Option<String>,
     pub agent_preset: Option<String>,
     pub provider_cursor: Option<ProviderResumeCursor>,
+    /// Frozen at session creation. `None` means the Mermaid prompt is off.
+    pub mermaid_prompt_version: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

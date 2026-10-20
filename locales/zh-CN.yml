@@ -80,7 +80,7 @@ settings.general: 通用
 settings.appearance: 外观
 settings.providers: 服务商
 settings.usage: 用量
-settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本 opencode shell powershell cmd bash 终端
+settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本 opencode shell powershell cmd bash 终端 mermaid diagram 图表 可视化
 settings.appearance_keywords: 外观 主题 系统 浅色 深色 语言 英语 中文 简体 字号 文字大小 代码 界面 字体 等宽 宽度 对话宽度 消息宽度
 settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key Base URL 端点 模型列表 命令行 版本 安装 检测 获取模型 models.dev 连通 测试 延迟 首字 模态 responses claude codex cursor opencode amp grok pi
 settings.skills: 技能
@@ -167,6 +167,8 @@ settings.local_by_default: 默认存储在本地
 settings.local_by_default_description: 项目、对话和设置均存储在这台电脑上
 settings.browser_tools: 浏览器工具
 settings.browser_tools_description: 默认关闭。开启后向模型提供内置浏览器操作工具与使用说明，会占用少量上下文
+settings.mermaid_visualization: Mermaid 可视化提示词
+settings.mermaid_visualization_description: 仅新会话
 settings.goal: 目标模式
 settings.goal_description: 开启后可用 /goal 设置会话目标，支持暂停与恢复执行
 settings.auto_compact: 自动压缩
@@ -511,6 +513,8 @@ common.copy_message_title: 复制消息
 common.copy_selection: 复制所选内容
 common.copy_to_composer: 复制到输入框
 common.copy_code: 复制代码
+common.show_source: 查看源码
+common.show_diagram: 查看图表
 common.copy_expression: 复制公式
 quote.add_title: 添加引用
 quote.add_file: 引用文件…
@@ -776,6 +780,7 @@ commands.fast_description: 切换快速模式
 commands.fast_enabled: 已启用快速模式
 commands.fast_disabled: 已关闭快速模式
 commands.compact_description: 总结对话以释放上下文空间
+commands.reload_server_description: 热重载 OpenCode 服务器
 commands.claude_context: 查看上下文窗口的占用情况
 commands.claude_cost: 查看当前任务的令牌用量与费用
 commands.claude_init: 分析项目并编写 CLAUDE.md
@@ -1248,6 +1253,8 @@ transcript.changed_files: 更改了 %{count} 个文件
 transcript.review_changes: 审阅
 transcript.show_more_files: 再显示 %{count} 个文件
 transcript.show_fewer_files: 收起文件列表
+transcript.show_long_message: 展开
+transcript.hide_long_message: 收起
 transcript.showing_first_files: 仅显示前 %{count}/%{total} 个
 transcript.scroll_to_bottom: 滚动到底部
 transcript.conversation_turns: 对话轮次
@@ -1343,6 +1350,7 @@ usage.shortcut: 上下文（%{shortcut}）
 usage.context_window: 上下文窗口
 usage.total_tokens: 总 Token
 usage.cache_hit_rate: 缓存命中率
+usage.first_token_latency: 平均首字延迟
 usage.compacting: 正在压缩上下文…
 usage.compaction_failed: 压缩失败
 usage.compaction_retry: 重试压缩

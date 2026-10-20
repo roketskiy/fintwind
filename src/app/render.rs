@@ -475,6 +475,12 @@ impl Render for Fintwind {
                                 .bg(theme.sidebar)
                                 .rounded_tl(px(WORKSPACE_CORNER_RADIUS))
                                 .rounded_bl(px(WORKSPACE_CORNER_RADIUS))
+                                // The sidebar's right edge faces the workspace
+                                // card, which rounds its own left corners. The
+                                // sidebar rounds this side too, so the two
+                                // cards read as a matched pair.
+                                .rounded_tr(px(WORKSPACE_CORNER_RADIUS))
+                                .rounded_br(px(WORKSPACE_CORNER_RADIUS))
                                 .py(px(WORKSPACE_CORNER_RADIUS))
                                 .shadow(theme.sidebar_shadow())
                                 .when(panels.sidebar_sliding, |element| element.overflow_hidden())

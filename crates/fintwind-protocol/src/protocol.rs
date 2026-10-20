@@ -499,6 +499,9 @@ pub struct WireDriverStartOptions {
     pub context_window: Option<String>,
     pub agent_preset: Option<String>,
     pub provider_cursor: Option<Value>,
+    /// Frozen at session creation; absent on older clients and off sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mermaid_prompt_version: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

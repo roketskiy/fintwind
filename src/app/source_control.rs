@@ -1345,12 +1345,13 @@ impl Fintwind {
                 div()
                     .id(element_id)
                     .tab_index(0)
-                    .h(px(28.0))
+                    .min_h(px(28.0))
                     .flex_none()
+                    .py(px(5.0))
                     .pl(px(12.0))
                     .pr(px(8.0))
                     .flex()
-                    .items_center()
+                    .items_start()
                     .gap(px(8.0))
                     .cursor_default()
                     .hover(|element| element.bg(theme.overlay))
@@ -1362,7 +1363,10 @@ impl Fintwind {
                     .child(
                         div()
                             .w(px(12.0))
+                            .h(ui_px(18.0))
                             .flex_none()
+                            .flex()
+                            .items_center()
                             .text_size(ui_px(11.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .text_color(status_letter_color(letter, &theme))
@@ -1373,7 +1377,12 @@ impl Fintwind {
                             .id(title_id)
                             .flex_1()
                             .min_w_0()
-                            .truncate()
+                            // The sidebar is narrow enough that long paths and
+                            // rename labels have to wrap rather than end in an
+                            // ellipsis: a review row that hides the file name
+                            // is not usable.
+                            .whitespace_normal()
+                            .line_height(ui_px(18.0))
                             .text_size(ui_px(12.0))
                             .text_color(theme.text_secondary)
                             .tooltip(Tooltip::text(title.clone()))

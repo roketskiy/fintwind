@@ -150,7 +150,7 @@ Tasks without a project use workspaces under
 ## Development
 
 Requires Windows, the MSVC C++ toolchain and Windows SDK,
-[Rust 1.96 or newer](https://www.rust-lang.org/tools/install), and
+[Rust 1.97 or newer](https://www.rust-lang.org/tools/install), and
 [Bun](https://bun.sh/). Follow [CONTRIBUTING.md](CONTRIBUTING.md) for setup and checks.
 
 ```sh

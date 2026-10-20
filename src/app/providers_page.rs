@@ -1587,8 +1587,7 @@ impl Fintwind {
                         .gap(px(14.0))
                         .child(catalog_check)
                         .when(
-                            needs_auth
-                                && !self.provider_oauth_methods(&provider.id).is_empty(),
+                            needs_auth && !self.provider_oauth_methods(&provider.id).is_empty(),
                             |element| {
                                 // The server has a URL for signing back in,
                                 // but the in-app flow reconnects the same
@@ -1603,10 +1602,7 @@ impl Fintwind {
                                     .on_click(cx.listener({
                                         let provider_id = provider.id.clone();
                                         move |this, _, _, cx| {
-                                            this.begin_provider_relogin(
-                                                provider_id.clone(),
-                                                cx,
-                                            );
+                                            this.begin_provider_relogin(provider_id.clone(), cx);
                                         }
                                     })),
                                 )
@@ -2380,7 +2376,11 @@ impl Fintwind {
         }
         row
     }
-    pub(super) fn select_form_builtin(&mut self, provider_id: Option<String>, cx: &mut Context<Self>) {
+    pub(super) fn select_form_builtin(
+        &mut self,
+        provider_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         // A pre-start OAuth form belongs to the provider it was opened on;
         // another choice discards it with the key field's content.
         self.providers_oauth_draft = None;
@@ -2871,16 +2871,14 @@ impl Fintwind {
                             .text_size(ui_px(12.0))
                             .font_weight(FontWeight::MEDIUM)
                             .child(label)
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.start_provider_oauth_action(
-                                        click_provider_id.clone(),
-                                        click_method_id.clone(),
-                                        window,
-                                        cx,
-                                    );
-                                },
-                            ))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.start_provider_oauth_action(
+                                    click_provider_id.clone(),
+                                    click_method_id.clone(),
+                                    window,
+                                    cx,
+                                );
+                            }))
                             .on_key_down(cx.listener(
                                 move |this, event: &KeyDownEvent, window, cx| {
                                     if !event.keystroke.modifiers.modified()
@@ -2909,11 +2907,7 @@ impl Fintwind {
                             .gap(px(8.0))
                             .text_size(ui_px(12.0))
                             .text_color(theme.text_secondary)
-                            .child(icon(
-                                "icons/loader-circle.svg",
-                                13.0,
-                                theme.text_secondary,
-                            ))
+                            .child(icon("icons/loader-circle.svg", 13.0, theme.text_secondary))
                             .child(tr!("providers.oauth_waiting")),
                     );
                 }
@@ -2940,7 +2934,8 @@ impl Fintwind {
                             })
                         }),
                     );
-                    if attempt.mode == fintwind_protocol::provider_session::IntegrationOAuthMode::Code
+                    if attempt.mode
+                        == fintwind_protocol::provider_session::IntegrationOAuthMode::Code
                     {
                         row = row.child(
                             TextField::new(
@@ -2989,24 +2984,15 @@ impl Fintwind {
                                 .gap(px(8.0))
                                 .text_size(ui_px(12.0))
                                 .text_color(theme.text_secondary)
-                                .child(icon(
-                                    "icons/loader-circle.svg",
-                                    13.0,
-                                    theme.text_secondary,
-                                ))
+                                .child(icon("icons/loader-circle.svg", 13.0, theme.text_secondary))
                                 .child(tr!("providers.oauth_waiting")),
                         );
                     }
                     row = row.child(
-                        outline_button(
-                            "oauth-cancel-flow",
-                            tr!("common.cancel"),
-                            None,
-                            theme,
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.cancel_provider_oauth_flow(cx);
-                        })),
+                        outline_button("oauth-cancel-flow", tr!("common.cancel"), None, theme)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.cancel_provider_oauth_flow(cx);
+                            })),
                     );
                     section = section.child(row);
                 }
@@ -3108,10 +3094,7 @@ impl Fintwind {
                     );
                 }
                 field_col = field_col.child(row);
-            } else if let Some((_, input)) = draft
-                .inputs
-                .iter()
-                .find(|(key, _)| key == &field.key)
+            } else if let Some((_, input)) = draft.inputs.iter().find(|(key, _)| key == &field.key)
             {
                 field_col = field_col.child(
                     TextField::new(
@@ -3165,10 +3148,11 @@ impl Fintwind {
                 .child(tr!("providers.oauth_connect")),
         );
         actions = actions.child(
-            outline_button("oauth-form-back", tr!("common.cancel"), None, theme)
-                .on_click(cx.listener(|this, _, _, cx| {
+            outline_button("oauth-form-back", tr!("common.cancel"), None, theme).on_click(
+                cx.listener(|this, _, _, cx| {
                     this.cancel_provider_oauth_form(cx);
-                })),
+                }),
+            ),
         );
         column = column.child(actions);
         column.into_any_element()

@@ -19,7 +19,7 @@ use crate::{
     },
 };
 
-const ROW_BYTES: usize = 2048;
+pub(super) const ROW_BYTES: usize = 2048;
 pub const THRESHOLD: usize = 6 * 1024;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,7 +50,7 @@ pub(super) struct TablePart {
 }
 
 /// Split parsed text, not Markdown source: fences, links and emphasis survive.
-fn text_parts(text: &str) -> Vec<&str> {
+pub(super) fn text_parts(text: &str) -> Vec<&str> {
     let mut parts = Vec::new();
     let mut remaining = text;
     while remaining.len() > ROW_BYTES {
@@ -127,6 +127,18 @@ fn push_block(block: &Block, rows: &mut Vec<Arc<Row>>, codes: &mut HashMap<usize
         }
         Block::CodeBlock { language, code } => {
             codes.insert(first, Arc::from(code.as_str()));
+            // A supported diagram is one bounded media row, never independent
+            // fragments of Mermaid. Oversized sources keep normal text virtualization.
+            if super::diagram_fence(language.as_deref(), code) {
+                rows.push(Arc::new(Row {
+                    block: block.clone(),
+                    decorations: Vec::new(),
+                    gap: true,
+                    code: Some((first, true, true)),
+                    table: None,
+                }));
+                return;
+            }
             let parts = text_parts(code);
             let count = parts.len();
             for (index, code) in parts.into_iter().enumerate() {
@@ -382,6 +394,7 @@ impl ReasoningView {
             || (source.len() == self.source_len && stamp != self.source_stamp);
         if reset {
             self.generation += 1;
+            self.cache.reset_source_scroll();
             self.pending.clear();
             self.reset = true;
         }
@@ -393,6 +406,7 @@ impl ReasoningView {
         self.source_len = source.len();
         self.source_stamp = stamp;
         self.live = live;
+        self.cache.set_text("", live);
         self.dirty = true;
         self.prepare(cx);
     }

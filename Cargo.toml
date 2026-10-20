@@ -2,6 +2,8 @@
 name = "fintwind"
 version = "0.2.11"
 edition = "2024"
+# Ondine (crates/fintwind-diagram) requires 1.97; CI pins the same toolchain.
+rust-version = "1.97"
 description = "A native Windows desktop app for OpenCode"
 license = "GPL-3.0-only"
 
@@ -20,6 +22,7 @@ members = [
     "crates/fintwind-client",
     "crates/fintwind-core",
     "crates/fintwind-daemon",
+    "crates/fintwind-diagram",
     "crates/fintwind-protocol",
 ]
 default-members = [
@@ -27,6 +30,7 @@ default-members = [
     "crates/fintwind-client",
     "crates/fintwind-core",
     "crates/fintwind-daemon",
+    "crates/fintwind-diagram",
     "crates/fintwind-protocol",
 ]
 resolver = "2"
@@ -64,6 +68,7 @@ unicode-linebreak = "0.1.5"
 url = "2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-client = { path = "crates/fintwind-client" }
+fintwind-diagram = { path = "crates/fintwind-diagram" }
 fintwind-protocol = { path = "crates/fintwind-protocol" }
 pulldown-cmark = "0.13"
 # Native, offline math typesetting; all layout and raster work runs on workers.

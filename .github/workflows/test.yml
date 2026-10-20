@@ -25,8 +25,8 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup toolchain install 1.96.0 --profile minimal
-          rustup default 1.96.0
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup default 1.97.0
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
@@ -38,9 +38,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-latest-rust-1.96.0-cargo-${{ hashFiles('Cargo.lock') }}
+          key: windows-latest-rust-1.97.0-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            windows-latest-rust-1.96.0-cargo-
+            windows-latest-rust-1.97.0-cargo-
 
       - name: Run tests
         run: cargo test --locked
@@ -60,8 +60,8 @@ jobs:
 
       - name: Install Rust
         run: |
-          rustup toolchain install 1.96.0 --profile minimal
-          rustup default 1.96.0
+          rustup toolchain install 1.97.0 --profile minimal
+          rustup default 1.97.0
 
       - name: Cache Cargo
         uses: actions/cache@v6
@@ -70,9 +70,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: windows-latest-rust-1.96.0-release-check-${{ hashFiles('Cargo.lock') }}
+          key: windows-latest-rust-1.97.0-release-check-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            windows-latest-rust-1.96.0-release-check-
+            windows-latest-rust-1.97.0-release-check-
 
       - name: Check stable release
         run: cargo check --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon

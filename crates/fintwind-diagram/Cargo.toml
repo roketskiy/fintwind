@@ -1,0 +1,17 @@
+[package]
+name = "fintwind-diagram"
+version = "0.1.0"
+edition = "2024"
+description = "Mermaid-to-SVG compilation shared by the app renderer and the daemon"
+license = "GPL-3.0-only"
+
+[dependencies]
+anyhow = "1.0"
+# Native Mermaid compilation; pinned while Ondine's API is pre-release.
+# One crate owns the compiler so the daemon's mermaid check tool and the
+# app's renderer can never drift apart.
+ondine = { package = "compiler", git = "https://github.com/wevm/ondine", rev = "6a1586e5af980e67c104239593ae931837157b8b" }
+
+[dev-dependencies]
+regex = "1"
+serde_json = "1.0"

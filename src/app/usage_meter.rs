@@ -5,7 +5,7 @@ use crate::ui::ActivationExt;
 use gpui::PathBuilder;
 
 use super::*;
-use crate::usage::{cache_hit_percent, format_percent, format_tokens};
+use crate::usage::{cache_hit_percent, format_first_token_ms, format_percent, format_tokens};
 
 impl Fintwind {
     pub(super) fn usage_meter_available(&self) -> bool {
@@ -199,15 +199,7 @@ impl Fintwind {
             .text_size(ui_px(12.0))
             .text_color(theme.text);
 
-        let hero = div()
-            .p(px(12.0))
-            .rounded(px(10.0))
-            .bg(theme.surface)
-            .border_1()
-            .border_color(theme.border)
-            .flex()
-            .flex_col()
-            .gap(px(10.0))
+        let hero = context_card(&theme)
             .child(
                 div()
                     .text_color(theme.text_secondary)
@@ -272,6 +264,11 @@ impl Fintwind {
                             })
                             .map(format_percent)
                             .unwrap_or_else(|| "—".to_owned()),
+                    ))
+                    .child(context_stat(
+                        &theme,
+                        tr!("usage.first_token_latency"),
+                        first_token_label(usage.as_ref()),
                     )),
             )
             .child(context_waffle(&breakdown, &theme))
@@ -569,15 +566,23 @@ impl Fintwind {
     }
 }
 
-fn inspector_section(theme: &Theme, title: String) -> Div {
+/// The floating card the context panel's sections share: one surface, one
+/// hairline border, one quiet shadow.
+fn context_card(theme: &Theme) -> Div {
     div()
-        .pt(px(16.0))
-        .border_t_1()
+        .p(px(12.0))
+        .rounded(px(10.0))
+        .bg(theme.surface)
+        .border_1()
         .border_color(theme.border)
+        .shadow(theme.card_shadow())
         .flex()
         .flex_col()
-        .gap(px(9.0))
-        .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+        .gap(px(10.0))
+}
+
+fn inspector_section(theme: &Theme, title: String) -> Div {
+    context_card(theme).child(div().font_weight(FontWeight::SEMIBOLD).child(title))
 }
 
 fn inspector_row(theme: &Theme, label: String, value: String) -> Div {
@@ -598,6 +603,20 @@ fn context_percent(usage: &ContextUsage) -> Option<f64> {
         .window
         .filter(|window| *window > 0)
         .map(|window| usage.tokens as f64 * 100.0 / window as f64)
+}
+
+/// The session's average first-token latency, "—" until a turn streams.
+fn first_token_label(usage: Option<&ContextUsage>) -> String {
+    usage
+        .and_then(
+            |usage| match (usage.first_token_ms, usage.first_token_turns) {
+                (Some(total), Some(turns)) if turns > 0 => {
+                    Some(format_first_token_ms(total / turns))
+                }
+                _ => None,
+            },
+        )
+        .unwrap_or_else(|| "—".to_owned())
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]

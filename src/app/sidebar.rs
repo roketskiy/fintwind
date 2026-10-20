@@ -1709,7 +1709,7 @@ impl Fintwind {
     ) -> impl IntoElement {
         div()
             .id("session-tabs-row")
-            .h(px(48.0))
+            .h(px(36.0))
             .flex_none()
             .flex()
             .items_center()

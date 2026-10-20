@@ -6,6 +6,38 @@ use chrono::{Datelike, Days};
 use gpui::StyledText;
 use std::path::Path;
 
+/// Folded user-message preview height: six body lines at the bubble's
+/// 20 px line height.
+const USER_MESSAGE_PREVIEW_HEIGHT: f32 = 120.0;
+
+/// A user bubble folds by default once its text would run past roughly nine
+/// wrapped lines. The row builder runs this for every visible user message on
+/// every frame, so it short-circuits on byte length and estimates wrapping
+/// from character widths instead of measuring text: an ASCII character counts
+/// one unit, anything else two, and a wrapped line holds 72 units — about one
+/// bubble width of Latin text.
+fn user_message_collapsible(content: &str) -> bool {
+    const UNITS_PER_LINE: usize = 72;
+    const LINE_LIMIT: usize = 9;
+    // Pure ASCII is the densest case at one unit per byte; anything shorter
+    // than the limit can never pass.
+    if content.len() < UNITS_PER_LINE * LINE_LIMIT {
+        return false;
+    }
+    let mut lines = 0usize;
+    for line in content.lines() {
+        let units = line
+            .chars()
+            .map(|c| if c.is_ascii() { 1 } else { 2 })
+            .sum::<usize>();
+        lines += units.div_ceil(UNITS_PER_LINE).max(1);
+        if lines > LINE_LIMIT {
+            return true;
+        }
+    }
+    false
+}
+
 pub(super) fn pulse_dot(size: f32, color: Hsla) -> AnyElement {
     motion::pulse(Duration::from_millis(1600), move |phase| {
         div()
@@ -425,6 +457,15 @@ pub(super) struct MessageRender<'a> {
     pub(super) assistant_message_action: Option<AssistantMessageAction>,
     pub(super) user_message_rewind: UserMessageRewind,
     pub(super) user_message_fill_width: bool,
+    /// Long user messages fold to a preview; this is the user's expansion
+    /// override. Only user rows read it.
+    pub(super) user_message_expanded: bool,
+    /// Stable focus identity for the folded message's disclosure row.
+    pub(super) user_message_toggle_focus: Option<FocusHandle>,
+    /// Whether the row renders in a subagent transcript, whose disclosure
+    /// remeasure goes through the background registry instead of the main
+    /// transcript list.
+    pub(super) user_message_in_background: bool,
     pub(super) goal_objective: bool,
     pub(super) message_edit_input: Option<Entity<ComposerInput>>,
     pub(super) attachment_menus: Vec<ContextMenuHandle>,
@@ -619,6 +660,71 @@ fn render_markdown_message_body<'a>(
         })
 }
 
+/// The show-more / show-less row inside a long user message's bubble. The
+/// caller passes the row's current fold state and this requests the inverse.
+/// Keyboard support rides the caller's cached focus handle, like the other
+/// transcript disclosures.
+fn user_message_disclosure_row(
+    message_id: Uuid,
+    collapsed: bool,
+    focus: Option<FocusHandle>,
+    in_background: bool,
+    theme: &Theme,
+    fintwind: &gpui::WeakEntity<Fintwind>,
+) -> AnyElement {
+    let click_fintwind = fintwind.clone();
+    let key_fintwind = fintwind.clone();
+    let mut row = div()
+        .id(SharedString::from(format!(
+            "user-message-toggle-{message_id}"
+        )))
+        .mt(px(2.0))
+        .flex_none()
+        .h(px(24.0))
+        .flex()
+        .items_center()
+        .gap(px(3.0))
+        .cursor_default()
+        .text_size(ui_px(11.5))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(theme.text_tertiary)
+        .hover(|element| element.text_color(theme.text_secondary))
+        .child(icon(
+            if collapsed {
+                "icons/chevron-down.svg"
+            } else {
+                "icons/chevron-up.svg"
+            },
+            12.0,
+            theme.text_tertiary,
+        ))
+        .child(if collapsed {
+            tr_cow!("transcript.show_long_message")
+        } else {
+            tr_cow!("transcript.hide_long_message")
+        })
+        .on_click(move |_, _, cx| {
+            let _ = click_fintwind.update(cx, |this, cx| {
+                this.toggle_user_message(message_id, !collapsed, in_background, cx)
+            });
+        });
+    if let Some(focus) = focus {
+        row = row
+            .track_focus(&focus)
+            .tab_index(0)
+            .focus_visible(|element| element.text_color(theme.text_secondary))
+            .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    let _ = key_fintwind.update(cx, |this, cx| {
+                        this.toggle_user_message(message_id, !collapsed, in_background, cx)
+                    });
+                    cx.stop_propagation();
+                }
+            });
+    }
+    row.into_any_element()
+}
+
 pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement {
     let MessageRender {
         theme,
@@ -631,6 +737,9 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
         assistant_message_action,
         user_message_rewind,
         user_message_fill_width,
+        user_message_expanded,
+        user_message_toggle_focus,
+        user_message_in_background,
         goal_objective,
         message_edit_input,
         attachment_menus,
@@ -792,21 +901,63 @@ pub(super) fn render_message(params: MessageRender, cx: &mut App) -> AnyElement 
                     // `w_full()` + `max_w` on a column child measures height at
                     // the unclamped width (Taffy). Put width on the main axis
                     // so max_w is applied before the text is measured.
-                    let bubble = div()
+                    let bubble_bg = if theme.is_dark {
+                        theme.raised
+                    } else {
+                        theme.inset
+                    };
+                    let collapsible = user_message_collapsible(&content);
+                    let collapsed = collapsible && !user_message_expanded;
+                    let mut bubble = div()
                         .max_w(px(540.0))
                         .min_w_0()
                         .when(user_message_fill_width, |element| element.w_full())
                         .rounded(px(12.0))
-                        .bg(if theme.is_dark {
-                            theme.raised
-                        } else {
-                            theme.inset
-                        })
+                        .bg(bubble_bg)
                         .px(px(12.0))
                         .py(px(8.0))
                         .text_size(ui_px(14.0))
-                        .line_height(ui_px(20.0))
-                        .child(body);
+                        .line_height(ui_px(20.0));
+                    if collapsed {
+                        // The preview clips after a fixed number of lines and
+                        // fades into the bubble, so the cut reads as "more
+                        // below" rather than as the message's end.
+                        bubble = bubble.child(
+                            div()
+                                .relative()
+                                .child(
+                                    div()
+                                        .max_h(px(USER_MESSAGE_PREVIEW_HEIGHT))
+                                        .overflow_hidden()
+                                        .child(body),
+                                )
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .bottom_0()
+                                        .left_0()
+                                        .w_full()
+                                        .h(px(32.0))
+                                        .bg(linear_gradient(
+                                            180.0,
+                                            linear_color_stop(bubble_bg.opacity(0.0), 0.0),
+                                            linear_color_stop(bubble_bg, 1.0),
+                                        )),
+                                ),
+                        );
+                    } else {
+                        bubble = bubble.child(body);
+                    }
+                    if collapsible {
+                        bubble = bubble.child(user_message_disclosure_row(
+                            message_id,
+                            collapsed,
+                            user_message_toggle_focus.clone(),
+                            user_message_in_background,
+                            theme,
+                            &fintwind,
+                        ));
+                    }
                     column = column.child(if user_message_fill_width {
                         div()
                             .w_full()
@@ -1452,9 +1603,7 @@ pub(super) fn merge_consecutive_reasoning(
                 .is_some_and(|reasoning| !reasoning.content.trim().is_empty());
         if !is_thought {
             if let Some((mut item, count, live, live_id)) = group.take() {
-                if live
-                    && let Some(live_id) = live_id
-                {
+                if live && let Some(live_id) = live_id {
                     item.id = live_id;
                 }
                 merged.push(MergedActivity {
@@ -1504,9 +1653,7 @@ pub(super) fn merge_consecutive_reasoning(
         }
     }
     if let Some((mut item, count, live, live_id)) = group.take() {
-        if live
-            && let Some(live_id) = live_id
-        {
+        if live && let Some(live_id) = live_id {
             // Keep the streaming fragment's identity so the pulse,
             // auto-expand, and markdown caches follow the live card.
             item.id = live_id;

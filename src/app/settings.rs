@@ -523,6 +523,7 @@ impl Fintwind {
                     .rounded(px(13.0))
                     .overflow_hidden()
                     .bg(theme.raised)
+                    .shadow_xs()
                     .child(
                         div()
                             .w_full()
@@ -585,6 +586,53 @@ impl Fintwind {
                                 move |this: &mut Self, _, cx| {
                                     this.set_browser_tools_enabled(
                                         !this.state.browser_tools_enabled,
+                                        cx,
+                                    );
+                                },
+                            )),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.mermaid_visualization")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!(
+                                                "settings.mermaid_visualization_description"
+                                            )),
+                                    ),
+                            )
+                            .child(toggle_switch(
+                                "mermaid-visualization-toggle",
+                                self.state.mermaid_visualization_enabled,
+                                false,
+                                theme,
+                                window,
+                                cx,
+                                move |this: &mut Self, _, cx| {
+                                    this.set_mermaid_visualization_enabled(
+                                        !this.state.mermaid_visualization_enabled,
                                         cx,
                                     );
                                 },
@@ -1076,6 +1124,7 @@ impl Fintwind {
             .rounded(px(13.0))
             .overflow_hidden()
             .bg(theme.raised)
+            .shadow_xs()
             .child(
                 div()
                     .w_full()
@@ -1442,6 +1491,19 @@ impl Fintwind {
             return;
         }
         self.state.browser_tools_enabled = enabled;
+        self.save();
+        cx.notify();
+    }
+
+    /// While off, new sessions carry no Mermaid prompt. The toggle only
+    /// updates the preference: accepted failures are an unsaved preference,
+    /// older data reading as off, and existing sessions keeping their cached
+    /// prompt version, so nothing is re-prompted retroactively.
+    fn set_mermaid_visualization_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.state.mermaid_visualization_enabled == enabled {
+            return;
+        }
+        self.state.mermaid_visualization_enabled = enabled;
         self.save();
         cx.notify();
     }

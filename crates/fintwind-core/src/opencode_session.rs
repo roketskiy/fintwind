@@ -520,6 +520,11 @@ impl OpenCodeServer {
         for (name, value) in environment {
             command.env(name, value);
         }
+        // The mermaid check capability rides every private process; the
+        // plugin decides per session whether the tool reaches the model.
+        for (name, value) in crate::mermaid_check::environment() {
+            command.env(name, value);
+        }
         command.env("OPENCODE_CONFIG_CONTENT", config);
         // The model traffic this server makes rides the configured proxy.
         // Setting the conventional variables overrides anything inherited from

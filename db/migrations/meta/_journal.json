@@ -57,6 +57,13 @@
       "when": 1791568983000,
       "tag": "0007_remote_cancel_terms",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1792479004568,
+      "tag": "0008_amused_tarantula",
+      "breakpoints": true
     }
   ]
 }

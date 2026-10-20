@@ -307,6 +307,15 @@ fn rasterize_tree(tree: &usvg::Tree, size: SvgSize) -> Result<Pixmap, usvg::Erro
 }
 
 fn load_bundled_fonts(asset_source: &dyn AssetSource, db: &mut usvg::fontdb::Database) {
+    // Hosts can expose their own bundled faces without relying on OS installs.
+    // This runs lazily during background SVG parsing, never during construction.
+    if let Ok(paths) = asset_source.list("fonts/") {
+        for path in paths {
+            if let Ok(Some(data)) = asset_source.load(&path) {
+                db.load_font_data(data.into_owned());
+            }
+        }
+    }
     let font_paths = [
         "fonts/ibm-plex-sans/IBMPlexSans-Regular.ttf",
         "fonts/lilex/Lilex-Regular.ttf",

@@ -50,6 +50,7 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             ("availableCommands", serde_json::to_value(commands)?)
         }
         DriverEvent::TurnStarted => ("turnStarted", Value::Null),
+        DriverEvent::StepStarted => ("stepStarted", Value::Null),
         DriverEvent::TurnTranscriptReconciled {
             transcript,
             continuation,
@@ -189,6 +190,7 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "autoTitleUpdated" => DriverEvent::AutoTitleUpdated(serde_json::from_value(payload)?),
         "availableCommands" => DriverEvent::AvailableCommands(serde_json::from_value(payload)?),
         "turnStarted" => DriverEvent::TurnStarted,
+        "stepStarted" => DriverEvent::StepStarted,
         "turnTranscriptReconciled" => DriverEvent::TurnTranscriptReconciled {
             transcript: serde_json::from_value(
                 payload

@@ -332,12 +332,7 @@ impl Fintwind {
                                     cx.notify();
                                 }),
                         )
-                        .child(
-                            div()
-                                .flex_none()
-                                .text_color(status_color)
-                                .child(status),
-                        )
+                        .child(div().flex_none().text_color(status_color).child(status))
                         .when_some(duration, |row, duration| {
                             row.child(
                                 div()
@@ -390,10 +385,7 @@ impl Fintwind {
                             .child(div().text_color(theme.text).child(goal.objective.clone()))
                             .child(tr!("goal.card_run", count = goal.turns))
                             .when(!goal.reason.is_empty(), |details| {
-                                details.child(tr!(
-                                    "goal.last_result",
-                                    reason = goal.reason.clone()
-                                ))
+                                details.child(tr!("goal.last_result", reason = goal.reason.clone()))
                             }),
                     )
                 }),

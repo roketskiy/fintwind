@@ -1603,9 +1603,7 @@ pub(super) fn merge_consecutive_reasoning(
                 .is_some_and(|reasoning| !reasoning.content.trim().is_empty());
         if !is_thought {
             if let Some((mut item, count, live, live_id)) = group.take() {
-                if live
-                    && let Some(live_id) = live_id
-                {
+                if live && let Some(live_id) = live_id {
                     item.id = live_id;
                 }
                 merged.push(MergedActivity {
@@ -1655,9 +1653,7 @@ pub(super) fn merge_consecutive_reasoning(
         }
     }
     if let Some((mut item, count, live, live_id)) = group.take() {
-        if live
-            && let Some(live_id) = live_id
-        {
+        if live && let Some(live_id) = live_id {
             // Keep the streaming fragment's identity so the pulse,
             // auto-expand, and markdown caches follow the live card.
             item.id = live_id;

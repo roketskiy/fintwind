@@ -11,6 +11,29 @@ impl Fintwind {
         }
     }
 
+    /// Sample the turn's first-token latency once: the anchor set at
+    /// `TurnStarted` and refined by `StepStarted` is consumed by the turn's
+    /// first streamed content, text or reasoning. A turn that settles without
+    /// streaming — its window arrived wholesale through reconciliation —
+    /// records no sample rather than a transport artifact.
+    fn observe_first_token(&mut self, session_id: Uuid, runtime: &mut SessionRuntime) {
+        if runtime.first_token_recorded {
+            return;
+        }
+        let Some(started_at) = runtime.turn_started_at.take() else {
+            return;
+        };
+        runtime.first_token_recorded = true;
+        let elapsed_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if let Some(session) = self.state.session_mut(session_id) {
+            let usage = session.context_usage.get_or_insert(ContextUsage::default());
+            usage.first_token_ms =
+                Some(usage.first_token_ms.unwrap_or(0).saturating_add(elapsed_ms));
+            usage.first_token_turns = Some(usage.first_token_turns.unwrap_or(0).saturating_add(1));
+            self.state.mark_session_dirty(session_id);
+        }
+    }
+
     pub(super) fn append_text_delta(
         &mut self,
         session_id: Uuid,
@@ -665,6 +688,10 @@ impl Fintwind {
                 runtime.last_driver_error = None;
                 runtime.transcript_reconciliation_failed = false;
                 runtime.provider_phase = None;
+                // Fallback anchor: drivers that never announce steps still
+                // measure from prompt acceptance. A `StepStarted` refines it.
+                runtime.turn_started_at = Some(Instant::now());
+                runtime.first_token_recorded = false;
                 self.provider_retries.remove(&session_id);
                 if let Some(session) = self.state.session_mut(session_id) {
                     runtime.continuation_projection_start =
@@ -766,10 +793,19 @@ impl Fintwind {
                     self.schedule_provider_retry_expiry(session_id, cx);
                 }
             }
+            DriverEvent::StepStarted => {
+                // The step boundary is the closest client-visible signal for
+                // the provider request going out, so it refines the
+                // prompt-acceptance anchor. Later steps overwrite an anchor
+                // the turn has not consumed yet; the recorded flag keeps a
+                // turn to one sample.
+                runtime.turn_started_at = Some(Instant::now());
+            }
             DriverEvent::TextStarted { part } => {
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
+                    self.observe_first_token(session_id, runtime);
                     self.open_text_fragment(session_id, runtime, part);
                 }
             }
@@ -777,6 +813,7 @@ impl Fintwind {
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
+                    self.observe_first_token(session_id, runtime);
                     self.append_keyed_text_delta(session_id, runtime, part, delta);
                 }
             }
@@ -791,6 +828,7 @@ impl Fintwind {
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
+                    self.observe_first_token(session_id, runtime);
                     self.open_reasoning_fragment(session_id, runtime, part);
                 }
             }
@@ -798,6 +836,7 @@ impl Fintwind {
                 self.provider_retries.remove(&session_id);
                 if self.accepts_turn_output(session_id) {
                     runtime.provider_phase = None;
+                    self.observe_first_token(session_id, runtime);
                     self.append_reasoning_delta(session_id, runtime, part, delta);
                 }
             }

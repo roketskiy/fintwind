@@ -639,6 +639,15 @@ pub struct ContextUsage {
     /// different domain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition: Option<ContextComposition>,
+    /// First-token latencies summed across measured turns, in milliseconds;
+    /// the numerator of the session's average first-token latency. Measured
+    /// by the desktop between the turn's `TurnStarted` and its first streamed
+    /// content, so a turn that settles without streaming records no sample.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_ms: Option<u64>,
+    /// Turns with a measured first-token latency; the denominator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_token_turns: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1815,6 +1824,11 @@ pub enum DriverEvent {
     /// the server starts a run on its own (opencode `session.execution.started`
     /// after a settled turn — background-task auto-continue).
     TurnStarted,
+    /// One model step began (opencode `session.step.started`). A turn's steps
+    /// each fire one; the first content of a turn follows the step that
+    /// produces it, so this is the closest client-visible signal for when the
+    /// provider request actually goes out.
+    StepStarted,
     /// A validated durable window, published before its TurnFinished. Kept
     /// atomic so a missing early part cannot be appended after a later one.
     TurnTranscriptReconciled {

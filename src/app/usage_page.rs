@@ -736,7 +736,10 @@ impl Fintwind {
                 theme,
                 tr!("usage_page.kpi_cache_hit"),
                 hit.map(format_percent).unwrap_or_else(|| "—".into()),
-                tr!("usage_page.cache_read_tokens", tokens = format_tokens(totals.cache_read)),
+                tr!(
+                    "usage_page.cache_read_tokens",
+                    tokens = format_tokens(totals.cache_read)
+                ),
             ))
     }
 

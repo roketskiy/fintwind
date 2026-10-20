@@ -2709,6 +2709,8 @@ usage.total_tokens:
   en: Total tokens
 usage.cache_hit_rate:
   en: Cache hit rate
+usage.first_token_latency:
+  en: Avg first token
 usage.compacting:
   en: Compacting context…
 usage.compaction_failed:

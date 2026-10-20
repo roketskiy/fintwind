@@ -1800,6 +1800,9 @@ impl Fintwind {
             .min_w_0()
             .rounded(px(12.0))
             .bg(theme.raised)
+            .border_1()
+            .border_color(theme.border)
+            .shadow(theme.card_shadow())
             .tab_index(0)
             .tab_group()
             .tab_stop(false)
@@ -2100,7 +2103,11 @@ impl Fintwind {
         else {
             return div().into_any_element();
         };
-        let result = if goal.result.as_ref().is_some_and(|text| !text.trim().is_empty()) {
+        let result = if goal
+            .result
+            .as_ref()
+            .is_some_and(|text| !text.trim().is_empty())
+        {
             goal.result.as_deref().unwrap_or_default()
         } else {
             goal.reason.as_str()
@@ -2663,9 +2670,9 @@ impl Fintwind {
         // consecutive thoughts as one card so a turn reads as work, not a
         // wall of rails. Full chain-of-thought families keep their own cards.
         let summary_model: Option<String> = match &context.surface {
-            ActivitySurface::Session => {
-                self.selected_session().and_then(|session| session.model.clone())
-            }
+            ActivitySurface::Session => self
+                .selected_session()
+                .and_then(|session| session.model.clone()),
             ActivitySurface::Background(key) => self.background_work_model(key),
         };
         let display = merge_consecutive_reasoning(
@@ -2797,11 +2804,8 @@ impl Fintwind {
         if let Some(reasoning) = reasoning
             && context.reasoning_group_count > 1
         {
-            row_detail = reasoning_group_title(
-                reasoning,
-                reasoning_live,
-                context.reasoning_group_count,
-            );
+            row_detail =
+                reasoning_group_title(reasoning, reasoning_live, context.reasoning_group_count);
         }
         // A thought's title already names the work; keep the English action
         // label out of the row instead of printing both.

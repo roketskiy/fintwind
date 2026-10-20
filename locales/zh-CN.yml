@@ -1350,6 +1350,7 @@ usage.shortcut: 上下文（%{shortcut}）
 usage.context_window: 上下文窗口
 usage.total_tokens: 总 Token
 usage.cache_hit_rate: 缓存命中率
+usage.first_token_latency: 平均首字延迟
 usage.compacting: 正在压缩上下文…
 usage.compaction_failed: 压缩失败
 usage.compaction_retry: 重试压缩

@@ -1400,6 +1400,7 @@ usage.shortcut: コンテキスト（%{shortcut}）
 usage.context_window: コンテキストウインドウ
 usage.total_tokens: 合計トークン
 usage.cache_hit_rate: キャッシュヒット率
+usage.first_token_latency: 平均初トークン
 usage.compacting: コンテキストを圧縮中…
 usage.compaction_failed: 圧縮に失敗しました
 usage.compaction_retry: 圧縮を再試行

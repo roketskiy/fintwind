@@ -3641,6 +3641,10 @@ fn handle_event(
                 .and_then(Value::as_str)
                 .map(str::to_owned);
             state.turn_stats = Some(stats);
+            // Turn output timing: the app measures first-token latency from
+            // the step boundary instead of prompt acceptance, so the server's
+            // own dispatch cost stays out of the sample.
+            let _ = events.send(DriverEvent::StepStarted);
         }
         "session.usage.updated" => {
             // opencode publishes the session's cumulative token row here —
@@ -7421,6 +7425,7 @@ mod tests {
             true,
             &mut state,
         );
+        assert!(matches!(event_rx.try_recv().unwrap(), DriverEvent::StepStarted));
         handle_event(
             &json!({
                 "type": "session.usage.updated",

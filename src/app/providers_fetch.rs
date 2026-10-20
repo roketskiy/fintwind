@@ -971,7 +971,12 @@ impl Fintwind {
         }
         let provider_id = draft.provider_id.clone();
         let method_id = draft.method_id.clone();
-        self.start_provider_oauth(provider_id, method_id, serde_json::Value::Object(answers), cx);
+        self.start_provider_oauth(
+            provider_id,
+            method_id,
+            serde_json::Value::Object(answers),
+            cx,
+        );
     }
 
     /// Start one OAuth sign-in for `provider_id` through `method_id`: the
@@ -1152,7 +1157,13 @@ impl Fintwind {
                 .spawn(async move {
                     let (binary, directory) = workspace;
                     fintwind_client::persistence::StateStore::remote(daemon)
-                        .complete_provider_oauth(binary, directory, flow.provider_id, attempt_id, Some(code))
+                        .complete_provider_oauth(
+                            binary,
+                            directory,
+                            flow.provider_id,
+                            attempt_id,
+                            Some(code),
+                        )
                 })
                 .await;
             let _ = this.update(cx, |this, cx| match completed {

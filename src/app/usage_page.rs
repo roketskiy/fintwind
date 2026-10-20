@@ -1225,6 +1225,41 @@ fn plot_values(point: &UsagePlotPoint) -> [f64; 5] {
     ]
 }
 
+/// How many straight segments approximate one interval of the spline. At the
+/// plot's width a segment is a couple of pixels long, so the joins disappear
+/// under the 2px stroke.
+const CURVE_SAMPLES: usize = 8;
+
+/// Continue `path` from its current point through a uniform Catmull-Rom spline
+/// over `points`, sampled as short straight segments. Only y is splined: x stays
+/// linear, so a curve cannot double back over its neighbours, and the spline
+/// passes through every datum the hover dots sit on. y is kept inside the plot
+/// so a peak's overshoot cannot paint outside the chart.
+fn trace_curve(path: &mut PathBuilder, points: &[(f32, f32)], ceiling: f32, floor: f32) {
+    if points.len() < 2 {
+        return;
+    }
+    for index in 0..points.len() - 1 {
+        let y0 = points[index.saturating_sub(1)].1;
+        let y1 = points[index].1;
+        let y2 = points[index + 1].1;
+        let y3 = points[(index + 2).min(points.len() - 1)].1;
+        let x1 = points[index].0;
+        let x2 = points[index + 1].0;
+        for step in 1..=CURVE_SAMPLES {
+            let t = step as f32 / CURVE_SAMPLES as f32;
+            let t2 = t * t;
+            let t3 = t2 * t;
+            let y = 0.5
+                * (2.0 * y1
+                    + (y2 - y0) * t
+                    + (2.0 * y0 - 5.0 * y1 + 4.0 * y2 - y3) * t2
+                    + (3.0 * y1 - y0 - 3.0 * y2 + y3) * t3);
+            path.line_to(point(px(x1 + (x2 - x1) * t), px(y.clamp(ceiling, floor))));
+        }
+    }
+}
+
 fn usage_line_chart(points: &[UsagePlotPoint], theme: &Theme) -> Div {
     let colors = plot_colors(theme);
     let values: Vec<_> = points.iter().map(plot_values).collect();
@@ -1243,39 +1278,50 @@ fn usage_line_chart(points: &[UsagePlotPoint], theme: &Theme) -> Div {
             }
             let width = f32::from(bounds.size.width);
             let height = f32::from(bounds.size.height);
+            let left = f32::from(bounds.origin.x);
+            let top = f32::from(bounds.origin.y);
+            let ceiling = top + 2.0;
+            let floor = top + height;
+            // The fill and the strokes ride the same spline, so the area under
+            // cache hits cannot drift away from the line above it.
+            let series_points = |series: usize| -> Vec<(f32, f32)> {
+                let max = if series == 4 { cost_max } else { token_max };
+                values
+                    .iter()
+                    .enumerate()
+                    .map(|(index, datum)| {
+                        let x = (index as f32 + 0.5) * width / count as f32;
+                        let y =
+                            height - (datum[series] / max.max(1e-12)) as f32 * (height - 5.0) - 2.0;
+                        (left + x, top + y)
+                    })
+                    .collect()
+            };
             // A subtle area under cache hits mirrors the reference chart
             // without hiding the other four independent traces.
+            let cache_points = series_points(3);
             let mut area = PathBuilder::fill();
-            area.move_to(point(
-                bounds.origin.x + px(width / (2.0 * count as f32)),
-                bounds.origin.y + px(height),
-            ));
-            for (index, datum) in values.iter().enumerate() {
-                let x = (index as f32 + 0.5) * width / count as f32;
-                let y = height - (datum[3] / token_max) as f32 * (height - 5.0) - 2.0;
-                area.line_to(point(bounds.origin.x + px(x), bounds.origin.y + px(y)));
+            area.move_to(point(px(left + width / (2.0 * count as f32)), px(floor)));
+            if let Some(&(first_x, first_y)) = cache_points.first() {
+                area.line_to(point(px(first_x), px(first_y)));
             }
+            trace_curve(&mut area, &cache_points, ceiling, floor);
             area.line_to(point(
-                bounds.origin.x + px(width - width / (2.0 * count as f32)),
-                bounds.origin.y + px(height),
+                px(left + width - width / (2.0 * count as f32)),
+                px(floor),
             ));
             area.close();
             if let Ok(area) = area.build() {
                 window.paint_path(area, colors[3].opacity(0.10));
             }
             for series in 0..5 {
-                let max = if series == 4 { cost_max } else { token_max };
+                let points = series_points(series);
+                let Some(&(first_x, first_y)) = points.first() else {
+                    continue;
+                };
                 let mut path = PathBuilder::stroke(px(2.0));
-                for (index, datum) in values.iter().enumerate() {
-                    let x = (index as f32 + 0.5) * width / count as f32;
-                    let y = height - (datum[series] / max.max(1e-12)) as f32 * (height - 5.0) - 2.0;
-                    let position = point(bounds.origin.x + px(x), bounds.origin.y + px(y));
-                    if index == 0 {
-                        path.move_to(position);
-                    } else {
-                        path.line_to(position);
-                    }
-                }
+                path.move_to(point(px(first_x), px(first_y)));
+                trace_curve(&mut path, &points, ceiling, floor);
                 if let Ok(path) = path.build() {
                     window.paint_path(path, colors[series]);
                 }

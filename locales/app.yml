@@ -1546,6 +1546,8 @@ commands.fast_description:
   en: Toggle fast mode
 commands.compact_description:
   en: Summarize the conversation to free up context
+commands.reload_server_description:
+  en: Hot-reload the OpenCode server
 commands.claude_context:
   en: Show what is occupying the context window
 commands.claude_cost:

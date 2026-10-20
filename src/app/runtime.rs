@@ -2256,6 +2256,49 @@ impl Fintwind {
         prompt.trim().split_whitespace().next() == Some("/compact")
     }
 
+    /// Whether the composer text invokes the server hot-reload command rather
+    /// than a prompt. `/reload-server` is a UI-intercepted command: Fintwind
+    /// asks the native OpenCode server to rebuild its locations in place, so
+    /// the text must never reach the model — not even steered into a running
+    /// turn.
+    pub(super) fn is_reload_submission(prompt: &str) -> bool {
+        prompt.trim().split_whitespace().next() == Some("/reload-server")
+    }
+
+    /// Hot-reload the native OpenCode server through its `location.reload`
+    /// route: the daemon asks the server to shut down and rebuild every
+    /// loaded location in place, so edited configuration takes effect
+    /// without restarting the server process. The blocking RPC runs on the
+    /// background executor; the outcome lands as a toast.
+    pub(super) fn request_opencode_server_reload(&mut self, cx: &mut Context<Self>) {
+        let Some(binary) = self.native_binary_path() else {
+            return;
+        };
+        let directory = self.native_server_directory();
+        self.show_toast(tr!("command_palette.reloading"));
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let reloaded = cx
+                .background_executor()
+                .spawn(async move {
+                    fintwind_client::persistence::StateStore::remote(daemon)
+                        .reload_opencode_server(binary, directory)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                match reloaded {
+                    Ok(()) => this.show_success_toast(tr!("command_palette.reloaded")),
+                    Err(error) => this.show_toast(tr!(
+                        "command_palette.reload_failed",
+                        error = error.to_string()
+                    )),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     /// Ask the provider to compact the session's context. The request is
     /// durable — a busy session compacts at its next safe step boundary, an
     /// idle one starts immediately — and every outcome arrives as
@@ -2383,6 +2426,10 @@ impl Fintwind {
             self.request_context_compaction(session.id, cx);
             return;
         }
+        if Self::is_reload_submission(&submission.prompt) {
+            self.request_opencode_server_reload(cx);
+            return;
+        }
         if session.is_busy() || self.pending_goal_actions.contains_key(&session.id) {
             // While the agent is working, Enter queues a follow-up instead of
             // refusing the message. The queue drains once the turn settles.
@@ -2411,6 +2458,13 @@ impl Fintwind {
             // a busy session: it runs at the next safe step boundary, ahead
             // of any queued or steered prompts.
             self.request_context_compaction(session.id, cx);
+            return;
+        }
+        if Self::is_reload_submission(&submission.prompt) {
+            // A reload never disturbs the running turn — the native route
+            // hands sessions fresh services at their next step boundary — so
+            // it executes immediately instead of joining the steer queue.
+            self.request_opencode_server_reload(cx);
             return;
         }
         if !session.is_busy() {

@@ -780,6 +780,7 @@ commands.fast_description: 切换快速模式
 commands.fast_enabled: 已启用快速模式
 commands.fast_disabled: 已关闭快速模式
 commands.compact_description: 总结对话以释放上下文空间
+commands.reload_server_description: 热重载 OpenCode 服务器
 commands.claude_context: 查看上下文窗口的占用情况
 commands.claude_cost: 查看当前任务的令牌用量与费用
 commands.claude_init: 分析项目并编写 CLAUDE.md

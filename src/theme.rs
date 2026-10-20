@@ -363,16 +363,17 @@ impl Theme {
         ]
     }
 
-    /// A contact shadow and a soft cast shadow lift the workspace above navigation.
+    /// A quiet contact shadow separates the dark workspace without a heavy seam.
     pub fn workspace_shadow(&self) -> Vec<BoxShadow> {
         let (contact, ambient) = if self.is_dark {
-            (0.20, 0.14)
+            (0.04, 0.025)
         } else {
             (0.08, 0.045)
         };
         vec![
             BoxShadow::new(px(-1.0), px(0.0), hsla(0.0, 0.0, 0.0, contact)).blur_radius(px(2.0)),
-            BoxShadow::new(px(-2.0), px(0.0), hsla(0.0, 0.0, 0.0, ambient)).blur_radius(px(8.0)),
+            BoxShadow::new(px(-2.0), px(0.0), hsla(0.0, 0.0, 0.0, ambient))
+                .blur_radius(px(if self.is_dark { 4.0 } else { 8.0 })),
         ]
     }
 

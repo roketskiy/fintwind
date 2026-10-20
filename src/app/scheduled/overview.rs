@@ -1,4 +1,4 @@
-use ely_gpui_component::menus::{Menu, MenuItem, OverflowMenu};
+use crate::ui::menu::{ContextMenuHandle, MenuAlign, MenuItem, dropdown_menu};
 
 use super::*;
 
@@ -123,27 +123,29 @@ impl ScheduledTasksView {
         let enabled = task.enabled;
         let busy = self.busy();
         let weak = cx.entity().downgrade();
-        let edit = MenuItem::new(tr!("scheduled_tasks.edit"))
-            .icon(IconName::Pencil)
-            .disabled(busy)
-            .on_click(move |window, cx| {
-                let _ = weak.update(cx, |this, cx| this.open_task(id, window, cx));
-            });
+        let edit = MenuItem::new(tr!("scheduled_tasks.edit"), move |window, cx| {
+            let _ = weak.update(cx, |this, cx| this.open_task(id, window, cx));
+        })
+        .icon("icons/pencil.svg")
+        .disabled(busy);
         let weak = cx.entity().downgrade();
-        let run = MenuItem::new(tr!("scheduled_tasks.run_now"))
-            .icon(IconName::Play)
-            .disabled(busy || task.pending.is_some())
-            .on_click(move |_, cx| {
-                let _ = weak.update(cx, |this, cx| this.run_now(id, cx));
-            });
+        let run = MenuItem::new(tr!("scheduled_tasks.run_now"), move |_, cx| {
+            let _ = weak.update(cx, |this, cx| this.run_now(id, cx));
+        })
+        .icon("icons/play.svg")
+        .disabled(busy || task.pending.is_some());
         let weak = cx.entity().downgrade();
-        let delete = MenuItem::new(tr!("scheduled_tasks.delete"))
-            .icon(IconName::Trash2)
-            .disabled(busy)
-            .on_click(move |window, cx| {
-                let _ = weak.update(cx, |this, cx| this.request_delete(id, window, cx));
-            });
-        let menu = Menu::new().item(edit).item(run).separator().item(delete);
+        let delete = MenuItem::new(tr!("scheduled_tasks.delete"), move |window, cx| {
+            let _ = weak.update(cx, |this, cx| this.request_delete(id, window, cx));
+        })
+        .icon("icons/trash.svg")
+        .disabled(busy);
+        let menu = vec![edit, run, MenuItem::Separator, delete];
+        let menu_id = SharedString::from(format!("scheduled-task-menu-{}", id.0));
+        let menu_handle = window
+            .use_keyed_state(menu_id.clone(), cx, |_, cx| ContextMenuHandle::new(cx))
+            .read(cx)
+            .clone();
         let state = TaskState::of(task);
         let (status, color) = if !enabled {
             (tr!("scheduled_tasks.paused"), theme.text_tertiary)
@@ -270,13 +272,18 @@ impl ScheduledTasksView {
                             tr!("scheduled_tasks.enabled")
                         )),
                     )
-                    .child(
-                        OverflowMenu::new(
-                            SharedString::from(format!("scheduled-task-menu-{}", id.0)),
-                            menu,
-                        )
-                        .tooltip(tr!("scheduled_tasks.actions")),
-                    ),
+                    .child(dropdown_menu(
+                        crate::ui::icon_button(menu_id.clone(), "icons/ellipsis.svg", theme)
+                            .aria_label(tr!("scheduled_tasks.actions"))
+                            .focus_visible(|style| style.border_1().border_color(theme.accent))
+                            .tooltip(crate::ui::tooltip::Tooltip::text(tr!(
+                                "scheduled_tasks.actions"
+                            ))),
+                        menu_id,
+                        &menu_handle,
+                        MenuAlign::BelowRight,
+                        move |_| menu.clone(),
+                    )),
             )
             .into_any_element()
     }
@@ -324,7 +331,7 @@ impl ScheduledTasksView {
 }
 
 impl Render for ScheduledTasksView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let row_height = ui_px(ROW_HEIGHT);
         if row_height != self.row_height {
             self.row_height = row_height;
@@ -384,7 +391,7 @@ impl Render for ScheduledTasksView {
                             .child(scrollbar::vertical(&self.list_state, &self.list_scrollbar)),
                     ),
             )
-            .children(self.render_dialog(cx))
+            .children(self.render_dialog(window, cx))
     }
 }
 

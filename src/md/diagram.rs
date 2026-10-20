@@ -53,7 +53,7 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, App, EntityId, Global, IntoElement, ObjectFit, RenderImage, RenderOnce,
-    SvgRenderer, Window, img, prelude::*, px,
+    SvgRenderer, Window, div, img, prelude::*, px,
 };
 
 use super::diagram_compile::{self, Theme};
@@ -75,8 +75,6 @@ const MAX_RASTER_EDGE: f64 = 8192.0;
 const SVG_SUPERSAMPLE: f64 = 2.0;
 /// A single rendered image must keep its dimensions representable as `f32`.
 const MAX_LOGICAL_EDGE: f64 = 1_000_000.0;
-/// Tall diagrams keep their aspect ratio and are letterboxed beyond this.
-const MAX_DISPLAY_HEIGHT: f32 = 720.0;
 
 fn normalize_font_scale(font_scale: f32) -> f32 {
     if font_scale.is_finite() {
@@ -206,6 +204,7 @@ struct Rendered {
     image: Arc<RenderImage>,
     /// Diagram width in logical pixels before `font_scale` is applied.
     logical_width: f32,
+    logical_height: f32,
 }
 
 #[derive(Clone)]
@@ -480,12 +479,24 @@ impl RenderOnce for DiagramImage {
         match request(key, self.theme, window.current_view(), cx) {
             Lookup::Ready(rendered) => {
                 let width = (rendered.logical_width * self.font_scale).max(1.0);
-                let max_height = (MAX_DISPLAY_HEIGHT * self.font_scale).clamp(160.0, 1600.0);
-                img(rendered.image.clone())
+                // Size the row from its constrained width before painting the
+                // image. Capping only the image height can truncate a tall row;
+                // deriving height from the unconstrained width can also leave
+                // incorrect space when max_w_full narrows the image.
+                div()
+                    .relative()
                     .w(px(width))
                     .max_w_full()
-                    .max_h(px(max_height))
-                    .object_fit(ObjectFit::ScaleDown)
+                    .aspect_ratio(rendered.logical_width / rendered.logical_height)
+                    .flex_shrink_0()
+                    .child(
+                        img(rendered.image.clone())
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full()
+                            .object_fit(ObjectFit::Contain),
+                    )
                     .into_any_element()
             }
             // The source stays visible until an image exists, and a cached
@@ -615,6 +626,7 @@ fn rasterize(key: &Key, theme: Theme, renderer: &SvgRenderer) -> anyhow::Result<
     Ok(Rendered {
         image,
         logical_width: width as f32,
+        logical_height: height as f32,
     })
 }
 

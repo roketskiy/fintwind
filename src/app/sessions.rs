@@ -935,7 +935,7 @@ impl Fintwind {
             WorkspaceMode::Sessions => self.sidebar_width,
             WorkspaceMode::SourceControl => self.source_control_width,
             WorkspaceMode::Settings => self.settings_width,
-            WorkspaceMode::Usage => 0.0,
+            WorkspaceMode::Usage | WorkspaceMode::ScheduledTasks => 0.0,
         }
     }
 
@@ -945,7 +945,10 @@ impl Fintwind {
     /// the width sanitizer clamps the zero up to the default width and an
     /// empty column shows.
     pub(super) fn has_secondary_column(&self) -> bool {
-        !matches!(self.mode, WorkspaceMode::Usage)
+        !matches!(
+            self.mode,
+            WorkspaceMode::Usage | WorkspaceMode::ScheduledTasks
+        )
     }
 
     fn set_secondary_width(&mut self, width: f32) {
@@ -953,7 +956,7 @@ impl Fintwind {
             WorkspaceMode::Sessions => self.sidebar_width = width,
             WorkspaceMode::SourceControl => self.source_control_width = width,
             WorkspaceMode::Settings => self.settings_width = width,
-            WorkspaceMode::Usage => {}
+            WorkspaceMode::Usage | WorkspaceMode::ScheduledTasks => {}
         }
     }
 

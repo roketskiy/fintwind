@@ -548,6 +548,88 @@ impl Fintwind {
                 })
     }
 
+    fn admit_scheduled_turn(
+        &mut self,
+        session_id: Uuid,
+        runtime: &mut SessionRuntime,
+        admission: fintwind_protocol::scheduled_task::ScheduledTurnAdmission,
+        cx: &mut Context<Self>,
+    ) {
+        if admission.message.turn_id != Some(admission.turn.id)
+            || admission.message.role != MessageRole::User
+            || admission.turn.status != TurnStatus::Running
+        {
+            return;
+        }
+        if admission
+            .turn
+            .submission
+            .as_ref()
+            .is_none_or(|receipt| receipt.id != admission.turn.id || receipt.input_id.is_empty())
+        {
+            return;
+        }
+        let local_preparation = self.submission_preparations.contains(&session_id);
+        let displaced = {
+            let Some(session) = self.state.session_mut(session_id) else {
+                return;
+            };
+            if session
+                .turns
+                .iter()
+                .any(|turn| turn.id == admission.turn.id)
+            {
+                return;
+            }
+            let mut displaced = None;
+            if local_preparation
+                && let Some(turn_id) = session
+                    .turns
+                    .last()
+                    .filter(|turn| {
+                        turn.status == TurnStatus::Running
+                            && !turn.provider_turn_started
+                            && turn.submission.as_ref().is_some_and(|receipt| {
+                                receipt.state
+                                    == fintwind_protocol::submission::SubmissionState::Preparing
+                            })
+                    })
+                    .map(|turn| turn.id)
+            {
+                displaced = session
+                    .messages
+                    .iter()
+                    .find(|message| {
+                        message.turn_id == Some(turn_id) && message.role == MessageRole::User
+                    })
+                    .map(|message| ComposerSubmission {
+                        prompt: message.content.clone(),
+                        display_content: message.display_content.clone(),
+                        attachments: message.attachments.clone(),
+                    });
+                session.unwind_unstarted_turn(turn_id);
+            }
+            session.messages.push(admission.message);
+            session.turns.push(admission.turn);
+            session.updated_at = unix_time();
+            session.status = SessionStatus::Connecting;
+            displaced
+        };
+        if local_preparation {
+            self.submission_preparations.remove(&session_id);
+        }
+        if let Some(displaced) = displaced {
+            self.enqueue_follow_up_submission(session_id, displaced, cx);
+        }
+        runtime.stream_phase = None;
+        runtime.open_reasoning.clear();
+        runtime.settled_reasoning.clear();
+        runtime.open_text.clear();
+        runtime.settled_text.clear();
+        runtime.continuation_projection_start = None;
+        runtime.provider_phase = None;
+    }
+
     /// Returns whether the runtime should remain attached after this event.
     ///
     /// `allow_follow_up_work` is false when the caller is flushing buffered
@@ -587,6 +669,7 @@ impl Fintwind {
                     | DriverEvent::UsageUpdated { .. }
                     | DriverEvent::ContextCompositionUpdated(_)
                     | DriverEvent::PlanUsageUpdated(_)
+                    | DriverEvent::ScheduledTurnAdmitted(_)
                     | DriverEvent::ProcessExited
             )
         {
@@ -703,6 +786,9 @@ impl Fintwind {
                     // drawn index when it sees this.
                     self.composer_sources_stale = true;
                 }
+            }
+            DriverEvent::ScheduledTurnAdmitted(admission) => {
+                self.admit_scheduled_turn(session_id, runtime, *admission, cx);
             }
             DriverEvent::TurnStarted => {
                 runtime.last_driver_error = None;

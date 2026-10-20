@@ -77,6 +77,10 @@ pub trait Backend: Send + Sync + 'static {
         None
     }
 
+    fn attach_system_channel(self: Arc<Self>, _channel: SystemChannel) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     fn shutdown(&self) {}
 }
 
@@ -86,6 +90,7 @@ pub struct EventSink {
     runtime_id: Uuid,
     hub: Arc<Hub>,
     source_subscriber_id: Option<u64>,
+    system_owner: Option<std::sync::Weak<()>>,
 }
 
 impl EventSink {
@@ -96,6 +101,7 @@ impl EventSink {
             runtime_id: Uuid::nil(),
             hub: Arc::new(Hub::default()),
             source_subscriber_id: None,
+            system_owner: None,
         }
     }
 
@@ -106,6 +112,9 @@ impl EventSink {
 
     /// Preparation belongs to this connection, not to a permanent runtime.
     pub(crate) fn source_is_connected(&self) -> bool {
+        if let Some(owner) = &self.system_owner {
+            return owner.upgrade().is_some();
+        }
         self.source_subscriber_id
             .is_none_or(|id| self.hub.state.lock().subscribers.contains_key(&id))
     }
@@ -121,10 +130,48 @@ impl EventSink {
     }
 }
 
+#[derive(Clone)]
+pub struct SystemChannel {
+    hub: Arc<Hub>,
+    broker: Arc<BrowserBroker>,
+}
+
+impl SystemChannel {
+    pub fn event_sink(
+        &self,
+        session_id: Uuid,
+        runtime_id: Uuid,
+        owner: std::sync::Weak<()>,
+    ) -> EventSink {
+        let mut sink = self.hub.event_sink(session_id, runtime_id);
+        sink.system_owner = Some(owner);
+        sink
+    }
+
+    pub fn begin_runtime(&self, session_id: Uuid, runtime_id: Uuid) {
+        self.hub.begin_runtime(session_id, runtime_id);
+        self.broker.note_runtime(session_id, runtime_id);
+    }
+
+    pub fn end_runtime(&self, session_id: Uuid, runtime_id: Option<Uuid>) {
+        self.hub.end_runtime(session_id, runtime_id);
+        self.broker.forget_runtime(session_id, runtime_id);
+    }
+
+    pub fn notify_catalog(&self) {
+        Hub::broadcast_task_state_changed(&mut self.hub.state.lock(), None);
+    }
+
+    pub fn notify_scheduled_tasks(&self) {
+        self.hub.scheduled_tasks_changed(None);
+    }
+}
+
 #[derive(Default)]
 struct HubState {
     next_subscriber_id: u64,
     task_state_revision: u64,
+    scheduled_tasks_revision: u64,
     subscribers: HashMap<u64, Sender<ServerMessage>>,
     active_runtimes: HashMap<Uuid, Uuid>,
     next_sequences: HashMap<(Uuid, Uuid), u64>,
@@ -221,6 +268,7 @@ impl Hub {
             runtime_id,
             hub: self.clone(),
             source_subscriber_id: None,
+            system_owner: None,
         }
     }
 
@@ -309,7 +357,7 @@ impl Hub {
 
     fn task_state_changed(&self, source_subscriber_id: u64) {
         let mut state = self.state.lock();
-        Self::broadcast_task_state_changed(&mut state, source_subscriber_id);
+        Self::broadcast_task_state_changed(&mut state, Some(source_subscriber_id));
     }
 
     fn replace_task_catalog(&self, projects: &[Project], sessions: &[AgentSession]) {
@@ -347,17 +395,28 @@ impl Hub {
                 .is_none_or(|previous| previous != next);
         }
         if changed {
-            Self::broadcast_task_state_changed(&mut state, source_subscriber_id);
+            Self::broadcast_task_state_changed(&mut state, Some(source_subscriber_id));
         }
     }
 
-    fn broadcast_task_state_changed(state: &mut HubState, source_subscriber_id: u64) {
+    fn broadcast_task_state_changed(state: &mut HubState, source_subscriber_id: Option<u64>) {
         state.task_state_revision = state.task_state_revision.saturating_add(1);
         let message = ServerMessage::TaskStateChanged {
             revision: state.task_state_revision,
         };
         state.subscribers.retain(|subscriber_id, subscriber| {
-            *subscriber_id == source_subscriber_id || subscriber.send(message.clone()).is_ok()
+            Some(*subscriber_id) == source_subscriber_id || subscriber.send(message.clone()).is_ok()
+        });
+    }
+
+    fn scheduled_tasks_changed(&self, source_subscriber_id: Option<u64>) {
+        let mut state = self.state.lock();
+        state.scheduled_tasks_revision = state.scheduled_tasks_revision.saturating_add(1);
+        let message = ServerMessage::ScheduledTasksChanged {
+            revision: state.scheduled_tasks_revision,
+        };
+        state.subscribers.retain(|id, subscriber| {
+            Some(*id) == source_subscriber_id || subscriber.send(message.clone()).is_ok()
         });
     }
 
@@ -554,6 +613,10 @@ pub fn serve(
     ));
     let options = Arc::new(options);
     let active_connections = Arc::new(AtomicUsize::new(0));
+    backend.clone().attach_system_channel(SystemChannel {
+        hub: hub.clone(),
+        broker: broker.clone(),
+    })?;
     while !shutdown.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -592,6 +655,10 @@ pub fn serve(
             Err(error) => return Err(error).context("fintwind daemon listener failed"),
         }
     }
+    // Cleanup can outlast a client's patience, and until it finishes the
+    // socket would still complete every TCP handshake while nothing accepts.
+    // Closing it first makes a probe observe the shutdown itself.
+    drop(listener);
     backend.shutdown();
     Ok(())
 }
@@ -726,8 +793,8 @@ fn handle_connection(
                 }
                 Ok(ClientMessage::Shutdown) => {
                     if options.allow_shutdown {
-                        write_json(&mut socket, &ServerMessage::ShuttingDown)?;
                         shutdown.store(true, Ordering::Release);
+                        let _ = write_json(&mut socket, &ServerMessage::ShuttingDown);
                         break;
                     }
                     write_json(
@@ -1001,6 +1068,7 @@ enum TaskCatalogAction {
     Load,
     Save { projects: Vec<Project> },
     Changed,
+    ScheduledTasksChanged,
 }
 
 fn handle_request(
@@ -1020,7 +1088,22 @@ fn handle_request(
         &request.command,
         Command::Start { .. } | Command::OpenTerminal { .. }
     );
-    let (outcome, executed) = if is_browser_command(&request.command) {
+    let scheduled_mutation = matches!(
+        &request.command,
+        Command::SaveScheduledTask { .. }
+            | Command::DeleteScheduledTask { .. }
+            | Command::RunScheduledTaskNow { .. }
+    );
+    let (outcome, executed) = if notification && scheduled_mutation {
+        (
+            ResponseOutcome::Error {
+                error: RpcError {
+                    message: "Scheduled-task changes require a request id".into(),
+                },
+            },
+            false,
+        )
+    } else if is_browser_command(&request.command) {
         // Browser RPCs deliberately bypass the shared response cache in both
         // directions: a snapshot is page data that must not linger in a
         // cross-connection cache, and a replayed request id must never be
@@ -1075,6 +1158,9 @@ fn handle_request(
             (TaskCatalogAction::Changed, ResponseOutcome::Ok { .. }) => {
                 hub.task_state_changed(source_subscriber_id);
             }
+            (TaskCatalogAction::ScheduledTasksChanged, ResponseOutcome::Ok { .. }) => {
+                hub.scheduled_tasks_changed(Some(source_subscriber_id));
+            }
             _ => {}
         }
     }
@@ -1090,6 +1176,9 @@ fn handle_request(
 fn task_catalog_action(command: &Command) -> TaskCatalogAction {
     match command {
         Command::LoadTaskState => TaskCatalogAction::Load,
+        Command::SaveScheduledTask { .. }
+        | Command::DeleteScheduledTask { .. }
+        | Command::RunScheduledTaskNow { .. } => TaskCatalogAction::ScheduledTasksChanged,
         Command::SaveTaskState { projects, .. }
         | Command::SaveTaskStateCheckpoint { projects, .. } => TaskCatalogAction::Save {
             projects: projects.clone(),

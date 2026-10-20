@@ -94,6 +94,23 @@ impl BackgroundTranscriptViewport {
             }
         }
     }
+
+    /// Reflow one message row after a disclosure inside it changed its
+    /// height — the folded user-message preview's expand and collapse.
+    fn remeasure_message(&self, message_index: usize) {
+        if let Some(index) = self
+            .rows
+            .iter()
+            .position(|row| *row == BackgroundTranscriptRow::Message(message_index))
+        {
+            let anchor = self.list.logical_scroll_top();
+            let following = self.list.is_following_tail();
+            self.list.splice(index..index + 1, 1);
+            if !following {
+                self.list.scroll_to(anchor);
+            }
+        }
+    }
 }
 
 impl Default for BackgroundOutputViewport {
@@ -1952,6 +1969,32 @@ impl Fintwind {
         )
     }
 
+    /// Remeasure whichever subagent transcript row owns this message after a
+    /// disclosure inside it changed its height. The message id is globally
+    /// unique, so scanning the selected session's background transcripts is
+    /// enough to find the one surface showing it.
+    pub(super) fn remeasure_background_user_message(&self, message_id: Uuid) {
+        let Some(registry) = self
+            .state
+            .selected_session
+            .and_then(|id| self.background_work.get(&id))
+        else {
+            return;
+        };
+        let target = registry.transcripts.iter().find_map(|(key, transcript)| {
+            transcript
+                .messages
+                .iter()
+                .position(|message| message.id == message_id)
+                .map(|message_index| (key.clone(), message_index))
+        });
+        if let Some((key, message_index)) = target
+            && let Some(viewport) = registry.transcript_viewports.get(&key)
+        {
+            viewport.remeasure_message(message_index);
+        }
+    }
+
     fn render_background_transcript_row(
         &self,
         key: &BackgroundWorkKey,
@@ -2001,6 +2044,9 @@ impl Fintwind {
                 .with_link_handler(self.markdown_link_handler.clone())
                 .with_streaming_animation(message.streaming && !cx.reduce_motion());
                 let menu = self.menu_handle(format!("background-message-{}", message.id), cx);
+                let user_message_toggle_focus = (message.role == MessageRole::User).then(|| {
+                    self.transcript_control_focus(format!("user-message-toggle-{}", message.id), cx)
+                });
                 let mut markdown_views = self.message_markdown.borrow_mut();
                 let view = markdown_views.get_or_insert_with(
                     message.id,
@@ -2020,6 +2066,9 @@ impl Fintwind {
                         assistant_message_action: None,
                         user_message_rewind: UserMessageRewind::Hidden,
                         user_message_fill_width: true,
+                        user_message_expanded: self.expanded_user_messages.contains(&message.id),
+                        user_message_toggle_focus,
+                        user_message_in_background: true,
                         goal_objective: false,
                         message_edit_input: None,
                         attachment_menus: Vec::new(),

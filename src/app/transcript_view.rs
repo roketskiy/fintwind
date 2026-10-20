@@ -1523,6 +1523,13 @@ impl Fintwind {
                     let compaction_focus = is_compaction.then(|| {
                         self.transcript_control_focus(format!("compaction-{}", message.id), cx)
                     });
+                    let user_message_toggle_focus =
+                        (message.role == MessageRole::User).then(|| {
+                            self.transcript_control_focus(
+                                format!("user-message-toggle-{}", message.id),
+                                cx,
+                            )
+                        });
                     let rendered = render_message(
                         MessageRender {
                             theme: &theme,
@@ -1535,6 +1542,11 @@ impl Fintwind {
                             assistant_message_action,
                             user_message_rewind,
                             user_message_fill_width: false,
+                            user_message_expanded: self
+                                .expanded_user_messages
+                                .contains(&message.id),
+                            user_message_toggle_focus,
+                            user_message_in_background: false,
                             goal_objective: self
                                 .transcript_goal_objectives
                                 .borrow()
@@ -1652,6 +1664,40 @@ impl Fintwind {
                 .position(|message| message.id == message_id)
         }) {
             self.remeasure_transcript_message(message_index);
+        }
+        cx.notify();
+    }
+
+    /// Expand or collapse a long user message's folded preview, in the main
+    /// transcript or a subagent transcript. Same disclosure contract as the
+    /// compaction card: the caller passes the row's current state, this
+    /// inverts it, and the height change must not shift the reader's
+    /// position. The subagent surface keeps its own scroll anchor, so only
+    /// the main transcript needs the pin.
+    pub(super) fn toggle_user_message(
+        &mut self,
+        message_id: Uuid,
+        expanded: bool,
+        in_background: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if expanded {
+            self.expanded_user_messages.remove(&message_id);
+        } else {
+            self.expanded_user_messages.insert(message_id);
+        }
+        if in_background {
+            self.remeasure_background_user_message(message_id);
+        } else {
+            self.pin_transcript_for_disclosure();
+            if let Some(message_index) = self.selected_session().and_then(|session| {
+                session
+                    .messages
+                    .iter()
+                    .position(|message| message.id == message_id)
+            }) {
+                self.remeasure_transcript_message(message_index);
+            }
         }
         cx.notify();
     }

@@ -2008,6 +2008,7 @@ impl Fintwind {
             self.expanded_turns.clear();
             self.expanded_changed_files.clear();
             self.expanded_compactions.clear();
+            self.expanded_user_messages.clear();
             self.expanded_provider_retries.clear();
             self.transcript_control_focuses.borrow_mut().clear();
             self.splice_transcript_rows_after_visibility_change(&previous_kinds);
@@ -2741,6 +2742,7 @@ impl Fintwind {
             self.expanded_turns.clear();
             self.expanded_changed_files.clear();
             self.expanded_compactions.clear();
+            self.expanded_user_messages.clear();
             self.expanded_provider_retries.clear();
             self.transcript_control_focuses.borrow_mut().clear();
             self.message_edit = None;

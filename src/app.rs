@@ -1156,6 +1156,7 @@ struct SessionTabState {
     expanded_turns: HashSet<Uuid>,
     expanded_changed_files: HashSet<Uuid>,
     expanded_compactions: HashSet<Uuid>,
+    expanded_user_messages: HashSet<Uuid>,
     expanded_provider_retries: HashSet<Uuid>,
     activity_markdown: RefCell<md::cache::RenderCache<MarkdownView>>,
     reasoning_views: RefCell<md::cache::RenderCache<Entity<md::virtualized::ReasoningView>>>,
@@ -1226,6 +1227,7 @@ impl SessionTabState {
             expanded_turns: HashSet::new(),
             expanded_changed_files: HashSet::new(),
             expanded_compactions: HashSet::new(),
+            expanded_user_messages: HashSet::new(),
             expanded_provider_retries: HashSet::new(),
             activity_markdown: RefCell::new(Default::default()),
             reasoning_views: RefCell::new(Default::default()),
@@ -1277,6 +1279,7 @@ impl SessionTabState {
             expanded_turns: std::mem::take(&mut fintwind.expanded_turns),
             expanded_changed_files: std::mem::take(&mut fintwind.expanded_changed_files),
             expanded_compactions: std::mem::take(&mut fintwind.expanded_compactions),
+            expanded_user_messages: std::mem::take(&mut fintwind.expanded_user_messages),
             expanded_provider_retries: std::mem::take(&mut fintwind.expanded_provider_retries),
             activity_markdown: std::mem::take(&mut fintwind.activity_markdown),
             reasoning_views: std::mem::take(&mut fintwind.reasoning_views),
@@ -1304,6 +1307,7 @@ impl SessionTabState {
         fintwind.expanded_turns = self.expanded_turns;
         fintwind.expanded_changed_files = self.expanded_changed_files;
         fintwind.expanded_compactions = self.expanded_compactions;
+        fintwind.expanded_user_messages = self.expanded_user_messages;
         fintwind.expanded_provider_retries = self.expanded_provider_retries;
         fintwind.activity_markdown = self.activity_markdown;
         fintwind.reasoning_views = self.reasoning_views;
@@ -1514,6 +1518,9 @@ pub struct Fintwind {
     /// the summary belongs to the provider's bookkeeping more than to the
     /// reader. Runtime-only, like the other transcript disclosures.
     expanded_compactions: HashSet<Uuid>,
+    /// Long user messages the user re-expanded past their folded preview, in
+    /// the main transcript and subagent transcripts alike. Runtime-only.
+    expanded_user_messages: HashSet<Uuid>,
     /// Sessions already served one client-side early auto compaction.
     /// Edge trigger: cleared when occupancy falls back below the threshold,
     /// so one crossing fires exactly once. Runtime-only.
@@ -3615,6 +3622,7 @@ impl Fintwind {
                 expanded_turns: HashSet::new(),
                 expanded_changed_files: HashSet::new(),
                 expanded_compactions: HashSet::new(),
+                expanded_user_messages: HashSet::new(),
                 auto_compacted_sessions: HashSet::new(),
                 auto_compacted_children: HashSet::new(),
                 expanded_provider_retries: HashSet::new(),

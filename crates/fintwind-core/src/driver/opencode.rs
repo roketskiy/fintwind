@@ -2295,6 +2295,10 @@ struct OpenCodeStreamState {
     /// here until the turn settles, then leave as one `TurnStatsUpdated`;
     /// `None` between turns and until the first `session.step.started`.
     turn_stats: Option<OpenCodeTurnStats>,
+    /// Whether the step now settling is the turn's first, and so the only one
+    /// whose plugin-measured first-token latency describes the wait the user
+    /// actually experienced. Later steps answer tool continuations.
+    turn_first_step_pending: bool,
 }
 
 /// Collect durable step IDs and metadata; throughput is resolved from stored
@@ -3623,8 +3627,16 @@ fn handle_event(
             // starting while no turn is active starts from zero.
             let stale = state.turn_stats.is_some() && !*turn_active.lock();
             let mut stats = match (state.turn_stats.take(), stale) {
-                (Some(existing), false) => existing,
-                _ => OpenCodeTurnStats::default(),
+                (Some(existing), false) => {
+                    state.turn_first_step_pending = false;
+                    existing
+                }
+                // A fresh accumulator is the turn's opening step, the only one
+                // whose first-token latency describes the user's wait.
+                _ => {
+                    state.turn_first_step_pending = true;
+                    OpenCodeTurnStats::default()
+                }
             };
             if stats.step_id.is_some() {
                 stats.incomplete = true;
@@ -3641,10 +3653,6 @@ fn handle_event(
                 .and_then(Value::as_str)
                 .map(str::to_owned);
             state.turn_stats = Some(stats);
-            // Turn output timing: the app measures first-token latency from
-            // the step boundary instead of prompt acceptance, so the server's
-            // own dispatch cost stays out of the sample.
-            let _ = events.send(DriverEvent::StepStarted);
         }
         "session.usage.updated" => {
             // opencode publishes the session's cumulative token row here —
@@ -3720,6 +3728,22 @@ fn handle_event(
                     cache_read,
                     prompt_tokens,
                 });
+            }
+            if state.turn_first_step_pending {
+                state.turn_first_step_pending = false;
+                // The plugin measured this turn's first-token latency inside
+                // the server, which no client-side clock can see past. An
+                // absent sample (WebSocket providers, older builds) leaves the
+                // desktop to its own wall-clock fallback.
+                if !state.directory.is_empty()
+                    && let Ok(Some(latency_ms)) = crate::context_plugin::first_token_on_port(
+                        port,
+                        &state.directory,
+                        session_id,
+                    )
+                {
+                    let _ = events.send(DriverEvent::FirstTokenMeasured { latency_ms });
+                }
             }
             if !state.directory.is_empty()
                 && let Ok(Some(composition)) =
@@ -7425,7 +7449,6 @@ mod tests {
             true,
             &mut state,
         );
-        assert!(matches!(event_rx.try_recv().unwrap(), DriverEvent::StepStarted));
         handle_event(
             &json!({
                 "type": "session.usage.updated",

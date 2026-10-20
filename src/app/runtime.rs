@@ -2237,6 +2237,7 @@ impl Fintwind {
                 last_driver_error: None,
                 last_active_at: Instant::now(),
                 turn_started_at: None,
+                first_content_at: None,
                 first_token_recorded: false,
                 last_background_refresh_at: Instant::now()
                     .checked_sub(BACKGROUND_WORK_REFRESH_INTERVAL)
@@ -3395,7 +3396,7 @@ impl Fintwind {
             | DriverEvent::AutoTitleUpdated(_)
             | DriverEvent::AvailableCommands(_)
             | DriverEvent::TurnStarted
-            | DriverEvent::StepStarted
+            | DriverEvent::FirstTokenMeasured { .. }
             | DriverEvent::SteerAccepted { .. }
             | DriverEvent::SteerRejected { .. }
             | DriverEvent::UsageUpdated { .. }

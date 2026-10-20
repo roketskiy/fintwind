@@ -113,6 +113,7 @@ fn automatic_compaction_event_pump_e2e(cx: &mut TestAppContext) {
             last_driver_error: None,
             last_active_at: Instant::now(),
             turn_started_at: None,
+            first_content_at: None,
             first_token_recorded: false,
             last_background_refresh_at: Instant::now(),
         });

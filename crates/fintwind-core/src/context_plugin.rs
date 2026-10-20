@@ -92,3 +92,30 @@ pub(crate) fn get_on_port(
         serde_json::from_value(output).context("invalid context composition snapshot")?;
     Ok(Some(composition))
 }
+
+/// Consume the plugin's server-side first-token latency for `session_id`, in
+/// milliseconds. The plugin measures it between its `http.request` and
+/// `http.response` hooks and answers `null` when the provider path never
+/// produced a sample (WebSocket streaming, or hooks missing on this build).
+pub(crate) fn first_token_on_port(
+    port: u16,
+    directory: &str,
+    session_id: &str,
+) -> anyhow::Result<Option<u64>> {
+    let response = crate::opencode_session::request_json_on_port_with_directory(
+        port,
+        "POST",
+        "/api/rpc/fintwind.context/ttft",
+        Some(&json!({ "input": { "sessionID": session_id } })),
+        std::time::Duration::from_secs(5),
+        Some(directory),
+    )?;
+    let output = response.get("output").cloned().unwrap_or(response);
+    if output.is_null() {
+        return Ok(None);
+    }
+    let latency = output
+        .as_u64()
+        .context("invalid first-token latency sample")?;
+    Ok(Some(latency))
+}

@@ -980,13 +980,15 @@ struct SessionRuntime {
     /// When this session last sent or received anything, for idle reaping.
     last_active_at: Instant,
     /// Turn-start anchor for the first-token latency meter: set on
-    /// `TurnStarted` as the fallback and refined by `StepStarted`, consumed
-    /// by the turn's first streamed content. Presentation bookkeeping that
+    /// `TurnStarted`, paired with the first streamed content when the turn
+    /// settles without a plugin measurement. Presentation bookkeeping that
     /// never persists and dies with the turn.
     turn_started_at: Option<Instant>,
-    /// Whether this turn already contributed a first-token sample. Steps
-    /// after the first fire their own `StepStarted`, and only the turn's
-    /// first content must record.
+    /// When this turn's first streamed content arrived, for the wall-clock
+    /// fallback sample. Runtime state that dies with the turn.
+    first_content_at: Option<Instant>,
+    /// Whether this turn already contributed a first-token sample, so the
+    /// plugin measurement and the wall-clock fallback never both record.
     first_token_recorded: bool,
     /// Background-process snapshots are provider IPC. Keep the polling clock
     /// on the runtime so switching tasks never creates duplicate probes.

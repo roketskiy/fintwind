@@ -40,6 +40,7 @@ pub mod i18n;
 pub mod identity;
 pub mod model;
 pub mod model_catalog;
+pub mod mermaid;
 pub mod persistence;
 pub mod projectless;
 pub mod provider_quota;

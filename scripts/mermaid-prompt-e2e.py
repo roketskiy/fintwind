@@ -50,6 +50,17 @@ MERMAID_PROMPT_V1 = "\n".join([
     "Use plain Mermaid without HTML labels, external images, clickable links, icons, custom CSS, or theme directives. Output the diagram source directly; no rendering tools or generated files are needed unless requested.",
     "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
 ])
+# Same frozen contract, second generation. v1 sessions keep the bytes above;
+# new sessions pick v2, whose only additions are the fintwind_mermaid_check
+# validation loop and the relaxed syntax preference.
+MERMAID_PROMPT_V2 = "\n".join([
+    "Fintwind Mermaid visualization (v2).",
+    "Proactively include a concise fenced mermaid code block when explaining nontrivial architecture, relationships, data flow, or a multi-step process that benefits from visualization, even when a diagram was not explicitly requested. Do not explain such structure only in prose.",
+    "Prefer flowchart or sequenceDiagram syntax with short quoted labels in the user's language. Fintwind renders Mermaid blocks directly in the conversation.",
+    "Use plain Mermaid without HTML labels, external images, clickable links, icons, custom CSS, or theme directives. Output the diagram source directly.",
+    "After writing or changing a mermaid code block, validate its exact source with the fintwind_mermaid_check tool. Fix every reported error and revalidate until the diagram is valid; a block that cannot be made valid is removed rather than left broken.",
+    "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
+])
 TOOL_NAME = "mermaid_fixture_probe"
 PLUGIN_SOURCE = ROOT / "resources" / "opencode-context-plugin.ts"
 
@@ -558,6 +569,33 @@ def execute(binary, output):
               and record["toolsSha256"] == baseline_tools for record in plain_records),
           [{"instructionCount": r["instructionCount"], "systemSha256": r["systemSha256"]}
            for r in plain_records])
+
+    # v2 is the current generation: same single-instruction guarantees as v1,
+    # different bytes, and no check tool in this environment because the
+    # runner never gives the plugin a mermaid-check capability.
+    v2 = create_session("v2")
+    v2_metadata = (session_info(v2).get("metadata") or {})
+    check("v2_session_metadata_echoed", v2_metadata.get("fintwindMermaidPrompt") == "v2", v2_metadata)
+    v2_records = turn(v2, "V2 turn 1.", label="v2")
+    v2_records += turn(v2, "V2 turn 2.", label="v2")
+    v2_system_text = system_text(v2_records[0]["payload"])
+    check("v2_each_request_instruction_once",
+          all(record["instructionCount"] == 1
+              and record["markerCount"] == 1
+              and record["systemSha256"] == v2_records[0]["systemSha256"]
+              for record in v2_records),
+          [{"instructionCount": record["instructionCount"],
+            "markerCount": record["markerCount"]} for record in v2_records])
+    check("v2_adds_only_instruction_to_off_system",
+          " ".join(v2_system_text.replace(MERMAID_PROMPT_V2, "").split())
+          == " ".join(off_system_text.split())
+          and v2_system_text.count(MERMAID_PROMPT_V2) == 1,
+          {"offLen": len(off_system_text), "v2Len": len(v2_system_text)})
+    check("v2_differs_from_v1_and_keeps_tools",
+          v2_records[0]["systemSha256"] != v1_system
+          and all(record["toolsSha256"] == baseline_tools for record in v2_records),
+          {"v2System": v2_records[0]["systemSha256"], "v1System": v1_system,
+           "tools": sorted({r["toolsSha256"] for r in v2_records})})
 
     # An independent preference file is not read by the plugin. Change it in
     # both directions and require exact request hashes to survive.

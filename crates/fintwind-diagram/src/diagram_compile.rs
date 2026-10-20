@@ -5,6 +5,10 @@
 //! small [`Theme`] and removes the now-unused custom-property declarations. The
 //! resolver never touches text nodes: a label that says `var(--x)` stays literal.
 //!
+//! This module lives in `fintwind-core` so the daemon's `mermaid` check tool and
+//! the app's renderer call one identical compiler; a validation can never drift
+//! from what the conversation actually draws.
+//!
 //! See `docs/diagrams.md` for the failure list, theme mapping and acceptance cases.
 
 use std::collections::HashMap;
@@ -38,7 +42,7 @@ pub struct Diagram {
 }
 
 /// The most source bytes accepted.
-pub(super) const MAX_SOURCE_BYTES: usize = 32 * 1024;
+pub const MAX_SOURCE_BYTES: usize = 32 * 1024;
 /// The most SVG bytes produced.
 const MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 /// The most edges a flowchart may describe.
@@ -70,8 +74,10 @@ const DRAWING_ATTRIBUTES: [&str; 14] = [
     "marker-end",
 ];
 
-/// Ondine's monochrome series shades, as percentages of the foreground.
-const SERIES_SHADES: [u8; 8] = [100, 57, 86, 50, 79, 64, 93, 71];
+/// The monochrome shades behind series 2..=8, as foreground percentages over
+/// the background; series 1 is the theme accent. The order alternates light
+/// and dark so neighboring slices never blur together.
+const SERIES_SHADES: [u8; 7] = [57, 86, 50, 79, 64, 93, 71];
 
 /// Compile against a captured reference date, or a deterministic acceptance date.
 ///
@@ -772,14 +778,16 @@ fn theme_vars(theme: Theme) -> HashMap<String, String> {
         ("--ondine-bg", background.as_str()),
         ("--ondine-fg", foreground.as_str()),
         ("--ondine-muted", muted.as_str()),
-        ("--ondine-line", muted.as_str()),
+        // Connector lines read as structure, not secondary text, so they
+        // share the outline color instead of the muted text color.
+        ("--ondine-line", border.as_str()),
         ("--ondine-surface", background.as_str()),
         ("--ondine-surface-alt", surface_alt.as_str()),
         ("--ondine-border", border.as_str()),
         ("--ondine-accent", accent.as_str()),
         ("--ondine-critical", accent.as_str()),
         ("--ondine-stroke", "2px"),
-        ("--ondine-radius", "0"),
+        ("--ondine-radius", "4"),
         ("--ondine-font", ROOT_FONT),
         ("--ondine-title-weight", "bold"),
         ("--ondine-heading-weight", "bold"),
@@ -788,9 +796,15 @@ fn theme_vars(theme: Theme) -> HashMap<String, String> {
         vars.insert(name.to_owned(), value.to_owned());
     }
 
+    // Series 1 carries the accent so the primary slice of a pie or the first
+    // line of a chart stands out; the rest walk a monochrome ladder. Every
+    // series must stay present: Ondine writes each fill as
+    // `var(--ondine-series-N, color-mix(...))`, and a missing entry unfolds
+    // the mix fallback into an expression this resolver rejects.
+    vars.insert("--ondine-series-1".to_owned(), accent.clone());
     for (index, shade) in SERIES_SHADES.iter().enumerate() {
         let value = hex(mix(theme.foreground, f64::from(*shade), theme.background));
-        vars.insert(format!("--ondine-series-{}", index + 1), value);
+        vars.insert(format!("--ondine-series-{}", index + 2), value);
     }
 
     for (alias, target) in [

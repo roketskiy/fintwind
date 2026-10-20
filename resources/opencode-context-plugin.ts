@@ -16,11 +16,30 @@ type Composition = {
   messages: number;
   incomplete: boolean;
 };
+type ToolInput = Record<string, unknown>;
+type ToolExecution = { sessionID: string; signal: AbortSignal };
+type PluginTool = {
+  name: string;
+  description: string;
+  input: ToolInput;
+  options: { codemode: false };
+  execute(input: ToolInput, context: ToolExecution): Promise<{ content: string }>;
+};
+type ToolEditor = {
+  add(tool: PluginTool): void;
+  list(): readonly { id: string }[];
+  get(id: string): { id: string } | undefined;
+  remove(id: string): void;
+};
 type Context = {
   storage: {
     get(key: string): Promise<unknown>;
     set(key: string, value: unknown): Promise<void>;
     remove(key: string): Promise<void>;
+  };
+  tool: {
+    transform(edit: (editor: ToolEditor) => void): Promise<Registration>;
+    list(): Promise<readonly { id: string }[]>;
   };
   session: {
     get(input: { sessionID: string }): Promise<unknown>;
@@ -30,6 +49,28 @@ type Context = {
     register(definition: unknown, handlers: Record<string, (input: unknown) => Promise<unknown>>): Promise<Registration>;
   };
 };
+
+// The mermaid check capability arrives through the environment, the same way
+// the browser plugin receives its bridge. OpenCode re-imports plugins for
+// each location: keep one process-local copy before removing the variables,
+// so later locations work without forwarding credentials to spawned shell
+// processes. Other trusted plugins in the same process are not an OS
+// security boundary.
+const capabilityKey = Symbol.for("fintwind.mermaid-check.capability.v1");
+type CheckCapability = Readonly<{ address: string; token: string }>;
+const processGlobals = globalThis as typeof globalThis & { [key: symbol]: CheckCapability | undefined };
+let checkCapability = processGlobals[capabilityKey];
+if (!checkCapability && process.env.FINTWIND_MERMAID_CHECK_ADDRESS && process.env.FINTWIND_MERMAID_CHECK_TOKEN) {
+  checkCapability = Object.freeze({
+    address: process.env.FINTWIND_MERMAID_CHECK_ADDRESS,
+    token: process.env.FINTWIND_MERMAID_CHECK_TOKEN,
+  });
+  Object.defineProperty(processGlobals, capabilityKey, { value: checkCapability, enumerable: false });
+}
+const checkAddress = checkCapability?.address;
+const checkToken = checkCapability?.token;
+delete process.env.FINTWIND_MERMAID_CHECK_ADDRESS;
+delete process.env.FINTWIND_MERMAID_CHECK_TOKEN;
 
 function object(value: unknown): Record<string, unknown> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -153,8 +194,8 @@ const definition = {
   events: {},
 };
 
-// Immutable version: changing these bytes would invalidate enabled sessions'
-// prompt prefixes. Future wording needs a new version, retaining this one.
+// Immutable versions: changing these bytes would invalidate enabled sessions'
+// prompt prefixes. Future wording needs a new version, retaining the old ones.
 const MERMAID_PROMPT_V1 = [
   "Fintwind Mermaid visualization (v1).",
   "Proactively include a concise fenced mermaid code block when explaining nontrivial architecture, relationships, data flow, or a multi-step process that benefits from visualization, even when a diagram was not explicitly requested. Do not explain such structure only in prose.",
@@ -163,12 +204,125 @@ const MERMAID_PROMPT_V1 = [
   "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
 ].join("\n");
 
+const MERMAID_PROMPT_V2 = [
+  "Fintwind Mermaid visualization (v2).",
+  "Proactively include a concise fenced mermaid code block when explaining nontrivial architecture, relationships, data flow, or a multi-step process that benefits from visualization, even when a diagram was not explicitly requested. Do not explain such structure only in prose.",
+  "Prefer flowchart or sequenceDiagram syntax with short quoted labels in the user's language. Fintwind renders Mermaid blocks directly in the conversation.",
+  "Use plain Mermaid without HTML labels, external images, clickable links, icons, custom CSS, or theme directives. Output the diagram source directly.",
+  "After writing or changing a mermaid code block, validate its exact source with the fintwind_mermaid_check tool. Fix every reported error and revalidate until the diagram is valid; a block that cannot be made valid is removed rather than left broken.",
+  "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
+].join("\n");
+
+const MERMAID_CHECK_TOOL = "fintwind_mermaid_check";
+const MAX_CHECK_SOURCE = 32 * 1024;
+
+type CheckReply = { requestId: string; ok: boolean; error?: string; width?: number; height?: number };
+
+/**
+ * One short-lived authenticated connection per check. The reply is a single
+ * bounded line, so every response above the reply bound is a protocol error
+ * rather than data.
+ */
+function checkDiagram(source: string, signal: AbortSignal): Promise<CheckReply> {
+  if (!checkAddress || !checkToken
+    || !/^ws:\/\/127\.0\.0\.1:\d+\/v1\/mermaid-check$/.test(checkAddress)) {
+    return Promise.reject(new Error("Fintwind mermaid check is unavailable in this process."));
+  }
+  if (new TextEncoder().encode(source).length > MAX_CHECK_SOURCE) {
+    return Promise.reject(new Error(
+      `The diagram source exceeds the ${MAX_CHECK_SOURCE / 1024} KiB limit. No check was issued.`));
+  }
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(checkAddress);
+    let authenticated = false;
+    let finished = false;
+    const end = (error?: Error, value?: CheckReply): void => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", cancel);
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) socket.close();
+      if (error) reject(error); else resolve(value!);
+    };
+    const cancel = (): void => end(new Error("Mermaid check cancelled."));
+    const timeout = setTimeout(() => end(new Error("Mermaid check timed out.")), 10_000);
+    signal.addEventListener("abort", cancel, { once: true });
+    socket.onopen = (): void => {
+      if (finished || signal.aborted) { cancel(); return; }
+      socket.send(JSON.stringify({ type: "hello", version: 1, token: checkToken }));
+    };
+    socket.onmessage = (event): void => {
+      if (finished) return;
+      try {
+        if (typeof event.data !== "string" || event.data.length > 8 * 1024) {
+          throw new Error("Invalid mermaid check response.");
+        }
+        const reply = JSON.parse(event.data) as { type?: string; version?: number } & Partial<CheckReply>;
+        if (!authenticated && reply.type === "hello" && reply.version === 1) {
+          authenticated = true;
+          socket.send(JSON.stringify({ type: "check", requestId, source }));
+          return;
+        }
+        if (!authenticated || reply.type !== "result" || reply.requestId !== requestId) {
+          throw new Error("Fintwind mermaid check rejected the call.");
+        }
+        end(undefined, reply as CheckReply);
+      } catch (error) {
+        end(error instanceof Error ? error : new Error("Invalid mermaid check response."));
+      }
+    };
+    socket.onerror = (): void => end(new Error("Fintwind mermaid check connection failed."));
+    socket.onclose = (): void => end(new Error("Fintwind mermaid check disconnected."));
+    if (signal.aborted) cancel();
+  });
+}
+
+const mermaidCheckTool: PluginTool = {
+  name: MERMAID_CHECK_TOOL,
+  description: "Validate one Mermaid diagram source against Fintwind's native renderer. " +
+    "Returns the size the diagram draws at, or the exact compiler error with its line and column. " +
+    "Call it after writing or changing a mermaid code fence, and after every fix, so the conversation never shows a broken diagram.",
+  options: { codemode: false },
+  input: {
+    type: "object",
+    properties: { source: { type: "string", minLength: 1, maxLength: MAX_CHECK_SOURCE } },
+    required: ["source"],
+    additionalProperties: false,
+  },
+  async execute(raw, context) {
+    const source = Object(raw).source;
+    if (typeof source !== "string" || !source.trim()) {
+      throw new Error("Give the exact diagram source to validate. Nothing was checked.");
+    }
+    const reply = await checkDiagram(source, context.signal);
+    if (reply.ok) {
+      const width = typeof reply.width === "number" ? Math.round(reply.width) : 0;
+      const height = typeof reply.height === "number" ? Math.round(reply.height) : 0;
+      return { content: `Valid diagram. Fintwind draws it at ${width}x${height} px.` };
+    }
+    return { content: `Invalid diagram: ${reply.error ?? "unknown error"}` };
+  },
+};
+
 export default {
   id: "fintwind.context",
   async setup(ctx: Context) {
     const latest = new Map<string, Composition>();
     const writes = new Map<string, Promise<void>>();
     const instructions = new Map<string, Promise<string | undefined>>();
+    // Registration is capability-gated: without the daemon endpoint this
+    // plugin stays instruction-and-composition only, exactly as before the
+    // tool existed. A missing registration is also what keeps the tool out
+    // of every snapshot; the per-request hook below is the second gate.
+    let checkRegistration: Registration | undefined;
+    if (checkAddress && checkToken) {
+      checkRegistration = await ctx.tool.transform(editor => editor.add(mermaidCheckTool));
+      const registered = await ctx.tool.list();
+      if (!registered.some(entry => entry.id === MERMAID_CHECK_TOOL)) {
+        throw new Error("OpenCode did not register the Fintwind mermaid check tool.");
+      }
+    }
     // First-token latency, measured inside the server: `http.request` opens
     // the provider call, `http.response` fires when the stream opens, so the
     // difference is the provider's own time to first byte for that request.
@@ -210,6 +364,7 @@ export default {
         const version = object(info.metadata)?.fintwindMermaidPrompt;
         if (version === undefined || version === null) return undefined;
         if (version === "v1") return MERMAID_PROMPT_V1;
+        if (version === "v2") return MERMAID_PROMPT_V2;
         throw new Error("Unsupported Mermaid prompt version");
       });
       instructions.set(sessionID, pending);
@@ -227,6 +382,12 @@ export default {
         if (!event.system.some(part => object(part)?.type === "text" && object(part)?.text === text)) {
           event.system.push({ type: "text", text });
         }
+      }
+      // The check tool belongs only to sessions that render diagrams: the
+      // same metadata snapshot that adds the instruction gates the tool, so
+      // other sessions never carry it in their tool snapshot.
+      if (text === undefined && event.tools && typeof event.tools === "object") {
+        delete (event.tools as Record<string, unknown>)[MERMAID_CHECK_TOOL];
       }
       try {
         const result = composition(event);
@@ -268,6 +429,7 @@ export default {
     return async () => {
       await hook.dispose();
       await rpc.dispose();
+      await checkRegistration?.dispose().catch(() => {});
       await timingHooks?.dispose().catch(() => {});
       await Promise.all([...writes.values()].map(write => write.catch(() => {})));
       writes.clear();

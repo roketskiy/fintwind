@@ -1910,6 +1910,7 @@ fn render_code_fragment(
             source,
             diagram_theme.unwrap(),
             ctx.metrics.text_size / Metrics::BODY.text_size,
+            *ctx.palette,
             fallback,
         )
     } else {

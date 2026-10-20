@@ -537,6 +537,16 @@ pub fn serve(
     if backend_tools.is_some() {
         crate::opencode_pool::attach_browser_tools(&tools)?;
     }
+    // The mermaid check endpoint rides the same listener. A failure to
+    // install only removes the model's validation tool; the daemon itself
+    // keeps serving.
+    if let Err(error) = crate::mermaid_check::install(format!(
+        "ws://{}{}",
+        listener.local_addr()?,
+        fintwind_protocol::mermaid::MERMAID_CHECK_ENDPOINT
+    )) {
+        eprintln!("fintwind-daemon mermaid check endpoint unavailable: {error:#}");
+    }
     let dispatcher = Arc::new(RequestDispatcher::new(
         backend.clone(),
         hub.clone(),
@@ -606,6 +616,8 @@ fn handle_connection(
         .max_frame_size(Some(MAX_HANDSHAKE_MESSAGE_BYTES));
     let is_browser_tool = Arc::new(AtomicBool::new(false));
     let handshake_browser_tool = is_browser_tool.clone();
+    let is_mermaid_check = Arc::new(AtomicBool::new(false));
+    let handshake_mermaid_check = is_mermaid_check.clone();
     let mut socket = accept_hdr_with_config(
         stream,
         move |request: &HandshakeRequest, response| {
@@ -618,6 +630,15 @@ fn handle_connection(
                 }
                 handshake_browser_tool.store(true, Ordering::Relaxed);
                 Ok(response)
+            } else if request.uri().path() == fintwind_protocol::mermaid::MERMAID_CHECK_ENDPOINT {
+                if request.headers().contains_key("origin") {
+                    return Err(handshake_error(
+                        StatusCode::FORBIDDEN,
+                        "mermaid check connections must originate from the private plugin",
+                    ));
+                }
+                handshake_mermaid_check.store(true, Ordering::Relaxed);
+                Ok(response)
             } else {
                 validate_handshake(request, response)
             }
@@ -627,6 +648,9 @@ fn handle_connection(
     .context("WebSocket handshake failed")?;
     if is_browser_tool.load(Ordering::Relaxed) {
         return crate::browser_tools_transport::handle(socket, tools, shutdown);
+    }
+    if is_mermaid_check.load(Ordering::Relaxed) {
+        return crate::mermaid_check::handle(socket, shutdown);
     }
     let hello = read_client_message(&mut socket)?;
     let resume_from = match hello {

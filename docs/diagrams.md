@@ -2,20 +2,32 @@
 
 Fintwind draws `mermaid` code fences as native SVG. The compiler is
 [Ondine](https://github.com/wevm/ondine) (crate `ondine`, package `compiler`,
-MIT), pinned by revision in `Cargo.toml`. Ondine is pure Rust: no DOM, no
-JavaScript, no network. This module turns its themed SVG into a document that
-the native SVG renderer (resvg/usvg) can draw without CSS custom properties.
+MIT), pinned by revision in `crates/fintwind-diagram/Cargo.toml`. Ondine is
+pure Rust: no DOM, no JavaScript, no network. This module turns its themed SVG
+into a document that the native SVG renderer (resvg/usvg) can draw without CSS
+custom properties.
 
 Code:
 
-- `src/md/diagram_compile.rs` — limits, compile call, theme materialization,
-  output audit. Public API:
+- `crates/fintwind-diagram/src/diagram_compile.rs` — limits, compile call,
+  theme materialization, output audit. The compiler lives in its own crate so
+  two consumers call one identical `compile`:
+  - the app renderer (`src/md/diagram.rs`), which rasterizes the SVG; and
+  - the daemon's mermaid check endpoint (`crates/fintwind-core/src/mermaid_check.rs`),
+    which validates sources for the model, so a check can never pass on a
+    source the renderer would reject.
+  Public API:
   - `struct Theme { background, foreground, muted, border, accent: [u8; 3] }`
     (`Clone, Copy, Debug, Eq, Hash, PartialEq`)
   - `struct Diagram { svg: String, width: f64, height: f64 }`
   - `fn compile(source: &str, theme: Theme, now_ms: f64) -> anyhow::Result<Diagram>`
-- `examples/diagram_blackbox.rs` — the black-box acceptance test. It prints a
-  deterministic JSON report to the path given on the command line.
+- `crates/fintwind-diagram/examples/diagram_blackbox.rs` — the black-box
+  acceptance test. It prints a deterministic JSON report to the path given on
+  the command line.
+- `crates/fintwind-core/examples/mermaid_check_e2e.rs` — the black-box
+  acceptance for the check endpoint: real `serve`, real handshake routing,
+  token refusals, valid and invalid sources, size limits, several checks on
+  one connection.
 
 Ondine emits `var(--ondine-*)`, private aliases (`--_fg`, `--_sw`, …) and
 `color-mix(in srgb, …)`. usvg supports none of them. The module resolves them
@@ -51,6 +63,7 @@ past bugs.
 | F20 | Several diagrams on one page share SVG ids | Only Ondine's `title`/`desc` ids exist; they are scoped to one SVG document. Host wraps each diagram separately | out of scope here |
 | F21 | Source can request a local file or a network fetch | Ondine's URL sanitizer; `images`/`links` off; no fonts or images are embedded or fetched | `image_blocked`, `link_blocked` |
 | F22 | Label text is treated as markup | Ondine escapes `&`, `<`, `>` in text; the audit only inspects tags, never text | `label_literals` |
+| F23 | A series color goes missing from the theme table | Ondine writes every series fill as `var(--ondine-series-N, color-mix(...))`; a missing entry unfolds the mix fallback into a form the resolver rejects. Series 1..=8 must all be present | `complex_color_mix` |
 
 ## Decisions
 
@@ -74,13 +87,15 @@ past bugs.
 |---|---|
 | `--ondine-bg`, `--ondine-surface` | `background` |
 | `--ondine-fg` | `foreground` |
-| `--ondine-muted`, `--ondine-line` | `muted` |
+| `--ondine-muted` | `muted` |
+| `--ondine-line` | `border` (lines read as structure, not secondary text) |
 | `--ondine-border` | `border` |
 | `--ondine-accent`, `--ondine-critical` | `accent` |
 | `--ondine-surface-alt` | `color-mix(fg 20%, bg)` |
-| `--ondine-series-1..8` | `fg` at 100/57/86/50/79/64/93/71 % over `bg` |
+| `--ondine-series-1` | `accent` (the primary slice or line stands out) |
+| `--ondine-series-2..8` | `fg` at 57/86/50/79/64/93/71 % over `bg` |
 | `--ondine-stroke` | `2px` |
-| `--ondine-radius` | `0` |
+| `--ondine-radius` | `4` |
 | `--ondine-font` | `JetBrains Mono, monospace` |
 | title/heading/bold weight | `bold` |
 
@@ -108,12 +123,50 @@ percentages that do not sum to 100 are normalized. Hex, `rgb()`, `rgba()`,
 `transparent` and the basic CSS named colors are accepted. Any other mix form
 (for example `in oklab`) is an error.
 
+## Mermaid check
+
+The daemon exposes `ws://127.0.0.1:<port>/v1/mermaid-check`, a restricted
+endpoint for the private OpenCode plugin only:
+
+- `crates/fintwind-protocol/src/mermaid.rs` owns the versioned wire: a
+  `Hello{version, token}` handshake, `Check{requestId, source}` calls and one
+  bounded `Result{ok, error, width, height}` per call.
+- `crates/fintwind-core/src/mermaid_check.rs` installs the endpoint (a
+  per-daemon random token, never the main daemon token), answers the checks
+  with the shared compiler, and hands the capability to private OpenCode
+  processes through `FINTWIND_MERMAID_CHECK_ADDRESS` / `FINTWIND_MERMAID_CHECK_TOKEN`.
+- `resources/opencode-context-plugin.ts` registers the `fintwind_mermaid_check`
+  tool when the capability exists, keeps it out of every session whose
+  creation metadata has no Mermaid prompt version, and returns the compiler's
+  line-and-column error to the model verbatim. The permission default is
+  `allow`: the check is read-only compilation.
+- Prompt `v2` (and only `v2`) tells the model to validate each diagram it
+  writes and fix the reported errors. A failure the fence shows the same
+  message above the source, so a broken diagram is never silent.
+
+## Updating Ondine
+
+Upstream is young and moves fast. The mechanical half is scripted; the
+judgment is not:
+
+```sh
+bun scripts/update-ondine.ts
+cargo update -p compiler
+cargo run --locked --offline --package fintwind-diagram --example diagram_blackbox -- C:/Users/Public/Temp/opencode/diagram-report.json
+```
+
+Run the blackbox twice and compare the reports byte for byte. A changed
+fingerprint means the rendered output changed: review the diff on purpose,
+update the theme mapping notes above when it is wanted, then render a
+flowchart, a sequence, a pie and a Gantt in the app before committing.
+
 ## Acceptance
 
 Build and run (the parent build owns `cargo`):
 
 ```sh
-cargo run --example diagram_blackbox -- C:/Users/Public/Temp/opencode/diagram-report.json
+cargo run --locked --offline --package fintwind-diagram --example diagram_blackbox -- C:/Users/Public/Temp/opencode/diagram-report.json
+cargo run --locked --offline --package fintwind-core --example mermaid_check_e2e -- C:/Users/Public/Temp/opencode/mermaid-check-report.json
 ```
 
 The report is reproducible: it contains no clock, path, duration or machine

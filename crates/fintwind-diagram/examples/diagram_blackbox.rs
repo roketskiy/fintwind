@@ -13,7 +13,7 @@
 //! The module under test is included by path on purpose: this example must stay
 //! independent of how the application registers it.
 
-#[path = "../src/md/diagram_compile.rs"]
+#[path = "../src/diagram_compile.rs"]
 mod diagram_compile;
 
 use std::fs;

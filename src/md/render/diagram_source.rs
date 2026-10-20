@@ -4,12 +4,12 @@ use super::*;
 use crate::ui::scrollbar::{self, Scrollable, ScrollbarState};
 use gpui::{FocusHandle, FollowMode, ListAlignment, ListOffset, ListState, list};
 
-pub(super) fn theme(palette: &Palette) -> super::super::diagram_compile::Theme {
+pub(super) fn theme(palette: &Palette) -> fintwind_diagram::diagram_compile::Theme {
     let rgb = |color: Hsla| {
         let color: gpui::Rgba = color.into();
         [color.r, color.g, color.b].map(|value| (value * 255.0).round() as u8)
     };
-    super::super::diagram_compile::Theme {
+    fintwind_diagram::diagram_compile::Theme {
         background: rgb(palette.inset),
         foreground: rgb(palette.text),
         muted: rgb(palette.tertiary),
@@ -25,7 +25,7 @@ pub(super) struct SourceToggle {
     pub show_source: bool,
     pub palette: Palette,
     pub source: std::sync::Arc<super::super::diagram::Source>,
-    pub theme: super::super::diagram_compile::Theme,
+    pub theme: fintwind_diagram::diagram_compile::Theme,
     pub font_scale: f32,
 }
 

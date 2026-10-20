@@ -723,8 +723,11 @@ pub struct RuntimeEventCursor {
     pub sequence: u64,
 }
 
-/// Versioned, immutable Mermaid instruction selected for newly created sessions.
-pub const MERMAID_PROMPT_VERSION: &str = "v1";
+/// Versioned, immutable Mermaid instruction selected for newly created
+/// sessions. `v1` sessions keep their byte-identical instruction; `v2` adds
+/// the `fintwind_mermaid_check` validation loop. New sessions pick this
+/// constant, so it always names the latest version.
+pub const MERMAID_PROMPT_VERSION: &str = "v2";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentSession {

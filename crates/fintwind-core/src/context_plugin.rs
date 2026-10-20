@@ -39,6 +39,20 @@ impl ContextPlugin {
             .as_array_mut()
             .context("inline OpenCode plugins must be an array")?
             .push(json!(self.directory));
+        // The check is read-only compilation with no side effects, so sitting
+        // behind a per-call approval would only stall diagram turns.
+        match object.entry("permission") {
+            serde_json::map::Entry::Vacant(entry) => {
+                entry.insert(json!({ "fintwind_mermaid_check": "allow" }));
+            }
+            serde_json::map::Entry::Occupied(mut entry) => {
+                if let Some(permissions) = entry.get_mut().as_object_mut() {
+                    permissions
+                        .entry("fintwind_mermaid_check".to_owned())
+                        .or_insert_with(|| json!("allow"));
+                }
+            }
+        }
         Ok(serde_json::to_string(&config)?)
     }
 }

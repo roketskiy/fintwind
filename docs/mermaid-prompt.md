@@ -3,6 +3,22 @@
 The global default is off. Changing it applies only to newly created Fintwind
 sessions, not to existing sessions (even an empty session created earlier).
 
+New sessions pick the latest prompt version (`v2`). Previously issued versions
+stay byte-identical forever: a `v1` session keeps the `v1` instruction, across
+forks, restarts and releases. `v2` differs from `v1` only in the relaxed
+syntax preference and one added line that tells the model to validate every
+diagram it writes with the `fintwind_mermaid_check` tool.
+
+## Mermaid check tool
+
+Sessions carrying a Mermaid prompt version (any version) also receive the
+`fintwind_mermaid_check` tool. It is registered by the same context plugin
+when the daemon exposed the check capability to the private OpenCode process;
+sessions without a Mermaid prompt version never carry it in their tool
+snapshot. The tool validates one source against the identical compiler the
+app renders with (`crates/fintwind-diagram`), so "the tool says valid" and
+"the fence draws" are the same fact. See `docs/diagrams.md` for the wire.
+
 ## Failure cases, before implementation
 
 - Reading the live setting on each model request changes an existing prefix.
@@ -19,11 +35,13 @@ sessions, not to existing sessions (even an empty session created earlier).
 
 ## Contract
 
-New sessions snapshot a version (`v1`) or no preference. The OpenCode session
-receives that version as creation metadata. The always-loaded context plugin
-appends the corresponding constant instruction to primary model requests only;
-it never reads the global default. No version means no changes to the outgoing
-request. Existing prompt versions must stay byte-identical in future releases.
+New sessions snapshot the latest version (`v2`) or no preference. The OpenCode
+session receives that version as creation metadata. The always-loaded context
+plugin appends the corresponding constant instruction to primary model requests
+only; it never reads the global default. No version means no changes to the
+outgoing request. Existing prompt versions must stay byte-identical in future
+releases, so `v1` sessions keep the `v1` bytes even though new sessions pick
+`v2`.
 
 Provider cache hits also depend on the model/provider and other context changes;
 this feature promises not to change existing requests because of its switch,
@@ -34,6 +52,7 @@ not an unconditional vendor cache-hit guarantee.
 ```sh
 cargo check --locked --offline --workspace
 cargo run --locked --offline --package fintwind-core --example mermaid_prompt_blackbox -- target/mermaid-prompt-blackbox
+cargo run --locked --offline --package fintwind-core --example mermaid_check_e2e -- C:/Users/Public/Temp/opencode/mermaid-check-report.json
 python scripts/mermaid-prompt-e2e.py --opencode E:/bun/bin/opencode.exe --deadline 180
 ```
 

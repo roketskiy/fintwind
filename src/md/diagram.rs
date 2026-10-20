@@ -53,10 +53,11 @@ use std::sync::Arc;
 
 use gpui::{
     AnyElement, App, EntityId, Global, IntoElement, ObjectFit, RenderImage, RenderOnce,
-    SvgRenderer, Window, div, img, prelude::*, px,
+    SharedString, SvgRenderer, Window, div, img, prelude::*, px,
 };
 
-use super::diagram_compile::{self, Theme};
+use fintwind_diagram::diagram_compile::{self, Theme};
+use super::render::Palette;
 
 /// Resolved results retained at once. Workers staging a result are not counted
 /// here; their rasters are bounded by [`MAX_RASTER_PIXELS`] instead.
@@ -200,6 +201,10 @@ impl Key {
     }
 }
 
+/// A compile or raster failure message, cached so a broken fence neither
+/// retries every frame nor hides the reason from the reader.
+type Failure = Arc<str>;
+
 struct Rendered {
     image: Arc<RenderImage>,
     /// Diagram width in logical pixels before `font_scale` is applied.
@@ -211,13 +216,13 @@ struct Rendered {
 enum Lookup {
     Ready(Arc<Rendered>),
     Pending,
-    Failed,
+    Failed(Failure),
 }
 
 enum State {
     Pending(HashSet<EntityId>),
-    // `None` is a cached failure: malformed diagrams do not retry every frame.
-    Ready(Option<Arc<Rendered>>),
+    // `Err` is a cached failure: malformed diagrams do not retry every frame.
+    Ready(Result<Arc<Rendered>, Failure>),
 }
 
 struct Entry {
@@ -237,7 +242,7 @@ impl Entry {
     /// costs a full compile.
     fn in_use(&self) -> bool {
         match &self.state {
-            State::Ready(Some(rendered)) => Arc::strong_count(&rendered.image) > 1,
+            State::Ready(Ok(rendered)) => Arc::strong_count(&rendered.image) > 1,
             _ => false,
         }
     }
@@ -282,8 +287,8 @@ impl Cache {
                     views.insert(view);
                     Lookup::Pending
                 }
-                State::Ready(Some(rendered)) => Lookup::Ready(rendered.clone()),
-                State::Ready(None) => Lookup::Failed,
+                State::Ready(Ok(rendered)) => Lookup::Ready(rendered.clone()),
+                State::Ready(Err(message)) => Lookup::Failed(message.clone()),
             };
         }
         if self.pending >= MAX_PENDING {
@@ -296,9 +301,11 @@ impl Cache {
         while self.entries.len() >= MAX_ENTRIES {
             if !self.evict_oldest_unused(std::slice::from_ref(key)) {
                 // No slot without disturbing this frame. Keep the source; no
-                // compile is started, and a later frame can try admission again.
+                // compile is started, and a later frame can try admission
+                // again. Pending, not Failed: cache pressure is not a
+                // diagnostic the reader should see.
                 self.waiting.insert(view);
-                return Lookup::Failed;
+                return Lookup::Pending;
             }
         }
         self.entries.insert(
@@ -339,7 +346,7 @@ impl Cache {
         let Some(key) = oldest else { return false };
         let entry = self.entries.remove(&key).expect("entry was just selected");
         self.bytes = self.bytes.saturating_sub(entry.bytes);
-        if let State::Ready(Some(rendered)) = entry.state {
+        if let State::Ready(Ok(rendered)) = entry.state {
             self.retired.push(rendered.image.clone());
         }
         true
@@ -367,7 +374,10 @@ impl Cache {
         self.bytes + bytes <= MAX_CACHE_BYTES
     }
 
-    fn complete(&mut self, results: Vec<(Key, Option<Arc<Rendered>>)>) -> HashSet<EntityId> {
+    fn complete(
+        &mut self,
+        results: Vec<(Key, Result<Arc<Rendered>, Failure>)>,
+    ) -> HashSet<EntityId> {
         let mut notify = std::mem::take(&mut self.waiting);
         // Results resolved in this batch are fresh but not yet referenced by an
         // `img`, so they are retained explicitly until the next frame can pin
@@ -387,25 +397,28 @@ impl Cache {
             };
             notify.extend(views.drain());
             self.bytes = self.bytes.saturating_sub(entry.bytes);
-            entry.bytes = result.as_ref().map_or(0, |rendered| {
-                rendered.image.as_bytes(0).map_or(0, |bytes| bytes.len())
-            });
-            let admitted = match result {
-                Some(rendered) if self.admit(&completed, entry.bytes) => {
+            entry.bytes = result
+                .as_ref()
+                .ok()
+                .map_or(0, |rendered| {
+                    rendered.image.as_bytes(0).map_or(0, |bytes| bytes.len())
+                });
+            let state = match result {
+                Ok(rendered) if self.admit(&completed, entry.bytes) => {
                     self.bytes += entry.bytes;
-                    Some(rendered)
+                    Ok(rendered)
                 }
                 // No room without dropping an image that is still visible.
                 // Caching the refusal keeps the fence on its source instead of
                 // recompiling the same oversized diagram every frame.
-                Some(rendered) => {
+                Ok(rendered) => {
                     entry.bytes = 0;
                     self.retired.push(rendered.image.clone());
-                    None
+                    Err(Arc::from("diagram raster exceeds the memory budget"))
                 }
-                None => None,
+                Err(message) => Err(message),
             };
-            entry.state = State::Ready(admitted);
+            entry.state = State::Ready(state);
             self.clock += 1;
             entry.touched = self.clock;
             completed.push(key.clone());
@@ -421,12 +434,14 @@ pub(super) fn element(
     source: Arc<Source>,
     theme: Theme,
     font_scale: f32,
+    palette: Palette,
     fallback: AnyElement,
 ) -> AnyElement {
     DiagramImage {
         source,
         theme,
         font_scale: normalize_font_scale(font_scale),
+        palette,
         fallback,
     }
     .into_any_element()
@@ -459,7 +474,7 @@ pub(super) fn is_ready(
     matches!(
         store.0.borrow().entries.get(&key),
         Some(Entry {
-            state: State::Ready(Some(_)),
+            state: State::Ready(Ok(_)),
             ..
         })
     )
@@ -470,6 +485,7 @@ struct DiagramImage {
     source: Arc<Source>,
     theme: Theme,
     font_scale: f32,
+    palette: Palette,
     fallback: AnyElement,
 }
 
@@ -487,6 +503,10 @@ impl RenderOnce for DiagramImage {
                     .relative()
                     .w(px(width))
                     .max_w_full()
+                    // A diagram narrower than the column reads centered, like
+                    // every other media row; a wide one fills the column and
+                    // the auto margins collapse to zero.
+                    .mx_auto()
                     .aspect_ratio(rendered.logical_width / rendered.logical_height)
                     .flex_shrink_0()
                     .child(
@@ -500,8 +520,39 @@ impl RenderOnce for DiagramImage {
                     .into_any_element()
             }
             // The source stays visible until an image exists, and a cached
-            // failure keeps showing it instead of an empty box.
-            Lookup::Pending | Lookup::Failed => self.fallback,
+            // failure keeps showing it — with the reason — instead of an
+            // empty box.
+            Lookup::Failed(message) => div()
+                .w_full()
+                .min_w_0()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .flex()
+                        .min_w_0()
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(crate::ui::icon(
+                            "icons/alert.svg",
+                            12.0,
+                            self.palette.removed,
+                        ))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .flex_1()
+                                .truncate()
+                                .text_size(px(11.0))
+                                .line_height(px(16.0))
+                                .text_color(self.palette.removed)
+                                .child(SharedString::from(message.to_string())),
+                        ),
+                )
+                .child(self.fallback)
+                .into_any_element(),
+            Lookup::Pending => self.fallback,
         }
     }
 }
@@ -574,11 +625,15 @@ fn pump(cx: &mut App) {
             batch
                 .into_iter()
                 .map(|Job { key, theme }| {
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        rasterize(&key, theme, &renderer).ok().map(Arc::new)
-                    }))
-                    .ok()
-                    .flatten();
+                    let result: Result<Arc<Rendered>, Failure> =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            rasterize(&key, theme, &renderer)
+                        }))
+                        .unwrap_or_else(|_| {
+                            Err(anyhow::anyhow!("diagram compilation panicked"))
+                        })
+                        .map(|rendered| Arc::new(rendered))
+                        .map_err(|error| failure_message(&error));
                     (key, result)
                 })
                 .collect::<Vec<_>>()
@@ -600,6 +655,22 @@ fn pump(cx: &mut App) {
         })
         .detach();
     }
+}
+
+/// A bounded, single-line reason for a cached failure. The full `anyhow`
+/// chain stays useful in logs; a fence shows the cause compactly. Truncation
+/// lands on a char boundary because a label may be any UTF-8.
+fn failure_message(error: &anyhow::Error) -> Failure {
+    const MAX_FAILURE_BYTES: usize = 400;
+    let text = format!("{error:#}");
+    if text.len() <= MAX_FAILURE_BYTES {
+        return Arc::from(text);
+    }
+    let mut end = MAX_FAILURE_BYTES;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    Arc::from(&text[..end])
 }
 
 fn rasterize(key: &Key, theme: Theme, renderer: &SvgRenderer) -> anyhow::Result<Rendered> {

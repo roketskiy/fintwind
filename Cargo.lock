@@ -1168,7 +1168,7 @@ dependencies = [
 [[package]]
 name = "compiler"
 version = "0.0.0"
-source = "git+https://github.com/wevm/ondine?rev=439fc64aefdb06e3451fac6c44266e5965ea7265#439fc64aefdb06e3451fac6c44266e5965ea7265"
+source = "git+https://github.com/wevm/ondine?rev=6a1586e5af980e67c104239593ae931837157b8b#6a1586e5af980e67c104239593ae931837157b8b"
 
 [[package]]
 name = "compression-codecs"
@@ -2173,12 +2173,12 @@ dependencies = [
  "anyhow",
  "base64",
  "chrono",
- "compiler",
  "crossbeam-channel",
  "dirs 6.0.0",
  "ely-gpui-component",
  "embed-resource",
  "fintwind-client",
+ "fintwind-diagram",
  "fintwind-protocol",
  "futures",
  "futures-lite",
@@ -2243,6 +2243,7 @@ dependencies = [
  "crossbeam-channel",
  "dirs 6.0.0",
  "fintwind-client",
+ "fintwind-diagram",
  "fintwind-protocol",
  "libc",
  "nucleo-matcher",
@@ -2271,6 +2272,16 @@ dependencies = [
  "libc",
  "serde_json",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "fintwind-diagram"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "compiler",
+ "regex",
+ "serde_json",
 ]
 
 [[package]]

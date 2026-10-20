@@ -1,13 +1,10 @@
 //! Real compiler + native SVG decoder acceptance, without a window or service.
 //! Failure matrix: docs/diagram-native-acceptance.md. No user processes are used.
 
-#[path = "../src/md/diagram_compile.rs"]
-mod diagram_compile;
-
 use std::{borrow::Cow, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, ensure};
-use diagram_compile::{Theme, compile};
+use fintwind_diagram::diagram_compile::{Theme, compile};
 use gpui::{AssetSource, SharedString, SvgRenderer};
 use serde_json::json;
 

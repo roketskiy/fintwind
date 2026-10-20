@@ -554,7 +554,37 @@ impl Theme {
             ThemeScheme::Vercel => Self::vercel(is_dark),
             ThemeScheme::VsCodePlus => Self::vs_code_plus(is_dark),
         };
-        theme.with_muted_accents()
+        theme.with_muted_accents().with_stronger_foregrounds()
+    }
+
+    /// Strengthen the shared text/icon ramp after each family's overrides,
+    /// before projecting it onto Fintwind, Ely and GPUI Kit components.
+    fn with_stronger_foregrounds(mut self) -> Self {
+        let (target, strength) = if self.is_dark {
+            (1.0, 0.35)
+        } else {
+            (0.0, 0.30)
+        };
+        for color in [
+            &mut self.text,
+            &mut self.text_secondary,
+            &mut self.text_tertiary,
+            &mut self.text_muted,
+            &mut self.text_ghost,
+        ] {
+            color.l += (target - color.l) * strength;
+        }
+        // Filled controls can have the opposite foreground polarity to the
+        // page. Strengthen their existing ink rather than the page's ink.
+        for color in [
+            &mut self.on_inverse,
+            &mut self.on_neutral,
+            &mut self.on_accent,
+        ] {
+            let target = if color.l < 0.5 { 0.0 } else { 1.0 };
+            color.l += (target - color.l) * strength;
+        }
+        self
     }
 
     fn with_muted_accents(mut self) -> Self {

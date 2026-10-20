@@ -8,7 +8,7 @@ well-scoped features are welcome.
 The debug app requires:
 
 - Windows 10 1809 and newer
-- Rust 1.96 or newer
+- Rust 1.97 or newer
 - Bun
 - A supported agent CLI when testing a provider integration
 - The MSVC toolchain (Visual Studio Build Tools with the C++ workload and the

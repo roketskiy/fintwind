@@ -45,6 +45,7 @@ pub mod persistence;
 pub mod projectless;
 pub mod provider_quota;
 pub mod provider_session;
+pub mod scheduled_task;
 pub mod settings;
 pub mod skills;
 pub mod submission;

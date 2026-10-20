@@ -1827,6 +1827,13 @@ pub enum DriverEvent {
     /// the server starts a run on its own (opencode `session.execution.started`
     /// after a settled turn — background-task auto-continue).
     TurnStarted,
+    /// A scheduled task admitted a new turn on an existing session. The daemon
+    /// emits it on the same ordered per-runtime stream as the provider events
+    /// that follow, before dispatch, so an attached client hydrates the turn
+    /// and its prompt before `TurnStarted` and streamed deltas arrive. It is a
+    /// new turn, not output of a preparing submission, so it deliberately
+    /// bypasses the preparation barrier and is idempotent on the client.
+    ScheduledTurnAdmitted(Box<crate::scheduled_task::ScheduledTurnAdmission>),
     /// The context plugin measured this turn's first-token latency inside the
     /// server (between its `http.request` and `http.response` hooks on the
     /// turn's first step). Carries that sample in milliseconds; the desktop

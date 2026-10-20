@@ -12,7 +12,8 @@
  * fetched only when a session is opened.
  */
 
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 
 export const projects = sqliteTable("projects", {
   id: text("id").primaryKey(),
@@ -155,4 +156,43 @@ export const remoteCancelTerms = sqliteTable(
     settledAtMs: integer("settled_at_ms").notNull(),
   },
   (table) => [index("remote_cancel_terms_by_prompt").on(table.promptOperationId)],
+);
+
+/** A user-defined scheduled task. Run state lives in `scheduled_occurrences`. */
+export const scheduledTasks = sqliteTable(
+  "scheduled_tasks",
+  {
+    id: text("id").primaryKey(),
+    /** User edits only, so a run never invalidates an open editor. */
+    revision: integer("revision").notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull(),
+    /** NULL while disabled; the only column claiming a due task needs. */
+    nextDueAt: integer("next_due_at"),
+    /** Frozen title, prompt, recurrence, target and last attempt, as JSON. */
+    data: text("data").notNull(),
+  },
+  (table) => [index("scheduled_tasks_by_next_due").on(table.enabled, table.nextDueAt)],
+);
+
+/** One queued or admitted run. A task holds at most one open row. */
+export const scheduledOccurrences = sqliteTable(
+  "scheduled_occurrences",
+  {
+    id: text("id").primaryKey(),
+    taskId: text("task_id").notNull(),
+    dueAt: integer("due_at").notNull(),
+    state: text("state").notNull(),
+    manual: integer("manual", { mode: "boolean" }).notNull(),
+    /** Frozen draft plus the durable submission record, as JSON. */
+    data: text("data").notNull(),
+  },
+  (table) => [
+    index("scheduled_occurrences_by_task").on(table.taskId, table.dueAt),
+    uniqueIndex("scheduled_occurrences_one_open")
+      .on(table.taskId)
+      .where(sql`"state" <> 'settled'`),
+    uniqueIndex("scheduled_occurrences_one_automatic")
+      .on(table.taskId, table.dueAt)
+      .where(sql`"manual" = 0`),
+  ],
 );

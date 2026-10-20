@@ -182,6 +182,10 @@ settings.mcp_market:
   en: MCP Marketplace
 settings.mcp_market_keywords:
   en: mcp marketplace smithery web search academic code install context7 github arxiv pubmed brave exa tavily
+settings.scheduled_tasks:
+  en: Scheduled tasks
+settings.scheduled_tasks_keywords:
+  en: scheduled tasks schedule cron repeat daily weekly run prompt
 daemon.reveal_token:
   en: Reveal token
 daemon.hide_token:
@@ -3062,3 +3066,181 @@ usage.unknown_context:
   en: Unknown context
 usage.below_min_percent:
   en: <0.001%
+
+scheduled_tasks.new:
+  en: New task
+scheduled_tasks.empty:
+  en: No scheduled tasks
+scheduled_tasks.loading:
+  en: Loading…
+scheduled_tasks.name_label:
+  en: Name
+scheduled_tasks.name_placeholder:
+  en: e.g. Weekly dependency update
+scheduled_tasks.prompt_label:
+  en: Prompt
+scheduled_tasks.prompt_placeholder:
+  en: What the session should do
+scheduled_tasks.schedule_label:
+  en: Schedule
+scheduled_tasks.mode_at_time:
+  en: At time
+scheduled_tasks.mode_interval:
+  en: Interval
+scheduled_tasks.repeat_label:
+  en: Days
+scheduled_tasks.interval_unit:
+  en: minutes
+scheduled_tasks.every_day:
+  en: Every day
+scheduled_tasks.at_time_summary:
+  en: "%{days} at %{time}"
+scheduled_tasks.every_minutes:
+  en: Every %{count} min
+scheduled_tasks.every_hours:
+  en: Every %{count} h
+scheduled_tasks.weekday_mon:
+  en: Mon
+scheduled_tasks.weekday_tue:
+  en: Tue
+scheduled_tasks.weekday_wed:
+  en: Wed
+scheduled_tasks.weekday_thu:
+  en: Thu
+scheduled_tasks.weekday_fri:
+  en: Fri
+scheduled_tasks.weekday_sat:
+  en: Sat
+scheduled_tasks.weekday_sun:
+  en: Sun
+scheduled_tasks.target_label:
+  en: Target
+scheduled_tasks.target_new:
+  en: New session
+scheduled_tasks.target_existing:
+  en: Existing session
+scheduled_tasks.project_label:
+  en: Project
+scheduled_tasks.project_placeholder:
+  en: Select a project
+scheduled_tasks.session_label:
+  en: Session
+scheduled_tasks.session_placeholder:
+  en: Select a session
+scheduled_tasks.session_search_placeholder:
+  en: Search sessions
+scheduled_tasks.session_none:
+  en: No matching sessions
+scheduled_tasks.session_empty:
+  en: No sessions yet
+scheduled_tasks.session_more:
+  en: "%{count} more. Type to narrow."
+scheduled_tasks.model_label:
+  en: Model
+scheduled_tasks.model_placeholder:
+  en: provider/model
+scheduled_tasks.access_label:
+  en: Permissions
+scheduled_tasks.local_note:
+  en: New sessions run in the project directory.
+scheduled_tasks.save:
+  en: Save
+scheduled_tasks.cancel:
+  en: Cancel
+scheduled_tasks.enabled:
+  en: Enabled
+scheduled_tasks.run_now:
+  en: Run now
+scheduled_tasks.open_session:
+  en: Open session
+scheduled_tasks.delete:
+  en: Delete
+scheduled_tasks.delete_confirm:
+  en: Delete “%{title}”?
+scheduled_tasks.delete_body:
+  en: Sessions it already started are kept.
+scheduled_tasks.next_run:
+  en: Next %{time}
+scheduled_tasks.next_run_none:
+  en: Not scheduled
+scheduled_tasks.status_never:
+  en: Never run
+scheduled_tasks.status_queued:
+  en: Queued
+scheduled_tasks.status_preparing:
+  en: Preparing
+scheduled_tasks.status_dispatched:
+  en: Dispatched
+scheduled_tasks.status_unconfirmed:
+  en: Unconfirmed
+scheduled_tasks.status_not_sent:
+  en: Not sent
+scheduled_tasks.status_rejected:
+  en: Rejected
+scheduled_tasks.status_missed:
+  en: Skipped
+scheduled_tasks.lifecycle_note:
+  en: Scheduled runs stop when Fintwind exits, and missed runs are not replayed.
+scheduled_tasks.retry:
+  en: Retry
+scheduled_tasks.error_title:
+  en: Enter a name
+scheduled_tasks.error_prompt:
+  en: Enter a prompt
+scheduled_tasks.error_time:
+  en: Use HH:MM
+scheduled_tasks.error_weekdays:
+  en: Select at least one day
+scheduled_tasks.error_interval:
+  en: Interval must be 1 to 525600 minutes
+scheduled_tasks.error_project:
+  en: Select a project
+scheduled_tasks.error_session:
+  en: Select a session
+scheduled_tasks.error_model:
+  en: Enter a model
+scheduled_tasks.error_disconnected:
+  en: The daemon is not connected
+scheduled_tasks.error_unexpected:
+  en: The daemon returned an unexpected response
+scheduled_tasks.error_detail:
+  en: "%{detail}"
+
+scheduled_tasks.all:
+  en: "All"
+
+scheduled_tasks.active:
+  en: "Active"
+
+scheduled_tasks.paused:
+  en: "Paused"
+
+scheduled_tasks.search:
+  en: "Search tasks"
+
+scheduled_tasks.edit:
+  en: "Edit task"
+
+scheduled_tasks.actions:
+  en: "Task actions"
+
+scheduled_tasks.no_matches:
+  en: "No matching tasks"
+
+scheduled_tasks.discard_title:
+  en: "Discard changes?"
+
+scheduled_tasks.discard:
+  en: "Discard changes"
+
+scheduled_tasks.keep_editing:
+  en: "Keep editing"
+
+scheduled_tasks.project_missing:
+  en: "Unavailable project"
+
+scheduled_tasks.session_missing:
+  en: "Unavailable conversation"
+
+scheduled_tasks.last_run:
+  en: "Last %{time}"

@@ -90,6 +90,8 @@ settings.mcp_servers: MCP 服务器
 settings.mcp_servers_keywords: MCP 服务器 工具 stdio http sse 本地 远程 npx 环境变量 请求头
 settings.mcp_market: MCP 市场
 settings.mcp_market_keywords: MCP 市场 smithery 网页搜索 学术 论文 代码 安装 context7 github arxiv pubmed brave exa tavily
+settings.scheduled_tasks: 定时任务
+settings.scheduled_tasks_keywords: 定时 计划 任务 调度 schedule cron 重复 每天 每周 运行 提示词
 daemon.reveal_token: 显示令牌
 daemon.hide_token: 隐藏令牌
 settings.theme: 主题
@@ -1531,3 +1533,99 @@ usage.used_context: 已用上下文
 usage.available_context: 可用
 usage.unknown_context: 未知上下文
 usage.below_min_percent: <0.001%
+
+scheduled_tasks.new: 新建
+scheduled_tasks.empty: 还没有定时任务
+scheduled_tasks.loading: 正在加载…
+scheduled_tasks.name_label: 名称
+scheduled_tasks.name_placeholder: 例如：每周依赖更新
+scheduled_tasks.prompt_label: 指令
+scheduled_tasks.prompt_placeholder: 会话要执行的内容
+scheduled_tasks.schedule_label: 时间
+scheduled_tasks.mode_at_time: 定时
+scheduled_tasks.mode_interval: 间隔
+scheduled_tasks.repeat_label: 星期
+scheduled_tasks.interval_unit: 分钟
+scheduled_tasks.every_day: 每天
+scheduled_tasks.at_time_summary: "%{days} %{time}"
+scheduled_tasks.every_minutes: 每 %{count} 分钟
+scheduled_tasks.every_hours: 每 %{count} 小时
+scheduled_tasks.weekday_mon: 一
+scheduled_tasks.weekday_tue: 二
+scheduled_tasks.weekday_wed: 三
+scheduled_tasks.weekday_thu: 四
+scheduled_tasks.weekday_fri: 五
+scheduled_tasks.weekday_sat: 六
+scheduled_tasks.weekday_sun: 日
+scheduled_tasks.target_label: 目标
+scheduled_tasks.target_new: 新会话
+scheduled_tasks.target_existing: 现有会话
+scheduled_tasks.project_label: 项目
+scheduled_tasks.project_placeholder: 选择项目
+scheduled_tasks.session_label: 会话
+scheduled_tasks.session_placeholder: 选择会话
+scheduled_tasks.session_search_placeholder: 搜索会话
+scheduled_tasks.session_none: 没有匹配的会话
+scheduled_tasks.session_empty: 还没有会话
+scheduled_tasks.session_more: "还有 %{count} 个，输入以缩小范围。"
+scheduled_tasks.model_label: 模型
+scheduled_tasks.model_placeholder: provider/model
+scheduled_tasks.access_label: 权限
+scheduled_tasks.local_note: 新会话在项目目录中运行。
+scheduled_tasks.save: 保存
+scheduled_tasks.cancel: 取消
+scheduled_tasks.enabled: 启用
+scheduled_tasks.run_now: 立即运行
+scheduled_tasks.open_session: 打开会话
+scheduled_tasks.delete: 删除
+scheduled_tasks.delete_confirm: 删除“%{title}”？
+scheduled_tasks.delete_body: 已派发的会话会保留。
+scheduled_tasks.next_run: 下次 %{time}
+scheduled_tasks.next_run_none: 未排期
+scheduled_tasks.status_never: 未运行
+scheduled_tasks.status_queued: 排队中
+scheduled_tasks.status_preparing: 准备中
+scheduled_tasks.status_dispatched: 已派发
+scheduled_tasks.status_unconfirmed: 未确认
+scheduled_tasks.status_not_sent: 未发送
+scheduled_tasks.status_rejected: 已拒绝
+scheduled_tasks.status_missed: 已跳过
+scheduled_tasks.lifecycle_note: Fintwind 完全退出后不会执行定时运行，错过的运行也不会补跑。
+scheduled_tasks.retry: 重试
+scheduled_tasks.error_title: 填写名称
+scheduled_tasks.error_prompt: 填写指令
+scheduled_tasks.error_time: 时间格式为 HH:MM
+scheduled_tasks.error_weekdays: 至少选择一个星期
+scheduled_tasks.error_interval: 间隔为 1 到 525600 分钟
+scheduled_tasks.error_project: 选择项目
+scheduled_tasks.error_session: 选择会话
+scheduled_tasks.error_model: 填写模型
+scheduled_tasks.error_disconnected: daemon 未连接
+scheduled_tasks.error_unexpected: daemon 返回了意外的响应
+scheduled_tasks.error_detail: "%{detail}"
+
+scheduled_tasks.all: "全部"
+
+scheduled_tasks.active: "已启用"
+
+scheduled_tasks.paused: "已暂停"
+
+scheduled_tasks.search: "搜索任务"
+
+scheduled_tasks.edit: "编辑任务"
+
+scheduled_tasks.actions: "任务操作"
+
+scheduled_tasks.no_matches: "没有匹配的任务"
+
+scheduled_tasks.discard_title: "放弃修改？"
+
+scheduled_tasks.discard: "放弃修改"
+
+scheduled_tasks.keep_editing: "继续编辑"
+
+scheduled_tasks.project_missing: "项目不可用"
+
+scheduled_tasks.session_missing: "会话不可用"
+
+scheduled_tasks.last_run: "上次 %{time}"

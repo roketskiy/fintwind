@@ -284,6 +284,12 @@ impl Fintwind {
                         cx,
                     ))
                     .child(self.render_mode_rail_entry(
+                        "rail-scheduled-tasks",
+                        "icons/clock.svg",
+                        WorkspaceMode::ScheduledTasks,
+                        cx,
+                    ))
+                    .child(self.render_mode_rail_entry(
                         "rail-usage",
                         "icons/chart-column.svg",
                         WorkspaceMode::Usage,
@@ -377,11 +383,15 @@ impl Fintwind {
             WorkspaceMode::Sessions => tr!("rail.sessions"),
             WorkspaceMode::SourceControl => tr!("rail.source_control"),
             WorkspaceMode::Usage => tr!("settings.usage"),
+            WorkspaceMode::ScheduledTasks => tr!("settings.scheduled_tasks"),
             WorkspaceMode::Settings => tr!("common.settings"),
         };
         let group = SharedString::from(format!("rail-{id}"));
         div()
             .id(id)
+            .when(mode == WorkspaceMode::ScheduledTasks, |entry| {
+                entry.track_focus(&self.scheduled_tasks_focus).tab_index(0)
+            })
             .group(group.clone())
             .relative()
             .w(px(MODE_RAIL_WIDTH))
@@ -502,7 +512,7 @@ impl Fintwind {
     fn activate_mode(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
         if self.mode == mode {
             // Usage has no second column; there is nothing to collapse.
-            if mode != WorkspaceMode::Usage {
+            if self.has_secondary_column() {
                 self.set_sidebar_visible(!self.sidebar_visible, cx);
             }
             return;
@@ -515,6 +525,7 @@ impl Fintwind {
             WorkspaceMode::Settings => self.open_settings_page(self.settings_page, cx),
             WorkspaceMode::SourceControl => self.open_source_control(cx),
             WorkspaceMode::Usage => self.open_usage_page(cx),
+            WorkspaceMode::ScheduledTasks => self.open_scheduled_tasks(cx),
         }
         if !self.sidebar_visible {
             self.set_sidebar_visible(true, cx);

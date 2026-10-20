@@ -281,6 +281,7 @@ enum WorkspaceMode {
     Sessions,
     SourceControl,
     Usage,
+    ScheduledTasks,
     Settings,
 }
 
@@ -1369,6 +1370,7 @@ pub struct Fintwind {
     onboarding_add_project_focus: FocusHandle,
     onboarding_projectless_focus: FocusHandle,
     sidebar_add_project_focus: FocusHandle,
+    scheduled_tasks_focus: FocusHandle,
     probes: Vec<ProviderProbe>,
     provider_probe_tx: Sender<ProviderProbeResult>,
     provider_probe_events: Receiver<ProviderProbeResult>,
@@ -1727,6 +1729,7 @@ pub struct Fintwind {
     /// The settings category shown while the workspace is in the settings
     /// mode. It survives leaving and re-entering settings.
     settings_page: SettingsPage,
+    scheduled_tasks_view: Entity<scheduled::ScheduledTasksView>,
     /// The Skills page's library snapshot, scanned off-thread. Frames read
     /// only this; `None` means the first scan has not landed yet.
     skills_catalog: Option<Rc<crate::skills::SkillsCatalog>>,
@@ -2220,6 +2223,7 @@ mod quote;
 mod render;
 mod right_panel;
 mod runtime;
+mod scheduled;
 mod sessions;
 mod settings;
 mod sidebar;
@@ -2989,6 +2993,18 @@ impl Fintwind {
         // overlay is open.
         let scene_overlay_enabled = window.enable_scene_overlay().is_ok();
         let entity = cx.new(|cx| {
+            let scheduled_tasks_view =
+                cx.new(|cx| scheduled::ScheduledTasksView::new(daemon.clone(), window, cx));
+            cx.subscribe(
+                &scheduled_tasks_view,
+                |this: &mut Self, _, event, cx| match event {
+                    scheduled::ScheduledTasksEvent::OpenSession(session_id) => {
+                        this.mode = WorkspaceMode::Sessions;
+                        this.select_session(*session_id, cx);
+                    }
+                },
+            )
+            .detach();
             let settings_focus = cx.focus_handle();
             let onboarding_add_project_focus = cx.focus_handle();
             let onboarding_projectless_focus = cx.focus_handle();
@@ -3561,6 +3577,7 @@ impl Fintwind {
                 onboarding_add_project_focus,
                 onboarding_projectless_focus,
                 sidebar_add_project_focus,
+                scheduled_tasks_focus: cx.focus_handle(),
                 probes,
                 provider_probe_tx,
                 provider_probe_events,
@@ -3722,6 +3739,7 @@ impl Fintwind {
                 scene_overlay_enabled,
                 mode: WorkspaceMode::default(),
                 settings_page: SettingsPage::General,
+                scheduled_tasks_view,
                 skills_catalog: None,
                 skills_scan_generation: 0,
                 skills_scan_pending: false,

@@ -182,7 +182,7 @@ impl Fintwind {
                 .render_source_control_secondary(sidebar_width, cx)
                 .into_any_element(),
             // Usage has no second column: the page fills the main area.
-            WorkspaceMode::Usage => div().into_any_element(),
+            WorkspaceMode::Usage | WorkspaceMode::ScheduledTasks => div().into_any_element(),
         }
     }
 
@@ -332,6 +332,13 @@ impl Render for Fintwind {
                     })
                     .into_any_element()
             }
+            WorkspaceMode::ScheduledTasks => div()
+                .flex_1()
+                .h_full()
+                .min_w_0()
+                .bg(theme.surface)
+                .child(self.scheduled_tasks_view.clone())
+                .into_any_element(),
             WorkspaceMode::Settings => div()
                 .flex_1()
                 .h_full()

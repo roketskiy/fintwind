@@ -759,6 +759,9 @@ pub fn apply_migrations(connection: &Connection) -> io::Result<usize> {
             continue;
         }
         let transaction = connection.unchecked_transaction().map_err(to_io_error)?;
+        if *tag == "0009_big_starbolt" {
+            preserve_retired_scheduled_tasks(&transaction).map_err(to_io_error)?;
+        }
         transaction
             .execute_batch(sql)
             .map_err(|error| io::Error::other(format!("migration {tag} failed: {error}")))?;
@@ -772,6 +775,25 @@ pub fn apply_migrations(connection: &Connection) -> io::Result<usize> {
         applied += 1;
     }
     Ok(applied)
+}
+
+/// An earlier local release used this name for a different scheduler schema.
+/// Keep its rows and run-history foreign keys together; they cannot be decoded
+/// as the current scheduler's JSON records. The rename and new schema commit
+/// in the same migration transaction, including when an upgrade is retried.
+fn preserve_retired_scheduled_tasks(connection: &Connection) -> rusqlite::Result<()> {
+    let retired: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM migrations WHERE tag = '0009_true_lockheed')
+         AND EXISTS(SELECT 1 FROM pragma_table_info('scheduled_tasks') WHERE name = 'schedule_json')
+         AND NOT EXISTS(SELECT 1 FROM pragma_table_info('scheduled_tasks') WHERE name = 'revision')",
+        [],
+        |row| row.get(0),
+    )?;
+    if retired {
+        connection
+            .execute_batch("ALTER TABLE scheduled_tasks RENAME TO retired_scheduled_tasks;")?;
+    }
+    Ok(())
 }
 
 struct Storage {
@@ -894,7 +916,7 @@ impl StateStore {
         &self.path
     }
 
-    fn open(&self) -> io::Result<Connection> {
+    pub(crate) fn open(&self) -> io::Result<Connection> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }

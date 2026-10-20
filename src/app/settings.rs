@@ -1731,6 +1731,8 @@ impl Fintwind {
         });
         self.refresh_command_palette_localized_text(cx);
         self.refresh_file_search_localized_text(cx);
+        self.scheduled_tasks_view
+            .update(cx, |view, cx| view.refresh_localized_text(cx));
         for browser in self.right_panel_browsers.values() {
             browser.update(cx, |browser, cx| browser.refresh_localized_text(cx));
         }

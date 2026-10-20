@@ -223,6 +223,7 @@ const ICONS: &[(&str, &[u8])] = icons![
     "replace-all",
     "rewind",
     "rotate-cw",
+    "clock",
     "search",
     "settings",
     "slash",

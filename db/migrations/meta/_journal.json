@@ -64,6 +64,13 @@
       "when": 1792479004568,
       "tag": "0008_amused_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1792512572538,
+      "tag": "0009_big_starbolt",
+      "breakpoints": true
     }
   ]
 }

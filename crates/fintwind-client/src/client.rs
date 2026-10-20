@@ -79,6 +79,7 @@ struct ClientInner {
     sessions: Mutex<HashMap<(Uuid, Uuid), Sender<SequencedEvent>>>,
     pending_events: Mutex<HashMap<(Uuid, Uuid), VecDeque<SequencedEvent>>>,
     task_state_subscribers: Mutex<Vec<Sender<u64>>>,
+    scheduled_tasks_subscribers: Mutex<Vec<Sender<u64>>>,
     /// Single browser consumer. A later `subscribe_browser_requests` call
     /// replaces the previous receiver instead of fanning one request out to
     /// several consumers; requests already delivered are not replayed.
@@ -159,6 +160,7 @@ impl DaemonClient {
             sessions: Mutex::new(HashMap::new()),
             pending_events: Mutex::new(HashMap::new()),
             task_state_subscribers: Mutex::new(Vec::new()),
+            scheduled_tasks_subscribers: Mutex::new(Vec::new()),
             browser: Mutex::new(None),
             last_sequences: Mutex::new(last_sequences),
             disconnected: AtomicBool::new(false),
@@ -194,6 +196,12 @@ impl DaemonClient {
     pub fn subscribe_task_state(&self) -> Receiver<u64> {
         let (events, receiver) = unbounded();
         self.inner.task_state_subscribers.lock().push(events);
+        receiver
+    }
+
+    pub fn subscribe_scheduled_tasks(&self) -> Receiver<u64> {
+        let (events, receiver) = bounded(1);
+        self.inner.scheduled_tasks_subscribers.lock().push(events);
         receiver
     }
 
@@ -531,6 +539,17 @@ fn run_client(
                             .task_state_subscribers
                             .lock()
                             .retain(|subscriber| subscriber.send(revision).is_ok());
+                    }
+                    ServerMessage::ScheduledTasksChanged { revision } => {
+                        inner
+                            .scheduled_tasks_subscribers
+                            .lock()
+                            .retain(|subscriber| {
+                                !matches!(
+                                    subscriber.try_send(revision),
+                                    Err(crossbeam_channel::TrySendError::Disconnected(_))
+                                )
+                            });
                     }
                     ServerMessage::BrowserRequest { request } => {
                         // Bounded delivery: a GUI that is not draining, has

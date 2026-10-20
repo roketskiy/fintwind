@@ -135,8 +135,10 @@ impl Fintwind {
     /// applies, rather than disappearing.
     fn render_top_bar_reveal_button(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = Theme::current(cx);
-        let enabled = !matches!(self.mode, WorkspaceMode::Settings | WorkspaceMode::Usage)
-            && self.selected_workspace_path().is_some();
+        let enabled = !matches!(
+            self.mode,
+            WorkspaceMode::Settings | WorkspaceMode::Usage | WorkspaceMode::ScheduledTasks
+        ) && self.selected_workspace_path().is_some();
         let focus = cx.focus_handle();
         div()
             .id("top-bar-reveal-project")

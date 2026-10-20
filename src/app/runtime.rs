@@ -577,6 +577,9 @@ impl Fintwind {
             self.reveal_sidebar_session_project(selected, cx);
         }
         self.sync_browser_automation_host(cx);
+        if self.mode == WorkspaceMode::ScheduledTasks {
+            self.refresh_scheduled_task_catalog(cx);
+        }
     }
 
     pub(super) fn start_runtime_attachment(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
@@ -2878,15 +2881,13 @@ impl Fintwind {
             .find(|session| session.id == session_id)
             .is_some_and(|session| session.turns.last().is_some_and(|turn| turn.id == turn_id));
         if !owns_turn {
+            // The prepared turn was superseded — a scheduled admission opened a
+            // new turn on this session. The preparation is terminal whether or
+            // not the session itself still exists, so clear the barrier
+            // unconditionally; keeping it would swallow the admitted turn's
+            // streamed output until a later receipt happened to clear it.
             self.abandon_submission(session_id, turn_id, cx);
-            if !self
-                .state
-                .sessions
-                .iter()
-                .any(|session| session.id == session_id)
-            {
-                self.submission_preparations.remove(&session_id);
-            }
+            self.submission_preparations.remove(&session_id);
             if self.state.selected_session == Some(session_id) {
                 self.restore_composer_submission(submission, cx);
             }
@@ -3121,7 +3122,7 @@ impl Fintwind {
         // queues just because its own drain reported a change first.
         let detection_changed = self.drain_provider_detection_events();
         if self.drain_driver_events(cx)
-            | self.drain_provider_probe_events()
+            | self.drain_provider_probe_events(cx)
             | self.drain_provider_version_events()
             | detection_changed
             | self.drain_task_state_sync_events(cx)
@@ -3163,7 +3164,7 @@ impl Fintwind {
         }
     }
 
-    pub(super) fn drain_provider_probe_events(&mut self) -> bool {
+    pub(super) fn drain_provider_probe_events(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         while let Ok(result) = self.provider_probe_events.try_recv() {
             self.provider_model_discoveries_pending
@@ -3184,6 +3185,9 @@ impl Fintwind {
                 self.probes.push(result.probe);
             }
             changed = true;
+        }
+        if changed && self.mode == WorkspaceMode::ScheduledTasks {
+            self.refresh_scheduled_task_catalog(cx);
         }
         changed
     }
@@ -3241,6 +3245,7 @@ impl Fintwind {
                         | DriverEvent::SteerRejected { .. }
                         | DriverEvent::TurnFinished { .. }
                         | DriverEvent::TurnTranscriptReconciled { .. }
+                        | DriverEvent::ScheduledTurnAdmitted(_)
                         | DriverEvent::Error(_)
                         | DriverEvent::ProcessExited
                 );
@@ -3396,6 +3401,7 @@ impl Fintwind {
             | DriverEvent::AutoTitleUpdated(_)
             | DriverEvent::AvailableCommands(_)
             | DriverEvent::TurnStarted
+            | DriverEvent::ScheduledTurnAdmitted(_)
             | DriverEvent::FirstTokenMeasured { .. }
             | DriverEvent::SteerAccepted { .. }
             | DriverEvent::SteerRejected { .. }

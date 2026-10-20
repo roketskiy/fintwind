@@ -2,7 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock, Weak};
 
 use crate::{
     Backend, Command, EventSink, Request, ResponsePayload, WireDriverEvent, WorkspaceOperation,
@@ -22,9 +23,14 @@ use crate::model::{
     Project, ProviderResumeCursor, ProviderRetryAction, SessionStatus,
 };
 use crate::persistence::{ComposerDraftStore, PersistedState, StateStore};
+use crate::scheduled::{Occurrence, ScheduledStore};
+use crate::server::SystemChannel;
 use crate::settings::DaemonSettingsStore;
 use fintwind_protocol::provider_session::{ProviderSessionFork, ProviderSessionForkRequest};
-use fintwind_protocol::submission::SubmissionState;
+use fintwind_protocol::scheduled_task::{
+    DispatchOutcome, ScheduledTaskEdit, ScheduledTurnAdmission, TaskTarget,
+};
+use fintwind_protocol::submission::{SubmissionReceipt, SubmissionRecord, SubmissionState};
 
 pub struct FintwindBackend {
     browser_tools: Arc<crate::browser_tools::BrowserTools>,
@@ -44,10 +50,37 @@ pub struct FintwindBackend {
     usage_index: crate::usage_index::UsageIndex,
     checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
     default_cwd: std::path::PathBuf,
+    pub(crate) scheduled_store: Arc<ScheduledStore>,
+    pub(crate) scheduled_stop: Arc<AtomicBool>,
+    pub(crate) scheduled_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    pub(crate) scheduled_done: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    pub(crate) scheduled_cursor: AtomicUsize,
+    pub(crate) scheduled_owner: Uuid,
+    system_channel: Mutex<Option<SystemChannel>>,
+    scheduler_lock: Mutex<Option<std::fs::File>>,
+}
+
+pub(crate) struct ScheduledPreparation {
+    pub session_id: Uuid,
+    pub runtime_id: Uuid,
+    pub submission: SubmissionRecord,
+    pub admission: ScheduledTurnAdmission,
+}
+
+pub(crate) enum ScheduledAdmission {
+    Deferred,
+    Rejected(String),
+    Interrupted {
+        session_id: Uuid,
+        submission_id: Uuid,
+        reason: String,
+    },
+    Admitted(ScheduledPreparation),
 }
 
 impl FintwindBackend {
     pub fn new(settings: DaemonSettingsStore, task_store: StateStore) -> anyhow::Result<Self> {
+        let task_store = Arc::new(task_store);
         let mut task_state = task_store
             .load()
             .context("could not load fintwind task database")?;
@@ -77,7 +110,8 @@ impl FintwindBackend {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             terminals: Mutex::new(HashMap::new()),
             settings,
-            task_store: Arc::new(task_store),
+            scheduled_store: Arc::new(ScheduledStore::new(task_store.clone())),
+            task_store,
             task_state: Arc::new(Mutex::new(task_state)),
             removed_session_ids: Mutex::new(HashSet::new()),
             removed_project_ids: Mutex::new(HashSet::new()),
@@ -90,7 +124,495 @@ impl FintwindBackend {
             usage_index,
             checkpoint_capture_locks: Mutex::new(HashMap::new()),
             default_cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+            scheduled_stop: Arc::new(AtomicBool::new(false)),
+            scheduled_thread: Mutex::new(None),
+            scheduled_done: Mutex::new(None),
+            scheduled_cursor: AtomicUsize::new(0),
+            scheduled_owner: Uuid::new_v4(),
+            system_channel: Mutex::new(None),
+            scheduler_lock: Mutex::new(None),
         })
+    }
+
+    fn acquire_scheduler_lock(&self) -> anyhow::Result<std::fs::File> {
+        let path = self
+            .task_store
+            .path()
+            .with_file_name("scheduled-tasks.lock");
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = std::fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("could not open {}", path.display()))?;
+        match file.try_lock() {
+            Ok(()) => Ok(file),
+            Err(std::fs::TryLockError::WouldBlock) => bail!(
+                "another Fintwind daemon already runs scheduled tasks for this data directory"
+            ),
+            Err(std::fs::TryLockError::Error(error)) => {
+                Err(error).context("could not lock the scheduled task runner")
+            }
+        }
+    }
+
+    pub(crate) fn scheduled_channel(&self) -> Option<SystemChannel> {
+        self.system_channel.lock().clone()
+    }
+
+    pub(crate) fn scheduled_is_stopping(&self) -> bool {
+        self.scheduled_stop.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn scheduled_notify_tasks(&self) {
+        if let Some(channel) = self.scheduled_channel() {
+            channel.notify_scheduled_tasks();
+        }
+    }
+
+    pub(crate) fn scheduled_notify_catalog(&self) {
+        if let Some(channel) = self.scheduled_channel() {
+            channel.notify_catalog();
+        }
+    }
+
+    pub(crate) fn scheduled_preparation_is_live(&self, submission_id: Uuid) -> bool {
+        self.active_preparations
+            .lock()
+            .get(&submission_id)
+            .is_some_and(EventSink::source_is_connected)
+    }
+
+    pub(crate) fn scheduled_admit(
+        &self,
+        channel: &SystemChannel,
+        occurrence: &Occurrence,
+        owner: Weak<()>,
+    ) -> anyhow::Result<ScheduledAdmission> {
+        let draft = &occurrence.draft;
+        if let TaskTarget::NewSession {
+            workspace: crate::model::SessionWorkspace::NewWorktree { .. },
+            ..
+        } = &draft.target
+        {
+            return Ok(ScheduledAdmission::Rejected(
+                "Scheduled tasks require an existing workspace".into(),
+            ));
+        }
+        let now = crate::model::unix_time();
+        let (mut session, project, created) = match &draft.target {
+            TaskTarget::ExistingSession { session_id } => {
+                let target_session_id = session_id.to_owned();
+                let (mut session, project) = {
+                    let state = self.task_state.lock();
+                    let Some(session) = state
+                        .sessions
+                        .iter()
+                        .find(|session| session.id == target_session_id)
+                        .cloned()
+                    else {
+                        return Ok(ScheduledAdmission::Rejected(
+                            "The target session no longer exists".into(),
+                        ));
+                    };
+                    let project = state
+                        .projects
+                        .iter()
+                        .find(|project| project.id == session.project_id)
+                        .cloned();
+                    (session, project)
+                };
+                let Some(project) = project else {
+                    return Ok(ScheduledAdmission::Rejected(
+                        "The project for this task was removed".into(),
+                    ));
+                };
+                if !scheduled_target_is_idle(&session) {
+                    return Ok(ScheduledAdmission::Deferred);
+                }
+                self.task_store.hydrate(&mut session)?;
+                self.hydrate_submission_session(&mut session)?;
+                if !scheduled_target_is_idle(&session) {
+                    return Ok(ScheduledAdmission::Deferred);
+                }
+                (session, project, false)
+            }
+            TaskTarget::NewSession {
+                project_id,
+                launch,
+                workspace,
+            } => {
+                let project_id = project_id.to_owned();
+                let project = self
+                    .task_state
+                    .lock()
+                    .projects
+                    .iter()
+                    .find(|project| project.id == project_id)
+                    .cloned();
+                let Some(project) = project else {
+                    return Ok(ScheduledAdmission::Rejected(
+                        "The project for this task was removed".into(),
+                    ));
+                };
+                let mut session = AgentSession::new(project_id);
+                session.model = Some(launch.model.clone());
+                session.runtime_mode = launch.runtime_mode;
+                session.interaction_mode = launch.interaction_mode;
+                session.reasoning_effort = launch.reasoning_effort.clone();
+                session.service_tier = launch.service_tier.clone();
+                session.context_window = launch.context_window.clone();
+                session.agent_preset = launch.agent_preset.clone();
+                session.workspace = workspace.clone();
+                session.title = draft.title.trim().to_owned();
+                session.mermaid_prompt_version =
+                    Some(crate::model::MERMAID_PROMPT_VERSION.to_owned());
+                session.detail_loaded = true;
+                (session, project, true)
+            }
+        };
+        let runtime_id = self
+            .sessions
+            .lock()
+            .get(&session.id)
+            .map(|(runtime_id, _)| *runtime_id)
+            .unwrap_or_else(Uuid::new_v4);
+        let turn_id = Uuid::new_v4();
+        session.begin_turn_with_id(turn_id, draft.prompt.clone());
+        session.bind_active_prompt_transport(&draft.prompt);
+        session.status = SessionStatus::Connecting;
+        session.updated_at = now;
+        let submission =
+            SubmissionRecord::new(session.id, turn_id, draft.prompt.clone(), Vec::new());
+        if let Some(turn) = session.turns.last_mut() {
+            turn.submission = Some(submission.receipt.clone());
+        }
+        let admission = ScheduledTurnAdmission {
+            turn: session
+                .turns
+                .last()
+                .cloned()
+                .expect("begin_turn_with_id pushed a turn"),
+            message: session
+                .messages
+                .last()
+                .cloned()
+                .expect("begin_turn_with_id pushed a user message"),
+        };
+        let session_id = session.id;
+        self.scheduled_store.save_preparation(
+            occurrence.id,
+            session_id,
+            runtime_id,
+            submission.clone(),
+        )?;
+        let accepted = self.handle(
+            Request {
+                request_id: Uuid::new_v4(),
+                session_id,
+                runtime_id: Uuid::nil(),
+                command: Command::AcceptSubmission {
+                    project,
+                    session: Box::new(session),
+                    submission: Box::new(submission.clone()),
+                },
+            },
+            channel.event_sink(session_id, runtime_id, owner),
+        );
+        match accepted {
+            Ok(ResponsePayload::SubmissionSaved { receipt })
+                if receipt.state == SubmissionState::Preparing => {}
+            Ok(_) => {
+                return Ok(ScheduledAdmission::Interrupted {
+                    session_id,
+                    submission_id: submission.receipt.id,
+                    reason: "The ordinary admission path did not accept the input".into(),
+                });
+            }
+            Err(error) => {
+                return Ok(ScheduledAdmission::Interrupted {
+                    session_id,
+                    submission_id: submission.receipt.id,
+                    reason: format!("The target did not accept the input: {error:#}"),
+                });
+            }
+        }
+        if created {
+            channel.notify_catalog();
+        }
+        Ok(ScheduledAdmission::Admitted(ScheduledPreparation {
+            session_id,
+            runtime_id,
+            submission,
+            admission,
+        }))
+    }
+
+    fn scheduled_announce(
+        &self,
+        channel: &SystemChannel,
+        preparation: &ScheduledPreparation,
+        owner: Weak<()>,
+    ) {
+        let Ok(wire) = event_to_wire(DriverEvent::ScheduledTurnAdmitted(Box::new(
+            preparation.admission.clone(),
+        ))) else {
+            return;
+        };
+        let _ = channel
+            .event_sink(preparation.session_id, preparation.runtime_id, owner)
+            .send(wire);
+    }
+
+    pub(crate) fn scheduled_launch(
+        &self,
+        channel: &SystemChannel,
+        preparation: &ScheduledPreparation,
+        owner: Weak<()>,
+    ) -> anyhow::Result<()> {
+        let session_id = preparation.session_id;
+        let runtime_id = preparation.runtime_id;
+        if self.scheduled_is_stopping() {
+            bail!("the daemon is shutting down");
+        }
+        let (cwd, turn_count, options) = {
+            let state = self.task_state.lock();
+            let session = state
+                .sessions
+                .iter()
+                .find(|session| session.id == session_id)
+                .ok_or_else(|| anyhow!("the scheduled session disappeared during preparation"))?;
+            let project = state
+                .projects
+                .iter()
+                .find(|project| project.id == session.project_id)
+                .ok_or_else(|| anyhow!("the project for this task was removed"))?;
+            let cwd = session.workspace.path().unwrap_or(&project.path).to_owned();
+            let turn_count = session.turns.last().map_or(1, |turn| turn.turn_count);
+            let options = scheduled_start_options(session, cwd.clone())?;
+            (cwd, turn_count, options)
+        };
+        let _ = self.handle(
+            Request {
+                request_id: Uuid::new_v4(),
+                session_id,
+                runtime_id,
+                command: Command::Workspace {
+                    operation: WorkspaceOperation::CaptureTurnStart {
+                        cwd: cwd.clone(),
+                        session_id,
+                        turn_count,
+                    },
+                },
+            },
+            channel.event_sink(session_id, runtime_id, owner.clone()),
+        );
+        if self.scheduled_is_stopping() {
+            bail!("the daemon is shutting down");
+        }
+        if self.removed_session_ids.lock().contains(&session_id) {
+            bail!("the scheduled session was removed");
+        }
+        if self.sessions.lock().contains_key(&session_id) {
+            self.scheduled_announce(channel, preparation, owner);
+            return Ok(());
+        }
+        let binary = self.provider_binary()?;
+        channel.begin_runtime(session_id, runtime_id);
+        let started = self.handle(
+            Request {
+                request_id: Uuid::new_v4(),
+                session_id,
+                runtime_id,
+                command: Command::Start {
+                    options: crate::WireDriverStartOptions {
+                        binary,
+                        cwd,
+                        ..options
+                    },
+                },
+            },
+            channel.event_sink(session_id, runtime_id, owner.clone()),
+        );
+        let started = match started {
+            Ok(ResponsePayload::Started { .. }) => true,
+            Ok(_) => false,
+            Err(error) => {
+                channel.end_runtime(session_id, Some(runtime_id));
+                return Err(error);
+            }
+        };
+        if !started {
+            channel.end_runtime(session_id, Some(runtime_id));
+            bail!("the daemon did not start a provider runtime for the scheduled session");
+        }
+        if self.removed_session_ids.lock().contains(&session_id) {
+            let removed = {
+                let mut sessions = self.sessions.lock();
+                sessions
+                    .get(&session_id)
+                    .is_some_and(|(active, _)| *active == runtime_id)
+                    .then(|| sessions.remove(&session_id))
+                    .flatten()
+            };
+            drop(removed);
+            channel.end_runtime(session_id, Some(runtime_id));
+            bail!("the scheduled session was removed");
+        }
+        self.scheduled_announce(channel, preparation, owner);
+        Ok(())
+    }
+
+    pub(crate) fn scheduled_dispatch(
+        &self,
+        channel: &SystemChannel,
+        preparation: &ScheduledPreparation,
+        owner: Weak<()>,
+    ) -> DispatchOutcome {
+        let session_id = preparation.session_id;
+        let runtime_id = preparation.runtime_id;
+        let submission_id = preparation.submission.receipt.id;
+        let workspace = self
+            .task_state
+            .lock()
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .map(|session| session.workspace.clone())
+            .unwrap_or_default();
+        let response = self.handle(
+            Request {
+                request_id: Uuid::new_v4(),
+                session_id,
+                runtime_id,
+                command: Command::DispatchSubmission {
+                    submission_id,
+                    workspace,
+                },
+            },
+            channel.event_sink(session_id, runtime_id, owner.clone()),
+        );
+        let confirmed = matches!(&response, Ok(ResponsePayload::SubmissionSaved { .. }));
+        if response.is_err() {
+            // Accept ran and stored the preparation, so a failed dispatch must
+            // release it here. Otherwise the session keeps an unsettled receipt,
+            // every later tick defers, and the occurrence is already settled so
+            // nothing else ever revisits it. Abandon is a CAS from Preparing, so a
+            // receipt that already reached Dispatching is returned untouched.
+            self.scheduled_abandon(channel, preparation, owner);
+        }
+        let receipt = self
+            .task_store
+            .submission(submission_id)
+            .ok()
+            .flatten()
+            .map(|saved| saved.receipt)
+            .or_else(|| match response {
+                Ok(ResponsePayload::SubmissionSaved { receipt }) => Some(receipt),
+                _ => None,
+            })
+            .unwrap_or_else(|| preparation.submission.receipt.clone());
+        scheduled_outcome(session_id, submission_id, receipt, confirmed)
+    }
+
+    pub(crate) fn scheduled_abandon(
+        &self,
+        channel: &SystemChannel,
+        preparation: &ScheduledPreparation,
+        owner: Weak<()>,
+    ) {
+        let _ = self.handle(
+            Request {
+                request_id: Uuid::new_v4(),
+                session_id: preparation.session_id,
+                runtime_id: Uuid::nil(),
+                command: Command::AbandonSubmission {
+                    submission_id: preparation.submission.receipt.id,
+                },
+            },
+            channel.event_sink(preparation.session_id, preparation.runtime_id, owner),
+        );
+    }
+
+    pub(crate) fn scheduled_resolve_interrupted(
+        &self,
+        submission: &SubmissionRecord,
+    ) -> DispatchOutcome {
+        let session_id = submission.session_id;
+        let submission_id = submission.receipt.id;
+        {
+            let mut state = self.task_state.lock();
+            if let Some(session) = state
+                .sessions
+                .iter_mut()
+                .find(|session| session.id == session_id)
+            {
+                if let Err(error) = self.hydrate_submission_session(session) {
+                    eprintln!(
+                        "fintwind scheduled tasks: could not repair session {session_id}: {error:#}"
+                    );
+                }
+                state.mark_session_dirty(session_id);
+                if let Err(error) = self.task_store.save(&mut state) {
+                    eprintln!(
+                        "fintwind scheduled tasks: could not save session {session_id}: {error:#}"
+                    );
+                }
+            }
+        }
+        let receipt = self
+            .task_store
+            .submission(submission_id)
+            .ok()
+            .flatten()
+            .map(|saved| saved.receipt)
+            .unwrap_or_else(|| submission.receipt.clone());
+        scheduled_outcome(session_id, submission_id, receipt, false)
+    }
+
+    fn validate_scheduled_edit(&self, edit: &ScheduledTaskEdit) -> anyhow::Result<()> {
+        let draft = match edit {
+            ScheduledTaskEdit::Create { draft } => draft,
+            ScheduledTaskEdit::Update { draft, .. } => draft,
+        };
+        draft.validate().map_err(|reason| anyhow!("{reason}"))?;
+        match &draft.target {
+            TaskTarget::NewSession { project_id, .. } => {
+                let project_id = project_id.to_owned();
+                let project = self
+                    .task_state
+                    .lock()
+                    .projects
+                    .iter()
+                    .find(|project| project.id == project_id)
+                    .cloned();
+                let Some(project) = project else {
+                    bail!("the project for this task does not exist");
+                };
+                if !project.path.is_dir() {
+                    bail!("the project directory does not exist");
+                }
+            }
+            TaskTarget::ExistingSession { session_id } => {
+                let session_id = session_id.to_owned();
+                let session = self
+                    .task_state
+                    .lock()
+                    .sessions
+                    .iter()
+                    .find(|session| session.id == session_id)
+                    .cloned();
+                let Some(mut session) = session else {
+                    bail!("the target session does not exist");
+                };
+                self.task_store.hydrate(&mut session)?;
+            }
+        }
+        Ok(())
     }
 
     /// Recover admission facts only. No runtime is not proof of execution idle.
@@ -481,10 +1003,88 @@ fn migrate_projectless_state(
     Ok(())
 }
 
+fn scheduled_target_is_idle(session: &AgentSession) -> bool {
+    !session.status.is_busy()
+        && !fintwind_protocol::submission::has_unsettled_submissions(session)
+        && session.queued_messages.is_empty()
+}
+
+fn scheduled_start_options(
+    session: &AgentSession,
+    cwd: PathBuf,
+) -> anyhow::Result<crate::WireDriverStartOptions> {
+    Ok(crate::WireDriverStartOptions {
+        binary: PathBuf::new(),
+        cwd,
+        mode: encode_enum(session.runtime_mode)?,
+        interaction_mode: encode_enum(session.interaction_mode)?,
+        model: session.model.clone(),
+        reasoning_effort: session.reasoning_effort.clone(),
+        service_tier: session.service_tier.clone(),
+        context_window: session.context_window.clone(),
+        agent_preset: session.agent_preset.clone(),
+        provider_cursor: session
+            .provider_cursor
+            .clone()
+            .map(serde_json::to_value)
+            .transpose()?,
+        mermaid_prompt_version: session.mermaid_prompt_version.clone(),
+    })
+}
+
+fn scheduled_outcome(
+    session_id: Uuid,
+    submission_id: Uuid,
+    receipt: SubmissionReceipt,
+    confirmed: bool,
+) -> DispatchOutcome {
+    match receipt.state {
+        SubmissionState::Accepted => DispatchOutcome::Accepted {
+            session_id,
+            submission_id,
+        },
+        // A confirmed dispatch response means the driver accepted the submission
+        // into the normal session queue. It does not mean provider work finished.
+        SubmissionState::Dispatching if confirmed => DispatchOutcome::Accepted {
+            session_id,
+            submission_id,
+        },
+        SubmissionState::Dispatching | SubmissionState::Unknown => DispatchOutcome::Unconfirmed {
+            session_id,
+            submission_id,
+        },
+        SubmissionState::Preparing if !confirmed => DispatchOutcome::NotSent {
+            session_id: Some(session_id),
+            submission_id: Some(submission_id),
+            reason: "The provider did not receive the input".into(),
+        },
+        SubmissionState::Preparing => DispatchOutcome::Unconfirmed {
+            session_id,
+            submission_id,
+        },
+        SubmissionState::NotSent => DispatchOutcome::NotSent {
+            session_id: Some(session_id),
+            submission_id: Some(submission_id),
+            reason: "The provider did not receive the input".into(),
+        },
+        SubmissionState::Rejected => DispatchOutcome::Rejected {
+            reason: "The provider rejected the input".into(),
+        },
+    }
+}
+
 impl Backend for FintwindBackend {
     fn browser_tools(&self) -> Option<Arc<crate::browser_tools::BrowserTools>> {
         Some(self.browser_tools.clone())
     }
+
+    fn attach_system_channel(self: Arc<Self>, channel: SystemChannel) -> anyhow::Result<()> {
+        let lock = self.acquire_scheduler_lock()?;
+        *self.scheduler_lock.lock() = Some(lock);
+        *self.system_channel.lock() = Some(channel);
+        crate::scheduled::runner::begin(&self)
+    }
+
     fn handle(&self, request: Request, events: EventSink) -> anyhow::Result<ResponsePayload> {
         let session_id = request.session_id;
         let runtime_id = request.runtime_id;
@@ -1424,6 +2024,39 @@ impl Backend for FintwindBackend {
                 drop(removed);
                 Ok(ResponsePayload::Ack)
             }
+            Command::ListScheduledTasks => Ok(ResponsePayload::ScheduledTasks {
+                tasks: self.scheduled_store.list()?,
+            }),
+            Command::SaveScheduledTask { edit } => {
+                self.validate_scheduled_edit(&edit)?;
+                let task = self.scheduled_store.save(edit, crate::model::unix_time())?;
+                self.scheduled_notify_tasks();
+                Ok(ResponsePayload::ScheduledTaskSaved { task })
+            }
+            Command::DeleteScheduledTask {
+                id,
+                expected_revision,
+            } => {
+                self.scheduled_store.delete(id, expected_revision)?;
+                self.scheduled_notify_tasks();
+                Ok(ResponsePayload::Ack)
+            }
+            Command::RunScheduledTaskNow { id } => {
+                self.scheduled_store
+                    .get(id)?
+                    .ok_or_else(|| anyhow!("the scheduled task does not exist"))?;
+                self.scheduled_store.claim_manual(
+                    id,
+                    crate::model::unix_time(),
+                    self.scheduled_owner,
+                )?;
+                let task = self
+                    .scheduled_store
+                    .get(id)?
+                    .ok_or_else(|| anyhow!("the scheduled task does not exist"))?;
+                self.scheduled_notify_tasks();
+                Ok(ResponsePayload::ScheduledTaskSaved { task })
+            }
             Command::Start { options } => {
                 let previous = self.sessions.lock().remove(&session_id);
                 drop(previous);
@@ -1580,6 +2213,19 @@ impl Backend for FintwindBackend {
     }
 
     fn shutdown(&self) {
+        crate::scheduled::runner::stop(self);
+        if let Some(channel) = self.scheduled_channel() {
+            let active: Vec<(Uuid, Uuid)> = self
+                .sessions
+                .lock()
+                .iter()
+                .map(|(session_id, (runtime_id, _))| (*session_id, *runtime_id))
+                .collect();
+            for (session_id, runtime_id) in active {
+                channel.end_runtime(session_id, Some(runtime_id));
+            }
+        }
+        self.scheduler_lock.lock().take();
         let sessions = std::mem::take(&mut *self.sessions.lock());
         drop(sessions);
         let terminals = std::mem::take(&mut *self.terminals.lock());
@@ -2132,7 +2778,11 @@ fn handle_driver_command(
         | Command::CloseTerminal
         | Command::CloseSession
         | Command::BrowserList
-        | Command::BrowserInvoke { .. } => {
+        | Command::BrowserInvoke { .. }
+        | Command::ListScheduledTasks
+        | Command::SaveScheduledTask { .. }
+        | Command::DeleteScheduledTask { .. }
+        | Command::RunScheduledTaskNow { .. } => {
             bail!("daemon received a command in the wrong dispatch path")
         }
     }
@@ -2177,6 +2827,9 @@ fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             ("availableCommands", serde_json::to_value(commands)?)
         }
         DriverEvent::TurnStarted => ("turnStarted", Value::Null),
+        DriverEvent::ScheduledTurnAdmitted(admission) => {
+            ("scheduledTurnAdmitted", serde_json::to_value(admission)?)
+        }
         DriverEvent::FirstTokenMeasured { latency_ms } => {
             ("firstTokenMeasured", json!({ "latencyMs": latency_ms }))
         }
@@ -2330,6 +2983,9 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "autoTitleUpdated" => DriverEvent::AutoTitleUpdated(serde_json::from_value(payload)?),
         "availableCommands" => DriverEvent::AvailableCommands(serde_json::from_value(payload)?),
         "turnStarted" => DriverEvent::TurnStarted,
+        "scheduledTurnAdmitted" => {
+            DriverEvent::ScheduledTurnAdmitted(serde_json::from_value(payload)?)
+        }
         "firstTokenMeasured" => DriverEvent::FirstTokenMeasured {
             latency_ms: payload
                 .get("latencyMs")

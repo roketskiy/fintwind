@@ -20,7 +20,7 @@
 //! stable while a selection is dragged across it.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -44,6 +44,7 @@ use crate::theme::Theme;
 use crate::ui::menu::{ContextMenuHandle, context_menu};
 use crate::ui::tooltip::Tooltip;
 
+mod diagram_source;
 mod math_text;
 
 #[cfg(test)]
@@ -463,6 +464,10 @@ pub struct MarkdownView {
     /// outside the parsed/flattened caches so a three-second icon change never
     /// invalidates text shaping.
     copied_code_blocks: Rc<RefCell<HashMap<usize, u64>>>,
+    diagram_sources: RefCell<HashMap<usize, std::sync::Arc<super::diagram::Source>>>,
+    diagram_text: RefCell<HashMap<usize, Rc<diagram_source::SourceDocument>>>,
+    diagram_scroll: RefCell<HashMap<usize, Rc<diagram_source::SourceState>>>,
+    diagram_source_visible: Rc<RefCell<HashSet<usize>>>,
     streaming: Cell<bool>,
 }
 
@@ -483,6 +488,10 @@ impl MarkdownView {
             style: Cell::new(None),
             veil: RefCell::new(RowVeil::default()),
             copied_code_blocks: Rc::new(RefCell::new(HashMap::new())),
+            diagram_sources: RefCell::new(HashMap::new()),
+            diagram_text: RefCell::new(HashMap::new()),
+            diagram_scroll: RefCell::new(HashMap::new()),
+            diagram_source_visible: Rc::default(),
             streaming: Cell::new(false),
         }
     }
@@ -504,6 +513,17 @@ impl MarkdownView {
     pub(super) fn invalidate_rows_from(&mut self, row: usize) {
         let ordinal = block_ordinal_base(row);
         self.flats.get_mut().retain(|key, _| *key < ordinal);
+        self.diagram_sources
+            .get_mut()
+            .retain(|key, _| *key < ordinal);
+        self.diagram_text.get_mut().retain(|key, _| *key < ordinal);
+        self.diagram_source_visible
+            .borrow_mut()
+            .retain(|key| *key < ordinal);
+    }
+
+    pub(super) fn reset_source_scroll(&self) {
+        self.diagram_scroll.borrow_mut().clear();
     }
 
     /// Point the view at `text`; `mend` closes hanging streaming markers.
@@ -518,6 +538,14 @@ impl MarkdownView {
         }
         let changed = self.parser.text() != text;
         if changed {
+            if !text.starts_with(self.parser.text()) {
+                // A replacement can reuse ordinals for entirely different code.
+                self.flats.borrow_mut().clear();
+                self.diagram_sources.borrow_mut().clear();
+                self.diagram_text.borrow_mut().clear();
+                self.reset_source_scroll();
+                self.diagram_source_visible.borrow_mut().clear();
+            }
             self.parser.set_text(text);
         }
         // The mended display tail depends only on the source and the
@@ -540,6 +568,15 @@ impl MarkdownView {
                 self.flats
                     .borrow_mut()
                     .retain(|ordinal, _| *ordinal < boundary);
+                self.diagram_sources
+                    .borrow_mut()
+                    .retain(|ordinal, _| *ordinal < boundary);
+                self.diagram_text
+                    .borrow_mut()
+                    .retain(|ordinal, _| *ordinal < boundary);
+                self.diagram_source_visible
+                    .borrow_mut()
+                    .retain(|ordinal| *ordinal < boundary);
             }
         }
     }
@@ -554,6 +591,7 @@ impl MarkdownView {
         if self.style.get() != Some(current) {
             self.style.set(Some(current));
             self.flats.borrow_mut().clear();
+            self.diagram_text.borrow_mut().clear();
         }
     }
 
@@ -1723,6 +1761,40 @@ fn render_code_fragment(
         |(code, _, _)| SharedString::from(code),
     );
     let keyboard_copy_content = copy_content.clone();
+    let is_diagram_fence = super::diagram_fence(language, code) && first && last;
+    let is_diagram = is_diagram_fence && !ctx.cache.is_some_and(|view| view.streaming.get());
+    let diagram_theme = is_diagram.then(|| diagram_source::theme(ctx.palette));
+    let diagram_source = is_diagram.then(|| {
+        ctx.cache.map_or_else(
+            || std::sync::Arc::new(super::diagram::Source::new(code)),
+            |view| {
+                view.diagram_sources
+                    .borrow_mut()
+                    .entry(key.index)
+                    .or_insert_with(|| std::sync::Arc::new(super::diagram::Source::new(code)))
+                    .clone()
+            },
+        )
+    });
+    let show_source = ctx
+        .cache
+        .is_some_and(|view| view.diagram_source_visible.borrow().contains(&key.index));
+    let source_toggle = if is_diagram {
+        ctx.cache.map(|view| {
+            diagram_source::SourceToggle {
+                key: key.clone(),
+                visible: view.diagram_source_visible.clone(),
+                show_source,
+                palette: *ctx.palette,
+                source: diagram_source.as_ref().unwrap().clone(),
+                theme: diagram_theme.unwrap(),
+                font_scale: ctx.metrics.text_size / Metrics::BODY.text_size,
+            }
+            .into_any_element()
+        })
+    } else {
+        None
+    };
     let copy_feedback = ctx.cache.map(|view| view.copied_code_blocks.clone());
     let copied = copy_feedback
         .as_ref()
@@ -1774,6 +1846,76 @@ fn render_code_fragment(
             }
         });
 
+    let fallback = div()
+        .w_full()
+        .min_w_0()
+        .whitespace_normal()
+        .text_size(px(ctx.metrics.code_text_size))
+        .line_height(px(ctx.metrics.code_line_height))
+        .text_color(ctx.palette.secondary)
+        .child(text_element(&flat, key.clone(), ctx))
+        .into_any_element();
+    let fallback = if is_diagram_fence && code.len() > super::virtualized::ROW_BYTES {
+        let state = ctx.cache.map_or_else(
+            || Rc::new(diagram_source::SourceState::new()),
+            |view| {
+                view.diagram_scroll
+                    .borrow_mut()
+                    .entry(key.index)
+                    .or_insert_with(|| Rc::new(diagram_source::SourceState::new()))
+                    .clone()
+            },
+        );
+        let document = ctx.cache.map_or_else(
+            || {
+                Rc::new(diagram_source::SourceDocument::new(
+                    code,
+                    ctx.palette,
+                    state.clone(),
+                ))
+            },
+            |view| {
+                view.diagram_text
+                    .borrow_mut()
+                    .entry(key.index)
+                    .or_insert_with(|| {
+                        Rc::new(diagram_source::SourceDocument::new(
+                            code,
+                            ctx.palette,
+                            state.clone(),
+                        ))
+                    })
+                    .clone()
+            },
+        );
+        ctx.next_ordinal
+            .set(ctx.next_ordinal.get().max(key.index + 1 + document.len()));
+        diagram_source::SourceText {
+            document,
+            key: key.clone(),
+            selection: ctx.selection.clone(),
+            palette: *ctx.palette,
+            metrics: ctx.metrics,
+            streaming: ctx.cache.is_some_and(|view| view.streaming.get()),
+        }
+        .into_any_element()
+    } else {
+        fallback
+    };
+    let body = if !show_source
+        && !ctx.cache.is_some_and(|view| view.streaming.get())
+        && let Some(source) = diagram_source
+    {
+        super::diagram::element(
+            source,
+            diagram_theme.unwrap(),
+            ctx.metrics.text_size / Metrics::BODY.text_size,
+            fallback,
+        )
+    } else {
+        fallback
+    };
+
     div()
         .id(SharedString::from(format!(
             "code-block-{}-{}",
@@ -1813,6 +1955,7 @@ fn render_code_fragment(
                                 element.child(SharedString::from(label))
                             }),
                     )
+                    .children(source_toggle)
                     .child(copy_button),
             )
         })
@@ -1827,16 +1970,7 @@ fn render_code_fragment(
                 .px(px(10.0))
                 .when(first, |el| el.pt(px(8.0)))
                 .when(last, |el| el.pb(px(8.0)))
-                .child(
-                    div()
-                        .w_full()
-                        .min_w_0()
-                        .whitespace_normal()
-                        .text_size(px(ctx.metrics.code_text_size))
-                        .line_height(px(ctx.metrics.code_line_height))
-                        .text_color(ctx.palette.secondary)
-                        .child(text_element(&flat, key, ctx)),
-                ),
+                .child(body),
         )
         .into_any_element()
 }

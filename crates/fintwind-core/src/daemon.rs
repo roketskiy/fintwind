@@ -892,6 +892,7 @@ impl Backend for FintwindBackend {
                         .iter_mut()
                         .find(|existing| existing.id == session.id)
                     {
+                        let saved_mermaid_prompt_version = existing.mermaid_prompt_version.clone();
                         let preparing = existing.turns.iter().any(|turn| {
                             turn.submission
                                 .as_ref()
@@ -957,6 +958,9 @@ impl Backend for FintwindBackend {
                                 }
                             }
                             *existing = session;
+                            // The creation-time Mermaid instruction is frozen;
+                            // a client projection can never change it.
+                            existing.mermaid_prompt_version = saved_mermaid_prompt_version;
                             if fintwind_protocol::submission::has_unsettled_submissions(existing)
                                 && !existing.status.is_busy()
                             {
@@ -1279,8 +1283,11 @@ impl Backend for FintwindBackend {
                 attempt_id,
             } => {
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let poll =
-                    crate::driver::native::poll_integration_oauth(&server, &provider_id, &attempt_id)?;
+                let poll = crate::driver::native::poll_integration_oauth(
+                    &server,
+                    &provider_id,
+                    &attempt_id,
+                )?;
                 Ok(ResponsePayload::ProviderOAuthPolled { poll })
             }
             Command::CompleteProviderOAuth {
@@ -1306,7 +1313,11 @@ impl Backend for FintwindBackend {
                 attempt_id,
             } => {
                 let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                crate::driver::native::cancel_integration_oauth(&server, &provider_id, &attempt_id)?;
+                crate::driver::native::cancel_integration_oauth(
+                    &server,
+                    &provider_id,
+                    &attempt_id,
+                )?;
                 Ok(ResponsePayload::Ack)
             }
             Command::ProbeBuiltinProvider {
@@ -1431,6 +1442,7 @@ impl Backend for FintwindBackend {
                         .map(serde_json::from_value)
                         .transpose()
                         .context("daemon received an invalid provider cursor")?,
+                    mermaid_prompt_version: options.mermaid_prompt_version,
                     // The daemon keys runtimes by the task's own UUID, so the
                     // session metadata can record it without the wire
                     // carrying a field the UI would only copy through.
@@ -1604,6 +1616,9 @@ fn session_projection_precedes(
 }
 
 fn merge_stale_session_metadata(existing: &mut AgentSession, incoming: AgentSession) {
+    // `mermaid_prompt_version` is deliberately never merged: it is frozen when
+    // the session is created, so a stale projection that omits it (older
+    // client) or carries a newer global default cannot change it.
     if incoming.updated_at >= existing.updated_at {
         existing.title = incoming.title;
         existing.project_id = incoming.project_id;

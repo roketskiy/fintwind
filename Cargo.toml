@@ -66,6 +66,8 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-client = { path = "crates/fintwind-client" }
 fintwind-protocol = { path = "crates/fintwind-protocol" }
 pulldown-cmark = "0.13"
+# Native Mermaid compilation; pinned while Ondine's API is pre-release.
+ondine = { package = "compiler", git = "https://github.com/wevm/ondine", rev = "439fc64aefdb06e3451fac6c44266e5965ea7265" }
 # Native, offline math typesetting; all layout and raster work runs on workers.
 ratex-parser = "=0.1.14"
 ratex-layout = "=0.1.14"

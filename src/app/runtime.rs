@@ -2200,6 +2200,7 @@ impl Fintwind {
                 context_window,
                 agent_preset,
                 provider_cursor: session.provider_cursor.clone(),
+                mermaid_prompt_version: session.mermaid_prompt_version.clone(),
             },
             event_wake: self.event_wake_tx.clone(),
             daemon_client: self.daemon.client(),

@@ -201,6 +201,8 @@ pub struct DriverStartOptions {
     pub context_window: Option<String>,
     pub agent_preset: Option<String>,
     pub provider_cursor: Option<ProviderResumeCursor>,
+    /// Frozen at session creation. `None` means the Mermaid prompt is off.
+    pub mermaid_prompt_version: Option<String>,
     /// The app-side task (session) UUID this runtime serves. It rides the
     /// OpenCode session's `metadata` so a native session can be traced back
     /// to the task that created it, from this app or any other client.

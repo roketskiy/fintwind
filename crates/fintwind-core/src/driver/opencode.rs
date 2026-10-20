@@ -479,12 +479,31 @@ fn file_uri(path: &Path) -> anyhow::Result<String> {
 /// The metadata a session create and every prompt carry: the app's identity
 /// plus the task UUID that owns this conversation, so any client of the
 /// OpenCode server can trace a session — or a single prompt — back to the
-/// task that created it. `Session.Metadata` is a free-form object, and the
-/// server echoes it on `GET /api/session/{id}` (verified on 2.0.11 and
-/// 2.0.16; the field has been in the contract since 2.0.4).
-fn fintwind_task_metadata(task_id: Option<&str>) -> Option<Value> {
-    let task = task_id.map(str::trim).filter(|task| !task.is_empty())?;
-    Some(json!({ "source": "fintwind", "task": task }))
+/// task that created it. Session creates additionally freeze the Mermaid
+/// prompt version; prompts never carry it, because the instruction belongs to
+/// the conversation's creation, not to each turn. `Session.Metadata` is a
+/// free-form object, and the server echoes it on `GET /api/session/{id}`
+/// (verified on 2.0.11 and 2.0.16; the field has been in the contract since
+/// 2.0.4).
+fn fintwind_task_metadata(
+    task_id: Option<&str>,
+    mermaid_prompt_version: Option<&str>,
+) -> Option<Value> {
+    let task = task_id.map(str::trim).filter(|task| !task.is_empty());
+    let version = mermaid_prompt_version
+        .map(str::trim)
+        .filter(|version| !version.is_empty());
+    if task.is_none() && version.is_none() {
+        return None;
+    }
+    let mut metadata = json!({ "source": "fintwind" });
+    if let Some(task) = task {
+        metadata["task"] = json!(task);
+    }
+    if let Some(version) = version {
+        metadata["fintwindMermaidPrompt"] = json!(version);
+    }
+    Some(metadata)
 }
 
 /// How long a command-route submit may take. The endpoint expands the
@@ -551,7 +570,7 @@ fn prompt_bodies(
     task_id: Option<&str>,
 ) -> anyhow::Result<(Value, Value)> {
     let mut current = json!({"text": text, "delivery": "steer"});
-    if let Some(metadata) = fintwind_task_metadata(task_id) {
+    if let Some(metadata) = fintwind_task_metadata(task_id, None) {
         current["metadata"] = metadata;
     }
     let mut legacy = json!({"text": text});
@@ -698,6 +717,7 @@ impl OpenCodeDriver {
             context_window: _,
             agent_preset,
             provider_cursor,
+            mermaid_prompt_version,
             task_id,
         } = options;
         let resume_session_id = match provider_cursor {
@@ -739,7 +759,10 @@ impl OpenCodeDriver {
                 // plain location body instead (2.0.4+ accepts it — verified
                 // on 2.0.11 and 2.0.16).
                 let location_body = json!({ "location": { "directory": &location_directory } });
-                let body = match fintwind_task_metadata(task_id.as_deref()) {
+                let body = match fintwind_task_metadata(
+                    task_id.as_deref(),
+                    mermaid_prompt_version.as_deref(),
+                ) {
                     Some(metadata) => {
                         let mut body = location_body.clone();
                         body["metadata"] = metadata;
@@ -6730,6 +6753,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                mermaid_prompt_version: None,
                 task_id: Some(task_id.clone()),
             },
             events,
@@ -6846,6 +6870,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                mermaid_prompt_version: None,
                 task_id: None,
             },
             events,
@@ -6924,6 +6949,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                mermaid_prompt_version: None,
                 task_id: None,
             },
             events,
@@ -7012,6 +7038,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                mermaid_prompt_version: None,
                 task_id: None,
             },
             events,
@@ -7238,6 +7265,7 @@ mod tests {
                 agent_preset: None,
 
                 provider_cursor: None,
+                mermaid_prompt_version: None,
                 task_id: None,
             },
             events,
@@ -8764,6 +8792,7 @@ mod tests {
                 context_window: None,
                 agent_preset: None,
                 provider_cursor: None,
+                mermaid_prompt_version: None,
                 task_id: None,
             },
             events,

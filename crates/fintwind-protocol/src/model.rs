@@ -714,6 +714,9 @@ pub struct RuntimeEventCursor {
     pub sequence: u64,
 }
 
+/// Versioned, immutable Mermaid instruction selected for newly created sessions.
+pub const MERMAID_PROMPT_VERSION: &str = "v1";
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentSession {
     pub id: Uuid,
@@ -749,6 +752,10 @@ pub struct AgentSession {
     /// locks this value once conversation history exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_preset: Option<String>,
+    /// Immutable creation-time preference. Missing in old sessions means off.
+    /// Never refresh this field from the current global default on resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mermaid_prompt_version: Option<String>,
     pub status: SessionStatus,
     pub created_at: u64,
     /// Any mutation, including title edits and truncation. Use
@@ -849,6 +856,7 @@ impl AgentSession {
             service_tier: None,
             context_window: None,
             agent_preset: None,
+            mermaid_prompt_version: None,
             status: SessionStatus::Idle,
             created_at: now,
             updated_at: now,
@@ -892,6 +900,7 @@ impl AgentSession {
             service_tier: None,
             context_window: None,
             agent_preset: None,
+            mermaid_prompt_version: self.mermaid_prompt_version.clone(),
             status: self.status,
             created_at: self.created_at,
             updated_at: self.updated_at,

@@ -1537,6 +1537,7 @@ mod tests {
                         context_window: None,
                         agent_preset: None,
                         provider_cursor: None,
+                        mermaid_prompt_version: None,
                     },
                 },
             )
@@ -1602,6 +1603,7 @@ mod tests {
                         context_window: None,
                         agent_preset: None,
                         provider_cursor: None,
+                        mermaid_prompt_version: None,
                     },
                 },
             )
@@ -2110,6 +2112,7 @@ mod tests {
             context_window: None,
             agent_preset: None,
             provider_cursor: None,
+            mermaid_prompt_version: None,
         }
     }
 }

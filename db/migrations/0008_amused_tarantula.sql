@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `mermaid_prompt_version` text;

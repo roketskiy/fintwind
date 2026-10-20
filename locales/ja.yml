@@ -84,7 +84,7 @@ settings.general: 一般
 settings.appearance: 外観
 settings.providers: プロバイダー
 settings.usage: 使用状況
-settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン opencode shell powershell cmd bash シェル
+settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン opencode shell powershell cmd bash シェル mermaid diagram 図 可視化
 settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語 文字サイズ コード フォント 幅 会話 メッセージ
 settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
 settings.skills: スキル
@@ -174,6 +174,8 @@ settings.local_by_default: デフォルトでローカルに保存
 settings.local_by_default_description: プロジェクト、会話、設定はこのコンピューターに保存されます
 settings.browser_tools: ブラウザツール
 settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します
+settings.mermaid_visualization: Mermaid 可視化プロンプト
+settings.mermaid_visualization_description: 新しいセッションのみ
 settings.goal: 目標モード
 settings.goal_description: 有効にすると /goal でセッションの目標を設定でき、実行の一時停止と再開ができます
 settings.auto_compact: 自動圧縮
@@ -527,6 +529,8 @@ common.copy_message_title: メッセージをコピー
 common.copy_selection: 選択範囲をコピー
 common.copy_to_composer: 入力欄にコピー
 common.copy_code: コードをコピー
+common.show_source: ソースを表示
+common.show_diagram: 図を表示
 common.copy_expression: 数式をコピー
 quote.add_title: 参照を追加
 quote.add_file: ファイルを参照…

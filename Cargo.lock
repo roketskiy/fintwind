@@ -1166,6 +1166,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "compiler"
+version = "0.0.0"
+source = "git+https://github.com/wevm/ondine?rev=439fc64aefdb06e3451fac6c44266e5965ea7265#439fc64aefdb06e3451fac6c44266e5965ea7265"
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2168,6 +2173,7 @@ dependencies = [
  "anyhow",
  "base64",
  "chrono",
+ "compiler",
  "crossbeam-channel",
  "dirs 6.0.0",
  "ely-gpui-component",

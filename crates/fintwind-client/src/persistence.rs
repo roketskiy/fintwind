@@ -287,6 +287,10 @@ pub struct AppSettings {
     pub browser_tools_enabled: bool,
     #[serde(default)]
     pub goal_enabled: bool,
+    /// Creation-time default only. Legacy settings default to off; existing
+    /// sessions retain their frozen version independently of this preference.
+    #[serde(default)]
+    pub mermaid_visualization_enabled: bool,
     /// Client-side early auto compaction: compact once live context
     /// occupancy reaches the threshold below, for the foreground session
     /// and live subagents alike. On by default; the provider's own
@@ -314,6 +318,7 @@ impl Default for AppSettings {
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
             goal_enabled: false,
+            mermaid_visualization_enabled: false,
             auto_compact_enabled: true,
             auto_compact_threshold_tokens:
                 fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
@@ -398,6 +403,9 @@ pub struct PersistedState {
     pub browser_tools_enabled: bool,
     #[serde(default)]
     pub goal_enabled: bool,
+    /// Default for newly created sessions only; old sessions keep their version.
+    #[serde(default)]
+    pub mermaid_visualization_enabled: bool,
     /// Client-side early auto compaction switch. On by default.
     #[serde(default = "default_auto_compact_enabled")]
     pub auto_compact_enabled: bool,
@@ -469,6 +477,7 @@ impl PersistedState {
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
             goal_enabled: false,
+            mermaid_visualization_enabled: false,
             auto_compact_enabled: true,
             auto_compact_threshold_tokens:
                 fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
@@ -506,6 +515,9 @@ impl PersistedState {
             .clone_from(&self.last_reasoning_effort);
         session.service_tier.clone_from(&self.last_service_tier);
         session.context_window.clone_from(&self.last_context_window);
+        session.mermaid_prompt_version = self
+            .mermaid_visualization_enabled
+            .then(|| fintwind_protocol::model::MERMAID_PROMPT_VERSION.to_owned());
         session
     }
 
@@ -607,6 +619,7 @@ impl PersistedState {
             code_font_family: self.code_font_family.clone(),
             browser_tools_enabled: self.browser_tools_enabled,
             goal_enabled: self.goal_enabled,
+            mermaid_visualization_enabled: self.mermaid_visualization_enabled,
             auto_compact_enabled: self.auto_compact_enabled,
             auto_compact_threshold_tokens: self.auto_compact_threshold_tokens,
             network_proxy_url: self.network_proxy_url.clone(),
@@ -646,6 +659,7 @@ impl PersistedState {
         self.code_font_family = settings.code_font_family;
         self.browser_tools_enabled = settings.browser_tools_enabled;
         self.goal_enabled = settings.goal_enabled;
+        self.mermaid_visualization_enabled = settings.mermaid_visualization_enabled;
         self.auto_compact_enabled = settings.auto_compact_enabled;
         self.auto_compact_threshold_tokens = settings.auto_compact_threshold_tokens;
         self.network_proxy_url = settings.network_proxy_url;

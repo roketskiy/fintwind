@@ -16,7 +16,10 @@ type Composition = {
 };
 type Context = {
   storage: { get(key: string): Promise<unknown>; set(key: string, value: unknown): Promise<void> };
-  session: { hook(kind: "context", handler: (event: ContextEvent) => void): Promise<Registration> };
+  session: {
+    get(input: { sessionID: string }): Promise<unknown>;
+    hook(kind: "context", handler: (event: ContextEvent) => void | Promise<void>): Promise<Registration>;
+  };
   rpc: { register(definition: unknown, handlers: { get(input: unknown): Promise<Composition | null> }): Promise<Registration> };
 };
 
@@ -135,12 +138,49 @@ function composition(event: ContextEvent): Composition | undefined {
 const input = { type: "object", properties: { sessionID: { type: "string" } }, required: ["sessionID"] };
 const definition = { id: "fintwind.context", methods: { get: { input, output: {} } }, events: {} };
 
+// Immutable version: changing these bytes would invalidate enabled sessions'
+// prompt prefixes. Future wording needs a new version, retaining this one.
+const MERMAID_PROMPT_V1 = [
+  "Fintwind Mermaid visualization (v1).",
+  "Proactively include a concise fenced mermaid code block when explaining nontrivial architecture, relationships, data flow, or a multi-step process that benefits from visualization, even when a diagram was not explicitly requested. Do not explain such structure only in prose.",
+  "Prefer simple flowchart or sequenceDiagram syntax, short quoted labels, and the user's language. Fintwind renders Mermaid blocks directly in the conversation.",
+  "Use plain Mermaid without HTML labels, external images, clickable links, icons, custom CSS, or theme directives. Output the diagram source directly; no rendering tools or generated files are needed unless requested.",
+  "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
+].join("\n");
+
 export default {
   id: "fintwind.context",
   async setup(ctx: Context) {
     const latest = new Map<string, Composition>();
     const writes = new Map<string, Promise<void>>();
-    const hook = await ctx.session.hook("context", event => {
+    const instructions = new Map<string, Promise<string | undefined>>();
+    function instruction(sessionID: string): Promise<string | undefined> {
+      const saved = instructions.get(sessionID);
+      if (saved) return saved;
+      const pending = ctx.session.get({ sessionID }).then(raw => {
+        const info = object(raw);
+        if (!info) throw new Error("Session metadata is unavailable");
+        const version = object(info.metadata)?.fintwindMermaidPrompt;
+        if (version === undefined || version === null) return undefined;
+        if (version === "v1") return MERMAID_PROMPT_V1;
+        throw new Error("Unsupported Mermaid prompt version");
+      });
+      instructions.set(sessionID, pending);
+      // Fail the request, not silently its instructions. A later request can
+      // retry metadata resolution without ever dispatching a different prefix.
+      void pending.catch(() => {
+        if (instructions.get(sessionID) === pending) instructions.delete(sessionID);
+      });
+      return pending;
+    }
+    const hook = await ctx.session.hook("context", async event => {
+      const text = await instruction(event.sessionID);
+      if (text !== undefined) {
+        if (!Array.isArray(event.system)) throw new Error("Missing model system context");
+        if (!event.system.some(part => object(part)?.type === "text" && object(part)?.text === text)) {
+          event.system.push({ type: "text", text });
+        }
+      }
       try {
         const result = composition(event);
         if (!result || !event.sessionID) return;
@@ -172,6 +212,7 @@ export default {
       await Promise.all([...writes.values()].map(write => write.catch(() => {})));
       writes.clear();
       latest.clear();
+      instructions.clear();
     };
   },
 };

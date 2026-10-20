@@ -1170,6 +1170,7 @@ fn start_options(binary: &Path, cwd: &Path) -> WireDriverStartOptions {
         context_window: None,
         agent_preset: None,
         provider_cursor: None,
+        mermaid_prompt_version: None,
     }
 }
 

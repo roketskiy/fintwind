@@ -111,6 +111,9 @@ moment any scrollbar became visible.
   code are split into at most 2 KiB text fragments after parsing, and lists
   are flattened into decorated rows, so one giant block cannot defeat
   virtualization. Full code remains available to the copy action.
+  Mermaid images occupy one bounded media row; their pending/failed/source
+  text uses a height-limited nested native list with the same 2 KiB fragments.
+  It never lays out an entire 32 KiB source as one text element.
 - The reasoning list uses GPUI's native tail-follow mode. Scrolling up pauses
   following; updates remeasure changed rows without replacing existing scroll
   anchors. Completed thoughts keep the same virtualized view. Long reasoning

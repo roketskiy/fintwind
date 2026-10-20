@@ -50,6 +50,9 @@ pub fn event_to_wire(event: DriverEvent) -> anyhow::Result<WireDriverEvent> {
             ("availableCommands", serde_json::to_value(commands)?)
         }
         DriverEvent::TurnStarted => ("turnStarted", Value::Null),
+        DriverEvent::ScheduledTurnAdmitted(admission) => {
+            ("scheduledTurnAdmitted", serde_json::to_value(admission)?)
+        }
         DriverEvent::FirstTokenMeasured { latency_ms } => {
             ("firstTokenMeasured", json!({ "latencyMs": latency_ms }))
         }
@@ -192,6 +195,9 @@ pub fn event_from_wire(event: WireDriverEvent) -> anyhow::Result<DriverEvent> {
         "autoTitleUpdated" => DriverEvent::AutoTitleUpdated(serde_json::from_value(payload)?),
         "availableCommands" => DriverEvent::AvailableCommands(serde_json::from_value(payload)?),
         "turnStarted" => DriverEvent::TurnStarted,
+        "scheduledTurnAdmitted" => {
+            DriverEvent::ScheduledTurnAdmitted(serde_json::from_value(payload)?)
+        }
         "firstTokenMeasured" => DriverEvent::FirstTokenMeasured {
             latency_ms: payload
                 .get("latencyMs")

@@ -52,6 +52,7 @@ pub mod opencode_session;
 pub mod persistence;
 pub mod projectless;
 pub mod provider_quota;
+mod scheduled;
 mod session_generation;
 pub mod settings;
 mod skill_prompt;
@@ -72,6 +73,6 @@ pub use protocol::{
     RpcError, SequencedEvent, ServerMessage, WireDriverEvent, WireDriverStartOptions,
     WireSessionOptions,
 };
-pub use server::{Backend, EventSink, ServerOptions, serve};
+pub use server::{Backend, EventSink, ServerOptions, SystemChannel, serve};
 pub use settings::{DaemonSettings, DaemonSettingsStore};
 pub use workspace::{WorkspaceOperation, WorkspaceResult};

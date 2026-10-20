@@ -94,6 +94,8 @@ settings.mcp_servers: MCPサーバー
 settings.mcp_servers_keywords: MCP サーバー ツール stdio http sse ローカル リモート npx 環境変数 ヘッダー
 settings.mcp_market: MCPマーケット
 settings.mcp_market_keywords: MCP マーケット smithery ウェブ検索 学術 論文 コード インストール context7 github arxiv pubmed brave exa tavily
+settings.scheduled_tasks: スケジュールタスク
+settings.scheduled_tasks_keywords: スケジュール タスク 定時 定期 実行 cron 毎日 毎週 プロンプト
 daemon.reveal_token: トークンを表示
 daemon.hide_token: トークンを隠す
 settings.theme: テーマ
@@ -1582,3 +1584,99 @@ usage.used_context: 使用済みコンテキスト
 usage.available_context: 利用可能
 usage.unknown_context: 不明なコンテキスト
 usage.below_min_percent: <0.001%
+
+scheduled_tasks.new: 新規
+scheduled_tasks.empty: スケジュールされたタスクはありません
+scheduled_tasks.loading: 読み込み中…
+scheduled_tasks.name_label: 名前
+scheduled_tasks.name_placeholder: 例：毎週の依存関係更新
+scheduled_tasks.prompt_label: プロンプト
+scheduled_tasks.prompt_placeholder: セッションで実行する内容
+scheduled_tasks.schedule_label: スケジュール
+scheduled_tasks.mode_at_time: 時刻
+scheduled_tasks.mode_interval: 間隔
+scheduled_tasks.repeat_label: 曜日
+scheduled_tasks.interval_unit: 分
+scheduled_tasks.every_day: 毎日
+scheduled_tasks.at_time_summary: "%{days} %{time}"
+scheduled_tasks.every_minutes: "%{count} 分ごと"
+scheduled_tasks.every_hours: "%{count} 時間ごと"
+scheduled_tasks.weekday_mon: 月
+scheduled_tasks.weekday_tue: 火
+scheduled_tasks.weekday_wed: 水
+scheduled_tasks.weekday_thu: 木
+scheduled_tasks.weekday_fri: 金
+scheduled_tasks.weekday_sat: 土
+scheduled_tasks.weekday_sun: 日
+scheduled_tasks.target_label: 実行先
+scheduled_tasks.target_new: 新しいセッション
+scheduled_tasks.target_existing: 既存のセッション
+scheduled_tasks.project_label: プロジェクト
+scheduled_tasks.project_placeholder: プロジェクトを選択
+scheduled_tasks.session_label: セッション
+scheduled_tasks.session_placeholder: セッションを選択
+scheduled_tasks.session_search_placeholder: セッションを検索
+scheduled_tasks.session_none: 一致するセッションはありません
+scheduled_tasks.session_empty: セッションはまだありません
+scheduled_tasks.session_more: "他に %{count} 件。入力で絞り込めます。"
+scheduled_tasks.model_label: モデル
+scheduled_tasks.model_placeholder: provider/model
+scheduled_tasks.access_label: 権限
+scheduled_tasks.local_note: 新しいセッションはプロジェクトのディレクトリで実行されます。
+scheduled_tasks.save: 保存
+scheduled_tasks.cancel: キャンセル
+scheduled_tasks.enabled: 有効
+scheduled_tasks.run_now: 今すぐ実行
+scheduled_tasks.open_session: セッションを開く
+scheduled_tasks.delete: 削除
+scheduled_tasks.delete_confirm: 「%{title}」を削除しますか？
+scheduled_tasks.delete_body: 開始済みのセッションは残ります。
+scheduled_tasks.next_run: 次回 %{time}
+scheduled_tasks.next_run_none: 予定なし
+scheduled_tasks.status_never: 未実行
+scheduled_tasks.status_queued: 待機中
+scheduled_tasks.status_preparing: 準備中
+scheduled_tasks.status_dispatched: 送信済み
+scheduled_tasks.status_unconfirmed: 未確認
+scheduled_tasks.status_not_sent: 未送信
+scheduled_tasks.status_rejected: 拒否
+scheduled_tasks.status_missed: スキップ
+scheduled_tasks.lifecycle_note: Fintwind を終了すると予定実行は停止し、逃した実行は再実行されません。
+scheduled_tasks.retry: 再試行
+scheduled_tasks.error_title: 名前を入力してください
+scheduled_tasks.error_prompt: プロンプトを入力してください
+scheduled_tasks.error_time: HH:MM 形式で入力してください
+scheduled_tasks.error_weekdays: 曜日を1つ以上選択してください
+scheduled_tasks.error_interval: 間隔は1〜525600分です
+scheduled_tasks.error_project: プロジェクトを選択してください
+scheduled_tasks.error_session: セッションを選択してください
+scheduled_tasks.error_model: モデルを入力してください
+scheduled_tasks.error_disconnected: daemon に接続されていません
+scheduled_tasks.error_unexpected: daemon から予期しない応答が返りました
+scheduled_tasks.error_detail: "%{detail}"
+
+scheduled_tasks.all: "すべて"
+
+scheduled_tasks.active: "有効"
+
+scheduled_tasks.paused: "一時停止"
+
+scheduled_tasks.search: "タスクを検索"
+
+scheduled_tasks.edit: "タスクを編集"
+
+scheduled_tasks.actions: "タスクの操作"
+
+scheduled_tasks.no_matches: "一致するタスクがありません"
+
+scheduled_tasks.discard_title: "変更を破棄しますか？"
+
+scheduled_tasks.discard: "変更を破棄"
+
+scheduled_tasks.keep_editing: "編集を続ける"
+
+scheduled_tasks.project_missing: "利用できないプロジェクト"
+
+scheduled_tasks.session_missing: "利用できない会話"
+
+scheduled_tasks.last_run: "前回 %{time}"

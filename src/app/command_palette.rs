@@ -110,6 +110,7 @@ enum PaletteAction {
     ReloadOpenCodeServer,
     OpenSettings(SettingsPage),
     OpenUsage,
+    OpenScheduledTasks,
     SelectTask(Uuid),
 }
 
@@ -713,6 +714,15 @@ impl Fintwind {
             ));
         }
         commands.push(CommandPaletteItem::command(
+            PaletteSection::Commands,
+            tr!("settings.scheduled_tasks"),
+            "icons/rotate-cw.svg",
+            None,
+            PaletteAction::OpenScheduledTasks,
+            "scheduled tasks schedule recurring timer automation 定时任务",
+            next(),
+        ));
+        commands.push(CommandPaletteItem::command(
             PaletteSection::Settings,
             tr!("settings.usage"),
             "icons/chart-column.svg",
@@ -967,6 +977,7 @@ impl Fintwind {
                 self.open_settings_page(page, cx);
             }
             PaletteAction::OpenUsage => self.open_usage_page(cx),
+            PaletteAction::OpenScheduledTasks => self.open_scheduled_tasks(cx),
             PaletteAction::SelectTask(session_id) => {
                 self.mode = WorkspaceMode::Sessions;
                 self.select_session(session_id, cx);

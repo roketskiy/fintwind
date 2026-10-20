@@ -2993,17 +2993,17 @@ impl Fintwind {
         // overlay is open.
         let scene_overlay_enabled = window.enable_scene_overlay().is_ok();
         let entity = cx.new(|cx| {
-            let scheduled_tasks_view = cx.new(|cx| {
-                scheduled::ScheduledTasksView::new(daemon.clone(), window, cx)
-            });
-            cx.subscribe(&scheduled_tasks_view, |this: &mut Self, _, event, cx| {
-                match event {
+            let scheduled_tasks_view =
+                cx.new(|cx| scheduled::ScheduledTasksView::new(daemon.clone(), window, cx));
+            cx.subscribe(
+                &scheduled_tasks_view,
+                |this: &mut Self, _, event, cx| match event {
                     scheduled::ScheduledTasksEvent::OpenSession(session_id) => {
                         this.mode = WorkspaceMode::Sessions;
                         this.select_session(*session_id, cx);
                     }
-                }
-            })
+                },
+            )
             .detach();
             let settings_focus = cx.focus_handle();
             let onboarding_add_project_focus = cx.focus_handle();

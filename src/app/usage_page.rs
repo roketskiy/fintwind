@@ -697,50 +697,113 @@ impl Fintwind {
                 .saturating_add(totals.cache_read)
                 .saturating_add(totals.cache_write),
         );
-        let breakdown = format!(
-            "{} {} · {} {} · {} {}",
-            tr!("usage_page.tokens_input"),
-            format_tokens(totals.input),
-            tr!("usage_page.tokens_output"),
-            format_tokens(totals.output),
-            tr!("usage_page.tokens_cache"),
-            format_tokens(totals.cache_read.saturating_add(totals.cache_write)),
-        );
         div()
+            .w_full()
+            .p_5()
+            .rounded_xl()
+            .bg(theme.raised)
             .flex()
-            .items_stretch()
-            .gap(px(12.0))
-            .child(usage_kpi_card(
-                theme,
-                tr!("usage_page.kpi_total_tokens"),
-                format_tokens(totals.total()),
-                breakdown,
-            ))
-            .child(usage_kpi_card(
-                theme,
-                tr!("usage_page.kpi_generated_tokens"),
-                format_tokens(totals.generated()),
-                format!(
-                    "{} {}",
-                    tr!("usage_page.incl_reasoning"),
-                    format_tokens(totals.reasoning)
-                ),
-            ))
-            .child(usage_kpi_card(
-                theme,
-                tr!("usage_page.kpi_sessions"),
-                totals.sessions.to_string(),
-                usage_sessions_subtitle(totals),
-            ))
-            .child(usage_kpi_card(
-                theme,
-                tr!("usage_page.kpi_cache_hit"),
-                hit.map(format_percent).unwrap_or_else(|| "—".into()),
-                tr!(
-                    "usage_page.cache_read_tokens",
-                    tokens = format_tokens(totals.cache_read)
-                ),
-            ))
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .items_start()
+                    .gap_6()
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex_basis(ui_px(240.0))
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .text_size(ui_px(11.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("usage_page.kpi_total_tokens")),
+                            )
+                            .child(
+                                div()
+                                    .text_size(ui_px(40.0))
+                                    .line_height(ui_px(48.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(theme.accent)
+                                    .child(format_tokens(totals.total())),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .flex_basis(ui_px(440.0))
+                            .min_w_0()
+                            .flex()
+                            .flex_wrap()
+                            .gap_4()
+                            .child(usage_kpi_metric(
+                                theme,
+                                tr!("usage_page.kpi_generated_tokens"),
+                                format_tokens(totals.generated()),
+                                format!(
+                                    "{} {}",
+                                    tr!("usage_page.incl_reasoning"),
+                                    format_tokens(totals.reasoning)
+                                ),
+                            ))
+                            .child(usage_kpi_metric(
+                                theme,
+                                tr!("usage_page.kpi_sessions"),
+                                totals.sessions.to_string(),
+                                usage_sessions_subtitle(totals),
+                            ))
+                            .child(usage_kpi_metric(
+                                theme,
+                                tr!("usage_page.kpi_cache_hit"),
+                                hit.map(format_percent).unwrap_or_else(|| "—".into()),
+                                tr!(
+                                    "usage_page.cache_read_tokens",
+                                    tokens = format_tokens(totals.cache_read)
+                                ),
+                            )),
+                    ),
+            )
+            .child(
+                div()
+                    .pt_3()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .flex()
+                    .flex_wrap()
+                    .gap_x_6()
+                    .gap_y_2()
+                    .children(
+                        [
+                            (tr!("usage_page.tokens_input"), totals.input),
+                            (tr!("usage_page.tokens_output"), totals.output),
+                            (
+                                tr!("usage_page.tokens_cache"),
+                                totals.cache_read.saturating_add(totals.cache_write),
+                            ),
+                        ]
+                        .into_iter()
+                        .map(|(label, value)| {
+                            div()
+                                .flex()
+                                .items_baseline()
+                                .gap_2()
+                                .text_size(ui_px(11.0))
+                                .child(div().text_color(theme.text_tertiary).child(label))
+                                .child(
+                                    div()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(theme.text_secondary)
+                                        .child(format_tokens(value)),
+                                )
+                        }),
+                    ),
+            )
     }
 
     fn render_usage_heatmap(&self, views: &UsageViews, theme: &Theme) -> Div {
@@ -1662,7 +1725,7 @@ fn usage_sessions_subtitle(totals: &UsageTotals) -> String {
     )
 }
 
-fn usage_kpi_card(
+fn usage_kpi_metric(
     theme: &Theme,
     label: impl IntoElement,
     value: impl IntoElement,
@@ -1670,15 +1733,11 @@ fn usage_kpi_card(
 ) -> Div {
     div()
         .flex_1()
-        .min_w(px(0.0))
-        .px(px(14.0))
-        .py(px(12.0))
-        .rounded(px(13.0))
-        .bg(theme.raised)
-        .shadow_xs()
+        .flex_basis(ui_px(128.0))
+        .min_w_0()
         .flex()
         .flex_col()
-        .gap(px(4.0))
+        .gap_1()
         .child(
             div()
                 .text_size(ui_px(11.0))
@@ -1687,17 +1746,18 @@ fn usage_kpi_card(
         )
         .child(
             div()
-                .text_size(ui_px(19.0))
+                .text_size(ui_px(24.0))
+                .line_height(ui_px(32.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text)
-                .truncate()
                 .child(value),
         )
         .child(
             div()
                 .text_size(ui_px(10.0))
+                .line_height(ui_px(16.0))
                 .text_color(theme.text_tertiary)
-                .truncate()
+                .whitespace_normal()
                 .child(sub),
         )
 }

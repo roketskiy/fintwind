@@ -181,7 +181,7 @@ settings.mcp_servers_keywords:
 settings.mcp_market:
   en: MCP Marketplace
 settings.mcp_market_keywords:
-  en: mcp marketplace smithery web search academic code install context7 github arxiv pubmed brave exa tavily
+  en: mcp marketplace official web search academic code install context7 github arxiv pubmed brave exa tavily
 settings.scheduled_tasks:
   en: Scheduled tasks
 settings.scheduled_tasks_keywords:
@@ -853,20 +853,24 @@ mcp_market.open_servers:
   en: Open in MCP Servers
 mcp_market.open_smithery:
   en: Open on Smithery
+mcp_market.open_official:
+  en: Open official page
 mcp_market.source:
-  en: Smithery
+  en: Source
 mcp_market.auth_note:
-  en: This server may ask for an API key or sign-in after you add it. You can set headers or OAuth on the MCP Servers page.
+  en: This server may ask for an API key or sign-in after you add it. You can set the URL, headers, or OAuth on the MCP Servers page.
 mcp_market.empty:
   en: No matching servers
 mcp_market.subtitle:
-  en: A short list of useful web search, academic, and code MCP servers from Smithery.
+  en: A short list of useful web search, academic, and code MCP servers, most of them the vendor's own endpoint.
 mcp_market.count:
   en: "%{count} servers"
 mcp_market.filter_caption:
   en: "%{shown} of %{total}"
 mcp_market.added_toast:
   en: "Added %{name}"
+mcp_market.upgraded_toast:
+  en: "Moved %{name} to the official endpoint"
 mcp_market.removed_toast:
   en: "Removed %{name}"
 mcp_market.note:

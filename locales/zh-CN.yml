@@ -89,7 +89,7 @@ settings.search: 搜索设置
 settings.mcp_servers: MCP 服务器
 settings.mcp_servers_keywords: MCP 服务器 工具 stdio http sse 本地 远程 npx 环境变量 请求头
 settings.mcp_market: MCP 市场
-settings.mcp_market_keywords: MCP 市场 smithery 网页搜索 学术 论文 代码 安装 context7 github arxiv pubmed brave exa tavily
+settings.mcp_market_keywords: MCP 市场 官方 网页搜索 学术 论文 代码 安装 context7 github arxiv pubmed brave exa tavily
 settings.scheduled_tasks: 定时任务
 settings.scheduled_tasks_keywords: 定时 计划 任务 调度 schedule cron 重复 每天 每周 运行 提示词
 daemon.reveal_token: 显示令牌
@@ -429,13 +429,15 @@ mcp_market.available: 可添加
 mcp_market.remove: 移除
 mcp_market.open_servers: 在 MCP 服务器中打开
 mcp_market.open_smithery: 在 Smithery 打开
-mcp_market.source: Smithery
-mcp_market.auth_note: 添加后该服务器可能需要 API 密钥或登录。可在 MCP 服务器页设置请求头或 OAuth。
+mcp_market.open_official: 打开官方页面
+mcp_market.source: 来源
+mcp_market.auth_note: 添加后该服务器可能需要 API 密钥或登录。可在 MCP 服务器页设置 URL、请求头或 OAuth。
 mcp_market.empty: 没有匹配的服务器
-mcp_market.subtitle: 从 Smithery 精选的网页搜索、学术与代码 MCP 服务器。
+mcp_market.subtitle: 精选的网页搜索、学术与代码 MCP 服务器，多数为厂商自建端点。
 mcp_market.count: "%{count} 个服务器"
 mcp_market.filter_caption: "%{shown} / %{total}"
 mcp_market.added_toast: "已添加 %{name}"
+mcp_market.upgraded_toast: "已把 %{name} 换成官方端点"
 mcp_market.removed_toast: "已移除 %{name}"
 mcp_market.note: 添加会把远程 MCP 服务器写入 OpenCode 配置。OpenCode 会热加载该文件，下一个任务即可使用。
 mcp_market.desc.brave: 用 Brave 独立索引搜索网页、新闻、图片和视频。

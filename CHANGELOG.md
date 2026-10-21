@@ -18,6 +18,8 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- MCP 市场改用厂商官方端点：Brave、Exa、Tavily、Keenable、Parallel、Linkup、Bright Data、Consensus、Hugging Face、GitHub、DeepWiki、Microsoft Learn、Gread 现在都指向各自的官方 MCP 服务，详情页也给出官方项目页；PubMed、arXiv、Paper Search、Semantic Scholar、Wikipedia 因为数据提供方没有发布官方端点，仍使用托管版本，来源照旧标明
+- 重新添加市场里改过端点的条目时，已有的旧服务器就地换成官方端点，保留名称、请求头与 OAuth，不再多出一个重复条目
 - 新增「定时任务」工作区：侧边栏时钟图标与命令面板均可进入，可按固定时间（指定星期）或固定间隔创建任务，到点自动执行一段指令；任务可选择新建会话（指定项目、模型与权限）或复用某个已有会话，支持暂停、恢复、立即运行与删除，列表显示下次运行时间与上一次运行结果，并可直接打开派发出的会话；Fintwind 完全退出后不会执行定时运行，错过的运行也不会补跑
 - 对话记录中的 `mermaid` 代码块改为本地编译的原生图表：渲染内核为 [Ondine](https://github.com/wevm/ondine)（crate `ondine`，MIT，按修订号固定，许可文本见 `docs/licenses/ondine-MIT.txt`），纯 Rust 实现，不运行 JavaScript、不联网、不读取本地文件；支持流程图、时序图、类图、状态图、实体关系图、饼图与甘特图等类型，图表跟随主题、字号和高 DPI 缩放，窄于栏宽时居中，高图保留完整高度；可在「查看图表」与「查看源码」之间切换，源码视图支持键盘滚动与复制
 - 新增通用设置「Mermaid 可视化提示词」，默认关闭且只对新会话生效：开启后新会话携带图表书写指引，并要求模型在输出前用 `fintwind_mermaid_check` 按与渲染完全相同的编译器自检、修正报错；偏好随会话冻结保存，此后切换开关、重开会话、重启应用或派生会话都不改变已创建的会话

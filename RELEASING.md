@@ -70,13 +70,16 @@ packages unsigned binaries and SmartScreen will warn.
 
 ## Cutting a release
 
-1. On `main`, bump `version` in the root `Cargo.toml` (next unused Fintwind
-   number — currently the line is `0.2.x`).
+1. On `main`, set `version` in the root `Cargo.toml` to the intended unused
+   Fintwind version and update the root package entry in `Cargo.lock`.
 2. Rename `## [unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) to
    `## [<version>]` and add a fresh empty `## [unreleased]` above it.
-3. Commit, for example `chore: release <version>`.
+3. Update both README feature lists and state the OpenCode compatibility scope
+   in the release notes. Use recorded verification results; an installed CLI
+   version alone does not establish compatibility. Commit, for example
+   `chore: release <version>`.
 4. Tag that commit `v<version>` (`git tag v<version>`) and push the branch
-   plus the tag (`git push origin main --tags`), or run **Release** from
+   plus that exact tag (`git push --atomic origin main v<version>`), or run **Release** from
    Actions without a tag (it reads `Cargo.toml`).
 5. Review the draft GitHub release, then publish it.
 

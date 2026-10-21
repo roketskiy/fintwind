@@ -104,8 +104,20 @@ detection, data locations, and WebView2 details.
 - **Provider management.** Sign in and out of built-in providers, see at a
   glance which connections need re-login, and read the provider's own rejection
   reason (quota, key, or model) when a request fails.
-- **MCP management.** Browse the MCP marketplace, add remote servers, complete
-  OAuth login, and check connection status.
+- **Scheduled tasks.** Open the clock icon in the sidebar to run instructions
+  on selected weekdays at a set time, or at a fixed interval. Create a session
+  with a chosen project, model, and access mode, or reuse an existing session.
+  Pause, resume, run immediately, and inspect results. Tasks do not run while
+  Fintwind is fully closed, and missed runs are not replayed.
+- **MCP management.** Browse search, office, design, data, automation,
+  operations, and business categories. Add remote servers, complete OAuth
+  login, and check connection status. Listings use vendor-operated endpoints
+  where available.
+- **Native Mermaid diagrams.** Read flowcharts, sequence diagrams, class
+  diagrams, state diagrams, and more directly in conversations. Switch to
+  source or inspect compilation errors. Enable the Mermaid visualization
+  prompt in General settings to give new sessions diagram guidance and a
+  built-in validation tool. Existing sessions retain their original preference.
 - **Native math.** Typeset inline and display formulas, including `\(…\)` and
   `\[…\]`, with layout work performed on background workers.
 

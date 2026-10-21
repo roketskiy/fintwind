@@ -8,7 +8,7 @@
 use crate::ui::icon;
 use crate::ui::toggle_switch;
 use ely_gpui_component::{
-    buttons::{Button, ButtonVariant, SegmentedControl, ToggleButton, ToggleItem},
+    buttons::{Button, ButtonVariant, SegmentedControl},
     forms::{Choice, Combobox, Input, InputEvent, Select, TextInput, TimePicker},
     overlays::Dialog,
     primitives::IconName,

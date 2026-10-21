@@ -2195,6 +2195,7 @@ dependencies = [
  "raw-window-handle",
  "regex",
  "ropey",
+ "rusqlite",
  "rust-i18n",
  "serde",
  "serde_json",

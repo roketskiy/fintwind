@@ -2624,6 +2624,14 @@ impl Fintwind {
         // The app process's own fetches (update checks, the model catalog,
         // provider probes) ride the stored proxy from the first request on.
         fintwind_protocol::http::set_active_proxy(state.network_proxy_url());
+        let activity_database = store.path().to_path_buf();
+        cx.background_executor()
+            .spawn(async move {
+                if crate::activity::report_startup(&activity_database).is_err() {
+                    eprintln!("could not report application activity");
+                }
+            })
+            .detach();
         crate::theme::set_ui_text_scale(state.ui_text_scale);
         crate::theme::set_code_text_scale(state.code_text_scale);
         crate::theme::set_transcript_width(state.transcript_width);

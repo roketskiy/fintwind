@@ -77,6 +77,7 @@ ratex-layout = "=0.1.14"
 ratex-types = "=0.1.14"
 ratex-svg = { version = "=0.1.14", features = ["embed-fonts"] }
 regex = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
 rust-i18n = "4"
 # Verifies a downloaded update installer against the digest GitHub publishes
 # with the release asset, so an update never runs something the API did not

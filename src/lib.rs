@@ -28,6 +28,7 @@ macro_rules! tr_cow {
     };
 }
 
+mod activity;
 mod app;
 mod assets;
 mod browser;

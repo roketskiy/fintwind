@@ -244,10 +244,11 @@ const fn themed(light: &'static str, dark: &'static str) -> CompanyMark {
 /// Brand mark per model company, matched on distinctive model-id and display
 /// name tokens. Checked top to bottom; list the more specific family first
 /// when companies share a token. Companies without an embedded mark (Cohere,
-/// 01.AI, StepFun, …) are absent on purpose and fall through to the provider
+/// 01.AI, Baichuan, …) are absent on purpose and fall through to the provider
 /// letter glyph. Marks are the published brand assets from the Lobe Icons
-/// collection; companies that publish only a monochrome mark (OpenAI, xAI)
-/// and Kimi's ink-following K carry a theme variant.
+/// collection, except Reflection's own site mark. Marks whose ink has to
+/// follow the theme (OpenAI, xAI, Kimi, Reflection) carry a light and a dark
+/// file.
 const MODEL_COMPANY_MARKS: &[(&[&str], CompanyMark)] = &[
     (
         &["grok"],
@@ -283,7 +284,7 @@ const MODEL_COMPANY_MARKS: &[(&[&str], CompanyMark)] = &[
         &["glm", "chatglm", "zhipu", "zai"],
         mark("icons/companies/zai.svg"),
     ),
-    (&["llama", "meta"], mark("icons/companies/meta.svg")),
+    (&["llama", "meta", "muse"], mark("icons/companies/meta.svg")),
     (
         &[
             "mistral",
@@ -313,6 +314,21 @@ const MODEL_COMPANY_MARKS: &[(&[&str], CompanyMark)] = &[
     (
         &["sonar", "perplexity", "r1-1776"],
         mark("icons/companies/perplexity.svg"),
+    ),
+    (&["nemotron", "nvidia"], mark("icons/companies/nvidia.svg")),
+    (&["longcat", "meituan"], mark("icons/companies/longcat.svg")),
+    (&["stepfun", "step"], mark("icons/companies/stepfun.svg")),
+    (
+        &["hy3", "hy4", "hunyuan", "tencent"],
+        mark("icons/companies/tencent.svg"),
+    ),
+    (&["mimo", "xiaomi"], mark("icons/companies/xiaomi.svg")),
+    (
+        &["beam", "reflection"],
+        themed(
+            "icons/companies/reflection.svg",
+            "icons/companies/reflection-dark.svg",
+        ),
     ),
 ];
 
@@ -1004,6 +1020,66 @@ mod tests {
         assert_eq!(
             model_mark("moonshotai/kimi-k2", "Kimi K2", "Moonshot", true).asset(),
             "icons/companies/moonshot-dark.svg"
+        );
+        // Companies on the current OpenCode roster that carry their own mark.
+        assert_eq!(
+            model_mark(
+                "opencode/nemotron-3.5-super-vl-free",
+                "Nemotron 3.5 Super VL Free",
+                "Opencode",
+                false
+            )
+            .asset(),
+            "icons/companies/nvidia.svg"
+        );
+        assert_eq!(
+            model_mark(
+                "opencode-go/step-5-preview",
+                "Step 5 Preview",
+                "Opencode Go",
+                false
+            )
+            .asset(),
+            "icons/companies/stepfun.svg"
+        );
+        assert_eq!(
+            model_mark(
+                "opencode-go/hy4-preview",
+                "Hy4 preview",
+                "Opencode Go",
+                false
+            )
+            .asset(),
+            "icons/companies/tencent.svg"
+        );
+        assert_eq!(
+            model_mark(
+                "opencode-go/mimo-v2.6-flash",
+                "MiMo-V2.6-Flash",
+                "Opencode Go",
+                true
+            )
+            .asset(),
+            "icons/companies/xiaomi.svg"
+        );
+        assert_eq!(
+            model_mark(
+                "opencode/longcat-2.5-preview-free",
+                "LongCat 2.5 Preview Free",
+                "Opencode",
+                true
+            )
+            .asset(),
+            "icons/companies/longcat.svg"
+        );
+        assert_eq!(
+            model_mark("opencode/beam-free", "Beam Free", "Opencode", false).asset(),
+            "icons/companies/reflection.svg"
+        );
+        // Meta's Muse family rides the same company mark as Llama.
+        assert_eq!(
+            model_mark("meta/muse-wonder-1.0", "Muse Wonder", "Meta", false).asset(),
+            "icons/companies/meta.svg"
         );
         // The match runs on either the id, the display name, or both.
         assert_eq!(

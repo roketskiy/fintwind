@@ -49,6 +49,12 @@ impl ScheduledTasksView {
         }));
         self.refresh_picker_choices(cx);
         self.error = None;
+        if self
+            .editor()
+            .is_some_and(|editor| editor.draft.task_id.is_none())
+        {
+            window.focus(&self.dialog_focus, cx);
+        }
         let focus = self.title_input.read(cx).focus_handle(cx);
         window.on_next_frame(move |window, _| {
             window.on_next_frame(move |window, cx| window.focus(&focus, cx))
@@ -190,7 +196,11 @@ impl ScheduledTasksView {
         cx.notify();
     }
 
-    pub(super) fn render_dialog(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(super) fn render_dialog(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let state = self.dialog.as_ref()?;
         let weak = cx.entity().downgrade();
         let busy = self.busy();
@@ -221,6 +231,103 @@ impl ScheduledTasksView {
                     .text_size(ui_px(12.0))
                     .text_color(theme.danger_text)
                     .children(self.error.clone());
+                if editor.draft.task_id.is_none() {
+                    use ely_gpui_component::{
+                        primitives::{FocusScope, raise},
+                        theme::{ActiveTheme, Elevation, Radius, TextSize},
+                    };
+                    // Ely's Dialog and Backdrop always animate their entrance.
+                    // Keep the same card and focus scope, but show both layers immediately.
+                    let ely = cx.theme();
+                    let backdrop = ely.colors.backdrop;
+                    let margin = ely.titlebar_height().to_pixels(window.rem_size());
+                    let card = div()
+                        .id("scheduled-editor")
+                        .role(gpui::Role::Dialog)
+                        .aria_label(tr!("scheduled_tasks.new"))
+                        .flex()
+                        .flex_col()
+                        .gap_5()
+                        .w(ely.dialog_width())
+                        .max_w(window.viewport_size().width - px(32.0))
+                        .max_h(window.viewport_size().height - margin * 2.0)
+                        .p_6()
+                        .rounded(ely.radius(Radius::Xl))
+                        .bg(ely.colors.overlay)
+                        .border_1()
+                        .border_color(ely.colors.border)
+                        .shadow(ely.elevation(Elevation::Modal))
+                        .child(
+                            div()
+                                .text_size(ely.text_size(TextSize::Lg))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(ely.colors.fg)
+                                .child(tr!("scheduled_tasks.new")),
+                        )
+                        .child(
+                            div()
+                                .id("scheduled-editor-body")
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .child(self.render_form(&editor.draft, &theme, cx)),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .flex()
+                                .justify_end()
+                                .gap_2()
+                                .child(feedback)
+                                .child(cancel)
+                                .child(save),
+                        );
+                    return Some(
+                        raise(
+                            "scheduled-editor-static",
+                            gpui::anchored().position(gpui::Point::default()).child(
+                                div()
+                                    .relative()
+                                    .w(window.viewport_size().width)
+                                    .h(window.viewport_size().height)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        div()
+                                            .absolute()
+                                            .inset_0()
+                                            .bg(backdrop)
+                                            .occlude()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, window, cx| {
+                                                    this.request_close(window, cx);
+                                                }),
+                                            ),
+                                    )
+                                    .child(
+                                        div()
+                                            .relative()
+                                            .occlude()
+                                            .on_key_down(cx.listener(
+                                                |this, event: &KeyDownEvent, window, cx| {
+                                                    if event.keystroke.key == "escape" {
+                                                        cx.stop_propagation();
+                                                        this.request_close(window, cx);
+                                                    }
+                                                },
+                                            ))
+                                            .child(
+                                                FocusScope::new(&self.dialog_focus)
+                                                    .trap()
+                                                    .child(card),
+                                            ),
+                                    ),
+                            ),
+                        )
+                        .into_any_element(),
+                    );
+                }
                 Dialog::new(
                     "scheduled-editor",
                     tr!(if editor.draft.task_id.is_some() {
@@ -339,7 +446,6 @@ impl ScheduledTasksView {
         } else {
             "interval"
         })
-        .size(ControlSize::Sm)
         .disabled(busy)
         .on_change(cx.listener(|this, value: &SharedString, _, cx| {
             this.edit(
@@ -357,7 +463,6 @@ impl ScheduledTasksView {
         let value = if editor.schedule == ScheduleKind::AtTime {
             TimePicker::new("scheduled-time", editor.time.parse().ok())
                 .step(1)
-                .size(ControlSize::Sm)
                 .disabled(busy)
                 .on_change(move |time, _, cx| {
                     let _ = weak.update(cx, |this, cx| {
@@ -373,11 +478,7 @@ impl ScheduledTasksView {
                 .flex()
                 .items_center()
                 .gap_2()
-                .child(
-                    div()
-                        .w(px(90.0))
-                        .child(Input::new(&self.interval_input).size(ControlSize::Sm)),
-                )
+                .child(div().w(px(90.0)).child(Input::new(&self.interval_input)))
                 .child(
                     div()
                         .text_size(ui_px(12.0))
@@ -388,10 +489,12 @@ impl ScheduledTasksView {
         };
         let timing = div()
             .flex()
+            .flex_wrap()
             .items_center()
             .gap_3()
             .child(schedule)
             .child(value);
+        let mut timing = div().flex().flex_col().gap_3().child(timing);
         let mut form = div()
             .flex()
             .flex_col()
@@ -403,25 +506,29 @@ impl ScheduledTasksView {
             .child(field(
                 tr!("scheduled_tasks.prompt_label"),
                 Input::new(&self.prompt_input),
-            ))
-            .child(field(tr!("scheduled_tasks.schedule_label"), timing));
+            ));
         if editor.schedule == ScheduleKind::AtTime {
-            form = form.child(div().flex().items_center().gap_1().children(
+            timing = timing.child(div().flex().w_full().items_center().gap_2().children(
                 WEEKDAY_ORDER.iter().map(|&(bit, key)| {
                     let selected = editor.weekdays & (1 << bit) != 0;
                     let weak = cx.entity().downgrade();
-                    ToggleButton::new(
+                    let button = Button::new(
                         SharedString::from(format!("scheduled-weekday-{bit}")),
-                        ToggleItem::new(bit.to_string()).label(tr!(key)),
-                        selected,
+                        tr!(key),
                     )
+                    .variant(if selected {
+                        ButtonVariant::Primary
+                    } else {
+                        ButtonVariant::Ghost
+                    })
+                    .full_width()
                     .size(ControlSize::Sm)
                     .disabled(busy)
-                    .on_toggle(move |enabled, _, cx| {
+                    .on_click(move |_, _, cx| {
                         let _ = weak.update(cx, |this, cx| {
                             this.edit(
                                 |draft| {
-                                    if enabled {
+                                    if !selected {
                                         draft.weekdays |= 1 << bit;
                                     } else {
                                         draft.weekdays &= !(1 << bit);
@@ -430,10 +537,12 @@ impl ScheduledTasksView {
                                 cx,
                             )
                         });
-                    })
+                    });
+                    div().flex_1().min_w_0().child(button)
                 }),
             ));
         }
+        form = form.child(field(tr!("scheduled_tasks.schedule_label"), timing));
         let target = Select::new(
             "scheduled-target-kind",
             [
@@ -446,7 +555,6 @@ impl ScheduledTasksView {
         } else {
             "existing"
         })
-        .size(ControlSize::Sm)
         .disabled(busy)
         .on_change(cx.listener(|this, value: &SharedString, _, cx| {
             this.edit(
@@ -460,7 +568,7 @@ impl ScheduledTasksView {
                 cx,
             )
         }));
-        form = form.child(field(tr!("scheduled_tasks.target_label"), target));
+        let target = field(tr!("scheduled_tasks.target_label"), target);
         if editor.target == TargetKind::NewSession {
             let project = Select::new(
                 "scheduled-project",
@@ -534,9 +642,14 @@ impl ScheduledTasksView {
                 }
             }));
             form = form
-                .child(field(tr!("scheduled_tasks.project_label"), project))
-                .child(field(tr!("scheduled_tasks.model_label"), model))
-                .child(field(tr!("scheduled_tasks.access_label"), access));
+                .child(field_pair(
+                    target,
+                    field(tr!("scheduled_tasks.project_label"), project),
+                ))
+                .child(field_pair(
+                    field(tr!("scheduled_tasks.model_label"), model),
+                    field(tr!("scheduled_tasks.access_label"), access),
+                ));
         } else {
             let session = Combobox::new(
                 "scheduled-session",
@@ -554,7 +667,9 @@ impl ScheduledTasksView {
                     this.edit(|draft| draft.session_id = Some(id), cx);
                 }
             }));
-            form = form.child(field(tr!("scheduled_tasks.session_label"), session));
+            form = form
+                .child(target)
+                .child(field(tr!("scheduled_tasks.session_label"), session));
         }
         let weak = cx.entity().downgrade();
         form.child(
@@ -572,6 +687,7 @@ impl ScheduledTasksView {
 
 fn field(label: String, control: impl IntoElement) -> Div {
     div()
+        .min_w_0()
         .flex()
         .flex_col()
         .gap_2()
@@ -582,4 +698,13 @@ fn field(label: String, control: impl IntoElement) -> Div {
                 .child(label),
         )
         .child(control)
+}
+
+fn field_pair(first: Div, second: Div) -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .gap_4()
+        .child(first.flex_1().min_w(px(180.0)))
+        .child(second.flex_1().min_w(px(180.0)))
 }

@@ -89,7 +89,7 @@ settings.search: 搜索设置
 settings.mcp_servers: MCP 服务器
 settings.mcp_servers_keywords: MCP 服务器 工具 stdio http sse 本地 远程 npx 环境变量 请求头
 settings.mcp_market: MCP 市场
-settings.mcp_market_keywords: MCP 市场 smithery 网页搜索 学术 论文 代码 安装 context7 github arxiv pubmed brave exa tavily
+settings.mcp_market_keywords: MCP 市场 官方 网页搜索 学术 论文 代码 安装 办公 设计 数据 自动化 运维 商务 notion airtable linear figma canva stripe sentry vercel supabase context7 github arxiv pubmed brave exa tavily
 settings.scheduled_tasks: 定时任务
 settings.scheduled_tasks_keywords: 定时 计划 任务 调度 schedule cron 重复 每天 每周 运行 提示词
 daemon.reveal_token: 显示令牌
@@ -423,19 +423,27 @@ mcp_market.filter_all: 全部
 mcp_market.filter_web: 网页搜索
 mcp_market.filter_academic: 学术
 mcp_market.filter_code: 代码
+mcp_market.filter_office: 办公
+mcp_market.filter_design: 设计
+mcp_market.filter_data: 数据
+mcp_market.filter_automation: 自动化
+mcp_market.filter_devops: 运维
+mcp_market.filter_business: 商务
 mcp_market.install: 添加
 mcp_market.installed: 已添加
 mcp_market.available: 可添加
 mcp_market.remove: 移除
 mcp_market.open_servers: 在 MCP 服务器中打开
 mcp_market.open_smithery: 在 Smithery 打开
-mcp_market.source: Smithery
-mcp_market.auth_note: 添加后该服务器可能需要 API 密钥或登录。可在 MCP 服务器页设置请求头或 OAuth。
+mcp_market.open_official: 打开官方页面
+mcp_market.source: 来源
+mcp_market.auth_note: 添加后该服务器可能需要 API 密钥或登录。可在 MCP 服务器页设置 URL、请求头或 OAuth。
 mcp_market.empty: 没有匹配的服务器
-mcp_market.subtitle: 从 Smithery 精选的网页搜索、学术与代码 MCP 服务器。
+mcp_market.subtitle: 精选的网页搜索、学术与代码 MCP 服务器，多数为厂商自建端点。
 mcp_market.count: "%{count} 个服务器"
 mcp_market.filter_caption: "%{shown} / %{total}"
 mcp_market.added_toast: "已添加 %{name}"
+mcp_market.upgraded_toast: "已把 %{name} 换成官方端点"
 mcp_market.removed_toast: "已移除 %{name}"
 mcp_market.note: 添加会把远程 MCP 服务器写入 OpenCode 配置。OpenCode 会热加载该文件，下一个任务即可使用。
 mcp_market.desc.brave: 用 Brave 独立索引搜索网页、新闻、图片和视频。
@@ -458,6 +466,20 @@ mcp_market.desc.deepwiki: 按主题浏览 GitHub 仓库文档，并就项目提�
 mcp_market.desc.grep: 在公开 GitHub 代码中搜索语法、API 和生产用法。
 mcp_market.desc.microsoft_learn: Microsoft 官方文档，覆盖 Azure、.NET 等相关产品。
 mcp_market.desc.gread: 读取公开 GitHub 仓库源码，若有文档仓库也会一并提供。
+mcp_market.desc.notion: 读写 Notion 页面与数据库，团队知识和项目记录都在这里。
+mcp_market.desc.zoom_docs: 创建与读取 Zoom 文档和会议笔记。
+mcp_market.desc.atlassian: 处理 Jira 工单、Confluence 页面与 Loom 录像。
+mcp_market.desc.linear: 管理 Linear 的缺陷、迭代与项目。
+mcp_market.desc.monday: 读写 monday.com 看板、条目与状态更新。
+mcp_market.desc.figma: 读取 Figma 设计稿的图层、样式与变量。
+mcp_market.desc.canva: 用 Canva 生成、检索与导出设计稿。
+mcp_market.desc.airtable: 读写 Airtable 表与记录，像用表格一样操作数据库。
+mcp_market.desc.supabase: 查询 Supabase 的 Postgres、执行迁移、部署 Edge Function。
+mcp_market.desc.zapier: 通过 Zapier 调用九千多个应用的动作。
+mcp_market.desc.sentry: 检索 Sentry 报错、分析性能、排查问题。
+mcp_market.desc.vercel: 管理 Vercel 项目与部署，查看部署日志与 Web 分析。
+mcp_market.desc.stripe: 读写 Stripe 客户、订阅、账单与退款。
+mcp_market.desc.zoominfo: 查询公司与联系人情报，补全线索。
 common.settings: 设置
 common.copy: 复制
 common.remove: 移除
@@ -1122,6 +1144,8 @@ file_picker.typed_file: "%{type} 文件"
 source_control.title: 审阅
 source_control.loading: 正在读取 Git 状态…
 source_control.refresh: 刷新
+source_control.repository_actions: 仓库操作
+source_control.group_actions: 未暂存更改操作
 source_control.follow_session: 跟随会话
 source_control.staged: 已暂存 %{count}
 source_control.unstaged: 未暂存 %{count}

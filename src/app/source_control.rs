@@ -1,4 +1,5 @@
 use crate::theme::{code_px, ui_px};
+use crate::ui::ActivationExt;
 
 use gpui::{Context, Div, IntoElement, Window, div, prelude::*, px};
 
@@ -771,7 +772,7 @@ impl Fintwind {
         let row_count = rows.len();
         *self.source_control_rows.borrow_mut() = rows;
         self.source_control_list_state
-            .reset_with_uniform_height(row_count, px(28.0));
+            .reset_with_uniform_height(row_count, ui_px(46.0));
     }
 
     /// Opens a file from one of the second column's groups. Clicking a file
@@ -886,8 +887,8 @@ impl Fintwind {
         let ready = writable && self.source_control_busy.is_none();
         div()
             .flex_none()
-            .px(px(10.0))
-            .py(px(8.0))
+            .px(px(12.0))
+            .py(px(10.0))
             .border_t_1()
             .border_color(theme.sidebar_border)
             .flex()
@@ -905,16 +906,16 @@ impl Fintwind {
                     .gap(px(5.0))
                     .text_size(ui_px(11.5))
                     .font_weight(FontWeight::MEDIUM)
+                    .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
                     .when(ready, |button| {
                         button
                             .bg(theme.inverse)
                             .text_color(theme.on_inverse)
                             .cursor_default()
                             .hover(|button| button.opacity(0.9))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                cx.stop_propagation();
+                            .on_activation(cx, |this, _, cx| {
                                 this.open_source_control_commit_dialog(cx);
-                            }))
+                            })
                     })
                     .when(!ready, |button| {
                         button.bg(theme.overlay_strong).text_color(theme.text_ghost)
@@ -946,9 +947,8 @@ impl Fintwind {
             .flex_none()
             .flex()
             .flex_col()
-            .gap(px(6.0))
-            .border_b_1()
-            .border_color(theme.sidebar_border)
+            .gap(px(4.0))
+            .child(self.render_source_control_workspace_menu(cx))
             // Loading, error, and "not a repository" states keep the block
             // honest instead of showing a stale branch over a dead path.
             .when_some(self.source_control_status_error.clone(), |column, error| {
@@ -970,12 +970,9 @@ impl Fintwind {
             .when(status.is_some(), |column| {
                 column.child(self.render_source_control_branch_row(branch_label, cx))
             })
-            .child(self.render_source_control_workspace_menu(cx))
     }
 
-    /// The branch row: the branch menu (list + create) beside the three
-    /// remote actions. Disabled while a history snapshot is on screen or a
-    /// write is in flight.
+    /// Branch selection and refresh stay visible; remote operations live in the menu.
     fn render_source_control_branch_row(
         &self,
         branch_label: String,
@@ -987,8 +984,12 @@ impl Fintwind {
             .flex()
             .items_center()
             .gap(px(4.0))
-            .child(self.render_source_control_branch_menu(branch_label, enabled, cx))
-            .child(div().flex_1())
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(self.render_source_control_branch_menu(branch_label, enabled, cx)),
+            )
             .child(self.render_source_control_action_button(
                 "source-control-refresh",
                 "icons/rotate-cw.svg",
@@ -1000,22 +1001,58 @@ impl Fintwind {
                 },
                 cx,
             ))
-            .child(self.render_source_control_action_button(
-                "source-control-pull",
-                "icons/arrow-down.svg",
-                tr!("source_control.pull"),
-                enabled,
-                Self::pull_source_control,
-                cx,
-            ))
-            .child(self.render_source_control_action_button(
-                "source-control-push",
-                "icons/arrow-up.svg",
-                tr!("source_control.push"),
-                enabled,
-                Self::push_source_control,
-                cx,
-            ))
+            .child(self.render_source_control_repository_menu(enabled, cx))
+    }
+
+    fn render_source_control_repository_menu(
+        &self,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let theme = Theme::current(cx);
+        let handle = self.menu_handle("source-control-repository-actions", cx);
+        let weak = cx.entity().downgrade();
+        dropdown_menu(
+            MenuChip::new("source-control-repository-actions")
+                .icon("icons/ellipsis.svg", theme.text_tertiary)
+                .icon_only(true)
+                .height(px(26.0))
+                .tooltip(tr!("source_control.repository_actions"))
+                .selected(handle.is_open()),
+            "source-control-repository-actions-menu",
+            &handle,
+            MenuAlign::BelowRight,
+            move |_| {
+                let actions: [(_, _, fn(&mut Self, &mut Context<Self>)); 3] = [
+                    (
+                        tr!("source_control.fetch"),
+                        "icons/download.svg",
+                        Self::fetch_source_control,
+                    ),
+                    (
+                        tr!("source_control.pull"),
+                        "icons/arrow-down.svg",
+                        Self::pull_source_control,
+                    ),
+                    (
+                        tr!("source_control.push"),
+                        "icons/arrow-up.svg",
+                        Self::push_source_control,
+                    ),
+                ];
+                actions
+                    .into_iter()
+                    .map(|(label, icon, action)| {
+                        let weak = weak.clone();
+                        MenuItem::new(label, move |_, cx| {
+                            let _ = weak.update(cx, |this, cx| action(this, cx));
+                        })
+                        .icon(icon)
+                        .disabled(!enabled)
+                    })
+                    .collect()
+            },
+        )
     }
 
     /// One small icon button of the branch row. `action` is the plain
@@ -1033,7 +1070,7 @@ impl Fintwind {
         div()
             .id(id)
             .tab_index(0)
-            .size(px(22.0))
+            .size(px(26.0))
             .rounded(px(5.0))
             .flex_none()
             .flex()
@@ -1044,12 +1081,12 @@ impl Fintwind {
                     .cursor_default()
                     .hover(|button| button.bg(theme.overlay))
                     .active(|button| button.bg(theme.overlay_strong))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
+                    .on_activation(cx, move |this, _, cx| {
                         action(this, cx);
-                    }))
+                    })
             })
             .when(!enabled, |button| button.opacity(0.4))
+            .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
             .tooltip(Tooltip::text(label))
             .child(icon(path, 12.0, theme.text_tertiary))
     }
@@ -1072,8 +1109,10 @@ impl Fintwind {
             MenuChip::new("source-control-branch")
                 .icon("icons/git-branch.svg", theme.text_tertiary)
                 .label(branch_label)
-                .max_label_width(110.0)
-                .height(px(22.0))
+                .max_label_width(140.0)
+                .height(px(26.0))
+                .w_full()
+                .min_w_0()
                 .background(theme.sidebar)
                 .caret(true)
                 .disabled(!enabled)
@@ -1115,11 +1154,6 @@ impl Fintwind {
                         );
                     }
                 }
-                items.push(MenuItem::Separator);
-                let fetch_weak = weak.clone();
-                items.push(MenuItem::new(tr!("source_control.fetch"), move |_, cx| {
-                    let _ = fetch_weak.update(cx, |this, cx| this.fetch_source_control(cx));
-                }));
                 items
             },
         )
@@ -1212,7 +1246,7 @@ impl Fintwind {
             // tree's filter input, which the standalone page no longer has.
             .when(has_workspace && status.is_some(), |column| {
                 column.child(
-                    div().px(px(10.0)).pb(px(6.0)).child(
+                    div().px(px(12.0)).pb(px(8.0)).child(
                         TextField::new(
                             "source-control-filter",
                             self.right_panel_diff_filter.clone(),
@@ -1274,7 +1308,9 @@ impl Fintwind {
         let writable = !self.review_is_history_snapshot();
         match row {
             SourceControlRow::Header { staged, count } => div()
-                .h(px(28.0))
+                .w_full()
+                .min_w_0()
+                .h(px(32.0))
                 .flex_none()
                 .pl(px(12.0))
                 .pr(px(8.0))
@@ -1297,11 +1333,10 @@ impl Fintwind {
                         header.child(self.render_source_control_text_action(
                             "source-control-unstage-all",
                             tr!("source_control.unstage_all"),
-                            cx.listener(move |this, _, _, cx| {
-                                cx.stop_propagation();
+                            move |this, cx| {
                                 let paths = this.source_control_staged_paths();
                                 this.unstage_source_control_paths(paths, cx);
-                            }),
+                            },
                             cx,
                         ))
                     } else {
@@ -1309,22 +1344,13 @@ impl Fintwind {
                             .child(self.render_source_control_text_action(
                                 "source-control-stage-all",
                                 tr!("source_control.stage_all"),
-                                cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
+                                move |this, cx| {
                                     let paths = this.source_control_unstaged_paths();
                                     this.stage_source_control_paths(paths, cx);
-                                }),
+                                },
                                 cx,
                             ))
-                            .child(self.render_source_control_text_action(
-                                "source-control-discard-all",
-                                tr!("source_control.discard_all"),
-                                cx.listener(move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.request_discard_source_control_all(cx);
-                                }),
-                                cx,
-                            ))
+                            .child(self.render_source_control_group_menu(cx))
                     }
                 })
                 .into_any_element(),
@@ -1332,6 +1358,8 @@ impl Fintwind {
                 staged,
                 path,
                 title,
+                name,
+                directory,
                 letter,
                 ..
             } => {
@@ -1342,55 +1370,126 @@ impl Fintwind {
                 let title_id =
                     SharedString::from(format!("source-control-file-title-{staged}-{path}"));
                 let row_path = path.clone();
+                let selected_source = self.right_panel_diff_source
+                    == if staged {
+                        ReviewDiffSource::Staged
+                    } else {
+                        ReviewDiffSource::Unstaged
+                    };
+                let selected_path = self.review_pending_file_focus.as_deref().or_else(|| {
+                    self.right_panel_diff_selected_file.and_then(|index| {
+                        self.right_panel_diff_snapshot
+                            .as_ref()?
+                            .files
+                            .get(index)
+                            .map(|file| file.path.as_str())
+                    })
+                });
+                let selected = selected_source && selected_path == Some(path.as_str());
                 div()
                     .id(element_id)
+                    .aria_label(title.clone())
                     .tab_index(0)
-                    .min_h(px(28.0))
+                    .w_full()
+                    .min_w_0()
+                    .h(ui_px(46.0))
                     .flex_none()
-                    .py(px(5.0))
+                    .py(ui_px(5.0))
                     .pl(px(12.0))
-                    .pr(px(8.0))
+                    .pr(px(12.0))
                     .flex()
-                    .items_start()
+                    .items_center()
                     .gap(px(8.0))
                     .cursor_default()
-                    .hover(|element| element.bg(theme.overlay))
+                    .when(selected, |element| element.bg(theme.overlay_strong))
+                    .when(!selected, |element| {
+                        element.hover(|element| element.bg(theme.overlay))
+                    })
                     .focus_visible(|element| element.border_1().border_color(theme.accent_focus))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
+                    .on_activation(cx, move |this, _, cx| {
                         this.open_source_control_file(staged, row_path.clone(), cx);
-                    }))
-                    .child(
-                        div()
-                            .w(px(12.0))
-                            .h(ui_px(18.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .text_size(ui_px(11.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(status_letter_color(letter, &theme))
-                            .child(letter.to_string()),
-                    )
+                    })
                     .child(
                         div()
                             .id(title_id)
                             .flex_1()
                             .min_w_0()
-                            // The sidebar is narrow enough that long paths and
-                            // rename labels have to wrap rather than end in an
-                            // ellipsis: a review row that hides the file name
-                            // is not usable.
-                            .whitespace_normal()
-                            .line_height(ui_px(18.0))
-                            .text_size(ui_px(12.0))
-                            .text_color(theme.text_secondary)
+                            .flex()
+                            .flex_col()
                             .tooltip(Tooltip::text(title.clone()))
-                            .child(title),
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_ellipsis_middle()
+                                    .line_height(ui_px(19.0))
+                                    .text_size(ui_px(12.0))
+                                    .font_weight(if selected {
+                                        FontWeight::MEDIUM
+                                    } else {
+                                        FontWeight::NORMAL
+                                    })
+                                    .text_color(if selected {
+                                        theme.text
+                                    } else {
+                                        theme.text_secondary
+                                    })
+                                    .child(name),
+                            )
+                            .when(!directory.is_empty(), |column| {
+                                column.child(
+                                    div()
+                                        .truncate()
+                                        .text_ellipsis_middle()
+                                        .line_height(ui_px(17.0))
+                                        .text_size(ui_px(11.0))
+                                        .text_color(theme.text_tertiary)
+                                        .child(directory),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .w(px(14.0))
+                            .flex_none()
+                            .text_right()
+                            .text_size(ui_px(11.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(status_letter_color(letter, &theme))
+                            .child(letter.to_string()),
                     )
                     .into_any_element()
             }
         }
+    }
+
+    fn render_source_control_group_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::current(cx);
+        let handle = self.menu_handle("source-control-group-actions", cx);
+        let weak = cx.entity().downgrade();
+        let enabled = self.source_control_allows_writes();
+        dropdown_menu(
+            MenuChip::new("source-control-group-actions")
+                .icon("icons/ellipsis.svg", theme.text_tertiary)
+                .icon_only(true)
+                .height(px(24.0))
+                .tooltip(tr!("source_control.group_actions"))
+                .selected(handle.is_open()),
+            "source-control-group-actions-menu",
+            &handle,
+            MenuAlign::BelowRight,
+            move |_| {
+                vec![
+                    MenuItem::new(tr!("source_control.discard_all"), {
+                        let weak = weak.clone();
+                        move |_, cx| {
+                            let _ = weak
+                                .update(cx, |this, cx| this.request_discard_source_control_all(cx));
+                        }
+                    })
+                    .disabled(!enabled),
+                ]
+            },
+        )
     }
 
     /// One small text action of a group header. Muted until hovered, so the
@@ -1399,14 +1498,14 @@ impl Fintwind {
         &self,
         id: &'static str,
         label: String,
-        on_click: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
+        activate: impl Fn(&mut Self, &mut Context<Self>) + 'static,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
         div()
             .id(id)
             .tab_index(0)
-            .h(px(20.0))
+            .h(px(24.0))
             .px(px(4.0))
             .rounded(px(4.0))
             .flex_none()
@@ -1414,7 +1513,7 @@ impl Fintwind {
             .items_center()
             .font_weight(FontWeight::MEDIUM)
             .cursor_default()
-            .text_size(ui_px(10.5))
+            .text_size(ui_px(11.0))
             .text_color(theme.text_tertiary)
             .hover(|button| {
                 button
@@ -1422,7 +1521,7 @@ impl Fintwind {
                     .text_color(theme.text_secondary)
             })
             .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
-            .on_click(on_click)
+            .on_activation(cx, move |this, _, cx| activate(this, cx))
             .child(label)
     }
 
@@ -3266,6 +3365,8 @@ pub(super) enum SourceControlRow {
         staged: bool,
         path: String,
         title: String,
+        name: String,
+        directory: String,
         letter: char,
         untracked: bool,
     },
@@ -3282,10 +3383,20 @@ impl SourceControlRow {
             Some(origin) => format!("{origin} → {}", entry.path),
             None => entry.path.clone(),
         };
+        let (directory, name) = entry
+            .path
+            .rsplit_once('/')
+            .unwrap_or(("", entry.path.as_str()));
+        let directory = match entry.origin_path.as_deref() {
+            Some(_) => title.clone(),
+            None => directory.to_owned(),
+        };
         Self::File {
             staged,
             path: entry.path.clone(),
             title,
+            name: name.to_owned(),
+            directory,
             letter,
             untracked: entry.worktree_status == '?',
         }

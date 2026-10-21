@@ -363,16 +363,17 @@ impl Theme {
         ]
     }
 
-    /// A contact shadow and a soft cast shadow lift the workspace above navigation.
+    /// A quiet contact shadow separates the dark workspace without a heavy seam.
     pub fn workspace_shadow(&self) -> Vec<BoxShadow> {
         let (contact, ambient) = if self.is_dark {
-            (0.20, 0.14)
+            (0.04, 0.025)
         } else {
             (0.08, 0.045)
         };
         vec![
             BoxShadow::new(px(-1.0), px(0.0), hsla(0.0, 0.0, 0.0, contact)).blur_radius(px(2.0)),
-            BoxShadow::new(px(-2.0), px(0.0), hsla(0.0, 0.0, 0.0, ambient)).blur_radius(px(8.0)),
+            BoxShadow::new(px(-2.0), px(0.0), hsla(0.0, 0.0, 0.0, ambient))
+                .blur_radius(px(if self.is_dark { 4.0 } else { 8.0 })),
         ]
     }
 
@@ -554,7 +555,37 @@ impl Theme {
             ThemeScheme::Vercel => Self::vercel(is_dark),
             ThemeScheme::VsCodePlus => Self::vs_code_plus(is_dark),
         };
-        theme.with_muted_accents()
+        theme.with_muted_accents().with_stronger_foregrounds()
+    }
+
+    /// Strengthen the shared text/icon ramp after each family's overrides,
+    /// before projecting it onto Fintwind, Ely and GPUI Kit components.
+    fn with_stronger_foregrounds(mut self) -> Self {
+        let (target, strength) = if self.is_dark {
+            (1.0, 0.35)
+        } else {
+            (0.0, 0.30)
+        };
+        for color in [
+            &mut self.text,
+            &mut self.text_secondary,
+            &mut self.text_tertiary,
+            &mut self.text_muted,
+            &mut self.text_ghost,
+        ] {
+            color.l += (target - color.l) * strength;
+        }
+        // Filled controls can have the opposite foreground polarity to the
+        // page. Strengthen their existing ink rather than the page's ink.
+        for color in [
+            &mut self.on_inverse,
+            &mut self.on_neutral,
+            &mut self.on_accent,
+        ] {
+            let target = if color.l < 0.5 { 0.0 } else { 1.0 };
+            color.l += (target - color.l) * strength;
+        }
+        self
     }
 
     fn with_muted_accents(mut self) -> Self {

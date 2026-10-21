@@ -18,6 +18,10 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [2.0.12]
+
+本版使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。已有专项验证覆盖 OpenCode 2.0.27 的 Goal 模式和 2.0.32 的 Mermaid 提示词与校验工具，未验证完整的版本兼容区间。验证记录见 [Goal 文档](docs/goals.md)与 [Mermaid 文档](docs/mermaid-prompt.md)。
+
 ### 新功能
 
 - 新增「定时任务」工作区，从侧边栏时钟图标或命令面板进入。可按指定星期与时间，或按固定间隔自动执行指令，适合周期性检查、汇总与维护。任务可新建会话并指定项目、模型与权限，也可复用已有会话；支持暂停、恢复、立即运行与删除，可查看下次运行时间、上一次运行结果并打开对应会话。Fintwind 完全退出后任务不会执行，错过的运行不会补跑。

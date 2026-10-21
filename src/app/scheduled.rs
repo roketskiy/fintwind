@@ -8,7 +8,7 @@
 use crate::ui::icon;
 use crate::ui::toggle_switch;
 use ely_gpui_component::{
-    buttons::{Button, ButtonVariant, SegmentedControl, ToggleButton, ToggleItem},
+    buttons::{Button, ButtonVariant, SegmentedControl},
     forms::{Choice, Combobox, Input, InputEvent, Select, TextInput, TimePicker},
     overlays::Dialog,
     primitives::IconName,
@@ -635,6 +635,7 @@ pub(super) struct ScheduledTasksView {
     query: String,
     dialog: Option<TaskDialog>,
     previous_focus: Option<FocusHandle>,
+    dialog_focus: FocusHandle,
     confirm_focus: FocusHandle,
     loading: bool,
     mutation: Option<Mutation>,
@@ -739,6 +740,7 @@ impl ScheduledTasksView {
             query: String::new(),
             dialog: None,
             previous_focus: None,
+            dialog_focus: cx.focus_handle(),
             confirm_focus: cx.focus_handle(),
             loading: true,
             mutation: None,

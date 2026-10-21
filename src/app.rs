@@ -61,9 +61,9 @@ use crate::terminal::TerminalView;
 use crate::theme::{TextSizePreset, Theme, ThemePreference, TranscriptWidthPreset};
 use crate::ui::text_field::TextField;
 use crate::ui::{
-    MenuChip, ProjectNameSelector, activity_noun, chip_width, contain_scroll, file_icon, icon,
-    icon_button, model_icon, motion, provider_color, provider_icon, spin_halo, status_color,
-    toggle_switch,
+    MenuChip, ModelMark, ProjectNameSelector, activity_noun, chip_width, contain_scroll, file_icon,
+    icon, icon_button, model_mark, model_mark_element, motion, provider_color, provider_icon,
+    spin_halo, status_color, toggle_switch,
 };
 use crate::{
     CancelTurn, CloseFind, CloseSessionTab, CloseWindow, CopySelection, FindNext, FindPrevious,

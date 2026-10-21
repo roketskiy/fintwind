@@ -93,7 +93,7 @@ settings.search: 設定を検索
 settings.mcp_servers: MCPサーバー
 settings.mcp_servers_keywords: MCP サーバー ツール stdio http sse ローカル リモート npx 環境変数 ヘッダー
 settings.mcp_market: MCPマーケット
-settings.mcp_market_keywords: MCP マーケット smithery ウェブ検索 学術 論文 コード インストール context7 github arxiv pubmed brave exa tavily
+settings.mcp_market_keywords: MCP マーケット 公式 ウェブ検索 学術 論文 コード インストール オフィス デザイン データ 自動化 運用 ビジネス notion airtable linear figma canva stripe sentry vercel supabase context7 github arxiv pubmed brave exa tavily
 settings.scheduled_tasks: スケジュールタスク
 settings.scheduled_tasks_keywords: スケジュール タスク 定時 定期 実行 cron 毎日 毎週 プロンプト
 daemon.reveal_token: トークンを表示
@@ -431,19 +431,27 @@ mcp_market.filter_all: すべて
 mcp_market.filter_web: ウェブ検索
 mcp_market.filter_academic: 学術
 mcp_market.filter_code: コード
+mcp_market.filter_office: オフィス
+mcp_market.filter_design: デザイン
+mcp_market.filter_data: データ
+mcp_market.filter_automation: 自動化
+mcp_market.filter_devops: 運用
+mcp_market.filter_business: ビジネス
 mcp_market.install: 追加
 mcp_market.installed: 追加済み
 mcp_market.available: 追加可能
 mcp_market.remove: 削除
 mcp_market.open_servers: MCPサーバーで開く
 mcp_market.open_smithery: Smitheryで開く
-mcp_market.source: Smithery
-mcp_market.auth_note: 追加後にAPIキーやサインインが必要な場合があります。ヘッダーやOAuthはMCPサーバーページで設定できます。
+mcp_market.open_official: 公式ページを開く
+mcp_market.source: ソース
+mcp_market.auth_note: 追加後にAPIキーやサインインが必要な場合があります。URL、ヘッダー、OAuthはMCPサーバーページで設定できます。
 mcp_market.empty: 一致するサーバーがありません
-mcp_market.subtitle: Smitheryから選んだウェブ検索、学術、コード向けMCPサーバーです。
+mcp_market.subtitle: ウェブ検索、学術、コード向けのMCPサーバー一覧です。多くは各社の公式エンドポイントです。
 mcp_market.count: "%{count} 個のサーバー"
 mcp_market.filter_caption: "%{shown} / %{total}"
 mcp_market.added_toast: "%{name} を追加しました"
+mcp_market.upgraded_toast: "%{name} を公式エンドポイントに切り替えました"
 mcp_market.removed_toast: "%{name} を削除しました"
 mcp_market.note: 追加するとリモートMCPサーバーがOpenCodeの設定に書き込まれます。OpenCodeはファイルをホットリロードするので、次のタスクから使えます。
 mcp_market.desc.brave: Braveの独自インデックスでウェブ、ニュース、画像、動画を検索します。
@@ -466,6 +474,20 @@ mcp_market.desc.deepwiki: GitHubリポジトリのドキュメントをトピッ
 mcp_market.desc.grep: 公開GitHubの実コードから構文、API、本番の使い方を検索します。
 mcp_market.desc.microsoft_learn: Azureや.NETなど、Microsoft公式ドキュメントです。
 mcp_market.desc.gread: 公開GitHubリポジトリのソースを読みます。ドキュメント用リポジトリがあれば合わせて提供します。
+mcp_market.desc.notion: Notionのページとデータベースを読み書きします。チームの知識や記録がここにあります。
+mcp_market.desc.zoom_docs: Zoomのドキュメントと会議メモを作成・読み取りします。
+mcp_market.desc.atlassian: Jiraのチケット、Confluenceのページ、Loomの録画を扱います。
+mcp_market.desc.linear: Linearのチケット、サイクル、プロジェクトを管理します。
+mcp_market.desc.monday: monday.comのボード、アイテム、ステータスを更新します。
+mcp_market.desc.figma: Figmaのデザイン情報（レイヤー、スタイル、変数）を読み取ります。
+mcp_market.desc.canva: Canvaでデザインを作成・検索・書き出しします。
+mcp_market.desc.airtable: Airtableのテーブルとレコードを読み書きします。
+mcp_market.desc.supabase: SupabaseのPostgresを照会し、移行やEdge Functionのデプロイを行います。
+mcp_market.desc.zapier: Zapier経由で9,000以上のアプリのアクションを実行します。
+mcp_market.desc.sentry: Sentryのエラーを検索し、パフォーマンスを分析して切り分けます。
+mcp_market.desc.vercel: Vercelのプロジェクトとデプロイを管理し、ログとWeb分析を確認します。
+mcp_market.desc.stripe: Stripeの顧客、サブスクリプション、請求書、返金を読み書きします。
+mcp_market.desc.zoominfo: 企業と連絡先の情報を取得し、リストを補強します。
 
 common.settings: 設定
 common.copy: コピー
@@ -1165,6 +1187,8 @@ file_picker.typed_file: "%{type} ファイル"
 source_control.title: レビュー
 source_control.loading: Git ステータスを読み込み中…
 source_control.refresh: 更新
+source_control.repository_actions: リポジトリ操作
+source_control.group_actions: 未ステージの変更操作
 source_control.follow_session: セッションに追従
 source_control.staged: ステージ済み %{count}
 source_control.unstaged: 未ステージ %{count}

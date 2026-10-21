@@ -1,6 +1,9 @@
-//! A curated MCP marketplace in settings: Smithery listings for web search,
-//! academic research, and code — installable as remote servers in OpenCode's
-//! `mcp` map.
+//! A curated MCP marketplace in settings: web search, academic research, and
+//! code servers — installable as remote servers in OpenCode's `mcp` map.
+//!
+//! Every listing points at the vendor's own MCP endpoint wherever the vendor
+//! runs one. Only the servers no vendor hosts point at a hosting platform's
+//! copy, and those say so.
 
 use crate::theme::ui_px;
 
@@ -29,10 +32,33 @@ pub(super) enum McpMarketCategory {
     WebSearch,
     Academic,
     Code,
+    /// Knowledge, documents, and team work.
+    Office,
+    /// Design and visual assets.
+    Design,
+    /// Databases, spreadsheets, and analytics back ends.
+    Data,
+    /// Cross-application automation.
+    Automation,
+    /// Hosting, deployments, and error tracking.
+    DevOps,
+    /// Payments, sales, and business records.
+    Business,
 }
 
 impl McpMarketCategory {
-    const FILTERS: [Self; 4] = [Self::All, Self::WebSearch, Self::Academic, Self::Code];
+    const FILTERS: [Self; 10] = [
+        Self::All,
+        Self::WebSearch,
+        Self::Academic,
+        Self::Code,
+        Self::Office,
+        Self::Design,
+        Self::Data,
+        Self::Automation,
+        Self::DevOps,
+        Self::Business,
+    ];
 
     fn id(self) -> &'static str {
         match self {
@@ -40,6 +66,12 @@ impl McpMarketCategory {
             Self::WebSearch => "mcp-market-filter-web",
             Self::Academic => "mcp-market-filter-academic",
             Self::Code => "mcp-market-filter-code",
+            Self::Office => "mcp-market-filter-office",
+            Self::Design => "mcp-market-filter-design",
+            Self::Data => "mcp-market-filter-data",
+            Self::Automation => "mcp-market-filter-automation",
+            Self::DevOps => "mcp-market-filter-devops",
+            Self::Business => "mcp-market-filter-business",
         }
     }
 
@@ -49,6 +81,12 @@ impl McpMarketCategory {
             Self::WebSearch => tr!("mcp_market.filter_web"),
             Self::Academic => tr!("mcp_market.filter_academic"),
             Self::Code => tr!("mcp_market.filter_code"),
+            Self::Office => tr!("mcp_market.filter_office"),
+            Self::Design => tr!("mcp_market.filter_design"),
+            Self::Data => tr!("mcp_market.filter_data"),
+            Self::Automation => tr!("mcp_market.filter_automation"),
+            Self::DevOps => tr!("mcp_market.filter_devops"),
+            Self::Business => tr!("mcp_market.filter_business"),
         }
     }
 
@@ -58,16 +96,39 @@ impl McpMarketCategory {
             Self::WebSearch => tr!("mcp_market.filter_web"),
             Self::Academic => tr!("mcp_market.filter_academic"),
             Self::Code => tr!("mcp_market.filter_code"),
+            Self::Office => tr!("mcp_market.filter_office"),
+            Self::Design => tr!("mcp_market.filter_design"),
+            Self::Data => tr!("mcp_market.filter_data"),
+            Self::Automation => tr!("mcp_market.filter_automation"),
+            Self::DevOps => tr!("mcp_market.filter_devops"),
+            Self::Business => tr!("mcp_market.filter_business"),
         }
     }
+}
+
+/// Where a listing's endpoint comes from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum McpMarketSource {
+    /// The vendor runs this MCP server itself.
+    Official,
+    /// A hosting platform's copy of an upstream project, because no vendor
+    /// publishes an endpoint of its own.
+    Hosted,
 }
 
 struct McpMarketEntry {
     id: &'static str,
     display_name: &'static str,
     category: McpMarketCategory,
+    /// The endpoint OpenCode connects to.
     url: &'static str,
-    smithery_path: &'static str,
+    source: McpMarketSource,
+    /// The host that serves the endpoint, or the hosting platform for a
+    /// hosted listing.
+    source_label: &'static str,
+    /// The page the source button opens: the vendor's project page for an
+    /// official listing, the hosting platform's listing otherwise.
+    source_url: &'static str,
     icon: &'static str,
     description_key: &'static str,
     needs_auth: bool,
@@ -78,8 +139,10 @@ const CATALOG: &[McpMarketEntry] = &[
         id: "brave",
         display_name: "Brave Search",
         category: McpMarketCategory::WebSearch,
-        url: "https://brave.run.tools",
-        smithery_path: "brave",
+        url: "https://api.search.brave.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "api.search.brave.com",
+        source_url: "https://github.com/brave/brave-search-mcp-server",
         icon: "icons/search.svg",
         description_key: "mcp_market.desc.brave",
         needs_auth: true,
@@ -88,28 +151,34 @@ const CATALOG: &[McpMarketEntry] = &[
         id: "exa",
         display_name: "Exa Search",
         category: McpMarketCategory::WebSearch,
-        url: "https://exa.run.tools",
-        smithery_path: "exa",
+        url: "https://mcp.exa.ai/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.exa.ai",
+        source_url: "https://github.com/exa-labs/exa-mcp-server",
         icon: "icons/search.svg",
         description_key: "mcp_market.desc.exa",
-        needs_auth: false,
+        needs_auth: true,
     },
     McpMarketEntry {
         id: "tavily",
         display_name: "Tavily",
         category: McpMarketCategory::WebSearch,
-        url: "https://tavily.run.tools",
-        smithery_path: "Tavily",
+        url: "https://mcp.tavily.com/mcp/",
+        source: McpMarketSource::Official,
+        source_label: "mcp.tavily.com",
+        source_url: "https://github.com/tavily-ai/tavily-mcp",
         icon: "icons/search.svg",
         description_key: "mcp_market.desc.tavily",
-        needs_auth: false,
+        needs_auth: true,
     },
     McpMarketEntry {
         id: "keenable-web-search",
         display_name: "Keenable Web Search",
         category: McpMarketCategory::WebSearch,
-        url: "https://web-search-keenable.run.tools",
-        smithery_path: "keenable/web-search",
+        url: "https://api.keenable.ai/mcp",
+        source: McpMarketSource::Official,
+        source_label: "api.keenable.ai",
+        source_url: "https://github.com/keenableai/keenable-mcp",
         icon: "icons/globe.svg",
         description_key: "mcp_market.desc.keenable",
         needs_auth: false,
@@ -118,28 +187,34 @@ const CATALOG: &[McpMarketEntry] = &[
         id: "parallel-search",
         display_name: "Parallel Web Search",
         category: McpMarketCategory::WebSearch,
-        url: "https://server.smithery.ai/parallel/search/mcp",
-        smithery_path: "parallel/search",
+        url: "https://mcp.parallel.ai/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.parallel.ai",
+        source_url: "https://github.com/parallel-web/search-mcp",
         icon: "icons/search.svg",
         description_key: "mcp_market.desc.parallel",
-        needs_auth: false,
+        needs_auth: true,
     },
     McpMarketEntry {
         id: "linkup",
         display_name: "Linkup",
         category: McpMarketCategory::WebSearch,
-        url: "https://server.smithery.ai/LinkupPlatform/linkup-mcp-server/mcp",
-        smithery_path: "LinkupPlatform/linkup-mcp-server",
+        url: "https://mcp.linkup.so/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.linkup.so",
+        source_url: "https://github.com/LinkupPlatform/linkup-mcp-server",
         icon: "icons/globe.svg",
         description_key: "mcp_market.desc.linkup",
-        needs_auth: false,
+        needs_auth: true,
     },
     McpMarketEntry {
         id: "brightdata",
         display_name: "Bright Data",
         category: McpMarketCategory::WebSearch,
-        url: "https://server.smithery.ai/brightdata/mcp",
-        smithery_path: "brightdata",
+        url: "https://mcp.brightdata.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.brightdata.com",
+        source_url: "https://github.com/brightdata/brightdata-mcp",
         icon: "icons/globe.svg",
         description_key: "mcp_market.desc.brightdata",
         needs_auth: true,
@@ -149,7 +224,9 @@ const CATALOG: &[McpMarketEntry] = &[
         display_name: "PubMed",
         category: McpMarketCategory::Academic,
         url: "https://pubmed.run.tools",
-        smithery_path: "pubmed",
+        source: McpMarketSource::Hosted,
+        source_label: "Smithery",
+        source_url: "https://smithery.ai/servers/pubmed",
         icon: "icons/file.svg",
         description_key: "mcp_market.desc.pubmed",
         needs_auth: false,
@@ -159,7 +236,9 @@ const CATALOG: &[McpMarketEntry] = &[
         display_name: "arXiv",
         category: McpMarketCategory::Academic,
         url: "https://arxiv.run.tools",
-        smithery_path: "arxiv",
+        source: McpMarketSource::Hosted,
+        source_label: "Smithery",
+        source_url: "https://smithery.ai/servers/arxiv",
         icon: "icons/file.svg",
         description_key: "mcp_market.desc.arxiv",
         needs_auth: false,
@@ -168,18 +247,22 @@ const CATALOG: &[McpMarketEntry] = &[
         id: "consensus",
         display_name: "Consensus",
         category: McpMarketCategory::Academic,
-        url: "https://server.smithery.ai/consensus/mcp",
-        smithery_path: "consensus",
+        url: "https://ai.consensus-analytics.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "ai.consensus-analytics.com",
+        source_url: "https://ai.consensus-analytics.com/mcp",
         icon: "icons/file.svg",
         description_key: "mcp_market.desc.consensus",
-        needs_auth: false,
+        needs_auth: true,
     },
     McpMarketEntry {
         id: "paper-search",
         display_name: "Paper Search",
         category: McpMarketCategory::Academic,
         url: "https://server.smithery.ai/adamamer20/paper-search-mcp-openai/mcp",
-        smithery_path: "adamamer20/paper-search-mcp-openai",
+        source: McpMarketSource::Hosted,
+        source_label: "Smithery",
+        source_url: "https://smithery.ai/servers/adamamer20/paper-search-mcp-openai",
         icon: "icons/file.svg",
         description_key: "mcp_market.desc.paper_search",
         needs_auth: false,
@@ -189,7 +272,9 @@ const CATALOG: &[McpMarketEntry] = &[
         display_name: "Semantic Scholar",
         category: McpMarketCategory::Academic,
         url: "https://server.smithery.ai/hamid-vakilzadeh/mcpsemanticscholar/mcp",
-        smithery_path: "hamid-vakilzadeh/mcpsemanticscholar",
+        source: McpMarketSource::Hosted,
+        source_label: "Smithery",
+        source_url: "https://smithery.ai/servers/hamid-vakilzadeh/mcpsemanticscholar",
         icon: "icons/file.svg",
         description_key: "mcp_market.desc.semantic_scholar",
         needs_auth: false,
@@ -198,8 +283,10 @@ const CATALOG: &[McpMarketEntry] = &[
         id: "huggingface",
         display_name: "Hugging Face",
         category: McpMarketCategory::Academic,
-        url: "https://server.smithery.ai/huggingface/mcp",
-        smithery_path: "huggingface",
+        url: "https://huggingface.co/mcp",
+        source: McpMarketSource::Official,
+        source_label: "huggingface.co",
+        source_url: "https://huggingface.co/mcp",
         icon: "icons/sparkle.svg",
         description_key: "mcp_market.desc.huggingface",
         needs_auth: false,
@@ -209,7 +296,9 @@ const CATALOG: &[McpMarketEntry] = &[
         display_name: "Wikipedia",
         category: McpMarketCategory::Academic,
         url: "https://wikipedia-mcp-server--cyanheads.run.tools",
-        smithery_path: "cyanheads/wikipedia-mcp-server",
+        source: McpMarketSource::Hosted,
+        source_label: "Smithery",
+        source_url: "https://smithery.ai/servers/cyanheads/wikipedia-mcp-server",
         icon: "icons/globe.svg",
         description_key: "mcp_market.desc.wikipedia",
         needs_auth: false,
@@ -219,7 +308,9 @@ const CATALOG: &[McpMarketEntry] = &[
         display_name: "Context7",
         category: McpMarketCategory::Code,
         url: "https://mcp.context7.com/mcp",
-        smithery_path: "upstash/context7-mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.context7.com",
+        source_url: "https://github.com/upstash/context7",
         icon: "icons/package.svg",
         description_key: "mcp_market.desc.context7",
         needs_auth: false,
@@ -228,8 +319,10 @@ const CATALOG: &[McpMarketEntry] = &[
         id: "github",
         display_name: "GitHub",
         category: McpMarketCategory::Code,
-        url: "https://server.smithery.ai/github/mcp",
-        smithery_path: "github",
+        url: "https://api.githubcopilot.com/mcp/",
+        source: McpMarketSource::Official,
+        source_label: "api.githubcopilot.com",
+        source_url: "https://github.com/github/github-mcp-server",
         icon: "icons/github.svg",
         description_key: "mcp_market.desc.github",
         needs_auth: true,
@@ -238,8 +331,10 @@ const CATALOG: &[McpMarketEntry] = &[
         id: "deepwiki",
         display_name: "DeepWiki",
         category: McpMarketCategory::Code,
-        url: "https://server.smithery.ai/deepwiki/mcp",
-        smithery_path: "deepwiki",
+        url: "https://mcp.deepwiki.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.deepwiki.com",
+        source_url: "https://mcp.deepwiki.com/mcp",
         icon: "icons/github.svg",
         description_key: "mcp_market.desc.deepwiki",
         needs_auth: false,
@@ -249,7 +344,9 @@ const CATALOG: &[McpMarketEntry] = &[
         display_name: "Vercel Grep",
         category: McpMarketCategory::Code,
         url: "https://mcp.grep.app",
-        smithery_path: "vercel/grep",
+        source: McpMarketSource::Official,
+        source_label: "mcp.grep.app",
+        source_url: "https://github.com/vercel/grep",
         icon: "icons/search.svg",
         description_key: "mcp_market.desc.grep",
         needs_auth: false,
@@ -258,8 +355,10 @@ const CATALOG: &[McpMarketEntry] = &[
         id: "microsoft-learn",
         display_name: "Microsoft Learn",
         category: McpMarketCategory::Code,
-        url: "https://server.smithery.ai/microsoft/learn_mcp/mcp",
-        smithery_path: "microsoft/learn_mcp",
+        url: "https://learn.microsoft.com/api/mcp",
+        source: McpMarketSource::Official,
+        source_label: "learn.microsoft.com",
+        source_url: "https://github.com/microsoftdocs/mcp",
         icon: "icons/file.svg",
         description_key: "mcp_market.desc.microsoft_learn",
         needs_auth: false,
@@ -268,12 +367,214 @@ const CATALOG: &[McpMarketEntry] = &[
         id: "gread",
         display_name: "Gread",
         category: McpMarketCategory::Code,
-        url: "https://server.smithery.ai/nitrofire-q/gread/mcp",
-        smithery_path: "nitrofire-q/gread",
+        url: "https://api.gread.dev/mcp",
+        source: McpMarketSource::Official,
+        source_label: "api.gread.dev",
+        source_url: "https://github.com/NitroRCr/gread",
         icon: "icons/github.svg",
         description_key: "mcp_market.desc.gread",
         needs_auth: false,
     },
+    McpMarketEntry {
+        id: "notion",
+        display_name: "Notion",
+        category: McpMarketCategory::Office,
+        url: "https://mcp.notion.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.notion.com",
+        source_url: "https://mcp.notion.com/mcp",
+        icon: "icons/compose.svg",
+        description_key: "mcp_market.desc.notion",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "zoom-docs",
+        display_name: "Zoom Docs",
+        category: McpMarketCategory::Office,
+        url: "https://mcp.zoom.us/mcp/docs/streamable",
+        source: McpMarketSource::Official,
+        source_label: "mcp.zoom.us",
+        source_url: "https://mcp.zoom.us/mcp/docs/streamable",
+        icon: "icons/file.svg",
+        description_key: "mcp_market.desc.zoom_docs",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "atlassian",
+        display_name: "Atlassian",
+        category: McpMarketCategory::Office,
+        url: "https://mcp.atlassian.com/v1/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.atlassian.com",
+        source_url: "https://mcp.atlassian.com/v1/mcp",
+        icon: "icons/source-control.svg",
+        description_key: "mcp_market.desc.atlassian",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "linear",
+        display_name: "Linear",
+        category: McpMarketCategory::Office,
+        url: "https://mcp.linear.app/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.linear.app",
+        source_url: "https://mcp.linear.app/mcp",
+        icon: "icons/target.svg",
+        description_key: "mcp_market.desc.linear",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "monday",
+        display_name: "monday.com",
+        category: McpMarketCategory::Office,
+        url: "https://mcp.monday.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.monday.com",
+        source_url: "https://mcp.monday.com/mcp",
+        icon: "icons/list.svg",
+        description_key: "mcp_market.desc.monday",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "figma",
+        display_name: "Figma",
+        category: McpMarketCategory::Design,
+        url: "https://mcp.figma.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.figma.com",
+        source_url: "https://mcp.figma.com/mcp",
+        icon: "icons/modality-image.svg",
+        description_key: "mcp_market.desc.figma",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "canva",
+        display_name: "Canva",
+        category: McpMarketCategory::Design,
+        url: "https://mcp.canva.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.canva.com",
+        source_url: "https://mcp.canva.com/mcp",
+        icon: "icons/sparkle.svg",
+        description_key: "mcp_market.desc.canva",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "airtable",
+        display_name: "Airtable",
+        category: McpMarketCategory::Data,
+        url: "https://mcp.airtable.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.airtable.com",
+        source_url: "https://mcp.airtable.com/mcp",
+        icon: "icons/folder.svg",
+        description_key: "mcp_market.desc.airtable",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "supabase",
+        display_name: "Supabase",
+        category: McpMarketCategory::Data,
+        url: "https://mcp.supabase.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.supabase.com",
+        source_url: "https://github.com/supabase/mcp",
+        icon: "icons/package.svg",
+        description_key: "mcp_market.desc.supabase",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "zapier",
+        display_name: "Zapier",
+        category: McpMarketCategory::Automation,
+        url: "https://mcp.zapier.com/api/v1/connect",
+        source: McpMarketSource::Official,
+        source_label: "mcp.zapier.com",
+        source_url: "https://mcp.zapier.com/api/v1/connect",
+        icon: "icons/zap.svg",
+        description_key: "mcp_market.desc.zapier",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "sentry",
+        display_name: "Sentry",
+        category: McpMarketCategory::DevOps,
+        url: "https://mcp.sentry.dev/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.sentry.dev",
+        source_url: "https://docs.sentry.io/product/sentry-mcp/",
+        icon: "icons/alert.svg",
+        description_key: "mcp_market.desc.sentry",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "vercel",
+        display_name: "Vercel",
+        category: McpMarketCategory::DevOps,
+        url: "https://mcp.vercel.com",
+        source: McpMarketSource::Official,
+        source_label: "mcp.vercel.com",
+        source_url: "https://vercel.com/docs/agent-resources/vercel-mcp",
+        icon: "icons/cloud-upload.svg",
+        description_key: "mcp_market.desc.vercel",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "stripe",
+        display_name: "Stripe",
+        category: McpMarketCategory::Business,
+        url: "https://mcp.stripe.com",
+        source: McpMarketSource::Official,
+        source_label: "mcp.stripe.com",
+        source_url: "https://docs.stripe.com/mcp",
+        icon: "icons/chart-column.svg",
+        description_key: "mcp_market.desc.stripe",
+        needs_auth: true,
+    },
+    McpMarketEntry {
+        id: "zoominfo",
+        display_name: "ZoomInfo",
+        category: McpMarketCategory::Business,
+        url: "https://mcp.zoominfo.com/mcp",
+        source: McpMarketSource::Official,
+        source_label: "mcp.zoominfo.com",
+        source_url: "https://mcp.zoominfo.com/mcp",
+        icon: "icons/eye.svg",
+        description_key: "mcp_market.desc.zoominfo",
+        needs_auth: true,
+    },
+];
+
+/// The endpoints the marketplace shipped before it listed the vendors' own
+/// servers. A server still on one of them moves to the vendor's endpoint in
+/// place when its listing is added again, instead of leaving a duplicate
+/// behind.
+const LEGACY_URLS: &[(&str, &str)] = &[
+    ("brave", "https://brave.run.tools"),
+    ("exa", "https://exa.run.tools"),
+    ("tavily", "https://tavily.run.tools"),
+    (
+        "keenable-web-search",
+        "https://web-search-keenable.run.tools",
+    ),
+    (
+        "parallel-search",
+        "https://server.smithery.ai/parallel/search/mcp",
+    ),
+    (
+        "linkup",
+        "https://server.smithery.ai/LinkupPlatform/linkup-mcp-server/mcp",
+    ),
+    ("brightdata", "https://server.smithery.ai/brightdata/mcp"),
+    ("consensus", "https://server.smithery.ai/consensus/mcp"),
+    ("huggingface", "https://server.smithery.ai/huggingface/mcp"),
+    ("github", "https://server.smithery.ai/github/mcp"),
+    ("deepwiki", "https://server.smithery.ai/deepwiki/mcp"),
+    (
+        "microsoft-learn",
+        "https://server.smithery.ai/microsoft/learn_mcp/mcp",
+    ),
+    ("gread", "https://server.smithery.ai/nitrofire-q/gread/mcp"),
 ];
 
 fn activate_key(event: &KeyDownEvent) -> bool {
@@ -291,6 +592,16 @@ fn catalog_entry(id: &str) -> Option<&'static McpMarketEntry> {
 
 fn installed_server<'a>(servers: &'a [McpServer], entry: &McpMarketEntry) -> Option<&'a McpServer> {
     servers.iter().find(|server| server.url == entry.url)
+}
+
+/// The roster slot of a server that still points at the listing's old
+/// endpoint.
+fn legacy_server_index(servers: &[McpServer], entry: &McpMarketEntry) -> Option<usize> {
+    let legacy = LEGACY_URLS
+        .iter()
+        .find(|(id, _)| *id == entry.id)
+        .map(|(_, url)| *url)?;
+    servers.iter().position(|server| server.url == legacy)
 }
 
 pub fn init(cx: &mut App) {
@@ -320,7 +631,8 @@ impl Fintwind {
                         || crate::i18n::translate(entry.description_key)
                             .to_lowercase()
                             .contains(&query)
-                        || entry.smithery_path.to_lowercase().contains(&query))
+                        || entry.source_label.to_lowercase().contains(&query)
+                        || entry.source_url.to_lowercase().contains(&query))
             })
             .collect()
     }
@@ -365,6 +677,15 @@ impl Fintwind {
             return;
         };
         if installed_server(&self.mcp_servers, entry).is_some() {
+            return;
+        }
+        // A server still on the listing's old endpoint moves to the vendor's
+        // endpoint in place: its name, headers, and OAuth survive, and no
+        // duplicate appears.
+        if let Some(index) = legacy_server_index(&self.mcp_servers, entry) {
+            self.mcp_servers[index].url = entry.url.to_owned();
+            self.commit_mcp_servers(cx);
+            self.show_success_toast(tr!("mcp_market.upgraded_toast", name = entry.display_name));
             return;
         }
         let taken: Vec<String> = self
@@ -457,6 +778,12 @@ impl Fintwind {
                 McpMarketCategory::WebSearch,
                 McpMarketCategory::Academic,
                 McpMarketCategory::Code,
+                McpMarketCategory::Office,
+                McpMarketCategory::Design,
+                McpMarketCategory::Data,
+                McpMarketCategory::Automation,
+                McpMarketCategory::DevOps,
+                McpMarketCategory::Business,
             ] {
                 let matches: Vec<_> = visible
                     .iter()
@@ -751,7 +1078,11 @@ impl Fintwind {
         let accent = market_accent(theme);
         let installed = installed_server(&self.mcp_servers, entry).is_some();
         let id = entry.id.to_owned();
-        let smithery_url = format!("https://smithery.ai/servers/{}", entry.smithery_path);
+        let source_url = entry.source_url;
+        let source_button_label = match entry.source {
+            McpMarketSource::Official => tr!("mcp_market.open_official"),
+            McpMarketSource::Hosted => tr!("mcp_market.open_smithery"),
+        };
         let actions = div()
             .flex()
             .flex_wrap()
@@ -835,22 +1166,22 @@ impl Fintwind {
             })
             .child(
                 outline_button(
-                    "mcp-market-smithery",
-                    tr!("mcp_market.open_smithery"),
+                    "mcp-market-source",
+                    source_button_label,
                     Some("icons/external-link.svg"),
                     theme,
                 )
                 .on_click({
-                    let smithery_url = smithery_url.clone();
+                    let source_url = source_url.to_owned();
                     cx.listener(move |_, _, _, cx| {
-                        cx.open_url(&smithery_url);
+                        cx.open_url(&source_url);
                     })
                 })
                 .on_key_down({
-                    let smithery_url = smithery_url.clone();
+                    let source_url = source_url.to_owned();
                     cx.listener(move |_, event: &KeyDownEvent, _, cx| {
                         if activate_key(event) {
-                            cx.open_url(&smithery_url);
+                            cx.open_url(&source_url);
                             cx.stop_propagation();
                         }
                     })
@@ -945,7 +1276,7 @@ impl Fintwind {
                                 .font_family(crate::md::render::mono_family())
                                 .text_size(ui_px(11.5))
                                 .text_color(theme.text_secondary)
-                                .child(SharedString::from(entry.smithery_path)),
+                                .child(SharedString::from(entry.source_label)),
                         )
                         .child(
                             div()

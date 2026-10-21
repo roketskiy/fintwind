@@ -159,7 +159,7 @@ where
 }
 
 /// Neutral tint for a provider icon: near-ink in either theme, so the
-/// letterform or brand mark carries the identity rather than a hue.
+/// letterform carries the identity rather than a hue.
 pub fn provider_color(theme: &Theme, _provider: &str) -> Hsla {
     if theme.is_dark {
         rgb(0xF3F3F3).into()
@@ -178,41 +178,112 @@ pub fn provider_icon(provider: &str) -> &'static str {
     provider_letter_icon(provider)
 }
 
-/// Icon for a model: its company's brand mark when the model is recognizable,
-/// otherwise the serving provider's icon. A provider often resells another
-/// company's models — a router serving Grok is still Grok — so the mark shown
-/// beside a model name is matched from the model's catalog id and display
-/// name rather than taken from the provider.
-pub fn model_icon(model_id: &str, model_name: &str, provider: &str) -> &'static str {
-    model_company_icon(model_id, model_name).unwrap_or_else(|| provider_icon(provider))
+/// A model's identity mark. Company marks are polychrome brand assets that
+/// keep their authored colors, so they render as images; a provider fallback
+/// is a monochrome glyph whose hue the caller supplies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ModelMark {
+    Company(&'static str),
+    Provider(&'static str),
+}
+
+impl ModelMark {
+    pub fn asset(self) -> &'static str {
+        match self {
+            Self::Company(path) | Self::Provider(path) => path,
+        }
+    }
+}
+
+/// Render a model mark at `size`. `tint` colors only the provider fallback;
+/// a company mark ignores it.
+pub fn model_mark_element(mark: ModelMark, size: f32, tint: Hsla) -> AnyElement {
+    match mark {
+        ModelMark::Company(_) => file_icon(mark.asset(), size).into_any_element(),
+        ModelMark::Provider(_) => icon(mark.asset(), size, tint).into_any_element(),
+    }
+}
+
+/// Mark for a model: its company's brand asset when the model is
+/// recognizable, otherwise the serving provider's icon. A provider often
+/// resells another company's models — a router serving Grok is still Grok —
+/// so the mark shown beside a model name is matched from the model's catalog
+/// id and display name rather than taken from the provider. A company whose
+/// official mark is monochrome swaps ink with the theme so the mark stays
+/// visible on either background.
+pub fn model_mark(model_id: &str, model_name: &str, provider: &str, is_dark: bool) -> ModelMark {
+    match model_company_icon(model_id, model_name) {
+        Some(company) => ModelMark::Company(if is_dark {
+            company.dark.unwrap_or(company.light)
+        } else {
+            company.light
+        }),
+        None => ModelMark::Provider(provider_icon(provider)),
+    }
+}
+
+/// One company's brand asset: the light-theme file, plus the dark-theme file
+/// when the official mark's ink has to invert to stay legible.
+#[derive(Clone, Copy)]
+struct CompanyMark {
+    light: &'static str,
+    dark: Option<&'static str>,
+}
+
+const fn mark(light: &'static str) -> CompanyMark {
+    CompanyMark { light, dark: None }
+}
+
+const fn themed(light: &'static str, dark: &'static str) -> CompanyMark {
+    CompanyMark {
+        light,
+        dark: Some(dark),
+    }
 }
 
 /// Brand mark per model company, matched on distinctive model-id and display
 /// name tokens. Checked top to bottom; list the more specific family first
 /// when companies share a token. Companies without an embedded mark (Cohere,
 /// 01.AI, StepFun, …) are absent on purpose and fall through to the provider
-/// letter glyph.
-const MODEL_COMPANY_MARKS: &[(&[&str], &str)] = &[
-    (&["grok"], "icons/companies/xai.svg"),
-    (&["claude"], "icons/companies/anthropic.svg"),
+/// letter glyph. Marks are the published brand assets from the Lobe Icons
+/// collection; companies that publish only a monochrome mark (OpenAI, xAI)
+/// and Kimi's ink-following K carry a theme variant.
+const MODEL_COMPANY_MARKS: &[(&[&str], CompanyMark)] = &[
+    (
+        &["grok"],
+        themed("icons/companies/xai.svg", "icons/companies/xai-dark.svg"),
+    ),
+    (&["claude"], mark("icons/companies/anthropic.svg")),
     (
         &[
             "gpt", "o1", "o3", "o4", "codex", "davinci", "chatgpt", "openai",
         ],
-        "icons/companies/openai.svg",
+        themed(
+            "icons/companies/openai.svg",
+            "icons/companies/openai-dark.svg",
+        ),
     ),
-    (&["gemini", "gemma", "google"], "icons/companies/google.svg"),
-    (&["deepseek"], "icons/companies/deepseek.svg"),
+    (
+        &["gemini", "gemma", "google"],
+        mark("icons/companies/google.svg"),
+    ),
+    (&["deepseek"], mark("icons/companies/deepseek.svg")),
     (
         &["qwen", "tongyi", "qwq", "qvq"],
-        "icons/companies/qwen.svg",
+        mark("icons/companies/qwen.svg"),
     ),
-    (&["kimi", "moonshot"], "icons/companies/moonshot.svg"),
+    (
+        &["kimi", "moonshot"],
+        themed(
+            "icons/companies/moonshot.svg",
+            "icons/companies/moonshot-dark.svg",
+        ),
+    ),
     (
         &["glm", "chatglm", "zhipu", "zai"],
-        "icons/companies/zai.svg",
+        mark("icons/companies/zai.svg"),
     ),
-    (&["llama", "meta"], "icons/companies/meta.svg"),
+    (&["llama", "meta"], mark("icons/companies/meta.svg")),
     (
         &[
             "mistral",
@@ -224,35 +295,35 @@ const MODEL_COMPANY_MARKS: &[(&[&str], &str)] = &[
             "devstral",
             "voxtral",
         ],
-        "icons/companies/mistral.svg",
+        mark("icons/companies/mistral.svg"),
     ),
     (
         &["minimax", "hailuo", "abab"],
-        "icons/companies/minimax.svg",
+        mark("icons/companies/minimax.svg"),
     ),
     (
         &["doubao", "bytedance", "ui-tars"],
-        "icons/companies/bytedance.svg",
+        mark("icons/companies/bytedance.svg"),
     ),
     (
         &["phi", "microsoft", "mai"],
-        "icons/companies/microsoft.svg",
+        mark("icons/companies/microsoft.svg"),
     ),
-    (&["nova", "amazon"], "icons/companies/amazon.svg"),
+    (&["nova", "amazon"], mark("icons/companies/amazon.svg")),
     (
         &["sonar", "perplexity", "r1-1776"],
-        "icons/companies/perplexity.svg",
+        mark("icons/companies/perplexity.svg"),
     ),
 ];
 
 /// The company mark for a model, or `None` when no company matches and the
 /// caller should fall back to [`provider_icon`].
-fn model_company_icon(model_id: &str, model_name: &str) -> Option<&'static str> {
+fn model_company_icon(model_id: &str, model_name: &str) -> Option<CompanyMark> {
     let haystack = format!("{} {}", model_id.trim(), model_name.trim()).to_ascii_lowercase();
     MODEL_COMPANY_MARKS
         .iter()
         .find(|(tokens, _)| tokens.iter().any(|token| contains_token(&haystack, token)))
-        .map(|(_, icon)| *icon)
+        .map(|(_, mark)| *mark)
 }
 
 /// Substring match on token boundaries, so short marks like `o3` or `phi`
@@ -486,7 +557,7 @@ pub fn chip_width(label: Option<f32>) -> f32 {
 #[derive(IntoElement)]
 pub struct MenuChip {
     base: Stateful<Div>,
-    icon: Option<(&'static str, Hsla)>,
+    icon: Option<ChipIcon>,
     label: SharedString,
     caret: bool,
     outlined: bool,
@@ -497,6 +568,11 @@ pub struct MenuChip {
     icon_only: bool,
     tooltip: Option<SharedString>,
     max_label_width: Option<f32>,
+}
+
+enum ChipIcon {
+    Tinted(&'static str, Hsla),
+    Mark(ModelMark, Hsla),
 }
 
 impl MenuChip {
@@ -533,7 +609,14 @@ impl MenuChip {
     }
 
     pub fn icon(mut self, path: &'static str, color: Hsla) -> Self {
-        self.icon = Some((path, color));
+        self.icon = Some(ChipIcon::Tinted(path, color));
+        self
+    }
+
+    /// Lead with a model mark: the company asset keeps its colors, while a
+    /// provider fallback is tinted.
+    pub fn mark(mut self, mark: ModelMark, tint: Hsla) -> Self {
+        self.icon = Some(ChipIcon::Mark(mark, tint));
         self
     }
 
@@ -651,8 +734,13 @@ impl RenderOnce for MenuChip {
                     .active(|element| element.bg(theme.overlay_strong))
             })
             .when(self.disabled, |element| element.opacity(0.7))
-            .when_some(self.icon, |element, (path, color)| {
-                element.child(icon(path, CHIP_ICON, color))
+            .when_some(self.icon, |element, chip_icon| {
+                element.child(match chip_icon {
+                    ChipIcon::Tinted(path, color) => {
+                        icon(path, CHIP_ICON, color).into_any_element()
+                    }
+                    ChipIcon::Mark(mark, tint) => model_mark_element(mark, CHIP_ICON, tint),
+                })
             })
             .when(!self.icon_only, |element| {
                 let label = div().min_w_0().truncate().text_color(theme.text_secondary);
@@ -809,10 +897,13 @@ mod tests {
             paths.push(provider_letter_icon(&letter.to_string()));
         }
         // Same for every company mark in `MODEL_COMPANY_MARKS`: one probe per
-        // entry, so a renamed SVG fails here instead of vanishing from the
-        // model chip at runtime.
-        for (tokens, _) in MODEL_COMPANY_MARKS {
-            paths.push(model_icon(tokens[0], tokens[0], "opencode"));
+        // entry and theme variant, so a renamed SVG fails here instead of
+        // vanishing from the model chip at runtime.
+        for (_, company) in MODEL_COMPANY_MARKS {
+            paths.push(company.light);
+            if let Some(dark) = company.dark {
+                paths.push(dark);
+            }
         }
         for kind in [
             ActivityKind::Reasoning,
@@ -880,47 +971,68 @@ mod tests {
         // A router's slug never leaks into the mark: the company is matched
         // from the model id and display name, however the provider is named.
         assert_eq!(
-            model_icon("some-router/grok-4.6", "Grok 4.6", "Some Router"),
+            model_mark("some-router/grok-4.6", "Grok 4.6", "Some Router", false).asset(),
             "icons/companies/xai.svg"
         );
         assert_eq!(
-            model_icon("openrouter/claude-opus-4", "Claude Opus 4", "OpenRouter"),
+            model_mark(
+                "openrouter/claude-opus-4",
+                "Claude Opus 4",
+                "OpenRouter",
+                false
+            )
+            .asset(),
             "icons/companies/anthropic.svg"
         );
         assert_eq!(
-            model_icon("zhipuai/glm-4.6", "GLM 4.6", "Zhipu"),
+            model_mark("zhipuai/glm-4.6", "GLM 4.6", "Zhipu", false).asset(),
             "icons/companies/zai.svg"
         );
         assert_eq!(
-            model_icon("moonshotai/kimi-k2", "Kimi K2", "Moonshot"),
+            model_mark("moonshotai/kimi-k2", "Kimi K2", "Moonshot", false).asset(),
             "icons/companies/moonshot.svg"
+        );
+        // Monochrome brand ink follows the theme so it stays visible.
+        assert_eq!(
+            model_mark("openai/gpt-5", "GPT-5", "OpenAI", true).asset(),
+            "icons/companies/openai-dark.svg"
+        );
+        assert_eq!(
+            model_mark("xai/grok-4", "Grok 4", "xAI", true).asset(),
+            "icons/companies/xai-dark.svg"
+        );
+        assert_eq!(
+            model_mark("moonshotai/kimi-k2", "Kimi K2", "Moonshot", true).asset(),
+            "icons/companies/moonshot-dark.svg"
         );
         // The match runs on either the id, the display name, or both.
         assert_eq!(
-            model_company_icon("", "GPT-5").unwrap(),
+            model_company_icon("", "GPT-5").unwrap().light,
             "icons/companies/openai.svg"
         );
         assert_eq!(
-            model_company_icon("google/gemini-2.5-pro", "").unwrap(),
+            model_company_icon("google/gemini-2.5-pro", "")
+                .unwrap()
+                .light,
             "icons/companies/google.svg"
         );
         // Short tokens land on real models but not inside other words.
         assert_eq!(
-            model_company_icon("openai/o3-mini", "").unwrap(),
+            model_company_icon("openai/o3-mini", "").unwrap().light,
             "icons/companies/openai.svg"
         );
         assert_eq!(
-            model_company_icon("microsoft/phi-4", ""),
+            model_company_icon("microsoft/phi-4", "").map(|mark| mark.light),
             Some("icons/companies/microsoft.svg")
         );
         assert_eq!(
-            model_company_icon("qwen/qwen3-o", ""),
+            model_company_icon("qwen/qwen3-o", "").map(|mark| mark.light),
             Some("icons/companies/qwen.svg")
         );
-        assert_eq!(model_company_icon("test/domain-x", ""), None);
+        assert!(model_company_icon("test/domain-x", "").is_none());
         // No match: the provider's icon carries on.
         assert_eq!(
-            model_icon("yi/yi-lightning", "Yi Lightning", "01.AI"),
+            model_mark("yi/yi-lightning", "Yi Lightning", "01.AI", false).asset(),
             "icons/letters/a.svg"
         );
     }

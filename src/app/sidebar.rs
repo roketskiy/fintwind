@@ -1545,7 +1545,12 @@ impl Fintwind {
                 .into_any_element()
         };
         let avatar = session_model_avatar(
-            model_icon(model_id.as_deref().unwrap_or(""), &model_name, &provider),
+            model_mark(
+                model_id.as_deref().unwrap_or(""),
+                &model_name,
+                &provider,
+                theme.is_dark,
+            ),
             provider_color(&theme, &provider),
             working,
             &theme,
@@ -1935,7 +1940,7 @@ impl Fintwind {
 }
 
 fn session_model_avatar(
-    icon_path: &'static str,
+    mark: ModelMark,
     icon_color: Hsla,
     working: bool,
     theme: &Theme,
@@ -1965,7 +1970,7 @@ fn session_model_avatar(
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(icon(icon_path, SESSION_AVATAR_ICON, icon_color)),
+                .child(model_mark_element(mark, SESSION_AVATAR_ICON, icon_color)),
         )
         .into_any_element()
 }

@@ -2287,6 +2287,10 @@ source_control.loading:
   en: Reading Git status…
 source_control.refresh:
   en: Refresh
+source_control.repository_actions:
+  en: Repository actions
+source_control.group_actions:
+  en: Unstaged changes actions
 source_control.follow_session:
   en: Following session
 source_control.staged:

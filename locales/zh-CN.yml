@@ -1144,6 +1144,8 @@ file_picker.typed_file: "%{type} 文件"
 source_control.title: 审阅
 source_control.loading: 正在读取 Git 状态…
 source_control.refresh: 刷新
+source_control.repository_actions: 仓库操作
+source_control.group_actions: 未暂存更改操作
 source_control.follow_session: 跟随会话
 source_control.staged: 已暂存 %{count}
 source_control.unstaged: 未暂存 %{count}

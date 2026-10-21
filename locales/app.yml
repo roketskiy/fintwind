@@ -181,7 +181,7 @@ settings.mcp_servers_keywords:
 settings.mcp_market:
   en: MCP Marketplace
 settings.mcp_market_keywords:
-  en: mcp marketplace official web search academic code install context7 github arxiv pubmed brave exa tavily
+  en: mcp marketplace official web search academic code install office design data automation devops business notion airtable linear figma canva stripe sentry vercel supabase context7 github arxiv pubmed brave exa tavily
 settings.scheduled_tasks:
   en: Scheduled tasks
 settings.scheduled_tasks_keywords:
@@ -841,6 +841,18 @@ mcp_market.filter_academic:
   en: Academic
 mcp_market.filter_code:
   en: Code
+mcp_market.filter_office:
+  en: Office
+mcp_market.filter_design:
+  en: Design
+mcp_market.filter_data:
+  en: Data
+mcp_market.filter_automation:
+  en: Automation
+mcp_market.filter_devops:
+  en: DevOps
+mcp_market.filter_business:
+  en: Business
 mcp_market.install:
   en: Add
 mcp_market.installed:
@@ -915,6 +927,34 @@ mcp_market.desc.microsoft_learn:
   en: Official Microsoft documentation for Azure, .NET, and related products.
 mcp_market.desc.gread:
   en: Read source from public GitHub repositories, including docs repos when present.
+mcp_market.desc.notion:
+  en: Read and write Notion pages and databases — team knowledge and project notes.
+mcp_market.desc.zoom_docs:
+  en: Create and read Zoom documents and meeting notes.
+mcp_market.desc.atlassian:
+  en: Work with Jira issues, Confluence pages, and Loom recordings.
+mcp_market.desc.linear:
+  en: Manage Linear issues, cycles, and projects.
+mcp_market.desc.monday:
+  en: Read and write monday.com boards, items, and status updates.
+mcp_market.desc.figma:
+  en: Read Figma design context — layers, styles, and variables.
+mcp_market.desc.canva:
+  en: Create, search, and export designs with Canva.
+mcp_market.desc.airtable:
+  en: Read and write Airtable tables and records — a database behind a spreadsheet.
+mcp_market.desc.supabase:
+  en: Query your Supabase Postgres, apply migrations, and deploy Edge Functions.
+mcp_market.desc.zapier:
+  en: Trigger actions across 9,000+ apps through Zapier.
+mcp_market.desc.sentry:
+  en: Search Sentry errors, analyze performance, and triage issues.
+mcp_market.desc.vercel:
+  en: Manage Vercel projects and deployments, read logs and Web Analytics.
+mcp_market.desc.stripe:
+  en: Read and write Stripe customers, subscriptions, invoices, and refunds.
+mcp_market.desc.zoominfo:
+  en: Look up company and contact intelligence to enrich your leads.
 
 common.settings:
   en: Settings

@@ -700,7 +700,7 @@ impl Fintwind {
                 SettingsPage::McpMarket,
                 "settings.mcp_market",
                 "icons/sparkle.svg",
-                "settings preferences mcp marketplace official web search academic code install",
+                "settings preferences mcp marketplace official web search academic code install office design data automation devops business",
             ),
         ] {
             commands.push(CommandPaletteItem::command(

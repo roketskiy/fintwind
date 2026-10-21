@@ -18,6 +18,7 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+- MCP 市场扩充：新增办公、设计、数据、自动化、运维、商务六个分类，收录 Notion、Zoom Docs、Atlassian、Linear、monday.com、Figma、Canva、Airtable、Supabase、Zapier、Sentry、Vercel、Stripe、ZoomInfo，均使用厂商自建的官方端点
 - MCP 市场改用厂商官方端点：Brave、Exa、Tavily、Keenable、Parallel、Linkup、Bright Data、Consensus、Hugging Face、GitHub、DeepWiki、Microsoft Learn、Gread 现在都指向各自的官方 MCP 服务，详情页也给出官方项目页；PubMed、arXiv、Paper Search、Semantic Scholar、Wikipedia 因为数据提供方没有发布官方端点，仍使用托管版本，来源照旧标明
 - 重新添加市场里改过端点的条目时，已有的旧服务器就地换成官方端点，保留名称、请求头与 OAuth，不再多出一个重复条目
 - 新增「定时任务」工作区：侧边栏时钟图标与命令面板均可进入，可按固定时间（指定星期）或固定间隔创建任务，到点自动执行一段指令；任务可选择新建会话（指定项目、模型与权限）或复用某个已有会话，支持暂停、恢复、立即运行与删除，列表显示下次运行时间与上一次运行结果，并可直接打开派发出的会话；Fintwind 完全退出后不会执行定时运行，错过的运行也不会补跑

@@ -702,6 +702,7 @@ impl Fintwind {
             .p_5()
             .rounded_xl()
             .bg(theme.raised)
+            .shadow_xs()
             .flex()
             .flex_col()
             .gap_4()
@@ -746,26 +747,16 @@ impl Fintwind {
                                 theme,
                                 tr!("usage_page.kpi_generated_tokens"),
                                 format_tokens(totals.generated()),
-                                format!(
-                                    "{} {}",
-                                    tr!("usage_page.incl_reasoning"),
-                                    format_tokens(totals.reasoning)
-                                ),
                             ))
                             .child(usage_kpi_metric(
                                 theme,
                                 tr!("usage_page.kpi_sessions"),
                                 totals.sessions.to_string(),
-                                usage_sessions_subtitle(totals),
                             ))
                             .child(usage_kpi_metric(
                                 theme,
                                 tr!("usage_page.kpi_cache_hit"),
                                 hit.map(format_percent).unwrap_or_else(|| "—".into()),
-                                tr!(
-                                    "usage_page.cache_read_tokens",
-                                    tokens = format_tokens(totals.cache_read)
-                                ),
                             )),
                     ),
             )
@@ -790,7 +781,11 @@ impl Fintwind {
                         .into_iter()
                         .map(|(label, value)| {
                             div()
+                                .flex_1()
+                                .flex_basis(ui_px(160.0))
+                                .min_w_0()
                                 .flex()
+                                .flex_wrap()
                                 .items_baseline()
                                 .gap_2()
                                 .text_size(ui_px(11.0))
@@ -1706,31 +1701,7 @@ fn usage_ranking_card(
     card
 }
 
-/// The session KPI's subtitle: active days, plus the sub-agent sessions whose
-/// usage the totals absorbed. The second half is only appended when there are
-/// any, so an ordinary store keeps the short reading.
-fn usage_sessions_subtitle(totals: &UsageTotals) -> String {
-    let base = tr!("usage_page.active_days_value", count = totals.active_days);
-    if totals.subagent_sessions == 0 {
-        return base;
-    }
-    format!(
-        "{} · {}",
-        base,
-        tr!(
-            "usage_page.subagent_sessions_value",
-            count = totals.subagent_sessions,
-            tokens = format_tokens(totals.subagent_tokens)
-        )
-    )
-}
-
-fn usage_kpi_metric(
-    theme: &Theme,
-    label: impl IntoElement,
-    value: impl IntoElement,
-    sub: impl IntoElement,
-) -> Div {
+fn usage_kpi_metric(theme: &Theme, label: impl IntoElement, value: impl IntoElement) -> Div {
     div()
         .flex_1()
         .flex_basis(ui_px(128.0))
@@ -1751,14 +1722,6 @@ fn usage_kpi_metric(
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(theme.text)
                 .child(value),
-        )
-        .child(
-            div()
-                .text_size(ui_px(10.0))
-                .line_height(ui_px(16.0))
-                .text_color(theme.text_tertiary)
-                .whitespace_normal()
-                .child(sub),
         )
 }
 

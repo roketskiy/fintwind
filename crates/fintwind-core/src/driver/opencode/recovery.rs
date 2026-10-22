@@ -41,6 +41,7 @@ pub(super) struct SubmissionFence {
     generation: u64,
     boundary: Option<Boundary>,
     durable_receipt: Option<(uuid::Uuid, Arc<crate::persistence::StateStore>)>,
+    delivered: std::collections::HashMap<String, (u64, String)>,
 }
 
 pub(super) struct Steering {
@@ -62,6 +63,7 @@ impl SubmissionFence {
 
     pub(super) fn begin_with_input(&mut self, input_id: String, started_at: u64) -> u64 {
         self.durable_receipt = None;
+        self.delivered.clear();
         self.generation = self.generation.wrapping_add(1);
         self.boundary = Some(Boundary {
             generation: self.generation,
@@ -176,6 +178,7 @@ impl SubmissionFence {
     pub(super) fn clear(&mut self) {
         self.boundary = None;
         self.durable_receipt = None;
+        self.delivered.clear();
     }
 
     pub(super) fn bind_receipt(
@@ -367,6 +370,24 @@ impl Coordinator {
         }
         self.revision = self.revision.wrapping_add(1);
         self.last_progress = Instant::now();
+        if kind == "session.inbox.delivered"
+            && let Some(id) = super::event_payload(event)
+                .get("inboxID")
+                .and_then(Value::as_str)
+            && let Some(created) = event.get("created").and_then(Value::as_u64)
+            && let Some(event_id) = event.get("id").and_then(Value::as_str)
+        {
+            let mut fence = self.submissions.lock();
+            if fence
+                .boundary
+                .as_ref()
+                .is_some_and(|boundary| boundary.latest_input_id.as_deref() == Some(id))
+            {
+                fence
+                    .delivered
+                    .insert(id.to_owned(), (created, event_id.to_owned()));
+            }
+        }
         if kind == "session.execution.started" {
             self.submissions.lock().server_started(event);
         } else if !active {
@@ -385,7 +406,14 @@ impl Coordinator {
         }
     }
 
-    pub(super) fn defer_terminal(&mut self, event: &Value, session: &str) -> bool {
+    pub(super) fn handle_terminal(
+        &mut self,
+        event: &Value,
+        session: &str,
+        events: &impl crate::driver::DriverEventSink,
+        turn_active: &Mutex<bool>,
+        state: &mut super::OpenCodeStreamState,
+    ) -> bool {
         let legacy_idle = event.get("type").and_then(Value::as_str) == Some("session.idle")
             || (event.get("type").and_then(Value::as_str) == Some("session.status")
                 && event.pointer("/data/status/type").and_then(Value::as_str) == Some("idle"));
@@ -397,8 +425,67 @@ impl Coordinator {
                     | "session.execution.interrupted"
             )
         );
-        // A successful HTTP ack admits an inbox item, not its delivery. The
-        // latest input must be durable before any execution terminal settles.
+        // V2's durable delivery event proves which input this uninterrupted
+        // execution consumed. A healthy feed already supplied its transcript;
+        // an unrelated history request must not hold its terminal hostage.
+        // Reconnects and unconsumed steers still require the durable walk.
+        if terminal && super::event_session_id(event) == Some(session) && !self.needs_history {
+            let mut active = turn_active.lock();
+            let fence = self.submissions.lock();
+            if let Some(boundary) = fence.boundary.as_ref()
+                && *active
+                && boundary.accepted
+                && boundary.unconfirmed_steers.is_empty()
+                && let Some(delivered) = boundary
+                    .latest_input_id
+                    .as_ref()
+                    .and_then(|id| fence.delivered.get(id))
+                && event
+                    .get("created")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|created| created >= delivered.0 && created >= boundary.started_at)
+                && event
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id > delivered.1.as_str())
+                && super::event_payload(event)
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    != Some("shutdown")
+            {
+                fence.confirm_receipt(events, self.port);
+                self.completed = Some(Completion {
+                    created: event
+                        .get("created")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_default(),
+                    message_id: event
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .and_then(|id| id.strip_prefix("evt_"))
+                        .map(|id| format!("msg_{id}")),
+                });
+                self.reconnect_due = false;
+                self.terminal_error = None;
+                crate::opencode_diagnostics::record(
+                    "turn_completed_live",
+                    self.port,
+                    boundary.generation,
+                );
+                super::finish_execution_event(
+                    event
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    super::event_payload(event),
+                    &mut active,
+                    state,
+                    events,
+                );
+                return true;
+            }
+        }
+        // An HTTP ack alone admits an inbox item, not its delivery.
         if (legacy_idle || terminal) && super::event_session_id(event) == Some(session) {
             self.reconnect_due = true;
             if let Some(message) = event.pointer("/data/error/message").and_then(Value::as_str)
@@ -447,12 +534,23 @@ impl Coordinator {
                         return Some(turn);
                     }
                     Ok(None) => {}
-                    Err(_) => {
-                        crate::opencode_diagnostics::record(
-                            "reconcile_unavailable",
-                            self.port,
-                            connection,
-                        );
+                    Err(error) => {
+                        let reason = error
+                            .chain()
+                            .find_map(|cause| match cause.to_string().as_str() {
+                                "reconcile_session_unavailable" => {
+                                    Some("reconcile_session_unavailable")
+                                }
+                                "reconcile_history_unavailable" => {
+                                    Some("reconcile_history_unavailable")
+                                }
+                                "reconcile_active_unavailable" => {
+                                    Some("reconcile_active_unavailable")
+                                }
+                                _ => None,
+                            })
+                            .unwrap_or("reconcile_unavailable");
+                        crate::opencode_diagnostics::record(reason, self.port, connection);
                     }
                 }
             }
@@ -491,7 +589,8 @@ fn fetch_turn(
     cancelled: impl Fn() -> bool,
 ) -> anyhow::Result<Option<RecoveredTurn>> {
     let path = format!("/api/session/{}", encode_path_segment(session));
-    let info = request_json_on_port_bounded(port, &path, REQUEST_TIMEOUT, MAX_RECOVERY_BYTES)?;
+    let info = request_json_on_port_bounded(port, &path, REQUEST_TIMEOUT, MAX_RECOVERY_BYTES)
+        .context("reconcile_session_unavailable")?;
     let info = info.get("data").unwrap_or(&info);
     if matches!(
         info.pointer("/status/type").and_then(Value::as_str),
@@ -526,7 +625,8 @@ fn fetch_turn(
         if timeout.is_zero() {
             bail!("OpenCode reconciliation exceeded its pagination deadline");
         }
-        let response = request_json_on_port_bounded(port, &query, timeout, MAX_RECOVERY_BYTES)?;
+        let response = request_json_on_port_bounded(port, &query, timeout, MAX_RECOVERY_BYTES)
+            .context("reconcile_history_unavailable")?;
         let messages = response
             .get("data")
             .and_then(Value::as_array)
@@ -646,7 +746,8 @@ fn fetch_turn(
         "/api/session/active",
         REQUEST_TIMEOUT,
         MAX_RECOVERY_BYTES,
-    )?;
+    )
+    .context("reconcile_active_unavailable")?;
     let active = active
         .get("data")
         .and_then(Value::as_object)

@@ -54,6 +54,125 @@ use fintwind_protocol::provider_session::NativeTranscript;
 
 const DAEMON_TOKEN: &str = "opencode-recovery-e2e-token";
 
+#[test]
+#[ignore = "requires isolated real OpenCode and loopback provider from the protocol runner"]
+fn opencode_real_turn_completion() {
+    let binary =
+        PathBuf::from(std::env::var_os("FINTWIND_REAL_OPENCODE").expect("isolated runner"));
+    let run = Run::new();
+    let workspace = run.workspace("real-protocol");
+    let harness = start_harness(&run.root);
+    let (session, runtime) = (Uuid::new_v4(), Uuid::new_v4());
+    let mut options = start_options(&binary, &workspace);
+    options.model = Some("fixture/fixture-model".into());
+    harness
+        .client
+        .request(session, runtime, Command::Start { options })
+        .unwrap();
+    let events = harness.client.subscribe(session, runtime);
+    for turn in 0..3 {
+        harness
+            .client
+            .request(
+                session,
+                runtime,
+                Command::Prompt {
+                    prompt: "Hello".into(),
+                    files: vec![],
+                },
+            )
+            .unwrap();
+        let mut collected = Collected::default();
+        observe(
+            &events,
+            Duration::from_secs(40),
+            Duration::from_millis(200),
+            &mut collected,
+        );
+        fs::write(
+            run.root.join(format!("real-protocol-{turn}.json")),
+            serde_json::to_vec_pretty(&collected.timeline).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(collected.finishes.len(), 1, "events: {:?}", collected.kinds);
+        assert!(collected.finishes[0].0, "{:?}", collected.finishes);
+        assert!(
+            collected
+                .delta_text
+                .contains("Protocol completion verified."),
+            "the live answer must arrive before completion"
+        );
+    }
+
+    let fixture = build_fixture(
+        &run,
+        "history-unavailable",
+        &json!({
+            "session_id": "ses_delivery", "messages_status": 503,
+            "turns": [{"user_msg_id": "msg_input", "created_ms": 1700000000000u64,
+                "sse": [
+                    {"sleep_ms": 200},
+                    {"inbox_delivered": true},
+                    // A same-millisecond terminal ordered before delivery is
+                    // stale, even though its timestamp alone looks current.
+                    {"event": {"id": "evt_001", "created": 1700000000001u64, "type": "session.execution.succeeded", "data": {"sessionID": "ses_delivery"}}},
+                    {"text_started": true}, {"delta": "Complete answer"}, {"text_ended": "Complete answer"},
+                    {"event": {"id": "evt_003", "created": 1700000000002u64, "type": "session.execution.succeeded", "data": {"sessionID": "ses_delivery"}}}
+                ]}]
+        }),
+    );
+    let (session, runtime) = (Uuid::new_v4(), Uuid::new_v4());
+    harness
+        .client
+        .request(
+            session,
+            runtime,
+            Command::Start {
+                options: start_options(&fixture.bin, &workspace),
+            },
+        )
+        .unwrap();
+    // This case exercises an already established feed; reconnect recovery has
+    // its own fault matrix below.
+    std::thread::sleep(Duration::from_millis(600));
+    let events = harness.client.subscribe(session, runtime);
+    harness
+        .client
+        .request(
+            session,
+            runtime,
+            Command::Prompt {
+                prompt: "Hello".into(),
+                files: vec![],
+            },
+        )
+        .unwrap();
+    let mut collected = Collected::default();
+    observe(
+        &events,
+        Duration::from_secs(5),
+        Duration::from_millis(200),
+        &mut collected,
+    );
+    assert_eq!(
+        collected.finishes.len(),
+        1,
+        "history failure must not block a delivered live turn: {:?}",
+        collected.kinds
+    );
+    assert!(collected.finishes[0].0);
+    assert_eq!(collected.delta_text, "Complete answer");
+    let text_ended = collected
+        .kinds
+        .iter()
+        .position(|(kind, _)| kind == "textEnded")
+        .unwrap();
+    assert!(
+        collected.finish_indices[0] > text_ended,
+        "a stale terminal must not precede the answer"
+    );
+}
+
 /// Explicit skills must reach the provider as native attachments, not hints
 /// that force the model to search. Cover display-name/ID differences, nested
 /// mentions, repeated IDs, ordinary files, unknown IDs, and busy-session steer.

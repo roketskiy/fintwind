@@ -1174,7 +1174,13 @@ impl OpenCodeDriver {
                             }
                             reconciliation.observe_connection(&stream_feed, *stream_turn.lock());
                             if !reconciliation.is_completed_event(&value, &stream_session) {
-                                if !reconciliation.defer_terminal(&value, &stream_session) {
+                                if !reconciliation.handle_terminal(
+                                    &value,
+                                    &stream_session,
+                                    &stream_event_sink,
+                                    &stream_turn,
+                                    &mut state,
+                                ) {
                                     dispatch_server_event(
                                         &value,
                                         &stream_session,
@@ -3925,41 +3931,10 @@ fn handle_event(
         // the foreground session must too, or the continuation's deltas are
         // dropped (`accepts_turn_output` is false while Idle).
         "session.execution.started" => ensure_foreground_turn_active(turn_active, events),
-        "session.execution.succeeded" => {
-            clear_foreground_turn_state(state, events);
-            if std::mem::take(&mut *turn_active.lock()) {
-                let _ = events.send(DriverEvent::TurnFinished {
-                    success: true,
-                    summary: None,
-                });
-            }
-        }
-        "session.execution.failed" => {
-            clear_foreground_turn_state(state, events);
-            // The failure payload carries the provider error; surface it so
-            // the transcript explains why the turn settled unsuccessfully.
-            let message = payload
-                .pointer("/error/message")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            if let Some(message) = message {
-                let _ = events.send(DriverEvent::Error(message));
-            }
-            if std::mem::take(&mut *turn_active.lock()) {
-                let _ = events.send(DriverEvent::TurnFinished {
-                    success: false,
-                    summary: Some(tr!("errors.provider_start_turn", provider = "OpenCode")),
-                });
-            }
-        }
-        "session.execution.interrupted" => {
-            clear_foreground_turn_state(state, events);
-            if std::mem::take(&mut *turn_active.lock()) {
-                let _ = events.send(DriverEvent::TurnFinished {
-                    success: false,
-                    summary: None,
-                });
-            }
+        "session.execution.succeeded"
+        | "session.execution.failed"
+        | "session.execution.interrupted" => {
+            finish_execution_event(kind, payload, &mut turn_active.lock(), state, events)
         }
         "session.error" => {
             let message = payload
@@ -4067,6 +4042,26 @@ fn handle_event(
         // comment lines are not transcript content. The text and reasoning
         // started/ended/delta trios are handled above.
         _ => {}
+    }
+}
+
+fn finish_execution_event(
+    kind: &str,
+    payload: &Value,
+    active: &mut bool,
+    state: &mut OpenCodeStreamState,
+    events: &impl DriverEventSink,
+) {
+    clear_foreground_turn_state(state, events);
+    let failed = kind == "session.execution.failed";
+    if failed && let Some(message) = payload.pointer("/error/message").and_then(Value::as_str) {
+        let _ = events.send(DriverEvent::Error(message.to_owned()));
+    }
+    if std::mem::take(active) {
+        let _ = events.send(DriverEvent::TurnFinished {
+            success: kind == "session.execution.succeeded",
+            summary: failed.then(|| tr!("errors.provider_start_turn", provider = "OpenCode")),
+        });
     }
 }
 

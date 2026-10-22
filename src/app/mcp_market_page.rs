@@ -1197,7 +1197,7 @@ impl Fintwind {
                         .flex()
                         .items_start()
                         .gap(px(12.0))
-                        .child(provider_tile(theme, entry.icon, true))
+                        .child(provider_tile(theme, ModelMark::Provider(entry.icon), true))
                         .child(
                             div()
                                 .flex_1()

@@ -1046,7 +1046,7 @@ impl Fintwind {
                     .overflow_y_scroll();
                 for (provider_tab, provider_label) in provider_tabs {
                     let is_selected = selected_tab == provider_tab && !searching;
-                    let icon_path = provider_icon(&provider_label);
+                    let mark = provider_mark(&provider_label, theme.is_dark);
                     let tooltip = provider_label.clone();
                     let select_tab = provider_tab.clone();
                     let provider_weak = provider_weak.clone();
@@ -1075,8 +1075,8 @@ impl Fintwind {
                                     this.select_model_picker_tab(select_tab.clone(), cx);
                                 });
                             })
-                            .child(icon(
-                                icon_path,
+                            .child(model_mark_element(
+                                mark,
                                 18.0,
                                 if is_selected {
                                     theme.neutral_fill

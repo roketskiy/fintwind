@@ -850,7 +850,7 @@ impl Fintwind {
             "provider-row-builtin",
             OPENCODE_PROVIDER.to_owned(),
             "OpenCode".to_owned(),
-            "icons/provider-opencode.svg",
+            provider_mark(OPENCODE_PROVIDER, theme.is_dark),
             selected_id == OPENCODE_PROVIDER,
             true,
             theme,
@@ -869,7 +869,7 @@ impl Fintwind {
                     SharedString::from(format!("provider-row-builtin-{}", provider.id)),
                     builtin_selection_id(&provider.id),
                     provider.name.clone(),
-                    provider_icon(&provider.name),
+                    provider_mark(&provider.name, theme.is_dark),
                     selected_id == builtin_selection_id(&provider.id),
                     true,
                     theme,
@@ -885,7 +885,7 @@ impl Fintwind {
                 SharedString::from(format!("provider-row-{index}")),
                 provider.id.clone(),
                 provider.name.clone(),
-                provider_icon(&provider.name),
+                provider_mark(&provider.name, theme.is_dark),
                 selected_id == provider.id,
                 provider.enabled,
                 theme,
@@ -962,7 +962,7 @@ impl Fintwind {
         id: impl Into<ElementId>,
         provider_id: String,
         label: String,
-        icon_path: &'static str,
+        mark: ModelMark,
         selected: bool,
         active: bool,
         theme: &Theme,
@@ -1002,8 +1002,8 @@ impl Fintwind {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(icon(
-                                icon_path,
+                            .child(model_mark_element(
+                                mark,
                                 14.0,
                                 if selected {
                                     accent
@@ -1297,7 +1297,7 @@ impl Fintwind {
                         .gap(px(12.0))
                         .child(provider_tile(
                             theme,
-                            "icons/provider-opencode.svg",
+                            provider_mark(OPENCODE_PROVIDER, theme.is_dark),
                             installed,
                         ))
                         .child(
@@ -1502,7 +1502,7 @@ impl Fintwind {
                         .gap(px(12.0))
                         .child(provider_tile(
                             theme,
-                            provider_icon(&provider.name),
+                            provider_mark(&provider.name, theme.is_dark),
                             authorized,
                         ))
                         .child(
@@ -1896,7 +1896,11 @@ impl Fintwind {
                         .flex()
                         .items_center()
                         .gap(px(12.0))
-                        .child(provider_tile(theme, provider_icon(&provider.name), enabled))
+                        .child(provider_tile(
+                            theme,
+                            provider_mark(&provider.name, theme.is_dark),
+                            enabled,
+                        ))
                         .child(
                             div()
                                 .flex_1()
@@ -2468,7 +2472,7 @@ impl Fintwind {
             "form-picker-custom",
             None,
             tr!("providers.form_custom_label"),
-            "icons/plus.svg",
+            ModelMark::Provider("icons/plus.svg"),
             None,
             false,
             theme,
@@ -2486,7 +2490,7 @@ impl Fintwind {
                     SharedString::from(format!("form-picker-{}", provider.id)),
                     Some(provider.id.clone()),
                     provider.name.clone(),
-                    provider_icon(&provider.name),
+                    provider_mark(&provider.name, theme.is_dark),
                     if authorized && self.provider_needs_auth(&provider.id) {
                         Some(tr!("providers.needs_auth_badge"))
                     } else if authorized {
@@ -2572,7 +2576,7 @@ impl Fintwind {
         id: impl Into<ElementId>,
         provider_id: Option<String>,
         label: String,
-        icon_path: &'static str,
+        mark: ModelMark,
         badge: Option<String>,
         separator: bool,
         theme: &Theme,
@@ -2607,7 +2611,7 @@ impl Fintwind {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(icon(icon_path, 12.0, theme.text_secondary)),
+                    .child(model_mark_element(mark, 12.0, theme.text_secondary)),
             )
             .child(
                 div()
@@ -3522,7 +3526,7 @@ pub(super) fn section_label(theme: &Theme, label: String, first: bool) -> Div {
         .child(SharedString::from(label.to_uppercase()))
 }
 
-pub(super) fn provider_tile(theme: &Theme, icon_path: &'static str, active: bool) -> Div {
+pub(super) fn provider_tile(theme: &Theme, mark: ModelMark, active: bool) -> Div {
     div()
         .w(px(38.0))
         .h(px(38.0))
@@ -3532,13 +3536,11 @@ pub(super) fn provider_tile(theme: &Theme, icon_path: &'static str, active: bool
         .flex()
         .items_center()
         .justify_center()
-        .child(icon(
-            icon_path,
-            17.0,
-            theme
-                .text_secondary
-                .opacity(if active { 1.0 } else { 0.45 }),
-        ))
+        .child(
+            div()
+                .opacity(if active { 1.0 } else { 0.45 })
+                .child(model_mark_element(mark, 17.0, theme.text_secondary)),
+        )
 }
 
 pub(super) fn enabled_badge(theme: &Theme, accent: Hsla, enabled: bool) -> Div {

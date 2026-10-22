@@ -3,7 +3,9 @@
 Users download a per-user **`fintwind-<version>-<arch>-Setup.exe`** (or the
 portable zip) from the
 [GitHub Releases](https://github.com/roketskiy/fintwind/releases) page. The app
-checks that page for a newer version and can install it itself: an installed
+selects the most recently published full release, regardless of numeric version
+ordering, and can install it itself. Drafts and prereleases are excluded; the
+installed release is not offered again. An installed
 copy offers **Update now** on the update notice, which downloads the installer
 for the running architecture, verifies it against the asset's `digest`, and runs
 it silently. That makes both release files load-bearing — a release without its

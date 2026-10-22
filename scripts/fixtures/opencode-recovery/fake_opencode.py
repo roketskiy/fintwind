@@ -295,6 +295,9 @@ class Handler(BaseHTTPRequestHandler):
                             part["text"] = text
 
     def handle_messages(self):
+        if BEHAVIOR.get("messages_status"):
+            log({"event": "messages_unavailable"})
+            return self._json(BEHAVIOR["messages_status"], {"error": "history unavailable"})
         sid = self._session_id()
         if sid in BEHAVIOR.get("session_messages", {}):
             log({"event": "messages", "sid": sid})
@@ -622,6 +625,10 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(step["sleep_ms"] / 1000.0)
             if "event" in step:
                 self._emit(step["event"], step)
+            if step.get("inbox_delivered"):
+                self._emit({"id": "evt_002", "created": turn["created_ms"] + 1,
+                            "type": "session.inbox.delivered", "data": {
+                                "sessionID": sid, "inboxID": STATE["accepted"][current_turn()]}}, step)
             if "move" in step:
                 move = step["move"]
                 moved_id = move.get("sessionID", sid)

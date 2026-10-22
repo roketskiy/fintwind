@@ -9,7 +9,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, bail};
 use serde::Deserialize;
@@ -19,7 +19,8 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub const RELEASES_LATEST_URL: &str = "https://github.com/roketskiy/fintwind/releases/latest";
 
-const LATEST_RELEASE_API: &str = "https://api.github.com/repos/roketskiy/fintwind/releases/latest";
+const RELEASES_API: &str = "https://api.github.com/repos/roketskiy/fintwind/releases";
+const RELEASES_PAGE_SIZE: usize = 100;
 
 /// The architecture token the release file names carry, which is the Rust
 /// target's own name — exactly what `bundle-windows.ts` writes into them.
@@ -96,7 +97,11 @@ impl ReleaseInfo {
 
 #[derive(Deserialize)]
 struct LatestRelease {
+    id: u64,
     tag_name: String,
+    draft: bool,
+    prerelease: bool,
+    published_at: Option<String>,
     #[serde(default)]
     body: Option<String>,
     #[serde(default)]
@@ -125,23 +130,61 @@ pub fn fetch_newer_release() -> Option<ReleaseInfo> {
     if crate::BUILD_CHANNEL != crate::BuildChannel::Stable {
         return None;
     }
+    fetch_newer_release_from(RELEASES_API, APP_VERSION)
+}
+
+pub(crate) fn fetch_newer_release_from(api: &str, current_version: &str) -> Option<ReleaseInfo> {
     let headers = [
         format!("User-Agent: fintwind/{APP_VERSION}"),
         "Accept: application/vnd.github+json".to_string(),
     ];
-    let (status, body) =
-        fintwind_protocol::http::http_get(LATEST_RELEASE_API, &headers, RELEASE_API_MAX_TIME_SECS)
-            .ok()?;
-    if status != 200 {
-        return None;
+    let started = Instant::now();
+    let budget = Duration::from_secs(RELEASE_API_MAX_TIME_SECS);
+    let mut latest = None;
+    for page in 1.. {
+        let remaining = budget.checked_sub(started.elapsed())?;
+        let endpoint = format!("{api}?per_page={RELEASES_PAGE_SIZE}&page={page}");
+        let (status, body) =
+            fintwind_protocol::http::http_get(&endpoint, &headers, remaining.as_secs().max(1))
+                .ok()?;
+        if status != 200 {
+            return None;
+        }
+        let releases = serde_json::from_str::<Vec<LatestRelease>>(&body).ok()?;
+        let last_page = releases.len() < RELEASES_PAGE_SIZE;
+        for release in releases {
+            if release.draft || release.prerelease || release.tag_name.trim().is_empty() {
+                continue;
+            }
+            let Some(published) = release
+                .published_at
+                .as_deref()
+                .and_then(|date| chrono::DateTime::parse_from_rfc3339(date).ok())
+            else {
+                continue;
+            };
+            let order = (published, release.id);
+            if latest
+                .as_ref()
+                .is_none_or(|(latest_order, _)| order > *latest_order)
+            {
+                latest = Some((order, release));
+            }
+        }
+        if last_page {
+            break;
+        }
     }
-    let release = serde_json::from_str::<LatestRelease>(&body).ok()?;
-    if release.tag_name.is_empty() || !is_newer(&release.tag_name, APP_VERSION) {
+    let (_, release) = latest?;
+    // Publication order is authoritative. A corrected version number can be
+    // numerically smaller than the installed version without being older.
+    let version = release.tag_name.trim().trim_start_matches(['v', 'V']);
+    if version == current_version.trim().trim_start_matches(['v', 'V']) {
         return None;
     }
 
     Some(ReleaseInfo {
-        version: release.tag_name.trim_start_matches(['v', 'V']).to_string(),
+        version: version.to_owned(),
         notes: release.body.unwrap_or_default(),
         url: release
             .html_url
@@ -438,26 +481,6 @@ pub fn launch_installer(installer: &Path) -> anyhow::Result<()> {
         .spawn()
         .with_context(|| format!("could not launch {}", installer.display()))?;
     Ok(())
-}
-
-fn is_newer(remote: &str, local: &str) -> bool {
-    match (parse_version(remote), parse_version(local)) {
-        (Some(remote), Some(local)) => remote > local,
-        _ => false,
-    }
-}
-
-fn parse_version(raw: &str) -> Option<(u64, u64, u64)> {
-    let trimmed = raw.trim().trim_start_matches(['v', 'V']);
-    let numeric = trimmed
-        .split(['-', '+'])
-        .next()
-        .filter(|part| !part.is_empty())?;
-    let mut parts = numeric.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next()?.parse().ok()?;
-    let patch = parts.next()?.parse().ok()?;
-    Some((major, minor, patch))
 }
 
 #[cfg(test)]

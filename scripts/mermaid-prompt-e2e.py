@@ -40,7 +40,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 ROOT = Path(__file__).resolve().parent.parent
 HTTP = build_opener(ProxyHandler({}))
 
-MARKER = "Fintwind Mermaid visualization (v1)."
+MARKER = "Fintwind Mermaid visualization ("
 # Frozen contract. A wording change needs a new version, so this runner owns a
 # byte-for-byte copy instead of parsing the TypeScript source.
 MERMAID_PROMPT_V1 = "\n".join([
@@ -61,6 +61,28 @@ MERMAID_PROMPT_V2 = "\n".join([
     "After writing or changing a mermaid code block, validate its exact source with the fintwind_mermaid_check tool. Fix every reported error and revalidate until the diagram is valid; a block that cannot be made valid is removed rather than left broken.",
     "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
 ])
+# v3 drops the flowchart-or-sequence style preset and the short-label rule.
+# The renderer limits stay: the native renderer cannot draw them.
+MERMAID_PROMPT_V3 = "\n".join([
+    "Fintwind Mermaid visualization (v3).",
+    "Proactively include a fenced mermaid code block when explaining nontrivial architecture, relationships, data flow, states, hierarchies, schedules, or any multi-step process that benefits from visualization, even when a diagram was not explicitly requested. Do not explain such structure only in prose.",
+    "Choose whichever diagram type expresses the idea best \u2014 flowchart, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, gantt, pie, timeline, mindmap, quadrantChart, or another supported type \u2014 and write the labels in the user's language. Quote labels that contain punctuation or reserved words.",
+    "Fintwind renders Mermaid natively and offline: use plain Mermaid text with standard syntax. Avoid HTML labels, images, icons, clickable links, custom CSS, and theme or init directives, which the renderer cannot draw. Output the diagram source directly.",
+    "After writing or changing a mermaid code block, validate its exact source with the fintwind_mermaid_check tool. Fix every reported error and revalidate until the diagram is valid; a block that cannot be made valid is removed rather than left broken.",
+    "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
+])
+MERMAID_PROMPTS = [MERMAID_PROMPT_V1, MERMAID_PROMPT_V2, MERMAID_PROMPT_V3]
+
+
+def instruction_count(prompt):
+    """How many frozen Mermaid instructions the request carries.
+
+    A request carries at most one version, so summing the three frozen
+    constants counts the instruction regardless of which version the session
+    selected. Counting only the newest constant would report zero for older
+    sessions.
+    """
+    return sum(prompt.count(text) for text in MERMAID_PROMPTS)
 TOOL_NAME = "mermaid_fixture_probe"
 PLUGIN_SOURCE = ROOT / "resources" / "opencode-context-plugin.ts"
 
@@ -170,7 +192,7 @@ class Brain:
                 "class": "primary" if primary else "auxiliary",
                 "systemSha256": sha256(prompt),
                 "toolsSha256": tools_hash(tools),
-                "instructionCount": prompt.count(MERMAID_PROMPT_V1),
+                "instructionCount": instruction_count(prompt),
                 "markerCount": prompt.count(MARKER),
                 "messageCount": len(payload.get("messages") or []),
                 "toolCall": tool_call,
@@ -570,9 +592,9 @@ def execute(binary, output):
           [{"instructionCount": r["instructionCount"], "systemSha256": r["systemSha256"]}
            for r in plain_records])
 
-    # v2 is the current generation: same single-instruction guarantees as v1,
-    # different bytes, and no check tool in this environment because the
-    # runner never gives the plugin a mermaid-check capability.
+    # v2 and v3 keep v1's single-instruction guarantees with their own bytes.
+    # The runner never gives the plugin a mermaid-check capability, so no
+    # version registers the check tool here.
     v2 = create_session("v2")
     v2_metadata = (session_info(v2).get("metadata") or {})
     check("v2_session_metadata_echoed", v2_metadata.get("fintwindMermaidPrompt") == "v2", v2_metadata)
@@ -596,6 +618,32 @@ def execute(binary, output):
           and all(record["toolsSha256"] == baseline_tools for record in v2_records),
           {"v2System": v2_records[0]["systemSha256"], "v1System": v1_system,
            "tools": sorted({r["toolsSha256"] for r in v2_records})})
+
+    v3 = create_session("v3")
+    v3_metadata = (session_info(v3).get("metadata") or {})
+    check("v3_session_metadata_echoed", v3_metadata.get("fintwindMermaidPrompt") == "v3", v3_metadata)
+    v3_records = turn(v3, "V3 turn 1.", label="v3")
+    v3_records += turn(v3, "V3 turn 2.", label="v3")
+    v3_system_text = system_text(v3_records[0]["payload"])
+    check("v3_each_request_instruction_once",
+          all(record["instructionCount"] == 1
+              and record["markerCount"] == 1
+              and record["systemSha256"] == v3_records[0]["systemSha256"]
+              for record in v3_records),
+          [{"instructionCount": record["instructionCount"],
+            "markerCount": record["markerCount"]} for record in v3_records])
+    check("v3_adds_only_instruction_to_off_system",
+          " ".join(v3_system_text.replace(MERMAID_PROMPT_V3, "").split())
+          == " ".join(off_system_text.split())
+          and v3_system_text.count(MERMAID_PROMPT_V3) == 1,
+          {"offLen": len(off_system_text), "v3Len": len(v3_system_text)})
+    check("v3_differs_from_older_versions_and_keeps_tools",
+          v3_records[0]["systemSha256"] != v1_system
+          and v3_records[0]["systemSha256"] != v2_records[0]["systemSha256"]
+          and all(record["toolsSha256"] == baseline_tools for record in v3_records),
+          {"v3System": v3_records[0]["systemSha256"], "v1System": v1_system,
+           "v2System": v2_records[0]["systemSha256"],
+           "tools": sorted({r["toolsSha256"] for r in v3_records})})
 
     # An independent preference file is not read by the plugin. Change it in
     # both directions and require exact request hashes to survive.
@@ -632,7 +680,7 @@ def execute(binary, output):
           {"systemSha256": fork_system, "toolsSha256": fork_records[0]["toolsSha256"]})
 
     # Unknown versions must fail the request, not silently omit the instruction.
-    unknown = create_session("v2")
+    unknown = create_session("v99")
     unknown_start = len(BRAIN.snapshot())
     unknown_response = prompt(unknown, "Unknown version turn.", allow_error=True)
     rejected = isinstance(unknown_response, dict) and "status" in unknown_response

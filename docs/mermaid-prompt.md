@@ -3,11 +3,14 @@
 The global default is off. Changing it applies only to newly created Fintwind
 sessions, not to existing sessions (even an empty session created earlier).
 
-New sessions pick the latest prompt version (`v2`). Previously issued versions
+New sessions pick the latest prompt version (`v3`). Previously issued versions
 stay byte-identical forever: a `v1` session keeps the `v1` instruction, across
-forks, restarts and releases. `v2` differs from `v1` only in the relaxed
-syntax preference and one added line that tells the model to validate every
-diagram it writes with the `fintwind_mermaid_check` tool.
+forks, restarts and releases. `v2` adds one line that tells the model to
+validate every diagram it writes with the `fintwind_mermaid_check` tool and
+relaxes the syntax preference. `v3` drops the fixed flowchart/sequence style
+preset and the short-label rule, so the model chooses whichever diagram type
+expresses the subject best; the renderer limits stay because the native
+renderer cannot draw HTML labels, images, links, custom CSS or directives.
 
 ## Mermaid check tool
 
@@ -35,13 +38,13 @@ app renders with (`crates/fintwind-diagram`), so "the tool says valid" and
 
 ## Contract
 
-New sessions snapshot the latest version (`v2`) or no preference. The OpenCode
+New sessions snapshot the latest version (`v3`) or no preference. The OpenCode
 session receives that version as creation metadata. The always-loaded context
 plugin appends the corresponding constant instruction to primary model requests
 only; it never reads the global default. No version means no changes to the
 outgoing request. Existing prompt versions must stay byte-identical in future
-releases, so `v1` sessions keep the `v1` bytes even though new sessions pick
-`v2`.
+releases, so `v1` and `v2` sessions keep their bytes even though new sessions
+pick `v3`.
 
 Provider cache hits also depend on the model/provider and other context changes;
 this feature promises not to change existing requests because of its switch,
@@ -67,21 +70,22 @@ environment, a loopback scripted model and an owned Windows Job Object. It
 never connects to the installed app's daemon or a real model. Its report
 records request-prefix hashes, not a claim of vendor-side cache hits.
 
-Verified with OpenCode `2.0.32`: 22 provider checks passed (multi-turn off/v1,
-unchanged old-session system bytes, unchanged tool schema/history prefix,
-exactly one instruction on tool continuations, fork and process restart).
-Direct metadata-lookup failure injection and forced compaction remain untested;
-unknown versions were verified to dispatch no primary model request.
+Verified with OpenCode `2.1.1`: 30 provider checks passed (multi-turn off, v1,
+v2 and v3 instruction bytes, unchanged old-session system bytes, unchanged tool
+schema/history prefix, exactly one instruction on tool continuations, fork,
+unknown-version rejection and process restart). An earlier run on `2.0.32`
+covered v1 and v2. Direct metadata-lookup failure injection and forced
+compaction remain untested.
 
-Artifacts for this run:
+Artifacts for the `2.1.1` run:
 
-- `target/mermaid-prompt-blackbox/c2675364-a922-43d7-b245-d1e5a4c43ce1/report.json`
-- `target/mermaid-prompt-e2e/c6da952a-8388-4d2e-8cbf-d3e76b678907/report.json`
+- `target/mermaid-prompt-blackbox/9caf7c55-675c-49d4-971e-e2ef523c7714/report.json`
+- `target/mermaid-prompt-e2e/1412b2f4-8d0e-4bd5-9b10-b79334c228ad/report.json`
 
 The preference-file fixture only verifies that the plugin ignores a changing
 external default. Actual client-side preference snapshotting is covered by the
 Rust scenario, not by that fixture. No native UI acceptance or real-provider
 cache measurements have been performed.
 
-Keep the fixed `v1` prompt unchanged after release. To revise the instructions,
+Keep every issued prompt unchanged after release. To revise the instructions,
 introduce a new version and retain all previously issued versions.

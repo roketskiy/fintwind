@@ -336,7 +336,15 @@ class Handler(BaseHTTPRequestHandler):
                 if (isinstance(message, dict) and message.get("type") == "user"
                         and (message.get("time") or {}).get("created") == first_created):
                     message["files"] = json.loads(json.dumps(prompt_files))
-        return self._json(200, {"data": messages})
+        query = parse_qs(urlparse(self.path).query)
+        limit = int(query.get("limit", [len(messages) or 1])[0])
+        cursor = query.get("cursor", [None])[0]
+        start = next((i + 1 for i, row in enumerate(messages) if row.get("id") == cursor), 0)
+        page = messages[start:start + limit]
+        next_cursor = page[-1]["id"] if page and start + limit < len(messages) else ""
+        log({"event": "messages_page", "limit": limit, "cursor": cursor,
+             "rows": len(page), "next": next_cursor})
+        return self._json(200, {"data": page, "cursor": {"next": next_cursor}})
 
     def handle_session_get(self):
         sid = self._session_id()

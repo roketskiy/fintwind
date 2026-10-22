@@ -26,6 +26,9 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--fault-matrix", action="store_true")
     parser.add_argument("--idle-matrix", action="store_true")
+    parser.add_argument("--history-matrix", action="store_true")
+    parser.add_argument("--history-page", type=Path)
+    parser.add_argument("--history-input")
     args = parser.parse_args()
     binary = os.environ.get("FINTWIND_REAL_OPENCODE") or shutil.which("opencode2") or shutil.which("opencode")
     if not binary:
@@ -50,12 +53,17 @@ def main():
                        OPENCODE_DISABLE_FILEWATCHER="1", OPENCODE_DISABLE_PROJECT_CONFIG="1",
                        OPENCODE_CONFIG_PROJECT_DISABLE="1", NO_PROXY="127.0.0.1,localhost,::1",
                        FINTWIND_REAL_OPENCODE=binary)
+    if args.history_page:
+        if not args.history_input:
+            parser.error("--history-page requires --history-input")
+        environment.update(FINTWIND_RECOVERY_PAGE=str(args.history_page.resolve()),
+                           FINTWIND_RECOVERY_INPUT=args.history_input)
     tests = sorted((ROOT / "target/debug/deps").glob("opencode_recovery-*.exe"), key=lambda path: path.stat().st_mtime)
     if not tests:
         raise RuntimeError("Build opencode_recovery first.")
     log = output / "test.log"
     command = output / "run.cmd"
-    name = "opencode_recovery_fast_faults" if args.fault_matrix else (
+    name = "opencode_large_history_completion" if args.history_matrix else "opencode_recovery_fast_faults" if args.fault_matrix else (
         "opencode_recovery_idle_reconciliation" if args.idle_matrix else "opencode_real_turn_completion")
     ignored = "" if args.fault_matrix else "--ignored"
     command.write_text(f'@echo off\n"{tests[-1]}" {name} {ignored} --nocapture > "{log}" 2>&1\n', encoding="utf-8")

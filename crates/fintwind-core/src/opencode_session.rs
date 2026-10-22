@@ -859,6 +859,17 @@ fn http_request(
     )
 }
 
+#[derive(Debug)]
+pub(crate) struct ResponseTooLarge;
+
+impl std::fmt::Display for ResponseTooLarge {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("OpenCode reconciliation HTTP response exceeded its byte limit")
+    }
+}
+
+impl std::error::Error for ResponseTooLarge {}
+
 /// Reconciliation is opportunistic: refuse an oversized response rather than
 /// allocating an unbounded history, and cap the whole HTTP exchange's time.
 pub(crate) fn request_json_on_port_bounded(
@@ -973,7 +984,7 @@ fn http_request_with_limit(
             break;
         }
         if read > max_bytes.saturating_sub(response.len()) {
-            bail!("OpenCode reconciliation HTTP response exceeded its byte limit");
+            return Err(ResponseTooLarge.into());
         }
         response.extend_from_slice(&buffer[..read]);
     }

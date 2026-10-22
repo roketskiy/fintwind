@@ -113,8 +113,16 @@ pub fn open_window(cx: &mut App) -> anyhow::Result<AnyWindowHandle> {
         },
     )?;
     // The caption comes after the window exists; a failure closes this
-    // window again rather than deliver one without a title bar.
-    match handle.update(cx, |_, window, _| enable_native_caption(window)) {
+    // window again rather than deliver one without a title bar. The dark
+    // mode follows the Fintwind theme (not only the system), so re-apply
+    // it after the style change — the vendor sets it once at creation
+    // from the system appearance, before this caption exists.
+    let caption_dark = crate::theme::Theme::current(cx).is_dark;
+    match handle.update(cx, |_, window, _| {
+        enable_native_caption(window)?;
+        sync_native_caption_theme(window, caption_dark);
+        Ok::<(), anyhow::Error>(())
+    }) {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             let _ = handle.update(cx, |_, window, _| window.remove_window());
@@ -193,6 +201,41 @@ fn enable_native_caption(window: &Window) -> anyhow::Result<()> {
 fn enable_native_caption(_: &Window) -> anyhow::Result<()> {
     Ok(())
 }
+
+/// Match the native caption to the Fintwind theme. The vendor paints the
+/// caption from the *system* appearance once at creation — before this
+/// window even has a caption — so without this a Fintwind-dark window on
+/// a light system (or a caption added late) keeps a white title bar.
+/// Re-applying after the style change and on later theme switches keeps
+/// the two in step. Failures stay silent: the worst case is the previous
+/// title bar, never a closed window.
+#[cfg(windows)]
+fn sync_native_caption_theme(window: &Window, is_dark: bool) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows_sys::Win32::Graphics::Dwm::{
+        DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute,
+    };
+
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return;
+    };
+    let RawWindowHandle::Win32(win) = handle.as_raw() else {
+        return;
+    };
+    let hwnd = win.hwnd.get() as isize as *mut _;
+    let dark: i32 = if is_dark { 1 } else { 0 };
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
+            &dark as *const _ as *const _,
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn sync_native_caption_theme(_: &Window, _: bool) {}
 
 /// The stable identity of a sampled process: the PID together with the
 /// creation time the ownership walk verified. Selection travels with the
@@ -375,6 +418,10 @@ struct PerfMonitor {
     /// render only writes its options back and never notifies.
     _selection_observer: Subscription,
     failed: Option<SharedString>,
+    /// Last dark mode pushed to the native caption. The content follows
+    /// `Theme::current` through render; the Win32 caption does not, so
+    /// render re-applies it only on change.
+    caption_dark: Option<bool>,
     _task: Task<()>,
 }
 
@@ -505,6 +552,7 @@ impl PerfMonitor {
             table_state,
             _selection_observer: selection_observer,
             failed: None,
+            caption_dark: None,
             _task: task,
         }
     }
@@ -525,8 +573,15 @@ impl PerfMonitor {
 }
 
 impl Render for PerfMonitor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
+        // Keep the native caption with the Fintwind theme. Content re-renders
+        // on theme change; the Win32 caption only follows an explicit
+        // `DwmSetWindowAttribute`, so push it here on change only.
+        if self.caption_dark != Some(theme.is_dark) {
+            sync_native_caption_theme(window, theme.is_dark);
+            self.caption_dark = Some(theme.is_dark);
+        }
         let mut root = div()
             .key_context(CONTEXT)
             // The kit's `DataTable` binds `escape` to its own `Cancel` one

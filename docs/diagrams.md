@@ -64,6 +64,7 @@ past bugs.
 | F21 | Source can request a local file or a network fetch | Ondine's URL sanitizer; `images`/`links` off; no fonts or images are embedded or fetched | `image_blocked`, `link_blocked` |
 | F22 | Label text is treated as markup | Ondine escapes `&`, `<`, `>` in text; the audit only inspects tags, never text | `label_literals` |
 | F23 | A series color goes missing from the theme table | Ondine writes every series fill as `var(--ondine-series-N, color-mix(...))`; a missing entry unfolds the mix fallback into a form the resolver rejects. Series 1..=8 must all be present | `complex_color_mix` |
+| F24 | East Asian labels fall back to a thin display face and blur when a wide diagram is drawn narrower | Prefer curated screen UI faces per script in the SVG font resolver, keeping the base weight and style | `cjk` compiles and draws; the picked face is verified out of band |
 
 ## Decisions
 
@@ -102,6 +103,24 @@ past bugs.
 An unknown `var()` uses its fallback. An unknown `var()` without a fallback
 becomes the theme foreground: the output must not keep an unresolved value, and
 failing the whole diagram for an author typo is worse than a visible color.
+
+### East Asian text fallback
+
+Ondine measures every label with monospace metrics (0.6 em per Latin glyph,
+1.2 em per East Asian glyph), so the root family must stay monospace and the
+SVG cannot simply ask for a proportional CJK face. A glyph that the root family
+lacks is resolved by usvg through the font database in registration order, which
+on a typical Windows install lands on the thin display face DengXian; its
+strokes blur when a wide diagram is drawn narrower than its natural width.
+
+The native SVG renderer therefore resolves East Asian characters itself before
+the default search: it prefers a screen-oriented UI face for the character's
+script (Microsoft YaHei UI for Han and CJK punctuation, Yu Gothic UI for kana,
+Malgun Gothic for Hangul, with PingFang, Noto Sans CJK and WenQuanYi shapes of
+the same names for macOS and Linux), preferring the base face's weight and
+style so bold labels stay bold. Latin text, symbols and emoji keep the document
+family and the existing emoji preference. This lives in `vendor/gpui-pre` next
+to the emoji fallback and applies to every SVG the app draws.
 
 ### Attribution and escaping
 
@@ -202,7 +221,8 @@ so a run is repeatable and a diff is visible.
 
 Not covered here, owned by the parent:
 
-- Font registration for `JetBrains Mono` in the native renderer.
+- Bundled font registration and the East Asian fallback preference in the
+  native renderer are shared with GPUI; this module only fixes the root family.
 - Turning the SVG into a texture, caching, invalidation and markdown layout.
 - Visual comparison against Mermaid for all 33 diagram types. This module
   accepts every type Ondine supports; the acceptance set samples one

@@ -32,11 +32,133 @@ const EMOJI_FONT_FAMILIES: &[&str] = &[
 )))]
 const EMOJI_FONT_FAMILIES: &[&str] = &[];
 
+// usvg resolves a glyph that the document's own family lacks by walking the
+// font database in registration order. That order follows the OS font list, so
+// East Asian text lands on whichever face happens to come first — on Windows,
+// the thin display face DengXian — and its strokes blur once a diagram is drawn
+// smaller than its natural size. Prefer screen-oriented UI faces for East Asian
+// scripts, and keep the document's own family for Latin, symbols and emoji.
+// Absent family names are skipped, so one list serves every platform.
+const CJK_FONT_FAMILIES: &[&str] = &[
+    "Microsoft YaHei UI",
+    "Microsoft YaHei",
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "Source Han Sans SC",
+    "WenQuanYi Micro Hei",
+    "Microsoft JhengHei UI",
+    "Microsoft JhengHei",
+    "PingFang TC",
+    "Noto Sans CJK TC",
+];
+
+const JAPANESE_FONT_FAMILIES: &[&str] = &[
+    "Yu Gothic UI",
+    "Meiryo UI",
+    "Meiryo",
+    "Yu Gothic",
+    "Hiragino Sans",
+    "Hiragino Kaku Gothic ProN",
+    "Noto Sans CJK JP",
+    "Noto Sans JP",
+];
+
+const KOREAN_FONT_FAMILIES: &[&str] = &[
+    "Malgun Gothic",
+    "Apple SD Gothic Neo",
+    "Noto Sans CJK KR",
+    "Noto Sans KR",
+];
+
 fn is_emoji_presentation(c: char) -> bool {
     static EMOJI_PRESENTATION_REGEX: LazyLock<regex::Regex> =
         LazyLock::new(|| regex::Regex::new("\\p{Emoji_Presentation}").unwrap());
     let mut buf = [0u8; 4];
     EMOJI_PRESENTATION_REGEX.is_match(c.encode_utf8(&mut buf))
+}
+
+fn is_kana(c: char) -> bool {
+    matches!(
+        c,
+        '\u{3040}'..='\u{30ff}' | '\u{31f0}'..='\u{31ff}' | '\u{ff66}'..='\u{ff9d}'
+    )
+}
+
+fn is_hangul(c: char) -> bool {
+    matches!(
+        c,
+        '\u{1100}'..='\u{11ff}'
+            | '\u{3130}'..='\u{318f}'
+            | '\u{a960}'..='\u{a97f}'
+            | '\u{ac00}'..='\u{d7af}'
+    )
+}
+
+/// Whether `c` belongs to an East Asian script, including its punctuation and
+/// fullwidth forms. Han covers the unified ideographs, their extensions and the
+/// compatibility block.
+fn is_east_asian(c: char) -> bool {
+    is_kana(c)
+        || is_hangul(c)
+        || matches!(
+            c,
+            '\u{2e80}'..='\u{2fff}'
+                | '\u{3000}'..='\u{303f}'
+                | '\u{3040}'..='\u{30ff}'
+                | '\u{3100}'..='\u{312f}'
+                | '\u{31a0}'..='\u{31bf}'
+                | '\u{31f0}'..='\u{31ff}'
+                | '\u{3400}'..='\u{4dbf}'
+                | '\u{4e00}'..='\u{9fff}'
+                | '\u{a960}'..='\u{a97f}'
+                | '\u{ac00}'..='\u{d7af}'
+                | '\u{f900}'..='\u{faff}'
+                | '\u{fe30}'..='\u{fe4f}'
+                | '\u{ff00}'..='\u{ffef}'
+                | '\u{20000}'..='\u{2fa1f}'
+        )
+}
+
+fn east_asian_families(c: char) -> &'static [&'static str] {
+    if is_kana(c) {
+        JAPANESE_FONT_FAMILIES
+    } else if is_hangul(c) {
+        KOREAN_FONT_FAMILIES
+    } else {
+        CJK_FONT_FAMILIES
+    }
+}
+
+/// Selects the first preferred family that resolves and contains `ch`, keeping
+/// the base face's weight and style so bold labels stay bold.
+fn select_east_asian_font(
+    ch: char,
+    fonts: &[usvg::fontdb::ID],
+    db: &usvg::fontdb::Database,
+) -> Option<usvg::fontdb::ID> {
+    let base = fonts.first().and_then(|id| db.face(*id));
+    for family_name in east_asian_families(ch) {
+        let query = usvg::fontdb::Query {
+            families: &[usvg::fontdb::Family::Name(family_name)],
+            weight: base.map_or(usvg::fontdb::Weight::NORMAL, |face| face.weight),
+            stretch: base.map_or(usvg::fontdb::Stretch::Normal, |face| face.stretch),
+            style: base.map_or(usvg::fontdb::Style::Normal, |face| face.style),
+        };
+
+        let Some(id) = db.query(&query) else {
+            continue;
+        };
+
+        if fonts.contains(&id) || !font_has_char(db, id, ch) {
+            continue;
+        }
+
+        return Some(id);
+    }
+
+    None
 }
 
 fn font_has_char(db: &usvg::fontdb::Database, id: usvg::fontdb::ID, ch: char) -> bool {
@@ -163,6 +285,12 @@ impl SvgRenderer {
         let default_fallback_selection = usvg::FontResolver::default_fallback_selector();
         let fallback_selection = Box::new(
             move |ch: char, fonts: &[usvg::fontdb::ID], db: &mut Arc<usvg::fontdb::Database>| {
+                if is_east_asian(ch) {
+                    if let Some(id) = select_east_asian_font(ch, fonts, db.as_ref()) {
+                        return Some(id);
+                    }
+                }
+
                 if is_emoji_presentation(ch) {
                     if let Some(id) = select_emoji_font(ch, fonts, db.as_ref(), EMOJI_FONT_FAMILIES)
                     {

@@ -18,6 +18,19 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [2.0.14]
+
+本版继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。已使用真实 OpenCode 2.1.3 与本地模拟模型完成客户端、daemon 和服务端的端到端验证，覆盖同一会话连续三回合正常结束；独立故障注入检查覆盖历史接口返回 503、同毫秒旧结束事件、断线恢复、追加输入和丢失结束事件。未验证完整的模型或版本兼容区间。验证入口见 [协议黑盒脚本](scripts/opencode-protocol-e2e.py)。
+
+### 改进
+
+- 应用内更新改为按正式 Release 的发布时间选择最新发布，不再比较版本号大小。后发布的版本即使版本号更小，也会提示更新；当前已是最新发布时不重复提示，草稿和预发布不参与检查。
+
+### 修复
+
+- 修复正常流式连接下，回答已完成却因额外历史查询失败而一直显示「工作中」的问题。客户端根据本轮输入送达与执行结束事件收尾，同时保留断线恢复、旧事件过滤和追加输入的并发保护。
+- 细分回合恢复失败的诊断，区分会话信息、消息历史和活动状态查询失败，便于定位后续问题。
+
 ## [2.0.13]
 
 本版继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。已有专项验证覆盖 OpenCode 2.1.1 的 Mermaid 提示词分发（v1/v2/v3 指令字节、fork 与进程重启）与校验工具；启动日活上报不依赖 OpenCode，已通过本地身份与上报的黑盒验证。未验证完整的版本兼容区间。验证记录见 [Mermaid 文档](docs/mermaid-prompt.md) 与 [启动日活文档](docs/activity.md)。

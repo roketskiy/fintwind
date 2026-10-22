@@ -73,6 +73,9 @@ detection, data locations, and WebView2 details.
 
 ## Features
 
+- **App updates.** Stable builds offer the most recently published full release,
+  even when a corrected version number is lower than the installed one. Drafts
+  and prereleases are excluded, and the current release is not offered again.
 - **Projects and session tabs.** Group sessions by project and open multiple
   sessions in one window, with tab reordering and unread indicators.
 - **Session controls.** Switch model, reasoning effort where supported, and

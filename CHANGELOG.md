@@ -18,6 +18,10 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+### 改进
+
+- Mermaid 图表中的中文、日文与韩文改用屏幕阅读更清晰的系统界面字体（如微软雅黑 UI），图表缩窄显示时笔画更清楚。
+
 ## [2.0.12]
 
 本版使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。已有专项验证覆盖 OpenCode 2.0.27 的 Goal 模式和 2.0.32 的 Mermaid 提示词与校验工具，未验证完整的版本兼容区间。验证记录见 [Goal 文档](docs/goals.md)与 [Mermaid 文档](docs/mermaid-prompt.md)。

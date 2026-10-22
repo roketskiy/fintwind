@@ -95,7 +95,7 @@ impl ScheduledTasksView {
                 prompt: String::new(),
                 schedule: ScheduleKind::AtTime,
                 time: "09:00".into(),
-                weekdays: Weekdays::every_day().bits(),
+                weekdays: 0,
                 interval_minutes: "60".into(),
                 target: TargetKind::NewSession,
                 project_id: self.projects.first().map(|project| project.id),
@@ -508,39 +508,38 @@ impl ScheduledTasksView {
                 Input::new(&self.prompt_input),
             ));
         if editor.schedule == ScheduleKind::AtTime {
-            timing = timing.child(div().flex().w_full().items_center().gap_2().children(
-                WEEKDAY_ORDER.iter().map(|&(bit, key)| {
-                    let selected = editor.weekdays & (1 << bit) != 0;
-                    let weak = cx.entity().downgrade();
-                    let button = Button::new(
-                        SharedString::from(format!("scheduled-weekday-{bit}")),
-                        tr!(key),
-                    )
-                    .variant(if selected {
-                        ButtonVariant::Primary
-                    } else {
-                        ButtonVariant::Ghost
-                    })
-                    .full_width()
-                    .size(ControlSize::Sm)
-                    .disabled(busy)
-                    .on_click(move |_, _, cx| {
-                        let _ = weak.update(cx, |this, cx| {
-                            this.edit(
-                                |draft| {
-                                    if !selected {
-                                        draft.weekdays |= 1 << bit;
-                                    } else {
-                                        draft.weekdays &= !(1 << bit);
+            let choices = WEEKDAY_ORDER.iter().map(|&(bit, key)| {
+                let mut choice = Choice::new(bit.to_string(), tr!(key));
+                if busy {
+                    choice.disabled = true;
+                }
+                choice
+            });
+            let selected = WEEKDAY_ORDER
+                .iter()
+                .filter(|&&(bit, _)| editor.weekdays & (1 << bit) != 0)
+                .map(|&(bit, _)| SharedString::from(bit.to_string()));
+            let weak = cx.entity().downgrade();
+            let weekdays = MultiSelect::new("scheduled-weekdays", choices)
+                .selected(selected)
+                .placeholder(tr!("scheduled_tasks.repeat_label"))
+                .on_change(move |values, _, cx| {
+                    let _ = weak.update(cx, |this, cx| {
+                        this.edit(
+                            |draft| {
+                                let mut bits = 0u8;
+                                for value in values {
+                                    if let Ok(bit) = value.parse::<u8>() {
+                                        bits |= 1 << bit;
                                     }
-                                },
-                                cx,
-                            )
-                        });
+                                }
+                                draft.weekdays = bits;
+                            },
+                            cx,
+                        )
                     });
-                    div().flex_1().min_w_0().child(button)
-                }),
-            ));
+                });
+            timing = timing.child(weekdays);
         }
         form = form.child(field(tr!("scheduled_tasks.schedule_label"), timing));
         let target = Select::new(

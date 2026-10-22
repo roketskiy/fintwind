@@ -1487,7 +1487,11 @@ impl Fintwind {
                         .flex()
                         .items_center()
                         .gap(px(12.0))
-                        .child(provider_tile(theme, mcp_server_icon(current_kind), enabled))
+                        .child(provider_tile(
+                            theme,
+                            ModelMark::Provider(mcp_server_icon(current_kind)),
+                            enabled,
+                        ))
                         .child(
                             div()
                                 .flex_1()

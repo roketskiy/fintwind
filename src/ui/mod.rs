@@ -168,9 +168,11 @@ pub fn provider_color(theme: &Theme, _provider: &str) -> Hsla {
     }
 }
 
-/// Icon for a model provider. OpenCode keeps its brand mark; every other
-/// provider gets a letter glyph keyed by the first letter of its name, so a
-/// provider configured later still reads as itself without a bespoke asset.
+/// Monochrome icon path for a model provider. OpenCode keeps its brand mark;
+/// every other provider gets a letter glyph keyed by the first letter of its
+/// name, so a provider configured later still reads as itself without a
+/// bespoke asset. Rendering code that wants a first-party vendor's published
+/// mark uses [`provider_mark`] instead.
 pub fn provider_icon(provider: &str) -> &'static str {
     if provider.trim().eq_ignore_ascii_case("opencode") {
         return "icons/provider-opencode.svg";
@@ -205,7 +207,7 @@ pub fn model_mark_element(mark: ModelMark, size: f32, tint: Hsla) -> AnyElement 
 }
 
 /// Mark for a model: its company's brand asset when the model is
-/// recognizable, otherwise the serving provider's icon. A provider often
+/// recognizable, otherwise the serving provider's mark. A provider often
 /// resells another company's models — a router serving Grok is still Grok —
 /// so the mark shown beside a model name is matched from the model's catalog
 /// id and display name rather than taken from the provider. A company whose
@@ -218,7 +220,27 @@ pub fn model_mark(model_id: &str, model_name: &str, provider: &str, is_dark: boo
         } else {
             company.light
         }),
-        None => ModelMark::Provider(provider_icon(provider)),
+        None => provider_mark(provider, is_dark),
+    }
+}
+
+/// Mark for a provider itself. A first-party model vendor takes its
+/// published company mark, matched from the provider name; OpenCode keeps
+/// its own brand mark; a relay or reseller keeps the letter glyph, because
+/// the mark should name the model vendor rather than the endpoint serving
+/// it.
+pub fn provider_mark(provider: &str, is_dark: bool) -> ModelMark {
+    let name = provider.trim();
+    if name.to_ascii_lowercase().starts_with("opencode") {
+        return ModelMark::Provider("icons/provider-opencode.svg");
+    }
+    match model_company_icon(name, "") {
+        Some(company) => ModelMark::Company(if is_dark {
+            company.dark.unwrap_or(company.light)
+        } else {
+            company.light
+        }),
+        None => ModelMark::Provider(provider_letter_icon(name)),
     }
 }
 
@@ -241,20 +263,23 @@ const fn themed(light: &'static str, dark: &'static str) -> CompanyMark {
     }
 }
 
-/// Brand mark per model company, matched on distinctive model-id and display
-/// name tokens. Checked top to bottom; list the more specific family first
-/// when companies share a token. Companies without an embedded mark (Cohere,
-/// 01.AI, Baichuan, …) are absent on purpose and fall through to the provider
-/// letter glyph. Marks are the published brand assets from the Lobe Icons
-/// collection, except Reflection's own site mark. Marks whose ink has to
-/// follow the theme (OpenAI, xAI, Kimi, Reflection) carry a light and a dark
-/// file.
+/// Brand mark per model company, matched on distinctive model-id, display
+/// name, and provider-name tokens. Checked top to bottom; list the more
+/// specific family first when companies share a token. Companies without an
+/// embedded mark (Cohere, 01.AI, Baichuan, …) are absent on purpose and fall
+/// through to the provider letter glyph. Marks are the published brand assets
+/// from the Lobe Icons collection, except Reflection's own site mark. Marks
+/// whose ink has to follow the theme (OpenAI, xAI, Kimi, Reflection) carry a
+/// light and a dark file.
 const MODEL_COMPANY_MARKS: &[(&[&str], CompanyMark)] = &[
     (
-        &["grok"],
+        &["grok", "xai"],
         themed("icons/companies/xai.svg", "icons/companies/xai-dark.svg"),
     ),
-    (&["claude"], mark("icons/companies/anthropic.svg")),
+    (
+        &["claude", "anthropic"],
+        mark("icons/companies/anthropic.svg"),
+    ),
     (
         &[
             "gpt", "o1", "o3", "o4", "codex", "davinci", "chatgpt", "openai",
@@ -270,18 +295,18 @@ const MODEL_COMPANY_MARKS: &[(&[&str], CompanyMark)] = &[
     ),
     (&["deepseek"], mark("icons/companies/deepseek.svg")),
     (
-        &["qwen", "tongyi", "qwq", "qvq"],
+        &["qwen", "tongyi", "qwq", "qvq", "alibaba"],
         mark("icons/companies/qwen.svg"),
     ),
     (
-        &["kimi", "moonshot"],
+        &["kimi", "moonshot", "moonshotai"],
         themed(
             "icons/companies/moonshot.svg",
             "icons/companies/moonshot-dark.svg",
         ),
     ),
     (
-        &["glm", "chatglm", "zhipu", "zai"],
+        &["glm", "chatglm", "zhipu", "zhipuai", "zai", "z.ai"],
         mark("icons/companies/zai.svg"),
     ),
     (&["llama", "meta", "muse"], mark("icons/companies/meta.svg")),

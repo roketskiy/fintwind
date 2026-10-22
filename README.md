@@ -101,6 +101,10 @@ detection, data locations, and WebView2 details.
 - **Usage statistics.** Explore local OpenCode session history through an
   activity heatmap, daily and hourly charts, and model/provider rankings,
   including subagent usage. Displayed costs are estimates, not billing records.
+- **Anonymous launch statistics.** Stable and beta builds report a randomly
+  generated local installation ID to the project website on each launch to
+  count daily active desktops. No sessions, project paths, or account data
+  are sent.
 - **Provider management.** Sign in and out of built-in providers, see at a
   glance which connections need re-login, and read the provider's own rejection
   reason (quota, key, or model) when a request fails.

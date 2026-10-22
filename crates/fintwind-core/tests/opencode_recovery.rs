@@ -55,6 +55,126 @@ use fintwind_protocol::provider_session::NativeTranscript;
 const DAEMON_TOKEN: &str = "opencode-recovery-e2e-token";
 
 #[test]
+#[ignore = "owns an isolated daemon; run with --history-matrix"]
+fn opencode_large_history_completion() {
+    let run = Run::new();
+    let harness = start_harness(&run.root);
+    let created = 1_700_000_000_000u64;
+    let mut rows = vec![idle_msg("msg_idle", created + 2000, "succeeded")];
+    for i in 0..64 {
+        rows.push(assistant_msg(
+            &format!("msg_answer_{i}"),
+            created + 1000,
+            "Recovered answer",
+        ));
+    }
+    rows.push(user_msg("msg_input", created, "prompt"));
+    for i in 0..130 {
+        rows.push(json!({"id": format!("msg_old_{i}"), "type": "user",
+            "time": {"created": created - 1000}, "text": "old image",
+            "files": [{"type": "image/png", "url": format!("data:image/png;base64,{}", "A".repeat(600_000))}]}));
+    }
+    let mut cases = vec![(rows, "msg_input".to_owned())];
+    // One image-bearing message larger than the former 16 MiB response cap
+    // must survive both HTTP reading and the retained-turn memory budget.
+    let mut single = settled_history(
+        "msg_large_input",
+        "msg_large_answer",
+        created,
+        "Large message recovered",
+        "succeeded",
+    );
+    single[2]["files"] = json!([{"mime": "image/png", "name": "large.png",
+        "source": {"type": "inline"}, "data": "A".repeat(20 * 1024 * 1024)}]);
+    cases.push((single, "msg_large_input".to_owned()));
+    if let Some(path) = std::env::var_os("FINTWIND_RECOVERY_PAGE") {
+        let page: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        cases.insert(
+            0,
+            (
+                page["data"].as_array().unwrap().clone(),
+                std::env::var("FINTWIND_RECOVERY_INPUT").unwrap(),
+            ),
+        );
+    }
+    for (index, (rows, input)) in cases.into_iter().enumerate() {
+        let final_text = rows
+            .iter()
+            .find(|row| row["type"] == "assistant")
+            .and_then(|row| row["content"].as_array())
+            .and_then(|parts| parts.iter().find(|part| part["type"] == "text"))
+            .and_then(|part| part["text"].as_str())
+            .expect("the fixture must have a final answer")
+            .to_owned();
+        let created = rows.iter().find(|row| row["id"] == input).unwrap()["time"]["created"]
+            .as_u64()
+            .unwrap();
+        let idle = rows.iter().find(|row| row["type"] == "idle").unwrap()["time"]["created"]
+            .as_u64()
+            .unwrap();
+        let fixture = build_fixture(
+            &run,
+            &format!("large-history-{index}"),
+            &json!({
+                "turns": [{"user_msg_id": input, "created_ms": created,
+                    "sse": [{"step_started": true}, {"text_started": true}, {"delta": "partial"}],
+                    "durable_messages": rows, "session_status": "idle",
+                    "session_outcome": "succeeded", "session_time_idle": idle, "active": false}]
+            }),
+        );
+        let (session, runtime) = (Uuid::new_v4(), Uuid::new_v4());
+        harness
+            .client
+            .request(
+                session,
+                runtime,
+                Command::Start {
+                    options: start_options(
+                        &fixture.bin,
+                        &run.workspace(&format!("large-history-{index}")),
+                    ),
+                },
+            )
+            .unwrap();
+        let events = harness.client.subscribe(session, runtime);
+        harness
+            .client
+            .request(
+                session,
+                runtime,
+                Command::Prompt {
+                    prompt: "prompt".into(),
+                    files: vec![],
+                },
+            )
+            .unwrap();
+        let mut collected = Collected::default();
+        observe(
+            &events,
+            Duration::from_secs(35),
+            Duration::from_millis(400),
+            &mut collected,
+        );
+        fs::write(
+            run.root.join(format!("large-history-{index}.json")),
+            serde_json::to_vec_pretty(&collected.timeline).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            collected.finishes.len(),
+            1,
+            "large history case {index}: {:?}; artifacts: {:?}",
+            collected.kinds,
+            run.root
+        );
+        assert!(collected.finishes[0].0);
+        assert!(collected.snapshot_before_finish());
+        assert!(collected.authoritative_text().contains(&final_text));
+        assert!(!collected.exited);
+    }
+}
+
+#[test]
 #[ignore = "requires isolated real OpenCode and loopback provider from the protocol runner"]
 fn opencode_real_turn_completion() {
     let binary =

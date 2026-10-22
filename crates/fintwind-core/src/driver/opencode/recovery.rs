@@ -12,15 +12,17 @@ use serde_json::Value;
 
 use crate::model::unix_time_millis;
 use crate::opencode_events::EventFeed;
-use crate::opencode_session::{encode_path_segment, request_json_on_port_bounded};
+use crate::opencode_session::{
+    ResponseTooLarge, encode_path_segment, request_json_on_port_bounded,
+};
 use fintwind_protocol::provider_session::NativeTranscript;
 
 const QUIET_INTERVAL: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const WALK_BUDGET: Duration = Duration::from_secs(12);
 const PAGE_LIMIT: usize = 200;
-const MAX_PAGES: usize = 25;
-const MAX_RECOVERY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_ROWS: usize = 5_000;
+const MAX_RECOVERY_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone)]
 struct Boundary {
@@ -537,17 +539,28 @@ impl Coordinator {
                     Err(error) => {
                         let reason = error
                             .chain()
-                            .find_map(|cause| match cause.to_string().as_str() {
-                                "reconcile_session_unavailable" => {
-                                    Some("reconcile_session_unavailable")
+                            .find_map(|cause| {
+                                if cause.is::<ResponseTooLarge>() {
+                                    Some("reconcile_history_response_too_large")
+                                } else {
+                                    None
                                 }
-                                "reconcile_history_unavailable" => {
-                                    Some("reconcile_history_unavailable")
-                                }
-                                "reconcile_active_unavailable" => {
-                                    Some("reconcile_active_unavailable")
-                                }
-                                _ => None,
+                            })
+                            .or_else(|| {
+                                error
+                                    .chain()
+                                    .find_map(|cause| match cause.to_string().as_str() {
+                                        "reconcile_session_unavailable" => {
+                                            Some("reconcile_session_unavailable")
+                                        }
+                                        "reconcile_history_unavailable" => {
+                                            Some("reconcile_history_unavailable")
+                                        }
+                                        "reconcile_active_unavailable" => {
+                                            Some("reconcile_active_unavailable")
+                                        }
+                                        _ => None,
+                                    })
                             })
                             .unwrap_or("reconcile_unavailable");
                         crate::opencode_diagnostics::record(reason, self.port, connection);
@@ -613,28 +626,41 @@ fn fetch_turn(
     let mut found_input = false;
     let mut full_window = false;
     let mut bytes = 0;
-    for page in 0..MAX_PAGES {
+    let mut scanned = 0;
+    let mut page_limit = PAGE_LIMIT;
+    loop {
         if cancelled() || started.elapsed() >= WALK_BUDGET {
             bail!("OpenCode reconciliation cancelled or exceeded its budget");
         }
-        let mut query = format!("{path}/message?limit={PAGE_LIMIT}");
-        if let Some(cursor) = &cursor {
-            query.push_str(&format!("&cursor={}", encode_path_segment(cursor)));
-        }
-        let timeout = REQUEST_TIMEOUT.min(WALK_BUDGET.saturating_sub(started.elapsed()));
-        if timeout.is_zero() {
-            bail!("OpenCode reconciliation exceeded its pagination deadline");
-        }
-        let response = request_json_on_port_bounded(port, &query, timeout, MAX_RECOVERY_BYTES)
-            .context("reconcile_history_unavailable")?;
+        let response = loop {
+            let mut query = format!("{path}/message?limit={page_limit}");
+            if let Some(cursor) = &cursor {
+                query.push_str(&format!("&cursor={}", encode_path_segment(cursor)));
+            }
+            let timeout = REQUEST_TIMEOUT.min(WALK_BUDGET.saturating_sub(started.elapsed()));
+            if cancelled() || timeout.is_zero() {
+                bail!("OpenCode reconciliation exceeded its pagination deadline");
+            }
+            match request_json_on_port_bounded(port, &query, timeout, MAX_RECOVERY_BYTES) {
+                Ok(response) => break response,
+                Err(error) if error.is::<ResponseTooLarge>() && page_limit > 1 => {
+                    // Native rows include image/tool payloads: a row count does
+                    // not bound bytes. Retry the same cursor with a smaller page.
+                    page_limit = (page_limit / 2).max(1);
+                    crate::opencode_diagnostics::record(
+                        "reconcile_history_page_reduced",
+                        port,
+                        boundary.generation,
+                    );
+                }
+                Err(error) => return Err(error).context("reconcile_history_unavailable"),
+            }
+        };
         let messages = response
             .get("data")
             .and_then(Value::as_array)
             .context("OpenCode reconciliation returned no message array")?;
-        bytes += serde_json::to_vec(messages)?.len();
-        if bytes > MAX_RECOVERY_BYTES {
-            bail!("OpenCode reconciliation exceeded its memory budget");
-        }
+        scanned += messages.len();
         let mut saw_older = false;
         for row in messages {
             let body = row.get("info").unwrap_or(row);
@@ -670,6 +696,12 @@ fn fetch_turn(
                             .map(|outcome| (time, outcome.to_owned()))
                     });
             }
+            // Budget only the current turn that we retain, not older rows
+            // bundled into its last page by the server.
+            bytes += serde_json::to_vec(row)?.len();
+            if bytes > MAX_RECOVERY_BYTES {
+                bail!("OpenCode reconciliation exceeded its memory budget");
+            }
             rows.push(row.clone());
             if boundary
                 .input_id
@@ -697,7 +729,7 @@ fn fetch_turn(
                 .is_none_or(str::is_empty);
             break;
         };
-        if page + 1 == MAX_PAGES || !seen_cursors.insert(next.to_owned()) {
+        if scanned >= MAX_ROWS || !seen_cursors.insert(next.to_owned()) {
             bail!("OpenCode reconciliation exceeded its message window");
         }
         cursor = Some(next.to_owned());

@@ -159,7 +159,7 @@ endpoint for the private OpenCode plugin only:
   creation metadata has no Mermaid prompt version, and returns the compiler's
   line-and-column error to the model verbatim. The permission default is
   `allow`: the check is read-only compilation.
-- Prompt `v2` (and only `v2`) tells the model to validate each diagram it
+- Prompts `v2` and `v3` tell the model to validate each diagram it
   writes and fix the reported errors. A failure the fence shows the same
   message above the source, so a broken diagram is never silent.
 

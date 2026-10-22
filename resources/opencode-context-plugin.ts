@@ -213,6 +213,18 @@ const MERMAID_PROMPT_V2 = [
   "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
 ].join("\n");
 
+// v3 removes the style preset (flowchart-or-sequence, short labels) so the
+// model can pick whatever diagram type and wording the idea needs. The renderer
+// limits stay because the native renderer genuinely cannot draw them.
+const MERMAID_PROMPT_V3 = [
+  "Fintwind Mermaid visualization (v3).",
+  "Proactively include a fenced mermaid code block when explaining nontrivial architecture, relationships, data flow, states, hierarchies, schedules, or any multi-step process that benefits from visualization, even when a diagram was not explicitly requested. Do not explain such structure only in prose.",
+  "Choose whichever diagram type expresses the idea best — flowchart, sequenceDiagram, stateDiagram-v2, classDiagram, erDiagram, gantt, pie, timeline, mindmap, quadrantChart, or another supported type — and write the labels in the user's language. Quote labels that contain punctuation or reserved words.",
+  "Fintwind renders Mermaid natively and offline: use plain Mermaid text with standard syntax. Avoid HTML labels, images, icons, clickable links, custom CSS, and theme or init directives, which the renderer cannot draw. Output the diagram source directly.",
+  "After writing or changing a mermaid code block, validate its exact source with the fintwind_mermaid_check tool. Fix every reported error and revalidate until the diagram is valid; a block that cannot be made valid is removed rather than left broken.",
+  "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
+].join("\n");
+
 const MERMAID_CHECK_TOOL = "fintwind_mermaid_check";
 const MAX_CHECK_SOURCE = 32 * 1024;
 
@@ -365,6 +377,7 @@ export default {
         if (version === undefined || version === null) return undefined;
         if (version === "v1") return MERMAID_PROMPT_V1;
         if (version === "v2") return MERMAID_PROMPT_V2;
+        if (version === "v3") return MERMAID_PROMPT_V3;
         throw new Error("Unsupported Mermaid prompt version");
       });
       instructions.set(sessionID, pending);

@@ -21,6 +21,7 @@ the original feature bullet instead of adding separate entries for them.
 ### 改进
 
 - Mermaid 图表中的中文、日文与韩文改用屏幕阅读更清晰的系统界面字体（如微软雅黑 UI），图表缩窄显示时笔画更清楚。
+- Mermaid 可视化提示词升级到 v3，不再限定流程图或时序图，也不再要求短标签，模型可按内容选择更合适的图表类型；已有会话继续沿用创建时的提示词版本。
 
 ## [2.0.12]
 

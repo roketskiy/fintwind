@@ -176,6 +176,23 @@ pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/opencode-recovery-e2e.ps1 
 
 这两项经第二次代码审查发现，修复后重跑验收，不额外启动第三轮审查。
 
+### 重开会话后的持久化快照
+
+原生历史每次读取会生成新的桌面消息 ID。持久化必须在同一事务内写入当前
+快照并删除不再属于该快照的消息 ID；仅删除 `position >= 消息数` 的尾部，
+会留下原位置上的旧副本。不能按文本去重，因为不同消息可以有相同文字。
+首次写入时缓存为空也不代表数据库为空。正常流式追加仍只写新增或改变的行。
+
+存储黑盒入口为 `scripts/fixtures/memory-storage`。在新建的独立目录运行：
+
+```powershell
+cargo run --locked --manifest-path scripts/fixtures/memory-storage/Cargo.toml -- <独立目录> [恢复事件JSON]
+```
+
+覆盖冷、热存储替换、连续 12 次重开、重排、缩短、合法相同文字和旧版残留行。
+可选恢复事件 JSON 使用协议黑盒产物中的 `large-history-0.json`，重放真实
+会话恢复快照；每次保存后重新读取数据库，核对消息身份、内容和顺序。
+
 补充旧内容围栏的失败证据：
 `temp/recovery-e2e/9cd29b1c9625463bb2bf30d01e616d1c/result.json` 中的
 `6_previous_turn_does_not_settle_new` 记录第二次提交后旧 delta 仍被派发；

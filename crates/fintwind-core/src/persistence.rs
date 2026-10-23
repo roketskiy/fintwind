@@ -1709,8 +1709,8 @@ const UPSERT_MESSAGE: &str = "INSERT INTO messages(
 
 /// Replaces a session's messages with the given list.
 ///
-/// Appending during a turn touches only the new rows; the delete clears any
-/// tail left behind when a conversation is forked or truncated.
+/// Appending during a turn touches only the new rows. Snapshot replacement
+/// removes absent identities, including old rows at positions still occupied.
 /// Writes the messages whose stored row would actually differ.
 ///
 /// A streaming turn saves once a second, and every one of those saves used to
@@ -1765,12 +1765,19 @@ fn write_messages(
             )
             .map_err(to_io_error)?;
     }
-    transaction
-        .execute(
-            "DELETE FROM messages WHERE session_id = ?1 AND position >= ?2",
-            params![session_id, session.messages.len() as i64],
-        )
-        .map_err(to_io_error)?;
+    // An empty write cache says nothing about existing database membership.
+    // Native reads can replace every ID without changing the message count.
+    if written.is_empty() || written.keys().any(|id| !current.contains_key(id)) {
+        let ids =
+            serde_json::to_string(&current.keys().collect::<Vec<_>>()).map_err(to_io_error)?;
+        transaction
+            .execute(
+                "DELETE FROM messages WHERE session_id = ?1
+                 AND id NOT IN (SELECT value FROM json_each(?2))",
+                params![session_id, ids],
+            )
+            .map_err(to_io_error)?;
+    }
     Ok(current)
 }
 

@@ -18,6 +18,10 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+### 修复
+
+- 修复单个长回合积累大量截图后，回答完成仍持续显示「工作中」的问题。恢复消息前先将工具图片保存为内容寻址引用，避免图片内联数据挤满累计恢复预算；保留图片、工具顺序与 64 MiB 响应保护，并补充累计预算和分页时限的明确诊断。
+
 ## [2.0.14]
 
 本版继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。已使用真实 OpenCode 2.1.3 与本地模拟模型完成客户端、daemon 和服务端的端到端验证，覆盖同一会话连续三回合正常结束；独立黑盒检查覆盖历史接口返回 503、同毫秒旧结束事件、断线恢复、追加输入、丢失结束事件、超过 64 MiB 的历史页和单条含 20 MiB 图片数据的消息，并重放真实会话的历史副本验证恢复。未验证完整的模型或版本兼容区间。验证入口见 [协议黑盒脚本](scripts/opencode-protocol-e2e.py)。

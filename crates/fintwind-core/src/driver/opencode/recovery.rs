@@ -274,7 +274,12 @@ pub(super) struct Coordinator {
 }
 
 impl Coordinator {
-    pub(super) fn new(port: u16, session: String, feed: Arc<EventFeed>) -> anyhow::Result<Self> {
+    pub(super) fn new(
+        port: u16,
+        session: String,
+        feed: Arc<EventFeed>,
+        blobs: Option<Arc<crate::blob_store::BlobStore>>,
+    ) -> anyhow::Result<Self> {
         let (requests, queries) = bounded::<Probe>(1);
         let (replies, results) = bounded(1);
         thread::Builder::new()
@@ -285,7 +290,9 @@ impl Coordinator {
                         break;
                     }
                     let result =
-                        fetch_turn(port, &session, &probe.boundary, || feed.is_cancelled());
+                        fetch_turn(port, &session, &probe.boundary, blobs.as_deref(), || {
+                            feed.is_cancelled()
+                        });
                     if replies.send(ProbeResult { probe, result }).is_err() {
                         break;
                     }
@@ -559,6 +566,13 @@ impl Coordinator {
                                         "reconcile_active_unavailable" => {
                                             Some("reconcile_active_unavailable")
                                         }
+                                        "OpenCode reconciliation exceeded its memory budget" => {
+                                            Some("reconcile_memory_budget_exceeded")
+                                        }
+                                        "OpenCode reconciliation cancelled or exceeded its budget"
+                                        | "OpenCode reconciliation exceeded its pagination deadline" => {
+                                            Some("reconcile_walk_budget_exceeded")
+                                        }
                                         _ => None,
                                     })
                             })
@@ -599,6 +613,7 @@ fn fetch_turn(
     port: u16,
     session: &str,
     boundary: &Boundary,
+    blobs: Option<&crate::blob_store::BlobStore>,
     cancelled: impl Fn() -> bool,
 ) -> anyhow::Result<Option<RecoveredTurn>> {
     let path = format!("/api/session/{}", encode_path_segment(session));
@@ -698,20 +713,24 @@ fn fetch_turn(
             }
             // Budget only the current turn that we retain, not older rows
             // bundled into its last page by the server.
-            bytes += serde_json::to_vec(row)?.len();
+            let mut row = row.clone();
+            if let Some(blobs) = blobs {
+                externalize_tool_images(&mut row, blobs);
+            }
+            bytes += serde_json::to_vec(&row)?.len();
             if bytes > MAX_RECOVERY_BYTES {
                 bail!("OpenCode reconciliation exceeded its memory budget");
             }
-            rows.push(row.clone());
-            if boundary
+            let is_input = boundary
                 .input_id
                 .as_deref()
                 .is_some_and(|input| id == Some(input))
                 || (!boundary.server_initiated
                     && boundary.input_id.is_none()
                     && kind == Some("user")
-                    && created.is_some_and(|time| time >= boundary.started_at))
-            {
+                    && created.is_some_and(|time| time >= boundary.started_at));
+            rows.push(row);
+            if is_input {
                 found_input = true;
                 break;
             }
@@ -864,12 +883,48 @@ fn fetch_turn(
     }))
 }
 
+// Tool images already belong in the daemon's content-addressed blob store.
+// Compact each fetched row before retaining it across pages; otherwise a
+// long execution pays the recovery budget for every screenshot's base64.
+fn externalize_tool_images(row: &mut Value, blobs: &crate::blob_store::BlobStore) {
+    fn replace(value: &mut Value, blobs: &crate::blob_store::BlobStore) {
+        match value {
+            Value::String(url) if url.starts_with("data:image/") => {
+                let stored = blobs.store_data_url(url);
+                if stored.len() < url.len() {
+                    *url = stored;
+                }
+            }
+            Value::Array(values) => values.iter_mut().for_each(|value| replace(value, blobs)),
+            Value::Object(values) => values.values_mut().for_each(|value| replace(value, blobs)),
+            _ => {}
+        }
+    }
+    for part in row
+        .get_mut("content")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if part.get("type").and_then(Value::as_str) == Some("tool") {
+            if let Some(state) = part.get_mut("state") {
+                for key in ["content", "output", "metadata"] {
+                    if let Some(value) = state.get_mut(key) {
+                        replace(value, blobs);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A cold receipt check uses the same exact-input terminal proof as live
 /// recovery, without subscribing to events, restarting execution or POSTing.
 pub(super) fn reconcile_saved(
     port: u16,
     session: &str,
     receipt: &fintwind_protocol::submission::SubmissionReceipt,
+    blobs: &crate::blob_store::BlobStore,
 ) -> anyhow::Result<Option<super::super::SavedSubmissionReconciliation>> {
     let boundary = Boundary {
         generation: 0,
@@ -881,15 +936,17 @@ pub(super) fn reconcile_saved(
         server_initiated: false,
         execution_id: None,
     };
-    Ok(fetch_turn(port, session, &boundary, || false)?.map(|turn| {
-        super::super::SavedSubmissionReconciliation {
-            status: if turn.success {
-                crate::model::TurnStatus::Completed
-            } else {
-                crate::model::TurnStatus::Failed
-            },
-            completed_at: turn.completion.created / 1000,
-            transcript: turn.transcript,
-        }
-    }))
+    Ok(
+        fetch_turn(port, session, &boundary, Some(blobs), || false)?.map(|turn| {
+            super::super::SavedSubmissionReconciliation {
+                status: if turn.success {
+                    crate::model::TurnStatus::Completed
+                } else {
+                    crate::model::TurnStatus::Failed
+                },
+                completed_at: turn.completion.created / 1000,
+                transcript: turn.transcript,
+            }
+        }),
+    )
 }

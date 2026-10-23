@@ -32,8 +32,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use fintwind_client::DaemonClient;
@@ -87,6 +89,21 @@ fn opencode_large_history_completion() {
     single[2]["files"] = json!([{"mime": "image/png", "name": "large.png",
         "source": {"type": "inline"}, "data": "A".repeat(20 * 1024 * 1024)}]);
     cases.push((single, "msg_large_input".to_owned()));
+    let mut images = vec![idle_msg("msg_images_idle", created + 2000, "succeeded")];
+    for i in 0..80 {
+        let mut row = assistant_msg(
+            &format!("msg_images_{i}"),
+            created + 1000,
+            "Screenshot verified",
+        );
+        row["content"].as_array_mut().unwrap().push(json!({"type": "tool", "id": format!("call_image_{i}"),
+            "name": "read", "state": {"status": "completed", "input": {"path": format!("shot-{i}.png")},
+            "content": [{"type": "text", "text": "Image read successfully"},
+                {"type": "file", "mime": "image/png", "uri": format!("data:image/png;base64,{}", "A".repeat(1024 * 1024))}]}}));
+        images.push(row);
+    }
+    images.push(user_msg("msg_images_input", created, "Inspect screenshots"));
+    cases.push((images, "msg_images_input".to_owned()));
     if let Some(path) = std::env::var_os("FINTWIND_RECOVERY_PAGE") {
         let page: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         cases.insert(
@@ -98,6 +115,26 @@ fn opencode_large_history_completion() {
         );
     }
     for (index, (rows, input)) in cases.into_iter().enumerate() {
+        let expected_images = rows
+            .iter()
+            .rev()
+            .flat_map(|row| row["content"].as_array().into_iter().flatten())
+            .filter(|part| part["type"] == "tool")
+            .flat_map(|part| part["state"]["content"].as_array().into_iter().flatten())
+            .filter_map(|part| {
+                part["uri"]
+                    .as_str()
+                    .filter(|uri| uri.starts_with("data:image/"))
+            })
+            .map(|uri| {
+                Sha256::digest(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(uri.split_once(',').unwrap().1)
+                        .unwrap(),
+                )
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
         let final_text = rows
             .iter()
             .find(|row| row["type"] == "assistant")
@@ -170,6 +207,26 @@ fn opencode_large_history_completion() {
         assert!(collected.finishes[0].0);
         assert!(collected.snapshot_before_finish());
         assert!(collected.authoritative_text().contains(&final_text));
+        let urls = collected.snapshot_image_urls.last().unwrap();
+        assert_eq!(
+            urls.len(),
+            expected_images.len(),
+            "recovery must preserve every screenshot"
+        );
+        let blobs = fintwind_core::blob_store::BlobStore::new(run.root.join("blobs"));
+        for (url, expected) in urls.iter().zip(expected_images) {
+            let bytes = fs::read(
+                blobs
+                    .path_for(url)
+                    .expect("recovered screenshot must use a blob reference"),
+            )
+            .unwrap();
+            assert_eq!(
+                Sha256::digest(bytes).as_slice(),
+                expected,
+                "screenshot bytes must survive recovery"
+            );
+        }
         assert!(!collected.exited);
     }
 }
@@ -1423,6 +1480,7 @@ struct Collected {
     finish_indices: Vec<usize>,
     snapshot_indices: Vec<usize>,
     snapshot_texts: Vec<String>,
+    snapshot_image_urls: Vec<Vec<String>>,
     snapshot_continuations: Vec<bool>,
     snapshot_parse_errors: Vec<String>,
     finishes: Vec<(bool, Option<String>)>,
@@ -1467,6 +1525,14 @@ impl Collected {
                     .and_then(|value| serde_json::from_value::<NativeTranscript>(value).ok())
                 {
                     Some(transcript) => {
+                        self.snapshot_image_urls.push(
+                            transcript
+                                .blocks
+                                .iter()
+                                .flat_map(|block| &block.activities)
+                                .flat_map(|activity| activity.image_urls.iter().cloned())
+                                .collect(),
+                        );
                         self.snapshot_continuations.push(continuation);
                         self.snapshot_texts.push(assistant_text(&transcript));
                     }

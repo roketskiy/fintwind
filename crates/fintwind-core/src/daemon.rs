@@ -807,10 +807,15 @@ impl FintwindBackend {
             })
             .and_then(|turn| turn.submission.as_ref())
             .and_then(|receipt| {
-                driver::reconcile_saved_submission(server.port, native_id, receipt)
-                    .ok()
-                    .flatten()
-                    .map(|proof| (receipt, proof))
+                driver::reconcile_saved_submission(
+                    server.port,
+                    native_id,
+                    receipt,
+                    &self.task_store.blobs(),
+                )
+                .ok()
+                .flatten()
+                .map(|proof| (receipt, proof))
             })
             .and_then(|(receipt, proof)| {
                 // The terminal cannot stamp an earlier partial history read.
@@ -2091,6 +2096,7 @@ impl Backend for FintwindBackend {
                         session_id,
                         runtime_id,
                     },
+                    self.task_store.blobs(),
                 )?;
                 let supports_steer = handle.supports_steer();
                 let task_state = self.task_state.clone();

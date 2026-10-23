@@ -635,8 +635,9 @@ pub(crate) fn reconcile_saved_submission(
     port: u16,
     session: &str,
     receipt: &fintwind_protocol::submission::SubmissionReceipt,
+    blobs: &crate::blob_store::BlobStore,
 ) -> anyhow::Result<Option<super::SavedSubmissionReconciliation>> {
-    recovery::reconcile_saved(port, session, receipt)
+    recovery::reconcile_saved(port, session, receipt, blobs)
 }
 
 /// A resume must stay inside the task's own workspace: on a server hosting
@@ -698,13 +699,14 @@ pub struct OpenCodeDriver {
 impl OpenCodeDriver {
     #[cfg(test)]
     pub fn start(options: DriverStartOptions, events: DriverEventSender) -> anyhow::Result<Self> {
-        Self::start_with_browser(options, events, None)
+        Self::start_with_browser(options, events, None, None)
     }
 
     pub(crate) fn start_with_browser(
         options: DriverStartOptions,
         events: DriverEventSender,
         browser: Option<crate::browser_tools::BrowserToolRuntime>,
+        blobs: Option<Arc<crate::blob_store::BlobStore>>,
     ) -> anyhow::Result<Self> {
         let DriverStartOptions {
             binary,
@@ -1018,8 +1020,12 @@ impl OpenCodeDriver {
         // live; `recv` blocks until the first event or the stream's end.
         let event_feed = Arc::new(crate::opencode_events::subscribe(server.port)?);
         let session_family = Arc::new(SessionFamily::new(session_id.clone()));
-        let mut reconciliation =
-            recovery::Coordinator::new(server.port, session_id.clone(), Arc::clone(&event_feed))?;
+        let mut reconciliation = recovery::Coordinator::new(
+            server.port,
+            session_id.clone(),
+            Arc::clone(&event_feed),
+            blobs,
+        )?;
         let submissions = Arc::clone(&reconciliation.submissions);
 
         // opencode answers permission requests through a polling endpoint

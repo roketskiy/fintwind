@@ -226,11 +226,13 @@ pub(crate) fn start_local(
     options: DriverStartOptions,
     events: DriverEventSender,
     browser: crate::browser_tools::BrowserToolRuntime,
+    blobs: Arc<crate::blob_store::BlobStore>,
 ) -> anyhow::Result<DriverHandle> {
     let inner: Arc<dyn DriverControl> = Arc::new(opencode::OpenCodeDriver::start_with_browser(
         options,
         events,
         Some(browser),
+        Some(blobs),
     )?);
     Ok(DriverHandle { inner })
 }

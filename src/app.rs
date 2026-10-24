@@ -1729,6 +1729,7 @@ pub struct Fintwind {
     /// The settings category shown while the workspace is in the settings
     /// mode. It survives leaving and re-entering settings.
     settings_page: SettingsPage,
+    session_cleanup: session_cleanup::CleanupState,
     scheduled_tasks_view: Entity<scheduled::ScheduledTasksView>,
     /// The Skills page's library snapshot, scanned off-thread. Frames read
     /// only this; `None` means the first scan has not landed yet.
@@ -2224,6 +2225,7 @@ mod render;
 mod right_panel;
 mod runtime;
 mod scheduled;
+mod session_cleanup;
 mod sessions;
 mod settings;
 mod sidebar;
@@ -3747,6 +3749,7 @@ impl Fintwind {
                 scene_overlay_enabled,
                 mode: WorkspaceMode::default(),
                 settings_page: SettingsPage::General,
+                session_cleanup: session_cleanup::CleanupState::default(),
                 scheduled_tasks_view,
                 skills_catalog: None,
                 skills_scan_generation: 0,

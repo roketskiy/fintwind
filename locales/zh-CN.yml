@@ -1653,3 +1653,19 @@ scheduled_tasks.project_missing: "项目不可用"
 scheduled_tasks.session_missing: "会话不可用"
 
 scheduled_tasks.last_run: "上次 %{time}"
+cleanup.title: '清理旧会话'
+cleanup.days: '%{days} 天未活动'
+cleanup.preview: '预览'
+cleanup.scope: '仅清理关联 OpenCode 的 Fintwind 会话，跳过运行中的会话。'
+cleanup.scanning: '正在扫描…'
+cleanup.empty: '没有符合条件的会话。'
+cleanup.confirm: '将从 Fintwind 和 OpenCode 永久删除 %{count} 个会话及其子会话。'
+cleanup.delete: '永久删除'
+cleanup.cancel: '取消'
+cleanup.progress: '正在清理 %{completed} / %{total}…'
+cleanup.finished: '已删除 %{deleted} 个，跳过 %{skipped} 个，失败 %{failed} 个。'
+cleanup.opencode_required: 'OpenCode 不可用。'
+settings.group_features: 功能
+settings.group_context: 上下文管理
+settings.group_environment: 运行环境
+settings.group_data: 数据管理

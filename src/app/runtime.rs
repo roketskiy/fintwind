@@ -57,7 +57,7 @@ fn attach_driver(
     Ok(Some((session, PreparedDriver { handle, events })))
 }
 
-fn load_remote_task_state(
+pub(super) fn load_remote_task_state(
     client: &fintwind_client::DaemonClient,
 ) -> anyhow::Result<RemoteTaskStateSnapshot> {
     let response = client.request(
@@ -458,7 +458,7 @@ impl Fintwind {
         }
     }
 
-    fn apply_remote_task_state(
+    pub(super) fn apply_remote_task_state(
         &mut self,
         mut snapshot: RemoteTaskStateSnapshot,
         cx: &mut Context<Self>,

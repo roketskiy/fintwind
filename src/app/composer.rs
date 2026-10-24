@@ -2863,6 +2863,7 @@ impl Fintwind {
                 .border_1()
                 .border_color(theme.border)
                 .bg(theme.composer)
+                .shadow(theme.card_shadow())
                 // Horizontal insets live on each row (and inside the field's
                 // scroll viewport, via `padding_x`) rather than on the card,
                 // so the field's overlay scrollbar can hug the card's edge.

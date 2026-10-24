@@ -1,5 +1,9 @@
 use crate::theme::{ThemeScheme, ui_px};
 
+use ely_gpui_component::{
+    buttons::{Button, ButtonVariant},
+    theme::ControlSize,
+};
 use gpui::actions;
 
 use super::composer::next_picker_highlight;
@@ -486,6 +490,7 @@ impl Fintwind {
 
     fn render_general_settings(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
+        let binary_path = self.state.opencode_binary_path();
         let selected = self.opencode_shell_selected.clone();
         let label = selected
             .as_ref()
@@ -829,6 +834,65 @@ impl Fintwind {
                                     ),
                             )
                             .child(shell_selector),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.opencode_binary")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .text_color(theme.text_secondary)
+                                            .overflow_hidden()
+                                            .child(binary_path.map(str::to_owned).unwrap_or_else(
+                                                || tr!("settings.opencode_binary_auto"),
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                Button::new(
+                                    "opencode-binary-choose",
+                                    tr!("settings.opencode_binary_choose"),
+                                )
+                                .variant(ButtonVariant::Secondary)
+                                .size(ControlSize::Sm)
+                                .disabled(self.opencode_binary_busy || self.daemon.is_remote())
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.choose_opencode_binary(cx)),
+                                ),
+                            )
+                            .when(binary_path.is_some(), |row| {
+                                row.child(
+                                    Button::new(
+                                        "opencode-binary-reset",
+                                        tr!("settings.opencode_binary_reset"),
+                                    )
+                                    .variant(ButtonVariant::Ghost)
+                                    .size(ControlSize::Sm)
+                                    .disabled(self.opencode_binary_busy)
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| this.set_opencode_binary(None, cx),
+                                    )),
+                                )
+                            }),
                     ),
             )
             .child(
@@ -1403,6 +1467,92 @@ impl Fintwind {
                     .child(transcript_width_selector),
             )
             .into_any_element()
+    }
+
+    fn choose_opencode_binary(&mut self, cx: &mut Context<Self>) {
+        if self.opencode_binary_busy || self.daemon.is_remote() {
+            return;
+        }
+        self.opencode_binary_busy = true;
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(tr!("settings.opencode_binary_choose").into()),
+        });
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let selected = receiver.await;
+            let _ = this.update(cx, |this, cx| {
+                this.opencode_binary_busy = false;
+                if let Ok(Ok(Some(paths))) = selected {
+                    if let Some(path) = paths.into_iter().next() {
+                        this.set_opencode_binary(Some(path.to_string_lossy().into_owned()), cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn set_opencode_binary(&mut self, path: Option<String>, cx: &mut Context<Self>) {
+        if self.opencode_binary_busy || self.state.opencode_binary_path() == path.as_deref() {
+            return;
+        }
+        self.opencode_binary_busy = true;
+        let mut settings = self.state.daemon_settings();
+        let key = fintwind_protocol::settings::OPENCODE_BINARY_PATH_KEY;
+        match &path {
+            Some(path) => {
+                settings.extra.insert(key.to_owned(), path.clone().into());
+            }
+            None => {
+                settings.extra.remove(key);
+            }
+        }
+        let daemon = self.daemon.client();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    match daemon.request(
+                        Uuid::nil(),
+                        Uuid::nil(),
+                        fintwind_client::Command::UpdateSettings { settings },
+                    )? {
+                        fintwind_client::ResponsePayload::Ack => Ok(()),
+                        _ => anyhow::bail!("invalid settings response"),
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.opencode_binary_busy = false;
+                match result {
+                    Ok(()) => {
+                        this.state.set_opencode_binary_path(path);
+                        this.save();
+                        this.provider_binary_generation =
+                            this.provider_binary_generation.wrapping_add(1);
+                        this.provider_detection_generation =
+                            this.provider_detection_generation.wrapping_add(1);
+                        this.provider_detection_remaining = 0;
+                        this.provider_model_discoveries.clear();
+                        this.provider_model_discoveries_pending.clear();
+                        this.provider_version_probes_pending.clear();
+                        this.provider_versions.clear();
+                        this.probes.clear();
+                        this.refresh_provider_detection();
+                    }
+                    Err(error) => {
+                        this.show_toast(tr!("settings.opencode_binary_failed", error = error))
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn load_opencode_shell(&mut self, cx: &mut Context<Self>) {

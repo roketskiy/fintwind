@@ -966,6 +966,7 @@ impl Fintwind {
         self.provider_model_discoveries.insert(directory.clone());
         self.provider_model_discoveries_pending
             .insert(directory.clone());
+        let binary_generation = self.provider_binary_generation;
         let provider_probe_tx = self.provider_probe_tx.clone();
         let event_wake = self.event_wake_tx.clone();
         let daemon = self.daemon.client();
@@ -990,6 +991,7 @@ impl Fintwind {
                 };
                 if provider_probe_tx
                     .send(ProviderProbeResult {
+                        binary_generation,
                         directory: result_directory,
                         probe: discovered,
                     })
@@ -1031,6 +1033,7 @@ impl Fintwind {
         {
             return;
         }
+        let binary_generation = self.provider_binary_generation;
         let provider_version_tx = self.provider_version_tx.clone();
         let event_wake = self.event_wake_tx.clone();
         let daemon = self.daemon.client();
@@ -1051,7 +1054,7 @@ impl Fintwind {
                     Ok(fintwind_client::ResponsePayload::ProviderProbe { version, .. }) => version,
                     _ => None,
                 };
-                let _ = provider_version_tx.send((provider, version));
+                let _ = provider_version_tx.send((binary_generation, provider, version));
                 signal_event_pump(&event_wake);
             })
             .is_err()
@@ -1063,7 +1066,12 @@ impl Fintwind {
 
     pub(super) fn drain_provider_version_events(&mut self) -> bool {
         let mut changed = false;
-        while let Ok((provider, version)) = self.provider_version_events.try_recv() {
+        while let Ok((binary_generation, provider, version)) =
+            self.provider_version_events.try_recv()
+        {
+            if binary_generation != self.provider_binary_generation {
+                continue;
+            }
             self.provider_version_probes_pending.remove(&provider);
             self.provider_versions.insert(provider, version);
             changed = true;
@@ -3167,6 +3175,9 @@ impl Fintwind {
     pub(super) fn drain_provider_probe_events(&mut self, cx: &mut Context<Self>) -> bool {
         let mut changed = false;
         while let Ok(result) = self.provider_probe_events.try_recv() {
+            if result.binary_generation != self.provider_binary_generation {
+                continue;
+            }
             self.provider_model_discoveries_pending
                 .remove(&result.directory);
             if result.directory != self.provider_probe_directory {

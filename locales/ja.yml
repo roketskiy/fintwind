@@ -187,6 +187,11 @@ settings.auto_compact_threshold_description: 使用量がしきい値に届か�
 settings.auto_compact_threshold_placeholder: 例：500K
 settings.auto_compact_threshold_invalid: しきい値の形式が正しくありません
 settings.network_proxy: ネットワークプロキシ
+settings.opencode_binary: "OpenCode 実行ファイル"
+settings.opencode_binary_auto: "自動検出"
+settings.opencode_binary_choose: "ファイルを選択…"
+settings.opencode_binary_reset: "自動検出に戻す"
+settings.opencode_binary_failed: "OpenCode のパスを更新できませんでした: %{error}"
 settings.opencode_shell: OpenCode シェル
 settings.opencode_shell_description: OpenCode がコマンドの実行に使用するシェルを選択します
 settings.shell_default: システムのデフォルト

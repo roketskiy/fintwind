@@ -607,6 +607,27 @@ impl PersistedState {
         self.daemon_settings_extra = settings.extra;
     }
 
+    pub fn opencode_binary_path(&self) -> Option<&str> {
+        self.daemon_settings_extra
+            .get(fintwind_protocol::settings::OPENCODE_BINARY_PATH_KEY)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+    }
+
+    pub fn set_opencode_binary_path(&mut self, path: Option<String>) {
+        let key = fintwind_protocol::settings::OPENCODE_BINARY_PATH_KEY;
+        match path {
+            Some(path) => {
+                self.daemon_settings_extra
+                    .insert(key.to_owned(), path.into());
+            }
+            None => {
+                self.daemon_settings_extra.remove(key);
+            }
+        }
+    }
+
     fn app_settings(&self) -> AppSettings {
         AppSettings {
             favorite_models: self.favorite_models.clone(),

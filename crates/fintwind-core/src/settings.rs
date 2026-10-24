@@ -76,6 +76,12 @@ impl DaemonSettingsStore {
     pub fn replace(&self, mut settings: DaemonSettings) -> io::Result<()> {
         settings.discard_legacy_app_keys();
         let mut current = self.settings.lock();
+        if settings.opencode_binary_path() != current.opencode_binary_path()
+            && let Some(path) = settings.opencode_binary_path()
+        {
+            crate::model::validate_opencode_binary_path(path)
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        }
         write_atomic(&self.path, &settings)?;
         *current = settings;
         Ok(())

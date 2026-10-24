@@ -152,6 +152,7 @@ pub(crate) fn task_id_from_notification_tag(tag: &str) -> Option<Uuid> {
 /// replace the catalog currently shown in the composer.
 #[derive(Clone, Debug)]
 struct ProviderProbeResult {
+    binary_generation: u64,
     directory: Option<PathBuf>,
     probe: ProviderProbe,
 }
@@ -1383,8 +1384,8 @@ pub struct Fintwind {
     /// CLI version, probed off-thread. Missing key means the probe has not
     /// answered yet; `None` means it ran and found nothing.
     provider_versions: HashMap<String, Option<String>>,
-    provider_version_tx: Sender<(String, Option<String>)>,
-    provider_version_events: Receiver<(String, Option<String>)>,
+    provider_version_tx: Sender<(u64, String, Option<String>)>,
+    provider_version_events: Receiver<(u64, String, Option<String>)>,
     /// Providers with a version probe in flight, so a re-detect cannot stack
     /// a second subprocess on one that has not answered.
     provider_version_probes_pending: HashSet<String>,
@@ -2031,6 +2032,8 @@ pub struct Fintwind {
     opencode_shell_options: Vec<fintwind_client::opencode_shell::ShellOption>,
     opencode_shell_selected: Option<String>,
     opencode_shell_generation: u64,
+    opencode_binary_busy: bool,
+    provider_binary_generation: u64,
     opencode_shell_busy: bool,
     opencode_shell_loaded: bool,
     header_drag_armed: bool,
@@ -3880,6 +3883,8 @@ impl Fintwind {
                 opencode_shell_options: Vec::new(),
                 opencode_shell_selected: None,
                 opencode_shell_generation: 0,
+                opencode_binary_busy: false,
+                provider_binary_generation: 0,
                 opencode_shell_busy: false,
                 opencode_shell_loaded: false,
                 header_drag_armed: false,

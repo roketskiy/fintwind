@@ -180,6 +180,11 @@ settings.auto_compact_threshold_description: 用量到不了阈值的窗口不�
 settings.auto_compact_threshold_placeholder: 如 500K
 settings.auto_compact_threshold_invalid: 阈值格式不对
 settings.network_proxy: 网络代理
+settings.opencode_binary: "OpenCode 可执行文件"
+settings.opencode_binary_auto: "自动检测"
+settings.opencode_binary_choose: "选择文件…"
+settings.opencode_binary_reset: "恢复自动检测"
+settings.opencode_binary_failed: "无法更新 OpenCode 路径：%{error}"
 settings.opencode_shell: OpenCode Shell
 settings.opencode_shell_description: 选择 OpenCode 执行命令时使用的 Shell
 settings.shell_default: 系统默认

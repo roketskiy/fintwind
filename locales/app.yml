@@ -364,6 +364,16 @@ settings.auto_compact_threshold_invalid:
   en: The threshold format is not recognized
 settings.network_proxy:
   en: Network proxy
+settings.opencode_binary:
+  en: "OpenCode executable"
+settings.opencode_binary_auto:
+  en: "Automatic detection"
+settings.opencode_binary_choose:
+  en: "Choose file…"
+settings.opencode_binary_reset:
+  en: "Use automatic detection"
+settings.opencode_binary_failed:
+  en: "Could not update OpenCode executable: %{error}"
 settings.opencode_shell:
   en: OpenCode shell
 settings.opencode_shell_description:

@@ -1138,6 +1138,8 @@ impl Fintwind {
                     count_label: tr!("usage_page.model_sessions", count = row.sessions),
                     total: row.total,
                     cost: row.cost,
+                    value_label: None,
+                    color: None,
                 }
             })
             .collect();
@@ -1161,7 +1163,13 @@ impl Fintwind {
         if tiles.is_empty() {
             return card;
         }
-        card.child(usage_treemap(window, cx, &tiles, theme))
+        card.child(usage_treemap(
+            "usage-model-treemap",
+            window,
+            cx,
+            &tiles,
+            theme,
+        ))
     }
 
     /// The per-provider ranking: where the store's usage actually went.

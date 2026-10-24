@@ -9,11 +9,18 @@ type ContextEvent = {
 type HttpRequestEvent = { sessionID?: unknown; kind?: unknown };
 type HookKind = "context" | "http.request" | "http.response";
 type Composition = {
+  version: 2;
   model: string;
   system: number;
   tools: number;
   memory: number;
   messages: number;
+  reasoning: number;
+  toolCalls: number;
+  files: number;
+  toolResults: number;
+  opaqueReasoning: boolean;
+  opaqueMemory: boolean;
   incomplete: boolean;
 };
 type ToolInput = Record<string, unknown>;
@@ -43,6 +50,7 @@ type Context = {
   };
   session: {
     get(input: { sessionID: string }): Promise<unknown>;
+    context(input: { sessionID: string }): Promise<unknown>;
     hook<T>(kind: HookKind, handler: (event: T) => void | Promise<void>): Promise<Registration>;
   };
   rpc: { register(definition: unknown, handlers: { get(input: unknown): Promise<Composition | null> }) : Promise<Registration> } & {
@@ -97,23 +105,31 @@ function estimateValue(value: unknown): number {
 
 function parseComposition(value: unknown): Composition | undefined {
   const saved = object(value);
-  if (!saved || typeof saved.model !== "string" || typeof saved.incomplete !== "boolean") return undefined;
-  const count = (key: string): number | undefined => {
-    const value = saved[key];
-    return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  if (!saved || saved.version !== 2 || typeof saved.model !== "string"
+    || typeof saved.incomplete !== "boolean" || typeof saved.opaqueReasoning !== "boolean"
+    || typeof saved.opaqueMemory !== "boolean") return undefined;
+  const keys = ["system", "tools", "memory", "messages", "reasoning", "toolCalls", "files", "toolResults"];
+  if (keys.some(key => typeof saved[key] !== "number" || !Number.isSafeInteger(saved[key]) || saved[key] < 0)) return undefined;
+  return {
+    version: 2, model: saved.model,
+    system: Number(saved.system), tools: Number(saved.tools), memory: Number(saved.memory),
+    messages: Number(saved.messages), reasoning: Number(saved.reasoning), toolCalls: Number(saved.toolCalls),
+    files: Number(saved.files), toolResults: Number(saved.toolResults),
+    opaqueReasoning: saved.opaqueReasoning, opaqueMemory: saved.opaqueMemory, incomplete: saved.incomplete,
   };
-  const system = count("system");
-  const tools = count("tools");
-  const memory = count("memory");
-  const messages = count("messages");
-  if (system === undefined || tools === undefined || memory === undefined || messages === undefined) return undefined;
-  return { model: saved.model, system, tools, memory, messages, incomplete: saved.incomplete };
 }
 
 function resultContent(value: unknown, counts: Composition): number {
   const result = object(value);
-  if (!result || typeof result.type !== "string") { counts.incomplete = true; return 0; }
-  if (result.type !== "content") return estimateValue(result.value);
+  if (!result || typeof result.type !== "string") {
+    // Error results have a structured error/content envelope instead of a value.
+    if (result && result.error !== undefined) return estimateValue({ error: result.error, content: result.content });
+    counts.incomplete = true;
+    return 0;
+  }
+  if (result.type !== "content") {
+    return typeof result.value === "string" ? estimateText(result.value) : estimateValue(result.value);
+  }
   if (!Array.isArray(result.value)) { counts.incomplete = true; return 0; }
   let estimate = 0;
   for (const item of result.value) {
@@ -124,12 +140,42 @@ function resultContent(value: unknown, counts: Composition): number {
   return estimate;
 }
 
-function composition(event: ContextEvent): Composition | undefined {
+function opaquePart(part: Record<string, unknown>): boolean {
+  if (part.encrypted !== undefined) return true;
+  const metadata = object(part.providerMetadata);
+  if (!metadata) return false;
+  if (typeof part.text !== "string" || !part.text) return Object.keys(metadata).length > 0;
+  return Object.values(metadata).some(raw => {
+    const state = object(raw);
+    return state !== undefined && ["reasoningEncryptedContent", "encrypted_content", "encryptedContent", "encrypted", "signature"]
+      .some(key => state[key] !== undefined);
+  });
+}
+
+type ContextSources = { summaries: Set<string>; instructions: Set<string> };
+
+function contextSources(value: unknown): ContextSources {
+  if (!Array.isArray(value)) throw new Error("Missing session context provenance");
+  const sources: ContextSources = { summaries: new Set(), instructions: new Set() };
+  for (const raw of value) {
+    const message = object(raw);
+    if (typeof message?.id !== "string") continue;
+    if (message.type === "compaction" && message.status === "completed") sources.summaries.add(message.id);
+    if (message.type === "system" || message.type === "skill" || message.type === "synthetic") sources.instructions.add(message.id);
+  }
+  return sources;
+}
+
+function composition(event: ContextEvent, sources: ContextSources): Composition | undefined {
   if (!event.sessionID || !Array.isArray(event.system) || !Array.isArray(event.messages)) return undefined;
   const provider = event.model?.providerID;
   const modelId = event.model?.id;
   if (typeof provider !== "string" || typeof modelId !== "string") return undefined;
-  const counts = { model: `${provider}/${modelId}`, system: 0, tools: 0, memory: 0, messages: 0, incomplete: false };
+  const counts: Composition = {
+    version: 2, model: `${provider}/${modelId}`, system: 0, tools: 0, memory: 0, messages: 0,
+    reasoning: 0, toolCalls: 0, files: 0, toolResults: 0,
+    opaqueReasoning: false, opaqueMemory: false, incomplete: false,
+  };
   for (const raw of event.system) {
     const part = object(raw);
     if (part?.type === "text" && typeof part.text === "string") counts.system += estimateText(part.text);
@@ -143,6 +189,7 @@ function composition(event: ContextEvent): Composition | undefined {
       else counts.incomplete = true;
     }
   } else counts.incomplete = true;
+  const calls = new Map<string, string>();
   for (const rawMessage of event.messages) {
     const message = object(rawMessage);
     if (!message || !Array.isArray(message.content)) { counts.incomplete = true; continue; }
@@ -152,24 +199,30 @@ function composition(event: ContextEvent): Composition | undefined {
       switch (part.type) {
         case "text":
           if (typeof part.text === "string") {
-            const target = message.role === "system" ? "system" : "messages";
+            const summary = typeof message.id === "string" && sources.summaries.has(message.id);
+            const instruction = message.role === "system" || (typeof message.id === "string" && sources.instructions.has(message.id));
+            const attachment = object(object(part.metadata)?.attachment);
+            const target = summary ? "memory" : instruction ? "system" : attachment ? "files" : "messages";
             counts[target] += estimateText(part.text);
           } else counts.incomplete = true;
           break;
         case "reasoning":
-          if (typeof part.text === "string") counts.messages += estimateText(part.text);
-          if (object(part)?.encrypted !== undefined) counts.incomplete = true;
+          if (typeof part.text === "string") counts.reasoning += estimateText(part.text);
+          if (opaquePart(part)) { counts.opaqueReasoning = true; counts.incomplete = true; }
           break;
         case "tool-call":
-          counts.tools += estimateValue({ name: part.name, input: part.input });
+          counts.toolCalls += estimateValue({ name: part.name, input: part.input });
+          if (typeof part.id === "string" && typeof part.name === "string") calls.set(part.id, part.name);
           break;
-        case "tool-result":
-          counts.tools += resultContent(part.result, counts);
+        case "tool-result": {
+          const name = typeof part.name === "string" ? part.name : typeof part.id === "string" ? calls.get(part.id) : undefined;
+          const target = name === "read" || name === "read_file" ? "files" : "toolResults";
+          counts[target] += resultContent(part.result, counts);
           break;
+        }
         case "compaction":
           if (typeof part.text === "string") counts.memory += estimateText(part.text);
-          else counts.incomplete = true;
-          if (object(part)?.encrypted !== undefined) counts.incomplete = true;
+          if (opaquePart(part)) { counts.opaqueMemory = true; counts.incomplete = true; }
           break;
         case "media":
           counts.incomplete = true;
@@ -403,7 +456,8 @@ export default {
         delete (event.tools as Record<string, unknown>)[MERMAID_CHECK_TOOL];
       }
       try {
-        const result = composition(event);
+        const sources = contextSources(await ctx.session.context({ sessionID: event.sessionID }));
+        const result = composition(event, sources);
         if (!result || !event.sessionID) return;
         latest.set(event.sessionID, result);
         const previous = writes.get(event.sessionID) ?? Promise.resolve();
@@ -415,7 +469,7 @@ export default {
       } catch {}
     });
     const rpc = await ctx.rpc.register(definition, {
-      async get(raw) {
+      async get(raw: unknown) {
         const request = object(raw);
         const id = request?.sessionID;
         if (typeof id !== "string" || !id) throw new Error("Missing sessionID");
@@ -430,7 +484,7 @@ export default {
       // so a stored sample always belongs to the request that just finished.
       // An empty answer means the provider path bypassed the HTTP hooks (or
       // the hooks are unavailable on this OpenCode build).
-      async ttft(raw) {
+      async ttft(raw: unknown) {
         const request = object(raw);
         const id = request?.sessionID;
         if (typeof id !== "string" || !id) throw new Error("Missing sessionID");

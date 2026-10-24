@@ -652,11 +652,27 @@ pub struct ContextUsage {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ContextComposition {
+    /// Version 2 separates definitions, calls, results and reasoning. Older
+    /// snapshots remain readable but cannot supply the detailed breakdown.
+    #[serde(default)]
+    pub version: u8,
     pub model: String,
     pub system: u64,
     pub tools: u64,
     pub memory: u64,
     pub messages: u64,
+    #[serde(default)]
+    pub reasoning: u64,
+    #[serde(default, rename = "toolCalls")]
+    pub tool_calls: u64,
+    #[serde(default)]
+    pub files: u64,
+    #[serde(default, rename = "toolResults")]
+    pub tool_results: u64,
+    #[serde(default, rename = "opaqueReasoning")]
+    pub opaque_reasoning: bool,
+    #[serde(default, rename = "opaqueMemory")]
+    pub opaque_memory: bool,
     #[serde(default)]
     pub incomplete: bool,
 }

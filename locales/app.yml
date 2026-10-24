@@ -3324,3 +3324,25 @@ settings.group_environment:
   en: Runtime environment
 settings.group_data:
   en: Data management
+usage.composition_estimated:
+  en: Estimated composition
+usage.composition_pending:
+  en: Available after the next request
+usage.composition_system:
+  en: System & rules
+usage.composition_tools:
+  en: Tool definitions
+usage.composition_dialogue:
+  en: Conversation
+usage.composition_calls:
+  en: Tool calls
+usage.composition_files:
+  en: File content
+usage.composition_results:
+  en: Other tool results
+usage.composition_summary:
+  en: Compaction summary
+usage.composition_unmeasured:
+  en: Unmeasured
+usage.composition_partial:
+  en: Includes unmeasured content

@@ -56,12 +56,15 @@ pub(super) struct TreemapTile {
     pub count_label: String,
     pub total: u64,
     pub cost: f64,
+    pub value_label: Option<String>,
+    pub color: Option<Hsla>,
 }
 
 /// The tile field. Empty on the first frame after the page opens, because a
 /// tile's area needs the field's width and only layout knows that; the measure
 /// canvas below reports it and the page repaints.
 pub(super) fn usage_treemap(
+    id: &'static str,
     window: &mut Window,
     cx: &mut App,
     tiles: &[TreemapTile],
@@ -75,9 +78,7 @@ pub(super) fn usage_treemap(
         return div().into_any_element();
     }
 
-    let width = window.use_keyed_state("usage-model-treemap-width", cx, |_, _| {
-        TreemapWidth::default()
-    });
+    let width = window.use_keyed_state((id, 0usize), cx, |_, _| TreemapWidth::default());
     let rects = squarify(
         &values,
         TileRect {
@@ -90,7 +91,7 @@ pub(super) fn usage_treemap(
     let colors = plot_colors(theme);
 
     let mut field = div()
-        .id("usage-model-treemap")
+        .id(id)
         // The tiles are the tab stops; the field itself is not one.
         .tab_group()
         .relative()
@@ -105,10 +106,11 @@ pub(super) fn usage_treemap(
             continue;
         }
         field = field.child(usage_treemap_tile(
+            id,
             index,
             tile,
             placed,
-            colors[index % colors.len()],
+            tile.color.unwrap_or(colors[index % colors.len()]),
             theme,
         ));
     }
@@ -117,13 +119,17 @@ pub(super) fn usage_treemap(
 }
 
 fn usage_treemap_tile(
+    id: &str,
     index: usize,
     tile: &TreemapTile,
     rect: TileRect,
     ink: Hsla,
     theme: &Theme,
 ) -> Stateful<Div> {
-    let tokens = format_tokens(tile.total);
+    let tokens = tile
+        .value_label
+        .clone()
+        .unwrap_or_else(|| format_tokens(tile.total));
     let detail = if tile.cost > 0.0 {
         format!("{} · {}", tile.count_label, format_cost(tile.cost))
     } else {
@@ -177,7 +183,7 @@ fn usage_treemap_tile(
     }
 
     div()
-        .id(SharedString::from(format!("usage-model-tile-{index}")))
+        .id(SharedString::from(format!("{id}-tile-{index}")))
         .tab_index(0)
         .absolute()
         .left(px(rect.x))

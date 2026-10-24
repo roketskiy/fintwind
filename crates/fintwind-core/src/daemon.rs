@@ -1383,13 +1383,16 @@ impl Backend for FintwindBackend {
                 probe_version,
             } => {
                 ensure_shell_environment();
+                let settings = self.settings.get();
                 let mut probe = match binary_override.as_deref() {
                     override_value if discover_models || probe_version => {
-                        crate::model::provider_probe(override_value)
+                        crate::model::provider_probe(&settings, override_value)
                     }
-                    override_value => {
-                        crate::model::cached_provider_probe(override_value, directory.as_deref())
-                    }
+                    override_value => crate::model::cached_provider_probe(
+                        &settings,
+                        override_value,
+                        directory.as_deref(),
+                    ),
                 };
                 let version = probe_version
                     .then(|| {
@@ -2131,10 +2134,14 @@ impl Backend for FintwindBackend {
                 if self.removed_session_ids.lock().contains(&session_id) {
                     bail!("session was removed");
                 }
+                let binary = match self.settings.get().opencode_binary_path() {
+                    Some(path) => crate::model::validate_opencode_binary_path(path)?,
+                    None => options.binary,
+                };
                 let previous = self.sessions.lock().remove(&session_id);
                 drop(previous);
                 let options = DriverStartOptions {
-                    binary: options.binary,
+                    binary,
                     cwd: options.cwd,
                     mode: decode_enum(&options.mode)?,
                     interaction_mode: decode_enum(&options.interaction_mode)?,
@@ -2598,7 +2605,7 @@ impl FintwindBackend {
 
     fn provider_binary(&self) -> anyhow::Result<PathBuf> {
         ensure_shell_environment();
-        crate::model::provider_probe(None)
+        crate::model::provider_probe(&self.settings.get(), None)
             .path
             .ok_or_else(|| anyhow!("opencode is not installed on the daemon"))
     }

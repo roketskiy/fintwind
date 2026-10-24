@@ -5,7 +5,38 @@ use std::time::Duration;
 
 pub use fintwind_protocol::model::*;
 
-pub fn provider_probe(binary_override: Option<&str>) -> ProviderProbe {
+/// Settings paths refer to files on the daemon host, independently of its cwd.
+pub fn validate_opencode_binary_path(value: &str) -> anyhow::Result<std::path::PathBuf> {
+    let path = Path::new(value.trim());
+    anyhow::ensure!(
+        path.is_absolute() && path.is_file(),
+        "OpenCode executable must be an existing absolute file path"
+    );
+    #[cfg(windows)]
+    anyhow::ensure!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| ["exe", "com", "cmd", "bat"]
+                .iter()
+                .any(|allowed| extension.eq_ignore_ascii_case(allowed))),
+        "OpenCode executable must be an .exe, .com, .cmd, or .bat file"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        anyhow::ensure!(
+            std::fs::metadata(path)?.permissions().mode() & 0o111 != 0,
+            "OpenCode file is not executable"
+        );
+    }
+    Ok(path.to_owned())
+}
+
+pub fn provider_probe(
+    settings: &crate::DaemonSettings,
+    binary_override: Option<&str>,
+) -> ProviderProbe {
+    let binary_override = binary_override.or_else(|| settings.opencode_binary_path());
     let path = match binary_override {
         Some(binary) => crate::command_env::resolve_binary_override(binary),
         None => crate::command_env::find_executable("opencode"),
@@ -25,11 +56,12 @@ pub fn provider_probe(binary_override: Option<&str>) -> ProviderProbe {
 /// it. Cache I/O stays in the daemon instead of leaking host filesystem access
 /// into desktop or Web clients.
 pub fn cached_provider_probe(
+    settings: &crate::DaemonSettings,
     binary_override: Option<&str>,
     directory: Option<&Path>,
 ) -> ProviderProbe {
     let cached = crate::model_catalog::cached_models(directory);
-    apply_cached_models(provider_probe(binary_override), cached)
+    apply_cached_models(provider_probe(settings, binary_override), cached)
 }
 
 fn apply_cached_models(

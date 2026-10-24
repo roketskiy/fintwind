@@ -5,7 +5,9 @@
 //! installer for this architecture and verify it, and only then hands it to a
 //! silent install. No step of that runs on the thread that draws the card.
 
+use ely_gpui_component::motion::ProgressBar;
 use gpui::{KeyBinding, actions};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::md::virtualized::ReasoningView;
 use crate::ui::ActivationExt;
@@ -46,6 +48,7 @@ pub(super) struct UpdateCard {
     installed: bool,
     visible: bool,
     phase: UpdatePhase,
+    downloaded_bytes: u64,
     /// Bumped whenever the card is dismissed, which strands a transfer still in
     /// flight: it may finish downloading, but it may not install, because the
     /// card that asked for it is gone.
@@ -85,6 +88,7 @@ impl UpdateCard {
             installed,
             visible: true,
             phase: UpdatePhase::Idle,
+            downloaded_bytes: 0,
             generation: 0,
             running: None,
             notes,
@@ -182,6 +186,7 @@ impl Fintwind {
         // controls come back, and a download that is still running is stranded
         // by the generation it no longer matches.
         card.phase = UpdatePhase::Idle;
+        card.downloaded_bytes = 0;
         card.generation = card.generation.wrapping_add(1);
         card.selection.selection.borrow_mut().clear();
         card.selection.registry.borrow_mut().clear();
@@ -220,6 +225,7 @@ impl Fintwind {
             return;
         };
         card.phase = UpdatePhase::Selecting;
+        card.downloaded_bytes = 0;
         card.generation = card.generation.wrapping_add(1);
         let generation = card.generation;
         card.running = Some(generation);
@@ -256,12 +262,47 @@ impl Fintwind {
             if !still_current {
                 return;
             }
+            let progress = Arc::new(AtomicU64::new(0));
+            let observed_progress = progress.clone();
+            let progress_owner = this.clone();
+            let progress_task = cx.spawn(async move |cx| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(250))
+                        .await;
+                    let bytes = observed_progress.load(Ordering::Relaxed);
+                    let keep_running = progress_owner
+                        .update(cx, |this, cx| {
+                            let Some(card) = this.latest_available.as_mut() else {
+                                return false;
+                            };
+                            if card.generation != generation
+                                || card.running != Some(generation)
+                                || card.phase != UpdatePhase::Downloading
+                            {
+                                return false;
+                            }
+                            if card.downloaded_bytes != bytes {
+                                card.downloaded_bytes = bytes;
+                                cx.notify();
+                            }
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !keep_running {
+                        break;
+                    }
+                }
+            });
             let downloaded = cx
                 .background_executor()
-                .spawn(
-                    async move { crate::update::download_installer(&asset, &chosen, &destination) },
-                )
+                .spawn(async move {
+                    crate::update::download_installer(&asset, &chosen, &destination, |bytes| {
+                        progress.store(bytes, Ordering::Relaxed);
+                    })
+                })
                 .await;
+            drop(progress_task);
             let Ok(installing) = this.update(cx, |this, cx| {
                 let Some(card) = this.latest_available.as_mut() else {
                     return false;
@@ -334,7 +375,18 @@ impl Fintwind {
                 motion::spin_slow(icon("icons/loader-circle.svg", 14.0, theme.text_secondary)),
             ),
             UpdatePhase::Downloading => (
-                tr!("update.downloading", size = asset.size_label()),
+                if asset.size > 0 {
+                    tr!(
+                        "update.downloading_progress",
+                        percent = (card.downloaded_bytes.saturating_mul(100) / asset.size).min(100)
+                    )
+                } else {
+                    tr!(
+                        "update.downloading",
+                        size =
+                            format!("{:.1} MB", card.downloaded_bytes as f64 / (1024.0 * 1024.0))
+                    )
+                },
                 motion::spin_slow(icon("icons/loader-circle.svg", 14.0, theme.text_secondary)),
             ),
             UpdatePhase::Installing => (
@@ -342,7 +394,7 @@ impl Fintwind {
                 motion::spin_slow(icon("icons/loader-circle.svg", 14.0, theme.text_secondary)),
             ),
         };
-        div()
+        let action = div()
             .id("install-update")
             .track_focus(&card.update_focus)
             .tab_index(0)
@@ -376,7 +428,35 @@ impl Fintwind {
                     .tooltip(Tooltip::text(tr!("update.install_tooltip")))
             })
             .child(glyph)
-            .child(label)
+            .child(label);
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .child(action)
+            .when(
+                card.phase == UpdatePhase::Downloading && asset.size > 0,
+                |row| {
+                    row.child(ProgressBar::new(
+                        "update-download-progress",
+                        (card.downloaded_bytes as f64 / asset.size as f64).clamp(0.0, 1.0) as f32,
+                    ))
+                    .child(
+                        div()
+                            .text_size(ui_px(11.0))
+                            .text_color(theme.text_secondary)
+                            .child(tr!(
+                                "update.download_size",
+                                downloaded = format!(
+                                    "{:.1} MB",
+                                    card.downloaded_bytes as f64 / (1024.0 * 1024.0)
+                                ),
+                                total = asset.size_label()
+                            )),
+                    )
+                },
+            )
             .into_any_element()
     }
 

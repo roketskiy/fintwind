@@ -256,6 +256,7 @@ pub fn download_installer(
     asset: &ReleaseAsset,
     source: &DownloadSource,
     destination: &Path,
+    on_progress: impl FnMut(u64),
 ) -> anyhow::Result<()> {
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent)
@@ -267,6 +268,7 @@ pub fn download_installer(
         &headers,
         destination,
         INSTALLER_MAX_TIME_SECS,
+        on_progress,
     )
     .with_context(|| {
         format!(

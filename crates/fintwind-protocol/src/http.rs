@@ -201,17 +201,21 @@ pub fn http_json(
 /// needs a helper of its own. `-L` follows the redirect a release asset URL
 /// answers with, and `--fail` turns an HTTP error status into a non-zero exit
 /// so an error page can never be mistaken for the installer. The parent of
-/// `destination` has to exist. Blocking.
+/// `destination` has to exist. Reports written bytes on this background thread
+/// every 100 ms when they change, plus the initial zero and final size. Blocking.
 pub fn http_download(
     url: &str,
     headers: &[String],
     destination: &Path,
     max_time_secs: u64,
+    mut on_progress: impl FnMut(u64),
 ) -> anyhow::Result<u64> {
     // curl writes the file itself, so a transfer that dies halfway would leave
     // something that looks like a complete installer. Download beside it and
     // rename only once curl reports success.
     let partial = partial_path(destination);
+    std::fs::File::create(&partial).context("could not create download file")?;
+    on_progress(0);
     let mut child = curl_command()
         .arg("-sS")
         .arg("-L")
@@ -228,6 +232,21 @@ pub fn http_download(
         .spawn()
         .context("could not run curl")?;
     take_stdin(&mut child, headers)?;
+    let mut last_bytes = 0;
+    while child
+        .try_wait()
+        .context("could not check download status")?
+        .is_none()
+    {
+        let bytes = std::fs::metadata(&partial)
+            .map(|file| file.len())
+            .unwrap_or(0);
+        if bytes > last_bytes {
+            on_progress(bytes);
+            last_bytes = bytes;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
     let output = child.wait_with_output().context("curl did not finish")?;
     if !output.status.success() {
         let _ = std::fs::remove_file(&partial);
@@ -239,9 +258,9 @@ pub fn http_download(
             destination.display()
         )
     })?;
-    Ok(std::fs::metadata(destination)
-        .map(|metadata| metadata.len())
-        .unwrap_or(0))
+    let bytes = std::fs::metadata(destination)?.len();
+    on_progress(bytes);
+    Ok(bytes)
 }
 
 fn partial_path(destination: &Path) -> PathBuf {

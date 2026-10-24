@@ -119,7 +119,11 @@ impl Fintwind {
         )
     }
 
-    pub(super) fn render_context_panel(&mut self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_context_panel(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let theme = Theme::current(cx);
         let Some(session) = self.selected_session() else {
             return div().into_any_element();
@@ -271,8 +275,7 @@ impl Fintwind {
                         first_token_label(usage.as_ref()),
                     )),
             )
-            .child(context_waffle(&breakdown, &theme))
-            .child(context_legend(&breakdown, &theme))
+            .child(context_composition(usage.as_ref(), window, cx, &theme))
             .when(failed, |element| {
                 element.child(
                     div().text_color(theme.warning_text).child(
@@ -619,128 +622,18 @@ fn first_token_label(usage: Option<&ContextUsage>) -> String {
         .unwrap_or_else(|| "—".to_owned())
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum ContextPartKind {
-    Input,
-    CacheRead,
-    CacheWrite,
-    Output,
-    Reasoning,
-    Unclassified,
-    Used,
-    Remaining,
-    Unknown,
-}
-
-struct ContextPart {
-    kind: ContextPartKind,
-    tokens: Option<u64>,
-}
-
 struct ContextBreakdown {
-    entries: Vec<ContextPart>,
     used: u64,
     window: Option<u64>,
-    denominator: u64,
     occupancy_known: bool,
-}
-
-impl ContextPartKind {
-    fn label(self) -> String {
-        match self {
-            Self::Input => tr!("usage.input"),
-            Self::CacheRead => tr!("usage.cache_read"),
-            Self::CacheWrite => tr!("usage.cache_write"),
-            Self::Output => tr!("usage.output"),
-            Self::Reasoning => tr!("usage.reasoning"),
-            Self::Unclassified => tr!("usage.unclassified_context"),
-            Self::Used => tr!("usage.used_context"),
-            Self::Remaining => tr!("usage.available_context"),
-            Self::Unknown => tr!("usage.unknown_context"),
-        }
-    }
-
-    fn color(self, theme: &Theme) -> Hsla {
-        match self {
-            Self::Input => theme.accent,
-            Self::CacheRead => theme.success,
-            Self::CacheWrite => theme.gauge,
-            Self::Output => theme.link,
-            Self::Reasoning => theme.code_keyword,
-            Self::Unclassified => theme.text_tertiary,
-            Self::Used => theme.accent,
-            Self::Remaining | Self::Unknown => theme.overlay_strong,
-        }
-    }
 }
 
 impl ContextBreakdown {
     fn new(usage: Option<&ContextUsage>) -> Self {
-        let window = usage.and_then(|usage| usage.window.filter(|window| *window > 0));
-        let occupancy_known = usage.is_some_and(|usage| usage.measured || usage.tokens > 0);
-        let used = usage.map(|usage| usage.tokens).unwrap_or(0);
-        let denominator = window.unwrap_or(used).max(used);
-        let mut entries = Vec::new();
-        if !occupancy_known {
-            entries.push(ContextPart {
-                kind: ContextPartKind::Unknown,
-                tokens: None,
-            });
-        } else if let Some(latest) = usage.and_then(|usage| usage.latest) {
-            let categories = [
-                (ContextPartKind::Input, latest.input),
-                (ContextPartKind::CacheRead, latest.cache_read),
-                (ContextPartKind::CacheWrite, latest.cache_write),
-                (ContextPartKind::Output, latest.output),
-                (ContextPartKind::Reasoning, latest.reasoning),
-            ];
-            let total: u128 = categories.iter().map(|(_, count)| u128::from(*count)).sum();
-            if total <= u128::from(used) {
-                for (kind, tokens) in categories {
-                    if tokens > 0 {
-                        entries.push(ContextPart {
-                            kind,
-                            tokens: Some(tokens),
-                        });
-                    }
-                }
-                if total < u128::from(used) {
-                    entries.push(ContextPart {
-                        kind: ContextPartKind::Unclassified,
-                        tokens: Some(used - total as u64),
-                    });
-                }
-            } else {
-                // A provider total can disagree with its split. Keep measured occupancy intact.
-                entries.push(ContextPart {
-                    kind: ContextPartKind::Used,
-                    tokens: Some(used),
-                });
-            }
-        } else {
-            entries.push(ContextPart {
-                kind: ContextPartKind::Used,
-                tokens: Some(used),
-            });
-        }
-        if occupancy_known && denominator > used {
-            entries.push(ContextPart {
-                kind: ContextPartKind::Remaining,
-                tokens: Some(denominator - used),
-            });
-        }
-        if entries.is_empty() {
-            entries.push(ContextPart {
-                kind: ContextPartKind::Used,
-                tokens: Some(0),
-            });
-        }
         Self {
-            entries,
-            used,
-            window,
-            denominator,
-            occupancy_known,
+            used: usage.map(|usage| usage.tokens).unwrap_or(0),
+            window: usage.and_then(|usage| usage.window.filter(|window| *window > 0)),
+            occupancy_known: usage.is_some_and(|usage| usage.measured || usage.tokens > 0),
         }
     }
 }
@@ -759,189 +652,164 @@ fn context_stat(theme: &Theme, label: String, value: String) -> Div {
         .child(div().font_weight(FontWeight::MEDIUM).child(value))
 }
 
-fn context_legend(breakdown: &ContextBreakdown, theme: &Theme) -> Div {
+fn context_composition(
+    usage: Option<&ContextUsage>,
+    window: &mut Window,
+    cx: &mut App,
+    theme: &Theme,
+) -> AnyElement {
+    use super::usage_treemap::{TreemapTile, usage_treemap};
+    let heading = div()
+        .text_color(theme.text_secondary)
+        .child(tr!("usage.composition_estimated"));
+    let Some(composition) = usage
+        .and_then(|usage| usage.composition.as_ref())
+        .filter(|value| value.version == 2)
+    else {
+        return div()
+            .flex()
+            .flex_col()
+            .gap(px(8.0))
+            .child(heading)
+            .child(
+                div()
+                    .text_color(theme.text_tertiary)
+                    .child(tr!("usage.composition_pending")),
+            )
+            .into_any_element();
+    };
+    let entries = [
+        (
+            tr!("usage.composition_system"),
+            composition.system,
+            false,
+            theme.text_secondary,
+        ),
+        (
+            tr!("usage.composition_tools"),
+            composition.tools,
+            false,
+            theme.link,
+        ),
+        (
+            tr!("usage.composition_dialogue"),
+            composition.messages,
+            false,
+            theme.code_keyword,
+        ),
+        (
+            tr!("usage.reasoning"),
+            composition.reasoning,
+            composition.opaque_reasoning,
+            theme.code_literal,
+        ),
+        (
+            tr!("usage.composition_calls"),
+            composition.tool_calls,
+            false,
+            theme.warning_text,
+        ),
+        (
+            tr!("usage.composition_files"),
+            composition.files,
+            false,
+            theme.accent,
+        ),
+        (
+            tr!("usage.composition_results"),
+            composition.tool_results,
+            false,
+            theme.success_text,
+        ),
+        (
+            tr!("usage.composition_summary"),
+            composition.memory,
+            composition.opaque_memory,
+            theme.gauge,
+        ),
+    ];
+    let total = entries
+        .iter()
+        .fold(0u64, |sum, (_, value, _, _)| sum.saturating_add(*value));
+    let label = |tokens, opaque| {
+        if opaque && tokens == 0 {
+            tr!("usage.composition_unmeasured")
+        } else {
+            format!(
+                "≈ {}{}",
+                format_tokens(tokens),
+                if opaque { " +" } else { "" }
+            )
+        }
+    };
+    let tiles: Vec<_> = entries
+        .iter()
+        .map(|(name, tokens, opaque, color)| TreemapTile {
+            name: name.clone(),
+            qualified: name.clone(),
+            count_label: if *opaque {
+                tr!("usage.composition_partial")
+            } else {
+                format_percent(if total > 0 {
+                    *tokens as f64 * 100.0 / total as f64
+                } else {
+                    0.0
+                })
+            },
+            total: *tokens,
+            cost: 0.0,
+            value_label: Some(label(*tokens, *opaque)),
+            color: Some(*color),
+        })
+        .collect();
     let mut legend = div().flex().flex_col().gap(px(5.0));
-    for entry in &breakdown.entries {
-        let count = entry
-            .tokens
-            .map(format_tokens)
-            .unwrap_or_else(|| "—".to_owned());
-        let percent = entry
-            .tokens
-            .map(|tokens| context_part_percent(tokens, breakdown.denominator))
-            .unwrap_or_else(|| "—".to_owned());
+    for (name, tokens, opaque, color) in entries {
         legend = legend.child(
             div()
                 .flex()
                 .items_center()
                 .gap(px(7.0))
-                .child(
-                    div()
-                        .size(px(8.0))
-                        .flex_none()
-                        .rounded(px(2.0))
-                        .bg(entry.kind.color(theme)),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .text_color(theme.text_secondary)
-                        .child(entry.kind.label()),
-                )
-                .child(div().text_color(theme.text).child(count))
-                .child(
-                    div()
-                        .w(px(55.0))
-                        .flex_none()
-                        .text_color(theme.text_secondary)
-                        .child(percent),
-                ),
+                .child(div().size(px(8.0)).flex_none().rounded(px(2.0)).bg(color))
+                .child(div().flex_1().text_color(theme.text_secondary).child(name))
+                .child(div().text_color(theme.text).child(label(tokens, opaque))),
         );
     }
-    legend
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(heading)
+                .child(
+                    div()
+                        .text_color(theme.text_secondary)
+                        .child(format!("≈ {}", format_tokens(total))),
+                ),
+        )
+        .when(total > 0, |element| {
+            element.child(usage_treemap(
+                "context-composition-treemap",
+                window,
+                cx,
+                &tiles,
+                theme,
+            ))
+        })
+        .child(legend)
+        .when(composition.incomplete, |element| {
+            element.child(
+                div()
+                    .text_color(theme.text_tertiary)
+                    .child(tr!("usage.composition_partial")),
+            )
+        })
+        .into_any_element()
 }
 
-fn context_part_percent(tokens: u64, denominator: u64) -> String {
-    if denominator == 0 || tokens == 0 {
-        return format_percent(0.0);
-    }
-    let percent = tokens as f64 * 100.0 / denominator as f64;
-    if percent < 0.001 {
-        tr!("usage.below_min_percent")
-    } else if percent < 0.1 {
-        format!("{percent:.3}%")
-    } else {
-        format_percent(percent)
-    }
-}
-
-fn context_waffle(breakdown: &ContextBreakdown, theme: &Theme) -> impl IntoElement {
-    const MIN_COLUMNS: usize = 10;
-    const MAX_COLUMNS: usize = 60;
-    const ROWS: usize = 8;
-    const GAP: f32 = 3.0;
-    const HEIGHT: f32 = 150.0;
-    let entries = breakdown
-        .entries
-        .iter()
-        .map(|entry| (entry.kind, entry.tokens))
-        .collect::<Vec<_>>();
-    let denominator = breakdown.denominator;
-    let palette = entries
-        .iter()
-        .map(|(kind, _)| kind.color(theme))
-        .collect::<Vec<_>>();
-    let kinds = entries.iter().map(|(kind, _)| *kind).collect::<Vec<_>>();
-    let cell_base = theme.overlay_strong;
-    let unknown_alt = theme.text_tertiary;
-
-    canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            let gap = px(GAP);
-            let columns = ((bounds.size.width / px(17.0)) as usize).clamp(MIN_COLUMNS, MAX_COLUMNS);
-            let cell_width = (bounds.size.width - gap * (columns - 1) as f32) / columns as f32;
-            let cell_height = (px(HEIGHT) - gap * (ROWS - 1) as f32) / ROWS as f32;
-            let cell = cell_width.min(cell_height).max(px(4.0));
-            let cell_count = columns * ROWS;
-            let grid_width = cell * columns as f32 + gap * (columns - 1) as f32;
-            let grid_height = cell * ROWS as f32 + gap * (ROWS - 1) as f32;
-            let left = bounds.origin.x + (bounds.size.width - grid_width) / 2.0;
-            let top = bounds.origin.y + (bounds.size.height - grid_height) / 2.0;
-            let mut ranges = Vec::with_capacity(entries.len());
-            let mut cumulative = 0u64;
-            for (_, tokens) in &entries {
-                let end = cumulative.saturating_add(tokens.unwrap_or(denominator));
-                ranges.push((cumulative, end));
-                cumulative = end;
-            }
-
-            for cell_index in 0..cell_count {
-                let x = left + (cell_index % columns) as f32 * (cell + gap);
-                let y = top + (cell_index / columns) as f32 * (cell + gap);
-                window.paint_quad(
-                    gpui::fill(
-                        Bounds::new(
-                            point(x, y),
-                            gpui::Size {
-                                width: cell,
-                                height: cell,
-                            },
-                        ),
-                        cell_base,
-                    )
-                    .corner_radii(px(3.0)),
-                );
-                if denominator == 0 {
-                    if kinds[0] == ContextPartKind::Unknown
-                        && (cell_index + cell_index / columns) % 2 == 0
-                    {
-                        window.paint_quad(
-                            gpui::fill(
-                                Bounds::new(
-                                    point(x, y),
-                                    gpui::Size {
-                                        width: cell,
-                                        height: cell,
-                                    },
-                                ),
-                                unknown_alt,
-                            )
-                            .corner_radii(px(3.0)),
-                        );
-                    }
-                    continue;
-                }
-
-                let denominator_wide = u128::from(denominator);
-                let cell_start = cell_index as u128 * denominator_wide;
-                let cell_end = (cell_index + 1) as u128 * denominator_wide;
-                for (segment, (range_start, range_end)) in ranges.iter().enumerate() {
-                    let start = u128::from(*range_start) * cell_count as u128;
-                    let end = u128::from(*range_end) * cell_count as u128;
-                    let overlap_start = start.max(cell_start);
-                    let overlap_end = end.min(cell_end);
-                    if overlap_end <= overlap_start {
-                        continue;
-                    }
-
-                    let offset = (overlap_start - cell_start) as f64 / denominator as f64
-                        * cell.as_f32() as f64;
-                    let actual_width = (overlap_end - overlap_start) as f64 / denominator as f64
-                        * cell.as_f32() as f64;
-                    let offset = offset as f32;
-                    let width = actual_width as f32;
-                    let width = width.min(cell.as_f32() - offset);
-                    if width <= 0.0 {
-                        continue;
-                    }
-                    let color = if kinds[segment] == ContextPartKind::Unknown
-                        && (cell_index + cell_index / columns) % 2 == 0
-                    {
-                        unknown_alt
-                    } else {
-                        palette[segment]
-                    };
-                    window.paint_quad(
-                        gpui::fill(
-                            Bounds::new(
-                                point(x + px(offset), y),
-                                gpui::Size {
-                                    width: px(width),
-                                    height: cell,
-                                },
-                            ),
-                            color,
-                        )
-                        .corner_radii(px(2.0)),
-                    );
-                }
-            }
-        },
-    )
-    .w_full()
-    .h(px(HEIGHT))
-}
 /// The footer ring paints only the track until the provider reports a window.
 fn context_gauge(percent: Option<f64>, track: Hsla, fill: Hsla) -> impl IntoElement {
     const SIZE: f32 = 13.0;

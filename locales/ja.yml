@@ -1720,3 +1720,14 @@ settings.group_features: 機能
 settings.group_context: コンテキスト管理
 settings.group_environment: 実行環境
 settings.group_data: データ管理
+usage.composition_estimated: 推定構成
+usage.composition_pending: 次のリクエスト後に利用可能
+usage.composition_system: システムとルール
+usage.composition_tools: ツール定義
+usage.composition_dialogue: 会話本文
+usage.composition_calls: ツール呼び出し
+usage.composition_files: ファイル内容
+usage.composition_results: その他のツール結果
+usage.composition_summary: 圧縮要約
+usage.composition_unmeasured: 計測不可
+usage.composition_partial: 計測できない内容を含む

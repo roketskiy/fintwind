@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import shutil
 import socket
+import sqlite3
+import time
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -73,13 +75,30 @@ def main():
       }));
       const hook = await ctx.session.hook("context", event => {
         const text = JSON.stringify(event.messages);
+        const original = event.messages;
         event.system = [{type: "text", text: "abcdefgh"}];
         event.messages = [{role: "user", content: [
           {type: "text", text: text.includes("longer-fixture") ? "abcdefghijklmnop" : "abcd"}
         ]}];
         if (text.includes("opaque-fixture")) event.messages.push({role: "assistant", content: [
-          {type: "reasoning", text: "", encrypted: "not-a-token-count"}
+          {type: "reasoning", text: "", providerMetadata: {openai: {reasoningEncryptedContent: "not-a-token-count"}}}
         ]});
+        if (text.includes("all-categories-fixture")) {
+          const summary = original.find(message => message.content.some(part => part.type === "text" && part.text.startsWith("<conversation-checkpoint>")));
+          event.messages.push(
+            {role: "assistant", content: [
+              {type: "reasoning", text: "abcdefgh", providerMetadata: {deepseek: {reasoningField: "reasoning_content"}}},
+              {type: "tool-call", id: "read-1", name: "read", input: {path: "fixture.txt"}},
+              {type: "tool-call", id: "shell-1", name: "shell", input: {command: "echo fixture"}}
+            ]},
+            {role: "tool", content: [
+              {type: "tool-result", id: "read-1", name: "read", result: {type: "text", value: "abcdefghijkl"}},
+              {type: "tool-result", id: "shell-1", name: "shell", result: {type: "content", value: [{type: "text", text: "abcdefgh"}]}}
+            ]}
+          );
+          if (!summary) throw new Error("Missing official summary projection");
+          event.messages.unshift(summary);
+        }
         event.tools = {fixture_read: {description: "Read", input: {type: "object", properties: {}}}};
       });
       return async () => { await hook.dispose(); await tool.dispose(); };
@@ -156,10 +175,27 @@ def main():
         assert observed[0]["messages"] == 1, observed
         assert observed[1]["messages"] == 4, observed
         assert observed[0]["tools"] > 0 and observed[0]["incomplete"] is False, observed
-        assert observed[2] == {**observed[0], "incomplete": True}, observed
+        assert observed[0]["version"] == 2, observed
+        assert all(observed[0][key] == 0 for key in ("reasoning", "toolCalls", "files", "toolResults")), observed
+        assert observed[2] == {**observed[0], "incomplete": True, "opaqueReasoning": True}, observed
         assert snapshot(sessions[0]) == observed[0], "Other sessions or auxiliary requests replaced the snapshot."
         runner.wait_for("primary provider request", lambda: any(
             "abcdefgh" in json.dumps(call) and "fixture_read" in json.dumps(call) for call in Provider.calls))
+        # Exercise a genuine projected compaction, not a guessed text marker.
+        compacted = api("POST", "/api/session", {"location": {"directory": str(work)}})["data"]["id"]
+        with sqlite3.connect(OUTPUT / "opencode.db") as database:
+            now = int(time.time() * 1000)
+            data = {"time": {"created": now}, "status": "completed", "reason": "manual",
+                    "model": {"providerID": "fixture", "id": "fixture-model"}, "summary": "abcdefgh"}
+            database.execute("INSERT INTO session_message(id,session_id,type,seq,time_created,time_updated,data) VALUES(?,?,?,?,?,?,?)",
+                             ("msg_" + uuid.uuid4().hex, compacted, "compaction", 1, now, now, json.dumps(data)))
+        api("POST", f"/api/session/{compacted}/prompt" + query, {"text": "all-categories-fixture"})
+        detailed = runner.wait_for("detailed context", lambda: snapshot(compacted))
+        assert detailed["system"] == 2 and detailed["messages"] == 1 and detailed["reasoning"] == 2, detailed
+        assert detailed["files"] == 3 and detailed["toolResults"] == 2, detailed
+        assert detailed["tools"] == observed[0]["tools"] and detailed["toolCalls"] > 0, detailed
+        assert detailed["memory"] > 0 and detailed["incomplete"] is False, detailed
+        observed.append(detailed)
         child.close()
         child = None
         child = start()
@@ -170,7 +206,7 @@ def main():
                                            for item in result.get("data", [])))
         assert snapshot(sessions[0]) == observed[0], "Context snapshot did not survive restart."
         report = {"passed": ["assembled semantic categories", "provider request preserved", "session isolation",
-                             "opaque payload stays uncounted", "auxiliary requests excluded", "snapshot survives restart"], "snapshots": observed}
+                             "opaque payload stays uncounted", "auxiliary requests excluded", "snapshot survives restart", "definitions separated from calls and results", "file and shell results separated", "reasoning separated from dialogue", "official compaction summary provenance"], "snapshots": observed}
         (OUTPUT / "result.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps(report, ensure_ascii=False))
     finally:

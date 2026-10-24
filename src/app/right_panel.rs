@@ -1572,7 +1572,7 @@ impl Fintwind {
         }
         let body = match self.active_right_panel_surface().cloned() {
             None => self.render_right_panel_chooser(cx).into_any_element(),
-            Some(RightPanelSurface::Context) => self.render_context_panel(cx),
+            Some(RightPanelSurface::Context) => self.render_context_panel(window, cx),
             Some(RightPanelSurface::Btw) => self.render_btw_panel(cx),
             Some(RightPanelSurface::BackgroundWork { key, .. }) => self
                 .render_background_work_surface(&key, window, cx)

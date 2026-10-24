@@ -73,6 +73,15 @@ detection, data locations, and WebView2 details.
 
 ## Features
 
+- **Portable OpenCode.** Choose the OpenCode executable in general settings
+  without adding a portable installation to PATH. Restore automatic detection
+  at any time.
+- **Old session cleanup.** Preview and delete sessions inactive for 30, 90, or
+  180 days (90 by default). Cleanup covers sessions visible in Fintwind and
+  linked to OpenCode, removing the corresponding records from both.
+- **Context composition.** A treemap compares eight estimated categories,
+  including compaction summaries, tool calls, and tool results. Reported
+  occupancy stays separate, and unmeasurable content is marked explicitly.
 - **App updates.** Stable builds offer the most recently published full release,
   even when a corrected version number is lower than the installed one. Drafts
   and prereleases are excluded, and the current release is not offered again.

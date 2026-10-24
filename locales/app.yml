@@ -323,6 +323,10 @@ update.install_tooltip:
   en: Download the installer and install it in place
 update.downloading:
   en: "Downloading %{size}…"
+update.downloading_progress:
+  en: "Downloading %{percent}%"
+update.download_size:
+  en: "%{downloaded} / %{total}"
 update.selecting_source:
   en: "Choosing a download source…"
 update.installing:

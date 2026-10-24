@@ -18,6 +18,10 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+### 改进
+
+- 一键更新下载时显示进度条、百分比和已下载大小；总大小未知时显示已下载大小。
+
 ## [0.2.15]
 
 本版继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。上下文采集通过隔离 OpenCode 服务与本地模拟模型的 10 项端到端检查，并回放了 3 个真实会话副本；路径设置通过 6 项隔离黑盒检查，旧会话清理通过 14 项模块黑盒检查。上述检查不代表完整的模型或版本兼容区间，也未覆盖新增路径设置的实际会话启动或界面操作。验证说明见 [上下文构成](docs/context-composition.md)与 [可执行文件路径](docs/opencode-executable.md)。

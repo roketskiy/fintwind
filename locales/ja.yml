@@ -1704,3 +1704,19 @@ scheduled_tasks.project_missing: "利用できないプロジェクト"
 scheduled_tasks.session_missing: "利用できない会話"
 
 scheduled_tasks.last_run: "前回 %{time}"
+cleanup.title: '古いセッションを削除'
+cleanup.days: '%{days} 日間未使用'
+cleanup.preview: 'プレビュー'
+cleanup.scope: 'OpenCode に関連付けられた Fintwind のセッションが対象です。実行中のセッションは除外します。'
+cleanup.scanning: 'スキャン中…'
+cleanup.empty: '対象のセッションはありません。'
+cleanup.confirm: 'Fintwind と OpenCode から %{count} 件のセッションと子セッションを完全に削除します。'
+cleanup.delete: '完全に削除'
+cleanup.cancel: 'キャンセル'
+cleanup.progress: '削除中 %{completed} / %{total}…'
+cleanup.finished: '削除 %{deleted} 件、除外 %{skipped} 件、失敗 %{failed} 件。'
+cleanup.opencode_required: 'OpenCode を利用できません。'
+settings.group_features: 機能
+settings.group_context: コンテキスト管理
+settings.group_environment: 実行環境
+settings.group_data: データ管理

@@ -1184,6 +1184,7 @@ fn task_catalog_action(command: &Command) -> TaskCatalogAction {
             projects: projects.clone(),
         },
         Command::RemoveSession
+        | Command::CleanupOldSession { .. }
         | Command::AcceptSubmission { .. }
         | Command::RemoveProject { .. }
         | Command::ForkSessionFromResponse { .. }

@@ -3292,3 +3292,35 @@ scheduled_tasks.session_missing:
 
 scheduled_tasks.last_run:
   en: "Last %{time}"
+cleanup.title:
+  en: 'Clean up old sessions'
+cleanup.days:
+  en: 'Inactive for %{days} days'
+cleanup.preview:
+  en: 'Preview'
+cleanup.scope:
+  en: 'Fintwind sessions linked to OpenCode. Active sessions are skipped.'
+cleanup.scanning:
+  en: 'Scanning…'
+cleanup.empty:
+  en: 'No sessions to clean up.'
+cleanup.confirm:
+  en: 'Permanently delete %{count} sessions and their child sessions from Fintwind and OpenCode?'
+cleanup.delete:
+  en: 'Delete permanently'
+cleanup.cancel:
+  en: 'Cancel'
+cleanup.progress:
+  en: 'Cleaning up %{completed} / %{total}…'
+cleanup.finished:
+  en: 'Deleted %{deleted}, skipped %{skipped}, failed %{failed}.'
+cleanup.opencode_required:
+  en: 'OpenCode is not available.'
+settings.group_features:
+  en: Features
+settings.group_context:
+  en: Context management
+settings.group_environment:
+  en: Runtime environment
+settings.group_data:
+  en: Data management

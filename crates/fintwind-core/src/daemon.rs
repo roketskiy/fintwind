@@ -40,6 +40,7 @@ pub struct FintwindBackend {
     task_store: Arc<StateStore>,
     task_state: Arc<Mutex<PersistedState>>,
     removed_session_ids: Mutex<HashSet<Uuid>>,
+    session_cleanup_gate: Mutex<()>,
     removed_project_ids: Mutex<HashSet<Uuid>>,
     active_preparations: Mutex<HashMap<Uuid, EventSink>>,
     native_transcript_generations: Mutex<HashMap<String, u64>>,
@@ -114,6 +115,7 @@ impl FintwindBackend {
             task_store,
             task_state: Arc::new(Mutex::new(task_state)),
             removed_session_ids: Mutex::new(HashSet::new()),
+            session_cleanup_gate: Mutex::new(()),
             removed_project_ids: Mutex::new(HashSet::new()),
             active_preparations: Mutex::new(HashMap::new()),
             native_transcript_generations: Mutex::new(HashMap::new()),
@@ -1610,6 +1612,68 @@ impl Backend for FintwindBackend {
                 self.remove_project_from_catalog(project_id)?;
                 Ok(ResponsePayload::Ack)
             }
+            Command::PreviewSessionCleanup {
+                binary,
+                period,
+                visible_session_ids,
+            } => {
+                let before = crate::model::unix_time().saturating_sub(period.days() * 86_400);
+                let (state, mut blocked): (_, HashSet<Uuid>) = {
+                    let state = self.task_state.lock();
+                    (
+                        state.clone(),
+                        self.sessions.lock().keys().copied().collect(),
+                    )
+                };
+                blocked.extend(self.composer_drafts.load()?.sessions.keys().copied());
+                let server = crate::opencode_pool::acquire(&binary, &self.default_cwd)?;
+                let session_ids = crate::session_cleanup::preview(
+                    &state,
+                    &self.task_store,
+                    &blocked,
+                    &visible_session_ids,
+                    before,
+                    &*server,
+                )?;
+                Ok(ResponsePayload::SessionCleanupPreview {
+                    preview: fintwind_protocol::session_cleanup::SessionCleanupPreview {
+                        before,
+                        session_ids,
+                    },
+                })
+            }
+            Command::CleanupOldSession { binary, before } => {
+                anyhow::ensure!(
+                    before <= crate::model::unix_time().saturating_sub(30 * 86_400),
+                    "Invalid cleanup cutoff"
+                );
+                let server = crate::opencode_pool::acquire(&binary, &self.default_cwd)?;
+                let outcome = {
+                    let _gate = self.session_cleanup_gate.lock();
+                    let mut state = self.task_state.lock();
+                    let mut blocked: HashSet<_> = self.sessions.lock().keys().copied().collect();
+                    blocked.extend(self.composer_drafts.load()?.sessions.keys().copied());
+                    let outcome = crate::session_cleanup::clean(
+                        &mut state,
+                        &self.task_store,
+                        &blocked,
+                        session_id,
+                        before,
+                        &*server,
+                    )?;
+                    if let fintwind_protocol::session_cleanup::SessionCleanupOutcome::Deleted {
+                        session_ids,
+                    } = &outcome
+                    {
+                        self.removed_session_ids
+                            .lock()
+                            .extend(session_ids.iter().copied());
+                    }
+                    outcome
+                };
+                self.scheduled_notify_catalog();
+                Ok(ResponsePayload::SessionCleanupFinished { outcome })
+            }
             Command::RemoveSession => {
                 {
                     let mut state = self.task_state.lock();
@@ -2063,6 +2127,10 @@ impl Backend for FintwindBackend {
                 Ok(ResponsePayload::ScheduledTaskSaved { task })
             }
             Command::Start { options } => {
+                let _gate = self.session_cleanup_gate.lock();
+                if self.removed_session_ids.lock().contains(&session_id) {
+                    bail!("session was removed");
+                }
                 let previous = self.sessions.lock().remove(&session_id);
                 drop(previous);
                 let options = DriverStartOptions {
@@ -2741,6 +2809,8 @@ fn handle_driver_command(
         | Command::SaveTaskState { .. }
         | Command::SaveTaskStateCheckpoint { .. }
         | Command::RemoveSession
+        | Command::PreviewSessionCleanup { .. }
+        | Command::CleanupOldSession { .. }
         | Command::RemoveProject { .. }
         | Command::HydrateSession { .. }
         | Command::SearchSessionMessages { .. }

@@ -7,6 +7,28 @@ use super::*;
 
 actions!(fintwind_settings, [ClearSearch]);
 
+fn general_settings_group(title: String, theme: Theme) -> Div {
+    div()
+        .mt(px(20.0))
+        .w_full()
+        .flex()
+        .flex_col()
+        .rounded(px(13.0))
+        .overflow_hidden()
+        .bg(theme.raised)
+        .shadow_xs()
+        .child(
+            div()
+                .px(px(20.0))
+                .pt(px(14.0))
+                .pb(px(4.0))
+                .text_size(ui_px(12.0))
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.text_secondary)
+                .child(title),
+        )
+}
+
 /// The settings and usage pages share one content width so both read as the
 /// same document column.
 pub(super) const SETTINGS_CONTENT_MAX_WIDTH: f32 = 760.0;
@@ -515,38 +537,7 @@ impl Fintwind {
         );
         div()
             .child(
-                div()
-                    .mt(px(15.0))
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .rounded(px(13.0))
-                    .overflow_hidden()
-                    .bg(theme.raised)
-                    .shadow_xs()
-                    .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .child(
-                                div()
-                                    .text_size(ui_px(13.5))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(theme.text)
-                                    .child(tr!("settings.local_by_default")),
-                            )
-                            .child(
-                                div()
-                                    .mt(px(5.0))
-                                    .text_size(ui_px(12.5))
-                                    .line_height(ui_px(18.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("settings.local_by_default_description")),
-                            ),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                general_settings_group(tr!("settings.group_features"), theme)
                     .child(
                         div()
                             .w_full()
@@ -679,8 +670,10 @@ impl Fintwind {
                                     this.set_goal_enabled(!this.state.goal_enabled, cx)
                                 },
                             )),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    ),
+            )
+            .child(
+                general_settings_group(tr!("settings.group_context"), theme)
                     .child(
                         div()
                             .w_full()
@@ -764,8 +757,10 @@ impl Fintwind {
                                 )
                                 .w(px(120.0)),
                             ),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    ),
+            )
+            .child(
+                general_settings_group(tr!("settings.group_environment"), theme)
                     .child(
                         div()
                             .w_full()
@@ -835,6 +830,33 @@ impl Fintwind {
                             )
                             .child(shell_selector),
                     ),
+            )
+            .child(
+                general_settings_group(tr!("settings.group_data"), theme)
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .child(
+                                div()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.local_by_default")),
+                            )
+                            .child(
+                                div()
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(12.5))
+                                    .line_height(ui_px(18.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(tr!("settings.local_by_default_description")),
+                            ),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(self.render_session_cleanup(cx)),
             )
             .child(
                 div()

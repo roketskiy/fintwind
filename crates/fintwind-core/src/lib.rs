@@ -53,6 +53,7 @@ pub mod persistence;
 pub mod projectless;
 pub mod provider_quota;
 mod scheduled;
+pub mod session_cleanup;
 mod session_generation;
 pub mod settings;
 mod skill_prompt;

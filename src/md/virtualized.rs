@@ -328,6 +328,7 @@ pub struct ReasoningView {
     row_id: String,
     initial_scroll: Option<gpui::Pixels>,
     height: gpui::Length,
+    release_notes: bool,
 }
 
 impl ReasoningView {
@@ -364,6 +365,7 @@ impl ReasoningView {
             row_id,
             initial_scroll,
             height: px(400.0).into(),
+            release_notes: false,
         }
     }
 
@@ -371,6 +373,11 @@ impl ReasoningView {
     /// retaining the reasoning history's default viewport for existing callers.
     pub fn with_height(mut self, height: impl Into<gpui::Length>) -> Self {
         self.height = height.into();
+        self
+    }
+
+    pub fn with_release_notes_style(mut self) -> Self {
+        self.release_notes = true;
         self
     }
 
@@ -467,8 +474,12 @@ impl Render for ReasoningView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::current(cx);
         let mut palette = Palette::from_theme(&theme);
-        palette.text = theme.text_secondary;
-        palette.secondary = theme.text_tertiary;
+        if !self.release_notes {
+            palette.text = theme.text_secondary;
+            palette.secondary = theme.text_tertiary;
+        }
+        let inset = if self.release_notes { 24.0 } else { 12.0 };
+        let vertical_inset = if self.release_notes { 20.0 } else { 8.0 };
         let view = cx.entity().downgrade();
         let list_state = self.list.clone();
         let wheel_list = self.list.clone();
@@ -487,17 +498,22 @@ impl Render for ReasoningView {
                 // element's left edge and measures them against the full border
                 // box, so `.px()` on the list itself has no effect. The page
                 // margin has to come from a wrapping element instead.
-                div().w_full().h_full().min_w_0().px(px(12.0)).child(
+                div().w_full().h_full().min_w_0().px(px(inset)).child(
                     list(self.list.clone(), move |index, _, cx| {
                         view.update(cx, |this, _| {
-                            let ctx = render::Ctx::new(
+                            let mut ctx = render::Ctx::new(
                                 this.row_id.clone(),
                                 &palette,
-                                Metrics::compact(),
+                                if this.release_notes {
+                                    Metrics::release_notes()
+                                } else {
+                                    Metrics::compact()
+                                },
                                 this.selection.clone(),
                             )
                             .with_link_handler(this.link_handler.clone())
                             .with_streaming_animation(false);
+                            ctx.release_notes = this.release_notes;
                             render::virtual_row(
                                 &this.rows[index],
                                 index,
@@ -509,7 +525,7 @@ impl Render for ReasoningView {
                         .unwrap_or_else(|_| div().into_any_element())
                     })
                     .size_full()
-                    .py(px(8.0)),
+                    .py(px(vertical_inset)),
                 ),
             )
             .child(scrollbar::vertical(&self.list, &self.scrollbar))

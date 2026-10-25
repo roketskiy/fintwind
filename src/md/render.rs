@@ -172,6 +172,17 @@ impl Metrics {
         Self::COMPACT.adjusted()
     }
 
+    pub(super) fn release_notes() -> Self {
+        Self {
+            text_size: 12.5,
+            line_height: 20.0,
+            code_text_size: 11.5,
+            code_line_height: 18.0,
+            block_gap: 10.0,
+        }
+        .adjusted()
+    }
+
     /// Body text follows the UI text scale, code follows the code text scale;
     /// both multiplicative so each preset keeps its designed proportions and
     /// the default settings reproduce these consts exactly.
@@ -649,6 +660,7 @@ pub struct Ctx<'a> {
     /// Set while rendering the first element of a block, for copy spacing.
     starts_block: Cell<bool>,
     animate_streaming: bool,
+    pub(super) release_notes: bool,
     math_enabled: bool,
     math_menu: Option<ContextMenuHandle>,
     wrap_math_menu: bool,
@@ -673,6 +685,7 @@ impl<'a> Ctx<'a> {
             next_ordinal: Cell::new(0),
             starts_block: Cell::new(true),
             animate_streaming: true,
+            release_notes: false,
             math_enabled: true,
             math_menu: None,
             wrap_math_menu: false,
@@ -732,6 +745,7 @@ impl<'a> Ctx<'a> {
             next_ordinal: Cell::new(self.next_ordinal.get()),
             starts_block: Cell::new(self.starts_block.get()),
             animate_streaming: self.animate_streaming,
+            release_notes: self.release_notes,
             math_enabled: self.math_enabled,
             math_menu: self.math_menu.clone(),
             wrap_math_menu: self.wrap_math_menu,
@@ -1422,10 +1436,19 @@ pub(super) fn virtual_row(
             .child(div().flex_1().min_w_0().child(body))
             .into_any_element();
     }
+    let gap = if ctx.release_notes {
+        match row.block {
+            Block::Heading { level: 1 | 2, .. } => 32.0 * crate::theme::ui_text_scale(),
+            Block::Heading { .. } => 20.0 * crate::theme::ui_text_scale(),
+            _ => ctx.metrics.block_gap,
+        }
+    } else {
+        ctx.metrics.block_gap
+    };
     div()
         .w_full()
         .min_w_0()
-        .when(row.gap && index > 0, |el| el.pt(px(ctx.metrics.block_gap)))
+        .when(row.gap && index > 0, |el| el.pt(px(gap)))
         .child(body)
         .into_any_element()
 }
@@ -1446,7 +1469,16 @@ fn render_block_content(block: &Block, ctx: &Ctx) -> AnyElement {
                 .into_any_element()
         }
         Block::Heading { level, runs } => {
-            let (size, line_height, weight) = heading_metrics(*level, &ctx.metrics);
+            let (size, line_height, weight) = if ctx.release_notes {
+                let scale = crate::theme::ui_text_scale();
+                if *level <= 2 {
+                    (21.0 * scale, 28.0 * scale, FontWeight::BOLD)
+                } else {
+                    (13.5 * scale, 20.0 * scale, FontWeight::SEMIBOLD)
+                }
+            } else {
+                heading_metrics(*level, &ctx.metrics)
+            };
             let key = ctx.next_key();
             let flat = ctx.flat(key.index, || {
                 flatten(runs, ctx.palette, weight, ctx.palette.text)
@@ -1454,7 +1486,9 @@ fn render_block_content(block: &Block, ctx: &Ctx) -> AnyElement {
             div()
                 .w_full()
                 .min_w_0()
-                .when(*level <= 2, |element| element.pt(px(4.0)))
+                .when(*level <= 2 && !ctx.release_notes, |element| {
+                    element.pt(px(4.0))
+                })
                 .text_size(px(size))
                 .line_height(px(line_height))
                 .child(text_element(&flat, key, ctx))

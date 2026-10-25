@@ -105,7 +105,8 @@ impl Fintwind {
                     Some(px(0.0)),
                     cx,
                 )
-                .with_height(gpui::relative(1.0));
+                .with_height(gpui::relative(1.0))
+                .with_release_notes_style();
                 view.set_source(&markdown, (1, 1), false, cx);
                 view
             })
@@ -200,9 +201,9 @@ impl Fintwind {
             .child(
                 div()
                     .flex_none()
-                    .pt(px(16.0))
-                    .px(px(20.0))
-                    .pb(px(12.0))
+                    .pt(px(20.0))
+                    .px(px(24.0))
+                    .pb(px(16.0))
                     .border_b_1()
                     .border_color(theme.border)
                     .flex()
@@ -214,14 +215,14 @@ impl Fintwind {
                             .min_w_0()
                             .child(
                                 div()
-                                    .text_size(ui_px(15.0))
+                                    .text_size(ui_px(16.0))
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(tr!("help.changelog")),
                             )
                             .child(
                                 div()
-                                    .mt(px(3.0))
-                                    .text_size(ui_px(12.0))
+                                    .mt(px(5.0))
+                                    .text_size(ui_px(11.0))
                                     .text_color(theme.text_secondary)
                                     .child(tr!(
                                         "update.current_version",

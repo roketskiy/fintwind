@@ -2445,9 +2445,14 @@ impl Fintwind {
             return;
         }
         if session.is_busy() || self.pending_goal_actions.contains_key(&session.id) {
-            // While the agent is working, Enter queues a follow-up instead of
-            // refusing the message. The queue drains once the turn settles.
-            self.enqueue_follow_up_submission(session.id, submission, cx);
+            if session.is_busy()
+                && self.state.busy_send_mode == crate::persistence::BusySendMode::Steer
+                && !self.pending_goal_actions.contains_key(&session.id)
+            {
+                self.steer_composer_submission(submission, cx);
+            } else {
+                self.enqueue_follow_up_submission(session.id, submission, cx);
+            }
             return;
         }
         self.submit_submission_for_session(session.id, submission, cx);

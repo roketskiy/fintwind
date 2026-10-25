@@ -1687,3 +1687,7 @@ usage.composition_results: 其他工具结果
 usage.composition_summary: 压缩摘要
 usage.composition_unmeasured: 不可测
 usage.composition_partial: 含不可测内容
+
+settings.busy_send_mode: 运行时发送
+settings.busy_send_queue: 排队
+composer.queued_messages: "排队 · %{count}"

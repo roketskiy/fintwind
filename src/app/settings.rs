@@ -1,7 +1,7 @@
 use crate::theme::{ThemeScheme, ui_px};
 
 use ely_gpui_component::{
-    buttons::{Button, ButtonVariant},
+    buttons::{Button, ButtonVariant, SegmentedControl},
     theme::ControlSize,
 };
 use gpui::actions;
@@ -543,6 +543,51 @@ impl Fintwind {
         div()
             .child(
                 general_settings_group(tr!("settings.group_features"), theme)
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(ui_px(13.5))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.text)
+                                    .child(tr!("settings.busy_send_mode")),
+                            )
+                            .child(
+                                SegmentedControl::new(
+                                    "busy-send-mode",
+                                    match self.state.busy_send_mode {
+                                        crate::persistence::BusySendMode::Queue => "queue",
+                                        crate::persistence::BusySendMode::Steer => "steer",
+                                    },
+                                )
+                                .segment("queue", tr!("settings.busy_send_queue"), None)
+                                .segment("steer", tr!("composer.steer"), None)
+                                .size(ControlSize::Sm)
+                                .on_change({
+                                    let weak = cx.entity().downgrade();
+                                    move |value, _, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.state.busy_send_mode = if value == "steer" {
+                                                crate::persistence::BusySendMode::Steer
+                                            } else {
+                                                crate::persistence::BusySendMode::Queue
+                                            };
+                                            this.save();
+                                            cx.notify();
+                                        });
+                                    }
+                                }),
+                            ),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
                     .child(
                         div()
                             .w_full()

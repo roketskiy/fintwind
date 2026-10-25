@@ -1,4 +1,9 @@
 use crate::theme::ui_px;
+use ely_gpui_component::{
+    buttons::{Button, ButtonVariant, IconButton},
+    primitives::IconName,
+    theme::ControlSize,
+};
 
 use super::*;
 
@@ -2431,13 +2436,7 @@ impl Fintwind {
         }
     }
 
-    /// The pending follow-up queue between the transcript and the composer: a
-    /// single card tucked against the composer's top edge, one row per queued
-    /// message. A row pulls its text back into the composer on click and
-    /// carries steer/remove/more controls on the right.    /// The pending follow-up queue between the transcript and the composer: a
-    /// single card tucked against the composer's top edge, one row per queued
-    /// message. A row pulls its text back into the composer on click and
-    /// carries steer/remove/more controls on the right.
+    /// Pending follow-ups with editing, reordering, and live-turn delivery.
     pub(super) fn render_queued_messages(&self, cx: &mut Context<Self>) -> Option<Div> {
         let session_id = self.state.selected_session?;
         let session = self.selected_session()?;
@@ -2451,7 +2450,7 @@ impl Fintwind {
                 .runtimes
                 .get(&session.id)
                 .is_some_and(|runtime| runtime.driver.supports_steer());
-        let mut list = div().flex().flex_col().py(px(4.0));
+        let mut list = div().flex().flex_col().py_1();
         for (index, message) in session.queued_messages.iter().enumerate() {
             let message_id = message.id;
             let previous_id = index
@@ -2476,97 +2475,61 @@ impl Fintwind {
                 message_id,
                 content: SharedString::from(content),
             };
-            let steer_control = steerable.then(|| {
-                div()
-                    .id(SharedString::from(format!(
-                        "queued-message-steer-{message_id}"
-                    )))
-                    .h(px(28.0))
-                    .px(px(8.0))
-                    .rounded(px(7.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .cursor_default()
-                    .tab_index(0)
-                    .focus_visible(|style| style.border_1().border_color(theme.accent))
-                    .hover(|element| element.bg(theme.overlay_strong))
-                    .active(|element| element.opacity(0.8))
-                    .text_size(ui_px(12.5))
-                    .text_color(theme.text_secondary)
-                    .child(icon(
-                        "icons/corner-down-right.svg",
-                        12.0,
-                        theme.text_secondary,
-                    ))
-                    .child(tr!("composer.steer"))
-                    .tooltip(Tooltip::text(tr!("composer.steer_current")))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        cx.stop_propagation();
-                        this.steer_queued_message(session_id, message_id, cx);
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.steer_queued_message(session_id, message_id, cx);
-                            cx.stop_propagation();
-                        }
-                    }))
-            });
-            let menu_handle = self.menu_handle(format!("queued-message-menu-{message_id}"), cx);
-            let menu_open = menu_handle.is_open();
             let weak = cx.entity().downgrade();
-            let more_control = dropdown_menu(
-                div()
-                    .id(SharedString::from(format!(
-                        "queued-message-more-{message_id}"
-                    )))
-                    .w(px(26.0))
-                    .h(px(26.0))
-                    .rounded(px(7.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_default()
-                    .focus_visible(|style| style.border_1().border_color(theme.accent))
-                    .when(menu_open, |element| element.bg(theme.overlay_strong))
-                    .hover(|element| element.bg(theme.overlay_strong))
-                    .active(|element| element.opacity(0.8))
-                    .child(icon("icons/ellipsis.svg", 13.5, theme.text_secondary)),
-                SharedString::from(format!("queued-message-more-menu-{message_id}")),
-                &menu_handle,
-                MenuAlign::BelowRight,
-                move |_| {
-                    let edit_weak = weak.clone();
-                    let remove_weak = weak.clone();
-                    vec![
-                        MenuItem::new(tr!("composer.edit_in_composer"), move |window, cx| {
-                            let _ = edit_weak.update(cx, |this, cx| {
-                                this.edit_queued_message(session_id, message_id, window, cx);
-                            });
-                        })
-                        .icon("icons/pencil.svg"),
-                        MenuItem::new(tr!("composer.remove_followup"), move |_, cx| {
-                            let _ = remove_weak.update(cx, |this, cx| {
-                                this.remove_queued_message(session_id, message_id, cx);
-                            });
-                        })
-                        .icon("icons/trash.svg"),
-                    ]
-                },
-            );
+            let steer_control = steerable.then(|| {
+                let weak = weak.clone();
+                Button::new(
+                    SharedString::from(format!("queued-message-steer-{message_id}")),
+                    tr!("composer.steer"),
+                )
+                .variant(ButtonVariant::Secondary)
+                .size(ControlSize::Sm)
+                .on_click(move |_, _, cx| {
+                    cx.stop_propagation();
+                    let _ = weak.update(cx, |this, cx| {
+                        this.steer_queued_message(session_id, message_id, cx);
+                    });
+                })
+            });
+            let edit_control = IconButton::new(
+                SharedString::from(format!("queued-message-edit-{message_id}")),
+                IconName::Pencil,
+            )
+            .size(ControlSize::Sm)
+            .tooltip(tr!("composer.edit_in_composer"))
+            .on_click({
+                let weak = weak.clone();
+                move |_, window, cx| {
+                    cx.stop_propagation();
+                    let _ = weak.update(cx, |this, cx| {
+                        this.edit_queued_message(session_id, message_id, window, cx);
+                    });
+                }
+            });
+            let remove_control = IconButton::new(
+                SharedString::from(format!("queued-message-remove-{message_id}")),
+                IconName::Trash2,
+            )
+            .size(ControlSize::Sm)
+            .tooltip(tr!("composer.remove_followup"))
+            .on_click(move |_, _, cx| {
+                cx.stop_propagation();
+                let _ = weak.update(cx, |this, cx| {
+                    this.remove_queued_message(session_id, message_id, cx);
+                });
+            });
             list = list.child(
                 div()
                     .id(SharedString::from(format!("queued-message-{message_id}")))
                     .relative()
-                    .h(px(32.0))
+                    .min_h(px(44.0))
+                    .py_1()
                     .pl(px(12.0))
                     .pr(px(6.0))
                     .flex()
                     .items_center()
                     .gap(px(9.0))
                     .cursor_default()
-                    .tab_index(0)
-                    .focus_visible(|style| style.border_1().border_color(theme.accent))
                     .hover(|element| element.bg(theme.overlay))
                     .active(|element| element.bg(theme.overlay_strong))
                     .tooltip(Tooltip::text(tr!("composer.edit_in_composer")))
@@ -2582,6 +2545,34 @@ impl Fintwind {
                             .items_center()
                             .gap(px(9.0))
                             .cursor_move()
+                            .tab_index(0)
+                            .focus_visible(|style| style.border_1().border_color(theme.accent))
+                            .on_key_down(cx.listener(
+                                move |this, event: &KeyDownEvent, window, cx| {
+                                    if event.keystroke.modifiers.alt {
+                                        let target = match event.keystroke.key.as_str() {
+                                            "up" => Some((previous_id, false)),
+                                            "down" => Some((next_id, true)),
+                                            _ => None,
+                                        };
+                                        if let Some((target_id, after)) = target {
+                                            if let Some(target_id) = target_id {
+                                                this.reorder_queued_message(
+                                                    session_id, message_id, target_id, after, cx,
+                                                );
+                                            }
+                                            cx.stop_propagation();
+                                            return;
+                                        }
+                                    }
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                        this.edit_queued_message(
+                                            session_id, message_id, window, cx,
+                                        );
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
                             .tooltip(Tooltip::text(tr!("composer.reorder_followup")))
                             .child(icon(
                                 "icons/chevrons-up-down.svg",
@@ -2610,70 +2601,11 @@ impl Fintwind {
                             .items_center()
                             .gap(px(2.0))
                             .children(steer_control)
-                            .child(
-                                div()
-                                    .id(SharedString::from(format!(
-                                        "queued-message-remove-{message_id}"
-                                    )))
-                                    .w(px(26.0))
-                                    .h(px(26.0))
-                                    .rounded(px(7.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .cursor_default()
-                                    .tab_index(0)
-                                    .focus_visible(|style| {
-                                        style.border_1().border_color(theme.accent)
-                                    })
-                                    .hover(|element| element.bg(theme.overlay_strong))
-                                    .active(|element| element.opacity(0.8))
-                                    .child(icon("icons/trash.svg", 13.0, theme.text_secondary))
-                                    .tooltip(Tooltip::text(tr!("composer.remove_followup")))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        cx.stop_propagation();
-                                        this.remove_queued_message(session_id, message_id, cx);
-                                    }))
-                                    .on_key_down(cx.listener(
-                                        move |this, event: &KeyDownEvent, _, cx| {
-                                            if matches!(
-                                                event.keystroke.key.as_str(),
-                                                "enter" | "space"
-                                            ) {
-                                                this.remove_queued_message(
-                                                    session_id, message_id, cx,
-                                                );
-                                                cx.stop_propagation();
-                                            }
-                                        },
-                                    )),
-                            )
-                            .child(more_control),
+                            .child(edit_control)
+                            .child(remove_control),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit_queued_message(session_id, message_id, window, cx);
-                    }))
-                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                        if event.keystroke.modifiers.alt {
-                            let target = match event.keystroke.key.as_str() {
-                                "up" => Some((previous_id, false)),
-                                "down" => Some((next_id, true)),
-                                _ => None,
-                            };
-                            if let Some((target_id, after)) = target {
-                                if let Some(target_id) = target_id {
-                                    this.reorder_queued_message(
-                                        session_id, message_id, target_id, after, cx,
-                                    );
-                                }
-                                cx.stop_propagation();
-                                return;
-                            }
-                        }
-                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.edit_queued_message(session_id, message_id, window, cx);
-                            cx.stop_propagation();
-                        }
                     }))
                     // The two halves provide insertion targets without changing
                     // row layout or intercepting ordinary clicks on its controls.
@@ -2686,7 +2618,7 @@ impl Fintwind {
                                 .absolute()
                                 .left_0()
                                 .right_0()
-                                .h(px(16.0))
+                                .h(gpui::relative(0.5))
                                 .when(after, |zone| zone.bottom_0())
                                 .when(!after, |zone| zone.top_0())
                                 // Accept no-op drops too so GPUI always refreshes
@@ -2730,16 +2662,29 @@ impl Fintwind {
                     .px(px(14.0))
                     .child(
                         div()
-                            .rounded_tl(px(12.0))
-                            .rounded_tr(px(12.0))
-                            .border_t_1()
-                            .border_l_1()
-                            .border_r_1()
+                            .rounded_lg()
+                            .mb_2()
+                            .border_1()
                             .border_color(theme.border)
-                            .bg(theme.composer)
-                            // Row hover fills are full-width rectangles; clip
-                            // them to the card's rounded corners.
+                            .bg(theme.raised)
                             .overflow_hidden()
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .px_3()
+                                    .py_2()
+                                    .border_b_1()
+                                    .border_color(theme.border)
+                                    .text_size(ui_px(12.0))
+                                    .text_color(theme.text_secondary)
+                                    .child(icon("icons/queue.svg", 13.0, theme.text_secondary))
+                                    .child(tr!(
+                                        "composer.queued_messages",
+                                        count = session.queued_messages.len()
+                                    )),
+                            )
                             .child(list),
                     ),
             ),
@@ -3002,7 +2947,15 @@ impl Fintwind {
                                                 18.0,
                                                 theme.on_inverse,
                                             ))
-                                            .tooltip(Tooltip::text(tr!("composer.queue_followup")))
+                                            .tooltip(Tooltip::text(
+                                                if self.state.busy_send_mode
+                                                    == crate::persistence::BusySendMode::Steer
+                                                {
+                                                    tr!("composer.steer_current")
+                                                } else {
+                                                    tr!("composer.queue_followup")
+                                                },
+                                            ))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 let prompt =
                                                     this.composer.read(cx).content().to_owned();

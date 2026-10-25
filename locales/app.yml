@@ -3360,3 +3360,10 @@ usage.composition_unmeasured:
   en: Unmeasured
 usage.composition_partial:
   en: Includes unmeasured content
+
+settings.busy_send_mode:
+  en: While running
+settings.busy_send_queue:
+  en: Queue
+composer.queued_messages:
+  en: "Queued · %{count}"

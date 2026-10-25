@@ -270,9 +270,18 @@ pub struct PersistedWindowState {
     pub display: Option<Uuid>,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BusySendMode {
+    #[default]
+    Queue,
+    Steer,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AppSettings {
+    pub busy_send_mode: BusySendMode,
     pub favorite_models: Vec<FavoriteModel>,
     pub theme: ThemePreference,
     #[serde(default)]
@@ -308,6 +317,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            busy_send_mode: BusySendMode::Queue,
             favorite_models: Vec::new(),
             theme: ThemePreference::System,
             theme_scheme: ThemeScheme::Default,
@@ -365,6 +375,8 @@ struct AppState {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PersistedState {
+    #[serde(default)]
+    pub busy_send_mode: BusySendMode,
     pub version: u32,
     pub projects: Vec<Project>,
     pub sessions: Vec<AgentSession>,
@@ -456,6 +468,7 @@ impl PersistedState {
 
     pub fn empty() -> Self {
         Self {
+            busy_send_mode: BusySendMode::Queue,
             version: STATE_VERSION,
             projects: Vec::new(),
             sessions: Vec::new(),
@@ -630,6 +643,7 @@ impl PersistedState {
 
     fn app_settings(&self) -> AppSettings {
         AppSettings {
+            busy_send_mode: self.busy_send_mode,
             favorite_models: self.favorite_models.clone(),
             theme: self.theme,
             theme_scheme: self.theme_scheme,
@@ -670,6 +684,7 @@ impl PersistedState {
     }
 
     fn apply_app_settings(&mut self, settings: AppSettings) {
+        self.busy_send_mode = settings.busy_send_mode;
         self.favorite_models = settings.favorite_models;
         self.theme = settings.theme;
         self.theme_scheme = settings.theme_scheme;

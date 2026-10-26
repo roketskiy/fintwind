@@ -588,14 +588,48 @@ fn inspector_section(theme: &Theme, title: String) -> Div {
     context_card(theme).child(div().font_weight(FontWeight::SEMIBOLD).child(title))
 }
 
+/// Width of the gutter where a long value dissolves into the card surface.
+/// Short values stop before it, so only overflowing text is ever faded.
+const INSPECTOR_FADE_WIDTH: f32 = 18.0;
+
+/// A label/value row. The value keeps one line: when it is wider than the row
+/// it dissolves into the card surface rather than crossing its border, and the
+/// reserved gutter keeps short values clear of the fade.
 fn inspector_row(theme: &Theme, label: String, value: String) -> Div {
     div()
+        .relative()
         .flex()
         .items_center()
         .gap(px(8.0))
-        .child(div().text_color(theme.text_secondary).child(label))
-        .child(div().flex_1())
-        .child(div().text_color(theme.text).child(value))
+        .overflow_hidden()
+        .pr(px(INSPECTOR_FADE_WIDTH))
+        .child(
+            div()
+                .flex_none()
+                .text_color(theme.text_secondary)
+                .child(label),
+        )
+        .child(div().flex_1().min_w_0())
+        .child(
+            div()
+                .flex_none()
+                .whitespace_nowrap()
+                .text_color(theme.text)
+                .child(value),
+        )
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right_0()
+                .w(px(INSPECTOR_FADE_WIDTH))
+                .bg(linear_gradient(
+                    90.0,
+                    linear_color_stop(theme.surface.opacity(0.0), 0.0),
+                    linear_color_stop(theme.surface, 1.0),
+                )),
+        )
 }
 
 fn context_percent(usage: &ContextUsage) -> Option<f64> {

@@ -63,6 +63,13 @@ impl DaemonSettings {
             .unwrap_or(false)
     }
 
+    pub fn scheduled_tools_enabled(&self) -> bool {
+        self.extra
+            .get(SCHEDULED_TOOLS_ENABLED_KEY)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
     /// Whether the daemon lets the browser plugin expose its tools to models.
     /// The default is off: browser tools cost model context, so enabling them
     /// is an explicit act. A missing or non-boolean value reads as off.
@@ -115,6 +122,7 @@ impl DaemonSettings {
 }
 
 pub const GOAL_ENABLED_KEY: &str = "goal_enabled";
+pub const SCHEDULED_TOOLS_ENABLED_KEY: &str = "scheduled_tools_enabled";
 pub const OPENCODE_BINARY_PATH_KEY: &str = "opencode_binary_path";
 pub const GENERAL_WORKSPACE_PATH_KEY: &str = "general_workspace_path";
 pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";

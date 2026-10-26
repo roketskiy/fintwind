@@ -44,6 +44,9 @@ use fintwind_protocol::{
 };
 use uuid::Uuid;
 
+#[path = "scheduled_tasks_e2e/mcp.rs"]
+mod mcp;
+
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const READY_TIMEOUT: Duration = Duration::from_secs(30);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
@@ -85,6 +88,7 @@ struct Arguments {
     opencode_bin: PathBuf,
     fixture_url: String,
     fixture_log: PathBuf,
+    mcp_only: bool,
 }
 
 impl Arguments {
@@ -95,9 +99,11 @@ impl Arguments {
         let mut opencode_bin = None;
         let mut fixture_url = None;
         let mut fixture_log = None;
+        let mut mcp_only = false;
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
+                "--mcp-only" => mcp_only = true,
                 "--data-root" => data_root = Some(PathBuf::from(value(&mut arguments, &argument)?)),
                 "--proof" => proof = Some(PathBuf::from(value(&mut arguments, &argument)?)),
                 "--daemon-bin" => {
@@ -137,6 +143,7 @@ impl Arguments {
             opencode_bin,
             fixture_url,
             fixture_log,
+            mcp_only,
         })
     }
 }
@@ -191,6 +198,17 @@ fn run(arguments: &Arguments, checks: &mut Checks) -> anyhow::Result<()> {
     let project = setup_project(&client, arguments)?;
     let project_id = project.id;
     checks.ok("isolated project registered through SaveTaskState");
+
+    mcp::verify(&client, &second, &project, arguments, &prefix, checks)?;
+    if arguments.mcp_only {
+        second.disconnect();
+        client.shutdown();
+        if !wait_listener_closed(&address, SHUTDOWN_TIMEOUT) {
+            bail!("the isolated MCP daemon did not shut down");
+        }
+        checks.ok("the isolated MCP daemon shut down through its own lifecycle");
+        return Ok(());
+    }
 
     let baseline = count_prefixed(&list(&client)?, &prefix);
     validation_refusals(&client, &second, project_id, &prefix)?;

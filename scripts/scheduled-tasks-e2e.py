@@ -249,6 +249,28 @@ class Fixture:
         self.log({"kind": "response", "prompt": prompt, "reply": reply,
                   "tools": tools, "held": held})
         message = {"role": "assistant", "content": reply}
+        if tools and prompt.startswith("FINTWIND_MCP_CREATE:"):
+            messages = payload.get("messages") or []
+            last_user = max(index for index, item in enumerate(messages) if item.get("role") == "user")
+            results = [item.get("content") for item in messages[last_user + 1:] if item.get("role") == "tool"]
+            catalog = next((json.dumps(item) for item in reversed(messages)
+                            if item.get("role") not in ("assistant", "tool")
+                            and "## Available tools" in json.dumps(item)), "")
+            self.log({"kind": "mcp", "prompt": prompt,
+                      "tools": payload.get("tools"), "results": results,
+                      "catalogVisible": "fintwind_scheduled_tasks" in catalog})
+            if not results:
+                arguments = json.loads(prompt.removeprefix("FINTWIND_MCP_CREATE:"))
+                tool_names = {tool.get("function", {}).get("name") for tool in payload.get("tools", [])}
+                name = "fintwind_scheduled_tasks_create"
+                if name not in tool_names:
+                    name = "execute"
+                    arguments = {"code": "const task = await tools.fintwind_scheduled_tasks.create(" +
+                                 json.dumps(arguments) + "); return task;"}
+                message = {"role": "assistant", "content": None, "tool_calls": [{
+                    "id": "call_" + uuid.uuid4().hex, "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(arguments)}}]}
+        reason = "tool_calls" if message.get("tool_calls") else "stop"
         common = {"id": "chatcmpl-fixture", "created": 0, "model": "fixture-model"}
         usage = {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}
         try:
@@ -256,13 +278,16 @@ class Fixture:
                 self.send_json(handler, {**common, "object": "chat.completion",
                                          "usage": usage, "choices": [{
                                              "index": 0, "message": message,
-                                             "finish_reason": "stop"}]})
+                                             "finish_reason": reason}]})
                 return
+            delta = dict(message)
+            if delta.get("tool_calls"):
+                delta["tool_calls"] = [{**call, "index": index} for index, call in enumerate(delta["tool_calls"])]
             chunks = [
                 {**common, "object": "chat.completion.chunk",
-                 "choices": [{"index": 0, "delta": message, "finish_reason": None}]},
+                 "choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
                 {**common, "object": "chat.completion.chunk", "usage": usage,
-                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                 "choices": [{"index": 0, "delta": {}, "finish_reason": reason}]},
             ]
             data = ("".join("data: " + json.dumps(chunk) + "\n\n" for chunk in chunks)
                     + "data: [DONE]\n\n").encode()
@@ -328,7 +353,7 @@ def base_environment(run):
     return env
 
 
-def worker(run, target, timeout, daemon_bin, no_build):
+def worker(run, target, timeout, daemon_bin, no_build, mcp_only):
     deadline = time.monotonic() + timeout
 
     def remaining(limit=None):
@@ -394,7 +419,8 @@ def worker(run, target, timeout, daemon_bin, no_build):
                     [str(example), "--data-root", str(data),
                      "--proof", str(run / "proof.json"), "--daemon-bin", str(daemon),
                      "--opencode-bin", opencode, "--fixture-url", fixture.origin,
-                     "--fixture-log", str(run / "fixture.jsonl")],
+                     "--fixture-log", str(run / "fixture.jsonl"),
+                     *(["--mcp-only"] if mcp_only else [])],
                     cwd=run, env=example_env, stdout=log, stderr=subprocess.STDOUT,
                     check=True, timeout=remaining())
     finally:
@@ -439,8 +465,8 @@ def parent(args):
             return 2
     run = ROOT / "target/scheduled-tasks-e2e" / uuid.uuid4().hex
     run.mkdir(parents=True)
-    print("[i] build target: " + str(target))
-    print("[i] run directory: " + str(run))
+    print("[i] build target: " + str(target), flush=True)
+    print("[i] run directory: " + str(run), flush=True)
     daemon = str(Path(args.daemon_bin).resolve()) if args.daemon_bin else ""
     sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location("owned_process", ROOT / "scripts/goal-opencode-e2e.py")
@@ -449,7 +475,7 @@ def parent(args):
     deadline = time.monotonic() + args.timeout
     child = helper.OwnedProcess(
         sys.executable, [str(Path(__file__).resolve()), "--worker", str(run), str(target),
-                         str(args.timeout), daemon, str(int(args.no_build))],
+                         str(args.timeout), daemon, str(int(args.no_build)), str(int(args.mcp_only))],
         run, isolated_environment(run))
     status = None
     try:
@@ -480,13 +506,14 @@ def main():
     parser.add_argument("--timeout", type=int, default=2400,
                         help="overall deadline in seconds, including a cold build")
     parser.add_argument("--no-build", action="store_true")
+    parser.add_argument("--mcp-only", action="store_true", help="verify agent task creation and dispatch only")
     parser.add_argument("--daemon-bin", help="use this daemon instead of building one")
-    parser.add_argument("--worker", nargs=5, help=argparse.SUPPRESS)
+    parser.add_argument("--worker", nargs=6, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.worker:
-        run, target, timeout, daemon, no_build = args.worker
+        run, target, timeout, daemon, no_build, mcp_only = args.worker
         try:
-            worker(Path(run), Path(target), float(timeout), daemon, no_build == "1")
+            worker(Path(run), Path(target), float(timeout), daemon, no_build == "1", mcp_only == "1")
             return 0
         except BaseException:
             with (Path(run) / "failure.log").open("w", encoding="utf-8") as log:

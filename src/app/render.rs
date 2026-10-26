@@ -320,9 +320,6 @@ impl Render for Fintwind {
                             .child(self.render_workspace_footer(cx))
                     })
                     .relative()
-                    .when(!empty, |element| {
-                        element.child(self.render_task_capsule(cx))
-                    })
                     .when(self.sidebar_visible, |element| {
                         element.child(self.render_panel_resize_handle(
                             "sidebar-resize-handle",

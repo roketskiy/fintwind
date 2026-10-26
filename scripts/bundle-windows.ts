@@ -11,6 +11,7 @@
 // Env:
 //   CARGO_TARGET_DIR              cargo target directory (default: target)
 //   FINTWIND_CHANNEL              fallback channel when --channel is absent
+//   FINTWIND_ISCC_EXE              explicit Inno Setup compiler path (optional)
 //   WINDOWS_CERTIFICATE           base64 Authenticode .pfx (optional)
 //   WINDOWS_CERTIFICATE_PASSWORD  password for it
 import { $ } from "bun";
@@ -52,6 +53,14 @@ interface CargoMetadata {
 
 /** Inno Setup's compiler, however it was installed. */
 function findInnoSetupCompiler(): string {
+  const configured = process.env.FINTWIND_ISCC_EXE;
+  if (configured) {
+    if (!existsSync(configured)) {
+      throw new Error(`FINTWIND_ISCC_EXE does not exist: ${configured}`);
+    }
+    return configured;
+  }
+
   const onPath = Bun.which("ISCC.exe") ?? Bun.which("iscc");
   if (onPath) return onPath;
   // Inno Setup 7 kept the "Inno Setup <major>" directory name but moved to
@@ -121,7 +130,30 @@ async function sign(
   files: string[],
 ): Promise<void> {
   for (const file of files) {
-    await $`${signtool} sign /f ${certificate} /p ${password} /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 ${file}`;
+    const signingProcess = Bun.spawn(
+      [
+        signtool,
+        "sign",
+        "/f",
+        certificate,
+        "/p",
+        password,
+        "/fd",
+        "SHA256",
+        "/tr",
+        "http://timestamp.digicert.com",
+        "/td",
+        "SHA256",
+        file,
+      ],
+      { stdout: "inherit", stderr: "inherit" },
+    );
+    const exitCode = await signingProcess.exited;
+    if (exitCode !== 0) {
+      throw new Error(
+        `signtool.exe failed to sign ${file} with exit code ${exitCode}.`,
+      );
+    }
   }
 }
 
@@ -214,7 +246,24 @@ try {
   // The installer is the primary download artifact, so it ships from the
   // same signed staging directory as the zip.
   await rm(installer, { force: true });
-  await $`${findInnoSetupCompiler()} ${`/DAppVersion=${version}`} ${`/DArch=${architecture}`} ${`/DChannel=${channel}`} ${`/DStageDir=${packageDirectory}`} ${`/DOutputDir=${releaseDirectory}`} ${join(projectRoot, "resources", "windows", "fintwind.iss")}`;
+  const innoSetupCompiler = Bun.spawn(
+    [
+      findInnoSetupCompiler(),
+      `/DAppVersion=${version}`,
+      `/DArch=${architecture}`,
+      `/DChannel=${channel}`,
+      `/DStageDir=${packageDirectory}`,
+      `/DOutputDir=${releaseDirectory}`,
+      join(projectRoot, "resources", "windows", "fintwind.iss"),
+    ],
+    { stdout: "inherit", stderr: "inherit" },
+  );
+  const innoSetupExitCode = await innoSetupCompiler.exited;
+  if (innoSetupExitCode !== 0) {
+    throw new Error(
+      `ISCC.exe failed with exit code ${innoSetupExitCode}.`,
+    );
+  }
   if (!existsSync(installer)) {
     throw new Error(`ISCC did not produce ${installer}`);
   }

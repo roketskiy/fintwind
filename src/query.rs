@@ -126,7 +126,6 @@ impl<K: Clone + Eq + Hash, V> QueryCache<K, V> {
     }
 
     /// Reads without claiming a fetch, for callers that only want a hit.
-    #[cfg(test)]
     pub fn peek(&self, key: &K) -> Option<Arc<V>> {
         match self.entries.get(key) {
             Some(Cached {

@@ -565,6 +565,7 @@ struct FloatingSurface {
     preferred: MenuAlign,
     gap: Pixels,
     margin: Pixels,
+    cover_trigger: bool,
 }
 
 struct FloatingSurfaceState {
@@ -585,6 +586,7 @@ impl FloatingSurface {
             preferred,
             gap,
             margin,
+            cover_trigger: false,
         }
     }
 }
@@ -633,14 +635,29 @@ impl Element for FloatingSurface {
         let surface_size = window.layout_bounds(request_layout.child_layout_id).size;
         let viewport = Bounds::new(Point::default(), window.viewport_size());
         let margin = self.margin + window.client_inset().unwrap_or(px(0.0));
-        let placement = resolve_floating_placement(
-            self.trigger,
-            surface_size,
-            viewport,
-            self.preferred,
-            self.gap,
-            margin,
-        );
+        let placement = if self.cover_trigger {
+            let left = margin;
+            let right = (viewport.right() - margin - surface_size.width).max(left);
+            FloatingPlacement {
+                bounds: Bounds::new(
+                    Point::new(
+                        (self.trigger.right() - surface_size.width).clamp(left, right),
+                        self.trigger.bottom() - surface_size.height,
+                    ),
+                    surface_size,
+                ),
+                align: MenuAlign::AboveRight,
+            }
+        } else {
+            resolve_floating_placement(
+                self.trigger,
+                surface_size,
+                viewport,
+                self.preferred,
+                self.gap,
+                margin,
+            )
+        };
         let offset = placement.bounds.origin - bounds.origin;
         let offset = Point::new(offset.x.round(), offset.y.round());
         window.with_element_offset(offset, |window| self.child.prepaint(window, cx));
@@ -686,14 +703,21 @@ where
 {
     let id: ElementId = id.into();
     let items = Rc::new(items);
-    anchored_surface(trigger, handle, align, SurfaceFocus::Card, move |handle| {
-        MenuCard {
-            id: id.clone(),
-            handle: handle.clone(),
-            items: items.clone(),
-        }
-        .into_any_element()
-    })
+    anchored_surface(
+        trigger,
+        handle,
+        align,
+        SurfaceFocus::Card,
+        false,
+        move |handle| {
+            MenuCard {
+                id: id.clone(),
+                handle: handle.clone(),
+                items: items.clone(),
+            }
+            .into_any_element()
+        },
+    )
 }
 
 /// A dropdown-anchored panel holding arbitrary content.
@@ -718,6 +742,44 @@ where
         handle,
         align,
         SurfaceFocus::Content,
+        false,
+        move |handle| {
+            PopoverCard {
+                handle: handle.clone(),
+                content: content.clone(),
+            }
+            .into_any_element()
+        },
+    )
+}
+
+/// Expand upward over the trigger, keeping the combined surface's bottom fixed.
+pub fn popover_covering_trigger<E>(
+    trigger: E,
+    handle: &ContextMenuHandle,
+    content: impl Fn(&ContextMenuHandle, Size<Pixels>, &mut Window, &mut App) -> AnyElement + 'static,
+) -> AnyElement
+where
+    E: ParentElement + Styled + InteractiveElement + IntoElement + 'static,
+{
+    let bounds = handle.trigger_bounds.clone();
+    let content = Rc::new(
+        move |handle: &ContextMenuHandle, window: &mut Window, cx: &mut App| {
+            let margin = px(8.0) + window.client_inset().unwrap_or(px(0.0));
+            let bottom = bounds.get().map_or(margin, |bounds| bounds.bottom());
+            let available = Size::new(
+                (window.viewport_size().width - margin * 2.0).max(px(0.0)),
+                (bottom - margin).max(px(0.0)),
+            );
+            content(handle, available, window, cx)
+        },
+    );
+    anchored_surface(
+        trigger,
+        handle,
+        MenuAlign::AboveRight,
+        SurfaceFocus::Content,
+        true,
         move |handle| {
             PopoverCard {
                 handle: handle.clone(),
@@ -761,6 +823,7 @@ fn anchored_surface<E>(
     handle: &ContextMenuHandle,
     align: MenuAlign,
     focus_target: SurfaceFocus,
+    cover_trigger: bool,
     card: impl Fn(&ContextMenuHandle) -> AnyElement + 'static,
 ) -> AnyElement
 where
@@ -774,6 +837,7 @@ where
         .relative()
         .track_focus(&handle.trigger_focus)
         .tab_index(0)
+        .tab_stop(!cover_trigger)
         .child(trigger_bounds_probe(handle))
         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
             toggle_anchored_surface(&toggle_handle, align, focus_target, window, cx);
@@ -796,17 +860,16 @@ where
         .get()
         .unwrap_or_else(|| Bounds::new(position, Size::default()));
 
+    let mut surface = FloatingSurface::new(
+        card(handle),
+        trigger_bounds,
+        align,
+        px(TRIGGER_GAP),
+        px(8.0),
+    );
+    surface.cover_trigger = cover_trigger;
     trigger
-        .child(
-            deferred(FloatingSurface::new(
-                card(handle),
-                trigger_bounds,
-                align,
-                px(TRIGGER_GAP),
-                px(8.0),
-            ))
-            .with_priority(1),
-        )
+        .child(deferred(surface).with_priority(1))
         .into_any_element()
 }
 

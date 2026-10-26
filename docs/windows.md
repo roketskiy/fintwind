@@ -46,6 +46,8 @@ GitHub resolves to several addresses, and some of them are unreachable from
 some networks — so before downloading, fintwind measures the publisher's own
 host and two public relays of the release asset, and uses whichever answers
 fastest. The card shows that measurement as **Choosing a download source…**.
+During the download, the card shows progress, percentage, and downloaded size.
+When the total size is unknown, it shows the downloaded size.
 This costs nothing in trust: every download is still checked against the
 digest the release published, so a relay that served anything else is refused
 before the installer is ever launched.
@@ -66,8 +68,14 @@ executables in place — see the next section.
 | Tasks, sessions, transcripts | `%LOCALAPPDATA%\Fintwind\app.db` |
 | Attachments and blobs | `%LOCALAPPDATA%\Fintwind\blobs` |
 | Settings | `%USERPROFILE%\.fintwind\app.json` |
+| Daemon settings | `%USERPROFILE%\.fintwind\settings.json` |
+| Default general workspace for new sessions without a project | `%LOCALAPPDATA%\Fintwind\projects` |
 
 Unpacking a new release over the old directory leaves all of it untouched.
+Choose a different general workspace in **Settings → General → Data management**.
+Changing or resetting that folder affects new sessions; existing sessions keep
+their directories and files, including older dated workspaces under
+`%USERPROFILE%\.fintwind\projects`.
 
 ## The OpenCode CLI
 
@@ -81,8 +89,22 @@ Bare names resolve through `PATHEXT`, so the `opencode.cmd` shim npm installs
 is found the same way `opencode` would be in a shell. Nothing is spawned with a
 console window attached.
 
+You can also choose an executable, including a portable `opencode-cli.exe`, in
+**Settings → General → Runtime environment**. The selected path applies to
+subsequent session starts and background operations. Running sessions keep
+their existing process. Restore automatic detection from the same setting.
+
 If the CLI is installed but not detected, make sure `opencode --version` works
-in a new PowerShell window.
+in a new PowerShell window, or select its executable in settings.
+
+### Scheduled task MCP
+
+Agent-created scheduled tasks require OpenCode 2.1.4 or newer. Enable
+**Scheduled task MCP** in **Settings → General → Features**. It is off by
+default. Enabling it automatically connects OpenCode's experimental client-hosted
+MCP interface, including for existing sessions. No separate experimental flag
+or MCP configuration entry is needed. Disabling it removes the tool; saved tasks
+continue to follow their schedules. See [the MCP reference](scheduled-tasks-mcp.md).
 
 ## Terminal
 

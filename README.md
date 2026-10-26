@@ -48,6 +48,10 @@ or use your existing provider configuration. fintwind uses OpenCode's models,
 provider credentials, and MCP configuration. You do not need to start
 `opencode serve` yourself: fintwind starts its own private local server.
 
+The optional scheduled task MCP requires OpenCode 2.1.4 or newer. Enable it in
+**Settings → General → Features**; Fintwind manages the experimental MCP
+connection automatically. See [agent-created scheduled tasks](docs/scheduled-tasks-mcp.md).
+
 ### 2. Install fintwind
 
 - **System:** Windows 10 version 1809 or newer, or Windows 11; x86_64 or Arm64.
@@ -86,10 +90,14 @@ detection, data locations, and WebView2 details.
   even when a corrected version number is lower than the installed one. Drafts
   and prereleases are excluded, and the current release is not offered again.
 - **Projects and session tabs.** Group sessions by project and open multiple
-  sessions in one window, with tab reordering and unread indicators.
+  sessions in one window, with tab reordering and unread indicators. New sessions
+  without a project share a fixed general workspace. Change its folder in
+  **Settings → General → Data management**; existing sessions keep their paths.
 - **Session controls.** Switch model, reasoning effort where supported, and
   access mode (Ask, Auto-accept edits, Full access). Queue or steer a follow-up
-  while the agent works and reorder queued messages by dragging. Use OpenCode's
+  while the agent works and reorder queued messages by dragging. Choose the
+  default send behavior in General settings. Question cards can be skipped,
+  collapsed, or expanded. Use OpenCode's
   native revert and restore for eligible Git-backed turns. `/btw` asks a
   one-off side question from the session's settled context without disturbing
   the task in progress.
@@ -104,7 +112,8 @@ detection, data locations, and WebView2 details.
   finished activity groups fold away on their own. Transcripts and reasoning
   use virtualized lists to limit per-frame work.
 - **Files and Git.** Browse workspace files, open multiple file tabs, inspect
-  diffs, and read Git commit history laid out as a commit graph. Attach files
+  diffs with a directory tree of changed files, and read Git commit history laid
+  out as a commit graph. Attach files
   from the composer or by dropping them onto the conversation; images and PDFs
   are sent inline to OpenCode.
 - **Terminal and browser.** Work in a built-in terminal or the optional
@@ -117,7 +126,8 @@ detection, data locations, and WebView2 details.
   text sizes. Animations honor the system's reduce-motion preference.
 - **Usage statistics.** Explore local OpenCode session history through an
   activity heatmap, daily and hourly charts, and model/provider rankings,
-  including subagent usage. Displayed costs are estimates, not billing records.
+  including subagent usage. Opens with a single day selected, followed by
+  7-day, 30-day, and all-time ranges. Displayed costs are estimates, not billing records.
 - **Anonymous launch statistics.** Stable and beta builds report a randomly
   generated local installation ID to the project website on each launch to
   count daily active desktops. No sessions, project paths, or account data
@@ -129,7 +139,10 @@ detection, data locations, and WebView2 details.
   on selected weekdays at a set time, or at a fixed interval. Create a session
   with a chosen project, model, and access mode, or reuse an existing session.
   Pause, resume, run immediately, and inspect results. Tasks do not run while
-  Fintwind is fully closed, and missed runs are not replayed.
+  Fintwind is fully closed, and missed runs are not replayed. Enable **Scheduled
+  task MCP** in General settings to let agents create tasks. It is off by
+  default and requires OpenCode 2.1.4+. Agents ask for missing task details before
+  creating a task. See [the MCP reference](docs/scheduled-tasks-mcp.md).
 - **MCP management.** Browse search, office, design, data, automation,
   operations, and business categories. Add remote servers, complete OAuth
   login, and check connection status. Listings use vendor-operated endpoints
@@ -177,7 +190,9 @@ on loopback and authenticates clients with a token generated at launch.
 
 Release desktop preferences live in `~/.fintwind/app.json`; debug builds use
 `temp/app.json`. Daemon provider settings live in `~/.fintwind/settings.json`.
-Tasks without a project use workspaces under
+New sessions without a project share `%LOCALAPPDATA%\Fintwind\projects` by
+default. You can choose another folder in General settings. Existing sessions
+keep their directories, including older dated workspaces under
 `~/.fintwind/projects/<date>/<slug>`.
 
 ## Development

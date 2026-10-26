@@ -77,13 +77,36 @@ packages unsigned binaries and SmartScreen will warn.
 2. Rename `## [unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) to
    `## [<version>]` and add a fresh empty `## [unreleased]` above it.
 3. Update both README feature lists and state the OpenCode compatibility scope
-   in the release notes. Use recorded verification results; an installed CLI
-   version alone does not establish compatibility. Commit, for example
+   in the release notes. Keep release notes focused on user-visible changes;
+   put verification procedures and results in the linked developer documents.
+   Use recorded results to establish compatibility; an installed CLI version
+   alone is not evidence. Commit, for example
    `chore: release <version>`.
 4. Tag that commit `v<version>` (`git tag v<version>`) and push the branch
    plus that exact tag (`git push --atomic origin main v<version>`), or run **Release** from
    Actions without a tag (it reads `Cargo.toml`).
 5. Review the draft GitHub release, then publish it.
+
+### OpenCode compatibility
+
+Fintwind uses OpenCode 2 (`@opencode/cli`), not OpenCode 1.x. The optional
+scheduled task MCP requires OpenCode 2.1.4+ and uses an experimental client-hosted
+MCP interface. Keep that requirement in both READMEs and the release notes.
+The General setting starts the connection automatically; OpenCode 2.1.4 has no
+additional experimental configuration flag for it.
+
+The [scheduled task MCP reference](docs/scheduled-tasks-mcp.md) records the
+verified version and scope. Run its isolated black-box check when changing this
+integration or the supported OpenCode version. Check the requirements of other
+features separately before claiming a wider compatibility range.
+
+### Website synchronization
+
+Publishing a full release triggers
+[Notify website on release](.github/workflows/notify-website.yml). It sends the
+tag to the separate `fintwind-website` repository using the `WEBSITE_RELEASE_PAT`
+secret. The website owns its version display and deployment. Do not edit website
+version data in this repository. Prereleases do not trigger synchronization.
 
 ### What CI produces
 

@@ -741,6 +741,7 @@ pub fn sync_ely_theme(cx: &mut App) {
     let colors = &mut palette;
     colors.bg = theme.canvas;
     colors.surface = theme.raised;
+    colors.sunken = theme.inset;
     colors.hover = theme.overlay;
     colors.active = theme.overlay_strong;
     colors.border = theme.border_strong;

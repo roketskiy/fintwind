@@ -1164,7 +1164,7 @@ struct SessionTabState {
     /// See [`Fintwind::activities_expanded`] and the fields below: disclosure
     /// state is session-scoped, and the position-keyed entries must never be
     /// read against another session's transcript.
-    activities_expanded: HashMap<usize, bool>,
+    activities_expanded: HashMap<usize, transcript_view::ActivityClusterDisclosure>,
     expanded_activity_items: HashMap<Uuid, bool>,
     expanded_turns: HashSet<Uuid>,
     expanded_changed_files: HashSet<Uuid>,
@@ -1522,7 +1522,7 @@ pub struct Fintwind {
     stream_state_dirty: bool,
     last_stream_save: Instant,
     /// User expansion overrides keyed by persisted transcript block index.
-    activities_expanded: HashMap<usize, bool>,
+    activities_expanded: HashMap<usize, transcript_view::ActivityClusterDisclosure>,
     /// Per-item disclosure overrides. Reasoning starts open while live; tool
     /// details start closed, so the stored bool must preserve either choice.
     expanded_activity_items: HashMap<Uuid, bool>,

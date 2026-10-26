@@ -590,6 +590,8 @@ time.sunday: 周日
 activity.count: "%{count} 次%{activity}"
 activity.running: 正在执行：%{activities}
 activity.detail: 活动详情
+activity.expand_earlier: 展开较早的 %{count} 条
+activity.collapse_earlier: 收起较早活动
 activity.named_content: "%{name}内容"
 activity.ran: 已执行：%{activities}
 activity.action_think: 思考

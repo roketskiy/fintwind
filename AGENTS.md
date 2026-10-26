@@ -138,6 +138,7 @@ bun scripts/bundle-windows.ts --channel=beta
 ## 产品参考
 - 有关opencode服务器的api协议在opencode2文档，地址（https://opencode.ai/v2/docs)
 - opencode v2的仓库地址是（https://github.com/anomalyco/opencode/tree/v2）
+- opencode v2的更新日志（https://opencode.ai/changelog）
 - 当任务涉及 coding-agent 工作流、信息层级、控件、工具活动或对话记录的
   呈现,且这种对比能切实澄清一个模糊的产品决策时,以 GitHub 上的
   [T3 Code](https://github.com/pingdotgg/t3code) 源码作为参考;或者当用户明确

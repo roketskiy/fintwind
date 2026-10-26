@@ -21,6 +21,7 @@ const ACTIVITY_DETAIL_MAX_HEIGHT: f32 = 800.0;
 /// `DiffRowStyle::ACTIVITY`.
 const ACTIVITY_DIFF_GUTTER_WIDTH: f32 = 52.0;
 const ACTIVITY_OPACITY: f32 = 0.70;
+const ACTIVITY_CLUSTER_PREVIEW_LIMIT: usize = 8;
 
 #[derive(Clone, Debug)]
 struct ConversationNavigationRailSnapshot {
@@ -862,6 +863,27 @@ pub(super) enum ActivitySurface {
     Background(BackgroundWorkKey),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ActivityClusterDisclosure {
+    Collapsed,
+    Recent,
+    All,
+}
+
+impl ActivityClusterDisclosure {
+    fn is_expanded(self) -> bool {
+        self != Self::Collapsed
+    }
+
+    fn visible_start(self, count: usize) -> usize {
+        match self {
+            Self::Collapsed => count,
+            Self::Recent => count.saturating_sub(ACTIVITY_CLUSTER_PREVIEW_LIMIT),
+            Self::All => 0,
+        }
+    }
+}
+
 /// The owning surface's answers for one activity cluster.
 ///
 /// The shared renderer cannot derive these: the two surfaces learn liveness
@@ -887,14 +909,18 @@ pub(super) struct ActivityClusterContext {
 impl ActivityClusterContext {
     /// Only a newer group or the turn settling auto-collapses the latest group.
     /// An explicit disclosure choice always takes precedence on both surfaces.
-    fn expanded(&self, this: &Fintwind) -> bool {
+    fn disclosure(&self, this: &Fintwind) -> ActivityClusterDisclosure {
         let stored = match &self.surface {
             ActivitySurface::Session => this.activities_expanded.get(&self.block_index).copied(),
             ActivitySurface::Background(key) => {
-                this.background_activity_cluster_expanded(key, self.block_index)
+                this.background_activity_cluster_disclosure(key, self.block_index)
             }
         };
-        stored.unwrap_or(self.live_turn && self.latest_group)
+        stored.unwrap_or(if self.live_turn && self.latest_group {
+            ActivityClusterDisclosure::Recent
+        } else {
+            ActivityClusterDisclosure::Collapsed
+        })
     }
 
     /// Stem for the cluster's focus handle and element id. Background surfaces
@@ -965,52 +991,84 @@ impl Fintwind {
         cx.notify();
     }
 
-    /// Toggle one activity cluster's card list.
+    /// Set one activity cluster's card list disclosure.
     ///
     /// The session transcript keeps the reader's place across the row's height
     /// change; a background surface remeasures its own independent list.
-    pub(super) fn toggle_activity_cluster(
+    pub(super) fn set_activity_cluster_disclosure(
         &mut self,
         surface: ActivitySurface,
         block_index: usize,
-        current: bool,
+        disclosure: ActivityClusterDisclosure,
         cx: &mut Context<Self>,
     ) {
+        let merge_reasoning = self.activity_cluster_merges_reasoning(&surface);
+        let block = match &surface {
+            ActivitySurface::Session => self.selected_transcript_blocks().get(block_index),
+            ActivitySurface::Background(key) => self
+                .state
+                .selected_session
+                .and_then(|id| self.background_work.get(&id))
+                .and_then(|registry| registry.transcripts.get(key))
+                .and_then(|transcript| transcript.transcript_blocks.get(block_index)),
+        };
+        if let Some(block) = block {
+            self.release_hidden_activity_caches(&block.activities, disclosure, merge_reasoning);
+        }
         match surface {
             ActivitySurface::Session => self.toggle_block_disclosure(block_index, cx, |this| {
-                this.activities_expanded.insert(block_index, !current);
-                if current && let Some(block) = this.selected_transcript_blocks().get(block_index) {
-                    for activity in &block.activities {
-                        this.release_activity_item_caches(activity.id);
-                    }
-                }
+                this.activities_expanded.insert(block_index, disclosure);
             }),
             ActivitySurface::Background(key) => {
-                // Scoped to the item, not the registry: two subagents each hold
-                // a block 0 of their own transcript.
-                if current
-                    && let Some(transcript) = self
-                        .state
-                        .selected_session
-                        .and_then(|id| self.background_work.get(&id))
-                        .and_then(|registry| registry.transcripts.get(&key))
-                    && let Some(block) = transcript.transcript_blocks.get(block_index)
-                {
-                    for activity in &block.activities {
-                        self.release_activity_item_caches(activity.id);
-                    }
-                }
                 let session_id = self.state.selected_session;
                 if let Some(session_id) = session_id
                     && let Some(registry) = self.background_work.get_mut(&session_id)
                 {
                     registry
                         .activities_expanded
-                        .insert((key.clone(), block_index), !current);
+                        .insert((key.clone(), block_index), disclosure);
                 }
                 self.remeasure_background_block(&key, block_index);
                 cx.notify();
             }
+        }
+    }
+
+    fn activity_cluster_merges_reasoning(&self, surface: &ActivitySurface) -> bool {
+        match surface {
+            ActivitySurface::Session => summary_only_reasoning_model(
+                self.selected_session()
+                    .and_then(|session| session.model.as_deref()),
+            ),
+            ActivitySurface::Background(key) => {
+                summary_only_reasoning_model(self.background_work_model(key).as_deref())
+            }
+        }
+    }
+
+    fn release_hidden_activity_caches(
+        &self,
+        activities: &[ActivityItem],
+        disclosure: ActivityClusterDisclosure,
+        merge_reasoning: bool,
+    ) {
+        let first_visible_id = match disclosure {
+            ActivityClusterDisclosure::Collapsed => None,
+            ActivityClusterDisclosure::Recent => {
+                let display = merge_consecutive_reasoning(activities, None, merge_reasoning);
+                let start = disclosure.visible_start(display.len());
+                if start == 0 {
+                    return;
+                }
+                Some(display[start].item.id)
+            }
+            ActivityClusterDisclosure::All => return,
+        };
+        for activity in activities
+            .iter()
+            .take_while(|activity| Some(activity.id) != first_visible_id)
+        {
+            self.release_activity_item_caches(activity.id);
         }
     }
 
@@ -2581,7 +2639,13 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let expanded = context.expanded(self);
+        let disclosure = context.disclosure(self);
+        let expanded = disclosure.is_expanded();
+        let toggled_disclosure = if expanded {
+            ActivityClusterDisclosure::Collapsed
+        } else {
+            ActivityClusterDisclosure::Recent
+        };
         let control_id = context.control_id();
         let header_title =
             activity_header_title(activities, context.live_turn, context.live_reasoning_id);
@@ -2597,7 +2661,7 @@ impl Fintwind {
             .gap(px(4.0))
             .child(
                 div()
-                    .id(SharedString::from(control_id))
+                    .id(SharedString::from(control_id.clone()))
                     .opacity(ACTIVITY_OPACITY)
                     .track_focus(&header_focus)
                     .tab_index(0)
@@ -2631,19 +2695,19 @@ impl Fintwind {
                         theme.text_tertiary,
                     ))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        this.toggle_activity_cluster(
+                        this.set_activity_cluster_disclosure(
                             click_surface.clone(),
                             block_index,
-                            expanded,
+                            toggled_disclosure,
                             cx,
                         );
                     }))
                     .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
                         if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                            this.toggle_activity_cluster(
+                            this.set_activity_cluster_disclosure(
                                 key_surface.clone(),
                                 block_index,
-                                expanded,
+                                toggled_disclosure,
                                 cx,
                             );
                             cx.stop_propagation();
@@ -2669,18 +2733,80 @@ impl Fintwind {
         // Summaries arrive as many short fragments on Claude/OpenAI; render
         // consecutive thoughts as one card so a turn reads as work, not a
         // wall of rails. Full chain-of-thought families keep their own cards.
-        let summary_model: Option<String> = match &context.surface {
-            ActivitySurface::Session => self
-                .selected_session()
-                .and_then(|session| session.model.clone()),
-            ActivitySurface::Background(key) => self.background_work_model(key),
-        };
         let display = merge_consecutive_reasoning(
             activities,
             context.live_reasoning_id,
-            summary_only_reasoning_model(summary_model.as_deref()),
+            self.activity_cluster_merges_reasoning(&context.surface),
         );
-        for merged in &display {
+        let start = disclosure.visible_start(display.len());
+        let earlier_count = display.len().saturating_sub(ACTIVITY_CLUSTER_PREVIEW_LIMIT);
+        if earlier_count > 0 {
+            let showing_all = disclosure == ActivityClusterDisclosure::All;
+            let next_disclosure = if showing_all {
+                ActivityClusterDisclosure::Recent
+            } else {
+                ActivityClusterDisclosure::All
+            };
+            let label = if showing_all {
+                tr!("activity.collapse_earlier")
+            } else {
+                tr!("activity.expand_earlier", count = earlier_count)
+            };
+            let more_id = format!("{control_id}-earlier");
+            let more_focus = self.transcript_control_focus(more_id.clone(), cx);
+            let click_surface = context.surface.clone();
+            let key_surface = context.surface.clone();
+            items = items.child(
+                div()
+                    .id(SharedString::from(more_id))
+                    .track_focus(&more_focus)
+                    .tab_index(0)
+                    .w_full()
+                    .min_w_0()
+                    .h(px(28.0))
+                    .px(px(6.0))
+                    .rounded(px(4.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .text_size(ui_px(12.0))
+                    .text_color(theme.text_tertiary)
+                    .cursor_default()
+                    .hover(|style| style.bg(theme.overlay).text_color(theme.text))
+                    .focus_visible(|style| style.bg(theme.overlay).text_color(theme.text))
+                    .child(icon(
+                        if showing_all {
+                            "icons/chevron-up.svg"
+                        } else {
+                            "icons/chevron-down.svg"
+                        },
+                        11.0,
+                        theme.text_tertiary,
+                    ))
+                    .child(SharedString::from(label))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        cx.stop_propagation();
+                        this.set_activity_cluster_disclosure(
+                            click_surface.clone(),
+                            block_index,
+                            next_disclosure,
+                            cx,
+                        );
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, _, cx| {
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.set_activity_cluster_disclosure(
+                                key_surface.clone(),
+                                block_index,
+                                next_disclosure,
+                                cx,
+                            );
+                            cx.stop_propagation();
+                        }
+                    })),
+            );
+        }
+        for merged in &display[start..] {
             let activity = merged.item.as_ref();
             let card_context = ActivityCardContext {
                 surface: context.surface.clone(),

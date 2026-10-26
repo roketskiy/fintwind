@@ -1225,6 +1225,10 @@ activity.running:
   en: Running %{activities}
 activity.detail:
   en: Activity detail
+activity.expand_earlier:
+  en: Show %{count} earlier activities
+activity.collapse_earlier:
+  en: Hide earlier activities
 activity.named_content:
   en: "%{name} content"
 activity.ran:

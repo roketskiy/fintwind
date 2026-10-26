@@ -1,6 +1,6 @@
 use crate::theme::{code_px, ui_px};
 
-use super::transcript_view::{ActivityClusterContext, ActivitySurface};
+use super::transcript_view::{ActivityClusterContext, ActivityClusterDisclosure, ActivitySurface};
 use super::*;
 use crate::ui::scrollbar::Scrollable;
 use gpui::FollowMode;
@@ -46,7 +46,7 @@ pub(super) struct BackgroundWorkRegistry {
     /// their blocks independently, so sharing the map would expand a parent
     /// block when a subagent's opens. Live turns start open, matching the
     /// session transcript; only a user toggle lands here.
-    pub(super) activities_expanded: HashMap<(BackgroundWorkKey, usize), bool>,
+    pub(super) activities_expanded: HashMap<(BackgroundWorkKey, usize), ActivityClusterDisclosure>,
     selection: TranscriptSelection,
 }
 
@@ -1261,11 +1261,11 @@ impl Fintwind {
     /// An item's stored cluster disclosure for one of its transcript blocks,
     /// if the user toggled it. `None` leaves the default — open for the newest
     /// group in a live turn, closed otherwise — to the shared cluster renderer.
-    pub(super) fn background_activity_cluster_expanded(
+    pub(super) fn background_activity_cluster_disclosure(
         &self,
         key: &BackgroundWorkKey,
         block_index: usize,
-    ) -> Option<bool> {
+    ) -> Option<ActivityClusterDisclosure> {
         self.state
             .selected_session
             .and_then(|session_id| self.background_work.get(&session_id))

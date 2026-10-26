@@ -909,7 +909,8 @@ impl Fintwind {
                             .find(|project| project.id == project_id)
                     })
                     .map(|project| project.path.clone())
-            });
+            })
+            .or_else(crate::projectless::workspace_root);
         // Comparison keys may fold case; API requests must retain the actual
         // workspace path. The daemon resolves it off the UI thread.
         directory
@@ -2419,6 +2420,13 @@ impl Fintwind {
         submission: ComposerSubmission,
         cx: &mut Context<Self>,
     ) {
+        if self.selected_session().is_none() {
+            self.create_projectless_session(cx);
+            if self.selected_session().is_none() {
+                self.restore_composer_submission(submission, cx);
+                return;
+            }
+        }
         if self.try_submit_goal(&submission, cx) || self.try_submit_btw(&submission, cx) {
             return;
         }
@@ -2466,6 +2474,10 @@ impl Fintwind {
         submission: ComposerSubmission,
         cx: &mut Context<Self>,
     ) {
+        if self.selected_session().is_none() {
+            self.submit_composer_submission(submission, cx);
+            return;
+        }
         if self.try_submit_goal(&submission, cx) || self.try_submit_btw(&submission, cx) {
             return;
         }

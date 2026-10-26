@@ -690,6 +690,8 @@ pub enum ResponsePayload {
         sessions: Vec<AgentSession>,
         default_cwd: PathBuf,
         projectless_root: Option<PathBuf>,
+        #[serde(default)]
+        projectless_legacy_root: Option<PathBuf>,
     },
     TaskStateSaved {
         sessions: Vec<AgentSession>,

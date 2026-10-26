@@ -1844,54 +1844,16 @@ impl Fintwind {
     }
 
     pub(super) fn create_projectless_session(&mut self, cx: &mut Context<Self>) {
-        if let Some(draft_id) = self
-            .state
-            .sessions
-            .iter()
-            .find(|session| {
-                !session.has_started()
-                    && self.state.projects.iter().any(|project| {
-                        project.id == session.project_id
-                            && project.is_projectless()
-                            && !crate::projectless::is_legacy_root_path(&project.path)
-                    })
-            })
-            .map(|session| session.id)
-        {
-            self.select_session(draft_id, cx);
+        let Some(root) = crate::projectless::workspace_root() else {
+            self.show_toast(tr!(
+                "errors.create_projectless_task",
+                error = "general workspace is unavailable"
+            ));
+            cx.notify();
             return;
-        }
-
-        let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
-        cx.spawn(async move |fintwind, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    match workspace.request(
-                        fintwind_client::WorkspaceOperation::CreateProjectlessWorkspace {
-                            prompt: None,
-                        },
-                    )? {
-                        fintwind_client::WorkspaceResult::ProjectlessWorkspace { cwd } => Ok(cwd),
-                        _ => anyhow::bail!("the daemon returned an invalid projectless response"),
-                    }
-                })
-                .await;
-            let _ = fintwind.update(cx, |fintwind, cx| match result {
-                Ok(cwd) => {
-                    let mut project = Project::from_path(cwd);
-                    project.name = Project::PROJECTLESS_NAME.to_owned();
-                    let project_id = project.id;
-                    fintwind.state.projects.push(project);
-                    fintwind.create_session_for(project_id, cx);
-                }
-                Err(error) => {
-                    fintwind.show_toast(tr!("errors.create_projectless_task", error = error));
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+        };
+        let project_id = self.state.ensure_general_workspace_project(root);
+        self.create_session_for(project_id, cx);
     }
 }
 

@@ -410,6 +410,14 @@ settings.network_proxy:
   en: Network proxy
 settings.opencode_binary:
   en: "OpenCode executable"
+settings.general_workspace:
+  en: "General workspace"
+settings.general_workspace_choose:
+  en: "Choose folder…"
+settings.general_workspace_reset:
+  en: "Restore default"
+settings.general_workspace_failed:
+  en: "Could not update general workspace: %{error}"
 settings.opencode_binary_auto:
   en: "Automatic detection"
 settings.opencode_binary_choose:

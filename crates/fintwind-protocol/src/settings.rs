@@ -20,6 +20,14 @@ impl Default for DaemonSettings {
 }
 
 impl DaemonSettings {
+    pub fn general_workspace_path(&self) -> Option<&str> {
+        self.extra
+            .get(GENERAL_WORKSPACE_PATH_KEY)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+    }
+
     pub fn opencode_binary_path(&self) -> Option<&str> {
         self.extra
             .get(OPENCODE_BINARY_PATH_KEY)
@@ -108,6 +116,7 @@ impl DaemonSettings {
 
 pub const GOAL_ENABLED_KEY: &str = "goal_enabled";
 pub const OPENCODE_BINARY_PATH_KEY: &str = "opencode_binary_path";
+pub const GENERAL_WORKSPACE_PATH_KEY: &str = "general_workspace_path";
 pub const BROWSER_TOOLS_ENABLED_KEY: &str = "browser_tools_enabled";
 pub const NETWORK_PROXY_URL_KEY: &str = "network_proxy_url";
 pub const AUTO_COMPACT_ENABLED_KEY: &str = "auto_compact_enabled";

@@ -37,6 +37,7 @@ pub struct FintwindBackend {
     sessions: Arc<Mutex<HashMap<Uuid, (Uuid, DriverHandle)>>>,
     terminals: Mutex<HashMap<Uuid, (Uuid, crate::terminal::DaemonTerminal)>>,
     settings: DaemonSettingsStore,
+    settings_update_gate: Mutex<()>,
     task_store: Arc<StateStore>,
     task_state: Arc<Mutex<PersistedState>>,
     removed_session_ids: Mutex<HashSet<Uuid>>,
@@ -50,7 +51,6 @@ pub struct FintwindBackend {
     attachments: AttachmentStore,
     usage_index: crate::usage_index::UsageIndex,
     checkpoint_capture_locks: Mutex<HashMap<(PathBuf, Uuid, usize), Arc<Mutex<()>>>>,
-    default_cwd: std::path::PathBuf,
     pub(crate) scheduled_store: Arc<ScheduledStore>,
     pub(crate) scheduled_stop: Arc<AtomicBool>,
     pub(crate) scheduled_thread: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -85,6 +85,23 @@ impl FintwindBackend {
         let mut task_state = task_store
             .load()
             .context("could not load fintwind task database")?;
+        let data_directory = task_store
+            .path()
+            .parent()
+            .context("task database has no parent directory")?;
+        let configured = settings.get();
+        let root = crate::projectless::configured_workspace_root(&configured, data_directory)?;
+        if let Err(error) = crate::projectless::prepare_workspace_root(&configured, data_directory)
+        {
+            if configured.general_workspace_path().is_none() {
+                return Err(error.into());
+            }
+            eprintln!(
+                "could not prepare general workspace {}: {error}",
+                root.display()
+            );
+        }
+        crate::projectless::set_workspace_root(Some(root));
         migrate_projectless_state(&task_store, &mut task_state)?;
         let composer_drafts = ComposerDraftStore::for_state_path(task_store.path());
         let attachments = AttachmentStore::new(
@@ -111,6 +128,7 @@ impl FintwindBackend {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             terminals: Mutex::new(HashMap::new()),
             settings,
+            settings_update_gate: Mutex::new(()),
             scheduled_store: Arc::new(ScheduledStore::new(task_store.clone())),
             task_store,
             task_state: Arc::new(Mutex::new(task_state)),
@@ -125,7 +143,6 @@ impl FintwindBackend {
             attachments,
             usage_index,
             checkpoint_capture_locks: Mutex::new(HashMap::new()),
-            default_cwd: std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
             scheduled_stop: Arc::new(AtomicBool::new(false)),
             scheduled_thread: Mutex::new(None),
             scheduled_done: Mutex::new(None),
@@ -1363,7 +1380,21 @@ impl Backend for FintwindBackend {
                 settings: self.settings.get(),
             }),
             Command::UpdateSettings { settings } => {
+                let _gate = self.settings_update_gate.lock();
+                let data_directory = self
+                    .task_store
+                    .path()
+                    .parent()
+                    .context("task database has no parent directory")?;
+                let root = if settings.general_workspace_path()
+                    != self.settings.get().general_workspace_path()
+                {
+                    crate::projectless::prepare_workspace_root(&settings, data_directory)?
+                } else {
+                    crate::projectless::configured_workspace_root(&settings, data_directory)?
+                };
                 self.settings.replace(settings)?;
+                crate::projectless::set_workspace_root(Some(root));
                 // Persisting alone keeps the plugin on its previous state;
                 // apply it so the change reaches models on the next request.
                 self.browser_tools
@@ -1383,6 +1414,7 @@ impl Backend for FintwindBackend {
                 probe_version,
             } => {
                 ensure_shell_environment();
+                let directory = directory.or_else(crate::projectless::workspace_root);
                 let settings = self.settings.get();
                 let mut probe = match binary_override.as_deref() {
                     override_value if discover_models || probe_version => {
@@ -1440,8 +1472,10 @@ impl Backend for FintwindBackend {
                         .iter()
                         .map(AgentSession::list_projection)
                         .collect(),
-                    default_cwd: self.default_cwd.clone(),
+                    default_cwd: crate::projectless::workspace_root()
+                        .context("general workspace is unavailable")?,
                     projectless_root: crate::projectless::workspace_root(),
+                    projectless_legacy_root: crate::projectless::legacy_root(),
                 })
             }
             Command::SaveTaskState {
@@ -1629,7 +1663,9 @@ impl Backend for FintwindBackend {
                     )
                 };
                 blocked.extend(self.composer_drafts.load()?.sessions.keys().copied());
-                let server = crate::opencode_pool::acquire(&binary, &self.default_cwd)?;
+                let directory = crate::projectless::workspace_root()
+                    .context("general workspace is unavailable")?;
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
                 let session_ids = crate::session_cleanup::preview(
                     &state,
                     &self.task_store,
@@ -1650,7 +1686,9 @@ impl Backend for FintwindBackend {
                     before <= crate::model::unix_time().saturating_sub(30 * 86_400),
                     "Invalid cleanup cutoff"
                 );
-                let server = crate::opencode_pool::acquire(&binary, &self.default_cwd)?;
+                let directory = crate::projectless::workspace_root()
+                    .context("general workspace is unavailable")?;
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
                 let outcome = {
                     let _gate = self.session_cleanup_gate.lock();
                     let mut state = self.task_state.lock();

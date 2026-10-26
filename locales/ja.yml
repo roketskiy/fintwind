@@ -190,6 +190,10 @@ settings.auto_compact_threshold_placeholder: 例：500K
 settings.auto_compact_threshold_invalid: しきい値の形式が正しくありません
 settings.network_proxy: ネットワークプロキシ
 settings.opencode_binary: "OpenCode 実行ファイル"
+settings.general_workspace: "共通ワークスペース"
+settings.general_workspace_choose: "フォルダーを選択…"
+settings.general_workspace_reset: "既定に戻す"
+settings.general_workspace_failed: "共通ワークスペースを更新できませんでした: %{error}"
 settings.opencode_binary_auto: "自動検出"
 settings.opencode_binary_choose: "ファイルを選択…"
 settings.opencode_binary_reset: "自動検出に戻す"

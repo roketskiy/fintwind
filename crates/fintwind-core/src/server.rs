@@ -1402,6 +1402,7 @@ mod tests {
                     sessions: self.sessions.lock().clone(),
                     default_cwd: PathBuf::from("/tmp"),
                     projectless_root: Some(PathBuf::from("/tmp/.fintwind/projects")),
+                    projectless_legacy_root: Some(PathBuf::from("/tmp/.fintwind")),
                 }),
                 _ => Ok(ResponsePayload::Ack),
             }

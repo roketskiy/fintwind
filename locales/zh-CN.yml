@@ -183,6 +183,10 @@ settings.auto_compact_threshold_placeholder: 如 500K
 settings.auto_compact_threshold_invalid: 阈值格式不对
 settings.network_proxy: 网络代理
 settings.opencode_binary: "OpenCode 可执行文件"
+settings.general_workspace: "通用工作区"
+settings.general_workspace_choose: "选择文件夹…"
+settings.general_workspace_reset: "恢复默认"
+settings.general_workspace_failed: "无法更新通用工作区：%{error}"
 settings.opencode_binary_auto: "自动检测"
 settings.opencode_binary_choose: "选择文件…"
 settings.opencode_binary_reset: "恢复自动检测"

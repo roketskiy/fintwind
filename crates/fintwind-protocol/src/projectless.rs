@@ -3,50 +3,75 @@
 use std::path::{Path, PathBuf};
 use std::sync::{OnceLock, RwLock};
 
-fn workspace_root_slot() -> &'static RwLock<Option<PathBuf>> {
-    static ROOT: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+struct WorkspacePaths {
+    root: Option<PathBuf>,
+    legacy_root: Option<PathBuf>,
+}
+
+fn workspace_root_slot() -> &'static RwLock<WorkspacePaths> {
+    static ROOT: OnceLock<RwLock<WorkspacePaths>> = OnceLock::new();
     ROOT.get_or_init(|| {
-        RwLock::new(dirs::home_dir().map(|home| home.join(".fintwind").join("projects")))
+        let legacy_root = dirs::home_dir().map(|home| home.join(".fintwind"));
+        RwLock::new(WorkspacePaths {
+            root: legacy_root.as_ref().map(|root| root.join("projects")),
+            legacy_root,
+        })
     })
 }
 
 pub fn set_workspace_root(root: Option<PathBuf>) {
     if let Ok(mut current) = workspace_root_slot().write() {
-        *current = root;
+        current.root = root;
     }
 }
 
 pub fn workspace_root() -> Option<PathBuf> {
-    workspace_root_slot().read().ok()?.clone()
+    workspace_root_slot().read().ok()?.root.clone()
+}
+
+pub fn set_legacy_root(root: Option<PathBuf>) {
+    if let Ok(mut current) = workspace_root_slot().write() {
+        current.legacy_root = root;
+    }
+}
+
+pub fn legacy_root() -> Option<PathBuf> {
+    workspace_root_slot().read().ok()?.legacy_root.clone()
 }
 
 pub fn home_directory() -> Option<PathBuf> {
-    let root = workspace_root()?;
-    root.parent()?.parent().map(Path::to_path_buf)
+    legacy_root()?.parent().map(Path::to_path_buf)
 }
 
 pub fn is_projectless_path(path: &Path) -> bool {
-    workspace_root().is_some_and(|root| {
-        path.starts_with(&root)
-            || root
-                .parent()
-                .is_some_and(|legacy_root| is_legacy_workspace_path(path, legacy_root))
-    })
+    let Ok(paths) = workspace_root_slot().read() else {
+        return false;
+    };
+    paths
+        .root
+        .as_ref()
+        .is_some_and(|root| path.starts_with(root))
+        || paths.legacy_root.as_ref().is_some_and(|root| {
+            path.starts_with(root.join("projects")) || is_legacy_workspace_path(path, root)
+        })
 }
 
 pub fn needs_migration(path: &Path) -> bool {
-    let Some(root) = workspace_root() else {
+    let Ok(paths) = workspace_root_slot().read() else {
         return false;
     };
-    !path.starts_with(&root)
-        && root
-            .parent()
-            .is_some_and(|legacy_root| is_legacy_workspace_path(path, legacy_root))
+    paths.legacy_root.as_ref().is_some_and(|legacy| {
+        path == legacy
+            || (!paths
+                .root
+                .as_ref()
+                .is_some_and(|root| path.starts_with(root))
+                && is_legacy_workspace_path(path, legacy))
+    })
 }
 
 pub fn is_legacy_root_path(path: &Path) -> bool {
-    workspace_root()
-        .is_some_and(|root| root.parent().is_some_and(|legacy_root| path == legacy_root))
+    legacy_root().is_some_and(|root| path == root)
 }
 
 fn is_legacy_workspace_path(path: &Path, legacy_root: &Path) -> bool {

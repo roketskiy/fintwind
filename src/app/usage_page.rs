@@ -19,6 +19,8 @@ use fintwind_client::models_dev::{self, ModelsDevTable};
 use super::usage_treemap::{TreemapTile, usage_treemap};
 use super::*;
 use crate::ui::ActivationExt;
+use ely_gpui_component::buttons::SegmentedControl;
+use ely_gpui_component::theme::ControlSize;
 use fintwind_client::provider_session::{UsageDayShare, UsageEntry, UsageStats};
 use gpui::PathBuilder;
 use gpui::relative;
@@ -70,6 +72,26 @@ impl UsageRange {
             Self::Days7 => "usage_page.range_7d",
             Self::Day(_) => "usage_page.range_day",
         })
+    }
+
+    /// The segment value the segmented control holds; every day offset is the
+    /// same segment.
+    fn key(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Days30 => "30d",
+            Self::Days7 => "7d",
+            Self::Day(_) => "day",
+        }
+    }
+
+    fn from_key(key: &str) -> Self {
+        match key {
+            "30d" => Self::Days30,
+            "7d" => Self::Days7,
+            "day" => Self::Day(0),
+            _ => Self::All,
+        }
     }
 
     fn days(self) -> Option<i64> {
@@ -574,54 +596,14 @@ impl Fintwind {
     }
 
     fn render_usage_toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
-        let mut range_buttons = Vec::new();
-        for (index, range) in UsageRange::ALL.into_iter().enumerate() {
-            let selected = match range {
-                UsageRange::Day(_) => matches!(self.usage_range, UsageRange::Day(_)),
-                _ => self.usage_range == range,
-            };
-            let mut button = div()
-                .id(SharedString::from(format!("usage-range-{index}")))
-                .tab_index(0)
-                .h(px(24.0))
-                .px(px(10.0))
-                .rounded(px(6.0))
-                .flex()
-                .items_center()
-                .cursor_default()
-                .text_size(ui_px(11.5))
-                .border_1()
-                .border_color(if selected {
-                    theme.border_strong
-                } else {
-                    gpui::transparent_black()
-                })
-                .text_color(if selected {
-                    theme.text
-                } else {
-                    theme.text_secondary
-                })
-                .hover(|element| element.bg(theme.overlay))
-                .active(|element| element.bg(theme.overlay_strong))
-                .focus_visible(|style| style.border_color(theme.accent))
-                .when(selected, |element| element.bg(theme.raised))
-                .child(range.label());
-            button = button.on_activation(cx, move |this, _, cx| {
-                this.set_usage_range(range, cx);
-            });
-            range_buttons.push(button);
+        let mut selector =
+            SegmentedControl::new("usage-range", self.usage_range.key()).size(ControlSize::Sm);
+        for range in UsageRange::ALL {
+            selector = selector.segment(range.key(), range.label(), None);
         }
-        let selector = div()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(2.0))
-            .p(px(2.0))
-            .rounded(px(8.0))
-            .bg(theme.inset)
-            .border_1()
-            .border_color(theme.border)
-            .children(range_buttons);
+        let selector = selector.on_change(cx.listener(|this, value: &SharedString, _, cx| {
+            this.set_usage_range(UsageRange::from_key(value), cx);
+        }));
 
         let refresh = icon_button("usage-refresh", "icons/rotate-cw.svg", *theme)
             .tab_index(0)
@@ -684,7 +666,7 @@ impl Fintwind {
             .child(div().flex_1().min_w_0())
             .children(freshness)
             .children(day_navigation)
-            .child(selector)
+            .child(div().flex_none().child(selector))
             .child(refresh)
     }
 

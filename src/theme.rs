@@ -366,9 +366,9 @@ impl Theme {
     /// A quiet contact shadow separates the dark workspace without a heavy seam.
     pub fn workspace_shadow(&self) -> Vec<BoxShadow> {
         let (contact, ambient) = if self.is_dark {
-            (0.04, 0.025)
+            (0.032, 0.02)
         } else {
-            (0.08, 0.045)
+            (0.064, 0.036)
         };
         vec![
             BoxShadow::new(px(-1.0), px(0.0), hsla(0.0, 0.0, 0.0, contact)).blur_radius(px(2.0)),

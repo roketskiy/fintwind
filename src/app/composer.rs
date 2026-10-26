@@ -1,6 +1,7 @@
 use crate::theme::ui_px;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant, IconButton},
+    layout::Collapsible,
     primitives::IconName,
     theme::ControlSize,
 };
@@ -693,27 +694,12 @@ impl Fintwind {
                 ))
         });
 
-        let toggle_focus =
-            self.transcript_control_focus(format!("user-input-{request_id}-toggle"), cx);
-        let toggle = div()
-            .id(SharedString::from(format!(
-                "user-input-{request_id}-toggle"
-            )))
-            .track_focus(&toggle_focus)
-            .tab_index(0)
-            .tab_stop(true)
+        let header = div()
             .w_full()
-            .px(px(6.0))
             .py(px(2.0))
-            .mx(px(-6.0))
-            .rounded(px(6.0))
             .flex()
             .items_center()
             .gap(px(8.0))
-            .cursor_default()
-            .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .hover(|style| style.bg(theme.overlay))
-            .active(|style| style.opacity(0.85))
             .child(
                 div()
                     .text_size(ui_px(10.5))
@@ -722,34 +708,125 @@ impl Fintwind {
                     .child(SharedString::from(question.header.clone())),
             )
             .children(progress)
-            .child(div().flex_1())
+            .child(div().flex_1());
+
+        let body = div()
+            .mt(px(5.0))
             .child(
-                // The chevron rides in a fixed hit-area chip so the fold
-                // control reads as a button rather than a stray glyph: quiet
-                // at rest, raised on hover. The row around it stays the click
-                // target — the chip only paints.
                 div()
-                    .id(SharedString::from(format!(
-                        "user-input-{request_id}-toggle-glyph"
-                    )))
-                    .flex_none()
-                    .w(px(20.0))
-                    .h(px(20.0))
-                    .rounded(px(6.0))
+                    .text_size(ui_px(13.0))
+                    .line_height(ui_px(18.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text)
+                    .whitespace_normal()
+                    .child(SharedString::from(question.question.clone())),
+            )
+            .children((!question.options.is_empty()).then_some(options))
+            .child(
+                div()
+                    .mt(px(if question.options.is_empty() {
+                        9.0
+                    } else {
+                        4.0
+                    }))
+                    .h(px(36.0))
+                    .px(px(10.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(if has_custom {
+                        theme.accent.opacity(0.34)
+                    } else {
+                        theme.border.opacity(0.0)
+                    })
+                    .bg(if has_custom {
+                        theme.accent.opacity(0.06)
+                    } else {
+                        theme.overlay
+                    })
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .hover(|style| style.bg(theme.overlay_strong))
+                    .gap(px(7.0))
+                    .text_size(ui_px(12.5))
+                    .line_height(ui_px(17.0))
                     .child(icon(
-                        if pending.collapsed {
-                            "icons/chevron-down.svg"
-                        } else {
-                            "icons/chevron-up.svg"
-                        },
+                        "icons/pencil.svg",
                         12.0,
-                        theme.text_tertiary,
-                    )),
-            )
+                        if has_custom {
+                            theme.accent
+                        } else {
+                            theme.text_ghost
+                        },
+                    ))
+                    .child(self.user_input_answer.clone()),
+            );
+
+        // Skipping is the provider's own cancellation path, not an invented
+        // answer: the question is dismissed and the agent carries on without
+        // the tool result it asked for.
+        let skip_focus = self.transcript_control_focus(format!("user-input-{request_id}-skip"), cx);
+        let skip = div()
+            .id(SharedString::from(format!("user-input-{request_id}-skip")))
+            .track_focus(&skip_focus)
+            .tab_index(0)
+            .tab_stop(true)
+            .h(px(30.0))
+            .px(px(9.0))
+            .rounded(px(7.0))
+            .flex()
+            .items_center()
+            .cursor_default()
+            .text_size(ui_px(12.0))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(theme.text_tertiary)
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .hover(|style| style.bg(theme.overlay).text_color(theme.text_secondary))
+            .active(|style| style.opacity(0.8))
+            .child(tr!("user_input.skip"))
+            .on_click(cx.listener(|this, _, _, cx| this.skip_user_input(cx)))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    this.skip_user_input(cx);
+                    cx.stop_propagation();
+                }
+            }));
+
+        // The fold control lives in the footer so the header stays a label
+        // row. Ely's Collapsible owns the measured-height transition that
+        // makes the body fold instead of disappearing.
+        let fold_focus = self.transcript_control_focus(format!("user-input-{request_id}-fold"), cx);
+        let fold_label = if pending.collapsed {
+            tr!("user_input.expand")
+        } else {
+            tr!("user_input.collapse")
+        };
+        let fold = div()
+            .id(SharedString::from(format!("user-input-{request_id}-fold")))
+            .track_focus(&fold_focus)
+            .tab_index(0)
+            .tab_stop(true)
+            .h(px(30.0))
+            .px(px(9.0))
+            .rounded(px(7.0))
+            .flex()
+            .items_center()
+            .gap(px(5.0))
+            .cursor_default()
+            .text_size(ui_px(12.0))
+            .font_weight(FontWeight::MEDIUM)
+            .text_color(theme.text_tertiary)
+            .focus_visible(|style| style.border_1().border_color(theme.accent))
+            .hover(|style| style.bg(theme.overlay).text_color(theme.text_secondary))
+            .active(|style| style.opacity(0.8))
+            .child(fold_label)
+            .child(icon(
+                if pending.collapsed {
+                    "icons/chevron-down.svg"
+                } else {
+                    "icons/chevron-up.svg"
+                },
+                11.0,
+                theme.text_ghost,
+            ))
             .on_click(cx.listener(|this, _, _, cx| this.toggle_user_input_collapsed(cx)))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
@@ -757,6 +834,18 @@ impl Fintwind {
                     cx.stop_propagation();
                 }
             }));
+
+        let footer = div()
+            .mt(px(8.0))
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(skip)
+            .child(fold)
+            .child(div().flex_1())
+            .when(!pending.collapsed, |footer| {
+                footer.children(back).child(continue_button)
+            });
 
         div().flex_none().px(px(20.0)).pb(px(8.0)).child(
             div()
@@ -774,66 +863,15 @@ impl Fintwind {
                 .tab_index(0)
                 .tab_group()
                 .tab_stop(false)
-                .child(toggle)
-                .when(!pending.collapsed, |card| {
-                    card.child(
-                        div()
-                            .mt(px(5.0))
-                            .text_size(ui_px(13.0))
-                            .line_height(ui_px(18.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .whitespace_normal()
-                            .child(SharedString::from(question.question.clone())),
+                .child(header)
+                .child(
+                    Collapsible::new(
+                        SharedString::from(format!("user-input-{request_id}-body")),
+                        !pending.collapsed,
                     )
-                    .children((!question.options.is_empty()).then_some(options))
-                    .child(
-                        div()
-                            .mt(px(if question.options.is_empty() {
-                                9.0
-                            } else {
-                                4.0
-                            }))
-                            .h(px(36.0))
-                            .px(px(10.0))
-                            .rounded(px(8.0))
-                            .border_1()
-                            .border_color(if has_custom {
-                                theme.accent.opacity(0.34)
-                            } else {
-                                theme.border.opacity(0.0)
-                            })
-                            .bg(if has_custom {
-                                theme.accent.opacity(0.06)
-                            } else {
-                                theme.overlay
-                            })
-                            .flex()
-                            .items_center()
-                            .gap(px(7.0))
-                            .text_size(ui_px(12.5))
-                            .line_height(ui_px(17.0))
-                            .child(icon(
-                                "icons/pencil.svg",
-                                12.0,
-                                if has_custom {
-                                    theme.accent
-                                } else {
-                                    theme.text_ghost
-                                },
-                            ))
-                            .child(self.user_input_answer.clone()),
-                    )
-                    .child(
-                        div()
-                            .mt(px(8.0))
-                            .flex()
-                            .items_center()
-                            .children(back)
-                            .child(div().flex_1())
-                            .child(continue_button),
-                    )
-                }),
+                    .child(body),
+                )
+                .child(footer),
         )
     }
     pub(super) fn render_provider_model_control(

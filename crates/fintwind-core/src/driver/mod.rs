@@ -137,6 +137,10 @@ impl DriverHandle {
         self.inner.respond_user_input(request_id, answers);
     }
 
+    pub fn cancel_user_input(&self, request_id: String) {
+        self.inner.cancel_user_input(request_id);
+    }
+
     pub fn apply_options(&self, options: SessionOptions) -> bool {
         self.inner.apply_options(options)
     }
@@ -179,6 +183,8 @@ pub trait DriverControl: Send + Sync {
     fn compact_child(&self, _control_id: String) {}
     fn respond(&self, request_id: String, option_id: String);
     fn respond_user_input(&self, _request_id: String, _answers: Vec<UserInputAnswer>) {}
+    /// Dismiss a pending question without answering it.
+    fn cancel_user_input(&self, _request_id: String) {}
     /// Applies changed turn options to the live session, returning whether the
     /// transport could do it without being restarted. A `false` answer is the
     /// driver asking to be torn down and recreated with the new options.

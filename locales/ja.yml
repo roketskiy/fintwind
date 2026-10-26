@@ -855,6 +855,10 @@ user_input.other_placeholder: 別の回答を入力
 user_input.back: 戻る
 user_input.next: 次へ
 user_input.submit: 送信
+user_input.skip: スキップ
+user_input.collapse: 折りたたむ
+user_input.expand: 展開
+user_input.skip_message: ユーザーはこの質問をスキップしました。回答なしで続行し、合理的な仮定を明示してください。
 user_input.progress: "%{current} / %{total}"
 composer.preparing_task: タスクを準備中…
 composer.queue_followup: フォローアップとしてキューに追加（⏎）
@@ -974,6 +978,7 @@ errors.read_provider_event_stream: "%{provider} のイベントストリーム�
 errors.provider_response_body: "プロバイダーの応答: %{body}"
 errors.answer_provider_permission: "%{provider} の権限リクエストに回答できませんでした：%{error}"
 errors.answer_provider_question: "%{provider} の質問に回答できませんでした：%{error}"
+errors.dismiss_provider_question: "%{provider} の質問をスキップできませんでした：%{error}"
 errors.provider_receive_prompt: "%{provider} はプロンプトを受信できませんでした"
 errors.provider_start_turn: "%{provider} はターンを開始できませんでした"
 errors.provider_rejected_steer: "%{provider} が追加の指示を拒否しました：%{error}"

@@ -178,6 +178,11 @@ pub enum Command {
         request_id: String,
         answers: Vec<UserInputAnswer>,
     },
+    /// Dismiss a pending question without answering it. OpenCode settles the
+    /// form as cancelled and the agent continues with the rejection.
+    CancelUserInput {
+        request_id: String,
+    },
     ApplyOptions {
         options: WireSessionOptions,
     },

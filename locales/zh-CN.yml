@@ -827,6 +827,10 @@ user_input.other_placeholder: 输入其他回答
 user_input.back: 上一步
 user_input.next: 下一步
 user_input.submit: 提交
+user_input.skip: 跳过
+user_input.collapse: 收起
+user_input.expand: 展开
+user_input.skip_message: 用户跳过了这个问题。请在没有回答的情况下继续；做出合理假设并说明。
 user_input.progress: "%{current} / %{total}"
 composer.preparing_task: 正在准备任务…
 composer.queue_followup: 排队为后续消息（⏎）
@@ -940,6 +944,7 @@ errors.read_provider_event_stream: "无法读取 %{provider} 事件流：%{error
 errors.provider_response_body: "供应商响应：%{body}"
 errors.answer_provider_permission: "无法响应 %{provider} 的权限请求：%{error}"
 errors.answer_provider_question: "无法回答 %{provider} 的问题：%{error}"
+errors.dismiss_provider_question: "无法跳过 %{provider} 的问题：%{error}"
 errors.provider_receive_prompt: "%{provider} 未能接收消息"
 errors.provider_start_turn: "%{provider} 未能开始本轮"
 errors.provider_rejected_steer: "%{provider} 拒绝了补充指示：%{error}"

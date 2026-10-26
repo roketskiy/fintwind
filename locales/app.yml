@@ -1,4 +1,44 @@
 _version: 2
+capsule.task_list:
+  en: Tasks
+capsule.pull_requests:
+  en: Pull requests
+capsule.loading:
+  en: Loading…
+capsule.pr_failed:
+  en: Could not load pull requests.
+capsule.not_repository:
+  en: No Git repository.
+capsule.detached_head:
+  en: Check out a branch to view pull requests.
+capsule.no_github_remote:
+  en: No GitHub remote.
+capsule.gh_missing:
+  en: Install GitHub CLI to view pull requests.
+capsule.gh_auth_required:
+  en: Sign in with gh auth login.
+capsule.no_pull_requests:
+  en: No pull requests for this branch.
+capsule.pr_open:
+  en: Open
+capsule.pr_draft:
+  en: Draft
+capsule.pr_merged:
+  en: Merged
+capsule.pr_closed:
+  en: Closed
+capsule.checks_none:
+  en: No checks
+capsule.checks_pending:
+  en: Checks pending
+capsule.checks_passed:
+  en: Checks passed
+capsule.checks_failed:
+  en: Checks failed
+capsule.comments:
+  en: comments
+capsule.file_count:
+  en: "%{count} files"
 common.open_default_app:
   en: Open with default app
 btw.command_description:

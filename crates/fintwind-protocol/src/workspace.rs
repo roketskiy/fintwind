@@ -84,6 +84,9 @@ pub enum WorkspaceOperation {
     InspectBranches {
         cwd: PathBuf,
     },
+    InspectPullRequests {
+        cwd: PathBuf,
+    },
     /// The commit history of a workspace, newest first. `branch` `None` reads
     /// `HEAD`; `Some` names a branch or any revision Git accepts.
     ListCommits {
@@ -245,6 +248,9 @@ pub enum WorkspaceResult {
     },
     Branches {
         snapshot: Option<BranchSnapshot>,
+    },
+    PullRequests {
+        snapshot: crate::pull_request::PullRequestSnapshot,
     },
     Commits {
         /// `None` means `cwd` is not inside a Git repository.

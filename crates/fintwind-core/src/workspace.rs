@@ -105,6 +105,9 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
         WorkspaceOperation::InspectBranches { cwd } => WorkspaceResult::Branches {
             snapshot: crate::git_branch::inspect(&cwd)?,
         },
+        WorkspaceOperation::InspectPullRequests { cwd } => WorkspaceResult::PullRequests {
+            snapshot: crate::pull_requests::inspect(&cwd)?,
+        },
         WorkspaceOperation::ListCommits { cwd, limit, branch } => WorkspaceResult::Commits {
             commits: crate::git_log::list(&cwd, limit, branch.as_deref())?,
         },

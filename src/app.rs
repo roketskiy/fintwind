@@ -1426,6 +1426,9 @@ pub struct Fintwind {
     /// Stale-while-revalidate value for the selected path, avoiding label
     /// flicker when app activation invalidates the query.
     visible_branch_snapshot: Option<(PathBuf, BranchSnapshot)>,
+    task_capsule_tab: background_work::capsule::CapsuleTab,
+    capsule_pull_requests:
+        QueryCache<PathBuf, Result<fintwind_protocol::pull_request::PullRequestSnapshot, String>>,
     /// Git commit history per (workspace path, branch filter). Render only
     /// reads this in-memory cache; misses are fulfilled on the background
     /// executor. `Err` is cached as well so a broken path is not retried every
@@ -3618,6 +3621,8 @@ impl Fintwind {
                 branch_snapshots: QueryCache::new(MAX_CACHED_WORKSPACES),
                 sidebar_branches: QueryCache::new(4 * MAX_CACHED_WORKSPACES),
                 visible_branch_snapshot: None,
+                task_capsule_tab: background_work::capsule::CapsuleTab::Changes,
+                capsule_pull_requests: QueryCache::new(MAX_CACHED_WORKSPACES),
                 commit_log: QueryCache::new(MAX_CACHED_WORKSPACES),
                 history_stats: QueryCache::new(128),
                 history_branch: None,

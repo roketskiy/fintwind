@@ -10,6 +10,8 @@ const MAX_SETTLED_BACKGROUND_ITEMS: usize = 24;
 const OUTPUT_CACHE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const BACKGROUND_SUMMARY_MENU_ID: &str = "background-work-summary";
 
+pub(super) mod capsule;
+
 fn flowing_background_work_label(text: String, base: Hsla, highlight: Hsla) -> AnyElement {
     motion::pulse(Duration::from_millis(2400), move |phase| {
         flowing_activity_label(&text, phase, base, highlight, FontWeight::NORMAL).into_any_element()
@@ -124,7 +126,10 @@ impl Default for BackgroundOutputViewport {
 
 #[derive(Clone)]
 struct BackgroundSummaryEntry {
-    item: BackgroundWorkItem,
+    key: BackgroundWorkKey,
+    title: String,
+    status: BackgroundWorkStatus,
+    can_stop: bool,
     row_focus: FocusHandle,
     stop_focus: FocusHandle,
 }
@@ -1355,169 +1360,6 @@ impl Fintwind {
         self.open_right_panel_surface(RightPanelSurface::BackgroundWork { key, title }, cx);
     }
 
-    /// Floating tool capsule over the session pane: collapsed it shows the
-    /// git change totals; expanded it lists Git tools, subagents, and
-    /// background work for the selected session.
-    pub(super) fn render_task_capsule(&self, cx: &mut Context<Self>) -> AnyElement {
-        let session = self.selected_session();
-        let session_id = session.map(|session| session.id);
-        let entries = session_id
-            .and_then(|session_id| self.background_work.get(&session_id))
-            .map(|registry| {
-                registry
-                    .ordered_items()
-                    .into_iter()
-                    .cloned()
-                    .map(|item| {
-                        let kind = item.key.kind as u8;
-                        let provider_id = &item.key.provider_id;
-                        BackgroundSummaryEntry {
-                            row_focus: self.transcript_control_focus(
-                                format!("background-summary-row-{provider_id}-{kind}"),
-                                cx,
-                            ),
-                            stop_focus: self.transcript_control_focus(
-                                format!("background-summary-stop-{provider_id}-{kind}"),
-                                cx,
-                            ),
-                            item,
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        let workspace_path = session
-            .and_then(|session| self.workspace_path_for_session(session))
-            .or_else(|| {
-                self.selected_project()
-                    .map(|project| project.path.as_path())
-            });
-        let snapshot = workspace_path.and_then(|path| {
-            self.visible_branch_snapshot
-                .as_ref()
-                .filter(|(snapshot_path, _)| snapshot_path == path)
-                .map(|(_, snapshot)| snapshot)
-        });
-        let (additions, deletions) = snapshot
-            .map(|snapshot| (snapshot.additions, snapshot.deletions))
-            .unwrap_or_default();
-        let has_changes = additions > 0 || deletions > 0;
-        let environment = Some(EnvironmentSummary {
-            branch: snapshot
-                .and_then(|snapshot| snapshot.display_branch())
-                .map(ToString::to_string),
-            additions,
-            deletions,
-            has_changes,
-            commit_status: self.commit_operation_status_label(),
-            changes_focus: self.transcript_control_focus("environment-summary-changes", cx),
-            commit_focus: self.transcript_control_focus("environment-summary-commit", cx),
-            compare_focus: self.transcript_control_focus("environment-summary-compare", cx),
-            history_focus: self.transcript_control_focus("environment-summary-history", cx),
-        });
-        let (processes, agents) = session_id
-            .map(|session_id| self.background_work_counts(session_id))
-            .unwrap_or_default();
-        let live_summary = background_work_count_summary(processes, agents);
-        let mut tooltip_parts = Vec::new();
-        if has_changes {
-            tooltip_parts.push(tr!("environment.changes"));
-        }
-        if !live_summary.is_empty() {
-            tooltip_parts.push(live_summary);
-        }
-        let tooltip = if tooltip_parts.is_empty() {
-            tr!("capsule.tasks")
-        } else {
-            tooltip_parts.join(" · ")
-        };
-        let theme = Theme::current(cx);
-        let refresh_weak = cx.entity().downgrade();
-        let handle = self.menu_handle_with(BACKGROUND_SUMMARY_MENU_ID, cx, move |open, _, cx| {
-            if open {
-                let _ = refresh_weak.update(cx, |this, cx| {
-                    this.refresh_selected_branch_snapshot(cx);
-                });
-            }
-        });
-        // The capsule floats over the transcript, so its hover and pressed
-        // washes have to be composited onto the opaque raised surface first:
-        // assigning the translucent overlay directly would replace the solid
-        // background and let the message behind show through the pill.
-        let rest_surface = theme.raised;
-        let hover_surface = rest_surface.blend(theme.overlay);
-        let active_surface = rest_surface.blend(theme.overlay_strong);
-        let trigger = div()
-            .id("task-capsule-trigger")
-            .h(px(28.0))
-            .px(px(11.0))
-            .rounded_full()
-            .border_1()
-            .border_color(if handle.is_open() {
-                theme.accent
-            } else {
-                theme.border_strong
-            })
-            .bg(rest_surface)
-            .shadow_xs()
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap(px(6.0))
-            .cursor_default()
-            .text_size(ui_px(12.0))
-            .font_weight(FontWeight::MEDIUM)
-            .focus_visible(|style| style.border_color(theme.accent))
-            .hover(|style| style.bg(hover_surface))
-            .active(|style| style.bg(active_surface))
-            .tooltip(Tooltip::text(tooltip))
-            .child(icon(
-                "icons/git-branch.svg",
-                13.0,
-                if handle.is_open() {
-                    theme.accent
-                } else {
-                    theme.text_secondary
-                },
-            ))
-            .when(additions > 0, |trigger| {
-                trigger.child(
-                    div()
-                        .text_color(theme.success_text)
-                        .child(format!("+{additions}")),
-                )
-            })
-            .when(deletions > 0, |trigger| {
-                trigger.child(
-                    div()
-                        .text_color(theme.danger_text)
-                        .child(format!("-{deletions}")),
-                )
-            });
-        let entries = Rc::new(entries);
-        let weak = cx.entity().downgrade();
-        div()
-            .absolute()
-            .top(px(56.0))
-            .right(px(16.0))
-            .child(popover(
-                trigger,
-                &handle,
-                MenuAlign::BelowRight,
-                move |handle, _, cx| {
-                    render_task_capsule_card(
-                        handle,
-                        session_id.unwrap_or_else(Uuid::nil),
-                        environment.clone(),
-                        entries.clone(),
-                        weak.clone(),
-                        cx,
-                    )
-                },
-            ))
-            .into_any_element()
-    }
-
     pub(super) fn render_background_work_surface(
         &self,
         key: &BackgroundWorkKey,
@@ -2302,103 +2144,6 @@ fn render_background_transcript_footer(
     )
 }
 
-fn background_work_count_summary(processes: usize, agents: usize) -> String {
-    let mut parts = Vec::new();
-    if processes > 0 {
-        parts.push(if processes == 1 {
-            tr!("background.process_count_one")
-        } else {
-            tr!("background.process_count", count = processes)
-        });
-    }
-    if agents > 0 {
-        parts.push(if agents == 1 {
-            tr!("background.agent_count_one")
-        } else {
-            tr!("background.agent_count", count = agents)
-        });
-    }
-    parts.join(" · ")
-}
-
-fn render_task_capsule_card(
-    handle: &ContextMenuHandle,
-    session_id: Uuid,
-    environment: Option<EnvironmentSummary>,
-    entries: Rc<Vec<BackgroundSummaryEntry>>,
-    weak: WeakEntity<Fintwind>,
-    cx: &mut App,
-) -> AnyElement {
-    let theme = Theme::current(cx);
-    let processes = entries
-        .iter()
-        .filter(|entry| entry.item.key.kind != BackgroundWorkKind::Subagent)
-        .cloned()
-        .collect::<Vec<_>>();
-    let agents = entries
-        .iter()
-        .filter(|entry| entry.item.key.kind == BackgroundWorkKind::Subagent)
-        .cloned()
-        .collect::<Vec<_>>();
-    let separator = || div().mx(px(8.0)).h(px(1.0)).bg(theme.border);
-    let git_tools = environment
-        .map(|environment| {
-            render_git_tools_section(environment, handle.clone(), weak.clone(), &theme)
-        })
-        .unwrap_or_else(|| {
-            div()
-                .h(px(26.0))
-                .px(px(8.0))
-                .flex()
-                .items_center()
-                .text_size(ui_px(12.5))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text_tertiary)
-                .child(tr!("capsule.git_tools"))
-        });
-    let content = div()
-        .id("task-capsule-scroll")
-        .max_h(px(480.0))
-        .overflow_y_scroll()
-        .p(px(8.0))
-        .flex()
-        .flex_col()
-        .gap(px(6.0))
-        .child(git_tools)
-        .child(separator())
-        .child(render_background_summary_section(
-            tr!("background.agents"),
-            agents,
-            session_id,
-            handle.clone(),
-            weak.clone(),
-            &theme,
-            tr!("background.no_agents"),
-        ))
-        .child(separator())
-        .child(render_background_summary_section(
-            tr!("background.title"),
-            processes,
-            session_id,
-            handle.clone(),
-            weak,
-            &theme,
-            tr!("background.no_work"),
-        ));
-    div()
-        .id("task-capsule-card")
-        .track_focus(handle.focus_handle())
-        .w(px(300.0))
-        .rounded(px(12.0))
-        .border_1()
-        .border_color(theme.border_strong)
-        .overflow_hidden()
-        .bg(theme.raised)
-        .shadow_lg()
-        .child(content)
-        .into_any_element()
-}
-
 fn render_capsule_section_header(id: &'static str, label: String, theme: &Theme) -> Stateful<Div> {
     div()
         .id(id)
@@ -2695,36 +2440,35 @@ fn render_background_summary_row(
     weak: WeakEntity<Fintwind>,
     theme: &Theme,
 ) -> Stateful<Div> {
-    let item = entry.item;
     let group_name = SharedString::from(format!(
         "background-summary-group-{}-{}",
-        item.key.provider_id, item.key.kind as u8
+        entry.key.provider_id, entry.key.kind as u8
     ));
-    let status = background_summary_process_status_icon(item.key.kind, item.status).map(|_| {
+    let status = background_summary_process_status_icon(entry.key.kind, entry.status).map(|_| {
         div()
             .absolute()
             .inset_0()
             .flex()
             .items_center()
             .justify_center()
-            .when(item.status.is_stoppable() && item.can_stop, |status| {
+            .when(entry.status.is_stoppable() && entry.can_stop, |status| {
                 status.group_hover(group_name.clone(), |style| style.invisible())
             })
             .child(rendered_work_status_icon(
-                item.status,
+                entry.status,
                 12.0,
-                work_status_color(item.status, *theme),
+                work_status_color(entry.status, *theme),
             ))
     });
-    let stop = (item.status.is_stoppable() && item.can_stop).then(|| {
-        let click_key = item.key.clone();
+    let stop = (entry.status.is_stoppable() && entry.can_stop).then(|| {
+        let click_key = entry.key.clone();
         let click_weak = weak.clone();
-        let key_key = item.key.clone();
+        let key_key = entry.key.clone();
         let key_weak = weak.clone();
         div()
             .id(SharedString::from(format!(
                 "background-summary-stop-{}-{}",
-                item.key.provider_id, item.key.kind as u8
+                entry.key.provider_id, entry.key.kind as u8
             )))
             .track_focus(&entry.stop_focus)
             .tab_index(0)
@@ -2771,8 +2515,8 @@ fn render_background_summary_row(
             .children(status)
             .children(stop)
     });
-    let is_process = item.key.kind != BackgroundWorkKind::Subagent;
-    let open_key = item.key.clone();
+    let is_process = entry.key.kind != BackgroundWorkKind::Subagent;
+    let open_key = entry.key.clone();
     let key_key = open_key.clone();
     let click_handle = handle.clone();
     let click_weak = weak.clone();
@@ -2781,7 +2525,7 @@ fn render_background_summary_row(
     div()
         .id(SharedString::from(format!(
             "background-summary-row-{}-{}",
-            item.key.provider_id, item.key.kind as u8
+            entry.key.provider_id, entry.key.kind as u8
         )))
         .group(group_name)
         .track_focus(&entry.row_focus)
@@ -2797,7 +2541,7 @@ fn render_background_summary_row(
         .focus_visible(|style| style.border_1().border_color(theme.accent))
         .hover(|style| style.bg(theme.overlay_strong))
         .child(icon(
-            work_kind_icon(item.key.kind),
+            work_kind_icon(entry.key.kind),
             14.0,
             theme.text_secondary,
         ))
@@ -2814,14 +2558,14 @@ fn render_background_summary_row(
                     theme.text
                 })
                 .child(
-                    if item.key.kind == BackgroundWorkKind::Subagent && item.status.is_live() {
+                    if entry.key.kind == BackgroundWorkKind::Subagent && entry.status.is_live() {
                         flowing_background_work_label(
-                            item.title.to_string(),
+                            entry.title.to_string(),
                             theme.text,
                             theme.accent,
                         )
                     } else {
-                        item.title.clone().into_any_element()
+                        entry.title.clone().into_any_element()
                     },
                 ),
         )

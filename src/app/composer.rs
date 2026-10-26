@@ -2799,7 +2799,22 @@ impl Fintwind {
         // compositing over it.
         let drop_wash = theme.composer.blend(theme.overlay_strong);
         let drop_ring = theme.accent.opacity(0.7);
-        div().flex_none().px(px(20.0)).child(
+        let container = div().flex_none().px(px(20.0)).flex().flex_col().when(
+            self.selected_workspace_path().is_some(),
+            |composer| {
+                composer.child(
+                    div()
+                        .w_full()
+                        .max_w(px(crate::theme::transcript_width()))
+                        .mx_auto()
+                        .mb(px(6.0))
+                        .flex()
+                        .justify_end()
+                        .child(self.render_task_capsule(cx)),
+                )
+            },
+        );
+        container.child(
             div()
                 .w_full()
                 .max_w(px(crate::theme::transcript_width()))

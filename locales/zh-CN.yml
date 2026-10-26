@@ -1691,3 +1691,23 @@ usage.composition_partial: 含不可测内容
 settings.busy_send_mode: 运行时发送
 settings.busy_send_queue: 排队
 composer.queued_messages: "排队 · %{count}"
+capsule.task_list: 任务
+capsule.pull_requests: 拉取请求
+capsule.loading: 正在加载…
+capsule.pr_failed: 无法加载拉取请求。
+capsule.not_repository: 当前目录不是 Git 仓库。
+capsule.detached_head: 切换到分支后查看拉取请求。
+capsule.no_github_remote: 未配置 GitHub 远程仓库。
+capsule.gh_missing: 安装 GitHub CLI 后查看拉取请求。
+capsule.gh_auth_required: 请通过 gh auth login 登录。
+capsule.no_pull_requests: 当前分支没有拉取请求。
+capsule.pr_open: 待合并
+capsule.pr_draft: 草稿
+capsule.pr_merged: 已合并
+capsule.pr_closed: 已关闭
+capsule.checks_none: 无检查
+capsule.checks_pending: 检查中
+capsule.checks_passed: 检查通过
+capsule.checks_failed: 检查失败
+capsule.comments: 条评论
+capsule.file_count: "%{count} 个文件"

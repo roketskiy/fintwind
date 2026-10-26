@@ -45,6 +45,7 @@ pub mod persistence;
 pub mod projectless;
 pub mod provider_quota;
 pub mod provider_session;
+pub mod pull_request;
 pub mod scheduled_task;
 pub mod session_cleanup;
 pub mod settings;

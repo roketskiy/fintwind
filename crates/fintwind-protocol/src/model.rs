@@ -420,7 +420,7 @@ impl Project {
     }
 
     pub fn is_projectless(&self) -> bool {
-        crate::projectless::is_projectless_path(&self.path)
+        self.name == Self::PROJECTLESS_NAME || crate::projectless::is_projectless_path(&self.path)
     }
 }
 

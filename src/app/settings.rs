@@ -249,6 +249,7 @@ impl Fintwind {
     /// while it stays open.
     pub(super) fn open_usage_page(&mut self, cx: &mut Context<Self>) {
         self.mode = WorkspaceMode::Usage;
+        self.set_usage_range(usage_page::UsageRange::default(), cx);
         self.ensure_usage_stats(false, cx);
         self.start_usage_auto_refresh(cx);
         cx.notify();
@@ -942,6 +943,8 @@ impl Fintwind {
             )
             .child(
                 general_settings_group(tr!("settings.group_data"), theme)
+                    .child(self.render_general_workspace_setting(cx))
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
                     .child(
                         div()
                             .w_full()
@@ -1512,6 +1515,169 @@ impl Fintwind {
                     .child(transcript_width_selector),
             )
             .into_any_element()
+    }
+
+    fn render_general_workspace_setting(&self, cx: &mut Context<Self>) -> Div {
+        let theme = Theme::current(cx);
+        let path = crate::projectless::workspace_root()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let custom = self.state.general_workspace_path().is_some();
+        div()
+            .w_full()
+            .min_h(px(60.0))
+            .px(px(20.0))
+            .py(px(12.0))
+            .flex()
+            .items_center()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_size(ui_px(13.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .child(tr!("settings.general_workspace")),
+                    )
+                    .child(
+                        div()
+                            .mt(px(5.0))
+                            .text_size(ui_px(12.5))
+                            .text_color(theme.text_secondary)
+                            .overflow_hidden()
+                            .child(path),
+                    ),
+            )
+            .child(
+                Button::new(
+                    "general-workspace-choose",
+                    tr!("settings.general_workspace_choose"),
+                )
+                .variant(ButtonVariant::Outline)
+                .size(ControlSize::Sm)
+                .disabled(self.general_workspace_busy || self.daemon.is_remote())
+                .on_click(cx.listener(|this, _, _, cx| this.choose_general_workspace(cx))),
+            )
+            .when(custom, |element| {
+                element.child(
+                    Button::new(
+                        "general-workspace-reset",
+                        tr!("settings.general_workspace_reset"),
+                    )
+                    .variant(ButtonVariant::Ghost)
+                    .size(ControlSize::Sm)
+                    .disabled(self.general_workspace_busy)
+                    .on_click(cx.listener(|this, _, _, cx| this.set_general_workspace(None, cx))),
+                )
+            })
+    }
+
+    fn choose_general_workspace(&mut self, cx: &mut Context<Self>) {
+        if self.general_workspace_busy || self.daemon.is_remote() {
+            return;
+        }
+        self.general_workspace_busy = true;
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: Some(tr!("settings.general_workspace_choose").into()),
+        });
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let selected = receiver.await;
+            let _ = this.update(cx, |this, cx| {
+                this.general_workspace_busy = false;
+                match selected {
+                    Ok(Ok(Some(paths))) => {
+                        if let Some(path) = paths.into_iter().next() {
+                            this.set_general_workspace(Some(path), cx);
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        this.show_toast(tr!("settings.general_workspace_failed", error = error))
+                    }
+                    _ => {}
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn set_general_workspace(&mut self, path: Option<PathBuf>, cx: &mut Context<Self>) {
+        if self.general_workspace_busy {
+            return;
+        }
+        self.general_workspace_busy = true;
+        let key = fintwind_protocol::settings::GENERAL_WORKSPACE_PATH_KEY;
+        let mut settings = self.state.daemon_settings();
+        let value = path.map(|path| path.to_string_lossy().into_owned());
+        match &value {
+            Some(path) => {
+                settings.extra.insert(key.to_owned(), path.clone().into());
+            }
+            None => {
+                settings.extra.remove(key);
+            }
+        }
+        let daemon = self.daemon.client();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    match daemon.request(
+                        Uuid::nil(),
+                        Uuid::nil(),
+                        fintwind_client::Command::UpdateSettings { settings },
+                    )? {
+                        fintwind_client::ResponsePayload::Ack => {}
+                        _ => anyhow::bail!("invalid settings response"),
+                    }
+                    match daemon.request(
+                        Uuid::nil(),
+                        Uuid::nil(),
+                        fintwind_client::Command::LoadTaskState,
+                    )? {
+                        fintwind_client::ResponsePayload::TaskState {
+                            projectless_root,
+                            projectless_legacy_root,
+                            ..
+                        } => Ok((projectless_root, projectless_legacy_root)),
+                        _ => anyhow::bail!("invalid task-state response"),
+                    }
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.general_workspace_busy = false;
+                match result {
+                    Ok((root, legacy_root)) => {
+                        fintwind_protocol::projectless::set_workspace_root(root);
+                        fintwind_protocol::projectless::set_legacy_root(legacy_root);
+                        this.state.set_general_workspace_path(value);
+                        if this.selected_project().is_some_and(Project::is_projectless)
+                            && this
+                                .selected_session()
+                                .is_some_and(|session| !session.has_started())
+                        {
+                            this.create_projectless_session_from_composer(cx);
+                        }
+                        this.switch_provider_location();
+                        this.refresh_provider_detection();
+                        this.save();
+                    }
+                    Err(error) => {
+                        this.show_toast(tr!("settings.general_workspace_failed", error = error))
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn choose_opencode_binary(&mut self, cx: &mut Context<Self>) {

@@ -628,6 +628,27 @@ impl PersistedState {
             .filter(|path| !path.is_empty())
     }
 
+    pub fn general_workspace_path(&self) -> Option<&str> {
+        self.daemon_settings_extra
+            .get(fintwind_protocol::settings::GENERAL_WORKSPACE_PATH_KEY)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+    }
+
+    pub fn set_general_workspace_path(&mut self, path: Option<String>) {
+        let key = fintwind_protocol::settings::GENERAL_WORKSPACE_PATH_KEY;
+        match path {
+            Some(path) => {
+                self.daemon_settings_extra
+                    .insert(key.to_owned(), path.into());
+            }
+            None => {
+                self.daemon_settings_extra.remove(key);
+            }
+        }
+    }
+
     pub fn set_opencode_binary_path(&mut self, path: Option<String>) {
         let key = fintwind_protocol::settings::OPENCODE_BINARY_PATH_KEY;
         match path {
@@ -728,6 +749,22 @@ impl PersistedState {
         })
     }
 
+    pub fn ensure_general_workspace_project(&mut self, path: PathBuf) -> Uuid {
+        if let Some(project) = self
+            .projects
+            .iter_mut()
+            .find(|project| project.path == path)
+        {
+            project.name = Project::PROJECTLESS_NAME.to_owned();
+            return project.id;
+        }
+        let mut project = Project::from_path(path);
+        project.name = Project::PROJECTLESS_NAME.to_owned();
+        let id = project.id;
+        self.projects.push(project);
+        id
+    }
+
     fn ensure_runtime_session(&mut self) {
         if self
             .selected_session
@@ -739,10 +776,15 @@ impl PersistedState {
         let Some(project_id) = self
             .selected_project
             .filter(|selected| self.projects.iter().any(|project| project.id == *selected))
+            .or_else(|| {
+                fintwind_protocol::projectless::workspace_root()
+                    .map(|path| self.ensure_general_workspace_project(path))
+            })
         else {
             return;
         };
         let session = self.new_session(project_id);
+        self.selected_project = Some(project_id);
         self.selected_session = Some(session.id);
         self.sessions.push(session);
     }
@@ -866,7 +908,6 @@ pub struct StateStore {
     app_settings_path: PathBuf,
     legacy_settings_paths: Vec<PathBuf>,
     daemon: DaemonSupervisor,
-    remote_default_cwd: Arc<Mutex<Option<PathBuf>>>,
     /// A task snapshot may only be written after this client has successfully
     /// loaded the daemon's authoritative state. Falling back to an empty UI
     /// after a transient RPC failure must never turn the next ordinary save
@@ -933,7 +974,6 @@ impl StateStore {
             legacy_settings_paths: default_legacy_settings_paths(),
             path: Self::default_path(),
             daemon,
-            remote_default_cwd: Arc::new(Mutex::new(None)),
             task_state_loaded: Arc::new(AtomicBool::new(false)),
             saves: Arc::new(DesktopSaves::default()),
         }
@@ -991,17 +1031,6 @@ impl StateStore {
             Err(_) if cwd.parent().is_none() => PersistedState::empty(),
             Err(_) => PersistedState::fresh(cwd),
         };
-        if state.projects.is_empty()
-            && let Some(cwd) = self.remote_default_cwd.lock().clone()
-            && cwd.parent().is_some()
-        {
-            let project = Project::from_path(cwd);
-            let session = state.new_session(project.id);
-            state.selected_project = Some(project.id);
-            state.selected_session = Some(session.id);
-            state.projects.push(project);
-            state.push_session(session);
-        }
         state.ensure_runtime_session();
         if let Some(selected) = state.selected_session
             && let Some(session) = state
@@ -1015,7 +1044,7 @@ impl StateStore {
     }
 
     pub fn load(&self) -> io::Result<PersistedState> {
-        let (projects, mut sessions, default_cwd) = match self
+        let (projects, mut sessions) = match self
             .daemon
             .client()
             .request(Uuid::nil(), Uuid::nil(), Command::LoadTaskState)
@@ -1024,11 +1053,13 @@ impl StateStore {
             ResponsePayload::TaskState {
                 projects,
                 sessions,
-                default_cwd,
+                default_cwd: _,
                 projectless_root,
+                projectless_legacy_root,
             } => {
                 fintwind_protocol::projectless::set_workspace_root(projectless_root);
-                (projects, sessions, default_cwd)
+                fintwind_protocol::projectless::set_legacy_root(projectless_legacy_root);
+                (projects, sessions)
             }
             _ => {
                 return Err(io::Error::other(
@@ -1037,7 +1068,6 @@ impl StateStore {
             }
         };
         restore_task_state_skeletons(&mut sessions);
-        *self.remote_default_cwd.lock() = Some(default_cwd);
         let mut state = PersistedState::empty();
         state.projects = projects;
         state.sessions = sessions;
@@ -1885,6 +1915,7 @@ mod tests {
             sessions: vec![session],
             default_cwd: PathBuf::from("/daemon/project"),
             projectless_root: None,
+            projectless_legacy_root: None,
         })
         .unwrap();
         let ResponsePayload::TaskState { mut sessions, .. } =

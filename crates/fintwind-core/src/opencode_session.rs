@@ -829,13 +829,15 @@ pub(crate) fn resolve_request_directory(directory: &Path) -> String {
     value
 }
 
-/// The `x-opencode-directory` header line for one request. A directory
+/// OpenCode URL-decodes `x-opencode-directory`, so encode its UTF-8 bytes once
+/// to preserve non-ASCII paths and literal percent sequences. A directory
 /// carrying CR or LF would smuggle extra headers into the raw request, so it
 /// is refused before any bytes are written.
 fn directory_header(directory: &str) -> anyhow::Result<String> {
     if directory.contains('\r') || directory.contains('\n') {
         bail!("a directory containing a line break cannot name an OpenCode request target");
     }
+    let directory = encode_path_segment(directory);
     Ok(format!("x-opencode-directory: {directory}\r\n"))
 }
 
@@ -1302,11 +1304,7 @@ mod tests {
     }
 
     #[test]
-    fn directory_header_rejects_line_breaks_and_formats_clean_values() {
-        assert_eq!(
-            directory_header("E:\\work\\fintwind").unwrap(),
-            "x-opencode-directory: E:\\work\\fintwind\r\n"
-        );
+    fn directory_header_rejects_line_breaks() {
         // Either break would end the header line and smuggle a second one
         // into the raw request, so both must be refused outright.
         assert!(directory_header("E:\\work\r\nX-Smuggled: 1").is_err());

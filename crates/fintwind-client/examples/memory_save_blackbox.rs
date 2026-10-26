@@ -133,6 +133,7 @@ fn main() -> anyhow::Result<()> {
                         sessions: Vec::new(),
                         default_cwd: peer_project.path.clone(),
                         projectless_root: None,
+                        projectless_legacy_root: None,
                     },
                 },
                 Command::SaveTaskStateCheckpoint {

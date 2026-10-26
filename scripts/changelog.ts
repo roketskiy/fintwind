@@ -17,7 +17,7 @@ export function extractReleaseNotes(
   changelog: string,
   version: string,
 ): string | null {
-  const lines = changelog.split("\n");
+  const lines = changelog.split(/\r?\n/);
 
   let start = -1;
   for (let i = 0; i < lines.length; i++) {

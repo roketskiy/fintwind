@@ -51,6 +51,12 @@ python scripts/scheduled-tasks-e2e.py --mcp-only
 ```
 
 该验证包含真实模型工具调用、目标和规则保存、变更通知、任务执行及非法输入拒绝，
-去掉 `--mcp-only` 可继续运行原有调度器验证。源码协议依据：
+也覆盖桌面设置持久化、默认关闭、运行中启停和连续切换。去掉 `--mcp-only` 可继续运行原有调度器验证。
+
+2026-10-27 使用真实 OpenCode 2.1.4 和本地模拟模型服务完成 21 项检查，全部通过。
+该记录不代表完整的模型或版本兼容区间，也不包含设置界面的视觉验证。
+源码协议依据：
 [OpenCode 客户端 MCP 实现](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/client/src/mcp.ts)
 及[服务端接口](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/server/src/handlers/mcp.ts)。
+OpenCode 2.1.4 的[实验性配置定义](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/schema/src/config/experimental.ts)
+没有额外的客户端 MCP 开关。

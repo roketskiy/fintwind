@@ -178,6 +178,8 @@ settings.local_by_default: デフォルトでローカルに保存
 settings.local_by_default_description: プロジェクト、会話、設定はこのコンピューターに保存されます
 settings.browser_tools: ブラウザツール
 settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します
+settings.scheduled_tools: 定期タスク MCP
+settings.scheduled_tools_description: エージェントによる定期タスクの作成を許可します。OpenCode 2.1.4 以降が必要で、有効にすると実験的な MCP 接続を自動で開始します
 settings.mermaid_visualization: Mermaid 可視化プロンプト
 settings.mermaid_visualization_description: 新しいセッションのみ
 settings.goal: 目標モード

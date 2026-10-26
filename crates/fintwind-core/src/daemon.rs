@@ -33,6 +33,7 @@ use fintwind_protocol::scheduled_task::{
 use fintwind_protocol::submission::{SubmissionReceipt, SubmissionRecord, SubmissionState};
 
 pub struct FintwindBackend {
+    scheduled_tools: Arc<crate::scheduled::mcp::Registry>,
     browser_tools: Arc<crate::browser_tools::BrowserTools>,
     sessions: Arc<Mutex<HashMap<Uuid, (Uuid, DriverHandle)>>>,
     terminals: Mutex<HashMap<Uuid, (Uuid, crate::terminal::DaemonTerminal)>>,
@@ -59,6 +60,7 @@ pub struct FintwindBackend {
     pub(crate) scheduled_owner: Uuid,
     system_channel: Mutex<Option<SystemChannel>>,
     scheduler_lock: Mutex<Option<std::fs::File>>,
+    self_weak: OnceLock<Weak<Self>>,
 }
 
 pub(crate) struct ScheduledPreparation {
@@ -112,6 +114,9 @@ impl FintwindBackend {
                 .join("attachments"),
         );
         let browser_tools = Arc::new(crate::browser_tools::BrowserTools::default());
+        let scheduled_tools = Arc::new(crate::scheduled::mcp::Registry::new(
+            settings.get().scheduled_tools_enabled(),
+        ));
         let usage_index =
             crate::usage_index::UsageIndex::new(task_store.path().with_file_name("usage-index.db"));
         // Seed from the persisted setting so a daemon that comes up before
@@ -124,6 +129,7 @@ impl FintwindBackend {
             settings.get().network_proxy_url().map(str::to_owned),
         );
         Ok(Self {
+            scheduled_tools,
             browser_tools,
             sessions: Arc::new(Mutex::new(HashMap::new())),
             terminals: Mutex::new(HashMap::new()),
@@ -150,6 +156,7 @@ impl FintwindBackend {
             scheduled_owner: Uuid::new_v4(),
             system_channel: Mutex::new(None),
             scheduler_lock: Mutex::new(None),
+            self_weak: OnceLock::new(),
         })
     }
 
@@ -634,6 +641,71 @@ impl FintwindBackend {
         Ok(())
     }
 
+    pub(crate) fn create_scheduled_task_from_agent(
+        &self,
+        session_id: Uuid,
+        runtime_id: Uuid,
+        input: crate::scheduled::tools::CreateTask,
+    ) -> anyhow::Result<fintwind_protocol::scheduled_task::ScheduledTask> {
+        use crate::scheduled::tools::Target;
+        use fintwind_protocol::scheduled_task::SessionLaunch;
+
+        if !self.scheduled_tools.is_enabled() {
+            bail!("Scheduled task MCP is disabled in Fintwind's general settings");
+        }
+
+        let _gate = self.session_cleanup_gate.lock();
+        if self.removed_session_ids.lock().contains(&session_id)
+            || !self
+                .sessions
+                .lock()
+                .get(&session_id)
+                .is_some_and(|(id, _)| *id == runtime_id)
+        {
+            bail!("The originating Fintwind session runtime has ended");
+        }
+        let source = self
+            .task_state
+            .lock()
+            .sessions
+            .iter()
+            .find(|session| session.id == session_id)
+            .cloned()
+            .context("The originating Fintwind session no longer exists")?;
+        let target = match input.target {
+            Target::CurrentSession => TaskTarget::ExistingSession { session_id },
+            Target::NewSession => TaskTarget::NewSession {
+                project_id: source.project_id,
+                launch: SessionLaunch {
+                    model: source
+                        .model
+                        .context("Choose a model in the originating session first")?,
+                    runtime_mode: source.runtime_mode,
+                    interaction_mode: source.interaction_mode,
+                    reasoning_effort: source.reasoning_effort,
+                    service_tier: source.service_tier,
+                    context_window: source.context_window,
+                    agent_preset: source.agent_preset,
+                },
+                workspace: source.workspace,
+            },
+        };
+        let edit = ScheduledTaskEdit::Create {
+            draft: input.draft(target)?,
+        };
+        self.save_scheduled_task(edit)
+    }
+
+    fn save_scheduled_task(
+        &self,
+        edit: ScheduledTaskEdit,
+    ) -> anyhow::Result<fintwind_protocol::scheduled_task::ScheduledTask> {
+        self.validate_scheduled_edit(&edit)?;
+        let task = self.scheduled_store.save(edit, crate::model::unix_time())?;
+        self.scheduled_notify_tasks();
+        Ok(task)
+    }
+
     /// Recover admission facts only. No runtime is not proof of execution idle.
     fn hydrate_submission_session(&self, session: &mut AgentSession) -> anyhow::Result<()> {
         self.task_store.hydrate(session)?;
@@ -1103,6 +1175,9 @@ impl Backend for FintwindBackend {
     }
 
     fn attach_system_channel(self: Arc<Self>, channel: SystemChannel) -> anyhow::Result<()> {
+        self.self_weak
+            .set(Arc::downgrade(&self))
+            .map_err(|_| anyhow!("daemon system channel is already attached"))?;
         let lock = self.acquire_scheduler_lock()?;
         *self.scheduler_lock.lock() = Some(lock);
         *self.system_channel.lock() = Some(channel);
@@ -1400,6 +1475,8 @@ impl Backend for FintwindBackend {
                 self.browser_tools
                     .set_enabled(self.settings.get().browser_tools_enabled());
                 crate::goal_plugin::set_enabled(self.settings.get().goal_enabled())?;
+                self.scheduled_tools
+                    .set_enabled(self.settings.get().scheduled_tools_enabled());
                 // Reinstall the proxy so later fetches and `opencode serve`
                 // children pick the new address up without a daemon restart.
                 fintwind_protocol::http::set_active_proxy(
@@ -2138,9 +2215,7 @@ impl Backend for FintwindBackend {
                 tasks: self.scheduled_store.list()?,
             }),
             Command::SaveScheduledTask { edit } => {
-                self.validate_scheduled_edit(&edit)?;
-                let task = self.scheduled_store.save(edit, crate::model::unix_time())?;
-                self.scheduled_notify_tasks();
+                let task = self.save_scheduled_task(edit)?;
                 Ok(ResponsePayload::ScheduledTaskSaved { task })
             }
             Command::DeleteScheduledTask {
@@ -2210,6 +2285,16 @@ impl Backend for FintwindBackend {
                         runtime_id,
                     },
                     self.task_store.blobs(),
+                    crate::scheduled::tools::Runtime {
+                        registry: self.scheduled_tools.clone(),
+                        backend: self
+                            .self_weak
+                            .get()
+                            .cloned()
+                            .context("daemon system channel is not attached")?,
+                        session_id,
+                        runtime_id,
+                    },
                 )?;
                 let supports_steer = handle.supports_steer();
                 let task_state = self.task_state.clone();

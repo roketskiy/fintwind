@@ -455,6 +455,7 @@ fn fork_message_id(message_ids: &[String], retained_turns: usize) -> anyhow::Res
 
 pub(crate) struct OpenCodeServer {
     child: Arc<Mutex<Child>>,
+    pub(crate) scheduled_mcp: Mutex<HashMap<String, std::sync::Weak<crate::scheduled::mcp::Host>>>,
     pub(crate) browser_tools: Option<Arc<crate::browser_tools::BrowserToolServer>>,
     _browser_plugin: Option<crate::browser_plugin::BrowserPlugin>,
     _goal_plugin: crate::goal_plugin::GoalPlugin,
@@ -565,6 +566,7 @@ impl OpenCodeServer {
         server_passwords().lock().insert(port, password);
         let server = Self {
             child: Arc::new(Mutex::new(child)),
+            scheduled_mcp: Mutex::new(HashMap::new()),
             browser_tools,
             _browser_plugin: browser_plugin,
             _goal_plugin: goal_plugin,

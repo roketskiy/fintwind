@@ -386,6 +386,10 @@ settings.browser_tools:
   en: Browser tools
 settings.browser_tools_description:
   en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context
+settings.scheduled_tools:
+  en: Scheduled task MCP
+settings.scheduled_tools_description:
+  en: Let agents create scheduled tasks. Requires OpenCode 2.1.4+; enables the experimental MCP connection automatically
 settings.mermaid_visualization:
   en: Mermaid visualization prompt
 settings.mermaid_visualization_description:

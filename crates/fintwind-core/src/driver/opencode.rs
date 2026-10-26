@@ -749,6 +749,7 @@ fn verify_resume_location(session: &Value, cwd: &Path, session_id: &str) -> anyh
 
 pub struct OpenCodeDriver {
     browser_binding: Option<crate::browser_tools::BrowserToolBinding>,
+    scheduled_binding: Option<crate::scheduled::mcp::Binding>,
     // `Drop` releases this lease before waking the worker, guaranteeing that
     // final process teardown runs on the worker rather than the UI thread.
     server: Option<PooledServer>,
@@ -779,14 +780,15 @@ pub struct OpenCodeDriver {
 impl OpenCodeDriver {
     #[cfg(test)]
     pub fn start(options: DriverStartOptions, events: DriverEventSender) -> anyhow::Result<Self> {
-        Self::start_with_browser(options, events, None, None)
+        Self::start_with_tools(options, events, None, None, None)
     }
 
-    pub(crate) fn start_with_browser(
+    pub(crate) fn start_with_tools(
         options: DriverStartOptions,
         events: DriverEventSender,
         browser: Option<crate::browser_tools::BrowserToolRuntime>,
         blobs: Option<Arc<crate::blob_store::BlobStore>>,
+        scheduled: Option<crate::scheduled::tools::Runtime>,
     ) -> anyhow::Result<Self> {
         let DriverStartOptions {
             binary,
@@ -909,6 +911,26 @@ impl OpenCodeDriver {
         } else {
             None
         };
+
+        let scheduled_binding = scheduled.and_then(|runtime| {
+            match crate::scheduled::mcp::Binding::attach(
+                &server,
+                &location_directory,
+                &session_id,
+                runtime,
+            ) {
+                Ok(binding) => Some(binding),
+                Err(error) => {
+                    eprintln!("Fintwind scheduled tasks MCP unavailable: {error:#}");
+                    crate::opencode_diagnostics::record(
+                        "scheduled-mcp-unavailable",
+                        server.port,
+                        0,
+                    );
+                    None
+                }
+            }
+        });
 
         let _ = events.send(DriverEvent::Connected {
             provider_cursor: Some(ProviderResumeCursor::OpenCode {
@@ -1952,6 +1974,7 @@ impl OpenCodeDriver {
 
         Ok(Self {
             browser_binding,
+            scheduled_binding,
             server: Some(server),
             session_id,
             cwd,
@@ -2392,6 +2415,7 @@ impl DriverControl for OpenCodeDriver {
 impl Drop for OpenCodeDriver {
     fn drop(&mut self) {
         drop(self.browser_binding.take());
+        drop(self.scheduled_binding.take());
         self.event_feed.cancel();
         // The worker owns the other server lease. Release the UI-owned lease
         // first, then wake the worker so any final terminate/wait happens there.

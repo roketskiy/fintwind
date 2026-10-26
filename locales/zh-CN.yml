@@ -171,6 +171,8 @@ settings.local_by_default: 默认存储在本地
 settings.local_by_default_description: 项目、对话和设置均存储在这台电脑上
 settings.browser_tools: 浏览器工具
 settings.browser_tools_description: 默认关闭。开启后向模型提供内置浏览器操作工具与使用说明，会占用少量上下文
+settings.scheduled_tools: 定时任务 MCP
+settings.scheduled_tools_description: 允许 Agent 创建定时任务。需 OpenCode 2.1.4+，开启后自动连接实验性 MCP 接口
 settings.mermaid_visualization: Mermaid 可视化提示词
 settings.mermaid_visualization_description: 仅新会话
 settings.goal: 目标模式

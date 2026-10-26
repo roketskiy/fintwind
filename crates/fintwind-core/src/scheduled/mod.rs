@@ -1,5 +1,7 @@
+pub(crate) mod mcp;
 pub(crate) mod runner;
 pub(crate) mod store;
+pub(crate) mod tools;
 
 use fintwind_protocol::scheduled_task::{ScheduledTaskDraft, ScheduledTaskId};
 use fintwind_protocol::submission::SubmissionRecord;

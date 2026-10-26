@@ -186,6 +186,7 @@ impl Fintwind {
         }
         self.review_workspace_override = target;
         self.review_pending_file_focus = None;
+        self.source_control_folded_directories.borrow_mut().clear();
         // A pinned turn snapshot belongs to its session's repository; once
         // the user repoints the workspace, the live view is the honest thing
         // to show.
@@ -720,9 +721,10 @@ impl Fintwind {
     }
 
     /// Flattens the cached status into the virtualized list's rows: one
-    /// header per non-empty group, then that group's files. The filter
-    /// input narrows both groups by path. Called whenever the status
-    /// snapshot or the filter changes.
+    /// header per non-empty group, then that group's files arranged as a
+    /// directory tree. The filter input narrows both groups by path, and a
+    /// filter always opens every directory so its matches are visible.
+    /// Called whenever the status snapshot, the filter, or a fold changes.
     pub(super) fn sync_source_control_rows(&mut self, cx: &App) {
         let filter = self.right_panel_diff_filter.read(cx).content().to_owned();
         let filter = filter.trim().to_ascii_lowercase();
@@ -734,6 +736,8 @@ impl Fintwind {
                     .as_deref()
                     .is_some_and(|origin| origin.to_ascii_lowercase().contains(&filter))
         };
+        let force_open = !filter.is_empty();
+        let folded = self.source_control_folded_directories.borrow();
         let mut rows = Vec::new();
         if let Some(status) = self.source_control_status.as_ref() {
             let staged: Vec<&fintwind_client::git::WorktreeStatusEntry> = status
@@ -746,11 +750,7 @@ impl Fintwind {
                     staged: true,
                     count: staged.len(),
                 });
-                rows.extend(
-                    staged
-                        .iter()
-                        .map(|entry| SourceControlRow::file(true, entry)),
-                );
+                source_control_tree_rows(&mut rows, true, &staged, &folded, force_open);
             }
             let unstaged: Vec<&fintwind_client::git::WorktreeStatusEntry> = status
                 .entries
@@ -762,17 +762,72 @@ impl Fintwind {
                     staged: false,
                     count: unstaged.len(),
                 });
-                rows.extend(
-                    unstaged
-                        .iter()
-                        .map(|entry| SourceControlRow::file(false, entry)),
-                );
+                source_control_tree_rows(&mut rows, false, &unstaged, &folded, force_open);
             }
         }
         let row_count = rows.len();
-        *self.source_control_rows.borrow_mut() = rows;
-        self.source_control_list_state
-            .reset_with_uniform_height(row_count, ui_px(46.0));
+        let mut cached = self.source_control_rows.borrow_mut();
+        if cached.as_slice() == rows.as_slice() {
+            return;
+        }
+        // Fold changes rewrite one subtree; splicing only the changed suffix
+        // keeps the scroll position and every measured row above it.
+        let prefix = cached
+            .iter()
+            .zip(rows.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        let old_count = cached.len();
+        *cached = rows;
+        drop(cached);
+        let height = ui_px(SOURCE_CONTROL_ROW_HEIGHT);
+        if old_count == 0 {
+            self.source_control_list_state
+                .reset_with_uniform_height(row_count, height);
+        } else {
+            self.source_control_list_state
+                .splice(prefix..old_count, row_count - prefix);
+            self.source_control_list_state
+                .clone()
+                .with_uniform_item_height(height);
+        }
+    }
+
+    /// Opens or folds one directory of the change tree. Directories start
+    /// open, so the first press folds; the folded set is what persists.
+    fn toggle_source_control_directory(
+        &mut self,
+        staged: bool,
+        path: String,
+        cx: &mut Context<Self>,
+    ) {
+        let key = source_control_directory_key(staged, &path);
+        let mut folded = self.source_control_folded_directories.borrow_mut();
+        if !folded.remove(&key) {
+            folded.insert(key);
+        }
+        drop(folded);
+        self.sync_source_control_rows(cx);
+        cx.notify();
+    }
+
+    /// Opens every directory above `path` on both sides of the tree, so a
+    /// file the reader moves to is reachable in the list beside it. Reports
+    /// whether any fold actually changed.
+    fn reveal_source_control_file(&mut self, path: &str) -> bool {
+        let Some((directory, _)) = path.rsplit_once('/') else {
+            return false;
+        };
+        let mut folded = self.source_control_folded_directories.borrow_mut();
+        let mut changed = false;
+        for (index, _) in directory.match_indices('/') {
+            let ancestor = &directory[..index];
+            changed |= folded.remove(&source_control_directory_key(true, ancestor));
+            changed |= folded.remove(&source_control_directory_key(false, ancestor));
+        }
+        changed |= folded.remove(&source_control_directory_key(true, directory));
+        changed |= folded.remove(&source_control_directory_key(false, directory));
+        changed
     }
 
     /// Opens a file from one of the second column's groups. Clicking a file
@@ -785,6 +840,9 @@ impl Fintwind {
         path: String,
         cx: &mut Context<Self>,
     ) {
+        if self.reveal_source_control_file(&path) {
+            self.sync_source_control_rows(cx);
+        }
         let source = if staged {
             ReviewDiffSource::Staged
         } else {
@@ -851,12 +909,21 @@ impl Fintwind {
             return;
         }
         self.right_panel_diff_selected_file = Some(next);
+        if let Some(path) = self
+            .right_panel_diff_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.files.get(next))
+            .map(|file| file.path.clone())
+            && self.reveal_source_control_file(&path)
+        {
+            self.sync_source_control_rows(cx);
+        }
         self.sync_source_control_diff_rows();
         cx.notify();
     }
 
     /// The mode's second column: the workspace the review is pointed at, and
-    /// its staged/unstaged file groups. Showing the project, the concrete
+    /// its staged/unstaged change tree. Showing the project, the concrete
     /// directory (a session worktree can differ from the project root), and
     /// the branch guards against running Git operations in the wrong place.
     pub(super) fn render_source_control_secondary(
@@ -1242,8 +1309,8 @@ impl Fintwind {
             .relative()
             .flex()
             .flex_col()
-            // The path filter narrows both groups. It reuses the old diff
-            // tree's filter input, which the standalone page no longer has.
+            // The path filter narrows the change tree and always opens the
+            // directories it matches.
             .when(has_workspace && status.is_some(), |column| {
                 column.child(
                     div().px(px(12.0)).pb(px(8.0)).child(
@@ -1297,9 +1364,10 @@ impl Fintwind {
             })
     }
 
-    /// One flattened row: a group header with its group-wide actions, or a
-    /// clickable file row with its colored status letter. Per-file actions
-    /// live beside the file name in the diff reader's header, not here.
+    /// One flattened row: a group header with its group-wide actions, a
+    /// foldable directory, or a clickable file with its status letter.
+    /// Per-file actions live beside the file name in the diff reader's
+    /// header, not here.
     fn render_source_control_row(&self, index: usize, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::current(cx);
         let Some(row) = self.source_control_rows.borrow().get(index).cloned() else {
@@ -1310,7 +1378,7 @@ impl Fintwind {
             SourceControlRow::Header { staged, count } => div()
                 .w_full()
                 .min_w_0()
-                .h(px(32.0))
+                .h(ui_px(SOURCE_CONTROL_ROW_HEIGHT))
                 .flex_none()
                 .pl(px(12.0))
                 .pr(px(8.0))
@@ -1354,12 +1422,67 @@ impl Fintwind {
                     }
                 })
                 .into_any_element(),
+            SourceControlRow::Directory {
+                staged,
+                path,
+                name,
+                depth,
+                open,
+            } => {
+                let element_id = SharedString::from(format!(
+                    "source-control-directory-{}-{path}",
+                    if staged { "staged" } else { "unstaged" }
+                ));
+                let row_path = path.clone();
+                div()
+                    .id(element_id)
+                    .aria_label(path.clone())
+                    .tab_index(0)
+                    .relative()
+                    .w_full()
+                    .min_w_0()
+                    .h(ui_px(SOURCE_CONTROL_ROW_HEIGHT))
+                    .flex_none()
+                    .pl(px(12.0 + depth as f32 * SOURCE_CONTROL_TREE_INDENT))
+                    .pr(px(12.0))
+                    .flex()
+                    .items_center()
+                    .gap(px(6.0))
+                    .rounded(px(5.0))
+                    .cursor_default()
+                    .hover(|element| element.bg(theme.overlay))
+                    .focus_visible(|element| element.border_1().border_color(theme.accent_focus))
+                    .child(source_control_guides(depth, &theme))
+                    .child(icon(
+                        if open {
+                            "icons/chevron-down.svg"
+                        } else {
+                            "icons/chevron-right.svg"
+                        },
+                        10.0,
+                        theme.text_ghost,
+                    ))
+                    .child(icon("icons/folder.svg", 13.0, theme.text_ghost))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .text_size(ui_px(11.5))
+                            .text_color(theme.text_tertiary)
+                            .child(name),
+                    )
+                    .on_activation(cx, move |this, _, cx| {
+                        this.toggle_source_control_directory(staged, row_path.clone(), cx);
+                    })
+                    .into_any_element()
+            }
             SourceControlRow::File {
                 staged,
                 path,
                 title,
                 name,
-                directory,
+                depth,
                 letter,
                 ..
             } => {
@@ -1390,16 +1513,17 @@ impl Fintwind {
                     .id(element_id)
                     .aria_label(title.clone())
                     .tab_index(0)
+                    .relative()
                     .w_full()
                     .min_w_0()
-                    .h(ui_px(46.0))
+                    .h(ui_px(SOURCE_CONTROL_ROW_HEIGHT))
                     .flex_none()
-                    .py(ui_px(5.0))
-                    .pl(px(12.0))
+                    .pl(px(12.0 + depth as f32 * SOURCE_CONTROL_TREE_INDENT))
                     .pr(px(12.0))
                     .flex()
                     .items_center()
-                    .gap(px(8.0))
+                    .gap(px(6.0))
+                    .rounded(px(5.0))
                     .cursor_default()
                     .when(selected, |element| element.bg(theme.overlay_strong))
                     .when(!selected, |element| {
@@ -1409,52 +1533,40 @@ impl Fintwind {
                     .on_activation(cx, move |this, _, cx| {
                         this.open_source_control_file(staged, row_path.clone(), cx);
                     })
+                    .child(source_control_guides(depth, &theme))
+                    // The chevron slot keeps file names aligned with the
+                    // directory names beside them.
+                    .child(div().w(px(10.0)).flex_none())
+                    .child(file_icon(file_icon_for_path(&path), 13.0))
                     .child(
                         div()
                             .id(title_id)
                             .flex_1()
                             .min_w_0()
-                            .flex()
-                            .flex_col()
+                            .truncate()
+                            .text_ellipsis_middle()
+                            .text_size(ui_px(11.5))
+                            .font_weight(if selected {
+                                FontWeight::MEDIUM
+                            } else {
+                                FontWeight::NORMAL
+                            })
+                            .text_color(if selected {
+                                theme.text
+                            } else {
+                                theme.text_secondary
+                            })
                             .tooltip(Tooltip::text(title.clone()))
-                            .child(
-                                div()
-                                    .truncate()
-                                    .text_ellipsis_middle()
-                                    .line_height(ui_px(19.0))
-                                    .text_size(ui_px(12.0))
-                                    .font_weight(if selected {
-                                        FontWeight::MEDIUM
-                                    } else {
-                                        FontWeight::NORMAL
-                                    })
-                                    .text_color(if selected {
-                                        theme.text
-                                    } else {
-                                        theme.text_secondary
-                                    })
-                                    .child(name),
-                            )
-                            .when(!directory.is_empty(), |column| {
-                                column.child(
-                                    div()
-                                        .truncate()
-                                        .text_ellipsis_middle()
-                                        .line_height(ui_px(17.0))
-                                        .text_size(ui_px(11.0))
-                                        .text_color(theme.text_tertiary)
-                                        .child(directory),
-                                )
-                            }),
+                            .child(name),
                     )
                     .child(
                         div()
-                            .w(px(14.0))
+                            .w(px(12.0))
                             .flex_none()
                             .text_right()
-                            .text_size(ui_px(11.0))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(status_letter_color(letter, &theme))
+                            .text_size(ui_px(10.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(status_letter_color(letter, &theme).opacity(0.9))
                             .child(letter.to_string()),
                     )
                     .into_any_element()
@@ -3351,29 +3463,37 @@ fn source_control_split_rows(
     rows
 }
 
-/// One flattened row of the source-control second column: a group header, or
-/// a file from the staged/unstaged side. `title` carries the rename form
-/// `origin → path` when Git detected a rename; `untracked` marks an entry
-/// Git has no record of, whose discard deletes the file.
+/// One flattened row of the source-control second column: a group header, a
+/// directory of the change tree, or a file from one of its groups. `title`
+/// carries the rename form `origin → path` when Git detected a rename;
+/// `untracked` marks an entry Git has no record of, whose discard deletes
+/// the file.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum SourceControlRow {
     Header {
         staged: bool,
         count: usize,
     },
+    Directory {
+        staged: bool,
+        path: String,
+        name: String,
+        depth: usize,
+        open: bool,
+    },
     File {
         staged: bool,
         path: String,
         title: String,
         name: String,
-        directory: String,
+        depth: usize,
         letter: char,
         untracked: bool,
     },
 }
 
 impl SourceControlRow {
-    fn file(staged: bool, entry: &fintwind_client::git::WorktreeStatusEntry) -> Self {
+    fn file(staged: bool, depth: usize, entry: &fintwind_client::git::WorktreeStatusEntry) -> Self {
         let letter = if staged {
             entry.index_status
         } else {
@@ -3383,24 +3503,98 @@ impl SourceControlRow {
             Some(origin) => format!("{origin} → {}", entry.path),
             None => entry.path.clone(),
         };
-        let (directory, name) = entry
+        let name = entry
             .path
             .rsplit_once('/')
-            .unwrap_or(("", entry.path.as_str()));
-        let directory = match entry.origin_path.as_deref() {
-            Some(_) => title.clone(),
-            None => directory.to_owned(),
-        };
+            .map_or(entry.path.as_str(), |(_, name)| name);
         Self::File {
             staged,
             path: entry.path.clone(),
             title,
             name: name.to_owned(),
-            directory,
+            depth,
             letter,
             untracked: entry.worktree_status == '?',
         }
     }
+}
+
+/// The source-control change tree's row height. Shared by the virtualized
+/// list and every row so a uniform height stays exact.
+const SOURCE_CONTROL_ROW_HEIGHT: f32 = 28.0;
+
+/// One directory level's indent, matching Ely's tree list.
+const SOURCE_CONTROL_TREE_INDENT: f32 = 16.0;
+
+/// One directory while a group's change tree is built: subdirectories and
+/// the files directly inside it, both keyed by name so the walk is stable.
+#[derive(Default)]
+struct SourceControlTreeNode<'a> {
+    directories: std::collections::BTreeMap<String, SourceControlTreeNode<'a>>,
+    files: std::collections::BTreeMap<&'a str, &'a fintwind_client::git::WorktreeStatusEntry>,
+}
+
+/// The fold set's key for one directory on one side of the tree.
+fn source_control_directory_key(staged: bool, path: &str) -> String {
+    format!("{}:{path}", if staged { "staged" } else { "unstaged" })
+}
+
+/// Flattens one group's changed files into directory rows and file rows,
+/// depth first. Directories keep their children behind a fold; files keep a
+/// stable name order inside each directory.
+fn source_control_tree_rows<'a>(
+    rows: &mut Vec<SourceControlRow>,
+    staged: bool,
+    entries: &[&'a fintwind_client::git::WorktreeStatusEntry],
+    folded: &std::collections::HashSet<String>,
+    force_open: bool,
+) {
+    let mut root = SourceControlTreeNode::<'a>::default();
+    for entry in entries {
+        let mut node = &mut root;
+        let mut segments = entry.path.split('/').peekable();
+        while let Some(segment) = segments.next() {
+            if segments.peek().is_none() {
+                node.files.insert(segment, *entry);
+                break;
+            }
+            node = node.directories.entry(segment.to_owned()).or_default();
+        }
+    }
+
+    fn walk<'a>(
+        node: &SourceControlTreeNode<'a>,
+        staged: bool,
+        prefix: &str,
+        depth: usize,
+        folded: &std::collections::HashSet<String>,
+        force_open: bool,
+        rows: &mut Vec<SourceControlRow>,
+    ) {
+        for (name, child) in &node.directories {
+            let path = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            let open = force_open || !folded.contains(&source_control_directory_key(staged, &path));
+            rows.push(SourceControlRow::Directory {
+                staged,
+                path: path.clone(),
+                name: name.clone(),
+                depth,
+                open,
+            });
+            if open {
+                walk(child, staged, &path, depth + 1, folded, force_open, rows);
+            }
+        }
+        for entry in node.files.values() {
+            rows.push(SourceControlRow::file(staged, depth, entry));
+        }
+    }
+
+    walk(&root, staged, "", 0, folded, force_open, rows);
 }
 
 /// The staged side of a porcelain entry: a real index change, not untracked.
@@ -3413,6 +3607,23 @@ fn source_control_entry_is_staged(entry: &fintwind_client::git::WorktreeStatusEn
 /// else in a Git UI.
 fn source_control_entry_is_unstaged(entry: &fintwind_client::git::WorktreeStatusEntry) -> bool {
     !matches!(entry.worktree_status, ' ' | '!')
+}
+
+/// Faint vertical guides down each level a tree row sits under, after Ely's
+/// tree list. A hairline only: the tree's shape should read without more ink.
+fn source_control_guides(depth: usize, theme: &Theme) -> Div {
+    div()
+        .absolute()
+        .inset_0()
+        .pl(px(12.0))
+        .flex()
+        .children((0..depth).map(|_| {
+            div()
+                .w(px(SOURCE_CONTROL_TREE_INDENT))
+                .h_full()
+                .pl(px(5.0))
+                .child(div().h_full().border_l_1().border_color(theme.border))
+        }))
 }
 
 /// Status-letter color following the Git convention Fintwind uses elsewhere:

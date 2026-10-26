@@ -1681,6 +1681,10 @@ pub struct Fintwind {
     source_control_status_error: Option<String>,
     source_control_status_generation: u64,
     source_control_rows: RefCell<Vec<source_control::SourceControlRow>>,
+    /// Folded directories of the second column's change tree, keyed by
+    /// `staged:` or `unstaged:` plus the directory path. Empty means every
+    /// directory is open, which is how a fresh tree reads.
+    source_control_folded_directories: RefCell<HashSet<String>>,
     source_control_list_state: ListState,
     source_control_scrollbar: Rc<ScrollbarState>,
     /// The workspace the source-control mode is pinned to. `None` follows
@@ -3733,6 +3737,7 @@ impl Fintwind {
                 source_control_status_error: None,
                 source_control_status_generation: 0,
                 source_control_rows: RefCell::new(Vec::new()),
+                source_control_folded_directories: RefCell::new(HashSet::new()),
                 source_control_list_state: ListState::new(0, ListAlignment::Top, px(28.0)),
                 source_control_scrollbar: ScrollbarState::new(),
                 review_workspace_override: None,

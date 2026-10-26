@@ -53,17 +53,22 @@ const MAX_MODEL_ROWS: usize = 8;
 /// What the KPI cards, timelines, and model ranking aggregate over. The
 /// heatmap keeps its own fixed week window, like GitHub's, so a short range
 /// does not gut it.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum UsageRange {
-    #[default]
     All,
     Days30,
     Days7,
     Day(u8),
 }
 
+impl Default for UsageRange {
+    fn default() -> Self {
+        Self::Day(0)
+    }
+}
+
 impl UsageRange {
-    pub(super) const ALL: [Self; 4] = [Self::All, Self::Days30, Self::Days7, Self::Day(0)];
+    pub(super) const ALL: [Self; 4] = [Self::Day(0), Self::Days7, Self::Days30, Self::All];
 
     fn label(self) -> String {
         tr!(match self {

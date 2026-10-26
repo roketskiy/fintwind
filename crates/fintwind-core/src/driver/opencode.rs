@@ -185,6 +185,10 @@ enum CommandMessage {
         answers: Vec<UserInputAnswer>,
         session_id: Option<String>,
     },
+    CancelUserInput {
+        request_id: String,
+        session_id: Option<String>,
+    },
     Shutdown,
 }
 
@@ -298,6 +302,12 @@ fn is_http_bad_request(error: &anyhow::Error) -> bool {
     error.to_string().contains("HTTP 400")
 }
 
+/// A form that was already answered or cancelled elsewhere. Dismissing it
+/// here has the outcome the caller asked for, so it is not a failure.
+fn is_http_conflict(error: &anyhow::Error) -> bool {
+    error.to_string().contains("HTTP 409")
+}
+
 /// Posts a permission decision in the v2.0.11+ shape, then the previous
 /// `reply` field if that body is rejected.
 ///
@@ -335,6 +345,76 @@ fn form_reply_path(session_id: &str, form_id: &str) -> String {
         encode_path_segment(session_id),
         encode_path_segment(form_id)
     )
+}
+
+/// The current v2 form contract settles a question as cancelled through a
+/// dedicated route. Some builds only expose the `DELETE` form route the API
+/// reference documents, so both are attempted.
+fn form_cancel_path(session_id: &str, form_id: &str) -> String {
+    format!(
+        "/api/session/{}/form/{}/cancel",
+        encode_path_segment(session_id),
+        encode_path_segment(form_id)
+    )
+}
+
+fn form_delete_path(session_id: &str, form_id: &str) -> String {
+    format!(
+        "/api/session/{}/form/{}",
+        encode_path_segment(session_id),
+        encode_path_segment(form_id)
+    )
+}
+
+/// Cancels `form_id`, retargeting to the session that currently owns it when
+/// the preferred one answers 404 (a child session's prompt can arrive before
+/// its row is known). Current v2 settles the form through its own `DELETE`
+/// route with an optional reason; releases that only expose `POST …/cancel`
+/// are still served. The reason tells the agent why it has no answer.
+fn cancel_form_on_server(
+    server: &crate::opencode_pool::PooledServer,
+    preferred_session: &str,
+    form_id: &str,
+) -> anyhow::Result<()> {
+    let message = encode_path_segment(&tr!("user_input.skip_message"));
+    let attempt = |session: &str| -> anyhow::Result<()> {
+        let delete_path = format!("{}?message={message}", form_delete_path(session, form_id));
+        let delete_error = match server.request("DELETE", &delete_path, None) {
+            Ok(_) => return Ok(()),
+            Err(error) if is_http_conflict(&error) => return Ok(()),
+            Err(error) => error,
+        };
+        let cancel_path = format!("{}?message={message}", form_cancel_path(session, form_id));
+        match server.request("POST", &cancel_path, None) {
+            Ok(_) => Ok(()),
+            Err(error) if is_http_conflict(&error) => Ok(()),
+            Err(_) => Err(delete_error),
+        }
+    };
+
+    let first_error = match attempt(preferred_session) {
+        Ok(()) => return Ok(()),
+        Err(error) => error,
+    };
+    let pending = crate::opencode_session::request_form_list(server.port, |path| {
+        server.request("GET", path, None)
+    })
+    .ok();
+    let owner = pending
+        .as_ref()
+        .and_then(|pending| lookup_pending_item_session(pending, form_id));
+    // A form that is no longer listed settled elsewhere; there is nothing
+    // left to dismiss, so the caller's intent is already satisfied.
+    if pending.is_some() && owner.is_none() {
+        return Ok(());
+    }
+    if let Some(owner) = owner.filter(|owner| owner != preferred_session) {
+        match attempt(&owner) {
+            Ok(()) => return Ok(()),
+            Err(_) => {}
+        }
+    }
+    Err(first_error)
 }
 
 fn value_session_id(value: &Value) -> Option<&str> {
@@ -1823,6 +1903,45 @@ impl OpenCodeDriver {
                                 }
                             }
                         }
+                        CommandMessage::CancelUserInput {
+                            request_id,
+                            session_id,
+                        } => {
+                            // Skipping a question is the provider's own cancel
+                            // path: the form settles as cancelled and the
+                            // question tool reports that rejection to the
+                            // agent. Releases that still publish
+                            // `question.asked` reject the dedicated record.
+                            let result = if request_id.starts_with("frm_") {
+                                let stored_session =
+                                    worker_forms.lock().sessions.get(&request_id).cloned();
+                                let target = session_id
+                                    .filter(|id| !id.is_empty())
+                                    .or(stored_session)
+                                    .unwrap_or_else(|| worker_session.clone());
+                                cancel_form_on_server(&worker_server, &target, &request_id)
+                            } else {
+                                let path = format!(
+                                    "/api/question/{}/reject",
+                                    encode_path_segment(&request_id)
+                                );
+                                worker_server.request("POST", &path, None).map(|_| ())
+                            };
+                            match result {
+                                Ok(()) => {
+                                    let mut forms = worker_forms.lock();
+                                    forms.fields.remove(&request_id);
+                                    forms.sessions.remove(&request_id);
+                                }
+                                Err(error) => {
+                                    let _ = worker_events.send(DriverEvent::Error(tr!(
+                                        "errors.dismiss_provider_question",
+                                        provider = "OpenCode",
+                                        error = error
+                                    )));
+                                }
+                            }
+                        }
                         CommandMessage::Shutdown => break,
                     }
                 }
@@ -2240,6 +2359,14 @@ impl DriverControl for OpenCodeDriver {
         let _ = self.commands.send(CommandMessage::RespondUserInput {
             request_id,
             answers,
+            session_id,
+        });
+    }
+
+    fn cancel_user_input(&self, request_id: String) {
+        let session_id = self.forms.lock().sessions.get(&request_id).cloned();
+        let _ = self.commands.send(CommandMessage::CancelUserInput {
+            request_id,
             session_id,
         });
     }

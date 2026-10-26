@@ -1683,6 +1683,14 @@ user_input.next:
   en: Next
 user_input.submit:
   en: Submit
+user_input.skip:
+  en: Skip
+user_input.collapse:
+  en: Collapse
+user_input.expand:
+  en: Expand
+user_input.skip_message:
+  en: "The user skipped this question. Continue without an answer; make reasonable assumptions and state them."
 user_input.progress:
   en: "%{current} of %{total}"
 composer.preparing_task:
@@ -1913,6 +1921,8 @@ errors.answer_provider_permission:
   en: "Could not answer %{provider}'s permission request: %{error}"
 errors.answer_provider_question:
   en: "Could not answer %{provider}'s question: %{error}"
+errors.dismiss_provider_question:
+  en: "Could not dismiss %{provider}'s question: %{error}"
 errors.provider_receive_prompt:
   en: "%{provider} could not receive the prompt"
 errors.provider_start_turn:

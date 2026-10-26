@@ -2784,6 +2784,7 @@ fn handle_driver_command(
             request_id,
             answers,
         } => driver.respond_user_input(request_id, answers),
+        Command::CancelUserInput { request_id } => driver.cancel_user_input(request_id),
         Command::ApplyOptions { options } => {
             return Ok(ResponsePayload::OptionsApplied {
                 applied: driver.apply_options(SessionOptions {

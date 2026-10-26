@@ -93,6 +93,10 @@ impl DriverHandle {
         self.inner.respond_user_input(request_id, answers);
     }
 
+    pub fn cancel_user_input(&self, request_id: String) {
+        self.inner.cancel_user_input(request_id);
+    }
+
     pub fn apply_options(&self, options: SessionOptions) -> bool {
         self.inner.apply_options(options)
     }
@@ -131,6 +135,8 @@ pub trait DriverControl: Send + Sync {
     fn stop_background_work(&self, _key: BackgroundWorkKey, _control_id: String) {}
     fn respond(&self, request_id: String, option_id: String);
     fn respond_user_input(&self, _request_id: String, _answers: Vec<UserInputAnswer>) {}
+    /// Dismiss a pending question instead of answering it.
+    fn cancel_user_input(&self, _request_id: String) {}
     fn apply_options(&self, _options: SessionOptions) -> bool {
         false
     }

@@ -277,6 +277,10 @@ impl DriverControl for RemoteDriverControl {
         });
     }
 
+    fn cancel_user_input(&self, request_id: String) {
+        self.notify(fintwind_client::Command::CancelUserInput { request_id });
+    }
+
     fn apply_options(&self, options: SessionOptions) -> bool {
         let options = (|| {
             Ok::<_, anyhow::Error>(fintwind_client::WireSessionOptions {

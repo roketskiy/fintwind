@@ -1732,6 +1732,30 @@ impl Fintwind {
         cx.notify();
     }
 
+    /// Dismiss the pending question without answering it. The provider
+    /// settles the form as cancelled, so the agent receives the rejection and
+    /// carries on; the card goes away without inventing an answer.
+    pub(super) fn skip_user_input(&mut self, cx: &mut Context<Self>) {
+        let Some(session_id) = self.state.selected_session else {
+            return;
+        };
+        {
+            let Some(runtime) = self.runtimes.get_mut(&session_id) else {
+                return;
+            };
+            let Some(pending) = runtime.pending_user_input.take() else {
+                return;
+            };
+            runtime.driver.cancel_user_input(pending.request_id);
+        }
+        if let Some(session) = self.state.session_mut(session_id) {
+            session.status = SessionStatus::Working;
+        }
+        self.user_input_answer
+            .update(cx, |input, cx| input.clear(cx));
+        cx.notify();
+    }
+
     pub(super) fn advance_user_input(&mut self, cx: &mut Context<Self>) {
         let Some(session_id) = self.state.selected_session else {
             return;

@@ -494,6 +494,13 @@ pub fn execute(operation: WorkspaceOperation) -> anyhow::Result<WorkspaceResult>
                 query_id,
             )?,
         },
+        WorkspaceOperation::CollectReviewStats {
+            cwd,
+            source,
+            query_id,
+        } => with_git_request(query_id, |cancelled| {
+            collect_review_stats(&cwd, source, cancelled)
+        })?,
         WorkspaceOperation::CancelGitQuery { query_id } => {
             cancel_git_request(query_id)?;
             WorkspaceResult::Ack
@@ -607,6 +614,78 @@ fn collect_review_diff(cwd: &Path, source: ReviewDiffSource) -> anyhow::Result<R
         complete_context,
         truncated: !complete_context,
         file: None,
+    })
+}
+
+/// Line totals for every file one review source covers. The review toolbar
+/// shows one figure for the whole area, so this must span the source rather
+/// than the selected file, and it must stay cheap enough to run beside the
+/// file's own diff:
+///
+/// - Live sources diff their two trees directly. Capturing a worktree snapshot
+///   here would repeat the expensive `git add -A` the diff request already did.
+/// - Untracked files are additions only; they have no diff. Their scan is
+///   bounded, and `truncated` says the totals under-report.
+fn collect_review_stats(
+    cwd: &Path,
+    source: ReviewDiffSource,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<WorkspaceResult> {
+    ensure_repository(cwd)?;
+    let head = resolve(cwd, "HEAD").unwrap_or_else(|| EMPTY_TREE.to_owned());
+    let mut command = crate::command_env::plain_command("git");
+    command
+        .args([
+            "--no-pager",
+            "--literal-pathspecs",
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--no-ext-diff",
+            "--no-color",
+            "--numstat",
+            "--no-renames",
+        ])
+        .current_dir(cwd);
+    let untracked = matches!(
+        source,
+        ReviewDiffSource::Uncommitted | ReviewDiffSource::Unstaged | ReviewDiffSource::Branch
+    );
+    match source {
+        ReviewDiffSource::Uncommitted => {
+            command.arg(&head);
+        }
+        ReviewDiffSource::Unstaged => {}
+        ReviewDiffSource::Staged => {
+            command.arg("--cached").arg(&head);
+        }
+        ReviewDiffSource::Committed => {
+            command.arg(branch_base(cwd)?).arg("HEAD");
+        }
+        ReviewDiffSource::Branch => {
+            command.arg(branch_base(cwd)?);
+        }
+        ReviewDiffSource::LastTurn { .. } => {
+            let range = resolve_diff_range(cwd, source)?;
+            command.arg(range.from).arg(range.to);
+        }
+    }
+    command.args(["--", "."]);
+    let output = bounded_git_output_cancellable(&mut command, false, cancelled, true)?;
+    let ((mut additions, deletions), files) = crate::git_branch::numstat_totals(&output);
+    let mut truncated = false;
+    let mut files = files;
+    if untracked {
+        let untracked = crate::git_branch::untracked_line_stats(cwd);
+        additions = additions.saturating_add(untracked.additions);
+        files = files.saturating_add(untracked.files);
+        truncated = !untracked.complete;
+    }
+    Ok(WorkspaceResult::ReviewStats {
+        additions,
+        deletions,
+        files,
+        truncated,
     })
 }
 

@@ -1258,6 +1258,7 @@ diff.resize_tree: 调整差异文件树宽度
 diff.changed_files: 已更改的文件
 diff.file_count_one: 1 个文件
 diff.file_count: "%{count} 个文件"
+diff.stats_partial: 部分未跟踪文件未计入
 diff.status_added: 新增
 diff.status_deleted: 删除
 diff.rows_hidden_one: 还有 1 行 · 打开审阅查看完整更改

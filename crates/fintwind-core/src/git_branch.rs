@@ -165,34 +165,52 @@ fn worktree_line_counts(cwd: &Path) -> (u64, u64) {
             .filter(|output| output.status.success())
             .map_or((0, 0), |output| numstat_line_counts(&output.stdout));
     (
-        tracked.0.saturating_add(untracked_line_additions(cwd)),
+        tracked
+            .0
+            .saturating_add(untracked_line_stats(cwd).additions),
         tracked.1,
     )
 }
 
-fn numstat_line_counts(output: &[u8]) -> (u64, u64) {
-    String::from_utf8_lossy(output)
-        .lines()
-        .fold((0, 0), |(additions, deletions), line| {
+pub(crate) fn numstat_line_counts(output: &[u8]) -> (u64, u64) {
+    numstat_totals(output).0
+}
+
+/// Added lines, removed lines, and file count of one `--numstat` stream.
+/// Binary files are reported as `-\t-`; they count as a file but have no line
+/// counts.
+pub(crate) fn numstat_totals(output: &[u8]) -> ((u64, u64), u64) {
+    String::from_utf8_lossy(output).lines().fold(
+        ((0, 0), 0),
+        |((additions, deletions), files), line| {
+            if line.is_empty() {
+                return ((additions, deletions), files);
+            }
             let mut fields = line.splitn(3, '\t');
             let added = fields.next().and_then(|value| value.parse::<u64>().ok());
             let deleted = fields.next().and_then(|value| value.parse::<u64>().ok());
             match (added, deleted) {
                 (Some(added), Some(deleted)) => (
-                    additions.saturating_add(added),
-                    deletions.saturating_add(deleted),
+                    (
+                        additions.saturating_add(added),
+                        deletions.saturating_add(deleted),
+                    ),
+                    files + 1,
                 ),
                 // Binary files are reported as `-\t-` and have no line count.
-                _ => (additions, deletions),
+                _ => ((additions, deletions), files + 1),
             }
-        })
+        },
+    )
 }
 
 /// `git diff --numstat` deliberately omits untracked files. Count their text
 /// lines as additions so the compact status agrees with the Uncommitted review
 /// source that opens when it is clicked. Bounds keep generated trees from
-/// turning a background metadata refresh into unbounded work.
-fn untracked_line_additions(repository: &Path) -> u64 {
+/// turning a background metadata refresh into unbounded work; the flag says
+/// whether a bound stopped the scan, so a caller that reports the number can
+/// say it under-counts.
+pub(crate) fn untracked_line_stats(repository: &Path) -> UntrackedStats {
     let mut command = crate::command_env::plain_command("git");
     command
         .args([
@@ -207,45 +225,82 @@ fn untracked_line_additions(repository: &Path) -> u64 {
     let Ok(output) =
         crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)
     else {
-        return 0;
+        return UntrackedStats::unavailable();
     };
     if !output.status.success() {
-        return 0;
+        return UntrackedStats::unavailable();
     }
 
     let mut remaining_bytes = MAX_UNTRACKED_TOTAL_BYTES;
-    let mut additions = 0_u64;
+    let mut stats = UntrackedStats::default();
     for path in output
         .stdout
         .split(|byte| *byte == 0)
         .filter(|path| !path.is_empty())
-        .take(MAX_UNTRACKED_FILES)
     {
-        if remaining_bytes == 0 {
+        if remaining_bytes == 0 || stats.files >= MAX_UNTRACKED_FILES as u64 {
+            stats.complete = false;
             break;
         }
+        stats.files += 1;
         let path = repository.join(path_from_git_bytes(path));
-        let (lines, bytes_read) =
+        let (lines, bytes_read, complete) =
             untracked_text_line_count(&path, remaining_bytes.min(MAX_UNTRACKED_FILE_BYTES));
-        additions = additions.saturating_add(lines);
+        stats.additions = stats.additions.saturating_add(lines);
+        stats.complete &= complete;
         remaining_bytes = remaining_bytes.saturating_sub(bytes_read);
     }
-    additions
+    stats
 }
 
-fn untracked_text_line_count(path: &Path, maximum_bytes: u64) -> (u64, u64) {
+/// Untracked files' contribution to a line total.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct UntrackedStats {
+    pub additions: u64,
+    pub files: u64,
+    /// False when a file, byte, or count bound stopped the scan, so the counts
+    /// are a lower bound rather than the whole answer.
+    pub complete: bool,
+}
+
+impl Default for UntrackedStats {
+    fn default() -> Self {
+        Self {
+            additions: 0,
+            files: 0,
+            complete: true,
+        }
+    }
+}
+
+impl UntrackedStats {
+    fn unavailable() -> Self {
+        Self {
+            complete: false,
+            ..Self::default()
+        }
+    }
+}
+
+/// Text lines in one untracked file, the bytes it read, and whether the answer
+/// covers the whole file. A file too large for the budget counts as unknown so
+/// the caller can say its total is partial.
+fn untracked_text_line_count(path: &Path, maximum_bytes: u64) -> (u64, u64, bool) {
     let Ok(metadata) = fs::symlink_metadata(path) else {
-        return (0, 0);
+        return (0, 0, false);
     };
     if metadata.file_type().is_symlink() {
-        return (1, 0);
+        return (1, 0, true);
     }
-    if !metadata.is_file() || metadata.len() > maximum_bytes {
-        return (0, 0);
+    if !metadata.is_file() {
+        return (0, 0, true);
+    }
+    if metadata.len() > maximum_bytes {
+        return (0, 0, false);
     }
 
     let Ok(file) = fs::File::open(path) else {
-        return (0, 0);
+        return (0, 0, false);
     };
     let mut content = Vec::with_capacity(metadata.len() as usize);
     if file
@@ -253,18 +308,26 @@ fn untracked_text_line_count(path: &Path, maximum_bytes: u64) -> (u64, u64) {
         .read_to_end(&mut content)
         .is_err()
     {
-        return (0, 0);
+        return (0, 0, false);
     }
     let bytes_read = content.len() as u64;
-    if bytes_read > maximum_bytes || content[..content.len().min(BINARY_PROBE_BYTES)].contains(&0) {
-        return (0, bytes_read);
+    if bytes_read > maximum_bytes {
+        return (0, bytes_read, false);
+    }
+    if content[..content.len().min(BINARY_PROBE_BYTES)].contains(&0) {
+        // Binary files have no line count at all, so nothing was skipped.
+        return (0, bytes_read, true);
     }
     if content.is_empty() {
-        return (0, 0);
+        return (0, 0, true);
     }
     let newline_count = content.iter().filter(|byte| **byte == b'\n').count() as u64;
     let trailing_line = u64::from(content.last() != Some(&b'\n'));
-    (newline_count.saturating_add(trailing_line), bytes_read)
+    (
+        newline_count.saturating_add(trailing_line),
+        bytes_read,
+        true,
+    )
 }
 
 #[cfg(unix)]

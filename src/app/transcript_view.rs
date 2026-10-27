@@ -17,9 +17,6 @@ const ACTIVITY_SECTION_MAX_HEIGHT: f32 = 400.0;
 /// The whole expanded detail area caps here so arguments, output, and images
 /// together can never push the rest of the transcript around.
 const ACTIVITY_DETAIL_MAX_HEIGHT: f32 = 800.0;
-/// Aligns a hunk separator with the line numbers in the rows below it; see
-/// `DiffRowStyle::ACTIVITY`.
-const ACTIVITY_DIFF_GUTTER_WIDTH: f32 = 52.0;
 const ACTIVITY_OPACITY: f32 = 0.70;
 const ACTIVITY_CLUSTER_PREVIEW_LIMIT: usize = 8;
 
@@ -3603,6 +3600,12 @@ impl Fintwind {
             .or_default()
             .clone();
         let wheel_scroll = viewport.scroll_handle.clone();
+        let number_width = crate::app::source_control::review_diff_number_width(
+            crate::app::source_control::review_diff_digits(
+                &diff.snapshot,
+                0..diff.snapshot.lines.len(),
+            ),
+        );
         let mut rows = div()
             .id(SharedString::from(format!("activity-diff-scroll-{id}")))
             .w_full()
@@ -3622,6 +3625,7 @@ impl Fintwind {
                 index,
                 line,
                 &diff.snapshot,
+                number_width,
                 theme,
                 cx,
             ));
@@ -3674,6 +3678,7 @@ impl Fintwind {
         index: usize,
         line: &crate::review_diff::Line,
         snapshot: &crate::review_diff::Snapshot,
+        number_width: f32,
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -3733,10 +3738,12 @@ impl Fintwind {
             // to expand it the way the Review panel does.
             LineKind::Gap(gap) => activity_diff_break_row(
                 Some(tr!("diff.unmodified_lines", count = gap.count())),
+                number_width,
                 theme,
             ),
             LineKind::HunkHeader | LineKind::Meta => activity_diff_break_row(
                 (!line.content.is_empty()).then(|| line.content.clone()),
+                number_width,
                 theme,
             ),
             LineKind::Context | LineKind::Addition | LineKind::Deletion => render_diff_code_row(
@@ -3744,7 +3751,7 @@ impl Fintwind {
                 index,
                 &format!("activity-diff-{id}"),
                 &self.transcript_selection,
-                DiffRowStyle::ACTIVITY,
+                DiffRowStyle::activity(number_width),
                 theme,
             ),
         }
@@ -3797,8 +3804,9 @@ pub(super) fn compact_provider_retry_message(message: &str) -> String {
     compact
 }
 
-/// The separator between two hunks of the same file.
-fn activity_diff_break_row(label: Option<String>, theme: &Theme) -> AnyElement {
+/// The separator between two hunks of the same file. Its `⋯` cell spans the
+/// row's own number and sign columns, so the label starts where code does.
+fn activity_diff_break_row(label: Option<String>, number_width: f32, theme: &Theme) -> AnyElement {
     div()
         .w_full()
         .min_w_0()
@@ -3812,23 +3820,15 @@ fn activity_diff_break_row(label: Option<String>, theme: &Theme) -> AnyElement {
         .text_color(theme.text_muted)
         .child(
             div()
-                .w(px(ACTIVITY_DIFF_GUTTER_WIDTH))
+                .w(px(number_width + 28.0))
                 .flex_none()
                 .self_stretch()
                 .flex()
                 .items_center()
                 .justify_center()
-                .border_r_1()
-                .border_color(theme.border)
                 .child("⋯"),
         )
-        .children(label.map(|label| {
-            div()
-                .min_w_0()
-                .pl(px(12.0))
-                .truncate()
-                .child(SharedString::from(label))
-        }))
+        .children(label.map(|label| div().min_w_0().truncate().child(SharedString::from(label))))
         .into_any_element()
 }
 

@@ -12,6 +12,18 @@ pub(super) struct PendingGitQuery {
     client: fintwind_client::WorkspaceClient,
 }
 
+/// Line totals for every file one review source covers. The toolbar capsule
+/// shows this; the diff snapshot beside it covers only the selected file.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct ReviewAreaStats {
+    pub additions: u64,
+    pub deletions: u64,
+    pub files: u64,
+    /// True when the daemon stopped its untracked scan at a budget, so the
+    /// totals under-report.
+    pub truncated: bool,
+}
+
 /// The source-control mode: the standalone review page that used to live in
 /// the right panel, plus its second column of workspace context. The mode is
 /// reached from the first column's rail, or from a turn's "review changes"
@@ -120,6 +132,13 @@ impl Fintwind {
         self.cancel_source_control_query(status_request, cx);
         let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
             self.cancel_nested_repository_queries(cx);
+            let stats_request = self.source_control_stats_request.take();
+            self.cancel_source_control_query(stats_request, cx);
+            self.source_control_stats_generation =
+                self.source_control_stats_generation.wrapping_add(1);
+            self.source_control_stats = None;
+            self.source_control_stats_key = None;
+            self.source_control_stats_dirty = false;
             let untracked_request = self.source_control_untracked_request.take();
             let ignored_request = self.source_control_ignored_request.take();
             self.cancel_source_control_query(untracked_request, cx);
@@ -168,8 +187,10 @@ impl Fintwind {
         {
             self.source_control_status_pending = true;
             self.right_panel_diff_generation = self.right_panel_diff_generation.wrapping_add(1);
+            self.refresh_review_stats(cx);
             return;
         }
+        self.refresh_review_stats(cx);
         self.source_control_status_pending = false;
         self.source_control_nested_candidates = None;
         let untracked_request = self.source_control_untracked_request.take();
@@ -1953,15 +1974,32 @@ impl Fintwind {
             cx.notify();
             return;
         }
+        let switched_source = self.right_panel_diff_source != source;
         self.reset_review_diff_state(source);
         self.review_pending_file_focus = Some(path);
         self.refresh_review_diff(cx);
+        if switched_source {
+            self.refresh_review_stats(cx);
+        }
     }
 
     /// Rebuilds the single-file diff rows from the cached snapshot, the
     /// selected file, and the layout. Called whenever any of the three
     /// changes; render reads only the flattened result.
     pub(super) fn sync_source_control_diff_rows(&mut self) {
+        let range = self
+            .right_panel_diff_snapshot
+            .as_ref()
+            .zip(self.right_panel_diff_selected_file)
+            .map(|(snapshot, file_index)| source_control_file_line_range(snapshot, file_index));
+        self.source_control_number_width = self
+            .right_panel_diff_snapshot
+            .as_ref()
+            .zip(range.clone())
+            .map_or_else(
+                || review_diff_number_width(2),
+                |(snapshot, range)| review_diff_number_width(review_diff_digits(snapshot, range)),
+            );
         let rows = self
             .right_panel_diff_snapshot
             .as_ref()
@@ -3925,14 +3963,87 @@ impl Fintwind {
         let selected = self.right_panel_diff_source;
         let latest_turn = self.latest_review_turn_source();
         let source_label = self.review_diff_source_label(selected);
+        let stats = self
+            .source_control_stats_key
+            .as_ref()
+            .filter(|(workspace, source)| {
+                *source == selected
+                    && self
+                        .review_workspace_path()
+                        .is_some_and(|current| current == workspace)
+            })
+            .and(self.source_control_stats)
+            .filter(|stats| stats.additions > 0 || stats.deletions > 0);
         let weak = cx.entity().downgrade();
         let handle = self.menu_handle("review-diff-source", cx);
+        let open = handle.is_open();
+        let trigger = div()
+            .id("review-diff-source")
+            .flex_none()
+            .h(px(26.0))
+            .pl(px(10.0))
+            .pr(px(8.0))
+            .rounded_full()
+            .border_1()
+            .border_color(if open {
+                theme.border_strong
+            } else {
+                theme.border
+            })
+            .bg(if open { theme.overlay } else { theme.surface })
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .cursor_default()
+            .text_size(ui_px(11.5))
+            .line_height(ui_px(16.0))
+            .hover(|pill| pill.bg(theme.overlay))
+            .focus_visible(|pill| pill.border_color(theme.accent))
+            .when_some(stats, |pill, stats| {
+                let mut tooltip = tr!("diff.file_count", count = stats.files);
+                if stats.truncated {
+                    tooltip.push_str(" · ");
+                    tooltip.push_str(&tr!("diff.stats_partial"));
+                }
+                pill.tooltip(Tooltip::text(tooltip))
+            })
+            .child(
+                div()
+                    .min_w_0()
+                    .max_w(px(160.0))
+                    .truncate()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(theme.text_secondary)
+                    .child(source_label),
+            )
+            .child(icon("icons/chevron-down.svg", 10.0, theme.text_ghost))
+            .when_some(stats, |pill, stats| {
+                pill.child(div().flex_none().h(px(10.0)).w(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.0))
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.success_text)
+                                    .child(format!("+{}", grouped_count(stats.additions))),
+                            )
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(theme.danger_text)
+                                    .child(format!("\u{2212}{}", grouped_count(stats.deletions))),
+                            )
+                            .when(stats.truncated, |group| {
+                                group.child(div().text_color(theme.text_tertiary).child("\u{2026}"))
+                            }),
+                    )
+            });
         let source = dropdown_menu(
-            MenuChip::new("review-diff-source")
-                .label(source_label)
-                .height(px(28.0))
-                .background(theme.surface)
-                .selected(handle.is_open()),
+            trigger,
             "review-diff-source-menu",
             &handle,
             MenuAlign::BelowLeft,
@@ -3985,12 +4096,10 @@ impl Fintwind {
             },
         );
 
-        let (additions, deletions, truncated) = self
+        let truncated = self
             .right_panel_diff_snapshot
             .as_ref()
-            .map_or((0, 0, false), |snapshot| {
-                (snapshot.additions, snapshot.deletions, snapshot.truncated)
-            });
+            .is_some_and(|snapshot| snapshot.truncated);
         let refresh_focus = self.transcript_control_focus("review-diff-refresh", cx);
         let refresh_icon: AnyElement = if self.right_panel_diff_loading {
             motion::spin(icon("icons/loader-circle.svg", 12.0, theme.text_tertiary))
@@ -4013,10 +4122,10 @@ impl Fintwind {
             .active(|style| style.bg(theme.overlay_strong))
             .child(refresh_icon)
             .tooltip(|window, cx| Tooltip::new(tr!("diff.refresh")).build(window, cx))
-            .on_click(cx.listener(|this, _, _, cx| this.refresh_review_diff(cx)))
+            .on_click(cx.listener(|this, _, _, cx| this.refresh_review_surface(cx)))
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
                 if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    this.refresh_review_diff(cx);
+                    this.refresh_review_surface(cx);
                     cx.stop_propagation();
                 }
             }));
@@ -4045,20 +4154,6 @@ impl Fintwind {
             .border_b_1()
             .border_color(theme.border)
             .child(source)
-            .child(
-                div()
-                    .text_size(ui_px(11.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.success_text)
-                    .child(format!("+{additions}")),
-            )
-            .child(
-                div()
-                    .text_size(ui_px(11.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(theme.danger_text)
-                    .child(format!("-{deletions}")),
-            )
             .when(truncated, |row| {
                 row.child(
                     div()
@@ -4250,9 +4345,16 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::current(cx);
+        let number_width = self.source_control_number_width;
         let side = |line_index: Option<usize>, old_side: bool| -> AnyElement {
             let Some(line_index) = line_index else {
-                return div().w(px(1.0)).flex_1().self_stretch().into_any_element();
+                return div()
+                    .flex_1()
+                    .min_w_0()
+                    .self_stretch()
+                    .pl(px(8.0))
+                    .bg(theme.overlay)
+                    .into_any_element();
             };
             let Some(snapshot) = self.right_panel_diff_snapshot.as_ref() else {
                 return div().into_any_element();
@@ -4265,18 +4367,18 @@ impl Fintwind {
             } else {
                 line.new_line
             };
-            let (body_background, gutter_background, edge) = match &line.kind {
+            let (marker, body_background, sign_color) = match &line.kind {
                 crate::review_diff::LineKind::Addition => (
-                    Some(theme.success.opacity(0.20)),
-                    Some(theme.success.opacity(0.15)),
-                    Some(theme.success),
+                    "+",
+                    Some(theme.success.opacity(DIFF_ROW_WASH)),
+                    theme.success_text,
                 ),
                 crate::review_diff::LineKind::Deletion => (
-                    Some(theme.danger.opacity(0.20)),
-                    Some(theme.danger.opacity(0.15)),
-                    Some(theme.danger),
+                    "\u{2212}",
+                    Some(theme.danger.opacity(DIFF_ROW_WASH)),
+                    theme.danger_text,
                 ),
-                _ => (None, None, None),
+                _ => (" ", None, theme.text_ghost),
             };
             let flat = review_diff_flat_text(line, &theme);
             let selectable = md::render::selectable_flat_text(
@@ -4303,32 +4405,32 @@ impl Fintwind {
                 .min_w_0()
                 .min_h(px(20.0))
                 .self_stretch()
+                .pl(px(8.0))
                 .flex()
                 .items_stretch()
                 .when_some(body_background, |side, background| side.bg(background))
                 .child(
                     div()
-                        .w(px(44.0))
-                        .self_stretch()
+                        .w(px(number_width))
                         .flex_none()
                         .pr(px(8.0))
-                        .flex()
-                        .items_start()
-                        .justify_end()
-                        .border_r_1()
-                        .border_color(theme.border)
+                        .text_right()
                         .text_color(theme.text_tertiary)
-                        .when_some(gutter_background, |gutter, background| {
-                            gutter.bg(background)
-                        })
                         .children(number.map(|number| number.to_string())),
                 )
-                .when_some(edge, |side, edge| side.border_l_2().border_color(edge))
+                .child(
+                    div()
+                        .w(px(10.0))
+                        .flex_none()
+                        .text_color(sign_color)
+                        .child(marker),
+                )
                 .child(
                     div()
                         .min_w_0()
                         .flex_1()
-                        .pl(px(10.0))
+                        .pl(px(2.0))
+                        .pr(px(8.0))
                         .flex()
                         .items_start()
                         .overflow_hidden()
@@ -4346,9 +4448,9 @@ impl Fintwind {
             .font_family(md::render::mono_family())
             .text_size(code_px(10.5))
             .line_height(code_px(20.0))
-            .child(side(left, true))
+            .child(div().flex_1().min_w_0().flex().child(side(left, true)))
             .child(div().w(px(1.0)).flex_none().self_stretch().bg(theme.border))
-            .child(side(right, false))
+            .child(div().flex_1().min_w_0().flex().child(side(right, false)))
             .into_any_element()
     }
 
@@ -4377,13 +4479,11 @@ impl Fintwind {
                 let directions = review_diff_gap_directions(gap.position, chunked);
                 let two_directions = directions.len() > 1;
                 let gutter = div()
-                    .w(px(52.0))
+                    .w(px(self.source_control_number_width * 2.0 + 24.0))
                     .h_full()
                     .flex_none()
                     .flex()
                     .when(two_directions, |gutter| gutter.flex_col())
-                    .border_r_1()
-                    .border_color(theme.border)
                     .bg(theme.overlay)
                     .when(expandable, |mut gutter| {
                         for (button_index, direction) in directions.iter().copied().enumerate() {
@@ -4414,8 +4514,12 @@ impl Fintwind {
                     .px(px(12.0))
                     .flex()
                     .items_center()
+                    .justify_center()
                     .bg(theme.overlay)
-                    .child(tr!("diff.unmodified_lines", count = gap.count()))
+                    .child(format!(
+                        "\u{22ef} {}",
+                        tr!("diff.unmodified_lines", count = gap.count())
+                    ))
                     .when(expandable, |label| {
                         label
                             .tab_index(0)
@@ -4466,21 +4570,12 @@ impl Fintwind {
                 .w_full()
                 .min_w_0()
                 .flex()
-                .items_stretch()
+                .items_center()
                 .font_family(md::render::mono_family())
                 .text_size(code_px(10.0))
                 .line_height(code_px(16.0))
                 .text_color(theme.text_tertiary)
-                .child(
-                    div()
-                        .w(px(52.0))
-                        .min_h(px(24.0))
-                        .self_stretch()
-                        .flex_none()
-                        .border_r_1()
-                        .border_color(theme.border)
-                        .bg(theme.overlay),
-                )
+                .bg(theme.overlay)
                 .child(
                     div()
                         .min_h(px(24.0))
@@ -4492,7 +4587,6 @@ impl Fintwind {
                         .items_start()
                         .overflow_hidden()
                         .whitespace_normal()
-                        .bg(theme.overlay)
                         .child(line.content.clone()),
                 )
                 .into_any_element(),
@@ -4501,21 +4595,20 @@ impl Fintwind {
                 .w_full()
                 .min_w_0()
                 .flex()
-                .items_stretch()
+                .items_center()
                 .font_family(md::render::mono_family())
                 .text_size(code_px(10.5))
                 .line_height(code_px(16.0))
                 .text_color(theme.text_tertiary)
-                .child(div().w(px(52.0)).min_h(px(24.0)).self_stretch().flex_none())
                 .child(
                     div()
                         .min_h(px(24.0))
                         .min_w_0()
                         .flex_1()
+                        .px(px(12.0))
                         .py(px(4.0))
                         .overflow_hidden()
                         .whitespace_normal()
-                        .pr(px(10.0))
                         .child(line.content.clone()),
                 )
                 .into_any_element(),
@@ -4526,7 +4619,7 @@ impl Fintwind {
                 index,
                 "review-diff",
                 &self.right_panel_diff_selection,
-                DiffRowStyle::REVIEW,
+                DiffRowStyle::review(self.source_control_number_width),
                 &theme,
             ),
         }
@@ -4754,7 +4847,99 @@ impl Fintwind {
             self.reset_review_diff_state(source);
         }
         self.refresh_review_diff(cx);
+        self.refresh_review_stats(cx);
         cx.notify();
+    }
+
+    /// Fetches the whole source's line totals for the toolbar capsule. This is
+    /// deliberately separate from the file diff: the toolbar needs one figure
+    /// for the area, and the reader still only loads the file it shows.
+    ///
+    /// A request already in flight for the same workspace and source wins; a
+    /// call that arrives meanwhile only marks that answer stale, and the
+    /// result asks for one more pass.
+    pub(super) fn refresh_review_stats(&mut self, cx: &mut Context<Self>) {
+        let Some(workspace) = self.review_workspace_path().map(Path::to_path_buf) else {
+            let request = self.source_control_stats_request.take();
+            self.cancel_source_control_query(request, cx);
+            self.source_control_stats_generation =
+                self.source_control_stats_generation.wrapping_add(1);
+            self.source_control_stats = None;
+            self.source_control_stats_key = None;
+            self.source_control_stats_dirty = false;
+            return;
+        };
+        let source = self.right_panel_diff_source;
+        let key = (workspace.clone(), source);
+        let same_key = self.source_control_stats_key.as_ref() == Some(&key);
+        if same_key && self.source_control_stats_request.is_some() {
+            // The answer in flight predates this state change. Ask again once
+            // it lands rather than firing a second Git call now.
+            self.source_control_stats_dirty = true;
+            return;
+        }
+        if !same_key {
+            self.source_control_stats = None;
+        }
+        self.source_control_stats_key = Some(key);
+        self.source_control_stats_dirty = false;
+        self.source_control_stats_generation = self.source_control_stats_generation.wrapping_add(1);
+        let generation = self.source_control_stats_generation;
+        let previous = self.source_control_stats_request.take();
+        self.cancel_source_control_query(previous, cx);
+        let query_id = Uuid::new_v4();
+        let client = fintwind_client::WorkspaceClient::new(self.daemon.client());
+        self.source_control_stats_request = Some(PendingGitQuery {
+            id: query_id,
+            client: client.clone(),
+        });
+        cx.spawn(async move |fintwind, cx| {
+            let request_workspace = workspace.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    client.request(fintwind_client::WorkspaceOperation::CollectReviewStats {
+                        cwd: request_workspace,
+                        source: crate::review_diff::wire_source(source),
+                        query_id: Some(query_id),
+                    })
+                })
+                .await;
+            fintwind
+                .update(cx, |this, cx| {
+                    if this.source_control_stats_generation != generation {
+                        return;
+                    }
+                    this.source_control_stats_request = None;
+                    this.source_control_stats = match result {
+                        Ok(fintwind_client::WorkspaceResult::ReviewStats {
+                            additions,
+                            deletions,
+                            files,
+                            truncated,
+                        }) => Some(ReviewAreaStats {
+                            additions,
+                            deletions,
+                            files,
+                            truncated,
+                        }),
+                        _ => None,
+                    };
+                    if std::mem::take(&mut this.source_control_stats_dirty) {
+                        this.refresh_review_stats(cx);
+                    }
+                    cx.notify();
+                })
+                .ok();
+        })
+        .detach();
+    }
+
+    /// The toolbar's refresh: both the file the reader shows and the area
+    /// totals beside its name, so the number never lags the file.
+    fn refresh_review_surface(&mut self, cx: &mut Context<Self>) {
+        self.refresh_review_diff(cx);
+        self.refresh_review_stats(cx);
     }
 
     /// Captures one stable Git range and turns it into render-ready rows. Git,
@@ -5714,6 +5899,20 @@ fn diff_stat_split(added: usize, removed: usize) -> Option<usize> {
     (total > 0).then(|| (added * 5 + total / 2) / total)
 }
 
+/// A count grouped for reading, so a five-figure total stays legible in a
+/// narrow capsule.
+fn grouped_count(value: u64) -> String {
+    let text = value.to_string();
+    let mut grouped = String::with_capacity(text.len() + text.len() / 3);
+    for (index, digit) in text.chars().enumerate() {
+        if index > 0 && (text.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 /// A file's line-change stat: the two counts plus five squares shared
 /// between them, after Ely's `DiffStat` badge.
 fn render_diff_stat(added: u64, removed: u64, theme: &Theme) -> Div {
@@ -5787,27 +5986,33 @@ fn review_diff_gap_directions(
 
 #[derive(Clone, Copy)]
 pub(super) struct DiffRowStyle {
-    gutter_width: f32,
+    /// One line-number column's width, sized to the widest number the diff
+    /// shows so the code column never shifts between rows.
+    number_width: f32,
     row_height: f32,
-    /// What to put in the gutter of a row that has no line number. Git always
-    /// reports positions, so this only comes up on a diff synthesized from a
-    /// provider's before/after text: there the `+`/`-` marker stands in, which
-    /// keeps the gutter from going blank and the meaning off color alone.
-    marker_fallback: bool,
+    /// Unified rows carry the old and the new number side by side.
+    two_numbers: bool,
 }
 
 impl DiffRowStyle {
-    pub(super) const REVIEW: Self = Self {
-        gutter_width: 52.0,
-        row_height: 20.0,
-        marker_fallback: false,
-    };
-    /// The same rows the review page draws, so an edit reads the same
-    /// wherever it is opened.
-    pub(super) const ACTIVITY: Self = Self {
-        marker_fallback: true,
-        ..Self::REVIEW
-    };
+    /// The review page's rows: one file's diff, both sides numbered.
+    pub(super) fn review(number_width: f32) -> Self {
+        Self {
+            number_width,
+            row_height: 20.0,
+            two_numbers: true,
+        }
+    }
+
+    /// A change card's rows: the same code, one number column, because a
+    /// provider's synthesised patch often has no positions at all.
+    pub(super) fn activity(number_width: f32) -> Self {
+        Self {
+            number_width,
+            row_height: 20.0,
+            two_numbers: false,
+        }
+    }
 }
 
 /// Selection identity for one diff code row. Selection resolves a drag by
@@ -5842,6 +6047,32 @@ fn diff_row_selection_key(
     }
 }
 
+/// The widest line number in `range`, at least two digits.
+pub(super) fn review_diff_digits(
+    snapshot: &crate::review_diff::Snapshot,
+    range: Range<usize>,
+) -> usize {
+    snapshot
+        .lines
+        .get(range)
+        .unwrap_or_default()
+        .iter()
+        .flat_map(|line| [line.old_line, line.new_line])
+        .flatten()
+        .max()
+        .unwrap_or(1)
+        .to_string()
+        .len()
+        .max(2)
+}
+
+/// One number column's width for a given digit count, so the code column
+/// keeps the same place on every row.
+pub(super) fn review_diff_number_width(digits: usize) -> f32 {
+    let size: f32 = code_px(10.5).into();
+    (size * (digits as f32 * 0.62 + 0.8)).max(size * 1.6)
+}
+
 /// One context, addition, or deletion row, shared by the review page and the
 /// diff inside an expanded file-change activity so the two never drift.
 pub(super) fn render_diff_code_row(
@@ -5852,26 +6083,19 @@ pub(super) fn render_diff_code_row(
     style: DiffRowStyle,
     theme: &Theme,
 ) -> AnyElement {
-    let semantic_body_opacity = if theme.is_dark { 0.20 } else { 0.12 };
-    let semantic_gutter_opacity = if theme.is_dark { 0.15 } else { 0.09 };
-    let (marker, body_background, gutter_background, edge, number_color) = match &line.kind {
+    let (marker, body_background, sign_color) = match &line.kind {
         crate::review_diff::LineKind::Addition => (
             "+",
-            Some(theme.success.opacity(semantic_body_opacity)),
-            Some(theme.success.opacity(semantic_gutter_opacity)),
-            Some(theme.success),
-            theme.success,
+            Some(theme.success.opacity(DIFF_ROW_WASH)),
+            theme.success_text,
         ),
         crate::review_diff::LineKind::Deletion => (
-            "-",
-            Some(theme.danger.opacity(semantic_body_opacity)),
-            Some(theme.danger.opacity(semantic_gutter_opacity)),
-            Some(theme.danger),
-            theme.danger,
+            "\u{2212}",
+            Some(theme.danger.opacity(DIFF_ROW_WASH)),
+            theme.danger_text,
         ),
-        _ => (" ", None, None, None, theme.text_tertiary),
+        _ => (" ", None, theme.text_ghost),
     };
-    let shown_line = line.new_line.or(line.old_line);
     let flat = review_diff_flat_text(line, theme);
     let selectable = md::render::selectable_flat_text(
         &flat,
@@ -5881,36 +6105,46 @@ pub(super) fn render_diff_code_row(
         theme.selection,
         false,
     );
-    let gutter = div()
-        .w(px(style.gutter_width))
+    let number = |value: Option<u32>| {
+        div()
+            .w(px(style.number_width))
+            .flex_none()
+            .text_right()
+            .children(value.map(|value| value.to_string()))
+    };
+    let mut gutter = div()
         .min_h(px(style.row_height))
         .self_stretch()
         .flex_none()
-        .pr(px(9.0))
+        .pl(px(8.0))
+        .pr(px(8.0))
         .flex()
+        .gap(px(6.0))
         .items_start()
-        .justify_end()
-        .border_r_1()
-        .border_color(theme.border)
-        .text_color(number_color)
-        .when_some(gutter_background, |gutter, background| {
-            gutter.bg(background)
-        })
-        .child(
-            shown_line
-                .map(|line| line.to_string())
-                .or_else(|| style.marker_fallback.then(|| marker.to_owned()))
-                .unwrap_or_default(),
-        );
+        .text_color(theme.text_tertiary);
+    if style.two_numbers {
+        gutter = gutter
+            .child(number(line.old_line))
+            .child(number(line.new_line));
+    } else {
+        gutter = gutter.child(number(line.new_line.or(line.old_line)));
+    }
     let body = div()
         .min_h(px(style.row_height))
         .self_stretch()
         .min_w_0()
         .flex_1()
-        .pl(px(12.0))
         .flex()
         .items_start()
-        .when_some(body_background, |body, background| body.bg(background))
+        .child(
+            div()
+                .id(SharedString::from(format!("{key_prefix}-sign-{index}")))
+                .w(px(10.0))
+                .min_h(px(style.row_height))
+                .flex_none()
+                .text_color(sign_color)
+                .child(marker),
+        )
         .child(
             div()
                 .id(SharedString::from(format!(
@@ -5919,6 +6153,7 @@ pub(super) fn render_diff_code_row(
                 .min_h(px(style.row_height))
                 .min_w_0()
                 .flex_1()
+                .pl(px(2.0))
                 .pr(px(10.0))
                 .flex()
                 .items_start()
@@ -5937,14 +6172,18 @@ pub(super) fn render_diff_code_row(
         .flex_none()
         .flex()
         .items_stretch()
+        .when_some(body_background, |row, background| row.bg(background))
         .font_family(md::render::mono_family())
         .text_size(code_px(10.5))
         .line_height(code_px(style.row_height))
-        .when_some(edge, |row, edge| row.border_l_2().border_color(edge))
         .child(gutter)
         .child(body)
         .into_any_element()
 }
+
+/// The faint row wash the review reader uses. The changed words inside the
+/// row are washed harder, so an edit reads without either half shouting.
+const DIFF_ROW_WASH: f32 = 0.08;
 
 fn review_diff_flat_text(line: &crate::review_diff::Line, theme: &Theme) -> md::render::FlatText {
     let text = line.content.clone();
@@ -5974,6 +6213,16 @@ fn review_diff_flat_text(line: &crate::review_diff::Line, theme: &Theme) -> md::
     if offset < text.len() {
         push(text.len() - offset, theme.text_secondary);
     }
+    if !line.words.is_empty() {
+        let wash = match line.kind {
+            crate::review_diff::LineKind::Addition => Some(theme.success.opacity(WORD_WASH)),
+            crate::review_diff::LineKind::Deletion => Some(theme.danger.opacity(WORD_WASH)),
+            _ => None,
+        };
+        if let Some(wash) = wash {
+            runs = wash_word_runs(runs, &line.words, wash);
+        }
+    }
     md::render::FlatText {
         text: text.into(),
         runs,
@@ -5983,6 +6232,59 @@ fn review_diff_flat_text(line: &crate::review_diff::Line, theme: &Theme) -> md::
         math: None,
         references: Vec::new(),
         allow_references: false,
+    }
+}
+
+/// The wash behind the words that changed, matching the diff viewer this
+/// surface follows: the row stays faint, the edit itself reads at full
+/// strength.
+const WORD_WASH: f32 = 0.25;
+
+/// Splits syntax runs so the changed words carry a background. Every input
+/// run becomes one or more runs with the same total length, so the text still
+/// lays out exactly as it did. Ranges are sorted and non-overlapping by
+/// construction; clamping to the cursor keeps that a hard guarantee rather
+/// than an assumption.
+fn wash_word_runs(runs: Vec<TextRun>, words: &[Range<usize>], wash: Hsla) -> Vec<TextRun> {
+    let mut output = Vec::with_capacity(runs.len() + words.len() * 2);
+    let mut offset = 0;
+    for run in runs {
+        let start = offset;
+        let end = offset + run.len;
+        offset = end;
+        let mut cursor = start;
+        for word in words {
+            let word_start = word.start.max(start).max(cursor);
+            let word_end = word.end.min(end);
+            if word_start >= word_end {
+                continue;
+            }
+            if cursor < word_start {
+                output.push(run_segment(&run, cursor - start, word_start - start, None));
+            }
+            output.push(run_segment(
+                &run,
+                word_start - start,
+                word_end - start,
+                Some(wash),
+            ));
+            cursor = word_end;
+        }
+        if cursor < end {
+            output.push(run_segment(&run, cursor - start, end - start, None));
+        }
+    }
+    output
+}
+
+fn run_segment(run: &TextRun, start: usize, end: usize, background: Option<Hsla>) -> TextRun {
+    TextRun {
+        len: end - start,
+        font: run.font.clone(),
+        color: run.color,
+        background_color: background.or(run.background_color),
+        underline: run.underline,
+        strikethrough: run.strikethrough,
     }
 }
 
@@ -6011,6 +6313,7 @@ mod tests {
             kind,
             content: String::new(),
             tokens: Vec::new(),
+            words: Vec::new(),
         }
     }
 

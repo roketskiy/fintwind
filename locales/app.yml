@@ -2553,6 +2553,8 @@ diff.file_count_one:
   en: 1 file
 diff.file_count:
   en: "%{count} files"
+diff.stats_partial:
+  en: Some untracked files are not counted
 diff.status_added:
   en: Added
 diff.status_deleted:

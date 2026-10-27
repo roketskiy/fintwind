@@ -1673,6 +1673,9 @@ pub struct Fintwind {
     /// carry a left/right pair of snapshot line indexes. Render reads only
     /// this cache.
     source_control_diff_rows: RefCell<Vec<source_control::SourceControlDiffRow>>,
+    /// Width of one line-number column in the review reader, sized once per
+    /// shown file so a row never measures its own number.
+    source_control_number_width: f32,
     /// The source-control second column's live worktree status: branch plus
     /// every staged, unstaged, and untracked file. One cached snapshot with
     /// its own generation; the virtualized list draws flattened rows from it.
@@ -1687,6 +1690,18 @@ pub struct Fintwind {
     source_control_review_files: source_control::SourceControlReviewFiles,
     source_control_diff_context: u32,
     source_control_diff_request: Option<source_control::PendingGitQuery>,
+    /// Line totals for every file in the review source. The toolbar capsule
+    /// shows one figure for the whole area while the snapshot beside it holds
+    /// only the selected file.
+    source_control_stats: Option<source_control::ReviewAreaStats>,
+    source_control_stats_request: Option<source_control::PendingGitQuery>,
+    source_control_stats_generation: u64,
+    /// What `source_control_stats` describes. A figure from another source or
+    /// workspace must never be shown beside this one's name.
+    source_control_stats_key: Option<(PathBuf, ReviewDiffSource)>,
+    /// A state change landed while a totals request was in flight, so that
+    /// answer is already out of date and must be followed by another.
+    source_control_stats_dirty: bool,
     source_control_untracked_loading: bool,
     source_control_untracked_complete: bool,
     source_control_untracked_ready: bool,
@@ -3774,6 +3789,7 @@ impl Fintwind {
                 right_panel_diff_selected_file: None,
                 source_control_diff_split: false,
                 source_control_diff_rows: RefCell::new(Vec::new()),
+                source_control_number_width: source_control::review_diff_number_width(2),
                 source_control_status: None,
                 source_control_status_loading: false,
                 source_control_status_error: None,
@@ -3785,6 +3801,11 @@ impl Fintwind {
                 source_control_review_files: source_control::SourceControlReviewFiles::default(),
                 source_control_diff_context: 3,
                 source_control_diff_request: None,
+                source_control_stats: None,
+                source_control_stats_request: None,
+                source_control_stats_generation: 0,
+                source_control_stats_key: None,
+                source_control_stats_dirty: false,
                 source_control_untracked_loading: false,
                 source_control_untracked_complete: false,
                 source_control_untracked_ready: false,

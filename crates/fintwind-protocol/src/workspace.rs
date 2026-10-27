@@ -272,6 +272,15 @@ pub enum WorkspaceOperation {
         #[serde(default)]
         query_id: Option<Uuid>,
     },
+    /// Line totals for every file in one review source. The review toolbar
+    /// shows one figure for the whole area, which no single file's diff can
+    /// supply; the caller fetches this beside the file it renders.
+    CollectReviewStats {
+        cwd: PathBuf,
+        source: ReviewDiffSource,
+        #[serde(default)]
+        query_id: Option<Uuid>,
+    },
     #[serde(alias = "cancelReviewFileDiff")]
     CancelGitQuery {
         query_id: Uuid,
@@ -374,5 +383,14 @@ pub enum WorkspaceResult {
     },
     ReviewDiff {
         data: ReviewDiffData,
+    },
+    ReviewStats {
+        additions: u64,
+        deletions: u64,
+        files: u64,
+        /// True when the untracked scan stopped at a budget, so the totals
+        /// cover only the files it read.
+        #[serde(default)]
+        truncated: bool,
     },
 }

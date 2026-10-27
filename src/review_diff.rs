@@ -4,6 +4,7 @@
 //! that returned data off the UI thread; a frame only indexes stored rows.
 
 use std::collections::HashMap;
+use std::ops::Range;
 use std::path::Path;
 
 use uuid::Uuid;
@@ -114,6 +115,10 @@ pub struct Line {
     pub content: String,
     /// Paint-only syntax spans over `content`, computed off the UI thread.
     pub tokens: Vec<Token>,
+    /// The parts of `content` that differ from the paired line on the other
+    /// side. Empty when the row has no pair or nothing textual changed. These
+    /// are byte ranges into `content`, computed off the UI thread.
+    pub words: Vec<Range<usize>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -247,6 +252,7 @@ fn push_remaining_gap(replacement: &mut Vec<Line>, file_index: usize, mut gap: G
         kind: LineKind::Gap(gap),
         content: String::new(),
         tokens: Vec::new(),
+        words: Vec::new(),
     });
 }
 
@@ -398,6 +404,7 @@ fn parse_with_files(
                 kind: LineKind::FileHeader,
                 content: String::new(),
                 tokens: Vec::new(),
+                words: Vec::new(),
             });
             continue;
         }
@@ -422,6 +429,7 @@ fn parse_with_files(
                 kind: LineKind::Meta,
                 content: "Binary file changed".into(),
                 tokens: Vec::new(),
+                words: Vec::new(),
             });
             continue;
         }
@@ -450,6 +458,7 @@ fn parse_with_files(
                     kind: LineKind::HunkHeader,
                     content: String::new(),
                     tokens: Vec::new(),
+                    words: Vec::new(),
                 });
             }
             old_carry = Carry::None;
@@ -480,6 +489,7 @@ fn parse_with_files(
                     }),
                     content: String::new(),
                     tokens: Vec::new(),
+                    words: Vec::new(),
                 });
                 next_gap_id = next_gap_id.wrapping_add(1);
             } else if !complete_context && (previous_old_next != 1 || previous_new_next != 1) {
@@ -490,6 +500,7 @@ fn parse_with_files(
                     kind: LineKind::HunkHeader,
                     content: raw.to_owned(),
                     tokens: Vec::new(),
+                    words: Vec::new(),
                 });
             }
             old_line = next_old;
@@ -544,6 +555,7 @@ fn parse_with_files(
             kind,
             content,
             tokens,
+            words: Vec::new(),
         });
     }
 
@@ -552,7 +564,8 @@ fn parse_with_files(
     } else {
         lines
     };
-    let (lines, truncated) = cap_visible_lines(lines);
+    let (mut lines, truncated) = cap_visible_lines(lines);
+    mark_changed_words(&mut lines);
     recompute_diff_lines(&mut files, &lines);
     let additions = files.iter().map(|file| file.additions).sum();
     let deletions = files.iter().map(|file| file.deletions).sum();
@@ -674,12 +687,128 @@ fn push_context_gap(
         }),
         content: String::new(),
         tokens: Vec::new(),
+        words: Vec::new(),
     });
     *next_gap_id = next_gap_id.wrapping_add(1);
 }
 
 fn is_change_line(line: &Line) -> bool {
     matches!(line.kind, LineKind::Addition | LineKind::Deletion)
+}
+
+/// A line this long is not worth an intra-line diff: the common prefix and
+/// suffix usually cover it, and a pathological generated line would cost more
+/// parse time than the highlight is worth.
+const MAX_WORD_DIFF_BYTES: usize = 4_096;
+
+/// Marks the words that actually changed between each deletion run and the
+/// addition run that follows it. A row wash can then stay faint — the eye
+/// finds the edit itself at full strength, which is how a diff reads without
+/// either side shouting.
+fn mark_changed_words(lines: &mut [Line]) {
+    let mut index = 0;
+    while index < lines.len() {
+        if lines[index].kind != LineKind::Deletion {
+            index += 1;
+            continue;
+        }
+        let deletions_start = index;
+        while index < lines.len() && lines[index].kind == LineKind::Deletion {
+            index += 1;
+        }
+        let deletions_end = index;
+        let additions_start = index;
+        while index < lines.len() && lines[index].kind == LineKind::Addition {
+            index += 1;
+        }
+        let additions_end = index;
+        let paired = (deletions_end - deletions_start).min(additions_end - additions_start);
+        for offset in 0..paired {
+            let (before, after) = lines.split_at_mut(additions_start + offset);
+            let old = &mut before[deletions_start + offset];
+            let new = &mut after[0];
+            let Some((old_words, new_words)) = changed_words(&old.content, &new.content) else {
+                continue;
+            };
+            old.words = old_words;
+            new.words = new_words;
+        }
+    }
+}
+
+/// The replaced span of two lines, as one or more byte ranges into each.
+type ChangedWords = (Vec<Range<usize>>, Vec<Range<usize>>);
+
+/// The replaced span of two lines, as byte ranges into each. `None` when the
+/// lines share everything or are too long to compare.
+fn changed_words(old: &str, new: &str) -> Option<ChangedWords> {
+    if old.len() > MAX_WORD_DIFF_BYTES || new.len() > MAX_WORD_DIFF_BYTES {
+        return None;
+    }
+    let prefix = common_prefix_bytes(old, new);
+    let suffix = common_suffix_bytes(&old[prefix..], &new[prefix..]);
+    let old_end = old.len().checked_sub(suffix)?;
+    let new_end = new.len().checked_sub(suffix)?;
+    // Overlapping spans mean nothing outside the shared prefix and suffix
+    // changed, so the row is already fully described by its context.
+    if old_end <= prefix && new_end <= prefix {
+        return None;
+    }
+    let mut spans = Vec::with_capacity(2);
+    if old_end > prefix {
+        // Leading and trailing whitespace stays unwashed: a re-indent should
+        // read as a moved line, not as a fully rewritten one.
+        let (start, end) = trim_span(old, prefix, old_end);
+        if start < end {
+            spans.push(start..end);
+        }
+    }
+    let mut added = Vec::with_capacity(1);
+    if new_end > prefix {
+        let (start, end) = trim_span(new, prefix, new_end);
+        if start < end {
+            added.push(start..end);
+        }
+    }
+    if spans.is_empty() && added.is_empty() {
+        return None;
+    }
+    Some((spans, added))
+}
+
+/// The shared leading bytes, stopping at a character boundary.
+fn common_prefix_bytes(old: &str, new: &str) -> usize {
+    let mut prefix = 0;
+    for (left, right) in old.chars().zip(new.chars()) {
+        if left != right {
+            break;
+        }
+        prefix += left.len_utf8();
+    }
+    prefix
+}
+
+/// The shared trailing bytes of two strings that already share `old[..prefix]`
+/// with `new[..prefix]`, stopping at a character boundary.
+fn common_suffix_bytes(old: &str, new: &str) -> usize {
+    let mut suffix = 0;
+    for (left, right) in old.chars().rev().zip(new.chars().rev()) {
+        if left != right {
+            break;
+        }
+        suffix += left.len_utf8();
+    }
+    suffix
+}
+
+/// Narrows `start..end` to its non-whitespace core.
+fn trim_span(text: &str, start: usize, end: usize) -> (usize, usize) {
+    let Some(span) = text.get(start..end) else {
+        return (start, end);
+    };
+    let trimmed_start = span.len() - span.trim_start().len();
+    let trimmed_end = span.trim_end().len();
+    (start + trimmed_start, start + trimmed_end)
 }
 
 fn cap_visible_lines(lines: Vec<Line>) -> (Vec<Line>, bool) {

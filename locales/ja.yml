@@ -1298,6 +1298,7 @@ diff.resize_tree: 差分ファイルツリーの幅を変更
 diff.changed_files: 変更されたファイル
 diff.file_count_one: ファイル 1 件
 diff.file_count: "ファイル %{count} 件"
+diff.stats_partial: 一部の未追跡ファイルは集計されていません
 diff.status_added: 追加
 diff.status_deleted: 削除
 diff.rows_hidden_one: 残り 1 行 · レビューを開くと変更全体を読めます

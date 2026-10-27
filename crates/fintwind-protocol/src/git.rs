@@ -53,6 +53,13 @@ pub struct WorktreeStatus {
     pub entries: Vec<WorktreeStatusEntry>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct NestedRepository {
+    pub path: PathBuf,
+    pub relative_path: String,
+    pub initialized: bool,
+}
+
 /// One `%D` decoration of a commit, split into its own label. `remote` marks
 /// decorations that point at a remote-tracking ref, e.g. `origin/main`;
 /// `head` marks the decoration `HEAD` points at (`HEAD` itself when

@@ -40,7 +40,7 @@ pub fn turn_diff_base_ref(session_id: Uuid, turn_count: usize) -> String {
 /// checkpoint: a branch switch or terminal edit between turns must not be
 /// attributed to either response.
 pub fn capture_turn_start(cwd: &Path, session_id: Uuid, turn_count: usize) -> anyhow::Result<()> {
-    if !is_git_repository(cwd) {
+    if !is_git_repository(cwd)? {
         return Ok(());
     }
 
@@ -80,7 +80,7 @@ pub fn capture_turn_start(cwd: &Path, session_id: Uuid, turn_count: usize) -> an
 
 pub fn capture_turn(cwd: &Path, session_id: Uuid, turn_count: usize) -> anyhow::Result<Checkpoint> {
     let git_ref = checkpoint_ref(session_id, turn_count);
-    if !is_git_repository(cwd) {
+    if !is_git_repository(cwd)? {
         return Ok(Checkpoint {
             turn_count,
             git_ref,
@@ -134,7 +134,7 @@ pub fn capture_turn(cwd: &Path, session_id: Uuid, turn_count: usize) -> anyhow::
 }
 
 pub fn capture_ref(cwd: &Path, git_ref: &str) -> anyhow::Result<()> {
-    if !is_git_repository(cwd) {
+    if !is_git_repository(cwd)? {
         bail!("checkpoints require a Git repository");
     }
 
@@ -149,7 +149,7 @@ pub fn capture_ref(cwd: &Path, git_ref: &str) -> anyhow::Result<()> {
 /// stages or unstages the user's files. Review uses the returned treeish to
 /// compare a stable worktree snapshot while edits continue on disk.
 pub fn capture_worktree_commit(cwd: &Path) -> anyhow::Result<String> {
-    if !is_git_repository(cwd) {
+    if !is_git_repository(cwd)? {
         bail!("worktree snapshots require a Git repository");
     }
 
@@ -163,7 +163,7 @@ fn capture_worktree_commit_from(
     message: &str,
     parents: &[String],
 ) -> anyhow::Result<String> {
-    if !is_git_repository(cwd) {
+    if !is_git_repository(cwd)? {
         bail!("worktree snapshots require a Git repository");
     }
 
@@ -397,11 +397,10 @@ pub fn session_turn_refs(cwd: &Path, session_id: Uuid) -> HashSet<usize> {
 }
 
 pub fn delete_ref(cwd: &Path, git_ref: &str) -> anyhow::Result<()> {
-    let output = crate::command_env::plain_command("git")
-        .args(["update-ref", "-d", git_ref])
-        .current_dir(cwd)
-        .output()
-        .with_context(|| format!("failed to delete checkpoint `{git_ref}`"))?;
+    let mut command = crate::command_env::plain_command("git");
+    command.args(["update-ref", "-d", git_ref]).current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background)?;
     if output.status.success() {
         Ok(())
     } else {
@@ -482,7 +481,7 @@ pub fn copy_session_refs(
     target_session_id: Uuid,
     through_turn_count: usize,
 ) -> anyhow::Result<()> {
-    if !is_git_repository(cwd) {
+    if !is_git_repository(cwd)? {
         return Ok(());
     }
 
@@ -581,14 +580,15 @@ fn update_refs(cwd: &Path, commands: String) -> anyhow::Result<()> {
     if commands.is_empty() {
         return Ok(());
     }
-    let mut child = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["update-ref", "--stdin"])
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to execute git")?;
+        .stderr(Stdio::piped());
+    let mut child =
+        crate::git_process::spawn(&mut command, crate::git_process::Priority::Background)?;
     child
         .stdin
         .take()
@@ -622,20 +622,23 @@ fn diff_files(cwd: &Path, from_ref: &str, to_ref: &str) -> anyhow::Result<Vec<Ch
     Ok(files)
 }
 
-fn is_git_repository(cwd: &Path) -> bool {
-    crate::command_env::plain_command("git")
+fn is_git_repository(cwd: &Path) -> anyhow::Result<bool> {
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["rev-parse", "--is-inside-work-tree"])
-        .current_dir(cwd)
-        .output()
-        .is_ok_and(|output| output.status.success())
+        .current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background)?;
+    Ok(output.status.success())
 }
 
 fn symbolic_head(cwd: &Path) -> Option<String> {
-    let output = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["symbolic-ref", "--quiet", "HEAD"])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
+        .current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background).ok()?;
     output
         .status
         .success()
@@ -677,19 +680,21 @@ fn repository_refs(cwd: &Path) -> anyhow::Result<BTreeMap<String, String>> {
 }
 
 fn has_head(cwd: &Path) -> bool {
-    crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["rev-parse", "--verify", "HEAD"])
-        .current_dir(cwd)
-        .output()
+        .current_dir(cwd);
+    crate::git_process::output(&mut command, crate::git_process::Priority::Background)
         .is_ok_and(|output| output.status.success())
 }
 
 fn resolve_ref(cwd: &Path, git_ref: &str) -> Option<String> {
-    let output = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["rev-parse", "--verify", &format!("{git_ref}^{{commit}}")])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
+        .current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background).ok()?;
     output
         .status
         .success()
@@ -702,11 +707,10 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let output = crate::command_env::plain_command("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git")?;
+    let mut command = crate::command_env::plain_command("git");
+    command.args(args).current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -752,7 +756,8 @@ where
             .env("GIT_COMMITTER_NAME", "Fintwind")
             .env("GIT_COMMITTER_EMAIL", "fintwind@localhost");
     }
-    let output = command.output().context("failed to execute git")?;
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background)?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {

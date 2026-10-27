@@ -21,11 +21,12 @@ pub fn list(
     limit: usize,
     branch: Option<&str>,
 ) -> anyhow::Result<Option<Vec<CommitEntry>>> {
-    let repository_output = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["rev-parse", "--show-toplevel"])
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git")?;
+        .current_dir(cwd);
+    let repository_output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background)?;
     if !repository_output.status.success() {
         return Ok(None);
     }
@@ -33,11 +34,10 @@ pub fn list(
     // Remote names decide which `%D` decorations point at remote-tracking
     // refs. A repository without remotes is common, so a failing `git
     // remote` simply yields an empty list rather than an error.
-    let remotes_output = crate::command_env::plain_command("git")
-        .arg("remote")
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git remote")?;
+    let mut command = crate::command_env::plain_command("git");
+    command.arg("remote").current_dir(cwd);
+    let remotes_output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background)?;
     let remotes = if remotes_output.status.success() {
         String::from_utf8_lossy(&remotes_output.stdout)
             .lines()
@@ -57,12 +57,12 @@ pub fn list(
     if let Some(branch) = branch {
         command.arg(branch);
     }
-    let output = command
+    command
         .arg("--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%at%x1f%D%x1f%P%x1e")
         .arg("--")
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git log")?;
+        .current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background)?;
     if !output.status.success() {
         // A repository whose HEAD branch has no commits yet is a valid empty
         // history, not an error; Git exits 128 with this fatal message.
@@ -142,14 +142,15 @@ pub fn list(
         input.push_str(parent);
         input.push('\n');
     }
-    let mut child = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["rev-list", "--stdin", "--not", "--remotes"])
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to execute git rev-list")?;
+        .stderr(Stdio::piped());
+    let mut child =
+        crate::git_process::spawn(&mut command, crate::git_process::Priority::Background)?;
     let write = child
         .stdin
         .take()
@@ -179,7 +180,8 @@ pub fn stats(cwd: &Path, hash: &str) -> anyhow::Result<fintwind_protocol::git::C
         matches!(hash.len(), 40 | 64) && hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
         "invalid commit hash"
     );
-    let output = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args([
             "show",
             "--format=",
@@ -193,9 +195,9 @@ pub fn stats(cwd: &Path, hash: &str) -> anyhow::Result<fintwind_protocol::git::C
             hash,
             "--",
         ])
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git show")?;
+        .current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if !output.status.success() {
         bail!("{}", command_error(&output));
     }

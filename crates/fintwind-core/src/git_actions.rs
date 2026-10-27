@@ -3,7 +3,7 @@
 //! entry point performs process I/O and must run on the background
 //! executor; the UI refreshes its cached status snapshot afterwards.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context as _, bail};
 
@@ -14,7 +14,11 @@ pub fn stage(cwd: &Path, paths: &[String]) -> anyhow::Result<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    run(cwd, &with_paths(&["add", "--"], paths))
+    let root = repository_root(cwd)?;
+    run(
+        &root,
+        &with_paths(&["--literal-pathspecs", "add", "--"], paths),
+    )
 }
 
 /// Unstages files without touching the worktree. A repository without any
@@ -24,14 +28,24 @@ pub fn unstage(cwd: &Path, paths: &[String]) -> anyhow::Result<()> {
     if paths.is_empty() {
         return Ok(());
     }
-    let reset = with_paths(&["reset", "-q", "HEAD", "--"], paths);
-    if !run_ok(cwd, &reset) {
+    let root = repository_root(cwd)?;
+    if run_ok(
+        &root,
+        &["rev-parse".into(), "--verify".into(), "HEAD".into()],
+    ) {
         run(
-            cwd,
-            &with_paths(&["rm", "--cached", "-r", "-q", "--"], paths),
-        )?;
+            &root,
+            &with_paths(&["--literal-pathspecs", "reset", "-q", "HEAD", "--"], paths),
+        )
+    } else {
+        run(
+            &root,
+            &with_paths(
+                &["--literal-pathspecs", "rm", "--cached", "-r", "-q", "--"],
+                paths,
+            ),
+        )
     }
-    Ok(())
 }
 
 /// Discards unstaged worktree changes. Tracked files restore from the
@@ -42,23 +56,105 @@ pub fn discard_worktree(
     tracked: &[String],
     untracked: &[String],
 ) -> anyhow::Result<()> {
-    if !tracked.is_empty() {
-        run(cwd, &with_paths(&["restore", "--"], tracked))?;
-    }
+    let root = repository_root(cwd)?;
+    let canonical_root = std::fs::canonicalize(&root)?;
+    let mut targets = Vec::new();
+    let mut checked_parents = std::collections::HashSet::new();
+    let current_untracked = if untracked.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        let mut command = crate::command_env::plain_command("git");
+        command
+            .args(with_paths(
+                &[
+                    "--literal-pathspecs",
+                    "ls-files",
+                    "--others",
+                    "--exclude-standard",
+                    "-z",
+                    "--",
+                ],
+                untracked,
+            ))
+            .current_dir(&root);
+        let output =
+            crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
+        if !output.status.success() {
+            bail!(
+                "failed to inspect untracked files: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        String::from_utf8_lossy(&output.stdout)
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
     for path in untracked {
-        // A literal relative path must stay inside the worktree: no `..`
-        // components, no absolute override.
-        let escapes = std::path::Path::new(path).is_absolute()
-            || path.split(['/', '\\']).any(|component| component == "..");
-        if escapes {
+        if Path::new(path).is_absolute()
+            || Path::new(path)
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)))
+        {
             bail!("refusing to delete outside the worktree: {path}");
         }
-        let target = cwd.join(path);
+        let target = root.join(path);
         if target.is_file() {
-            std::fs::remove_file(&target).with_context(|| format!("failed to delete {path}"))?;
+            if !current_untracked.contains(path) {
+                bail!("file is no longer untracked: {path}");
+            }
+            let parent = target.parent().context("file has no parent directory")?;
+            if !std::fs::canonicalize(parent)?.starts_with(&canonical_root) {
+                bail!("refusing to delete outside the worktree: {path}");
+            }
+            let mut ancestor = root.clone();
+            for component in Path::new(path)
+                .parent()
+                .into_iter()
+                .flat_map(Path::components)
+            {
+                let Component::Normal(name) = component else {
+                    bail!("invalid worktree path: {path}");
+                };
+                ancestor.push(name);
+                if checked_parents.insert(ancestor.clone()) {
+                    if !std::fs::canonicalize(&ancestor)?.starts_with(&canonical_root) {
+                        bail!("refusing to delete outside the worktree: {path}");
+                    }
+                    if ancestor.join(".git").try_exists()? {
+                        bail!("refusing to delete inside a separate Git repository: {path}");
+                    }
+                }
+            }
+            targets.push((target, path));
         }
     }
+    if !tracked.is_empty() {
+        run(
+            &root,
+            &with_paths(&["--literal-pathspecs", "restore", "--"], tracked),
+        )?;
+    }
+    for (target, path) in targets {
+        std::fs::remove_file(&target).with_context(|| format!("failed to delete {path}"))?;
+    }
     Ok(())
+}
+
+fn repository_root(cwd: &Path) -> anyhow::Result<PathBuf> {
+    let mut command = crate::command_env::plain_command("git");
+    command
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
+    if !output.status.success() {
+        bail!("this directory is not a Git repository");
+    }
+    Ok(PathBuf::from(
+        String::from_utf8_lossy(&output.stdout).trim_end_matches(['\r', '\n']),
+    ))
 }
 
 /// Fetches every remote and prunes stale tracking refs.
@@ -90,12 +186,13 @@ fn with_paths(prefix: &[&str], paths: &[String]) -> Vec<String> {
 }
 
 fn run(cwd: &Path, args: &[String]) -> anyhow::Result<()> {
-    if run_ok(cwd, args) {
-        return Ok(());
-    }
     let mut command = crate::command_env::plain_command("git");
     command.args(args).current_dir(cwd);
-    let output = command.output().context("failed to execute git")?;
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
+    if output.status.success() {
+        return Ok(());
+    }
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
     bail!("git failed: {stderr}");
 }
@@ -103,10 +200,8 @@ fn run(cwd: &Path, args: &[String]) -> anyhow::Result<()> {
 fn run_ok(cwd: &Path, args: &[String]) -> bool {
     let mut command = crate::command_env::plain_command("git");
     command.args(args).current_dir(cwd);
-    command
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
+    crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)
+        .is_ok_and(|output| output.status.success())
 }
 
 #[cfg(test)]

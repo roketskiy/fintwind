@@ -1169,6 +1169,16 @@ source_control.group_actions: 未暂存更改操作
 source_control.follow_session: 跟随会话
 source_control.staged: 已暂存 %{count}
 source_control.unstaged: 未暂存 %{count}
+source_control.untracked: 未跟踪 %{count}
+source_control.untracked_incomplete: 未跟踪
+source_control.ignored: 已忽略
+source_control.ignored_empty: 没有已忽略的文件
+source_control.load_more: 继续加载
+source_control.listing_incomplete: 列表已截断，请展开更窄的目录
+diff.more_context: 更多上下文
+source_control.repository_uninitialized: 未初始化
+source_control.repositories_incomplete: 仓库扫描不完整
+source_control.load_untracked_first: 请先展开未跟踪文件夹
 source_control.clean: 没有未提交的更改
 source_control.not_a_repository: 当前目录不是 Git 仓库
 source_control.no_directory: 暂无可查看的工作目录

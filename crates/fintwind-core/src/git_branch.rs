@@ -14,7 +14,7 @@ use std::ffi::OsString;
 #[cfg(unix)]
 use std::os::unix::ffi::OsStringExt as _;
 
-use anyhow::{Context as _, anyhow, bail};
+use anyhow::{anyhow, bail};
 const MAX_UNTRACKED_FILES: usize = 2_048;
 const MAX_UNTRACKED_FILE_BYTES: u64 = 8 * 1_024 * 1_024;
 const MAX_UNTRACKED_TOTAL_BYTES: u64 = 32 * 1_024 * 1_024;
@@ -25,11 +25,21 @@ pub use fintwind_protocol::git::{BranchEntry, BranchSnapshot};
 /// Inspect local branches and which worktree, if any, currently owns each.
 /// `Ok(None)` means `cwd` is not inside a Git repository.
 pub fn inspect(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
-    let repository_output = crate::command_env::plain_command("git")
+    inspect_inner(cwd, true)
+}
+
+/// Branch metadata for menus that do not display worktree line counts.
+pub fn inspect_refs(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
+    inspect_inner(cwd, false)
+}
+
+fn inspect_inner(cwd: &Path, include_line_counts: bool) -> anyhow::Result<Option<BranchSnapshot>> {
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["rev-parse", "--show-toplevel"])
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git")?;
+        .current_dir(cwd);
+    let repository_output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if !repository_output.status.success() {
         return Ok(None);
     }
@@ -103,7 +113,11 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
         .filter(|branch| branches.iter().any(|entry| entry.name == *branch))
         .map(str::to_owned)
         .or_else(|| current.clone());
-    let (additions, deletions) = worktree_line_counts(&repository);
+    let (additions, deletions) = if include_line_counts {
+        worktree_line_counts(&repository)
+    } else {
+        (0, 0)
+    };
 
     Ok(Some(BranchSnapshot {
         repository,
@@ -123,11 +137,12 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<Option<BranchSnapshot>> {
 /// refs or measures pending changes, so list surfaces can afford to ask once
 /// per project rather than only for the selected workspace.
 pub fn current(cwd: &Path) -> anyhow::Result<Option<String>> {
-    let repository = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["rev-parse", "--show-toplevel"])
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git")?;
+        .current_dir(cwd);
+    let repository =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if !repository.status.success() {
         return Ok(None);
     }
@@ -140,13 +155,15 @@ pub fn current(cwd: &Path) -> anyhow::Result<Option<String>> {
 }
 
 fn worktree_line_counts(cwd: &Path) -> (u64, u64) {
-    let tracked = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["diff", "--numstat", "HEAD", "--"])
-        .current_dir(cwd)
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map_or((0, 0), |output| numstat_line_counts(&output.stdout));
+        .current_dir(cwd);
+    let tracked =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)
+            .ok()
+            .filter(|output| output.status.success())
+            .map_or((0, 0), |output| numstat_line_counts(&output.stdout));
     (
         tracked.0.saturating_add(untracked_line_additions(cwd)),
         tracked.1,
@@ -176,7 +193,8 @@ fn numstat_line_counts(output: &[u8]) -> (u64, u64) {
 /// source that opens when it is clicked. Bounds keep generated trees from
 /// turning a background metadata refresh into unbounded work.
 fn untracked_line_additions(repository: &Path) -> u64 {
-    let Ok(output) = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args([
             "ls-files",
             "--others",
@@ -185,8 +203,9 @@ fn untracked_line_additions(repository: &Path) -> u64 {
             "-z",
             "--",
         ])
-        .current_dir(repository)
-        .output()
+        .current_dir(repository);
+    let Ok(output) =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)
     else {
         return 0;
     };
@@ -259,12 +278,10 @@ fn path_from_git_bytes(path: &[u8]) -> PathBuf {
 }
 
 pub fn checkout(cwd: &Path, branch: &str) -> anyhow::Result<BranchSnapshot> {
-    let output = crate::command_env::plain_command("git")
-        .args(["switch", "--"])
-        .arg(branch)
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git switch")?;
+    let mut command = crate::command_env::plain_command("git");
+    command.args(["switch", "--"]).arg(branch).current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if !output.status.success() {
         bail!("{}", command_error(&output));
     }
@@ -276,21 +293,20 @@ pub fn create_and_checkout(cwd: &Path, branch: &str) -> anyhow::Result<BranchSna
     if branch.is_empty() {
         bail!("enter a branch name");
     }
-    let validation = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["check-ref-format", "--branch"])
         .arg(branch)
-        .current_dir(cwd)
-        .output()
-        .context("failed to validate the branch name")?;
+        .current_dir(cwd);
+    let validation =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if !validation.status.success() {
         bail!("{}", command_error(&validation));
     }
-    let output = crate::command_env::plain_command("git")
-        .args(["switch", "-c"])
-        .arg(branch)
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git switch")?;
+    let mut command = crate::command_env::plain_command("git");
+    command.args(["switch", "-c"]).arg(branch).current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if !output.status.success() {
         bail!("{}", command_error(&output));
     }
@@ -298,11 +314,10 @@ pub fn create_and_checkout(cwd: &Path, branch: &str) -> anyhow::Result<BranchSna
 }
 
 fn git_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let output = crate::command_env::plain_command("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git")?;
+    let mut command = crate::command_env::plain_command("git");
+    command.args(args).current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if !output.status.success() {
         bail!("{}", command_error(&output));
     }
@@ -310,11 +325,10 @@ fn git_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
 }
 
 fn optional_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<Option<String>> {
-    let output = crate::command_env::plain_command("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git")?;
+    let mut command = crate::command_env::plain_command("git");
+    command.args(args).current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if output.status.success() {
         return Ok(Some(
             String::from_utf8_lossy(&output.stdout).trim().to_owned(),

@@ -2377,6 +2377,26 @@ source_control.staged:
   en: Staged %{count}
 source_control.unstaged:
   en: Unstaged %{count}
+source_control.untracked:
+  en: Untracked %{count}
+source_control.untracked_incomplete:
+  en: Untracked
+source_control.ignored:
+  en: Ignored
+source_control.ignored_empty:
+  en: No ignored files
+source_control.load_more:
+  en: Load more
+source_control.listing_incomplete:
+  en: Listing truncated — expand a narrower folder
+diff.more_context:
+  en: More context
+source_control.repository_uninitialized:
+  en: Not initialized
+source_control.repositories_incomplete:
+  en: Repository scan incomplete
+source_control.load_untracked_first:
+  en: Expand untracked folders before staging all changes
 source_control.clean:
   en: No uncommitted changes
 source_control.not_a_repository:

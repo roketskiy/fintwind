@@ -1210,6 +1210,16 @@ source_control.group_actions: 未ステージの変更操作
 source_control.follow_session: セッションに追従
 source_control.staged: ステージ済み %{count}
 source_control.unstaged: 未ステージ %{count}
+source_control.untracked: 未追跡 %{count}
+source_control.untracked_incomplete: 未追跡
+source_control.ignored: 無視済み
+source_control.ignored_empty: 無視されたファイルはありません
+source_control.load_more: さらに読み込む
+source_control.listing_incomplete: 一覧が切り捨てられました。より狭いフォルダーを展開してください
+diff.more_context: 文脈を追加
+source_control.repository_uninitialized: 未初期化
+source_control.repositories_incomplete: リポジトリの走査が不完全です
+source_control.load_untracked_first: 先に未追跡フォルダーを展開してください
 source_control.clean: 未コミットの変更はありません
 source_control.not_a_repository: このディレクトリは Git リポジトリではありません
 source_control.no_directory: 表示できるワークスペースがありません

@@ -31,6 +31,19 @@ pub struct ReviewDiffData {
     pub numstat: String,
     pub patch: String,
     pub complete_context: bool,
+    #[serde(default)]
+    pub truncated: bool,
+    #[serde(default)]
+    pub file: Option<ReviewDiffFile>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewDiffFile {
+    pub path: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub binary: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -84,6 +97,10 @@ pub enum WorkspaceOperation {
     InspectBranches {
         cwd: PathBuf,
     },
+    /// Branch menu metadata without scanning file contents for line counts.
+    InspectBranchRefs {
+        cwd: PathBuf,
+    },
     InspectPullRequests {
         cwd: PathBuf,
     },
@@ -124,6 +141,35 @@ pub enum WorkspaceOperation {
     /// `None` means `cwd` is not inside a Git repository.
     InspectStatus {
         cwd: PathBuf,
+    },
+    InspectTrackedStatus {
+        cwd: PathBuf,
+        #[serde(default)]
+        query_id: Option<Uuid>,
+    },
+    ListUntracked {
+        cwd: PathBuf,
+        directory: Option<String>,
+        /// Last direct child of the previous page; the next page starts after
+        /// it. `None` starts at the beginning of the directory.
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default)]
+        query_id: Option<Uuid>,
+    },
+    ListIgnored {
+        cwd: PathBuf,
+        directory: Option<String>,
+        #[serde(default)]
+        after: Option<String>,
+        #[serde(default)]
+        query_id: Option<Uuid>,
+    },
+    DiscoverNestedRepositories {
+        cwd: PathBuf,
+        candidates: Vec<String>,
+        #[serde(default)]
+        query_id: Option<Uuid>,
     },
     /// Stages files by literal repository-relative path.
     StagePaths {
@@ -216,6 +262,20 @@ pub enum WorkspaceOperation {
         cwd: PathBuf,
         source: ReviewDiffSource,
     },
+    CollectReviewFileDiff {
+        cwd: PathBuf,
+        source: ReviewDiffSource,
+        path: String,
+        origin_path: Option<String>,
+        untracked: bool,
+        context_lines: u32,
+        #[serde(default)]
+        query_id: Option<Uuid>,
+    },
+    #[serde(alias = "cancelReviewFileDiff")]
+    CancelGitQuery {
+        query_id: Uuid,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -274,6 +334,31 @@ pub enum WorkspaceResult {
     WorktreeStatus {
         /// `None` means `cwd` is not inside a Git repository.
         status: Option<crate::git::WorktreeStatus>,
+    },
+    IgnoredFiles {
+        entries: Vec<crate::git::WorktreeStatusEntry>,
+        /// Pass back as `after` to read the next page. `None` means this
+        /// directory is fully listed, or the page could not be continued.
+        #[serde(default)]
+        next: Option<String>,
+        /// The output budget stopped this page before every child was read, so
+        /// it must be narrowed instead of paged.
+        #[serde(default)]
+        incomplete: bool,
+    },
+    UntrackedFiles {
+        entries: Vec<crate::git::WorktreeStatusEntry>,
+        #[serde(default)]
+        next: Option<String>,
+        #[serde(default)]
+        incomplete: bool,
+    },
+    NestedRepositories {
+        repositories: Vec<crate::git::NestedRepository>,
+        /// False when the scan hit its directory, time, or count budget, so
+        /// the list is a partial view of the workspace.
+        #[serde(default)]
+        complete: bool,
     },
     CommitMessage {
         message: String,

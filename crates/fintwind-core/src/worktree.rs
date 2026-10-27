@@ -21,15 +21,17 @@ pub use fintwind_protocol::git::CreatedWorktree;
 /// directories and detached HEAD. Called only on daemon request workers.
 pub(crate) fn inspect_workspace(path: &Path) -> fintwind_protocol::model::SessionWorkspace {
     use fintwind_protocol::model::SessionWorkspace;
-    let output = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args([
             "rev-parse",
             "--path-format=absolute",
             "--git-dir",
             "--git-common-dir",
         ])
-        .current_dir(path)
-        .output();
+        .current_dir(path);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive);
     let Ok(output) = output else {
         return SessionWorkspace::Local;
     };
@@ -121,14 +123,15 @@ fn create_in(
             continue;
         }
 
-        let output = crate::command_env::plain_command("git")
+        let mut command = crate::command_env::plain_command("git");
+        command
             .args(["worktree", "add", "-b"])
             .arg(&branch)
             .arg(&path)
             .arg(&base_ref)
-            .current_dir(&repository)
-            .output()
-            .context("failed to execute git worktree add")?;
+            .current_dir(&repository);
+        let output =
+            crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
         if !output.status.success() {
             bail!("{}", command_error(&output));
         }
@@ -154,14 +157,15 @@ fn create_in(
     if path.exists() || local_branch_exists(&repository, &branch)? {
         bail!("could not allocate a unique Git worktree name");
     }
-    let output = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["worktree", "add", "-b"])
         .arg(&branch)
         .arg(&path)
         .arg(&base_ref)
-        .current_dir(&repository)
-        .output()
-        .context("failed to execute git worktree add")?;
+        .current_dir(&repository);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if !output.status.success() {
         bail!("{}", command_error(&output));
     }
@@ -202,12 +206,13 @@ fn default_base_ref(repository: &Path) -> anyhow::Result<String> {
 }
 
 fn local_branch_exists(repository: &Path, branch: &str) -> anyhow::Result<bool> {
-    let output = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args(["show-ref", "--verify", "--quiet"])
         .arg(format!("refs/heads/{branch}"))
-        .current_dir(repository)
-        .output()
-        .context("failed to inspect Git branches")?;
+        .current_dir(repository);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     match output.status.code() {
         Some(0) => Ok(true),
         Some(1) => Ok(false),
@@ -216,11 +221,10 @@ fn local_branch_exists(repository: &Path, branch: &str) -> anyhow::Result<bool> 
 }
 
 fn git_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
-    let output = crate::command_env::plain_command("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git")?;
+    let mut command = crate::command_env::plain_command("git");
+    command.args(args).current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if !output.status.success() {
         bail!("{}", command_error(&output));
     }
@@ -228,11 +232,10 @@ fn git_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<String> {
 }
 
 fn git_optional_stdout(cwd: &Path, args: &[&str]) -> anyhow::Result<Option<String>> {
-    let output = crate::command_env::plain_command("git")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git")?;
+    let mut command = crate::command_env::plain_command("git");
+    command.args(args).current_dir(cwd);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
     if output.status.success() {
         return Ok(Some(
             String::from_utf8_lossy(&output.stdout).trim().to_owned(),

@@ -6,27 +6,55 @@
 //! executor, and render paths consume only the cached value they return.
 
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 
-use anyhow::{Context as _, bail};
+use anyhow::bail;
 
 use fintwind_protocol::git::{WorktreeStatus, WorktreeStatusEntry};
 
 /// The live worktree status of a workspace. `Ok(None)` means `cwd` is not
 /// inside a Git repository, mirroring [`crate::git_log::list`].
 pub fn inspect(cwd: &Path) -> anyhow::Result<Option<WorktreeStatus>> {
-    let repository_output = crate::command_env::plain_command("git")
+    inspect_with_untracked(cwd, true, None)
+}
+
+pub fn inspect_tracked(
+    cwd: &Path,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<Option<WorktreeStatus>> {
+    inspect_with_untracked(cwd, false, cancelled)
+}
+
+fn inspect_with_untracked(
+    cwd: &Path,
+    include_untracked: bool,
+    cancelled: Option<&AtomicBool>,
+) -> anyhow::Result<Option<WorktreeStatus>> {
+    crate::workspace::check_git_cancelled(cancelled)?;
+    let mut repository_command = crate::command_env::plain_command("git");
+    repository_command
         .args(["rev-parse", "--show-toplevel"])
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git")?;
-    if !repository_output.status.success() {
+        .current_dir(cwd);
+    let is_repository = if include_untracked {
+        crate::git_process::output(
+            &mut repository_command,
+            crate::git_process::Priority::Interactive,
+        )?
+        .status
+        .success()
+    } else {
+        crate::workspace::bounded_git_probe(&mut repository_command, cancelled, true)?
+    };
+    crate::workspace::check_git_cancelled(cancelled)?;
+    if !is_repository {
         return Ok(None);
     }
 
     // `-z` terminates records with NUL, so path names containing spaces,
     // quotes, or line breaks cannot corrupt the parsing below, and renames
     // arrive as two NUL-separated fields (new path, then origin).
-    let output = crate::command_env::plain_command("git")
+    let mut command = crate::command_env::plain_command("git");
+    command
         .args([
             "-c",
             "core.quotePath=false",
@@ -34,19 +62,28 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<Option<WorktreeStatus>> {
             "--porcelain=v1",
             "-z",
             "--branch",
-            "--untracked-files=all",
+            if include_untracked {
+                "--untracked-files=all"
+            } else {
+                "--untracked-files=no"
+            },
         ])
-        .current_dir(cwd)
-        .output()
-        .context("failed to execute git status")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        bail!("git status failed: {stderr}");
-    }
-    parse(String::from_utf8_lossy(&output.stdout).as_ref()).map(Some)
+        .current_dir(cwd);
+    let stdout = if include_untracked {
+        let output =
+            crate::git_process::output(&mut command, crate::git_process::Priority::Interactive)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            bail!("git status failed: {stderr}");
+        }
+        output.stdout
+    } else {
+        crate::workspace::bounded_git_output_cancellable(&mut command, false, cancelled, true)?
+    };
+    parse(String::from_utf8_lossy(&stdout).as_ref()).map(Some)
 }
 
-fn parse(stdout: &str) -> anyhow::Result<WorktreeStatus> {
+pub(crate) fn parse(stdout: &str) -> anyhow::Result<WorktreeStatus> {
     let mut status = WorktreeStatus {
         branch: None,
         upstream: None,
@@ -73,11 +110,12 @@ fn parse(stdout: &str) -> anyhow::Result<WorktreeStatus> {
         let path = record[3..].to_owned();
         // Rename and copy records carry their origin path as the next
         // NUL-separated field.
-        let origin_path = if matches!(index_status, 'R' | 'C') {
-            records.next().map(str::to_owned)
-        } else {
-            None
-        };
+        let origin_path =
+            if matches!(index_status, 'R' | 'C') || matches!(worktree_status, 'R' | 'C') {
+                records.next().map(str::to_owned)
+            } else {
+                None
+            };
         status.entries.push(WorktreeStatusEntry {
             path,
             origin_path,

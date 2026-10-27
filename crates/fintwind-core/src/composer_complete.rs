@@ -640,18 +640,16 @@ pub fn list_project_files(root: &Path, cap: usize) -> Vec<FileEntry> {
 }
 
 fn git_listed_files(root: &Path, cap: usize) -> Option<Vec<String>> {
-    let output = crate::command_env::plain_command("git")
-        .arg("-C")
-        .arg(root)
-        .args([
-            "ls-files",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-            "-z",
-        ])
-        .output()
-        .ok()?;
+    let mut command = crate::command_env::plain_command("git");
+    command.arg("-C").arg(root).args([
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    ]);
+    let output =
+        crate::git_process::output(&mut command, crate::git_process::Priority::Background).ok()?;
     if !output.status.success() {
         return None;
     }

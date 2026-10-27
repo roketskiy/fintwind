@@ -96,6 +96,8 @@ pub fn inspect(cwd: &Path) -> anyhow::Result<PullRequestSnapshot> {
 fn git(cwd: &Path, args: &[&str]) -> anyhow::Result<Output> {
     let mut command = crate::command_env::plain_command("git");
     command.current_dir(cwd).args(args);
+    let _permit =
+        crate::git_process::Permit::acquire(crate::git_process::Priority::Interactive, None)?;
     crate::command_env::output_with_timeout(&mut command, Duration::from_secs(5))?
         .ok_or_else(|| anyhow!("Git query timed out"))
 }

@@ -367,6 +367,8 @@ fn git_capture(cwd: &Path, args: &[&str]) -> anyhow::Result<CapturedOutput> {
         .current_dir(cwd)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true");
+    let _permit =
+        crate::git_process::Permit::acquire(crate::git_process::Priority::Interactive, None)?;
     run_capture(&mut command, GIT_TIMEOUT)
 }
 

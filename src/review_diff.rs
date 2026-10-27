@@ -258,11 +258,27 @@ pub fn parse_collected(
     numstat: &str,
     patch: &str,
     complete_context: bool,
+    truncated: bool,
+    file: Option<&fintwind_client::workspace::ReviewDiffFile>,
 ) -> Snapshot {
-    let mut snapshot = parse(source, numstat, patch, complete_context);
-    if !complete_context {
-        snapshot.truncated = true;
-    }
+    let files = file.map_or_else(
+        || parse_numstat(numstat),
+        |file| {
+            vec![File {
+                path: file.path.clone(),
+                additions: file.additions,
+                deletions: file.deletions,
+                status: if file.binary {
+                    FileStatus::Binary
+                } else {
+                    FileStatus::Modified
+                },
+                diff_line: None,
+            }]
+        },
+    );
+    let mut snapshot = parse_with_files(source, files, patch, complete_context);
+    snapshot.truncated |= truncated;
     snapshot
 }
 
@@ -327,7 +343,15 @@ pub fn wire_source(source: Source) -> fintwind_client::workspace::ReviewDiffSour
 }
 
 fn parse(source: Source, numstat: &str, patch: &str, complete_context: bool) -> Snapshot {
-    let mut files = parse_numstat(numstat);
+    parse_with_files(source, parse_numstat(numstat), patch, complete_context)
+}
+
+fn parse_with_files(
+    source: Source,
+    mut files: Vec<File>,
+    patch: &str,
+    complete_context: bool,
+) -> Snapshot {
     let mut path_indexes = files
         .iter()
         .enumerate()

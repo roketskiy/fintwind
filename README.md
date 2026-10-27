@@ -111,11 +111,11 @@ detection, data locations, and WebView2 details.
   Background shell commands surface as capsules on the session card, and
   finished activity groups fold away on their own. Transcripts and reasoning
   use virtualized lists to limit per-frame work.
-- **Files and Git.** Browse workspace files, open multiple file tabs, inspect
-  diffs with a directory tree of changed files, and read Git commit history laid
-  out as a commit graph. Attach files
-  from the composer or by dropping them onto the conversation; images and PDFs
-  are sent inline to OpenCode.
+- **Files and Git.** Browse workspace files and open multiple file tabs. Review
+  staged, unstaged, untracked, and ignored files in a directory tree, load
+  directories on demand, and inspect nested repositories and per-file diffs.
+  Read Git history as a commit graph. Attach files from the composer or by
+  dropping them onto the conversation; images and PDFs are sent inline to OpenCode.
 - **Terminal and browser.** Work in a built-in terminal or the optional
   WebView2 browser panel. Enable the browser tools in settings (off by
   default) and the agent can operate browser tabs you share with the session —

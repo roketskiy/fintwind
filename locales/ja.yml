@@ -105,6 +105,7 @@ settings.scheme_description: ライト・ダーク両方に適用する配色を
 settings.scheme_default: Fintwind
 settings.scheme_vscode: VS Code Modern
 settings.scheme_codex: Codex
+settings.scheme_claude: Claude
 settings.scheme_nord: Nord
 settings.scheme_linear: Linear
 settings.scheme_notion: Notion

@@ -863,7 +863,7 @@ fn ref_chip(
     tooltip: Option<String>,
 ) -> Stateful<Div> {
     let color = if is_head {
-        theme.accent
+        theme.accent_text
     } else {
         theme.text_tertiary
     };

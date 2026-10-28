@@ -544,6 +544,7 @@ impl Theme {
             }
             ThemeScheme::VsCode => Self::vs_code(is_dark),
             ThemeScheme::Codex => Self::codex(is_dark),
+            ThemeScheme::Claude => Self::claude(is_dark),
             ThemeScheme::Nord => Self::nord(is_dark),
             ThemeScheme::Linear => Self::linear(is_dark),
             ThemeScheme::Notion => Self::notion(is_dark),
@@ -555,7 +556,25 @@ impl Theme {
             ThemeScheme::Vercel => Self::vercel(is_dark),
             ThemeScheme::VsCodePlus => Self::vs_code_plus(is_dark),
         };
-        theme.with_muted_accents().with_stronger_foregrounds()
+        if matches!(
+            scheme,
+            ThemeScheme::VsCode | ThemeScheme::Claude | ThemeScheme::RosePine | ThemeScheme::Vercel
+        ) {
+            // These palettes specify their final 21st colors and accessible
+            // foregrounds directly, including the primary button pair.
+            let mut theme = theme;
+            theme.inverse = theme.accent_fill;
+            theme.on_inverse = theme.on_accent;
+            if scheme == ThemeScheme::VsCode {
+                // The reference blue and white pair has sufficient contrast;
+                // brighter blue is reserved for small text on dark surfaces.
+                theme.inverse = theme.accent;
+                theme.on_inverse = rgb(0xFFFFFF).into();
+            }
+            theme
+        } else {
+            theme.with_muted_accents().with_stronger_foregrounds()
+        }
     }
 
     /// Strengthen the shared text/icon ramp after each family's overrides,

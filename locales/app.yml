@@ -244,6 +244,8 @@ settings.scheme_vscode:
   en: VS Code Modern
 settings.scheme_codex:
   en: Codex
+settings.scheme_claude:
+  en: Claude
 settings.scheme_nord:
   en: Nord
 settings.scheme_linear:

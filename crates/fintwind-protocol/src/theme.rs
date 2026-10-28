@@ -23,6 +23,7 @@ pub enum ThemeScheme {
     Default,
     VsCode,
     Codex,
+    Claude,
     Nord,
     Linear,
     Notion,
@@ -36,10 +37,11 @@ pub enum ThemeScheme {
 }
 
 impl ThemeScheme {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::Default,
         Self::VsCode,
         Self::Codex,
+        Self::Claude,
         Self::Nord,
         Self::Linear,
         Self::Notion,
@@ -57,6 +59,7 @@ impl ThemeScheme {
             Self::Default => "settings.scheme_default",
             Self::VsCode => "settings.scheme_vscode",
             Self::Codex => "settings.scheme_codex",
+            Self::Claude => "settings.scheme_claude",
             Self::Nord => "settings.scheme_nord",
             Self::Linear => "settings.scheme_linear",
             Self::Notion => "settings.scheme_notion",

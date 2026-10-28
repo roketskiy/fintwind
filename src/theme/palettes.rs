@@ -147,29 +147,28 @@ impl Theme {
         };
         theme.scheme = ThemeScheme::VsCode;
         if is_dark {
-            // VS Code Dark Modern workbench surfaces; high-emphasis text and
-            // status colors are adjusted for our smaller transcript controls.
-            theme.canvas = rgb(0x1F1F1F).into();
-            theme.sidebar = rgb(0x181818).into();
-            theme.raised = rgb(0x252526).into();
-            theme.composer = rgb(0x313131).into();
-            theme.inset = rgb(0x181818).into();
-            theme.terminal = rgb(0x1F1F1F).into();
-            theme.text = rgb(0xCCCCCC).into();
+            // https://21st.dev/@serafimcloud/themes/vs-code
+            theme.canvas = rgb(0x1B1B1B).into();
+            theme.sidebar = rgb(0x1F1F1F).into();
+            theme.raised = rgb(0x1F1F1F).into();
+            theme.composer = rgb(0x23272B).into();
+            theme.inset = rgb(0x262626).into();
+            theme.terminal = rgb(0x1B1B1B).into();
+            theme.text = rgb(0xCECECE).into();
             theme.text_secondary = rgb(0xB1B1B1).into();
-            theme.text_tertiary = rgb(0x989898).into();
-            theme.text_muted = rgb(0x929292).into();
-            theme.text_ghost = rgb(0x999999).into();
-            theme.accent = rgb(0x0078D4).into();
-            theme.accent_text = rgb(0x70BAF3).into();
-            theme.accent_fill = rgb(0x0078D4).into();
+            theme.text_tertiary = rgb(0xA3A3A3).into();
+            theme.text_muted = rgb(0xA3A3A3).into();
+            theme.text_ghost = rgb(0xA3A3A3).into();
+            theme.accent = rgb(0x226BC0).into();
+            theme.accent_text = rgb(0x90C1F5).into();
+            theme.accent_fill = rgb(0x90C1F5).into();
             theme.accent_focus = rgb(0x70BAF3).into();
-            theme.on_accent = rgb(0xFFFFFF).into();
-            theme.link = rgb(0x70BAF3).into();
+            theme.on_accent = rgb(0x101E2E).into();
+            theme.link = rgb(0x90C1F5).into();
             theme.success = rgb(0x2EA043).into();
             theme.success_text = rgb(0x73CD80).into();
-            theme.danger = rgb(0xF85149).into();
-            theme.danger_text = rgb(0xFF817A).into();
+            theme.danger = rgb(0xE24947).into();
+            theme.danger_text = rgb(0xFF8986).into();
             // Dark+ token colors (VS Code theme reference).
             theme.code_keyword = rgb(0xC586C0).into();
             theme.code_literal = rgb(0xB5CEA8).into();
@@ -177,28 +176,28 @@ impl Theme {
             theme.code_number = rgb(0xB5CEA8).into();
             theme.code_type = rgb(0x4EC9B0).into();
             theme.code_function = rgb(0xDCDCAA).into();
-            theme.border = rgb(0x2B2B2B).into();
+            theme.border = rgb(0x383838).into();
             theme.sidebar_border = theme.border;
-            theme.border_strong = rgb(0x424242).into();
+            theme.border_strong = rgb(0x4B4B4B).into();
         } else {
-            // Light Modern shares the same family, rather than a forced
-            // dark palette when the system switches to light appearance.
             theme.canvas = rgb(0xFFFFFF).into();
-            theme.sidebar = rgb(0xF8F8F8).into();
-            theme.raised = rgb(0xF3F3F3).into();
+            theme.sidebar = rgb(0xF2F2F2).into();
+            theme.raised = rgb(0xFFFFFF).into();
             theme.composer = rgb(0xFFFFFF).into();
-            theme.inset = rgb(0xF3F3F3).into();
-            theme.text = rgb(0x3B3B3B).into();
+            theme.inset = rgb(0xF2F2F2).into();
+            theme.text = rgb(0x333333).into();
             theme.text_secondary = rgb(0x595959).into();
-            theme.text_tertiary = rgb(0x6B6B6B).into();
-            theme.text_muted = rgb(0x656565).into();
+            theme.text_tertiary = rgb(0x696969).into();
+            theme.text_muted = rgb(0x696969).into();
             theme.text_ghost = rgb(0x696969).into();
-            theme.accent = rgb(0x005FB8).into();
-            theme.accent_text = theme.accent;
+            theme.accent = rgb(0x226BC0).into();
+            theme.accent_text = rgb(0x1B5AA4).into();
             theme.accent_fill = theme.accent;
             theme.accent_focus = theme.accent;
             theme.on_accent = rgb(0xFFFFFF).into();
-            theme.link = theme.accent;
+            theme.link = theme.accent_text;
+            theme.danger = rgb(0xC51D28).into();
+            theme.danger_text = rgb(0xB51C28).into();
             // Light+ token colors (VS Code theme reference).
             theme.code_keyword = rgb(0xAF00DB).into();
             theme.code_literal = rgb(0x087044).into();
@@ -206,13 +205,14 @@ impl Theme {
             theme.code_number = rgb(0x087044).into();
             theme.code_type = rgb(0x1D647C).into();
             theme.code_function = rgb(0x795E26).into();
-            theme.border = rgb(0xE5E5E5).into();
+            theme.border = rgb(0xE1E1E1).into();
             theme.sidebar_border = theme.border;
             theme.border_strong = rgb(0xC8C8C8).into();
         }
         theme.surface = theme.canvas;
+        theme.rail = frame_from(theme.sidebar, is_dark);
         theme.sidebar_drag_background = theme.sidebar;
-        theme.resize_handle = theme.accent;
+        theme.resize_handle = theme.accent_focus;
         theme.gauge = theme.accent;
         theme
     }
@@ -282,6 +282,96 @@ impl Theme {
         theme.sidebar_border = theme.border;
         theme.resize_handle = theme.accent;
         theme.gauge = theme.accent;
+        theme
+    }
+
+    pub(super) fn claude(is_dark: bool) -> Self {
+        // https://21st.dev/@serafimcloud/themes/claude
+        // The reference's primary colors stay intact for chrome. Text and
+        // filled controls use adjusted shades for contrast on both surfaces.
+        let seed = if is_dark {
+            PaletteSeed {
+                canvas: Some(0x262624),
+                sidebar: Some(0x1B1B19),
+                raised: Some(0x30302C),
+                composer: Some(0x30302C),
+                inset: Some(0x1A1915),
+                terminal: Some(0x1B1B19),
+                border: Some(0x3E3E38),
+                border_strong: Some(0x5A594F),
+                text: Some(0xC3C0B6),
+                text_secondary: Some(0xB7B5A9),
+                text_tertiary: Some(0xAAA89E),
+                text_muted: Some(0xAAA89E),
+                text_ghost: Some(0xAAA89E),
+                accent: Some(0xD97757),
+                accent_text: Some(0xE69B7E),
+                accent_fill: Some(0xD97757),
+                accent_focus: Some(0xD97757),
+                on_accent: Some(0x262624),
+                link: Some(0xE69B7E),
+                warning: Some(0xD8B46B),
+                warning_text: Some(0xD8B46B),
+                success: Some(0x96BC91),
+                success_text: Some(0x96BC91),
+                favorite: Some(0xD8B46B),
+                danger: Some(0xEF4444),
+                danger_text: Some(0xF17F75),
+                code_keyword: Some(0xE29A7D),
+                code_literal: Some(0xE1B878),
+                code_string: Some(0xA7C59A),
+                code_number: Some(0xE1B878),
+                code_type: Some(0x9AB7C7),
+                code_function: Some(0x9AB7C7),
+                ..PaletteSeed::default()
+            }
+        } else {
+            PaletteSeed {
+                canvas: Some(0xFAF9F5),
+                sidebar: Some(0xE9E6DC),
+                raised: Some(0xF1EFE7),
+                composer: Some(0xFAF9F5),
+                inset: Some(0xEDE9DE),
+                terminal: Some(0xFAF9F5),
+                border: Some(0xDAD9D4),
+                border_strong: Some(0xC3C0B6),
+                text: Some(0x3D3929),
+                text_secondary: Some(0x5C5A51),
+                text_tertiary: Some(0x68665D),
+                text_muted: Some(0x68665D),
+                text_ghost: Some(0x68665D),
+                accent: Some(0xC96442),
+                accent_text: Some(0x9D4129),
+                accent_fill: Some(0xA74E32),
+                accent_focus: Some(0xA74E32),
+                on_accent: Some(0xFFFFFF),
+                link: Some(0x9D4129),
+                warning: Some(0x8A5A00),
+                warning_text: Some(0x8A5A00),
+                success: Some(0x286843),
+                success_text: Some(0x286843),
+                favorite: Some(0x8A5A00),
+                danger: Some(0xB84339),
+                danger_text: Some(0xA43631),
+                code_keyword: Some(0x8C4936),
+                code_literal: Some(0x825C1E),
+                code_string: Some(0x406B48),
+                code_number: Some(0x825C1E),
+                code_type: Some(0x416C80),
+                code_function: Some(0x416C80),
+                ..PaletteSeed::default()
+            }
+        };
+        let mut theme = Self::family(ThemeScheme::Claude, is_dark, seed);
+        let (fill, ink) = if is_dark {
+            (0xFAF9F5, 0x262624)
+        } else {
+            (0x3D3929, 0xFAF9F5)
+        };
+        theme.neutral_fill = color(fill);
+        theme.on_neutral = color(ink);
+        theme.inverse = color(fill);
+        theme.on_inverse = color(ink);
         theme
     }
 
@@ -778,32 +868,29 @@ impl Theme {
     }
 
     pub(super) fn rose_pine(is_dark: bool) -> Self {
-        // Rose Pine's own Main (dark) and Dawn (light) palettes, using its
-        // canonical roles: base/surface/overlay as chrome, iris as accent,
-        // foam for links and success, gold for warning, love for danger.
-        // A few paper-side syntax hues are a shade deeper than the released
-        // values to stay legible on the warm light background.
+        // https://21st.dev/@serafimcloud/themes/ros-pine
+        // The primary follows the ink; iris remains the focus color.
         let seed = if is_dark {
             PaletteSeed {
                 canvas: Some(0x191724),
                 sidebar: Some(0x1F1D2E),
-                raised: Some(0x26233A),
-                composer: Some(0x26233A),
-                inset: Some(0x151320),
-                terminal: Some(0x13111C),
+                raised: Some(0x1F1D2E),
+                composer: Some(0x1F1D2E),
+                inset: Some(0x21202E),
+                terminal: Some(0x191724),
                 border: Some(0x403D52),
                 border_strong: Some(0x524F67),
                 text: Some(0xE0DEF4),
-                text_secondary: Some(0x908CAA),
-                text_tertiary: Some(0x908CAA),
+                text_secondary: Some(0xAAA6C1),
+                text_tertiary: Some(0xAAA6C1),
                 text_muted: Some(0xAAA6C1),
                 text_ghost: Some(0xAAA6C1),
-                accent: Some(0xC4A7E7),
-                accent_text: Some(0xC4A7E7),
-                accent_fill: Some(0xC4A7E7),
+                accent: Some(0xE0DEF4),
+                accent_text: Some(0xE0DEF4),
+                accent_fill: Some(0xE0DEF4),
                 accent_focus: Some(0xC4A7E7),
                 on_accent: Some(0x191724),
-                link: Some(0x9CCFD8),
+                link: Some(0xE0DEF4),
                 warning: Some(0xF6C177),
                 warning_text: Some(0xF6C177),
                 success: Some(0x9CCFD8),
@@ -822,24 +909,24 @@ impl Theme {
         } else {
             PaletteSeed {
                 canvas: Some(0xFAF4ED),
-                sidebar: Some(0xF7F0E6),
+                sidebar: Some(0xF2E9E1),
                 raised: Some(0xFFFAF3),
                 composer: Some(0xFFFAF3),
-                inset: Some(0xF2E9DE),
-                terminal: Some(0xFFFAF3),
-                border: Some(0xEBDFCF),
-                border_strong: Some(0xD9C7B4),
+                inset: Some(0xF4EDE8),
+                terminal: Some(0xFAF4ED),
+                border: Some(0xCECACD),
+                border_strong: Some(0xBCB6BD),
                 text: Some(0x575279),
-                text_secondary: Some(0x585475),
-                text_tertiary: Some(0x585475),
-                text_muted: Some(0x585475),
-                text_ghost: Some(0x585475),
-                accent: Some(0x907AA9),
-                accent_text: Some(0x6F5A8C),
-                accent_fill: Some(0x7C6699),
-                accent_focus: Some(0x907AA9),
-                on_accent: Some(0xFFFFFF),
-                link: Some(0x6F5A8C),
+                text_secondary: Some(0x65617D),
+                text_tertiary: Some(0x65617D),
+                text_muted: Some(0x65617D),
+                text_ghost: Some(0x65617D),
+                accent: Some(0x575279),
+                accent_text: Some(0x575279),
+                accent_fill: Some(0x575279),
+                accent_focus: Some(0x6B5488),
+                on_accent: Some(0xFAF4ED),
+                link: Some(0x575279),
                 warning: Some(0xB97B22),
                 warning_text: Some(0x8A5E12),
                 success: Some(0x286983),
@@ -941,36 +1028,36 @@ impl Theme {
     }
 
     pub(super) fn vercel(is_dark: bool) -> Self {
-        // Geist-inspired black/white chrome and blue #0070F3 accents; on dark
-        // surfaces controls use a brighter blue fill with dark ink labels.
+        // https://21st.dev/@serafimcloud/themes/vercel
+        // The published OKLCH values below are converted to sRGB.
         let seed = if is_dark {
             PaletteSeed {
-                canvas: Some(0x0A0A0A),
-                sidebar: Some(0x000000),
-                raised: Some(0x171717),
-                composer: Some(0x1A1A1A),
-                inset: Some(0x000000),
+                canvas: Some(0x000000),
+                sidebar: Some(0x1D1D1D),
+                raised: Some(0x090909),
+                composer: Some(0x090909),
+                inset: Some(0x1D1D1D),
                 terminal: Some(0x000000),
-                border: Some(0x2A2A2A),
-                border_strong: Some(0x3A3A3A),
-                text: Some(0xEDEDED),
-                text_secondary: Some(0xA1A1A1),
-                text_tertiary: Some(0x8F8F8F),
-                text_muted: Some(0x828282),
-                text_ghost: Some(0x828282),
-                accent: Some(0x0070F3),
-                accent_text: Some(0x3B9AF7),
-                accent_fill: Some(0x3B9AF7),
-                accent_focus: Some(0x0070F3),
-                on_accent: Some(0x171717),
-                link: Some(0x3B9AF7),
+                border: Some(0x242424),
+                border_strong: Some(0x333333),
+                text: Some(0xFFFFFF),
+                text_secondary: Some(0xA4A4A4),
+                text_tertiary: Some(0xA4A4A4),
+                text_muted: Some(0xA4A4A4),
+                text_ghost: Some(0xA4A4A4),
+                accent: Some(0xFFFFFF),
+                accent_text: Some(0xFFFFFF),
+                accent_fill: Some(0xFFFFFF),
+                accent_focus: Some(0xA4A4A4),
+                on_accent: Some(0x000000),
+                link: Some(0xFFFFFF),
                 warning: Some(0xF5A623),
                 warning_text: Some(0xF5A623),
                 success: Some(0x3ECF8E),
                 success_text: Some(0x3ECF8E),
                 favorite: Some(0xF5A623),
-                danger: Some(0xF2555A),
-                danger_text: Some(0xF2777A),
+                danger: Some(0xFF5B5B),
+                danger_text: Some(0xFF7676),
                 code_keyword: Some(0x8B7CF6),
                 code_literal: Some(0xF5A623),
                 code_string: Some(0x3ECF8E),
@@ -981,32 +1068,32 @@ impl Theme {
             }
         } else {
             PaletteSeed {
-                canvas: Some(0xFFFFFF),
-                sidebar: Some(0xFAFAFA),
-                raised: Some(0xF5F5F5),
+                canvas: Some(0xFCFCFC),
+                sidebar: Some(0xEBEBEB),
+                raised: Some(0xFFFFFF),
                 composer: Some(0xFFFFFF),
-                inset: Some(0xF0F0F0),
-                terminal: Some(0xFFFFFF),
-                border: Some(0xE5E5E5),
+                inset: Some(0xF5F5F5),
+                terminal: Some(0xFCFCFC),
+                border: Some(0xE4E4E4),
                 border_strong: Some(0xD4D4D4),
-                text: Some(0x171717),
-                text_secondary: Some(0x444444),
-                text_tertiary: Some(0x5C5C5C),
-                text_muted: Some(0x575757),
-                text_ghost: Some(0x575757),
-                accent: Some(0x0070F3),
-                accent_text: Some(0x0761D1),
-                accent_fill: Some(0x0070F3),
-                accent_focus: Some(0x0070F3),
+                text: Some(0x000000),
+                text_secondary: Some(0x525252),
+                text_tertiary: Some(0x666666),
+                text_muted: Some(0x666666),
+                text_ghost: Some(0x666666),
+                accent: Some(0x000000),
+                accent_text: Some(0x000000),
+                accent_fill: Some(0x000000),
+                accent_focus: Some(0x000000),
                 on_accent: Some(0xFFFFFF),
-                link: Some(0x0761D1),
+                link: Some(0x000000),
                 warning: Some(0xA16207),
                 warning_text: Some(0x8A5A00),
                 success: Some(0x0F7B52),
                 success_text: Some(0x0B6342),
                 favorite: Some(0xA16207),
-                danger: Some(0xC22A34),
-                danger_text: Some(0xAB2430),
+                danger: Some(0xE54B4F),
+                danger_text: Some(0xB4232B),
                 code_keyword: Some(0x6B3FC9),
                 code_literal: Some(0x8A5A00),
                 code_string: Some(0x0F7B52),

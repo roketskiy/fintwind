@@ -15,6 +15,7 @@
 //! mouse listeners live in [`super::render`].
 
 use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -59,7 +60,14 @@ pub struct Selection {
     anchor_offset: usize,
     dragging: bool,
     /// Resolved spans in document order. Empty until a drag moves.
-    spans: Vec<Span>,
+    spans: VecDeque<Span>,
+    /// Paint only asks for visible keys, even when the selection spans pages.
+    ranges: HashMap<TextKey, Range<usize>>,
+    drag_forward: Option<bool>,
+    scroll_pointer: Option<(f32, f32)>,
+    scroll_armed: bool,
+    scroll_moved: bool,
+    drag_generation: u64,
 }
 
 impl Selection {
@@ -69,23 +77,21 @@ impl Selection {
 
     /// Begin a drag anchored at `offset` in `key`.
     pub fn begin(&mut self, key: TextKey, offset: usize) {
+        self.clear();
         self.anchor = Some(key);
         self.anchor_offset = offset;
         self.dragging = true;
-        self.spans.clear();
     }
 
     /// Begin with an immediate span: double- or triple-click in one element.
     pub fn begin_with_span(&mut self, key: TextKey, text: Rc<str>, range: Range<usize>) {
-        self.anchor = Some(key.clone());
-        self.anchor_offset = range.start;
-        self.dragging = true;
-        self.spans = vec![Span {
+        self.begin(key.clone(), range.start);
+        self.set_spans(vec![Span {
             key,
             range,
             text,
             block_break: false,
-        }];
+        }]);
     }
 
     /// The live drag's anchor offset, if `key` owns the drag.
@@ -97,12 +103,154 @@ impl Selection {
         self.anchor.as_ref()
     }
 
-    /// Replace the resolved spans. True when they changed and a repaint is due.
-    pub fn set_spans(&mut self, spans: Vec<Span>) -> bool {
-        if self.spans == spans {
+    pub fn is_dragging(&self) -> bool {
+        self.dragging
+    }
+
+    /// Store the pointer across frames and arm at most one scroll driver.
+    pub fn scroll_pointer(&mut self, pointer: Option<(f32, f32)>) -> Option<u64> {
+        self.scroll_pointer = pointer;
+        if self.dragging && pointer.is_some() && !self.scroll_armed {
+            self.scroll_armed = true;
+            Some(self.drag_generation)
+        } else {
+            None
+        }
+    }
+
+    pub fn active_scroll_pointer(&self, generation: u64) -> Option<(f32, f32)> {
+        (self.dragging && self.drag_generation == generation)
+            .then_some(self.scroll_pointer)
+            .flatten()
+    }
+
+    pub fn finish_scroll(&mut self, generation: u64) -> bool {
+        if self.drag_generation != generation {
             return false;
         }
-        self.spans = spans;
+        self.scroll_armed = false;
+        true
+    }
+
+    pub fn mark_scroll_moved(&mut self, generation: u64) {
+        if self.drag_generation == generation {
+            self.scroll_moved = true;
+        }
+    }
+
+    pub fn take_scroll_moved(&mut self) -> bool {
+        std::mem::take(&mut self.scroll_moved)
+    }
+
+    /// Replace the resolved spans. True when they changed and a repaint is due.
+    pub fn set_spans(&mut self, spans: Vec<Span>) -> bool {
+        if self.spans.iter().eq(spans.iter()) {
+            return false;
+        }
+        self.ranges.clear();
+        self.spans.clear();
+        for span in spans {
+            self.push_back(span);
+        }
+        true
+    }
+
+    fn push_back(&mut self, span: Span) {
+        self.ranges.insert(span.key.clone(), span.range.clone());
+        self.spans.push_back(span);
+    }
+
+    fn push_front(&mut self, span: Span) {
+        self.ranges.insert(span.key.clone(), span.range.clone());
+        self.spans.push_front(span);
+    }
+
+    fn pop_back(&mut self) {
+        if let Some(span) = self.spans.pop_back() {
+            self.ranges.remove(&span.key);
+        }
+    }
+
+    fn pop_front(&mut self) {
+        if let Some(span) = self.spans.pop_front() {
+            self.ranges.remove(&span.key);
+        }
+    }
+
+    /// Extend or contract the live selection with the current painted rows.
+    /// When the anchor is no longer painted, retain the already-crossed spans
+    /// and replace only the part overlapping this frame's registry.
+    pub fn update_drag<G>(
+        &mut self,
+        registry: &SelectionRegistry<G>,
+        head: (usize, usize),
+    ) -> bool {
+        let Some(anchor) = self.anchor.as_ref().filter(|_| self.dragging) else {
+            return false;
+        };
+        if let Some(anchor_index) = registry.position(anchor) {
+            let anchor = (anchor_index, self.anchor_offset);
+            if anchor != head {
+                self.drag_forward = Some(anchor < head);
+            }
+            return self.set_spans(registry.resolve(anchor, head));
+        }
+
+        let Some(forward) = self.drag_forward else {
+            return false;
+        };
+        if forward {
+            let overlap = self
+                .spans
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(index, span)| {
+                    registry
+                        .position(&span.key)
+                        .filter(|&position| position <= head.0)
+                        .map(|position| (index, position, span.range.start))
+                });
+            let Some((index, position, offset)) = overlap else {
+                return false;
+            };
+            let mut replacement = registry.resolve((position, offset), head);
+            if index > 0
+                && let Some(first) = replacement.first_mut()
+                && let Some(entry_index) = registry.position(&first.key)
+            {
+                first.block_break = registry.entries()[entry_index].block_break;
+            }
+            if self.spans.iter().skip(index).eq(replacement.iter()) {
+                return false;
+            }
+            while self.spans.len() > index {
+                self.pop_back();
+            }
+            for span in replacement {
+                self.push_back(span);
+            }
+        } else {
+            let overlap = self.spans.iter().enumerate().find_map(|(index, span)| {
+                registry
+                    .position(&span.key)
+                    .filter(|&position| position >= head.0)
+                    .map(|position| (index, position, span.range.end))
+            });
+            let Some((index, position, offset)) = overlap else {
+                return false;
+            };
+            let replacement = registry.resolve(head, (position, offset));
+            if self.spans.iter().take(index + 1).eq(replacement.iter()) {
+                return false;
+            }
+            for _ in 0..=index {
+                self.pop_front();
+            }
+            for span in replacement.into_iter().rev() {
+                self.push_front(span);
+            }
+        }
         true
     }
 
@@ -112,6 +260,7 @@ impl Selection {
             return None;
         }
         self.dragging = false;
+        self.scroll_pointer = None;
         if self.is_empty() {
             self.clear();
             return None;
@@ -124,14 +273,20 @@ impl Selection {
         self.anchor_offset = 0;
         self.dragging = false;
         self.spans.clear();
+        self.ranges.clear();
+        self.drag_forward = None;
+        self.scroll_pointer = None;
+        self.scroll_armed = false;
+        self.scroll_moved = false;
+        self.drag_generation = self.drag_generation.wrapping_add(1);
     }
 
     /// The wash range for `key` this frame. `None` means nothing to paint.
     pub fn wash_range(&self, key: &TextKey) -> Option<Range<usize>> {
-        self.spans
-            .iter()
-            .find(|span| span.key == *key && !span.range.is_empty())
-            .map(|span| span.range.clone())
+        self.ranges
+            .get(key)
+            .filter(|range| !range.is_empty())
+            .cloned()
     }
 
     /// The full selected text, or `None` when nothing is selected.

@@ -2,9 +2,78 @@ use crate::theme::{code_px, ui_px};
 
 use super::source_control::{DiffRowStyle, render_diff_code_row};
 use super::*;
-use base64::Engine as _;
 use crate::md::render::{TranscriptSelectionScroll, install_selection_input_with_focus_and_scroll};
+use base64::Engine as _;
 use gpui::{Bounds, Pixels, px};
+
+pub(crate) struct TranscriptScrollTarget {
+    list: gpui::ListState,
+    anchor_following: Rc<Cell<bool>>,
+    is_scrolled: Rc<Cell<bool>>,
+    tail_recheck: Rc<Cell<bool>>,
+}
+
+impl TranscriptScrollTarget {
+    pub(crate) fn new(
+        list: gpui::ListState,
+        anchor_following: Rc<Cell<bool>>,
+        is_scrolled: Rc<Cell<bool>>,
+        tail_recheck: Rc<Cell<bool>>,
+    ) -> Self {
+        Self {
+            list,
+            anchor_following,
+            is_scrolled,
+            tail_recheck,
+        }
+    }
+}
+
+impl TranscriptSelectionScroll for TranscriptScrollTarget {
+    fn viewport_bounds(&self) -> Bounds<Pixels> {
+        self.list.viewport_bounds()
+    }
+
+    fn scroll_by(&self, delta: Pixels) -> bool {
+        let current = self.list.scroll_px_offset_for_scrollbar();
+        let max = self.list.max_offset_for_scrollbar().y;
+        let at_implicit_tail = self.list.logical_scroll_top().item_ix >= self.list.item_count();
+        let mut next = (-current.y + delta).clamp(Pixels::ZERO, max);
+        // GPUI considers anything within one pixel of the tail to be back at
+        // the tail. Cross that tolerance on the first upward step, otherwise a
+        // slow edge drag is re-pinned by the next layout before it can move.
+        if at_implicit_tail && delta < Pixels::ZERO {
+            next = next.min((max - px(1.1)).max(Pixels::ZERO));
+        }
+        if (next + current.y).abs() < px(0.001) {
+            return false;
+        }
+        // This path bypasses GPUI's wheel handler, so explicitly yield the
+        // turn anchor until the gesture finishes.
+        self.anchor_following.set(false);
+        self.is_scrolled.set(true);
+        self.tail_recheck.set(false);
+
+        // A tail-pinned list uses the item count instead of a viewport offset.
+        // Convert that sentinel to a real position before applying a relative
+        // scroll. The scrollbar setter alone would re-pin within 1px of the end.
+        if at_implicit_tail {
+            self.list
+                .set_offset_from_scrollbar(gpui::point(current.x, -next));
+        } else {
+            self.list.scroll_by(next + current.y);
+        }
+        true
+    }
+
+    fn is_scrollable(&self) -> bool {
+        self.list.max_offset_for_scrollbar().y > px(0.5)
+    }
+
+    fn finish_scroll(&self) {
+        self.tail_recheck.set(true);
+    }
+}
 
 const CHANGED_FILES_PREVIEW_LIMIT: usize = 3;
 /// Keep one virtualized transcript row bounded even when a generator touches
@@ -470,29 +539,21 @@ impl Fintwind {
         let selection = self.transcript_selection.clone();
         let focus = self.transcript_selection_focus.clone();
         let list = self.active_transcript_rows().clone();
-        struct TranscriptScrollTarget {
-            list: gpui::ListState,
-        }
-        impl TranscriptSelectionScroll for TranscriptScrollTarget {
-            fn viewport_bounds(&self) -> Bounds<Pixels> {
-                self.list.viewport_bounds()
-            }
-            fn scroll_by(&self, delta: Pixels) {
-                let current = self.list.scroll_px_offset_for_scrollbar();
-                self.list.set_offset_from_scrollbar(gpui::point(
-                    current.x,
-                    current.y - delta,
-                ));
-            }
-            fn is_scrollable(&self) -> bool {
-                self.list.max_offset_for_scrollbar().y > px(0.5)
-            }
-        }
-        let scroll_target = Rc::new(TranscriptScrollTarget { list }) as Rc<dyn TranscriptSelectionScroll>;
+        let scroll_target = Rc::new(TranscriptScrollTarget::new(
+            list,
+            self.transcript_anchor_following.clone(),
+            self.transcript_is_scrolled.clone(),
+            self.transcript_tail_recheck.clone(),
+        )) as Rc<dyn TranscriptSelectionScroll>;
         canvas(
             |_, _, _| (),
             move |_, _, window, _| {
-                install_selection_input_with_focus_and_scroll(window, &selection, &focus, scroll_target.clone())
+                install_selection_input_with_focus_and_scroll(
+                    window,
+                    &selection,
+                    &focus,
+                    scroll_target.clone(),
+                )
             },
         )
         .absolute()

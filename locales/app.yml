@@ -686,6 +686,8 @@ providers.rename:
   en: Rename
 providers.save:
   en: Save
+providers.account_label:
+  en: Account
 providers.delete_provider:
   en: Delete provider
 providers.confirm_delete_provider:

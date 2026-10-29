@@ -59,6 +59,8 @@ impl Fintwind {
         };
         let provider_id = provider.id.clone();
         self.models_dev_fetching = true;
+        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
+        let workspace = self.provider_workspace();
         cx.notify();
 
         let session_table = self.models_dev_table.clone();
@@ -70,7 +72,12 @@ impl Fintwind {
             let fetched = cx
                 .background_executor()
                 .spawn(async move {
-                    let api_models = custom_providers::fetch_api_model_list(&provider);
+                    let api_models = provider
+                        .for_probe(&credentials, workspace)
+                        .map_err(|error| {
+                            custom_providers::ApiListError::Unreachable(error.to_string())
+                        })
+                        .and_then(|provider| custom_providers::fetch_api_model_list(&provider));
                     let table = match fresh_table {
                         Some(table) => Some(table),
                         None => fintwind_client::models_dev::fetch_catalog_with_fallback(
@@ -291,13 +298,22 @@ impl Fintwind {
             return;
         }
         let provider_id = provider.id.clone();
+        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
+        let workspace = self.provider_workspace();
         self.provider_connectivity
             .insert(provider_id.clone(), ProviderConnectivityState::Testing);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_executor()
-                .spawn(async move { custom_providers::probe_connectivity(&provider) })
+                .spawn(async move {
+                    match provider.for_probe(&credentials, workspace) {
+                        Ok(provider) => custom_providers::probe_connectivity(&provider),
+                        Err(error) => custom_providers::ConnectivityOutcome::Failed {
+                            error: custom_providers::ApiListError::Unreachable(error.to_string()),
+                        },
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.provider_connectivity
@@ -371,6 +387,8 @@ impl Fintwind {
         }
         let provider = self.form_transient_provider(cx);
         self.providers_form_fetching = true;
+        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
+        let workspace = self.provider_workspace();
         self.providers_form_fetch_generation += 1;
         let generation = self.providers_form_fetch_generation;
         cx.notify();
@@ -384,7 +402,12 @@ impl Fintwind {
             let fetched = cx
                 .background_executor()
                 .spawn(async move {
-                    let api_models = custom_providers::fetch_api_model_list(&provider);
+                    let api_models = provider
+                        .for_probe(&credentials, workspace)
+                        .map_err(|error| {
+                            custom_providers::ApiListError::Unreachable(error.to_string())
+                        })
+                        .and_then(|provider| custom_providers::fetch_api_model_list(&provider));
                     let table = match fresh_table {
                         Some(table) => Some(table),
                         None => fintwind_client::models_dev::fetch_catalog_with_fallback(
@@ -512,13 +535,22 @@ impl Fintwind {
         }
         let provider = self.form_transient_provider(cx);
         self.providers_form_probe_generation += 1;
+        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
+        let workspace = self.provider_workspace();
         let generation = self.providers_form_probe_generation;
         self.providers_form_connectivity = Some(ProviderConnectivityState::Testing);
         cx.notify();
         cx.spawn(async move |this, cx| {
             let outcome = cx
                 .background_executor()
-                .spawn(async move { custom_providers::probe_connectivity(&provider) })
+                .spawn(async move {
+                    match provider.for_probe(&credentials, workspace) {
+                        Ok(provider) => custom_providers::probe_connectivity(&provider),
+                        Err(error) => custom_providers::ConnectivityOutcome::Failed {
+                            error: custom_providers::ApiListError::Unreachable(error.to_string()),
+                        },
+                    }
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.providers_form_probe_generation == generation {
@@ -579,14 +611,23 @@ impl Fintwind {
         };
         self.model_latency.insert(key, ModelLatencyState::Testing);
         cx.notify();
+        let credentials = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
+        let workspace = self.provider_workspace();
         cx.spawn(async move |this, cx| {
             let probe_model_id = model_id.clone();
-            let result =
-                cx.background_executor()
-                    .spawn(async move {
-                        custom_providers::first_token_latency(&provider, &probe_model_id)
-                    })
-                    .await;
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    provider
+                        .for_probe(&credentials, workspace)
+                        .map_err(|error| {
+                            custom_providers::FirstTokenError::Unreachable(error.to_string())
+                        })
+                        .and_then(|provider| {
+                            custom_providers::first_token_latency(&provider, &probe_model_id)
+                        })
+                })
+                .await;
             let _ = this.update(cx, |this, cx| {
                 let key = (provider_id, model_id);
                 this.model_latency.insert(
@@ -690,6 +731,11 @@ impl Fintwind {
         &mut self,
         integrations: Vec<fintwind_protocol::provider_session::IntegrationSummary>,
     ) {
+        self.providers_key_accounts = integrations
+            .iter()
+            .filter(|integration| !integration.key_accounts.is_empty())
+            .map(|integration| (integration.id.clone(), integration.key_accounts.clone()))
+            .collect();
         self.providers_authorized = integrations
             .iter()
             .filter(|integration| integration.connected)
@@ -728,7 +774,7 @@ impl Fintwind {
     }
 
     /// The workspace the page's server RPCs anchor to: the probed OpenCode
-    /// binary and a project checkout. The credential store is shared by
+    /// binary and a workspace directory. The credential store is shared by
     /// every server of the same OpenCode install, so the directory only
     /// picks which pool entry answers.
     pub(super) fn provider_workspace(&self) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
@@ -738,7 +784,13 @@ impl Fintwind {
             .selected_project
             .and_then(|id| self.state.projects.iter().find(|project| project.id == id))
             .or_else(|| self.state.projects.first())
-            .map(|project| project.path.clone())?;
+            .map(|project| project.path.clone())
+            .or_else(|| {
+                self.state
+                    .general_workspace_path()
+                    .map(std::path::PathBuf::from)
+            })
+            .or_else(dirs::home_dir)?;
         Some((binary, directory))
     }
 
@@ -1281,7 +1333,7 @@ impl Fintwind {
     /// Re-fetch the integration list in the background, so the authorized
     /// set mirrors the server rather than what this action assumed. Failure
     /// is quiet — the optimistic set from the action stands.
-    fn refresh_integrations(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn refresh_integrations(&mut self, cx: &mut Context<Self>) {
         let Some(workspace) = self.provider_workspace() else {
             return;
         };
@@ -1301,6 +1353,50 @@ impl Fintwind {
                     this.load_selected_provider_quota(false, cx);
                     cx.notify();
                 }
+            });
+        })
+        .detach();
+    }
+
+    pub(super) fn switch_custom_provider_account(
+        &mut self,
+        provider_id: String,
+        credential_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        if self.providers_auth_loading || self.providers_save_in_flight {
+            return;
+        }
+        let Some((binary, directory)) = self.provider_workspace() else {
+            return;
+        };
+        self.providers_auth_loading = true;
+        let store = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    store
+                        .activate_provider_key_account(
+                            binary,
+                            directory,
+                            provider_id.clone(),
+                            credential_id,
+                        )
+                        .map(|_| provider_id)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.providers_auth_loading = false;
+                match result {
+                    Ok(id) => {
+                        this.clear_provider_probe_results(&id);
+                        this.refresh_integrations(cx);
+                    }
+                    Err(error) => this
+                        .show_toast(tr!("providers.auth_save_failed", error = error.to_string())),
+                }
+                cx.notify();
             });
         })
         .detach();

@@ -321,14 +321,37 @@ impl Fintwind {
     /// the working store unless a newer load started or a debounced field
     /// edit is pending.
     pub(super) fn load_providers_from_config(&mut self, cx: &mut Context<Self>) {
+        if self.providers_save_in_flight || self.providers_commit_generation != 0 {
+            return;
+        }
         self.providers_load_generation += 1;
         let generation = self.providers_load_generation;
+        let workspace = self.provider_workspace();
+        let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
-            let migrated = cx
+            let (loaded, migration_error) = cx
                 .background_executor()
                 .spawn(async move {
                     fintwind_client::opencode_config::migrate_legacy_override_file();
-                    fintwind_client::opencode_config::load_providers()
+                    let migration_error = workspace.and_then(|(binary, directory)| {
+                        let store = fintwind_client::persistence::StateStore::remote(daemon);
+                        fintwind_client::opencode_config::migrate_provider_credentials_at(
+                            &fintwind_client::opencode_config::config_path(),
+                            |id, key| {
+                                store.store_custom_provider_key(
+                                    binary.clone(),
+                                    directory.clone(),
+                                    id.to_owned(),
+                                    key.to_owned(),
+                                )
+                            },
+                        )
+                        .err()
+                    });
+                    (
+                        fintwind_client::opencode_config::load_providers(),
+                        migration_error,
+                    )
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -337,7 +360,7 @@ impl Fintwind {
                 {
                     return;
                 }
-                match migrated {
+                match loaded {
                     Ok(providers) => {
                         let selected_missing =
                             this.providers_selected.as_deref().is_some_and(|id| {
@@ -358,6 +381,13 @@ impl Fintwind {
                         } else if page_reload && let Some(id) = this.providers_selected.clone() {
                             this.load_provider_fields(&id, cx);
                         }
+                        if let Some(error) = migration_error {
+                            this.show_toast(tr!(
+                                "providers.auth_save_failed",
+                                error = error.to_string()
+                            ));
+                        }
+                        this.refresh_integrations(cx);
                         cx.notify();
                     }
                     Err(error) => {
@@ -375,18 +405,95 @@ impl Fintwind {
     /// without a restart. Thinking variants come from the models.dev table
     /// the session holds; a commit before any fetch keeps raw variants only.
     pub(super) fn commit_custom_providers(&mut self, cx: &mut Context<Self>) {
-        if let Err(error) = fintwind_client::opencode_config::save_providers(
-            &self.providers_store,
-            self.models_dev_table.as_deref(),
-        ) {
-            self.show_toast(tr!("providers.sync_failed", error = error.to_string()));
+        self.providers_load_generation += 1;
+        if self.providers_save_in_flight {
+            self.providers_save_pending = true;
+            return;
         }
-        self.rebuild_image_models();
-        self.refresh_provider_detection();
+        self.providers_save_in_flight = true;
+        let providers = self.providers_store.clone();
+        let submitted = providers.clone();
+        let catalog = self.models_dev_table.clone();
+        let workspace = self.provider_workspace();
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let store = fintwind_client::persistence::StateStore::remote(daemon);
+                    fintwind_client::opencode_config::save_providers_with_credentials_at(
+                        &fintwind_client::opencode_config::config_path(),
+                        &providers,
+                        catalog.as_deref(),
+                        |id, key| {
+                            let (binary, directory) = workspace
+                                .as_ref()
+                                .ok_or_else(|| std::io::Error::other("OpenCode is unavailable"))?;
+                            store.store_custom_provider_key(
+                                binary.clone(),
+                                directory.clone(),
+                                id.to_owned(),
+                                key.to_owned(),
+                            )
+                        },
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.providers_save_in_flight = false;
+                match result {
+                    Ok(saved) => {
+                        let mut clear_key_editor = false;
+                        for (before, saved) in submitted.iter().zip(saved) {
+                            if let Some(current) =
+                                this.providers_store.iter_mut().find(|p| p.id == saved.id)
+                            {
+                                // Keep newer model/endpoint/key edits. Only the submitted
+                                // secret and original-record baseline belong to this save.
+                                current.raw = saved.raw;
+                                if current.api_key == before.api_key
+                                    && saved.api_key.is_empty()
+                                    && !before.api_key.is_empty()
+                                {
+                                    current.api_key.clear();
+                                    this.providers_authorized.insert(current.id.clone());
+                                    clear_key_editor |= this.providers_selected.as_deref()
+                                        == Some(current.id.as_str())
+                                        && this.provider_api_key_input.read(cx).content().trim()
+                                            == before.api_key;
+                                }
+                                if before.raw.is_null() {
+                                    this.show_success_toast(tr!(
+                                        "providers.added_toast",
+                                        name = before.name.clone()
+                                    ));
+                                }
+                            }
+                        }
+                        if clear_key_editor {
+                            this.provider_api_key_input
+                                .update(cx, |input, cx| input.set_content(String::new(), cx));
+                            this.providers_api_key_revealed = false;
+                        }
+                        this.rebuild_image_models();
+                        this.refresh_provider_detection();
+                        this.refresh_integrations(cx);
+                    }
+                    Err(error) => {
+                        this.show_toast(tr!("providers.sync_failed", error = error.to_string()))
+                    }
+                }
+                if std::mem::take(&mut this.providers_save_pending) {
+                    this.commit_custom_providers(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
         cx.notify();
     }
 
-    /// Debounced commit for keystroke-level edits (base URL, API key), so a
+    /// Debounced commit for keystroke-level endpoint edits, so a
     /// burst of typing costs one save and one probe instead of one per key.
     fn schedule_custom_providers_commit(&mut self, cx: &mut Context<Self>) {
         self.providers_commit_generation += 1;
@@ -434,18 +541,44 @@ impl Fintwind {
                 if provider.api_key == value {
                     return;
                 }
-                provider.api_key = value;
+                // Keep replacement input separate from the roster. Automatic
+                // model/endpoint saves must never submit an unfinished key.
                 true
             }
         };
         if changed {
+            self.providers_load_generation += 1;
             // The endpoint or key just changed: this provider's connectivity
             // and first-token verdicts no longer describe it.
             let provider_id = provider.id.clone();
             self.clear_provider_probe_results(&provider_id);
-            self.schedule_custom_providers_commit(cx);
+            // A key is a replacement draft. Do not persist partial secrets
+            // merely because the user pauses while typing.
+            if matches!(field, ProviderField::BaseUrl) {
+                self.schedule_custom_providers_commit(cx);
+            }
             cx.notify();
         }
+    }
+    fn save_custom_provider_key(&mut self, cx: &mut Context<Self>) {
+        let key = self
+            .provider_api_key_input
+            .read(cx)
+            .content()
+            .trim()
+            .to_owned();
+        if key.is_empty() {
+            return;
+        }
+        let Some(provider) = self
+            .providers_store
+            .iter_mut()
+            .find(|provider| Some(&provider.id) == self.providers_selected.as_ref())
+        else {
+            return;
+        };
+        provider.api_key = key;
+        self.commit_custom_providers(cx);
     }
     pub(super) fn begin_add_provider(&mut self, cx: &mut Context<Self>) {
         self.providers_adding = true;
@@ -555,8 +688,9 @@ impl Fintwind {
         self.providers_store.push(provider);
         self.commit_custom_providers(cx);
         self.exit_provider_form(cx);
+        self.provider_form_api_key
+            .update(cx, |input, cx| input.set_content(String::new(), cx));
         self.select_provider(id, cx);
-        self.show_success_toast(tr!("providers.added_toast", name = name));
     }
 
     fn delete_provider(&mut self, id: String, cx: &mut Context<Self>) {
@@ -670,12 +804,7 @@ impl Fintwind {
                         self.effective_output_modalities(model),
                     )
                 }
-                _ => (
-                    String::new(),
-                    String::new(),
-                    Vec::new(),
-                    Vec::new(),
-                ),
+                _ => (String::new(), String::new(), Vec::new(), Vec::new()),
             };
         self.providers_model_editor = Some(editor);
         self.providers_model_editor_modalities = modalities;
@@ -1920,6 +2049,73 @@ impl Fintwind {
         let connectivity_field = self.render_connectivity_field(provider, theme, cx);
 
         let models_section = self.render_provider_models(provider, theme, cx);
+        let accounts = self
+            .providers_key_accounts
+            .get(&provider.id)
+            .cloned()
+            .unwrap_or_default();
+        let account_selector = if accounts.len() > 1
+            && provider.api_key.is_empty()
+            && !self.providers_api_key_revealed
+        {
+            let active = accounts.iter().find(|account| account.active);
+            let label = active
+                .map(|account| {
+                    if account.label.is_empty() {
+                        account.id.clone()
+                    } else {
+                        account.label.clone()
+                    }
+                })
+                .unwrap_or_else(|| tr!("providers.account_label"));
+            let handle = self.menu_handle("custom-provider-account", cx);
+            let weak = cx.entity().downgrade();
+            let provider_id = provider.id.clone();
+            Some(labeled_field(
+                theme,
+                tr!("providers.account_label"),
+                dropdown_menu(
+                    MenuChip::new("custom-provider-account")
+                        .label(label)
+                        .outlined()
+                        .selected(handle.is_open())
+                        .w_full()
+                        .justify_between(),
+                    "custom-provider-account-menu",
+                    &handle,
+                    MenuAlign::BelowLeft,
+                    move |_| {
+                        accounts
+                            .iter()
+                            .map(|account| {
+                                let weak = weak.clone();
+                                let provider_id = provider_id.clone();
+                                let credential_id = account.id.clone();
+                                MenuItem::new(
+                                    if account.label.is_empty() {
+                                        account.id.clone()
+                                    } else {
+                                        account.label.clone()
+                                    },
+                                    move |_, cx| {
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.switch_custom_provider_account(
+                                                provider_id.clone(),
+                                                credential_id.clone(),
+                                                cx,
+                                            )
+                                        });
+                                    },
+                                )
+                                .selected(account.active)
+                            })
+                            .collect()
+                    },
+                ),
+            ))
+        } else {
+            None
+        };
 
         self.scrollable_detail(
             div()
@@ -1963,6 +2159,7 @@ impl Fintwind {
                         .gap(px(14.0))
                         .child(base_url_field)
                         .child(api_key_field)
+                        .children(account_selector)
                         .child(format_field)
                         .child(connectivity_field),
                 )
@@ -1974,6 +2171,10 @@ impl Fintwind {
     /// treatment), the editable field itself while revealed.
     fn render_api_key_field(&self, theme: &Theme, cx: &mut Context<Self>) -> AnyElement {
         let revealed = self.providers_api_key_revealed;
+        let connected = self
+            .providers_selected
+            .as_deref()
+            .is_some_and(|id| self.provider_is_authorized(id));
         let field: AnyElement = if revealed {
             TextField::new(
                 "provider-api-key-field",
@@ -1983,7 +2184,9 @@ impl Fintwind {
             .into_any_element()
         } else {
             let key = self.provider_api_key_input.read(cx).content();
-            let masked = if key.is_empty() {
+            let masked = if key.is_empty() && connected {
+                tr!("providers.authorized_badge")
+            } else if key.is_empty() {
                 tr!("providers.api_key_placeholder")
             } else {
                 "•".repeat(key.chars().count().min(36))
@@ -2007,7 +2210,7 @@ impl Fintwind {
                         .truncate()
                         .font_family(crate::md::render::mono_family())
                         .text_size(ui_px(11.0))
-                        .text_color(if key.is_empty() {
+                        .text_color(if key.is_empty() && !connected {
                             theme.text_ghost
                         } else {
                             theme.text_secondary
@@ -2031,6 +2234,63 @@ impl Fintwind {
             .items_center()
             .gap(px(6.0))
             .child(div().flex_1().min_w_0().child(field))
+            .when(
+                connected
+                    && !revealed
+                    && !self.providers_save_in_flight
+                    && !self.providers_auth_loading
+                    && self.provider_api_key_input.read(cx).content().is_empty(),
+                |row| {
+                    row.child(
+                        outline_button(
+                            "disconnect-custom-provider",
+                            tr!("providers.logout"),
+                            None,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            if let Some(id) = this.providers_selected.clone() {
+                                this.clear_provider_probe_results(&id);
+                                this.logout_builtin_provider(id, cx);
+                            }
+                        }))
+                        .on_key_down(cx.listener(
+                            |this, event: &KeyDownEvent, _, cx| {
+                                if !event.keystroke.modifiers.modified()
+                                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                {
+                                    if let Some(id) = this.providers_selected.clone() {
+                                        this.clear_provider_probe_results(&id);
+                                        this.logout_builtin_provider(id, cx);
+                                    }
+                                    cx.stop_propagation();
+                                }
+                            },
+                        )),
+                    )
+                },
+            )
+            .when(revealed && !self.providers_save_in_flight, |row| {
+                row.child(
+                    outline_button(
+                        "save-custom-provider-key",
+                        tr!("providers.save"),
+                        None,
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.save_custom_provider_key(cx)))
+                    .on_key_down(cx.listener(
+                        |this, event: &KeyDownEvent, _, cx| {
+                            if !event.keystroke.modifiers.modified()
+                                && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                            {
+                                this.save_custom_provider_key(cx);
+                                cx.stop_propagation();
+                            }
+                        },
+                    )),
+                )
+            })
             .child(
                 icon_button(
                     "toggle-provider-key-reveal",
@@ -3244,13 +3504,12 @@ impl Fintwind {
                 }
                 cx.notify();
             };
-            let toggle_output =
-                move |this: &mut Self, modality: &str, cx: &mut Context<Self>| {
-                    if let Some(draft) = this.providers_form_models.get_mut(index) {
-                        toggle_output_modality(&mut draft.output_modalities, modality);
-                    }
-                    cx.notify();
-                };
+            let toggle_output = move |this: &mut Self, modality: &str, cx: &mut Context<Self>| {
+                if let Some(draft) = this.providers_form_models.get_mut(index) {
+                    toggle_output_modality(&mut draft.output_modalities, modality);
+                }
+                cx.notify();
+            };
             drafts = drafts.child(
                 div()
                     .py(px(8.0))
@@ -3835,7 +4094,11 @@ impl Fintwind {
                 .id(id.into())
                 .flex_none()
                 .tooltip(Tooltip::text(tr!("providers.output_modalities_label")))
-                .child(small_pill(theme, tr!("providers.image_badge"), Some(accent)))
+                .child(small_pill(
+                    theme,
+                    tr!("providers.image_badge"),
+                    Some(accent),
+                ))
                 .into_any_element(),
         )
     }

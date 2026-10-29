@@ -330,6 +330,7 @@ providers.action_enable: 有効にする
 providers.action_disable: 無効にする
 providers.rename: 名前を変更
 providers.save: 保存
+providers.account_label: アカウント
 providers.delete_provider: プロバイダーを削除
 providers.confirm_delete_provider: 削除しますか？
 providers.delete_model: モデルを削除

@@ -2036,6 +2036,41 @@ impl Backend for FintwindBackend {
                     .fetch_from_server(&server, &provider_id, force);
                 Ok(ResponsePayload::ProviderQuota { quota })
             }
+            Command::StoreCustomProviderKey {
+                binary,
+                directory,
+                provider_id,
+                key,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                crate::custom_provider_credentials::store(&server, &provider_id, &key)?;
+                Ok(ResponsePayload::Ack)
+            }
+            Command::ResolveCustomProviderKey {
+                binary,
+                directory,
+                provider_id,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let key = crate::custom_provider_credentials::resolve(&server, &provider_id)?;
+                Ok(ResponsePayload::Json {
+                    value: serde_json::json!(key),
+                })
+            }
+            Command::ActivateProviderKeyAccount {
+                binary,
+                directory,
+                provider_id,
+                credential_id,
+            } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                crate::custom_provider_credentials::activate(
+                    &server,
+                    &provider_id,
+                    &credential_id,
+                )?;
+                Ok(ResponsePayload::Ack)
+            }
             Command::LogoutProvider {
                 binary,
                 directory,
@@ -2966,6 +3001,9 @@ fn handle_driver_command(
         | Command::FetchIntegrations { .. }
         | Command::FetchProviderQuota { .. }
         | Command::AuthorizeProvider { .. }
+        | Command::StoreCustomProviderKey { .. }
+        | Command::ResolveCustomProviderKey { .. }
+        | Command::ActivateProviderKeyAccount { .. }
         | Command::LogoutProvider { .. }
         | Command::StartProviderOAuth { .. }
         | Command::PollProviderOAuth { .. }

@@ -171,11 +171,11 @@ fn rise_light(x: f32, y: f32, size: FieldSize, seconds: f32, palette: &Palette) 
     let height = size.height as f32 / FIELD_HEIGHT;
     let mut px = (x - size.width as f32 * 0.5) / height;
     let mut py = (height - size.height as f32 + y - height * 0.5) / height;
-    let warp_x = field_noise(px * 1.7 + seconds * 0.13, py * 1.7 - seconds * 0.08) - 0.5;
-    let warp_y = field_noise(px * 1.7 - seconds * 0.1 + 3.7, py * 1.7 + seconds * 0.12) - 0.5;
-    px += warp_x * 0.065;
-    py += warp_y * 0.065;
-    py += (px * 2.6 + seconds * 0.5).sin() * 0.015;
+    let warp_x = field_noise(px * 1.7 + seconds * 0.16, py * 1.7 - seconds * 0.10) - 0.5;
+    let warp_y = field_noise(px * 1.7 - seconds * 0.125 + 3.7, py * 1.7 + seconds * 0.15) - 0.5;
+    px += warp_x * 0.08;
+    py += warp_y * 0.08;
+    py += (px * 2.6 + seconds * 0.6).sin() * 0.018;
 
     let radius = ((px + 0.085) * 0.385).hypot(py - 0.678);
     let depth = 0.62 - radius;

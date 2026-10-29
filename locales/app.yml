@@ -396,6 +396,10 @@ settings.mermaid_visualization:
   en: Mermaid visualization prompt
 settings.mermaid_visualization_description:
   en: New sessions only
+settings.keep_screen_awake:
+  en: Keep screen awake
+settings.keep_screen_awake_description:
+  en: While on, the display and system stay awake for as long as the app runs
 settings.goal:
   en: Goal mode
 settings.goal_description:

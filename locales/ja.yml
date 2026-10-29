@@ -183,6 +183,8 @@ settings.scheduled_tools: 定期タスク MCP
 settings.scheduled_tools_description: エージェントによる定期タスクの作成を許可します。OpenCode 2.1.4 以降が必要で、有効にすると実験的な MCP 接続を自動で開始します
 settings.mermaid_visualization: Mermaid 可視化プロンプト
 settings.mermaid_visualization_description: 新しいセッションのみ
+settings.keep_screen_awake: 画面を常時点灯
+settings.keep_screen_awake_description: オンにすると、アプリの実行中は画面とシステムをスリープさせません
 settings.goal: 目標モード
 settings.goal_description: 有効にすると /goal でセッションの目標を設定でき、実行の一時停止と再開ができます
 settings.auto_compact: 自動圧縮

@@ -27,9 +27,14 @@ const RESIZE_DETAIL: f32 = 0.55;
 /// leaves room for texture upload and painting.
 const RENDER_BUDGET: Duration = Duration::from_millis(12);
 /// Bounds of the adaptive detail factor. A slower machine lowers it until a
-/// frame fits the budget; a faster one returns to native detail.
+/// frame fits the budget.
 const MIN_DETAIL: f32 = 0.5;
 const MAX_DETAIL: f32 = 1.0;
+/// Frames spent calibrating the detail factor after the bounds settle. The
+/// factor then stays fixed: adjusting it every frame kept changing the bitmap
+/// size, and a different bitmap size rounds the character cell differently,
+/// which shifted the whole grid and read as violent character jitter.
+const CALIBRATION_FRAMES: u8 = 3;
 
 #[derive(Clone, Copy)]
 enum Appearance {
@@ -278,7 +283,11 @@ fn render_field(size: FieldSize, seconds: f32, colors: ThemeColors) -> RgbaImage
         size.height,
         image::imageops::FilterType::Triangle,
     );
-    let grain_phase = (seconds.max(0.0) * 7.13).floor() as u32;
+    // Grain and glyph choices change on a slow, fixed cadence. At 60fps a
+    // per-frame choice recomputes the whole character face every frame, which
+    // reads as violent jitter rather than as the intended slow flicker.
+    let grain_phase = (seconds.max(0.0) * 2.0).floor() as u32;
+    let glyph_seconds = (seconds.max(0.0) * 10.0).floor() / 10.0;
     for (y, row) in image.rows_mut().enumerate() {
         for (x, pixel) in row.enumerate() {
             let light = (0..3)
@@ -317,7 +326,7 @@ fn render_field(size: FieldSize, seconds: f32, colors: ThemeColors) -> RgbaImage
         for col in 0..columns {
             let left = offset_x + col as f32 * step_x;
             let glyph_x = left + step_x * 0.5;
-            let light = rise_light(glyph_x, glyph_y, size, seconds, palette);
+            let light = rise_light(glyph_x, glyph_y, size, glyph_seconds, palette);
             let brightness =
                 light.strength.powf(0.6) * (0.35 + 0.38 * light.center + 0.55 * light.white);
             if brightness < 0.035 {
@@ -327,7 +336,7 @@ fn render_field(size: FieldSize, seconds: f32, colors: ThemeColors) -> RgbaImage
                 continue;
             }
             let rate = 0.8 + 2.4 * noise(col.wrapping_add(19), row.wrapping_add(9));
-            let tick = (seconds * rate + noise(col, row) * 7.0).floor() as u32;
+            let tick = (glyph_seconds * rate + noise(col, row) * 7.0).floor() as u32;
             let swap = noise(
                 col.wrapping_add(tick.wrapping_mul(3)),
                 row.wrapping_add(tick.wrapping_mul(5)),
@@ -351,7 +360,7 @@ fn render_field(size: FieldSize, seconds: f32, colors: ThemeColors) -> RgbaImage
             let phase =
                 noise(col.wrapping_add(1001), row.wrapping_add(171)) * std::f32::consts::TAU;
             let speed = 1.5 + 2.1 * noise(col.wrapping_add(359), row.wrapping_add(872));
-            let wave = 0.5 + 0.5 * (seconds * speed + phase).sin();
+            let wave = 0.5 + 0.5 * (glyph_seconds * speed + phase).sin();
             let opacity = smoothstep(0.02, 0.55, light.strength) * (0.72 + 0.28 * wave);
             let ink = match appearance {
                 Appearance::Light => light
@@ -440,6 +449,8 @@ pub(super) struct NewSessionBackground {
     /// Adaptive rasterization detail: 1.0 is native, lower values keep the
     /// frame inside `RENDER_BUDGET` by stretching a smaller bitmap.
     detail: f32,
+    /// Remaining calibration frames before `detail` is held fixed.
+    calibration: u8,
 }
 
 impl NewSessionBackground {
@@ -454,6 +465,7 @@ impl NewSessionBackground {
             fading_since: None,
             rendering: false,
             detail: MAX_DETAIL,
+            calibration: CALIBRATION_FRAMES,
         }
     }
 
@@ -533,11 +545,7 @@ impl NewSessionBackground {
             let (image, cost) = task.await;
             let _ = view.update(cx, |this, cx| {
                 this.rendering = false;
-                // Cost scales with the pixel area, so the square root of the
-                // budget ratio moves the detail factor toward the target in
-                // one step.
-                let ratio = (RENDER_BUDGET.as_secs_f32() / cost.as_secs_f32().max(0.001)).sqrt();
-                this.detail = (this.detail * ratio).clamp(MIN_DETAIL, MAX_DETAIL);
+                this.track_cost(cost);
                 let preserve_fading_frame = this.image.is_some()
                     && this
                         .fading_since
@@ -556,6 +564,21 @@ impl NewSessionBackground {
             });
         })
         .detach();
+    }
+
+    /// Sets the detail factor for the next few frames, then leaves it alone.
+    /// Cost scales with the pixel area, so the square root of the budget ratio
+    /// moves the factor toward the target in one step. Quantizing to tenths
+    /// keeps the character grid from drifting between adjacent subtleties.
+    fn track_cost(&mut self, cost: Duration) {
+        if self.calibration == 0 {
+            return;
+        }
+        self.calibration -= 1;
+        let budget = RENDER_BUDGET.as_secs_f32();
+        let ratio = (budget / cost.as_secs_f32().max(0.001)).sqrt();
+        let target = (self.detail * ratio).clamp(MIN_DETAIL, MAX_DETAIL);
+        self.detail = ((target * 10.0).round() / 10.0).clamp(MIN_DETAIL, MAX_DETAIL);
     }
 
     fn accept_image(&mut self, image: Arc<RenderImage>, cx: &mut Context<Self>) {
@@ -582,6 +605,7 @@ impl Render for NewSessionBackground {
             // stay on a stretched low-detail frame.
             if self.resized_at.is_some() && !self.resizing() && !self.rendering {
                 self.resized_at = None;
+                self.calibration = CALIBRATION_FRAMES;
                 self.request_frame(cx);
             }
             if active {

@@ -302,6 +302,10 @@ pub struct AppSettings {
     /// sessions retain their frozen version independently of this preference.
     #[serde(default)]
     pub mermaid_visualization_enabled: bool,
+    /// Hold the display and system awake for the app's whole runtime. Off by
+    /// default: it costs power, so enabling it is an explicit act.
+    #[serde(default)]
+    pub keep_screen_awake: bool,
     /// Client-side early auto compaction: compact once live context
     /// occupancy reaches the threshold below, for the foreground session
     /// and live subagents alike. On by default; the provider's own
@@ -332,6 +336,7 @@ impl Default for AppSettings {
             scheduled_tools_enabled: false,
             goal_enabled: false,
             mermaid_visualization_enabled: false,
+            keep_screen_awake: false,
             auto_compact_enabled: true,
             auto_compact_threshold_tokens:
                 fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
@@ -423,6 +428,9 @@ pub struct PersistedState {
     /// Default for newly created sessions only; old sessions keep their version.
     #[serde(default)]
     pub mermaid_visualization_enabled: bool,
+    /// Hold the display and system awake for the app's whole runtime.
+    #[serde(default)]
+    pub keep_screen_awake: bool,
     /// Client-side early auto compaction switch. On by default.
     #[serde(default = "default_auto_compact_enabled")]
     pub auto_compact_enabled: bool,
@@ -497,6 +505,7 @@ impl PersistedState {
             scheduled_tools_enabled: false,
             goal_enabled: false,
             mermaid_visualization_enabled: false,
+            keep_screen_awake: false,
             auto_compact_enabled: true,
             auto_compact_threshold_tokens:
                 fintwind_protocol::settings::AUTO_COMPACT_THRESHOLD_TOKENS_DEFAULT,
@@ -687,6 +696,7 @@ impl PersistedState {
             scheduled_tools_enabled: self.scheduled_tools_enabled,
             goal_enabled: self.goal_enabled,
             mermaid_visualization_enabled: self.mermaid_visualization_enabled,
+            keep_screen_awake: self.keep_screen_awake,
             auto_compact_enabled: self.auto_compact_enabled,
             auto_compact_threshold_tokens: self.auto_compact_threshold_tokens,
             network_proxy_url: self.network_proxy_url.clone(),
@@ -729,6 +739,7 @@ impl PersistedState {
         self.scheduled_tools_enabled = settings.scheduled_tools_enabled;
         self.goal_enabled = settings.goal_enabled;
         self.mermaid_visualization_enabled = settings.mermaid_visualization_enabled;
+        self.keep_screen_awake = settings.keep_screen_awake;
         self.auto_compact_enabled = settings.auto_compact_enabled;
         self.auto_compact_threshold_tokens = settings.auto_compact_threshold_tokens;
         self.network_proxy_url = settings.network_proxy_url;

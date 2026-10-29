@@ -766,6 +766,48 @@ impl Fintwind {
                                     this.set_goal_enabled(!this.state.goal_enabled, cx)
                                 },
                             )),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.keep_screen_awake")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.keep_screen_awake_description")),
+                                    ),
+                            )
+                            .child(toggle_switch(
+                                "keep-screen-awake-toggle",
+                                self.state.keep_screen_awake,
+                                false,
+                                theme,
+                                window,
+                                cx,
+                                move |this: &mut Self, _, cx| {
+                                    this.set_keep_screen_awake(!this.state.keep_screen_awake, cx);
+                                },
+                            )),
                     ),
             )
             .child(
@@ -1919,6 +1961,19 @@ impl Fintwind {
             return;
         }
         self.state.browser_tools_enabled = enabled;
+        self.save();
+        cx.notify();
+    }
+
+    /// While on, the app holds the display and system awake for as long as it
+    /// runs. The Win32 request is thread-scoped, so the UI thread owns it for
+    /// the whole process lifetime.
+    fn set_keep_screen_awake(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.state.keep_screen_awake == enabled {
+            return;
+        }
+        self.state.keep_screen_awake = enabled;
+        crate::platform::set_keep_awake(enabled);
         self.save();
         cx.notify();
     }

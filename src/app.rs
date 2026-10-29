@@ -2722,6 +2722,9 @@ impl Fintwind {
         crate::theme::set_transcript_width(state.transcript_width);
         crate::theme::set_ui_font_family(state.ui_font_family.clone());
         crate::theme::set_code_font_family(state.code_font_family.clone());
+        // The Win32 execution-state request belongs to the UI thread, so the
+        // startup value is applied here rather than from a background task.
+        crate::platform::set_keep_awake(state.keep_screen_awake);
 
         let composer = cx.new(|cx| {
             ComposerInput::new(window, cx)

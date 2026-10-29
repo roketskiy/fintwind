@@ -69,6 +69,48 @@ pub fn titlebar_double_click(window: &Window) {
     let _ = window;
 }
 
+/// Hold the display and system awake while the app runs.
+///
+/// `SetThreadExecutionState` is thread-scoped: a continuous request outlives
+/// the call but ends with the thread that made it. The UI thread lives as
+/// long as the process, so it owns the request; a call from another thread is
+/// refused instead of clearing a request it does not own.
+pub fn set_keep_awake(hold: bool) {
+    use parking_lot::Mutex;
+    use std::thread::{self, ThreadId};
+    use windows_sys::Win32::System::Power::{
+        ES_CONTINUOUS, ES_DISPLAY_REQUIRED, ES_SYSTEM_REQUIRED, SetThreadExecutionState,
+    };
+
+    static HOLDER: Mutex<Option<(ThreadId, bool)>> = Mutex::new(None);
+
+    let thread = thread::current().id();
+    let mut holder = HOLDER.lock();
+    match holder.as_mut() {
+        Some((owner, current)) => {
+            if *owner != thread {
+                eprintln!("keep-awake must be requested from its owning thread");
+                return;
+            }
+            if *current == hold {
+                return;
+            }
+            *current = hold;
+        }
+        None => *holder = Some((thread, hold)),
+    }
+    let flags = if hold {
+        ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED
+    } else {
+        ES_CONTINUOUS
+    };
+    // The return value is the previous thread execution state, which is 0 both
+    // when the thread held none and when the call failed. The flags are
+    // constants, so success is the expected outcome; treat it as such and
+    // record the request rather than inferring a failure from that value.
+    let _ = unsafe { SetThreadExecutionState(flags) };
+}
+
 pub fn configure_sidebar_material(_: &Window, _: bool) {}
 
 pub fn set_sidebar_material_width(_: &Window, _: f32) {}

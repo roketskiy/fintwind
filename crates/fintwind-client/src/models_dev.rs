@@ -229,6 +229,17 @@ pub struct RecordBasics {
     pub output_modalities: Vec<String>,
 }
 
+/// One catalog model that emits images, as the settings page lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageModelChoice {
+    /// The catalog provider id — the first half of [`Self::id`].
+    pub provider: String,
+    /// `provider/model`, the value OpenCode's config stores.
+    pub id: String,
+    /// The model's display name, or the model id when the catalog has none.
+    pub label: String,
+}
+
 /// The metadata table: the catalog flattened into records grouped by
 /// normalized model id, plus when it was fetched. The grouping is built at
 /// parse time so a lookup never rescans the catalog.
@@ -243,6 +254,44 @@ pub struct ModelsDevTable {
 }
 
 impl ModelsDevTable {
+    /// Every model the catalog says emits images, one entry per
+    /// `provider/model`, in provider then display-name order. The table is
+    /// already parsed; build this when the data changes, not per frame.
+    pub fn image_models(&self) -> Vec<ImageModelChoice> {
+        let mut choices: BTreeMap<String, ImageModelChoice> = BTreeMap::new();
+        for model in self.models.values().flatten() {
+            if model.provider.is_empty()
+                || !model
+                    .output_modalities
+                    .iter()
+                    .any(|modality| modality == "image")
+            {
+                continue;
+            }
+            let id = format!("{}/{}", model.provider, model.id);
+            let label = model
+                .name
+                .as_deref()
+                .filter(|name| !name.is_empty() && *name != model.id)
+                .unwrap_or(&model.id)
+                .to_owned();
+            choices.entry(id.clone()).or_insert(ImageModelChoice {
+                provider: model.provider.clone(),
+                id,
+                label,
+            });
+        }
+        let mut choices: Vec<ImageModelChoice> = choices.into_values().collect();
+        choices.sort_by(|left, right| {
+            left.provider
+                .to_lowercase()
+                .cmp(&right.provider.to_lowercase())
+                .then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        choices
+    }
+
     pub fn age(&self) -> Duration {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

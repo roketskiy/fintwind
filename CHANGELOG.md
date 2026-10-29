@@ -18,6 +18,14 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+### 新功能
+
+- 通用设置新增「图像生成」开关，启用 OpenCode 的实验性 `image_generate` 工具，并可从已连接提供商的图像模型中选择默认模型。
+
+### 兼容性
+
+- 图像生成需要 OpenCode 2.2.1 或更新版本；未连接提供图像模型的提供商时，仅可使用自动模型选择。
+
 ## [0.2.17]
 
 ### 改进

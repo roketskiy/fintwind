@@ -177,6 +177,13 @@ update.dismiss: 更新通知を閉じる
 
 settings.local_by_default: デフォルトでローカルに保存
 settings.local_by_default_description: プロジェクト、会話、設定はこのコンピューターに保存されます
+settings.image_generation: 画像生成
+settings.image_generation_description: 既定でオフ。オンにすると、モデルは image_generate ツールで画像を生成・編集できます
+settings.image_generation_model: デフォルトモデル
+settings.image_generation_model_description: リクエストでモデルを指定しない場合に使用します
+settings.image_generation_model_auto: 自動
+settings.image_generation_load_failed: "画像生成の設定を読み込めませんでした：%{error}"
+settings.image_generation_save_failed: "画像生成の設定を保存できませんでした：%{error}"
 settings.browser_tools: ブラウザツール
 settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します
 settings.scheduled_tools: 定期タスク MCP

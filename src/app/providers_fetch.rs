@@ -270,6 +270,7 @@ impl Fintwind {
                 if let Some(table) = loaded {
                     this.models_dev_table = Some(std::sync::Arc::new(table));
                 }
+                this.rebuild_image_models();
                 cx.notify();
             });
         })
@@ -609,7 +610,11 @@ impl Fintwind {
     /// Make sure the built-in provider roster and the authorized set are
     /// loaded for the page visit. Both run off the UI thread; render reads
     /// only what they store and degrades to "unknown" until then.
-    pub(super) fn ensure_builtin_providers(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn ensure_builtin_providers(
+        &mut self,
+        report_failure: bool,
+        cx: &mut Context<Self>,
+    ) {
         self.ensure_models_dev_table(cx);
         if self.providers_builtin.is_none() && !self.providers_builtin_loading {
             self.providers_builtin_loading = true;
@@ -658,10 +663,14 @@ impl Fintwind {
                             this.apply_integrations(integrations);
                             this.load_selected_provider_quota(false, cx);
                         }
-                        Err(error) => this.show_toast(tr!(
-                            "providers.auth_load_failed",
-                            error = error.to_string()
-                        )),
+                        Err(error) => {
+                            if report_failure {
+                                this.show_toast(tr!(
+                                    "providers.auth_load_failed",
+                                    error = error.to_string()
+                                ));
+                            }
+                        }
                     }
                     cx.notify();
                 });
@@ -712,6 +721,7 @@ impl Fintwind {
             .filter(|integration| !integration.oauth_methods.is_empty())
             .map(|integration| (integration.id.clone(), integration.oauth_methods.clone()))
             .collect();
+        self.rebuild_image_models();
     }
 
     /// The workspace the page's server RPCs anchor to: the probed OpenCode

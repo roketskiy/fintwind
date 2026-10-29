@@ -1929,6 +1929,16 @@ pub struct Fintwind {
     models_dev_fetching: bool,
     /// The Providers page's page-open catalog load is in flight.
     models_dev_loading: bool,
+    /// OpenCode's experimental image generation switch, read from its config.
+    /// `None` until the first load lands; the control stays inert until then.
+    image_generate: Option<fintwind_client::opencode_image_generate::ImageGenerateConfig>,
+    /// A config write is in flight.
+    image_generate_busy: bool,
+    /// Generation token for the config read; a newer read wins.
+    image_generate_generation: u64,
+    /// Catalog image models narrowed to providers this install can use.
+    /// Rebuilt only when the catalog or the authorized set changes.
+    image_models: Vec<fintwind_client::models_dev::ImageModelChoice>,
     /// The Providers page's connectivity probes, keyed by provider id. The
     /// page's one network-status memory; render reads only what a finished
     /// probe stored.
@@ -3919,6 +3929,10 @@ impl Fintwind {
                 models_dev_table: None,
                 models_dev_fetching: false,
                 models_dev_loading: false,
+                image_generate: None,
+                image_generate_busy: false,
+                image_generate_generation: 0,
+                image_models: Vec::new(),
                 provider_connectivity: HashMap::new(),
                 model_latency: HashMap::new(),
                 native_reconcile_generation: 0,

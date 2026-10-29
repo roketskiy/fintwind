@@ -355,7 +355,11 @@ impl Fintwind {
             .flex_col()
             .child(
                 div()
-                    .id("task-capsule-scroll")
+                    .id(SharedString::from(format!(
+                        "task-capsule-scroll-{}",
+                        tab.id()
+                    )))
+                    .w_full()
                     .max_h(
                         px(440.0)
                             .min((available.height - px(CAPSULE_TABS_HEIGHT + 3.0)).max(px(0.0))),
@@ -688,6 +692,7 @@ fn capsule_message(text: String, theme: &Theme) -> Div {
 
 fn empty_todo_section(theme: &Theme) -> Div {
     div()
+        .w_full()
         .flex()
         .flex_col()
         .gap(px(12.0))
@@ -707,11 +712,13 @@ fn render_todo_plan(snapshot: &TodoSnapshot, theme: &Theme) -> Div {
     )
     .child(format!("{}/{}", snapshot.completed, snapshot.items.len()));
     div()
+        .w_full()
         .flex()
         .flex_col()
         .gap(px(10.0))
         .child(
             div()
+                .w_full()
                 .px(px(8.0))
                 .py(px(5.0))
                 .flex()
@@ -735,6 +742,7 @@ fn render_todo_plan(snapshot: &TodoSnapshot, theme: &Theme) -> Div {
                 TodoStatus::Pending => theme.text_secondary,
             };
             div()
+                .w_full()
                 .flex()
                 .items_start()
                 .gap(px(8.0))

@@ -241,7 +241,10 @@ fn render_field(size: FieldSize, seconds: f32, colors: ThemeColors) -> RgbaImage
                 pixel.0[channel] =
                     (background[channel] as f32 * (1.0 - alpha) + wash * alpha).round() as u8;
             }
-            pixel.0[3] = 255;
+            // The unlit area must not paint a rectangular surface over the
+            // pane. Keep the visible glow opaque so the existing old/new-frame
+            // cross-fade still interpolates colors rather than stacking light.
+            pixel.0[3] = (smoothstep(0.0, 0.02, light.strength) * 255.0).round() as u8;
         }
     }
     let mut image = image::imageops::resize(

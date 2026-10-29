@@ -384,6 +384,20 @@ settings.local_by_default:
   en: Local by default
 settings.local_by_default_description:
   en: Projects, conversations, and settings are stored on this computer
+settings.image_generation:
+  en: Image generation
+settings.image_generation_description:
+  en: Off by default. When on, the model can create and edit images with the image_generate tool
+settings.image_generation_model:
+  en: Default model
+settings.image_generation_model_description:
+  en: Used when a request does not name a model
+settings.image_generation_model_auto:
+  en: Automatic
+settings.image_generation_load_failed:
+  en: "Could not read the image generation setting: %{error}"
+settings.image_generation_save_failed:
+  en: "Could not save the image generation setting: %{error}"
 settings.browser_tools:
   en: Browser tools
 settings.browser_tools_description:

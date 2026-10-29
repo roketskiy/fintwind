@@ -229,6 +229,10 @@ impl Fintwind {
             self.sync_auto_compact_threshold_input(cx);
             self.sync_network_proxy_input(cx);
             self.load_opencode_shell(cx);
+            self.load_image_generate(cx);
+            // The image-model picker reads the catalog and the connected
+            // provider set; both loads are shared with the Providers page.
+            self.ensure_builtin_providers(false, cx);
         }
         if page == SettingsPage::McpServers {
             // Same contract as Providers: transient editors drop, the roster
@@ -541,6 +545,78 @@ impl Fintwind {
                 items
             },
         );
+        let image_generate = self.image_generate.clone();
+        let image_generate_enabled = image_generate.as_ref().is_some_and(|config| config.enabled);
+        let image_generate_model = image_generate
+            .as_ref()
+            .and_then(|config| config.model.clone());
+        let image_model_label = image_generate_model
+            .as_deref()
+            .map(|model| {
+                self.image_models
+                    .iter()
+                    .find(|choice| choice.id == model)
+                    .map(|choice| choice.label.clone())
+                    .unwrap_or_else(|| model.to_owned())
+            })
+            .unwrap_or_else(|| tr!("settings.image_generation_model_auto"));
+        let image_model_choices = self.image_models.clone();
+        let image_weak = cx.entity().downgrade();
+        let image_handle = self.menu_handle("image-generate-model-selector", cx);
+        let image_model_selector = dropdown_menu(
+            MenuChip::new("image-generate-model-selector")
+                .label(image_model_label)
+                .outlined()
+                .selected(image_handle.is_open())
+                .w(px(220.0))
+                .justify_between()
+                .disabled(self.image_generate_busy || !image_generate_enabled),
+            "image-generate-model-menu",
+            &image_handle,
+            MenuAlign::BelowRight,
+            move |_| {
+                let weak_auto = image_weak.clone();
+                let mut items = vec![
+                    MenuItem::new(tr!("settings.image_generation_model_auto"), move |_, cx| {
+                        let _ = weak_auto
+                            .update(cx, |this, cx| this.set_image_generate_model(None, cx));
+                    })
+                    .selected(image_generate_model.is_none()),
+                ];
+                if let Some(model) = image_generate_model.as_ref().filter(|model| {
+                    !image_model_choices
+                        .iter()
+                        .any(|choice| &choice.id == *model)
+                }) {
+                    let weak_current = image_weak.clone();
+                    let value = model.clone();
+                    items.push(
+                        MenuItem::new(value.clone(), move |_, cx| {
+                            let _ = weak_current.update(cx, |this, cx| {
+                                this.set_image_generate_model(Some(value.clone()), cx)
+                            });
+                        })
+                        .selected(true),
+                    );
+                }
+                for choice in &image_model_choices {
+                    let weak = image_weak.clone();
+                    let value = choice.id.clone();
+                    items.push(
+                        MenuItem::new(
+                            format!("{} · {}", choice.provider, choice.label),
+                            move |_, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.set_image_generate_model(Some(value.clone()), cx)
+                                });
+                            },
+                        )
+                        .selected(image_generate_model.as_deref() == Some(choice.id.as_str())),
+                    );
+                }
+                items
+            },
+        );
         div()
             .child(
                 general_settings_group(tr!("settings.group_features"), theme)
@@ -678,6 +754,89 @@ impl Fintwind {
                                 },
                             )),
                     )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.image_generation")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.image_generation_description")),
+                                    ),
+                            )
+                            .child(toggle_switch(
+                                "image-generation-toggle",
+                                image_generate_enabled,
+                                self.image_generate.is_none() || self.image_generate_busy,
+                                theme,
+                                window,
+                                cx,
+                                move |this: &mut Self, _, cx| {
+                                    let enabled = this
+                                        .image_generate
+                                        .as_ref()
+                                        .is_some_and(|config| config.enabled);
+                                    this.set_image_generate_enabled(!enabled, cx);
+                                },
+                            )),
+                    )
+                    .when(image_generate_enabled, |group| {
+                        group
+                            .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                            .child(
+                            div()
+                                .w_full()
+                                .min_h(px(60.0))
+                                .px(px(20.0))
+                                .py(px(12.0))
+                                .flex()
+                                .items_center()
+                                .gap(px(24.0))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(
+                                            div()
+                                                .text_size(ui_px(13.5))
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(theme.text)
+                                                .child(tr!("settings.image_generation_model")),
+                                        )
+                                        .child(
+                                            div()
+                                                .mt(px(5.0))
+                                                .text_size(ui_px(12.5))
+                                                .line_height(ui_px(18.0))
+                                                .text_color(theme.text_secondary)
+                                                .child(tr!(
+                                                    "settings.image_generation_model_description"
+                                                )),
+                                        ),
+                                )
+                                .child(image_model_selector),
+                        )
+                    })
                     .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
                     .child(
                         div()
@@ -1875,6 +2034,101 @@ impl Fintwind {
                     Err(error) => {
                         this.show_toast(tr!("settings.shell_failed", error = error.to_string()))
                     }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Read OpenCode's experimental image generation switch off-thread. The
+    /// control renders from the stored copy and stays inert until it lands.
+    fn load_image_generate(&mut self, cx: &mut Context<Self>) {
+        self.image_generate_generation += 1;
+        let generation = self.image_generate_generation;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async { fintwind_client::opencode_image_generate::load() })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.image_generate_generation != generation {
+                    return;
+                }
+                match result {
+                    Ok(config) => this.image_generate = Some(config),
+                    Err(error) => this.show_toast(tr!(
+                        "settings.image_generation_load_failed",
+                        error = error.to_string()
+                    )),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Recompute the image-model choices from the catalog and the providers
+    /// the server reports as connected. Until either arrives the list stays
+    /// empty and the picker offers only automatic selection.
+    pub(super) fn rebuild_image_models(&mut self) {
+        let Some(table) = self.models_dev_table.as_deref() else {
+            self.image_models.clear();
+            return;
+        };
+        let mut models = table.image_models();
+        if !self.providers_authorized.is_empty() {
+            models.retain(|choice| self.providers_authorized.contains(&choice.provider));
+        }
+        self.image_models = models;
+    }
+
+    fn set_image_generate_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        let Some(mut config) = self.image_generate.clone() else {
+            return;
+        };
+        if config.enabled == enabled {
+            return;
+        }
+        config.enabled = enabled;
+        self.commit_image_generate(config, cx);
+    }
+
+    fn set_image_generate_model(&mut self, model: Option<String>, cx: &mut Context<Self>) {
+        let Some(mut config) = self.image_generate.clone() else {
+            return;
+        };
+        if config.model == model {
+            return;
+        }
+        config.model = model;
+        self.commit_image_generate(config, cx);
+    }
+
+    /// Show the new value at once, then write it. A failed write restores
+    /// the previous value so the control never claims a change it lost.
+    fn commit_image_generate(
+        &mut self,
+        config: fintwind_client::opencode_image_generate::ImageGenerateConfig,
+        cx: &mut Context<Self>,
+    ) {
+        let previous = self.image_generate.clone();
+        self.image_generate = Some(config.clone());
+        self.image_generate_busy = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { fintwind_client::opencode_image_generate::save(&config) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.image_generate_busy = false;
+                if let Err(error) = result {
+                    this.image_generate = previous;
+                    this.show_toast(tr!(
+                        "settings.image_generation_save_failed",
+                        error = error.to_string()
+                    ));
                 }
                 cx.notify();
             });

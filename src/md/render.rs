@@ -1163,7 +1163,7 @@ fn registry_point(
 /// so three closures replace three-per-element and a mouse move costs one
 /// registry scan instead of one dispatch per visible paragraph.
 pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection) {
-    install_selection_input_inner(window, state, None);
+    install_selection_input_inner(window, state, None, None);
 }
 
 /// Give a selectable surface keyboard focus only when its text is hit. An
@@ -1173,13 +1173,33 @@ pub fn install_selection_input_with_focus(
     state: &TranscriptSelection,
     focus: &gpui::FocusHandle,
 ) {
-    install_selection_input_inner(window, state, Some(focus.clone()));
+    install_selection_input_inner(window, state, Some(focus.clone()), None);
+}
+
+/// Give a selectable surface keyboard focus only when its text is hit. An
+/// ancestor mouse handler would also steal focus from embedded editable fields.
+/// Also auto-scrolls the provided scroll target when dragging near the edges.
+pub fn install_selection_input_with_focus_and_scroll(
+    window: &mut Window,
+    state: &TranscriptSelection,
+    focus: &gpui::FocusHandle,
+    scroll_target: Rc<dyn TranscriptSelectionScroll>,
+) {
+    install_selection_input_inner(window, state, Some(focus.clone()), Some(scroll_target));
+}
+
+/// A target that can be auto-scrolled during transcript text selection.
+pub trait TranscriptSelectionScroll {
+    fn viewport_bounds(&self) -> Bounds<Pixels>;
+    fn scroll_by(&self, delta: Pixels);
+    fn is_scrollable(&self) -> bool;
 }
 
 fn install_selection_input_inner(
     window: &mut Window,
     state: &TranscriptSelection,
     focus: Option<gpui::FocusHandle>,
+    scroll_target: Option<Rc<dyn TranscriptSelectionScroll>>,
 ) {
     window.on_mouse_event({
         let state = state.clone();
@@ -1237,9 +1257,26 @@ fn install_selection_input_inner(
 
     window.on_mouse_event({
         let state = state.clone();
-        move |event: &MouseMoveEvent, phase, window, _| {
+        let scroll_target = scroll_target.clone();
+        move |event: &MouseMoveEvent, phase, window, _cx| {
             if phase != DispatchPhase::Bubble || !event.dragging() {
                 return;
+            }
+            if let Some(target) = &scroll_target {
+                if target.is_scrollable() {
+                    let bounds = target.viewport_bounds();
+                    const EDGE_THRESHOLD: Pixels = px(24.0);
+                    const SCROLL_SPEED: Pixels = px(4.0);
+                    if event.position.y < bounds.top() + EDGE_THRESHOLD {
+                        let delta = (bounds.top() + EDGE_THRESHOLD) - event.position.y;
+                        let factor = (delta / EDGE_THRESHOLD).min(1.0);
+                        target.scroll_by(-SCROLL_SPEED * factor);
+                    } else if event.position.y > bounds.bottom() - EDGE_THRESHOLD {
+                        let delta = event.position.y - (bounds.bottom() - EDGE_THRESHOLD);
+                        let factor = (delta / EDGE_THRESHOLD).min(1.0);
+                        target.scroll_by(SCROLL_SPEED * factor);
+                    }
+                }
             }
             let registry = state.registry.borrow();
             let anchor = {

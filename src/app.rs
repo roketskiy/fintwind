@@ -2253,6 +2253,7 @@ pub struct Fintwind {
     expanded_goal: Option<Uuid>,
     goal_details_scroll: gpui::ScrollHandle,
     pending_goal_actions: HashMap<Uuid, fintwind_client::goal::GoalAction>,
+    goal_status_requests: HashSet<Uuid>,
     navigation_rail: Entity<ConversationNavigationRail>,
     navigation_rail_reset_generation: Cell<u64>,
     /// Cached islands of the root view; see [`FintwindPane`].
@@ -2581,18 +2582,8 @@ impl Fintwind {
     /// stream events.
     fn schedule_time_label_wake(&self, cx: &mut Context<Self>) {
         let now = unix_time();
-        let goal_seconds = self
-            .selected_session()
-            .and_then(|session| session.goal.as_ref())
-            .filter(|goal| {
-                self.state.goal_enabled
-                    && goal.status == fintwind_protocol::goal::GoalStatus::Active
-            })
-            .and_then(|goal| goal.elapsed_seconds_at(now))
-            .map(|elapsed| if elapsed < 60 { 1 } else { 60 - elapsed % 60 });
         let target = next_time_label_change(&self.state.sessions, now)
             .into_iter()
-            .chain(goal_seconds)
             .min()
             .map(|seconds| now + seconds);
         if self.time_label_wake.get() == target {
@@ -4086,6 +4077,7 @@ impl Fintwind {
                 expanded_goal: None,
                 goal_details_scroll: gpui::ScrollHandle::new(),
                 pending_goal_actions: HashMap::new(),
+                goal_status_requests: HashSet::new(),
                 navigation_rail: navigation_rail.clone(),
                 navigation_rail_reset_generation: Cell::new(0),
                 open_tabs,

@@ -1984,6 +1984,10 @@ pub enum DriverEvent {
     /// and it arrives for the provider's own automatic compaction too.
     CompactionUpdated(CompactionState),
     GoalUpdated(Option<crate::goal::GoalSnapshot>),
+    /// Reply to an explicit `/goal` status request, separate from updates.
+    GoalStatusReported(Result<Option<crate::goal::GoalSnapshot>, String>),
+    /// A Goal command failed without implying that the current turn failed.
+    GoalCommandFailed(String),
     /// The provider runtime announced a model call in flight (opencode
     /// `session.status busy`): at the turn's start and again at every step
     /// start. This is the transcript's signal to label the wait before the

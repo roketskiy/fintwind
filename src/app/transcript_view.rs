@@ -1562,8 +1562,7 @@ impl Fintwind {
             | TranscriptRowKind::ChangedFiles(_)
             | TranscriptRowKind::WorkingIndicator
             | TranscriptRowKind::Compacting
-            | TranscriptRowKind::ProviderRetry
-            | TranscriptRowKind::GoalCompletion => false,
+            | TranscriptRowKind::ProviderRetry => false,
         };
         let inner = match kind {
             TranscriptRowKind::Message(message_index) => self
@@ -1740,7 +1739,6 @@ impl Fintwind {
                     None => div().into_any_element(),
                 }
             }
-            TranscriptRowKind::GoalCompletion => self.render_goal_completion_row(&theme),
         };
         div()
             .w_full()
@@ -2228,144 +2226,6 @@ impl Fintwind {
             )
             .children(phase.map(|phase| self.render_working_phase(phase, theme, cx)))
             .into_any_element()
-    }
-
-    /// The completed Goal's result card: centered title, the objective and
-    /// the outcome as labeled sections, and a centered run line. Lives after
-    /// the final response so the result stays attached to the work.
-    fn render_goal_completion_row(&self, theme: &Theme) -> AnyElement {
-        let Some(goal) = self
-            .selected_session()
-            .and_then(|session| session.goal.as_ref())
-            .filter(|goal| goal.status == fintwind_client::goal::GoalStatus::Done)
-        else {
-            return div().into_any_element();
-        };
-        let result = if goal
-            .result
-            .as_ref()
-            .is_some_and(|text| !text.trim().is_empty())
-        {
-            goal.result.as_deref().unwrap_or_default()
-        } else {
-            goal.reason.as_str()
-        };
-        let objective: String = goal
-            .objective
-            .chars()
-            .take(400)
-            .collect::<String>()
-            .trim_end()
-            .to_owned();
-        let model = self.model_display_name(goal.model.as_deref());
-        let mut metadata = vec![tr!("goal.card_run", count = goal.turns)];
-        if goal.tools.is_some_and(|count| count > 0) {
-            metadata.push(tr!(
-                "goal.card_tools",
-                count = goal.tools.unwrap_or_default()
-            ));
-        }
-        if let Some(duration) = goal
-            .elapsed_seconds_at(unix_time())
-            .filter(|seconds| *seconds > 0)
-        {
-            metadata.push(tr!(
-                "goal.card_duration",
-                duration = Self::format_goal_duration(duration)
-            ));
-        }
-        if !model.is_empty() {
-            metadata.push(model);
-        }
-        if let Some(completed_at) = goal.completed_at {
-            metadata.push(format_message_time(completed_at));
-        }
-        let section_label = |text: String| {
-            div()
-                .text_size(ui_px(11.0))
-                .line_height(ui_px(14.0))
-                .text_color(theme.text_tertiary)
-                .child(SharedString::from(text))
-        };
-        div()
-            .w_full()
-            .min_w_0()
-            .rounded(px(10.0))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.raised)
-            .pt(px(12.0))
-            .pb(px(10.0))
-            .px(px(16.0))
-            .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .gap(px(6.0))
-                    .child(icon("icons/check.svg", 13.0, theme.success_text))
-                    .child(
-                        div()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.success_text)
-                            .child(tr!("goal.card_title")),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(3.0))
-                    .child(section_label(tr!("goal.card_objective")))
-                    .child(
-                        div()
-                            .text_size(ui_px(12.5))
-                            .line_height(ui_px(18.0))
-                            .text_color(theme.text_secondary)
-                            .child(SharedString::from(objective)),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(3.0))
-                    .child(section_label(tr!("goal.card_result")))
-                    .child(
-                        div()
-                            .text_size(ui_px(12.5))
-                            .line_height(ui_px(18.0))
-                            .text_color(theme.text)
-                            .child(SharedString::from(result.to_owned())),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .justify_center()
-                    .text_size(ui_px(11.5))
-                    .line_height(ui_px(16.0))
-                    .text_color(theme.text_tertiary)
-                    .child(SharedString::from(metadata.join(" · "))),
-            )
-            .into_any_element()
-    }
-
-    pub(super) fn format_goal_duration(seconds: u64) -> String {
-        if seconds < 60 {
-            tr!("goal.duration_seconds", count = seconds)
-        } else if seconds < 3600 {
-            tr!("goal.duration_minutes", count = seconds / 60)
-        } else {
-            tr!(
-                "goal.duration_hours",
-                h = seconds / 3600,
-                m = (seconds % 3600) / 60
-            )
-        }
     }
 
     fn render_compacting_indicator_row(&self, theme: &Theme) -> AnyElement {

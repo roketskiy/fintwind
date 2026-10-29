@@ -1,7 +1,7 @@
-"""Black-box Goal checks against an isolated real OpenCode and a scripted model.
+"""Retired Fintwind Goal plugin checks and shared test helpers.
 
-Run on Windows with Python 3.12: python scripts/goal-opencode-e2e.py
-The native Fintwind UI is outside this runner's scope.
+The old plugin has been removed. Other scripts still import helpers here;
+the legacy checks do not exercise OpenCode's built-in Goal.
 """
 
 import base64
@@ -939,4 +939,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit("The Fintwind Goal plugin was removed; this legacy check is no longer applicable.")

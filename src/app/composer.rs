@@ -2288,7 +2288,6 @@ impl Fintwind {
         let weak = cx.entity().downgrade();
         let handle = self.menu_handle("composer-quote", cx);
         let quotable = self.has_quotable_editor_selection(cx);
-        let goal_enabled = self.state.goal_enabled;
         let chip = MenuChip::new("composer-quote")
             .icon("icons/plus.svg", theme.text_tertiary)
             .label(String::new())
@@ -2304,18 +2303,7 @@ impl Fintwind {
             move |_| {
                 let quote_file = weak.clone();
                 let quote_selection = weak.clone();
-                let goal = weak.clone();
-                let mut items = Vec::new();
-                if goal_enabled {
-                    items.push(
-                        MenuItem::new(tr!("goal.set"), move |window, cx| {
-                            let _ = goal.update(cx, |this, cx| this.stage_goal(false, window, cx));
-                        })
-                        .icon("icons/target.svg"),
-                    );
-                    items.push(MenuItem::Separator);
-                }
-                items.extend([
+                vec![
                     MenuItem::new(tr!("quote.add_file"), move |window, cx| {
                         let _ = quote_file.update(cx, |this, cx| {
                             this.quote_file_from_picker(window, cx);
@@ -2330,8 +2318,7 @@ impl Fintwind {
                     })
                     .icon("icons/file-bottom-left-arrow.svg")
                     .disabled(!quotable),
-                ]);
-                items
+                ]
             },
         )
     }
@@ -2804,17 +2791,7 @@ impl Fintwind {
         let submit_action = if side_question {
             ComposerSubmitAction::Send
         } else {
-            if self.state.goal_enabled
-                && session.is_some_and(|session| {
-                    session.goal.as_ref().is_some_and(|goal| {
-                        goal.status == fintwind_client::goal::GoalStatus::Active
-                    })
-                })
-            {
-                ComposerSubmitAction::Stop
-            } else {
-                composer_submit_action(session.map(|session| session.status), preparing)
-            }
+            composer_submit_action(session.map(|session| session.status), preparing)
         };
         let escape_stop_armed = session.is_some_and(|session| {
             self.escape_stop_confirmation

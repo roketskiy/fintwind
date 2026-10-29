@@ -669,6 +669,9 @@ impl Fintwind {
                     | DriverEvent::UsageUpdated { .. }
                     | DriverEvent::ContextCompositionUpdated(_)
                     | DriverEvent::PlanUsageUpdated(_)
+                    | DriverEvent::GoalUpdated(_)
+                    | DriverEvent::GoalStatusReported(_)
+                    | DriverEvent::GoalCommandFailed(_)
                     | DriverEvent::ScheduledTurnAdmitted(_)
                     | DriverEvent::ProcessExited
             )
@@ -1229,10 +1232,41 @@ impl Fintwind {
                         session.goal = goal;
                     }
                 }
-                if self.state.selected_session == Some(session_id) {
-                    self.sync_transcript_rows();
-                }
                 cx.notify();
+            }
+            DriverEvent::GoalStatusReported(result) => {
+                if self.goal_status_requests.remove(&session_id)
+                    && self.state.selected_session == Some(session_id)
+                {
+                    let message = match result {
+                        Ok(Some(goal)) => {
+                            let status = match goal.status {
+                                fintwind_client::goal::GoalStatus::Active => tr!("goal.active"),
+                                fintwind_client::goal::GoalStatus::Paused
+                                | fintwind_client::goal::GoalStatus::Blocked => tr!("goal.paused"),
+                                fintwind_client::goal::GoalStatus::Done => tr!("goal.done"),
+                            };
+                            let mut message = format!("{status}: {}", goal.objective);
+                            if !goal.reason.is_empty() {
+                                message.push('\n');
+                                message.push_str(&goal.reason);
+                            }
+                            message.push('\n');
+                            message.push_str(&tr!("goal.usage"));
+                            message
+                        }
+                        Ok(None) => tr!("goal.usage"),
+                        Err(error) => compact_driver_error(&error),
+                    };
+                    self.show_toast(message);
+                    cx.notify();
+                }
+            }
+            DriverEvent::GoalCommandFailed(error) => {
+                if self.state.selected_session == Some(session_id) {
+                    self.show_toast(compact_driver_error(&error));
+                    cx.notify();
+                }
             }
             DriverEvent::CompactionUpdated(state) => {
                 // Compaction is conversation plumbing, not turn output: it can

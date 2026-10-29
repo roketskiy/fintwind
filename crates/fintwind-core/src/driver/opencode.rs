@@ -171,6 +171,7 @@ enum CommandMessage {
     },
     Compact,
     Goal(fintwind_protocol::goal::GoalAction),
+    RefreshGoal,
     Cancel,
     CompactChild {
         session_id: String,
@@ -1260,14 +1261,26 @@ impl OpenCodeDriver {
                     ..OpenCodeStreamState::default()
                 };
                 state.shells = Arc::clone(&stream_background_shells);
+                let mut goal_connection = 0;
                 // SSE loss is a transport fault, not process exit. The hub
                 // reconnects; durable reconciliation runs off this consumer.
                 loop {
                     if stream_feed.is_cancelled() {
                         break;
                     }
+                    let connection = stream_feed.connection_generation();
+                    if connection != 0 && connection != goal_connection {
+                        goal_connection = connection;
+                        let _ = stream_commands.send(CommandMessage::RefreshGoal);
+                    }
                     match stream_feed.recv_timeout(Duration::from_millis(500)) {
                         Ok(Some(value)) => {
+                            if value.get("type").and_then(Value::as_str)
+                                == Some("rpc.opencode.goal.changed")
+                                && event_session_id(&value) == Some(stream_session.as_str())
+                            {
+                                let _ = stream_commands.send(CommandMessage::RefreshGoal);
+                            }
                             if value.get("type").and_then(Value::as_str) == Some("session.moved")
                                 && event_session_id(&value) == Some(stream_session.as_str())
                                 && let Some(directory) = event_payload(&value)
@@ -1276,6 +1289,7 @@ impl OpenCodeDriver {
                                 && !directory.is_empty()
                             {
                                 *stream_cwd.lock() = PathBuf::from(directory);
+                                let _ = stream_commands.send(CommandMessage::RefreshGoal);
                                 // Old-directory child listings must not retire the
                                 // moved session's background work after the handoff.
                                 stream_background_generation.fetch_add(1, Ordering::AcqRel);
@@ -1355,64 +1369,19 @@ impl OpenCodeDriver {
         let worker_events = events;
         let worker_turn = turn_active;
         let worker_forms = Arc::clone(&forms);
+        let worker_cwd = Arc::clone(&cwd);
         thread::Builder::new()
             .name("fintwind-opencode-driver".into())
             .spawn(move || {
                 let mut goal = None;
                 let mut first_goal_read = true;
-                let mut initial_goal_attempts = 0;
-                let mut poll_goal = true;
-                loop {
-                    if poll_goal {
-                        match crate::goal_plugin::control(
-                            &worker_server,
-                            &worker_location,
-                            &worker_session,
-                            fintwind_protocol::goal::GoalAction::Get,
-                        ) {
-                            Ok(next) => {
-                                if first_goal_read || next != goal {
-                                    first_goal_read = false;
-                                    goal = next;
-                                    let _ =
-                                        worker_events.send(DriverEvent::GoalUpdated(goal.clone()));
-                                }
-                            }
-                            Err(error) if first_goal_read => {
-                                initial_goal_attempts += 1;
-                                if initial_goal_attempts >= 5 {
-                                    first_goal_read = false;
-                                    let _ = worker_events.send(DriverEvent::GoalUpdated(None));
-                                    let _ =
-                                        worker_events.send(DriverEvent::Error(error.to_string()));
-                                }
-                            }
-                            Err(_) => {}
-                        }
-                    }
-                    poll_goal = first_goal_read
-                        || goal.as_ref().is_some_and(|state| {
-                            state.status == fintwind_protocol::goal::GoalStatus::Active
-                        });
-                    let message = if poll_goal {
-                        match command_rx.recv_timeout(Duration::from_secs(1)) {
-                            Ok(message) => message,
-                            Err(crossbeam_channel::RecvTimeoutError::Timeout) => continue,
-                            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
-                        }
-                    } else {
-                        match command_rx.recv() {
-                            Ok(message) => message,
-                            Err(_) => break,
-                        }
-                    };
+                while let Ok(message) = command_rx.recv() {
                     match message {
                         CommandMessage::Prompt {
                             text,
                             files,
                             durable,
                         } => {
-                            poll_goal = true;
                             if let Some((record, store)) = &durable {
                                 // Persist the native session association before
                                 // the side effect; failed storage forbids POST.
@@ -1600,7 +1569,6 @@ impl OpenCodeDriver {
                             }
                         }
                         CommandMessage::Steer { text, files } => {
-                            poll_goal = true;
                             // A prompt posted into a busy session is a steer:
                             // the server folds it into the running turn and one
                             // `session.execution.succeeded` still settles
@@ -1727,82 +1695,178 @@ impl OpenCodeDriver {
                             );
                             let _ = worker_server.request("POST", &path, Some(&json!({})));
                         }
-                        CommandMessage::Goal(action) => {
-                            poll_goal = true;
-                            let submission = if matches!(
-                                action,
-                                fintwind_protocol::goal::GoalAction::Start { .. }
-                            ) {
-                                let mut active = worker_turn.lock();
-                                let mut fence = submissions.lock();
-                                let generation = fence.begin();
-                                *active = true;
-                                let _ = worker_events.send(DriverEvent::TurnStarted);
-                                Some((generation, fence.input_id()))
-                            } else {
-                                None
-                            };
-                            let starts_turn = matches!(
-                                action,
-                                fintwind_protocol::goal::GoalAction::Start { .. }
-                                    | fintwind_protocol::goal::GoalAction::Resume
-                            );
-                            match crate::goal_plugin::control_with_input(
-                                &worker_server,
-                                &worker_location,
-                                &worker_session,
-                                action,
-                                submission.as_ref().and_then(|(_, input)| input.as_deref()),
-                            ) {
-                                Ok(next) => {
-                                    if let Some((generation, _)) = submission {
-                                        submissions.lock().unconfirmed(generation);
-                                    }
+                        CommandMessage::RefreshGoal => {
+                            let directory = opencode_location_directory(&worker_cwd.lock());
+                            if let Ok(next) =
+                                crate::native_goal::get(&worker_server, &directory, &worker_session)
+                            {
+                                if first_goal_read || next != goal {
+                                    first_goal_read = false;
                                     goal = next;
                                     let _ =
                                         worker_events.send(DriverEvent::GoalUpdated(goal.clone()));
                                 }
+                            }
+                        }
+                        CommandMessage::Goal(fintwind_protocol::goal::GoalAction::Get) => {
+                            let directory = opencode_location_directory(&worker_cwd.lock());
+                            let result = crate::native_goal::get(
+                                &worker_server,
+                                &directory,
+                                &worker_session,
+                            )
+                            .map_err(|error| error.to_string());
+                            if let Ok(next) = &result {
+                                first_goal_read = false;
+                                goal = next.clone();
+                                let _ = worker_events.send(DriverEvent::GoalUpdated(goal.clone()));
+                            }
+                            let _ = worker_events.send(DriverEvent::GoalStatusReported(result));
+                        }
+                        CommandMessage::Goal(action) => {
+                            use fintwind_protocol::goal::GoalAction;
+                            let starts_turn =
+                                matches!(action, GoalAction::Start { .. } | GoalAction::Resume);
+                            let (text, files) = match action {
+                                GoalAction::Start {
+                                    objective,
+                                    attachments,
+                                } => (
+                                    objective,
+                                    attachments
+                                        .into_iter()
+                                        .map(|attachment| PromptFile {
+                                            path: attachment.path,
+                                            name: attachment.name,
+                                        })
+                                        .collect::<Vec<_>>(),
+                                ),
+                                GoalAction::Pause => ("pause".to_owned(), Vec::new()),
+                                GoalAction::Resume => ("resume".to_owned(), Vec::new()),
+                                GoalAction::Clear => ("clear".to_owned(), Vec::new()),
+                                GoalAction::Get => unreachable!(),
+                            };
+                            let submission = if starts_turn {
+                                let mut active = worker_turn.lock();
+                                if !*active {
+                                    let generation = submissions.lock().begin_goal_command();
+                                    *active = true;
+                                    let _ = worker_events.send(DriverEvent::TurnStarted);
+                                    Some(generation)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            let directory = opencode_location_directory(&worker_cwd.lock());
+                            let bodies = resolved_prompt_bodies(
+                                &worker_server,
+                                &directory,
+                                &text,
+                                &files,
+                                worker_task_id.as_deref(),
+                            );
+                            let invalid_input = bodies.is_err();
+                            let posted = bodies.and_then(|(mut body, _)| {
+                                body.as_object_mut().unwrap().remove("metadata");
+                                body["name"] = json!("goal");
+                                worker_server.request_for_directory_with_timeout(
+                                    &directory,
+                                    "POST",
+                                    &format!(
+                                        "/api/session/{}/command",
+                                        encode_path_segment(&worker_session)
+                                    ),
+                                    Some(&body),
+                                    HTTP_SUBMIT_TIMEOUT,
+                                )
+                            });
+                            match posted {
+                                Ok(_) => {
+                                    if let Ok(next) = crate::native_goal::get(
+                                        &worker_server,
+                                        &directory,
+                                        &worker_session,
+                                    ) {
+                                        first_goal_read = false;
+                                        goal = next;
+                                        let _ = worker_events
+                                            .send(DriverEvent::GoalUpdated(goal.clone()));
+                                    }
+                                }
                                 Err(error) => {
-                                    if let Some((generation, _)) = submission.as_ref()
-                                        && !(error.to_string().contains("HTTP 4")
-                                            && !error.to_string().contains("HTTP 409"))
+                                    let detail = error.to_string();
+                                    let rejected = invalid_input
+                                        || (detail.contains("HTTP 4")
+                                            && !detail.contains("HTTP 409"))
+                                        // These official command errors happen before
+                                        // any goal write or execution admission.
+                                        || (detail.contains("CommandExecutionError")
+                                            && (detail.contains("No paused goal to resume")
+                                                || detail.contains("A goal objective is limited")));
+                                    if let Some(generation) = submission
+                                        && !rejected
                                     {
-                                        submissions.lock().unconfirmed(*generation);
-                                        let _ = worker_events.send(DriverEvent::Error(tr!(
-                                            "errors.provider_prompt_unconfirmed_detail",
-                                            provider = "OpenCode",
-                                            error = error
-                                        )));
+                                        // A lost acknowledgement may still have admitted the
+                                        // goal. Do not resubmit or declare the turn failed.
+                                        submissions.lock().unconfirmed(generation);
+                                        let _ = worker_events.send(DriverEvent::GoalCommandFailed(
+                                            tr!(
+                                                "errors.provider_prompt_unconfirmed_detail",
+                                                provider = "OpenCode",
+                                                error = error
+                                            ),
+                                        ));
                                         continue;
                                     }
                                     if submission.is_some() {
-                                        let mut active = worker_turn.lock();
-                                        let mut fence = submissions.lock();
-                                        *active = false;
-                                        fence.clear();
-                                    }
-                                    let _ =
-                                        worker_events.send(DriverEvent::Error(error.to_string()));
-                                    if starts_turn {
+                                        *worker_turn.lock() = false;
+                                        submissions.lock().clear();
                                         let _ = worker_events.send(DriverEvent::TurnFinished {
                                             success: false,
                                             summary: None,
                                         });
                                     }
+                                    let _ = worker_events
+                                        .send(DriverEvent::GoalCommandFailed(error.to_string()));
                                 }
                             }
                         }
                         CommandMessage::Cancel => {
-                            poll_goal = true;
-                            {
-                                if let Err(error) = crate::goal_plugin::control(
+                            // An active goal can be waiting while the session
+                            // is idle. Interrupt alone cannot pause it then.
+                            if goal.as_ref().is_some_and(|state| {
+                                state.status == fintwind_protocol::goal::GoalStatus::Active
+                            }) {
+                                let directory = opencode_location_directory(&worker_cwd.lock());
+                                let result = worker_server.request_for_directory_with_timeout(
+                                    &directory,
+                                    "POST",
+                                    &format!(
+                                        "/api/session/{}/command",
+                                        encode_path_segment(&worker_session)
+                                    ),
+                                    Some(&json!({"name": "goal", "text": "pause"})),
+                                    HTTP_SUBMIT_TIMEOUT,
+                                );
+                                if let Ok(next) = crate::native_goal::get(
                                     &worker_server,
-                                    &worker_location,
+                                    &directory,
                                     &worker_session,
-                                    fintwind_protocol::goal::GoalAction::Pause,
                                 ) {
+                                    first_goal_read = false;
+                                    goal = next;
                                     let _ =
-                                        worker_events.send(DriverEvent::Error(error.to_string()));
+                                        worker_events.send(DriverEvent::GoalUpdated(goal.clone()));
+                                }
+                                if let Err(error) = result
+                                    && goal.as_ref().is_some_and(|state| {
+                                        state.status == fintwind_protocol::goal::GoalStatus::Active
+                                    })
+                                {
+                                    let _ = worker_events
+                                        .send(DriverEvent::GoalCommandFailed(error.to_string()));
                                 }
                             }
                             let path = format!(

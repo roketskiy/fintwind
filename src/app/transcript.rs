@@ -528,9 +528,6 @@ pub(super) enum TranscriptRowKind {
     /// the turn settled or failed, and it presents as its own compact card
     /// rather than a working-row suffix so it stays visible either way.
     ProviderRetry,
-    /// A completed Goal's result card, placed after the final response so the
-    /// run result and its metadata stay attached to the work.
-    GoalCompletion,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -740,8 +737,7 @@ pub(super) fn assistant_response_footer(
                 | TranscriptRowKind::ChangedFiles(_)
                 | TranscriptRowKind::WorkingIndicator
                 | TranscriptRowKind::Compacting
-                | TranscriptRowKind::ProviderRetry
-                | TranscriptRowKind::GoalCompletion => None,
+                | TranscriptRowKind::ProviderRetry => None,
             })
             .filter(|part| !part.content.trim().is_empty())
             .map(|part| part.content.as_str())
@@ -1101,15 +1097,6 @@ pub(super) fn transcript_rows_fingerprint_with_retry(
     // turn statuses below would hold still while the rows moved.
     hash = mix(hash, session.status.is_busy() as u64);
 
-    // The completion card changes only with a new durable Goal revision.
-    hash = mix(
-        hash,
-        session
-            .goal
-            .as_ref()
-            .map_or(0, |goal| goal.revision.wrapping_mul(2) + goal.status as u64),
-    );
-
     // The compacting row exists only while a compaction runs, and no turn
     // status changes when it settles — this flip must move the rows too.
     hash = mix(
@@ -1322,32 +1309,6 @@ pub(super) fn folded_transcript_row_kinds_with_retry(
         }
         with_changes = spliced;
     }
-    if let Some(goal) = session
-        .goal
-        .as_ref()
-        .filter(|goal| goal.status == fintwind_client::goal::GoalStatus::Done)
-    {
-        let completion_turn = goal.completed_at.and_then(|completed_at| {
-            session
-                .turns
-                .iter()
-                .rev()
-                .find(|turn| turn.started_at <= completed_at)
-        });
-        if completion_turn.is_some_and(|turn| turn.status == TurnStatus::Running) {
-            return with_changes;
-        }
-        let insert_after = completion_turn.and_then(|turn| {
-            with_changes
-                .iter()
-                .rposition(|row| row_turn_id(session, *row) == Some(turn.id))
-        });
-        if let Some(index) = insert_after {
-            with_changes.insert(index + 1, TranscriptRowKind::GoalCompletion);
-        } else {
-            with_changes.push(TranscriptRowKind::GoalCompletion);
-        }
-    }
     with_changes
 }
 
@@ -1411,8 +1372,7 @@ fn turn_answer_start(session: &AgentSession, turn_rows: &[TranscriptRowKind]) ->
         | TranscriptRowKind::ChangedFiles(_)
         | TranscriptRowKind::WorkingIndicator
         | TranscriptRowKind::Compacting
-        | TranscriptRowKind::ProviderRetry
-        | TranscriptRowKind::GoalCompletion => false,
+        | TranscriptRowKind::ProviderRetry => false,
     };
     let Some(last_text) = turn_rows.iter().rposition(is_answer_text) else {
         return turn_rows.len();
@@ -1436,7 +1396,6 @@ fn row_turn_id(session: &AgentSession, row: TranscriptRowKind) -> Option<Uuid> {
         TranscriptRowKind::TurnBlock(index) => session.transcript_blocks.get(index)?.turn_id,
         TranscriptRowKind::TurnFold(turn_id) => Some(turn_id),
         TranscriptRowKind::ChangedFiles(turn_id) => Some(turn_id),
-        TranscriptRowKind::GoalCompletion => None,
         TranscriptRowKind::WorkingIndicator
         | TranscriptRowKind::Compacting
         | TranscriptRowKind::ProviderRetry => None,

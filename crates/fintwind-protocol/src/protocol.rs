@@ -20,7 +20,7 @@ use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 /// Desktop protocol version. Bumped when the `ClientMessage` or
 /// `ServerMessage` grammar changes; the handshake refuses a mismatch in
 /// either direction, so an old client and a new daemon never half-speak.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes

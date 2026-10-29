@@ -47,6 +47,100 @@ use crate::models_dev::ModelsDevTable;
 /// limit (verified via `/api/model`).
 const DEFAULT_OUTPUT_LIMIT: u64 = 32_000;
 
+// Held only by background work. Credential round trips and config writes must
+// not interleave with another migration or provider save in this client.
+static PROVIDER_SAVE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+pub fn is_key_reference(key: &str) -> bool {
+    key.contains("{env:") || key.contains("{file:")
+}
+
+/// Persist keys first, then write only non-secret provider configuration. On
+/// failure the original file is untouched and the caller retains its draft.
+pub fn save_providers_with_credentials_at(
+    path: &Path,
+    providers: &[CustomProvider],
+    catalog: Option<&ModelsDevTable>,
+    mut store_key: impl FnMut(&str, &str) -> io::Result<()>,
+) -> io::Result<Vec<CustomProvider>> {
+    let _guard = PROVIDER_SAVE_LOCK.lock();
+    let before = read_optional_config(path)?;
+    let mut saved = providers.to_vec();
+    for provider in &mut saved {
+        let key = provider.api_key.trim();
+        if !key.is_empty() && !is_key_reference(key) {
+            store_key(&provider.id, key)?;
+            provider.api_key.clear();
+            if let Some(options) = provider
+                .raw
+                .get_mut("options")
+                .and_then(Value::as_object_mut)
+            {
+                options.remove("apiKey");
+            }
+        }
+    }
+    if read_optional_config(path)? != before {
+        return Err(io::Error::other(
+            "OpenCode configuration changed while saving; retry the save",
+        ));
+    }
+    save_providers_at(path, &saved, catalog)?;
+    for provider in &mut saved {
+        provider.raw = provider_entry(provider, catalog);
+        provider.npm_touched = false;
+    }
+    Ok(saved)
+}
+
+/// Remove only literal inline keys, after verified credential storage. This
+/// does not regenerate models or alter references, IDs, packages, or defaults.
+pub fn migrate_provider_credentials_at(
+    path: &Path,
+    mut store_key: impl FnMut(&str, &str) -> io::Result<()>,
+) -> io::Result<()> {
+    let _guard = PROVIDER_SAVE_LOCK.lock();
+    let Some(before) = read_optional_config(path)? else {
+        return Ok(());
+    };
+    let mut document: Value = serde_json::from_slice(&before)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let mut changed = false;
+    if let Some(providers) = document.get_mut("provider").and_then(Value::as_object_mut) {
+        for (id, provider) in providers {
+            let Some(options) = provider.get_mut("options").and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let Some(key) = options.get("apiKey").and_then(Value::as_str) else {
+                continue;
+            };
+            if key.trim().is_empty() || is_key_reference(key) {
+                continue;
+            }
+            store_key(id, key)?;
+            options.remove("apiKey");
+            changed = true;
+        }
+    }
+    if changed {
+        if read_optional_config(path)?.as_deref() != Some(before.as_slice()) {
+            return Err(io::Error::other(
+                "OpenCode configuration changed during credential migration",
+            ));
+        }
+        write_json_atomically(path, &document)?;
+    }
+    Ok(())
+}
+
+fn read_optional_config(path: &Path) -> io::Result<Option<Vec<u8>>> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 /// Where OpenCode's global configuration lives. `OPENCODE_CONFIG_DIR` wins
 /// when set, mirroring the CLI; otherwise the XDG-style path OpenCode uses
 /// on every platform, including Windows.
@@ -786,9 +880,13 @@ fn write_json_atomically(path: &Path, document: &Value) -> io::Result<()> {
     }
     let mut bytes = serde_json::to_vec_pretty(document)?;
     bytes.push(b'\n');
-    let temporary = path.with_extension("json.tmp");
+    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     std::fs::write(&temporary, bytes)?;
-    std::fs::rename(&temporary, path)
+    let result = std::fs::rename(&temporary, path);
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 
 /// One-time migration from the pre-sync design: the app used to mirror its
@@ -816,7 +914,22 @@ pub fn migrate_legacy_override_file() -> bool {
             Some(providers)
         });
     let migrated = match migrated {
-        Some(providers) => save_providers_at(&config_path(), &providers, None).is_ok(),
+        Some(providers) => {
+            let current = match load_providers() {
+                Ok(current) => current,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+                Err(_) => return false,
+            };
+            // The real configuration wins over the obsolete mirror. Never
+            // replace the whole roster with a potentially older app snapshot.
+            let mut merged = current;
+            for provider in providers {
+                if !merged.iter().any(|existing| existing.id == provider.id) {
+                    merged.push(provider);
+                }
+            }
+            save_providers_at(&config_path(), &merged, None).is_ok()
+        }
         None => false,
     };
     if migrated {

@@ -1720,6 +1720,22 @@ pub(crate) fn list_integrations(
                     && auth_states.len() == connections.len()
                     && auth_states.iter().all(|state| *state == "needs_auth"),
                 env_names,
+                key_accounts: connections
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, connection)| {
+                        if connection["type"].as_str() != Some("credential")
+                            || connection["method"].as_str() != Some("key")
+                        {
+                            return None;
+                        }
+                        Some(fintwind_protocol::provider_session::IntegrationKeyAccount {
+                            id: connection["id"].as_str()?.to_owned(),
+                            label: connection["label"].as_str().unwrap_or_default().to_owned(),
+                            active: index == 0,
+                        })
+                    })
+                    .collect(),
                 oauth_methods,
                 auth_url: connections
                     .iter()

@@ -27,6 +27,7 @@ pub mod checkpoint;
 pub mod command_env;
 pub mod composer_complete;
 mod context_plugin;
+mod custom_provider_credentials;
 pub mod daemon;
 pub mod driver;
 pub mod git_actions;

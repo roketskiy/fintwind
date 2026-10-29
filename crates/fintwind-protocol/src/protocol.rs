@@ -20,7 +20,7 @@ use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 /// Desktop protocol version. Bumped when the `ClientMessage` or
 /// `ServerMessage` grammar changes; the handshake refuses a mismatch in
 /// either direction, so an old client and a new daemon never half-speak.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes
@@ -348,6 +348,28 @@ pub enum Command {
         directory: PathBuf,
         provider_id: String,
         key: String,
+    },
+    /// Store and verify a custom provider's key without requiring an existing
+    /// integration. Updates only Fintwind's account, not other saved accounts.
+    StoreCustomProviderKey {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        key: String,
+    },
+    /// Resolve the selected key for a one-shot provider probe. The client must
+    /// not retain the returned secret in its provider roster or configuration.
+    ResolveCustomProviderKey {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+    },
+    /// Activate an existing key account owned by the specified integration.
+    ActivateProviderKeyAccount {
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        credential_id: String,
     },
     /// Remove a provider's connected credential from the workspace's
     /// OpenCode server — the logout. The server owns the credential store,

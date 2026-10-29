@@ -1868,6 +1868,9 @@ pub struct Fintwind {
     /// Generation token for the debounced commit of keystroke-level field
     /// edits; a newer edit supersedes the pending one.
     providers_commit_generation: u64,
+    /// One serialized background save; edits made during it queue a fresh save.
+    providers_save_in_flight: bool,
+    providers_save_pending: bool,
     /// The provider roster, loaded from and committed back to OpenCode's own
     /// configuration file. The app keeps no separate store — this is a
     /// working copy that only lives between a config load and the next
@@ -1887,6 +1890,8 @@ pub struct Fintwind {
     /// not any file, is the source of truth: it counts credentials made
     /// here, in the CLI, and in the TUI alike.
     providers_authorized: std::collections::HashSet<String>,
+    providers_key_accounts:
+        HashMap<String, Vec<fintwind_protocol::provider_session::IntegrationKeyAccount>>,
     /// The authorized provider ids whose every credential the server reports
     /// as needing re-auth (OpenCode v2.0.20+ `connection.status`). They stay
     /// in the authorized set — the credentials exist — but requests through
@@ -3917,11 +3922,14 @@ impl Fintwind {
                 providers_model_editor_modalities: Vec::new(),
                 providers_model_editor_output_modalities: Vec::new(),
                 providers_commit_generation: 0,
+                providers_save_in_flight: false,
+                providers_save_pending: false,
                 providers_store: Vec::new(),
                 providers_load_generation: 0,
                 providers_builtin: None,
                 providers_builtin_loading: false,
                 providers_authorized: HashSet::new(),
+                providers_key_accounts: HashMap::new(),
                 providers_needs_auth: HashSet::new(),
                 providers_auth_urls: HashMap::new(),
                 providers_env_names: HashMap::new(),

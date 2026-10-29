@@ -1441,6 +1441,87 @@ impl StateStore {
         )
     }
 
+    /// Store a custom key and wait for OpenCode to verify it. Blocking RPC.
+    pub fn store_custom_provider_key(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        key: String,
+    ) -> io::Result<()> {
+        self.expect_ack(
+            self.daemon
+                .client()
+                .request_with_timeout(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    Command::StoreCustomProviderKey {
+                        binary,
+                        directory,
+                        provider_id,
+                        key,
+                    },
+                    Duration::from_secs(90),
+                )
+                .map_err(to_io_error),
+        )
+    }
+
+    /// A short-lived key for discovery/probes only. Never store it in UI state.
+    pub fn resolve_custom_provider_key(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+    ) -> io::Result<Option<String>> {
+        match self
+            .daemon
+            .client()
+            .request_with_timeout(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::ResolveCustomProviderKey {
+                    binary,
+                    directory,
+                    provider_id,
+                },
+                Duration::from_secs(90),
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::Json { value } => {
+                serde_json::from_value(value).map_err(io::Error::other)
+            }
+            _ => Err(io::Error::other("Invalid provider credential response")),
+        }
+    }
+
+    /// Activate an existing API-key account. Blocking RPC.
+    pub fn activate_provider_key_account(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+        provider_id: String,
+        credential_id: String,
+    ) -> io::Result<()> {
+        self.expect_ack(
+            self.daemon
+                .client()
+                .request_with_timeout(
+                    Uuid::nil(),
+                    Uuid::nil(),
+                    Command::ActivateProviderKeyAccount {
+                        binary,
+                        directory,
+                        provider_id,
+                        credential_id,
+                    },
+                    Duration::from_secs(90),
+                )
+                .map_err(to_io_error),
+        )
+    }
+
     /// Fetch sanitized account quota. Blocking RPC; never call from rendering.
     pub fn fetch_provider_quota(
         &self,

@@ -135,11 +135,22 @@ pub struct IntegrationSummary {
     /// explains instead of pretending.
     #[serde(default)]
     pub env_names: Vec<String>,
+    /// Sanitized API-key account choices, in OpenCode connection order.
+    #[serde(default)]
+    pub key_accounts: Vec<IntegrationKeyAccount>,
     /// The OAuth sign-in methods the server offers for this integration, in
     /// the roster order. Each is connectable through the in-app OAuth flow:
     /// start an attempt, open its URL, then poll or submit a code.
     #[serde(default)]
     pub oauth_methods: Vec<IntegrationOAuthMethod>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IntegrationKeyAccount {
+    pub id: String,
+    pub label: String,
+    pub active: bool,
 }
 
 /// One OAuth sign-in method of an integration (`Integration.OAuthMethod`):

@@ -1,7 +1,7 @@
 //! User-configured model providers.
 //!
 //! A custom provider is an entry in OpenCode's own configuration file
-//! (`provider.<key>` — base URL, API format, key, and model list) managed
+//! (`provider.<key>` — base URL, API format, and model list) managed
 //! from the Providers settings page. The app keeps no parallel store: the
 //! working roster is loaded from, and committed back to, OpenCode's
 //! configuration by [`crate::opencode_config`], so entries created with the
@@ -146,6 +146,56 @@ pub struct CustomProvider {
 }
 
 impl CustomProvider {
+    /// Resolve authentication only for the lifetime of a background probe.
+    /// Never put this returned provider back into the UI's working roster.
+    pub fn for_probe(
+        mut self,
+        store: &StateStore,
+        workspace: Option<(PathBuf, PathBuf)>,
+    ) -> std::io::Result<Self> {
+        let key = self.api_key.trim();
+        if let Some(name) = key.strip_prefix("{env:").and_then(|s| s.strip_suffix('}')) {
+            self.api_key = std::env::var(name).map_err(|_| {
+                std::io::Error::other("Provider credential environment variable is unavailable")
+            })?;
+        } else if let Some(path) = key.strip_prefix("{file:").and_then(|s| s.strip_suffix('}')) {
+            let path = if let Some(relative) =
+                path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\"))
+            {
+                dirs::home_dir()
+                    .ok_or_else(|| std::io::Error::other("Home directory is unavailable"))?
+                    .join(relative)
+            } else {
+                let path = PathBuf::from(path);
+                if path.is_absolute() {
+                    path
+                } else {
+                    crate::opencode_config::config_path()
+                        .parent()
+                        .ok_or_else(|| {
+                            std::io::Error::other("Provider configuration directory is unavailable")
+                        })?
+                        .join(path)
+                }
+            };
+            self.api_key = std::fs::read_to_string(path)
+                .map_err(|_| std::io::Error::other("Provider credential file is unavailable"))?
+                .trim()
+                .to_owned();
+        } else if crate::opencode_config::is_key_reference(key) {
+            return Err(std::io::Error::other(
+                "Unsupported provider credential reference",
+            ));
+        } else if key.is_empty() && !self.id.is_empty() {
+            let (binary, directory) =
+                workspace.ok_or_else(|| std::io::Error::other("OpenCode is unavailable"))?;
+            self.api_key = store
+                .resolve_custom_provider_key(binary, directory, self.id.clone())?
+                .unwrap_or_default();
+        }
+        Ok(self)
+    }
+
     pub fn model(&self, id: &str) -> Option<&CustomProviderModel> {
         self.models.iter().find(|model| model.id == id)
     }

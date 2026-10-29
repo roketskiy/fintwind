@@ -322,6 +322,7 @@ providers.action_enable: 启用
 providers.action_disable: 禁用
 providers.rename: 重命名
 providers.save: 保存
+providers.account_label: 账号
 providers.delete_provider: 删除供应商
 providers.confirm_delete_provider: 确认删除？
 providers.delete_model: 删除模型

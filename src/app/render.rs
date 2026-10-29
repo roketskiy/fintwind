@@ -206,6 +206,41 @@ impl Fintwind {
             .into_any_element()
     }
 
+    pub(super) fn new_session_pane_content(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let bottom_gap = self.new_session_bottom_gap.clone();
+        div()
+            .id("new-session-content")
+            .size_full()
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .child(div().flex_1().min_h(px(16.0)))
+            .child(self.render_empty_state(true, cx))
+            .children(self.render_permission(cx))
+            .children(self.render_queued_messages(cx))
+            .child(self.render_composer(window, cx))
+            .child(self.render_workspace_footer(cx))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h(px(16.0))
+                    .relative()
+                    .child(
+                        canvas(
+                            move |bounds, _, _| bottom_gap.set(Some(bounds.size.height)),
+                            |_, _, _, _| (),
+                        )
+                        .absolute()
+                        .inset_0(),
+                    ),
+            )
+            .into_any_element()
+    }
+
     /// [`FintwindPane`] delegate for the right-panel island.
     pub(super) fn right_panel_pane_content(
         &mut self,
@@ -264,7 +299,6 @@ impl Render for Fintwind {
 
         let theme = Theme::current(cx);
         let empty = should_render_empty_state(self.selected_session());
-        let permission = self.render_permission(cx);
         let command_palette = self.render_command_palette(window, cx);
         let commit_dialog = self.render_commit_dialog(cx);
         let browser_open_approval = self.render_browser_open_approval(cx);
@@ -277,6 +311,74 @@ impl Render for Fintwind {
         // second column and the window's right edge.
         let main_area = match self.mode {
             WorkspaceMode::Sessions => {
+                let centered = empty && self.selected_project().is_some();
+                if self.new_session_transition.is_some_and(|transition| {
+                    empty
+                        || cx.reduce_motion()
+                        || self.state.selected_session != Some(transition.session_id)
+                        || transition.started.elapsed() >= NEW_SESSION_MOVE
+                }) {
+                    self.new_session_transition = None;
+                    self.new_session_background
+                        .update(cx, |background, cx| background.cancel_fade(cx));
+                }
+                let transition = self.new_session_transition.map(|transition| {
+                    let elapsed = transition.started.elapsed().as_secs_f32();
+                    let ease = |progress: f32| {
+                        let progress = progress.clamp(0.0, 1.0);
+                        progress * progress * (3.0 - 2.0 * progress)
+                    };
+                    let remaining = 1.0 - ease(elapsed / NEW_SESSION_MOVE.as_secs_f32());
+                    let opacity = 1.0 - ease(elapsed / NEW_SESSION_FADE.as_secs_f32());
+                    (transition, remaining, opacity)
+                });
+                let background_opacity = if centered {
+                    Some(1.0)
+                } else {
+                    transition.map(|(_, _, opacity)| opacity)
+                };
+                let background = background_opacity.map(|opacity| {
+                    div().absolute().inset_0().opacity(opacity).child(
+                        self.new_session_background
+                            .clone()
+                            .cached(StyleRefinement::default().size_full()),
+                    )
+                });
+                let content = if centered {
+                    self.new_session_pane
+                        .clone()
+                        .cached(StyleRefinement::default().size_full())
+                        .into_any_element()
+                } else {
+                    self.new_session_bottom_gap.set(None);
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .child(if empty {
+                            self.render_empty_state(false, cx).into_any_element()
+                        } else {
+                            self.transcript_pane
+                                .clone()
+                                .cached(StyleRefinement::default().flex_1().min_h(px(0.0)).w_full())
+                                .into_any_element()
+                        })
+                        .children(self.render_permission(cx))
+                        .when(self.selected_project().is_some(), |element| {
+                            element
+                                .children(self.render_queued_messages(cx))
+                                .child(self.render_composer(window, cx))
+                                .child(self.render_workspace_footer(cx))
+                        })
+                        .when_some(transition, |element, (transition, remaining, _)| {
+                            element.child(
+                                div()
+                                    .flex_none()
+                                    .h(px(f32::from(transition.bottom_gap) * remaining)),
+                            )
+                        })
+                        .into_any_element()
+                };
                 div()
                     .flex_1()
                     .min_h_0()
@@ -304,21 +406,15 @@ impl Render for Fintwind {
                     .when(!self.open_tabs.is_empty(), |element| {
                         element.child(self.render_session_tabs_row(window, cx))
                     })
-                    .child(if empty {
-                        self.render_empty_state(cx).into_any_element()
-                    } else {
-                        self.transcript_pane
-                            .clone()
-                            .cached(StyleRefinement::default().flex_1().min_h(px(0.0)).w_full())
-                            .into_any_element()
-                    })
-                    .children(permission)
-                    .when(self.selected_project().is_some(), |element| {
-                        element
-                            .children(self.render_queued_messages(cx))
-                            .child(self.render_composer(window, cx))
-                            .child(self.render_workspace_footer(cx))
-                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .relative()
+                            .children(background)
+                            .child(content),
+                    )
                     .relative()
                     .when(self.sidebar_visible, |element| {
                         element.child(self.render_panel_resize_handle(

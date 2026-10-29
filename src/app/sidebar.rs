@@ -1738,7 +1738,7 @@ impl Fintwind {
                     .cached(StyleRefinement::default().flex_1().min_w(px(0.0)).h_full()),
             )
     }
-    pub(super) fn render_empty_state(&self, cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_empty_state(&self, centered: bool, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         if self.selected_project().is_none() {
             return div()
@@ -1912,13 +1912,14 @@ impl Fintwind {
             },
         );
         div()
-            .flex_1()
+            .when(centered, |element| element.flex_none())
+            .when(!centered, |element| element.flex_1())
             .flex()
             .flex_col()
             .items_center()
             .justify_center()
             .px_8()
-            .pb(px(52.0))
+            .pb(px(if centered { 24.0 } else { 52.0 }))
             .child(
                 div()
                     .flex()

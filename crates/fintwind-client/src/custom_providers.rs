@@ -49,6 +49,30 @@ impl ProviderApiFormat {
             Self::Google => "@ai-sdk/google",
         }
     }
+
+    pub fn native_package(self) -> &'static str {
+        match self {
+            Self::OpenAi => "@opencode/ai/providers/openai-compatible",
+            Self::OpenAiResponses => "@opencode/ai/providers/openai",
+            Self::Anthropic => "@opencode/ai/providers/anthropic",
+            Self::Google => "@opencode/ai/providers/google",
+        }
+    }
+
+    pub fn from_package(package: &str) -> Option<Self> {
+        match package.trim_start_matches("aisdk:") {
+            "@ai-sdk/openai-compatible" | "@opencode/ai/providers/openai-compatible" => {
+                Some(Self::OpenAi)
+            }
+            "@ai-sdk/openai"
+            | "@opencode/ai/providers/openai"
+            | "@opencode/ai/providers/openai/responses" => Some(Self::OpenAiResponses),
+            "@opencode/ai/providers/openai/chat" => Some(Self::OpenAi),
+            "@ai-sdk/anthropic" | "@opencode/ai/providers/anthropic" => Some(Self::Anthropic),
+            "@ai-sdk/google" | "@opencode/ai/providers/google" => Some(Self::Google),
+            _ => None,
+        }
+    }
 }
 
 /// The input modalities OpenCode's model schema accepts, in the order the
@@ -64,6 +88,9 @@ pub const OUTPUT_MODALITIES: [&str; 4] = ["text", "image", "audio", "video"];
 #[serde(default)]
 pub struct CustomProviderModel {
     pub id: String,
+    /// Native V2 model package. None inherits the provider's protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_package: Option<String>,
     /// Context window in tokens, when the user recorded one. The context
     /// meter prefers this over a catalog window from another provider's copy
     /// of the same model id. Stored on the model as `limit.context`.
@@ -90,6 +117,7 @@ impl Default for CustomProviderModel {
     fn default() -> Self {
         Self {
             id: String::new(),
+            api_package: None,
             context_window: None,
             name: None,
             output_limit: None,
@@ -138,6 +166,8 @@ pub struct CustomProvider {
     /// (cost tables, `whitelist`, `options.setCacheKey`, …) survive.
     #[serde(skip)]
     pub raw: Value,
+    #[serde(skip)]
+    pub native: bool,
     /// Set when the user explicitly picked an API format. Only then does a
     /// save rewrite `npm`; otherwise an unrecognized original package (or a
     /// deliberately absent one, like models.dev providers) is left as-is.
@@ -220,6 +250,7 @@ impl CustomProvider {
             enabled: true,
             models,
             raw: Value::Null,
+            native: false,
             npm_touched: true,
         }
     }
@@ -441,6 +472,18 @@ pub fn first_token_latency(
     provider: &CustomProvider,
     model_id: &str,
 ) -> Result<Duration, FirstTokenError> {
+    let mut effective = provider.clone();
+    if let Some(package) = provider
+        .model(model_id)
+        .and_then(|model| model.api_package.as_deref())
+    {
+        effective.api_format = ProviderApiFormat::from_package(package).ok_or_else(|| {
+            FirstTokenError::Unreachable(
+                "This model protocol does not support a chat latency probe".into(),
+            )
+        })?;
+    }
+    let provider = &effective;
     if !base_url_valid(provider.base_url.trim()) {
         return Err(FirstTokenError::InvalidBaseUrl);
     }

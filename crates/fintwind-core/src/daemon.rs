@@ -2014,6 +2014,11 @@ impl Backend for FintwindBackend {
                 let integrations = crate::driver::native::list_integrations(&server)?;
                 Ok(ResponsePayload::Integrations { integrations })
             }
+            Command::FetchImageModels { binary, directory } => {
+                let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                let value = crate::driver::native::list_image_models(&server)?;
+                Ok(ResponsePayload::Json { value })
+            }
             Command::AuthorizeProvider {
                 binary,
                 directory,
@@ -2999,6 +3004,7 @@ fn handle_driver_command(
         | Command::RenameProviderSession { .. }
         | Command::DeleteProviderSession { .. }
         | Command::FetchIntegrations { .. }
+        | Command::FetchImageModels { .. }
         | Command::FetchProviderQuota { .. }
         | Command::AuthorizeProvider { .. }
         | Command::StoreCustomProviderKey { .. }

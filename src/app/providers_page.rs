@@ -369,7 +369,7 @@ impl Fintwind {
                             });
                         let page_reload = this.providers_selected.is_some();
                         this.providers_store = providers;
-                        this.rebuild_image_models();
+                        this.rebuild_image_models(cx);
                         if selected_missing {
                             this.providers_selected = None;
                             this.providers_adding = false;
@@ -451,6 +451,18 @@ impl Fintwind {
                                 // Keep newer model/endpoint/key edits. Only the submitted
                                 // secret and original-record baseline belong to this save.
                                 current.raw = saved.raw;
+                                current.native = saved.native;
+                                if current.api_format == before.api_format {
+                                    current.npm_touched = false;
+                                }
+                                for model in &mut current.models {
+                                    if before.models.iter().any(|submitted| submitted == model)
+                                        && let Some(saved_model) =
+                                            saved.models.iter().find(|saved| saved.id == model.id)
+                                    {
+                                        model.api_package = saved_model.api_package.clone();
+                                    }
+                                }
                                 if current.api_key == before.api_key
                                     && saved.api_key.is_empty()
                                     && !before.api_key.is_empty()
@@ -475,7 +487,7 @@ impl Fintwind {
                                 .update(cx, |input, cx| input.set_content(String::new(), cx));
                             this.providers_api_key_revealed = false;
                         }
-                        this.rebuild_image_models();
+                        this.rebuild_image_models(cx);
                         this.refresh_provider_detection();
                         this.refresh_integrations(cx);
                     }
@@ -651,6 +663,7 @@ impl Fintwind {
             let known = self.providers_form_model_catalog.get(&id);
             models.push(CustomProviderModel {
                 id,
+                api_package: known.and_then(|model| model.api_package.clone()),
                 context_window: custom_providers::parse_context_window(&context),
                 name: known.and_then(|model| model.name.clone()),
                 output_limit: known.and_then(|model| model.output_limit),
@@ -788,6 +801,13 @@ impl Fintwind {
     }
 
     fn begin_model_editor(&mut self, editor: ProvidersModelEditor, cx: &mut Context<Self>) {
+        self.providers_model_editor_package = match (&editor, self.selected_custom_provider()) {
+            (ProvidersModelEditor::Edit(index), Some(provider)) => provider
+                .models
+                .get(*index)
+                .and_then(|model| model.api_package.clone()),
+            _ => None,
+        };
         let (id, context, modalities, output_modalities) =
             match (&editor, self.selected_custom_provider()) {
                 (ProvidersModelEditor::Edit(index), Some(provider)) => {
@@ -890,6 +910,7 @@ impl Fintwind {
         };
         let mut model = CustomProviderModel {
             id: model_id.clone(),
+            api_package: self.providers_model_editor_package.clone(),
             context_window,
             input_modalities: self.providers_model_editor_modalities.clone(),
             output_modalities: self.providers_model_editor_output_modalities.clone(),
@@ -2520,6 +2541,62 @@ impl Fintwind {
             cx.notify();
         };
 
+        let selected_package = self.providers_model_editor_package.clone();
+        let protocol_label = |package: &str| match package {
+            fintwind_client::model_protocol::OPENAI_IMAGES => "OpenAI Images".to_owned(),
+            fintwind_client::model_protocol::GOOGLE_IMAGES => "Google Images".to_owned(),
+            _ => ProviderApiFormat::from_package(package)
+                .map(api_format_label)
+                .unwrap_or_else(|| package.to_owned()),
+        };
+        let label = selected_package
+            .as_deref()
+            .map(protocol_label)
+            .unwrap_or_else(|| tr!("providers.protocol_inherit"));
+        let weak = cx.entity().downgrade();
+        let handle = self.menu_handle("model-protocol-selector", cx);
+        let protocol = dropdown_menu(
+            MenuChip::new("model-protocol-selector")
+                .label(label)
+                .outlined()
+                .selected(handle.is_open()),
+            "model-protocol-menu",
+            &handle,
+            MenuAlign::BelowLeft,
+            move |_| {
+                let inherit = weak.clone();
+                let mut items = vec![
+                    MenuItem::new(tr!("providers.protocol_inherit"), move |_, cx| {
+                        let _ = inherit.update(cx, |this, cx| {
+                            this.providers_model_editor_package = None;
+                            cx.notify();
+                        });
+                    })
+                    .selected(selected_package.is_none()),
+                ];
+                for package in fintwind_client::model_protocol::PACKAGES {
+                    let weak = weak.clone();
+                    items.push(
+                        MenuItem::new(protocol_label(package), move |_, cx| {
+                            let _ = weak.update(cx, |this, cx| {
+                                this.providers_model_editor_package = Some(package.to_owned());
+                                if fintwind_client::model_protocol::is_image(package) {
+                                    this.providers_model_editor_output_modalities =
+                                        vec!["image".into()];
+                                } else {
+                                    this.providers_model_editor_output_modalities =
+                                        vec!["text".into()];
+                                }
+                                cx.notify();
+                            });
+                        })
+                        .selected(selected_package.as_deref() == Some(package)),
+                    );
+                }
+                items
+            },
+        );
+
         div()
             .px(px(10.0))
             .py(px(8.0))
@@ -2626,6 +2703,19 @@ impl Fintwind {
                 true,
                 toggle,
             ))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .text_size(ui_px(11.0))
+                            .text_color(theme.text_secondary)
+                            .child(tr!("providers.api_format_label")),
+                    )
+                    .child(protocol),
+            )
             .child(self.render_modality_row(
                 theme,
                 cx,

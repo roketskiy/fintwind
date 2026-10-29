@@ -178,6 +178,8 @@ settings.image_generation_model_auto: 自动
 settings.image_generation_load_failed: "读取图像生成设置失败：%{error}"
 settings.image_generation_save_failed: "保存图像生成设置失败：%{error}"
 settings.browser_tools: 浏览器工具
+settings.image_generation_model_unavailable: "%{model}（不可用）"
+providers.protocol_inherit: 继承提供商
 settings.browser_tools_description: 默认关闭。开启后向模型提供内置浏览器操作工具与使用说明，会占用少量上下文
 settings.todo_list: 待办列表
 settings.todo_list_description: 默认关闭。开启后 Agent 可用 todowrite 维护任务清单，并显示在输入框上方

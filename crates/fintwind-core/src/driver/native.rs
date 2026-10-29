@@ -1538,6 +1538,30 @@ pub(crate) fn delete_session(server: &OpenCodeServer, session_id: &str) -> anyho
 
 /// List the server's provider integrations: the connectable roster with
 /// each entry's key-method support and live credential connections.
+pub(crate) fn list_image_models(server: &OpenCodeServer) -> anyhow::Result<Value> {
+    let response =
+        server.request_with_timeout("GET", "/api/model?types=image", None, HTTP_TIMEOUT)?;
+    let rows = response
+        .get("data")
+        .unwrap_or(&response)
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Invalid OpenCode image model inventory"))?;
+    let mut models = Vec::new();
+    for row in rows {
+        if row.get("type").and_then(Value::as_str) != Some("image") {
+            continue;
+        }
+        let Some(provider) = row.get("providerID").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(id) = row.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        models.push(serde_json::json!({"provider": provider, "id": format!("{provider}/{id}"), "label": row.get("name").and_then(Value::as_str).unwrap_or(id)}));
+    }
+    Ok(Value::Array(models))
+}
+
 pub(crate) fn list_integrations(
     server: &OpenCodeServer,
 ) -> anyhow::Result<Vec<IntegrationSummary>> {

@@ -52,6 +52,11 @@ The optional scheduled task MCP requires OpenCode 2.1.4 or newer. Enable it in
 **Settings → General → Features**; Fintwind manages the experimental MCP
 connection automatically. See [agent-created scheduled tasks](docs/scheduled-tasks-mcp.md).
 
+Optional image generation requires OpenCode 2.2.1 or newer and a compatible
+connected image model. Native Goal integration targets OpenCode 2.2.1;
+older versions without native Goal cannot use it. See [Goal](docs/goals.md)
+and [image model configuration](docs/image-generation.md) for scope.
+
 ### 2. Install fintwind
 
 - **System:** Windows 10 version 1809 or newer, or Windows 11; x86_64 or Arm64.
@@ -77,6 +82,14 @@ detection, data locations, and WebView2 details.
 
 ## Features
 
+- **Image generation.** Enable OpenCode's experimental image tool in General
+  settings and choose a default from the current workspace's available image models.
+- **Native Goal.** Set a goal with `/goal <goal>`, then inspect, pause, resume,
+  or clear it. OpenCode owns goal evaluation and continuation. Old Fintwind goals
+  are not migrated automatically.
+- **Session Todo.** Follow the agent's task list and completion progress in the
+  session capsule, alongside pending added and removed line counts.
+- **Keep awake.** Optionally keep the display and system awake while Fintwind runs.
 - **Portable OpenCode.** Choose the OpenCode executable in general settings
   without adding a portable installation to PATH. Restore automatic detection
   at any time.
@@ -121,7 +134,7 @@ detection, data locations, and WebView2 details.
   default) and the agent can operate browser tabs you share with the session —
   open, observe, click, fill, scroll, navigate, screenshot — within the
   session's access mode. The session interface itself remains native GPUI.
-- **Appearance settings.** Choose Fintwind or one of 12 additional theme
+- **Appearance settings.** Choose Fintwind or one of 13 additional theme
   families, select light/dark/system mode, and customize UI and code fonts and
   text sizes. Animations honor the system's reduce-motion preference.
 - **Usage statistics.** Explore local OpenCode session history through an
@@ -134,7 +147,9 @@ detection, data locations, and WebView2 details.
   are sent.
 - **Provider management.** Sign in and out of built-in providers, see at a
   glance which connections need re-login, and read the provider's own rejection
-  reason (quota, key, or model) when a request fails.
+  reason (quota, key, or model) when a request fails. Custom provider API keys
+  use OpenCode credentials; models can inherit the provider protocol or select
+  their own, including OpenAI Images and Google Images.
 - **Scheduled tasks.** Open the clock icon in the sidebar to run instructions
   on selected weekdays at a set time, or at a fixed interval. Create a session
   with a chosen project, model, and access mode, or reuse an existing session.

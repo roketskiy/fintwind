@@ -728,6 +728,48 @@ impl Fintwind {
                                             .text_size(ui_px(13.5))
                                             .font_weight(FontWeight::MEDIUM)
                                             .text_color(theme.text)
+                                            .child(tr!("settings.todo_list")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.todo_list_description")),
+                                    ),
+                            )
+                            .child(toggle_switch(
+                                "todo-list-toggle",
+                                self.state.todo_enabled,
+                                false,
+                                theme,
+                                window,
+                                cx,
+                                move |this: &mut Self, _, cx| {
+                                    this.set_todo_enabled(!this.state.todo_enabled, cx);
+                                },
+                            )),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
                                             .child(tr!("settings.scheduled_tools")),
                                     )
                                     .child(
@@ -2144,6 +2186,27 @@ impl Fintwind {
             return;
         }
         self.state.browser_tools_enabled = enabled;
+        self.save();
+        cx.notify();
+    }
+
+    /// The todo tool is OpenCode's experimental feature: the switch has to
+    /// reach `experimental.todo` or the model never gets `todowrite`. The
+    /// config write is a one-time user action, never a frame path.
+    fn set_todo_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.state.todo_enabled == enabled {
+            return;
+        }
+        if let Err(error) = fintwind_client::opencode_todo::save(enabled) {
+            self.show_toast(tr!("settings.todo_list_failed", error = error.to_string()));
+            cx.notify();
+            return;
+        }
+        self.state.todo_enabled = enabled;
+        if !enabled {
+            self.task_capsule_tab = super::background_work::capsule::CapsuleTab::Changes;
+        }
+        self.invalidate_capsule_todos();
         self.save();
         cx.notify();
     }

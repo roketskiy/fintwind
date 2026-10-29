@@ -1436,6 +1436,9 @@ pub struct Fintwind {
     /// flicker when app activation invalidates the query.
     visible_branch_snapshot: Option<(PathBuf, BranchSnapshot)>,
     task_capsule_tab: background_work::capsule::CapsuleTab,
+    /// The selected session's newest todo list. Kept parsed across frames; a
+    /// cache miss is one transcript scan, not a scan per frame.
+    capsule_todos: RefCell<Option<(Uuid, Option<Rc<background_work::todo::TodoSnapshot>>)>>,
     capsule_pull_requests:
         QueryCache<PathBuf, Result<fintwind_protocol::pull_request::PullRequestSnapshot, String>>,
     /// Git commit history per (workspace path, branch filter). Render only
@@ -3706,6 +3709,7 @@ impl Fintwind {
                 sidebar_branches: QueryCache::new(4 * MAX_CACHED_WORKSPACES),
                 visible_branch_snapshot: None,
                 task_capsule_tab: background_work::capsule::CapsuleTab::Changes,
+                capsule_todos: RefCell::new(None),
                 capsule_pull_requests: QueryCache::new(MAX_CACHED_WORKSPACES),
                 commit_log: QueryCache::new(MAX_CACHED_WORKSPACES),
                 history_stats: QueryCache::new(128),

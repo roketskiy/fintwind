@@ -14,6 +14,7 @@ pub mod models_dev;
 pub mod opencode_config;
 pub mod opencode_image_generate;
 pub mod opencode_shell;
+pub mod opencode_todo;
 pub mod persistence;
 mod process;
 mod provider_thinking;

@@ -294,6 +294,10 @@ pub struct AppSettings {
     /// Off by default: browser tools cost model context, so enabling them
     /// is an explicit act.
     pub browser_tools_enabled: bool,
+    /// Off by default: enables OpenCode's experimental `todowrite` tool and
+    /// the capsule's todo section.
+    #[serde(default)]
+    pub todo_enabled: bool,
     #[serde(default)]
     pub scheduled_tools_enabled: bool,
     /// Creation-time default only. Legacy settings default to off; existing
@@ -331,6 +335,7 @@ impl Default for AppSettings {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
+            todo_enabled: false,
             scheduled_tools_enabled: false,
             mermaid_visualization_enabled: false,
             keep_screen_awake: false,
@@ -419,6 +424,8 @@ pub struct PersistedState {
     #[serde(default)]
     pub browser_tools_enabled: bool,
     #[serde(default)]
+    pub todo_enabled: bool,
+    #[serde(default)]
     pub scheduled_tools_enabled: bool,
     /// Default for newly created sessions only; old sessions keep their version.
     #[serde(default)]
@@ -497,6 +504,7 @@ impl PersistedState {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_owned(),
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
+            todo_enabled: false,
             scheduled_tools_enabled: false,
             mermaid_visualization_enabled: false,
             keep_screen_awake: false,
@@ -683,6 +691,7 @@ impl PersistedState {
             ui_font_family: self.ui_font_family.clone(),
             code_font_family: self.code_font_family.clone(),
             browser_tools_enabled: self.browser_tools_enabled,
+            todo_enabled: self.todo_enabled,
             scheduled_tools_enabled: self.scheduled_tools_enabled,
             mermaid_visualization_enabled: self.mermaid_visualization_enabled,
             keep_screen_awake: self.keep_screen_awake,
@@ -725,6 +734,7 @@ impl PersistedState {
         self.ui_font_family = settings.ui_font_family;
         self.code_font_family = settings.code_font_family;
         self.browser_tools_enabled = settings.browser_tools_enabled;
+        self.todo_enabled = settings.todo_enabled;
         self.scheduled_tools_enabled = settings.scheduled_tools_enabled;
         self.mermaid_visualization_enabled = settings.mermaid_visualization_enabled;
         self.keep_screen_awake = settings.keep_screen_awake;

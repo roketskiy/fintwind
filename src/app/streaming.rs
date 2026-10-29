@@ -387,6 +387,11 @@ impl Fintwind {
         runtime: &mut SessionRuntime,
         item: ActivityItem,
     ) {
+        // A plan tool call owns the capsule's todo list; reparse it once the
+        // update lands instead of holding a stale copy.
+        if item.kind == ActivityKind::Plan && self.state.selected_session == Some(session_id) {
+            self.invalidate_capsule_todos();
+        }
         let previous_phase = runtime.stream_phase;
         if previous_phase == Some(StreamPhase::Text) {
             self.finish_streaming_assistant(session_id);
@@ -833,6 +838,9 @@ impl Fintwind {
                         runtime.open_reasoning.clear();
                         runtime.settled_reasoning.clear();
                         runtime.stream_phase = None;
+                        if self.state.selected_session == Some(session_id) {
+                            self.invalidate_capsule_todos();
+                        }
                         self.state.mark_session_dirty(session_id);
                         if let Some(previous) = previous_kinds {
                             self.splice_active_transcript_rows_after_visibility_change(&previous);

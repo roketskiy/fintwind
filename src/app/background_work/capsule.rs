@@ -1,25 +1,32 @@
 use super::*;
 use crate::ui::menu::{popover_covering_trigger, toggle_popover};
+use ely_gpui_component::motion::Spinner;
+use ely_gpui_component::theme::IconSize;
+use ely_gpui_component::typography::tabular;
 use fintwind_protocol::pull_request::{
     PullRequest, PullRequestChecks, PullRequestSnapshot, PullRequestState, PullRequestUnavailable,
 };
 use gpui::Size;
+
+use super::todo::{TodoSnapshot, TodoStatus};
 
 const CAPSULE_TABS_HEIGHT: f32 = 32.0;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(in crate::app) enum CapsuleTab {
     Changes,
+    Todo,
     Tasks,
     PullRequests,
 }
 
 impl CapsuleTab {
-    const ALL: [Self; 3] = [Self::Changes, Self::Tasks, Self::PullRequests];
+    const ALL: [Self; 4] = [Self::Changes, Self::Todo, Self::Tasks, Self::PullRequests];
 
     fn id(self) -> &'static str {
         match self {
             Self::Changes => "changes",
+            Self::Todo => "todo",
             Self::Tasks => "tasks",
             Self::PullRequests => "pull-requests",
         }
@@ -28,6 +35,7 @@ impl CapsuleTab {
     fn icon(self) -> &'static str {
         match self {
             Self::Changes => "icons/file-diff.svg",
+            Self::Todo => "icons/list.svg",
             Self::Tasks => "icons/bot.svg",
             Self::PullRequests => "icons/git-branch.svg",
         }
@@ -36,21 +44,33 @@ impl CapsuleTab {
     fn label(self) -> String {
         match self {
             Self::Changes => tr!("environment.changes"),
+            Self::Todo => tr!("capsule.todo"),
             Self::Tasks => tr!("capsule.task_list"),
             Self::PullRequests => tr!("capsule.pull_requests"),
         }
     }
 
-    fn navigate(self, key: &str) -> Option<Self> {
-        let index = Self::ALL.iter().position(|tab| *tab == self)?;
+    fn visible(self, todo_enabled: bool) -> bool {
+        self != Self::Todo || todo_enabled
+    }
+
+    fn visible_tabs(todo_enabled: bool) -> impl Iterator<Item = Self> {
+        Self::ALL
+            .into_iter()
+            .filter(move |tab| tab.visible(todo_enabled))
+    }
+
+    fn navigate(self, key: &str, todo_enabled: bool) -> Option<Self> {
+        let tabs: Vec<Self> = Self::visible_tabs(todo_enabled).collect();
+        let index = tabs.iter().position(|tab| *tab == self)?;
         let next = match key {
-            "left" => (index + Self::ALL.len() - 1) % Self::ALL.len(),
-            "right" => (index + 1) % Self::ALL.len(),
+            "left" => (index + tabs.len() - 1) % tabs.len(),
+            "right" => (index + 1) % tabs.len(),
             "home" => 0,
-            "end" => Self::ALL.len() - 1,
+            "end" => tabs.len() - 1,
             _ => return None,
         };
-        Some(Self::ALL[next])
+        tabs.get(next).copied()
     }
 }
 
@@ -131,7 +151,15 @@ impl Fintwind {
             .cached_branch_snapshot()
             .map(|snapshot| (snapshot.additions, snapshot.deletions))
             .unwrap_or_default();
-        for tab in CapsuleTab::ALL {
+        let todo_enabled = self.state.todo_enabled;
+        let open_todos = if todo_enabled {
+            self.capsule_todos()
+                .map(|snapshot| snapshot.open)
+                .unwrap_or_default()
+        } else {
+            0
+        };
+        for tab in CapsuleTab::visible_tabs(todo_enabled) {
             let selected = expanded && self.task_capsule_tab == tab;
             let diff = (!expanded && tab == CapsuleTab::Changes)
                 .then_some(changes)
@@ -149,6 +177,7 @@ impl Fintwind {
                 cx,
             );
             let count = match tab {
+                CapsuleTab::Todo => open_todos,
                 CapsuleTab::Tasks => processes + agents,
                 _ => 0,
             };
@@ -238,7 +267,7 @@ impl Fintwind {
                 .on_key_down(move |event: &KeyDownEvent, window, cx| {
                     if matches!(event.keystroke.key.as_str(), "enter" | "space") {
                         activate_tab(&weak, &key_handle, tab, true, window, cx);
-                    } else if let Some(next) = tab.navigate(&event.keystroke.key) {
+                    } else if let Some(next) = tab.navigate(&event.keystroke.key, todo_enabled) {
                         activate_tab(&weak, &key_handle, next, false, window, cx);
                     } else {
                         return;
@@ -253,7 +282,7 @@ impl Fintwind {
     fn refresh_capsule_tab(&mut self, cx: &mut Context<Self>) {
         match self.task_capsule_tab {
             CapsuleTab::PullRequests => self.refresh_capsule_pull_requests(cx),
-            CapsuleTab::Changes | CapsuleTab::Tasks => {}
+            CapsuleTab::Changes | CapsuleTab::Todo | CapsuleTab::Tasks => {}
         }
     }
 
@@ -298,8 +327,14 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let theme = Theme::current(cx);
-        let body = match self.task_capsule_tab {
+        let tab = if self.task_capsule_tab.visible(self.state.todo_enabled) {
+            self.task_capsule_tab
+        } else {
+            CapsuleTab::Changes
+        };
+        let body = match tab {
             CapsuleTab::Changes => self.render_capsule_changes(handle, cx),
+            CapsuleTab::Todo => self.render_capsule_todo(cx),
             CapsuleTab::Tasks => self.render_capsule_tasks(handle, cx),
             CapsuleTab::PullRequests => self.render_capsule_pull_requests(handle, cx),
         };
@@ -362,6 +397,40 @@ impl Fintwind {
             history_focus: self.transcript_control_focus("environment-summary-history", cx),
         };
         render_git_tools_section(environment, handle.clone(), cx.entity().downgrade(), &theme)
+    }
+
+    /// The selected session's newest task list, parsed once and shared by the
+    /// collapsed badge and the open card. A cache miss is one transcript scan,
+    /// never a scan per frame.
+    fn capsule_todos(&self) -> Option<Rc<TodoSnapshot>> {
+        let session = self.selected_session()?;
+        let session_id = session.id;
+        if let Some((cached_id, snapshot)) = self.capsule_todos.borrow().as_ref()
+            && *cached_id == session_id
+        {
+            return snapshot.clone();
+        }
+        let snapshot = super::todo::latest_snapshot(session).map(Rc::new);
+        self.capsule_todos
+            .replace(Some((session_id, snapshot.clone())));
+        snapshot
+    }
+
+    /// The plan activity changed or history was replaced: reparse the list on
+    /// the next frame instead of showing a stale one.
+    pub(in crate::app) fn invalidate_capsule_todos(&self) {
+        self.capsule_todos.replace(None);
+    }
+
+    fn render_capsule_todo(&self, cx: &mut Context<Self>) -> Div {
+        let theme = Theme::current(cx);
+        let Some(snapshot) = self.capsule_todos() else {
+            return empty_todo_section(&theme);
+        };
+        if snapshot.items.is_empty() {
+            return empty_todo_section(&theme);
+        }
+        render_todo_plan(&snapshot, &theme)
     }
 
     fn render_capsule_tasks(&self, handle: &ContextMenuHandle, cx: &mut Context<Self>) -> Div {
@@ -615,6 +684,102 @@ fn capsule_message(text: String, theme: &Theme) -> Div {
         .text_size(ui_px(12.5))
         .text_color(theme.text_secondary)
         .child(text)
+}
+
+fn empty_todo_section(theme: &Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(capsule_heading(tr!("capsule.todo"), theme))
+        .child(capsule_message(tr!("capsule.todo_empty"), theme))
+}
+
+/// The agent's plan, laid out like Ely's `AgentPlan`: a title with how many
+/// items are done, then one marked row per item. The count is composed here
+/// so it follows the UI language.
+fn render_todo_plan(snapshot: &TodoSnapshot, theme: &Theme) -> Div {
+    let count = tabular(
+        div()
+            .flex_none()
+            .text_size(ui_px(11.0))
+            .text_color(theme.text_tertiary),
+    )
+    .child(format!("{}/{}", snapshot.completed, snapshot.items.len()));
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(10.0))
+        .child(
+            div()
+                .px(px(8.0))
+                .py(px(5.0))
+                .flex()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(ui_px(14.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(theme.text)
+                        .child(tr!("capsule.todo")),
+                )
+                .child(count),
+        )
+        .children(snapshot.items.iter().enumerate().map(|(index, item)| {
+            let text_color = match item.status {
+                TodoStatus::Completed | TodoStatus::Cancelled => theme.text_tertiary,
+                TodoStatus::InProgress => theme.text,
+                TodoStatus::Pending => theme.text_secondary,
+            };
+            div()
+                .flex()
+                .items_start()
+                .gap(px(8.0))
+                .px(px(8.0))
+                .child(todo_mark(item.status, index, theme))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .text_size(ui_px(12.5))
+                        .line_height(ui_px(17.0))
+                        .text_color(text_color)
+                        .when(item.status == TodoStatus::Completed, |text| {
+                            text.line_through()
+                        })
+                        .child(item.content.clone()),
+                )
+        }))
+}
+
+fn todo_mark(status: TodoStatus, index: usize, theme: &Theme) -> AnyElement {
+    let mark = match status {
+        TodoStatus::Completed => {
+            icon("icons/check.svg", 14.0, theme.success_text).into_any_element()
+        }
+        TodoStatus::InProgress => Spinner::new(("capsule-todo-mark", index))
+            .size(IconSize::Sm)
+            .color(theme.accent)
+            .into_any_element(),
+        TodoStatus::Cancelled => icon("icons/x.svg", 13.0, theme.text_tertiary).into_any_element(),
+        TodoStatus::Pending => div()
+            .size(px(6.0))
+            .rounded_full()
+            .bg(theme.text_tertiary)
+            .into_any_element(),
+    };
+    div()
+        .flex_none()
+        .w(px(16.0))
+        .h(px(17.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(mark)
+        .into_any_element()
 }
 
 fn render_pull_request_card(

@@ -80,7 +80,7 @@ settings.general: 通用
 settings.appearance: 外观
 settings.providers: 服务商
 settings.usage: 用量
-settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本 opencode shell powershell cmd bash 终端 mermaid diagram 图表 可视化
+settings.general_keywords: 通用 本地 项目 对话 隐私 匿名 使用数据 分析 分享 更新 自动 版本 opencode shell powershell cmd bash 终端 mermaid diagram 图表 可视化 todo todowrite 待办 任务 清单
 settings.appearance_keywords: 外观 主题 系统 浅色 深色 语言 英语 中文 简体 字号 文字大小 代码 界面 字体 等宽 宽度 对话宽度 消息宽度
 settings.providers_keywords: 服务商 智能体 模型 自定义 添加 API Key Base URL 端点 模型列表 命令行 版本 安装 检测 获取模型 models.dev 连通 测试 延迟 首字 模态 responses claude codex cursor opencode amp grok pi
 settings.skills: 技能
@@ -179,6 +179,9 @@ settings.image_generation_load_failed: "读取图像生成设置失败：%{error
 settings.image_generation_save_failed: "保存图像生成设置失败：%{error}"
 settings.browser_tools: 浏览器工具
 settings.browser_tools_description: 默认关闭。开启后向模型提供内置浏览器操作工具与使用说明，会占用少量上下文
+settings.todo_list: 待办列表
+settings.todo_list_description: 默认关闭。开启后 Agent 可用 todowrite 维护任务清单，并显示在输入框上方
+settings.todo_list_failed: 无法更新 OpenCode 的 Todo 设置：%{error}
 settings.scheduled_tools: 定时任务 MCP
 settings.scheduled_tools_description: 允许 Agent 创建定时任务。需 OpenCode 2.1.4+，开启后自动连接实验性 MCP 接口
 settings.mermaid_visualization: Mermaid 可视化提示词
@@ -1706,6 +1709,8 @@ settings.busy_send_mode: 运行时发送
 settings.busy_send_queue: 排队
 composer.queued_messages: "排队 · %{count}"
 capsule.task_list: 任务
+capsule.todo: 待办
+capsule.todo_empty: Agent 还没有写下任务清单
 capsule.pull_requests: 拉取请求
 capsule.loading: 正在加载…
 capsule.pr_failed: 无法加载拉取请求。

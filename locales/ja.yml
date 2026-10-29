@@ -84,7 +84,7 @@ settings.general: 一般
 settings.appearance: 外観
 settings.providers: プロバイダー
 settings.usage: 使用状況
-settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン opencode shell powershell cmd bash シェル mermaid diagram 図 可視化
+settings.general_keywords: 一般 ローカル プロジェクト 会話 プライバシー 分析 テレメトリ 匿名 共有 アップデート 自動 バージョン opencode shell powershell cmd bash シェル mermaid diagram 図 可視化 todo todowrite タスク リスト
 settings.appearance_keywords: 外観 テーマ システム ライト ダーク 言語 英語 中国語 簡体字 日本語 文字サイズ コード フォント 幅 会話 メッセージ
 settings.providers_keywords: プロバイダー エージェント モデル カスタム 追加 API Key Base URL エンドポイント モデル一覧 CLI バージョン インストール 検出 モデル取得 models.dev 接続 テスト レイテンシ 最初のトークン モダリティ responses claude codex cursor opencode amp grok pi
 settings.skills: スキル
@@ -186,6 +186,9 @@ settings.image_generation_load_failed: "画像生成の設定を読み込めま�
 settings.image_generation_save_failed: "画像生成の設定を保存できませんでした：%{error}"
 settings.browser_tools: ブラウザツール
 settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します
+settings.todo_list: Todo リスト
+settings.todo_list_description: 既定でオフ。オンにすると、エージェントは todowrite でタスクリストを管理でき、入力欄の上に表示されます
+settings.todo_list_failed: "OpenCode の Todo 設定を更新できませんでした: %{error}"
 settings.scheduled_tools: 定期タスク MCP
 settings.scheduled_tools_description: エージェントによる定期タスクの作成を許可します。OpenCode 2.1.4 以降が必要で、有効にすると実験的な MCP 接続を自動で開始します
 settings.mermaid_visualization: Mermaid 可視化プロンプト

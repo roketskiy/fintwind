@@ -11,6 +11,7 @@ const OUTPUT_CACHE_REFRESH_INTERVAL: Duration = Duration::from_millis(100);
 const BACKGROUND_SUMMARY_MENU_ID: &str = "background-work-summary";
 
 pub(super) mod capsule;
+pub(super) mod todo;
 
 fn flowing_background_work_label(text: String, base: Hsla, highlight: Hsla) -> AnyElement {
     motion::pulse(Duration::from_millis(2400), move |phase| {

@@ -1,6 +1,10 @@
 _version: 2
 capsule.task_list:
   en: Tasks
+capsule.todo:
+  en: Todo
+capsule.todo_empty:
+  en: The agent has not written a task list
 capsule.pull_requests:
   en: Pull requests
 capsule.loading:
@@ -203,7 +207,7 @@ settings.appearance:
 settings.providers:
   en: Providers
 settings.general_keywords:
-  en: general local projects conversations privacy version proxy network opencode shell powershell cmd bash mermaid diagram visualization
+  en: general local projects conversations privacy version proxy network opencode shell powershell cmd bash mermaid diagram visualization todo todowrite task list
 settings.appearance_keywords:
   en: appearance theme system light dark language english chinese simplified text size font code interface width conversation
 settings.providers_keywords:
@@ -402,6 +406,12 @@ settings.browser_tools:
   en: Browser tools
 settings.browser_tools_description:
   en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context
+settings.todo_list:
+  en: Todo list
+settings.todo_list_description:
+  en: Off by default. When on, agents can keep a task list with todowrite and show it above the composer
+settings.todo_list_failed:
+  en: "Could not update the OpenCode todo setting: %{error}"
 settings.scheduled_tools:
   en: Scheduled task MCP
 settings.scheduled_tools_description:

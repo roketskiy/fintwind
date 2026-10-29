@@ -335,6 +335,9 @@ impl Fintwind {
                             .pending_session_activation
                             .filter(|pending| pending.session_id == session_id);
                         if replaced {
+                            if fintwind.state.selected_session == Some(session_id) {
+                                fintwind.invalidate_capsule_todos();
+                            }
                             fintwind.refresh_context_summary_id(session_id);
                         }
                         if pending.is_some() {

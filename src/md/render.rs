@@ -1168,6 +1168,7 @@ pub fn install_selection_input(window: &mut Window, state: &TranscriptSelection)
 
 /// Give a selectable surface keyboard focus only when its text is hit. An
 /// ancestor mouse handler would also steal focus from embedded editable fields.
+#[cfg(test)]
 pub fn install_selection_input_with_focus(
     window: &mut Window,
     state: &TranscriptSelection,

@@ -4,7 +4,7 @@ use super::source_control::{DiffRowStyle, render_diff_code_row};
 use super::*;
 use base64::Engine as _;
 use crate::md::render::{TranscriptSelectionScroll, install_selection_input_with_focus_and_scroll};
-use gpui::{Bounds, Pixels, point, px};
+use gpui::{Bounds, Pixels, px};
 
 const CHANGED_FILES_PREVIEW_LIMIT: usize = 3;
 /// Keep one virtualized transcript row bounded even when a generator touches

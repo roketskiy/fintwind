@@ -116,6 +116,8 @@ const NAVIGATION_RAIL_FADE_HEIGHT: f32 = 20.0;
 /// the 150 ms motion-restraint bound despite the rail's larger travel.
 const NAVIGATION_RAIL_ANIMATION_DURATION: Duration = Duration::from_millis(150);
 const ESCAPE_STOP_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(3);
+const NEW_SESSION_FADE: Duration = Duration::from_millis(260);
+const NEW_SESSION_MOVE: Duration = Duration::from_millis(500);
 /// Presentation pacing only. The app sleeps until a provider or background
 /// result wakes it, then uses this cadence while streamed chunks remain.
 /// 120 ms matches Zeron's `STREAM_COMMIT_MS`: chunks queue for a full
@@ -924,6 +926,13 @@ struct MessageEdit {
 struct TranscriptAnchor {
     session_id: Uuid,
     turn_id: Uuid,
+}
+
+#[derive(Clone, Copy)]
+struct NewSessionTransition {
+    session_id: Uuid,
+    started: Instant,
+    bottom_gap: Pixels,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -2250,6 +2259,10 @@ pub struct Fintwind {
     sidebar_pane: Entity<FintwindPane>,
     transcript_pane: Entity<FintwindPane>,
     right_panel_pane: Entity<FintwindPane>,
+    new_session_pane: Entity<FintwindPane>,
+    new_session_background: Entity<new_session_background::NewSessionBackground>,
+    new_session_transition: Option<NewSessionTransition>,
+    new_session_bottom_gap: Rc<Cell<Option<Pixels>>>,
     /// The header tab strip. Its own island so the working spinners it hosts
     /// lease the strip's view, not the root: a pulse tick rebuilds only the
     /// strip, never the whole window.
@@ -2284,6 +2297,7 @@ mod image_preview;
 mod mcp_market_page;
 mod mcp_page;
 mod native_sessions;
+mod new_session_background;
 mod providers_fetch;
 mod providers_page;
 mod providers_quota;
@@ -2873,7 +2887,10 @@ impl Fintwind {
         let sidebar_pane = FintwindPane::new(Fintwind::sidebar_pane_content, cx);
         let transcript_pane = FintwindPane::new(Fintwind::transcript_pane_content, cx);
         let right_panel_pane = FintwindPane::new(Fintwind::right_panel_pane_content, cx);
+        let new_session_pane = FintwindPane::new(Fintwind::new_session_pane_content, cx);
         let session_tabs_pane = FintwindPane::new(Fintwind::session_tabs_pane_content, cx);
+        let new_session_background =
+            cx.new(|cx| new_session_background::NewSessionBackground::new(window, cx));
         let workspace_client = fintwind_client::WorkspaceClient::new(daemon.client());
         let (projectless_migrated, projectless_migration_error) =
             migrate_legacy_projectless_projects(&mut state, &workspace_client);
@@ -4079,6 +4096,10 @@ impl Fintwind {
                 sidebar_pane: sidebar_pane.clone(),
                 transcript_pane: transcript_pane.clone(),
                 right_panel_pane: right_panel_pane.clone(),
+                new_session_pane: new_session_pane.clone(),
+                new_session_background,
+                new_session_transition: None,
+                new_session_bottom_gap: Rc::new(Cell::new(None)),
                 session_tabs_pane: session_tabs_pane.clone(),
                 time_label_wake: Cell::new(None),
                 time_label_wake_generation: Cell::new(0),
@@ -4092,6 +4113,7 @@ impl Fintwind {
             &sidebar_pane,
             &transcript_pane,
             &right_panel_pane,
+            &new_session_pane,
             &session_tabs_pane,
         ] {
             pane.update(cx, |pane, cx| pane.bind(&entity, cx));

@@ -2724,6 +2724,7 @@ impl Fintwind {
             self.enqueue_follow_up_submission(session_id, submission, cx);
             return;
         }
+        let fade_new_session = selected && session.detail_loaded && session.messages.is_empty();
         let prompt = submission.prompt.clone();
         let human_prompt = submission.human_prompt();
         let next_turn_count = session.turns.len() + 1;
@@ -2787,6 +2788,16 @@ impl Fintwind {
         } else {
             None
         };
+        if fade_new_session && transcript_anchor.is_some() && !cx.reduce_motion() {
+            let started = Instant::now();
+            self.new_session_transition = Some(NewSessionTransition {
+                session_id,
+                started,
+                bottom_gap: self.new_session_bottom_gap.get().unwrap_or(Pixels::ZERO),
+            });
+            self.new_session_background
+                .update(cx, |background, cx| background.fade_out(started, cx));
+        }
         self.submission_preparations.insert(session_id);
         let Some(turn_id) = self
             .state

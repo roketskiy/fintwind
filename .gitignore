@@ -8,6 +8,7 @@ target
 __pycache__/
 
 /dist
+/examples/
 node_modules
 temp/
 

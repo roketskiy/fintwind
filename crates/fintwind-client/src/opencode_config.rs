@@ -117,27 +117,33 @@ fn provider_from_config(key: &str, entry: &Value, disabled: &HashSet<String>) ->
         .map(|models| {
             models
                 .iter()
-                .map(|(id, spec)| CustomProviderModel {
-                    id: id.clone(),
-                    context_window: spec
-                        .pointer("/limit/context")
-                        .and_then(Value::as_u64)
-                        .or_else(|| spec.get("contextWindow").and_then(Value::as_u64)),
-                    // Stored as recorded; whether a name is worth showing is
-                    // `CustomProviderModel::display_name`'s one decision.
-                    name: spec.get("name").and_then(Value::as_str).map(str::to_owned),
-                    output_limit: spec.pointer("/limit/output").and_then(Value::as_u64),
-                    input_modalities: spec
-                        .pointer("/modalities/input")
-                        .and_then(Value::as_array)
-                        .map(|modalities| {
-                            modalities
-                                .iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_owned)
-                                .collect()
-                        })
-                        .unwrap_or_default(),
+                .map(|(id, spec)| {
+                    let modalities = |key: &str| {
+                        spec.pointer(format!("/modalities/{key}").as_str())
+                            .and_then(Value::as_array)
+                            .map(|modalities| {
+                                modalities
+                                    .iter()
+                                    .filter_map(Value::as_str)
+                                    .map(str::to_owned)
+                                    .collect()
+                            })
+                            .unwrap_or_default()
+                    };
+                    CustomProviderModel {
+                        id: id.clone(),
+                        context_window: spec
+                            .pointer("/limit/context")
+                            .and_then(Value::as_u64)
+                            .or_else(|| spec.get("contextWindow").and_then(Value::as_u64))
+                            .filter(|window| *window > 0),
+                        // Stored as recorded; whether a name is worth showing is
+                        // `CustomProviderModel::display_name`'s one decision.
+                        name: spec.get("name").and_then(Value::as_str).map(str::to_owned),
+                        output_limit: spec.pointer("/limit/output").and_then(Value::as_u64),
+                        input_modalities: modalities("input"),
+                        output_modalities: modalities("output"),
+                    }
                 })
                 .collect()
         })
@@ -315,7 +321,9 @@ fn provider_entry(provider: &CustomProvider, catalog: Option<&ModelsDevTable>) -
         // schema requires `output` beside it — a context-only `limit`
         // invalidates the whole provider (verified: the entry silently
         // vanishes from the catalog) — so a fresh limit is written complete.
-        match model.context_window {
+        // A zero window is unset: no model serves zero context, and writing
+        // `limit.context: 0` risks the whole provider entry server-side.
+        match model.context_window.filter(|window| *window > 0) {
             Some(window) => {
                 let mut limit = spec
                     .get("limit")
@@ -348,42 +356,25 @@ fn provider_entry(provider: &CustomProvider, catalog: Option<&ModelsDevTable>) -
                 }
             }
         }
-        // `modalities.input` carries the recorded input modalities. An unset
-        // list drops just that key, leaving any other `modalities` keys
-        // (`output`, or anything a newer schema adds) exactly as recorded.
-        if model.input_modalities.is_empty() {
-            let mut modalities = spec.get("modalities").and_then(Value::as_object).cloned();
-            if let Some(modalities) = modalities.as_mut() {
-                modalities.remove("input");
+        // `modalities.input` and `modalities.output` carry the recorded
+        // modalities. An unset list drops just that key, leaving any other
+        // `modalities` keys exactly as recorded.
+        set_or_remove_modalities(&mut spec, "input", &model.input_modalities);
+        // A model with no recorded output that the catalog places among the
+        // image emitters writes that output down. OpenCode builds its image
+        // model roster from this field, so a supplier badge without it would
+        // claim a capability the runtime cannot use. Text-only catalog
+        // entries stay unrecorded: they need no key to behave as text.
+        let mut output_modalities = model.output_modalities.clone();
+        if output_modalities.is_empty()
+            && let Some(catalog) = catalog
+        {
+            let inferred = catalog.resolve_output_modalities_for(&model.id, Some(&provider.slug));
+            if inferred.iter().any(|modality| modality == "image") {
+                output_modalities = inferred;
             }
-            match modalities {
-                Some(modalities) if modalities.is_empty() => {
-                    spec.remove("modalities");
-                }
-                Some(modalities) => {
-                    spec.insert("modalities".into(), Value::Object(modalities));
-                }
-                None => {}
-            }
-        } else {
-            let mut modalities = spec
-                .get("modalities")
-                .and_then(Value::as_object)
-                .cloned()
-                .unwrap_or_default();
-            modalities.insert(
-                "input".into(),
-                Value::Array(
-                    model
-                        .input_modalities
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
-            spec.insert("modalities".into(), Value::Object(modalities));
         }
+        set_or_remove_modalities(&mut spec, "output", &output_modalities);
         // The pre-OpenCode-config mirror wrote `contextWindow`; superseded
         // by `limit.context` and never read back once `limit` exists.
         spec.remove("contextWindow");
@@ -433,6 +424,35 @@ fn set_or_remove_string(map: &mut Map<String, Value>, key: &str, value: &str) {
         map.remove(key);
     } else {
         map.insert(key.into(), Value::String(value.to_owned()));
+    }
+}
+
+fn set_or_remove_modalities(spec: &mut Map<String, Value>, key: &str, values: &[String]) {
+    if values.is_empty() {
+        let mut modalities = spec.get("modalities").and_then(Value::as_object).cloned();
+        if let Some(modalities) = modalities.as_mut() {
+            modalities.remove(key);
+        }
+        match modalities {
+            Some(modalities) if modalities.is_empty() => {
+                spec.remove("modalities");
+            }
+            Some(modalities) => {
+                spec.insert("modalities".into(), Value::Object(modalities));
+            }
+            None => {}
+        }
+    } else {
+        let mut modalities = spec
+            .get("modalities")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        modalities.insert(
+            key.into(),
+            Value::Array(values.iter().cloned().map(Value::String).collect()),
+        );
+        spec.insert("modalities".into(), Value::Object(modalities));
     }
 }
 

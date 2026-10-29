@@ -383,6 +383,21 @@ impl ModelsDevTable {
         self.resolve_input_modalities_for(id, None)
     }
 
+    /// The output modalities one model id resolves to, same matching as
+    /// [`resolve_model_basics_for`]. Separate because the modality badge and
+    /// the image-model list need only this field per row.
+    pub fn resolve_output_modalities_for(&self, id: &str, preferred: Option<&str>) -> Vec<String> {
+        mode(self.resolve_matches(id, preferred).iter().map(|model| {
+            (!model.output_modalities.is_empty()).then(|| model.output_modalities.clone())
+        }))
+        .unwrap_or_default()
+    }
+
+    /// [`Self::resolve_output_modalities_for`] across every provider.
+    pub fn resolve_output_modalities(&self, id: &str) -> Vec<String> {
+        self.resolve_output_modalities_for(id, None)
+    }
+
     /// The basics one model id resolves to: the preferred provider's copy
     /// when there is one, otherwise exact ids first and
     /// separator-insensitive ones after; each field is the majority value
@@ -440,6 +455,32 @@ impl ModelsDevTable {
     pub fn resolve_thinking(&self, id: &str) -> Option<ModelsDevThinking> {
         self.resolve_thinking_for(id, None)
     }
+}
+
+/// Whether a custom provider's model counts as an image generator: the
+/// recorded output wins, else the catalog's answer — the provider's own
+/// slug preferred, falling back to the cross-provider majority. Either
+/// source saying `image` counts, so the supplier badge and the settings
+/// image list always agree with each other.
+pub fn custom_model_emits_image(
+    model: &CustomProviderModel,
+    provider_slug: &str,
+    table: Option<&ModelsDevTable>,
+) -> bool {
+    if model.output_modalities.iter().any(|mode| mode == "image") {
+        return true;
+    }
+    let Some(table) = table else {
+        return false;
+    };
+    table
+        .resolve_output_modalities_for(&model.id, Some(provider_slug))
+        .iter()
+        .any(|mode| mode == "image")
+        || table
+            .resolve_output_modalities(&model.id)
+            .iter()
+            .any(|mode| mode == "image")
 }
 
 /// The thinking modes one model offers: the mode keys the wire mapping
@@ -591,7 +632,10 @@ pub fn merge_api_models(
                 .unwrap_or_default();
             let mut touched = false;
             if model.context_window.is_none()
-                && let Some(window) = api_model.context_window.or(basics.context_window)
+                && let Some(window) = api_model
+                    .context_window
+                    .filter(|window| *window > 0)
+                    .or_else(|| basics.context_window.filter(|window| *window > 0))
             {
                 model.context_window = Some(window);
                 touched = true;
@@ -627,11 +671,15 @@ pub fn merge_api_models(
         provider.models.push(CustomProviderModel {
             id: api_model.id.clone(),
             name: basics.name.or_else(|| api_model.name.clone()),
-            context_window: api_model.context_window.or(basics.context_window),
+            context_window: api_model
+                .context_window
+                .filter(|window| *window > 0)
+                .or_else(|| basics.context_window.filter(|window| *window > 0)),
             output_limit: api_model.output_limit.or(basics.output_limit),
             // The catalog's modalities stay a display fallback; a fetched
             // model records none of its own until the user says so.
             input_modalities: Vec::new(),
+            output_modalities: Vec::new(),
         });
         outcome.added += 1;
     }

@@ -55,6 +55,10 @@ impl ProviderApiFormat {
 /// Providers page offers them.
 pub const INPUT_MODALITIES: [&str; 5] = ["text", "image", "audio", "video", "pdf"];
 
+/// The output modalities OpenCode's model schema accepts, in the order the
+/// Providers page offers them.
+pub const OUTPUT_MODALITIES: [&str; 4] = ["text", "image", "audio", "video"];
+
 /// One model of a [`CustomProvider`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -74,6 +78,12 @@ pub struct CustomProviderModel {
     /// the model as `modalities.input`; empty means unset, and the UI badge
     /// falls back to the models.dev catalog.
     pub input_modalities: Vec<String>,
+    /// Output modalities the user recorded, e.g. `["text"]` or
+    /// `["image"]`. Stored on the model as `modalities.output`; empty means
+    /// unset, and the UI badge plus the image-model list fall back to the
+    /// models.dev catalog.
+    #[serde(default)]
+    pub output_modalities: Vec<String>,
 }
 
 impl Default for CustomProviderModel {
@@ -84,6 +94,7 @@ impl Default for CustomProviderModel {
             name: None,
             output_limit: None,
             input_modalities: Vec::new(),
+            output_modalities: Vec::new(),
         }
     }
 }
@@ -97,6 +108,13 @@ impl CustomProviderModel {
         self.name
             .as_deref()
             .filter(|name| !name.is_empty() && *name != self.id)
+    }
+
+    /// Whether the recorded output modalities mark this model as an image
+    /// generator. Catalog fallback is resolved by callers that hold the
+    /// metadata table.
+    pub fn emits_image(&self) -> bool {
+        self.output_modalities.iter().any(|mode| mode == "image")
     }
 }
 
@@ -221,7 +239,11 @@ pub fn parse_context_window(text: &str) -> Option<u64> {
         _ => return None,
     };
     let number: String = number.chars().filter(|char| *char != ',').collect();
-    number.parse::<u64>().ok().map(|value| value * multiplier)
+    number
+        .parse::<u64>()
+        .ok()
+        .map(|value| value * multiplier)
+        .filter(|value| *value > 0)
 }
 
 /// Compact badge text: whole millions as `N M`, whole thousands as `N K`,

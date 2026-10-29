@@ -350,6 +350,7 @@ impl Fintwind {
                 id,
                 context_window: custom_providers::parse_context_window(context),
                 input_modalities: draft.input_modalities.clone(),
+                output_modalities: draft.output_modalities.clone(),
                 ..Default::default()
             });
         }
@@ -485,10 +486,12 @@ impl Fintwind {
             // stay a display fallback and must not freeze into the config on
             // a fetch-plus-submit the user never toggled.
             let input_modalities = model.input_modalities.clone();
+            let output_modalities = model.output_modalities.clone();
             self.providers_form_models.push(ProviderFormModelDraft {
                 id,
                 context,
                 input_modalities,
+                output_modalities,
             });
         }
         cx.notify();

@@ -49,6 +49,8 @@ mod math_text;
 
 #[cfg(test)]
 mod copy_e2e;
+#[cfg(test)]
+mod selection_scroll_e2e;
 
 /// Selection geometry: the laid-out text handle for one painted element.
 #[derive(Clone)]
@@ -1192,8 +1194,134 @@ pub fn install_selection_input_with_focus_and_scroll(
 /// A target that can be auto-scrolled during transcript text selection.
 pub trait TranscriptSelectionScroll {
     fn viewport_bounds(&self) -> Bounds<Pixels>;
-    fn scroll_by(&self, delta: Pixels);
+    /// Returns whether the viewport actually moved.
+    fn scroll_by(&self, delta: Pixels) -> bool;
     fn is_scrollable(&self) -> bool;
+    fn finish_scroll(&self) {}
+}
+
+fn update_drag_selection(state: &TranscriptSelection, position: Point<Pixels>) -> bool {
+    let registry = state.registry.borrow();
+    let Some(head) = registry_point(&registry, position) else {
+        return false;
+    };
+    state.selection.borrow_mut().update_drag(&registry, head)
+}
+
+/// Speed is based on time and distance to the edge, not mouse event frequency.
+fn selection_scroll_speed(bounds: Bounds<Pixels>, position: Point<Pixels>) -> f32 {
+    const EDGE: Pixels = px(24.0);
+    const MAX_SPEED: f32 = 360.0;
+    if bounds.size.height <= Pixels::ZERO {
+        return 0.0;
+    }
+    let edge = EDGE.min(bounds.size.height / 3.0);
+    if position.y < bounds.top() + edge {
+        -MAX_SPEED * (((bounds.top() + edge) - position.y) / edge).min(1.0)
+    } else if position.y > bounds.bottom() - edge {
+        MAX_SPEED * ((position.y - (bounds.bottom() - edge)) / edge).min(1.0)
+    } else {
+        0.0
+    }
+}
+
+type SelectionScrollTick = Box<dyn FnMut(&mut Window, &mut gpui::App) -> bool>;
+
+fn schedule_selection_scroll(tick: Rc<RefCell<SelectionScrollTick>>, window: &Window) {
+    window.on_next_frame(move |window, cx| {
+        let again = (tick.borrow_mut())(window, cx);
+        if again {
+            schedule_selection_scroll(tick, window);
+        }
+    });
+}
+
+fn arm_selection_scroll(
+    state: TranscriptSelection,
+    target: Rc<dyn TranscriptSelectionScroll>,
+    generation: u64,
+    view: gpui::EntityId,
+    window: &Window,
+    cx: &mut gpui::App,
+) {
+    let mut last = cx.background_executor().now();
+    let tick: Rc<RefCell<SelectionScrollTick>> =
+        Rc::new(RefCell::new(Box::new(move |window, cx| {
+            let pointer = state
+                .selection
+                .borrow()
+                .active_scroll_pointer(generation)
+                .map(|(x, y)| point(px(x), px(y)));
+            let speed = pointer
+                .map(|pointer| selection_scroll_speed(target.viewport_bounds(), pointer))
+                .unwrap_or(0.0);
+            if speed == 0.0 || !window.is_window_active() {
+                let finished = state.selection.borrow_mut().finish_scroll(generation);
+                if finished && !window.is_window_active() {
+                    let mut selection = state.selection.borrow_mut();
+                    let moved = selection.take_scroll_moved();
+                    if let Some(key) = selection.anchor().cloned() {
+                        selection.end_drag(&key);
+                    }
+                    drop(selection);
+                    if moved {
+                        target.finish_scroll();
+                        cx.notify(view);
+                    }
+                }
+                return false;
+            }
+
+            let now = cx.background_executor().now();
+            let elapsed = now - last;
+            // A high-refresh display may ask for callbacks faster than necessary;
+            // rebuild the transcript at most about 60 times per second, and only
+            // while this direct user gesture is actively scrolling.
+            if elapsed < Duration::from_millis(16) {
+                return true;
+            }
+            last = now;
+            let elapsed = elapsed.min(Duration::from_millis(50)).as_secs_f32();
+            let changed = update_drag_selection(&state, pointer.unwrap());
+            let moved = target.scroll_by(px(speed * elapsed));
+            if moved {
+                state.selection.borrow_mut().mark_scroll_moved(generation);
+            }
+            if changed || moved {
+                cx.notify(view);
+            }
+            if !moved {
+                state.selection.borrow_mut().finish_scroll(generation);
+                return false;
+            }
+            true
+        })));
+    schedule_selection_scroll(tick, window);
+}
+
+fn finish_drag_selection(
+    state: &TranscriptSelection,
+    target: Option<&Rc<dyn TranscriptSelectionScroll>>,
+    position: Point<Pixels>,
+    view: gpui::EntityId,
+    cx: &mut gpui::App,
+) {
+    let dragging = state.selection.borrow().is_dragging();
+    let moved = state.selection.borrow_mut().take_scroll_moved();
+    // A double/triple click creates an immediate word/line selection. Only
+    // recompute on release when scrolling changed the text under the pointer.
+    if target.is_some() && dragging && moved && update_drag_selection(state, position) {
+        cx.notify(view);
+    }
+    let mut selection = state.selection.borrow_mut();
+    if let Some(key) = selection.anchor().cloned() {
+        selection.end_drag(&key);
+    }
+    drop(selection);
+    if moved && let Some(target) = target {
+        target.finish_scroll();
+        cx.notify(view);
+    }
 }
 
 fn install_selection_input_inner(
@@ -1202,6 +1330,7 @@ fn install_selection_input_inner(
     focus: Option<gpui::FocusHandle>,
     scroll_target: Option<Rc<dyn TranscriptSelectionScroll>>,
 ) {
+    let view = window.current_view();
     window.on_mouse_event({
         let state = state.clone();
         move |event: &MouseDownEvent, phase, window, cx| {
@@ -1259,61 +1388,58 @@ fn install_selection_input_inner(
     window.on_mouse_event({
         let state = state.clone();
         let scroll_target = scroll_target.clone();
-        move |event: &MouseMoveEvent, phase, window, _cx| {
-            if phase != DispatchPhase::Bubble || !event.dragging() {
+        move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble {
                 return;
+            }
+            if !event.dragging() {
+                let dragging = state.selection.borrow().is_dragging();
+                if scroll_target.is_some() && dragging {
+                    finish_drag_selection(&state, scroll_target.as_ref(), event.position, view, cx);
+                }
+                return;
+            }
+            if !state.selection.borrow().is_dragging() {
+                return;
+            }
+            if update_drag_selection(&state, event.position) {
+                cx.notify(view);
             }
             if let Some(target) = &scroll_target {
-                if target.is_scrollable() {
-                    let bounds = target.viewport_bounds();
-                    const EDGE_THRESHOLD: Pixels = px(24.0);
-                    const SCROLL_SPEED: Pixels = px(4.0);
-                    if event.position.y < bounds.top() + EDGE_THRESHOLD {
-                        let delta = (bounds.top() + EDGE_THRESHOLD) - event.position.y;
-                        let factor = (delta / EDGE_THRESHOLD).min(1.0);
-                        target.scroll_by(-SCROLL_SPEED * factor);
-                    } else if event.position.y > bounds.bottom() - EDGE_THRESHOLD {
-                        let delta = event.position.y - (bounds.bottom() - EDGE_THRESHOLD);
-                        let factor = (delta / EDGE_THRESHOLD).min(1.0);
-                        target.scroll_by(SCROLL_SPEED * factor);
-                    }
+                let at_edge = target.is_scrollable()
+                    && selection_scroll_speed(target.viewport_bounds(), event.position) != 0.0;
+                let pointer =
+                    at_edge.then(|| (f32::from(event.position.x), f32::from(event.position.y)));
+                let generation = state.selection.borrow_mut().scroll_pointer(pointer);
+                if let Some(generation) = generation {
+                    arm_selection_scroll(
+                        state.clone(),
+                        target.clone(),
+                        generation,
+                        view,
+                        window,
+                        cx,
+                    );
                 }
-            }
-            let registry = state.registry.borrow();
-            let anchor = {
-                let selection = state.selection.borrow();
-                selection
-                    .anchor()
-                    .cloned()
-                    .and_then(|key| selection.drag_anchor(&key).map(|offset| (key, offset)))
-                    .and_then(|(key, offset)| registry.position(&key).map(|index| (index, offset)))
-            };
-            // The anchor scrolling out of the frame keeps the existing spans
-            // rather than collapsing the selection.
-            let Some((anchor_index, anchor_offset)) = anchor else {
-                return;
-            };
-            let Some(head) = registry_point(&registry, event.position) else {
-                return;
-            };
-            let spans = registry.resolve((anchor_index, anchor_offset), head);
-            drop(registry);
-            if state.selection.borrow_mut().set_spans(spans) {
-                window.refresh();
             }
         }
     });
 
     window.on_mouse_event({
         let state = state.clone();
-        move |_: &MouseUpEvent, phase, _, _| {
-            if phase != DispatchPhase::Bubble {
+        let scroll_target = scroll_target.clone();
+        move |event: &MouseUpEvent, phase, _, cx| {
+            // Capture is necessary for the scrolling transcript: another
+            // control can stop the bubble phase after the pointer leaves it.
+            let expected_phase = if scroll_target.is_some() {
+                DispatchPhase::Capture
+            } else {
+                DispatchPhase::Bubble
+            };
+            if phase != expected_phase || event.button != MouseButton::Left {
                 return;
             }
-            let key = state.selection.borrow().anchor().cloned();
-            if let Some(key) = key {
-                state.selection.borrow_mut().end_drag(&key);
-            }
+            finish_drag_selection(&state, scroll_target.as_ref(), event.position, view, cx);
         }
     });
 }

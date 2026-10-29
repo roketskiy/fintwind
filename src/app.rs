@@ -2316,6 +2316,8 @@ mod streaming;
 mod tabs;
 mod transcript;
 mod transcript_view;
+#[cfg(test)]
+pub(crate) use transcript_view::TranscriptScrollTarget;
 mod update_card;
 mod usage_meter;
 mod usage_page;

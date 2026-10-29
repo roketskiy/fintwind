@@ -3,6 +3,8 @@ use crate::theme::{code_px, ui_px};
 use super::source_control::{DiffRowStyle, render_diff_code_row};
 use super::*;
 use base64::Engine as _;
+use crate::md::render::{TranscriptSelectionScroll, install_selection_input_with_focus_and_scroll};
+use gpui::{Bounds, Pixels, point, px};
 
 const CHANGED_FILES_PREVIEW_LIMIT: usize = 3;
 /// Keep one virtualized transcript row bounded even when a generator touches
@@ -467,10 +469,30 @@ impl Fintwind {
         }
         let selection = self.transcript_selection.clone();
         let focus = self.transcript_selection_focus.clone();
+        let list = self.active_transcript_rows().clone();
+        struct TranscriptScrollTarget {
+            list: gpui::ListState,
+        }
+        impl TranscriptSelectionScroll for TranscriptScrollTarget {
+            fn viewport_bounds(&self) -> Bounds<Pixels> {
+                self.list.viewport_bounds()
+            }
+            fn scroll_by(&self, delta: Pixels) {
+                let current = self.list.scroll_px_offset_for_scrollbar();
+                self.list.set_offset_from_scrollbar(gpui::point(
+                    current.x,
+                    current.y - delta,
+                ));
+            }
+            fn is_scrollable(&self) -> bool {
+                self.list.max_offset_for_scrollbar().y > px(0.5)
+            }
+        }
+        let scroll_target = Rc::new(TranscriptScrollTarget { list }) as Rc<dyn TranscriptSelectionScroll>;
         canvas(
             |_, _, _| (),
             move |_, _, window, _| {
-                md::render::install_selection_input_with_focus(window, &selection, &focus)
+                install_selection_input_with_focus_and_scroll(window, &selection, &focus, scroll_target.clone())
             },
         )
         .absolute()

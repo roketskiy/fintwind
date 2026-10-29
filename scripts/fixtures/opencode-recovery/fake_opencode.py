@@ -24,7 +24,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 LOCK = threading.Condition()
 STATE = {
@@ -138,7 +138,10 @@ class Handler(BaseHTTPRequestHandler):
         return urlparse(self.path).path
 
     def _directory(self):
-        return self.headers.get("x-opencode-directory")
+        """Decode the header once, as OpenCode does, so a percent-encoded
+        path resolves to the workspace key the behavior manifest uses."""
+        value = self.headers.get("x-opencode-directory")
+        return unquote(value) if value is not None else None
 
     def _require_auth(self):
         if not authorized(self):
@@ -272,10 +275,10 @@ class Handler(BaseHTTPRequestHandler):
     def handle_model(self):
         directory = self._directory()
         port = self.server.server_address[1]
-        log({"event": "model", "directory": directory, "port": port})
         rows = BEHAVIOR.get("models", {}).get(directory)
         if rows is None:
             rows = []
+        log({"event": "model", "directory": directory, "rows": len(rows), "port": port})
         return self._json(200, {"data": rows})
 
     def _rewrite_user(self, messages, created, new_id, text):

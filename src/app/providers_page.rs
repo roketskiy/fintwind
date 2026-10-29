@@ -144,13 +144,14 @@ impl ProviderOAuthFormDraft {
 }
 
 /// One model draft row of the add-provider form: the id and context-window
-/// fields plus the input modalities picked for the model. A draft exists
+/// fields plus the modalities picked for the model. A draft exists
 /// before its model does, so the selection lives here rather than on a
 /// [`CustomProviderModel`].
 pub(super) struct ProviderFormModelDraft {
     pub(super) id: Entity<ComposerInput>,
     pub(super) context: Entity<ComposerInput>,
     pub(super) input_modalities: Vec<String>,
+    pub(super) output_modalities: Vec<String>,
 }
 
 pub(super) fn api_format_label(format: ProviderApiFormat) -> String {
@@ -253,6 +254,7 @@ impl Fintwind {
         self.providers_delete_arming = None;
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
+        self.providers_model_editor_output_modalities.clear();
         // A probe verdict describes one catalog provider; another selection
         // must not show it, and an in-flight one must not land on the new
         // selection.
@@ -304,6 +306,7 @@ impl Fintwind {
         self.providers_delete_arming = None;
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
+        self.providers_model_editor_output_modalities.clear();
         self.providers_form_models.clear();
         if let Some(id) = self.providers_selected.clone() {
             self.load_provider_fields(&id, cx);
@@ -343,12 +346,14 @@ impl Fintwind {
                             });
                         let page_reload = this.providers_selected.is_some();
                         this.providers_store = providers;
+                        this.rebuild_image_models();
                         if selected_missing {
                             this.providers_selected = None;
                             this.providers_adding = false;
                             this.providers_renaming = false;
                             this.providers_model_editor = None;
                             this.providers_model_editor_modalities.clear();
+                            this.providers_model_editor_output_modalities.clear();
                             this.providers_delete_arming = None;
                         } else if page_reload && let Some(id) = this.providers_selected.clone() {
                             this.load_provider_fields(&id, cx);
@@ -376,6 +381,7 @@ impl Fintwind {
         ) {
             self.show_toast(tr!("providers.sync_failed", error = error.to_string()));
         }
+        self.rebuild_image_models();
         self.refresh_provider_detection();
         cx.notify();
     }
@@ -450,6 +456,7 @@ impl Fintwind {
         self.providers_delete_arming = None;
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
+        self.providers_model_editor_output_modalities.clear();
         self.providers_api_key_revealed = false;
         self.provider_form_api_key
             .update(cx, |input, cx| input.set_obscured(true, cx));
@@ -515,6 +522,7 @@ impl Fintwind {
                 name: known.and_then(|model| model.name.clone()),
                 output_limit: known.and_then(|model| model.output_limit),
                 input_modalities: draft.input_modalities.clone(),
+                output_modalities: draft.output_modalities.clone(),
             });
         }
 
@@ -646,24 +654,32 @@ impl Fintwind {
     }
 
     fn begin_model_editor(&mut self, editor: ProvidersModelEditor, cx: &mut Context<Self>) {
-        let (id, context, modalities) = match (&editor, self.selected_custom_provider()) {
-            (ProvidersModelEditor::Edit(index), Some(provider)) => {
-                let Some(model) = provider.models.get(*index) else {
-                    return;
-                };
-                (
-                    model.id.clone(),
-                    model
-                        .context_window
-                        .map(|window| custom_providers::format_context_window(window))
-                        .unwrap_or_default(),
-                    self.effective_input_modalities(model),
-                )
-            }
-            _ => (String::new(), String::new(), Vec::new()),
-        };
+        let (id, context, modalities, output_modalities) =
+            match (&editor, self.selected_custom_provider()) {
+                (ProvidersModelEditor::Edit(index), Some(provider)) => {
+                    let Some(model) = provider.models.get(*index) else {
+                        return;
+                    };
+                    (
+                        model.id.clone(),
+                        model
+                            .context_window
+                            .map(|window| custom_providers::format_context_window(window))
+                            .unwrap_or_default(),
+                        self.effective_input_modalities(model),
+                        self.effective_output_modalities(model),
+                    )
+                }
+                _ => (
+                    String::new(),
+                    String::new(),
+                    Vec::new(),
+                    Vec::new(),
+                ),
+            };
         self.providers_model_editor = Some(editor);
         self.providers_model_editor_modalities = modalities;
+        self.providers_model_editor_output_modalities = output_modalities;
         self.provider_model_id_input
             .update(cx, |input, cx| input.set_content(id, cx));
         self.provider_model_context_input
@@ -684,9 +700,23 @@ impl Fintwind {
             .unwrap_or_default()
     }
 
+    /// The output modalities a model row shows: the recorded list when there
+    /// is one, otherwise the metadata table's answer for the id. The editor
+    /// seeds its picker from this, so it opens showing what the row says.
+    fn effective_output_modalities(&self, model: &CustomProviderModel) -> Vec<String> {
+        if !model.output_modalities.is_empty() {
+            return model.output_modalities.clone();
+        }
+        self.models_dev_table
+            .as_deref()
+            .map(|table| table.resolve_output_modalities(&model.id))
+            .unwrap_or_default()
+    }
+
     fn cancel_model_editor(&mut self, cx: &mut Context<Self>) {
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
+        self.providers_model_editor_output_modalities.clear();
         cx.notify();
     }
 
@@ -733,6 +763,7 @@ impl Fintwind {
             id: model_id.clone(),
             context_window,
             input_modalities: self.providers_model_editor_modalities.clone(),
+            output_modalities: self.providers_model_editor_output_modalities.clone(),
             ..Default::default()
         };
         if let Some(provider) = self
@@ -758,6 +789,7 @@ impl Fintwind {
         }
         self.providers_model_editor = None;
         self.providers_model_editor_modalities.clear();
+        self.providers_model_editor_output_modalities.clear();
         self.commit_custom_providers(cx);
     }
 
@@ -785,6 +817,7 @@ impl Fintwind {
             Some(ProvidersModelEditor::Edit(edited)) if edited == index => {
                 self.providers_model_editor = None;
                 self.providers_model_editor_modalities.clear();
+                self.providers_model_editor_output_modalities.clear();
             }
             // The editor points at a slot in a shrinking list: follow the
             // model it opened on rather than whatever shifts into the index.
@@ -811,6 +844,7 @@ impl Fintwind {
             id,
             context,
             input_modalities: Vec::new(),
+            output_modalities: Vec::new(),
         });
         cx.notify();
     }
@@ -2064,6 +2098,12 @@ impl Fintwind {
                 &model.input_modalities,
                 SharedString::from(format!("modality-{index}")),
             );
+            let image_badge = self.model_image_badge(
+                theme,
+                &provider.slug,
+                model,
+                SharedString::from(format!("image-{index}")),
+            );
             let latency_cluster =
                 self.render_model_latency_cluster(&provider.id, &model.id, index, theme, cx);
             rows = rows.child(
@@ -2100,6 +2140,7 @@ impl Fintwind {
                             .child(SharedString::from(model.id.clone())),
                     )
                     .children(modality_pill)
+                    .children(image_badge)
                     .when_some(model.context_window, |element, window| {
                         element.child(small_pill(
                             theme,
@@ -2186,8 +2227,8 @@ impl Fintwind {
             .into_any_element()
     }
 
-    /// The inline model editor: id, context window, and input modalities,
-    /// confirmed with the check button or Enter in either field.
+    /// The inline model editor: id, context window, and input/output
+    /// modalities, confirmed with the check button or Enter in either field.
     fn render_model_editor_row(
         &self,
         theme: &Theme,
@@ -2212,6 +2253,10 @@ impl Fintwind {
                 || custom_providers::parse_context_window(&context_text).is_some());
         let toggle = |this: &mut Self, modality: &str, cx: &mut Context<Self>| {
             toggle_modality(&mut this.providers_model_editor_modalities, modality);
+            cx.notify();
+        };
+        let toggle_output = |this: &mut Self, modality: &str, cx: &mut Context<Self>| {
+            toggle_output_modality(&mut this.providers_model_editor_output_modalities, modality);
             cx.notify();
         };
 
@@ -2315,14 +2360,26 @@ impl Fintwind {
                 theme,
                 cx,
                 "model-editor",
+                tr!("providers.input_modalities_label"),
+                &custom_providers::INPUT_MODALITIES,
                 &self.providers_model_editor_modalities,
                 true,
                 toggle,
             ))
+            .child(self.render_modality_row(
+                theme,
+                cx,
+                "model-editor-output",
+                tr!("providers.output_modalities_label"),
+                &custom_providers::OUTPUT_MODALITIES,
+                &self.providers_model_editor_output_modalities,
+                false,
+                toggle_output,
+            ))
             .into_any_element()
     }
 
-    /// The input-modality picker of a model editor: one toggle chip per
+    /// The modality picker of a model editor: one toggle chip per
     /// modality, plus a hint that an empty selection defers to models.dev.
     /// The caller supplies `toggle`, so the editor and each add-form draft
     /// share the same control; `hint` is off on repeated draft rows, where
@@ -2332,6 +2389,8 @@ impl Fintwind {
         theme: &Theme,
         cx: &mut Context<Self>,
         id_prefix: &str,
+        label: String,
+        options: &'static [&'static str],
         selected: &[String],
         hint: bool,
         toggle: impl Fn(&mut Self, &str, &mut Context<Self>) + Copy + 'static,
@@ -2344,9 +2403,9 @@ impl Fintwind {
                 .text_size(ui_px(10.0))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(theme.text_tertiary)
-                .child(tr!("providers.input_modalities_label")),
+                .child(label),
         );
-        for modality in custom_providers::INPUT_MODALITIES {
+        for modality in options {
             let active = selected.iter().any(|entry| entry == modality);
             row = row.child(
                 modality_chip(
@@ -3185,6 +3244,13 @@ impl Fintwind {
                 }
                 cx.notify();
             };
+            let toggle_output =
+                move |this: &mut Self, modality: &str, cx: &mut Context<Self>| {
+                    if let Some(draft) = this.providers_form_models.get_mut(index) {
+                        toggle_output_modality(&mut draft.output_modalities, modality);
+                    }
+                    cx.notify();
+                };
             drafts = drafts.child(
                 div()
                     .py(px(8.0))
@@ -3243,9 +3309,21 @@ impl Fintwind {
                         theme,
                         cx,
                         &format!("form-model-{index}"),
+                        tr!("providers.input_modalities_label"),
+                        &custom_providers::INPUT_MODALITIES,
                         &draft.input_modalities,
                         index == 0,
                         toggle,
+                    ))
+                    .child(self.render_modality_row(
+                        theme,
+                        cx,
+                        &format!("form-model-output-{index}"),
+                        tr!("providers.output_modalities_label"),
+                        &custom_providers::OUTPUT_MODALITIES,
+                        &draft.output_modalities,
+                        false,
+                        toggle_output,
                     )),
             );
         }
@@ -3622,6 +3700,22 @@ fn toggle_modality(selected: &mut Vec<String>, modality: &str) {
     });
 }
 
+/// Flip one output modality in a selection, keeping the output canonical
+/// order so saved lists do not shuffle between edits.
+fn toggle_output_modality(selected: &mut Vec<String>, modality: &str) {
+    if let Some(index) = selected.iter().position(|entry| entry == modality) {
+        selected.remove(index);
+        return;
+    }
+    selected.push(modality.to_owned());
+    selected.sort_by_key(|entry| {
+        custom_providers::OUTPUT_MODALITIES
+            .iter()
+            .position(|candidate| candidate == entry)
+            .unwrap_or(usize::MAX)
+    });
+}
+
 /// One toggle chip in a modality picker: the modality's stroke icon and word,
 /// accent-filled while selected. The caller attaches the toggle handlers, so
 /// the same chip serves the model editor and the add form's drafts.
@@ -3714,6 +3808,34 @@ impl Fintwind {
                         .items_center()
                         .child(glyphs),
                 )
+                .into_any_element(),
+        )
+    }
+
+    /// The image-output badge for one custom model: a compact pill shown only
+    /// when the model's effective output modalities emit images. Recorded
+    /// output wins; without it the metadata table answers.
+    pub(super) fn model_image_badge(
+        &self,
+        theme: &Theme,
+        provider_slug: &str,
+        model: &CustomProviderModel,
+        id: impl Into<ElementId>,
+    ) -> Option<AnyElement> {
+        if !fintwind_client::models_dev::custom_model_emits_image(
+            model,
+            provider_slug,
+            self.models_dev_table.as_deref(),
+        ) {
+            return None;
+        }
+        let accent = providers_accent(theme);
+        Some(
+            div()
+                .id(id.into())
+                .flex_none()
+                .tooltip(Tooltip::text(tr!("providers.output_modalities_label")))
+                .child(small_pill(theme, tr!("providers.image_badge"), Some(accent)))
                 .into_any_element(),
         )
     }

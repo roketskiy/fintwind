@@ -775,6 +775,10 @@ providers.ttft_error_timeout:
   en: "no first token within %{seconds} s"
 providers.input_modalities_label:
   en: Input modalities
+providers.output_modalities_label:
+  en: Output modalities
+providers.image_badge:
+  en: image
 providers.input_modalities_hint:
   en: Empty follows models.dev
 providers.modality_tooltip:

@@ -2110,18 +2110,57 @@ impl Fintwind {
         .detach();
     }
 
-    /// Recompute the image-model choices from the catalog and the providers
-    /// the server reports as connected. Until either arrives the list stays
-    /// empty and the picker offers only automatic selection.
+    /// Recompute the image-model choices from the catalog, the connected
+    /// providers, and the enabled custom providers. Catalog entries stay
+    /// filtered by the authorized set; custom models join when their
+    /// effective output emits images — recorded output wins, else the
+    /// catalog's answer for the id with the provider's slug preferred.
+    /// Without a table only recorded custom outputs can join.
     pub(super) fn rebuild_image_models(&mut self) {
-        let Some(table) = self.models_dev_table.as_deref() else {
-            self.image_models.clear();
-            return;
-        };
-        let mut models = table.image_models();
-        if !self.providers_authorized.is_empty() {
-            models.retain(|choice| self.providers_authorized.contains(&choice.provider));
+        use std::collections::BTreeMap;
+        let mut merged: BTreeMap<String, fintwind_client::models_dev::ImageModelChoice> =
+            BTreeMap::new();
+        if let Some(table) = self.models_dev_table.as_deref() {
+            let mut catalog = table.image_models();
+            if !self.providers_authorized.is_empty() {
+                catalog.retain(|choice| self.providers_authorized.contains(&choice.provider));
+            }
+            for choice in catalog {
+                merged.insert(choice.id.clone(), choice);
+            }
         }
+        for provider in &self.providers_store {
+            if !provider.enabled {
+                continue;
+            }
+            for model in &provider.models {
+                if !fintwind_client::models_dev::custom_model_emits_image(
+                    model,
+                    &provider.slug,
+                    self.models_dev_table.as_deref(),
+                ) {
+                    continue;
+                }
+                let id = format!("{}/{}", provider.slug, model.id);
+                let label = model.display_name().unwrap_or(&model.id).to_owned();
+                merged.entry(id.clone()).or_insert(
+                    fintwind_client::models_dev::ImageModelChoice {
+                        provider: provider.slug.clone(),
+                        id,
+                        label,
+                    },
+                );
+            }
+        }
+        let mut models: Vec<fintwind_client::models_dev::ImageModelChoice> =
+            merged.into_values().collect();
+        models.sort_by(|left, right| {
+            left.provider
+                .to_lowercase()
+                .cmp(&right.provider.to_lowercase())
+                .then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
+                .then_with(|| left.id.cmp(&right.id))
+        });
         self.image_models = models;
     }
 

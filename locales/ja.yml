@@ -375,6 +375,8 @@ providers.ttft_error_model: モデルが見つかりません（HTTP 404）
 providers.ttft_error_no_stream: エンドポイントはストリーミングトークンを返しませんでした
 providers.ttft_error_timeout: "%{seconds}秒以内に最初のトークンが届きませんでした"
 providers.input_modalities_label: 入力モダリティ
+providers.output_modalities_label: 出力モダリティ
+providers.image_badge: 画像生成
 providers.input_modalities_hint: 空欄なら models.dev に従います
 providers.modality_tooltip: "入力モダリティ：%{modalities}"
 modality.text: テキスト

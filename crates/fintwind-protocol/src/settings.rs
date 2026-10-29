@@ -56,13 +56,6 @@ impl DaemonSettings {
         }
     }
 
-    pub fn goal_enabled(&self) -> bool {
-        self.extra
-            .get(GOAL_ENABLED_KEY)
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }
-
     pub fn scheduled_tools_enabled(&self) -> bool {
         self.extra
             .get(SCHEDULED_TOOLS_ENABLED_KEY)
@@ -121,7 +114,6 @@ impl DaemonSettings {
     }
 }
 
-pub const GOAL_ENABLED_KEY: &str = "goal_enabled";
 pub const SCHEDULED_TOOLS_ENABLED_KEY: &str = "scheduled_tools_enabled";
 pub const OPENCODE_BINARY_PATH_KEY: &str = "opencode_binary_path";
 pub const GENERAL_WORKSPACE_PATH_KEY: &str = "general_workspace_path";

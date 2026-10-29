@@ -400,10 +400,6 @@ settings.keep_screen_awake:
   en: Keep screen awake
 settings.keep_screen_awake_description:
   en: While on, the display and system stay awake for as long as the app runs
-settings.goal:
-  en: Goal mode
-settings.goal_description:
-  en: Use /goal to set a session objective, with controls to pause and resume execution
 settings.auto_compact:
   en: Auto compact
 settings.auto_compact_description:
@@ -3156,60 +3152,24 @@ perf.sample_failed:
 
 goal.title:
   en: "Goal"
+goal.usage:
+  en: "/goal <objective> | pause | resume | clear"
 goal.set:
   en: "Set goal"
-goal.actions:
-  en: "Goal actions"
 goal.active:
-  en: "Active"
+  en: "Goal active"
 goal.paused:
-  en: "Paused"
+  en: "Goal paused"
 goal.done:
-  en: "Completed"
-goal.blocked:
-  en: "Blocked"
+  en: "Goal met"
 goal.pause:
   en: "Pause"
 goal.resume:
   en: "Resume"
-goal.edit:
-  en: "Edit goal"
-goal.complete:
-  en: "Mark complete"
 goal.clear:
-  en: "Clear goal"
+  en: "Clear"
 goal.reconnecting:
   en: "Reconnecting."
-goal.draft_present:
-  en: "Finish or clear the current draft first."
-goal.no_attachments:
-  en: "Goal commands do not accept attachments."
-goal.enable_first:
-  en: "Enable Goal in settings first."
-goal.wait_for_turn:
-  en: "Wait for the current reply to finish or stop it first."
-goal.executions:
-  en: "Executed %{count} times · Limit %{limit}"
-goal.card_title:
-  en: "Goal completed"
-goal.card_objective:
-  en: "Objective"
-goal.card_result:
-  en: "Result"
-goal.card_run:
-  en: "Executed %{count} times"
-goal.card_tools:
-  en: "%{count} tool calls"
-goal.card_duration:
-  en: "Took %{duration}"
-goal.duration_seconds:
-  en: "%{count}s"
-goal.duration_minutes:
-  en: "%{count} min"
-goal.duration_hours:
-  en: "%{h}h %{m}m"
-goal.last_result:
-  en: "Latest result: %{reason}"
 usage.healthy:
   en: Healthy
 usage.unclassified_context:

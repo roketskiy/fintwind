@@ -1189,13 +1189,8 @@ impl Fintwind {
 
     fn selected_escape_stop_target(&self) -> Option<EscapeStopTarget> {
         let session = self.selected_session()?;
-        (!self.submission_preparations.contains(&session.id)
-            && (session.status.is_busy()
-                || self.state.goal_enabled
-                    && session.goal.as_ref().is_some_and(|goal| {
-                        goal.status == fintwind_client::goal::GoalStatus::Active
-                    })))
-        .then(|| EscapeStopTarget::for_session(session))
+        (!self.submission_preparations.contains(&session.id) && session.status.is_busy())
+            .then(|| EscapeStopTarget::for_session(session))
     }
 
     pub(super) fn reset_visible_state(&mut self) {

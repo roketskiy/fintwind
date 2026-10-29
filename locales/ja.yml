@@ -185,8 +185,6 @@ settings.mermaid_visualization: Mermaid 可視化プロンプト
 settings.mermaid_visualization_description: 新しいセッションのみ
 settings.keep_screen_awake: 画面を常時点灯
 settings.keep_screen_awake_description: オンにすると、アプリの実行中は画面とシステムをスリープさせません
-settings.goal: 目標モード
-settings.goal_description: 有効にすると /goal でセッションの目標を設定でき、実行の一時停止と再開ができます
 settings.auto_compact: 自動圧縮
 settings.auto_compact_description: コンテキストが下のしきい値に達したら1回圧縮します。セッションとサブエージェントの両方に適用されます
 settings.auto_compact_threshold: 圧縮のしきい値
@@ -1607,33 +1605,15 @@ perf.total: 合計
 perf.sample_failed: "サンプリングに失敗しました: %{error}"
 
 goal.title: "目標"
+goal.usage: "/goal <目標> | pause | resume | clear"
 goal.set: "目標を設定"
-goal.actions: "目標の操作"
-goal.active: "実行中"
-goal.paused: "一時停止"
-goal.done: "完了"
-goal.blocked: "ブロック中"
+goal.active: "目標を実行中"
+goal.paused: "目標を一時停止"
+goal.done: "目標達成"
 goal.pause: "一時停止"
 goal.resume: "再開"
-goal.edit: "目標を編集"
-goal.complete: "完了にする"
-goal.clear: "目標を削除"
+goal.clear: "削除"
 goal.reconnecting: "再接続中です。接続後に再試行してください。"
-goal.draft_present: "現在の下書きを送信または消去してください。"
-goal.no_attachments: "目標コマンドは添付ファイルを使用できません。"
-goal.enable_first: "設定で目標を有効にしてください。"
-goal.wait_for_turn: "現在の応答が終わるまで待つか、実行を停止してください。"
-goal.executions: "実行 %{count} 回 · 上限 %{limit} 回"
-goal.card_title: "目標完了"
-goal.card_objective: "目標"
-goal.card_result: "結果"
-goal.card_run: "実行 %{count} 回"
-goal.card_tools: "ツール %{count} 回"
-goal.card_duration: "所要 %{duration}"
-goal.duration_seconds: "%{count} 秒"
-goal.duration_minutes: "%{count} 分"
-goal.duration_hours: "%{h} 時間 %{m} 分"
-goal.last_result: "最新の結果：%{reason}"
 usage.healthy: 正常
 usage.unclassified_context: 未分類
 usage.used_context: 使用済みコンテキスト

@@ -296,8 +296,6 @@ pub struct AppSettings {
     pub browser_tools_enabled: bool,
     #[serde(default)]
     pub scheduled_tools_enabled: bool,
-    #[serde(default)]
-    pub goal_enabled: bool,
     /// Creation-time default only. Legacy settings default to off; existing
     /// sessions retain their frozen version independently of this preference.
     #[serde(default)]
@@ -334,7 +332,6 @@ impl Default for AppSettings {
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
             scheduled_tools_enabled: false,
-            goal_enabled: false,
             mermaid_visualization_enabled: false,
             keep_screen_awake: false,
             auto_compact_enabled: true,
@@ -423,8 +420,6 @@ pub struct PersistedState {
     pub browser_tools_enabled: bool,
     #[serde(default)]
     pub scheduled_tools_enabled: bool,
-    #[serde(default)]
-    pub goal_enabled: bool,
     /// Default for newly created sessions only; old sessions keep their version.
     #[serde(default)]
     pub mermaid_visualization_enabled: bool,
@@ -503,7 +498,6 @@ impl PersistedState {
             code_font_family: DEFAULT_CODE_FONT_FAMILY.to_owned(),
             browser_tools_enabled: false,
             scheduled_tools_enabled: false,
-            goal_enabled: false,
             mermaid_visualization_enabled: false,
             keep_screen_awake: false,
             auto_compact_enabled: true,
@@ -613,10 +607,6 @@ impl PersistedState {
             serde_json::Value::Bool(self.browser_tools_enabled),
         );
         extra.insert(
-            fintwind_protocol::settings::GOAL_ENABLED_KEY.to_owned(),
-            serde_json::Value::Bool(self.goal_enabled),
-        );
-        extra.insert(
             fintwind_protocol::settings::SCHEDULED_TOOLS_ENABLED_KEY.to_owned(),
             serde_json::Value::Bool(self.scheduled_tools_enabled),
         );
@@ -694,7 +684,6 @@ impl PersistedState {
             code_font_family: self.code_font_family.clone(),
             browser_tools_enabled: self.browser_tools_enabled,
             scheduled_tools_enabled: self.scheduled_tools_enabled,
-            goal_enabled: self.goal_enabled,
             mermaid_visualization_enabled: self.mermaid_visualization_enabled,
             keep_screen_awake: self.keep_screen_awake,
             auto_compact_enabled: self.auto_compact_enabled,
@@ -737,7 +726,6 @@ impl PersistedState {
         self.code_font_family = settings.code_font_family;
         self.browser_tools_enabled = settings.browser_tools_enabled;
         self.scheduled_tools_enabled = settings.scheduled_tools_enabled;
-        self.goal_enabled = settings.goal_enabled;
         self.mermaid_visualization_enabled = settings.mermaid_visualization_enabled;
         self.keep_screen_awake = settings.keep_screen_awake;
         self.auto_compact_enabled = settings.auto_compact_enabled;

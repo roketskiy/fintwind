@@ -33,6 +33,7 @@ struct Boundary {
     unconfirmed_steers: Vec<(String, String)>,
     accepted: bool,
     server_initiated: bool,
+    continuation: bool,
     execution_id: Option<String>,
 }
 
@@ -75,6 +76,7 @@ impl SubmissionFence {
             unconfirmed_steers: Vec::new(),
             accepted: false,
             server_initiated: false,
+            continuation: false,
             execution_id: None,
         });
         self.generation
@@ -93,6 +95,20 @@ impl SubmissionFence {
             input_id,
             previous,
         })
+    }
+
+    /// Goal commands admit an OpenCode-generated synthetic input rather than
+    /// accepting a client message ID. Recover from the native execution
+    /// boundary, but replace the locally opened turn rather than its suffix.
+    pub(super) fn begin_goal_command(&mut self) -> u64 {
+        let generation = self.begin();
+        if let Some(boundary) = self.boundary.as_mut() {
+            boundary.input_id = None;
+            boundary.latest_input_id = None;
+            boundary.server_initiated = true;
+            boundary.continuation = false;
+        }
+        generation
     }
 
     pub(super) fn reject_steer(&mut self, mut steering: Steering) {
@@ -154,20 +170,26 @@ impl SubmissionFence {
         if self.boundary.is_none() {
             self.begin();
             if let Some(boundary) = self.boundary.as_mut() {
-                // Never use the time this consumer processed a buffered event.
-                let native_started = event.get("created").and_then(Value::as_u64);
-                let execution_id = event
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .and_then(|id| id.strip_prefix("evt_"))
-                    .map(|id| format!("msg_{id}"));
-                boundary.accepted = native_started.is_some() && execution_id.is_some();
-                boundary.started_at = native_started.unwrap_or_default();
-                boundary.execution_id = execution_id;
                 boundary.server_initiated = true;
+                boundary.continuation = true;
                 boundary.input_id = None;
                 boundary.latest_input_id = None;
             }
+        }
+        if let Some(boundary) = self.boundary.as_mut()
+            && boundary.server_initiated
+            && boundary.execution_id.is_none()
+        {
+            // Never use the time this consumer processed a buffered event.
+            let native_started = event.get("created").and_then(Value::as_u64);
+            let execution_id = event
+                .get("id")
+                .and_then(Value::as_str)
+                .and_then(|id| id.strip_prefix("evt_"))
+                .map(|id| format!("msg_{id}"));
+            boundary.accepted = native_started.is_some() && execution_id.is_some();
+            boundary.started_at = native_started.unwrap_or_default();
+            boundary.execution_id = execution_id;
         }
     }
 
@@ -865,7 +887,10 @@ fn fetch_turn(
         .count()
         != rows
             .iter()
-            .filter(|row| row.get("type").and_then(Value::as_str) == Some("user"))
+            .filter(|row| {
+                row.get("type").and_then(Value::as_str) == Some("user")
+                    || super::super::native::is_native_goal_kickoff(row)
+            })
             .count()
     {
         // A shifted or attachment-only shape the translator cannot materialize
@@ -875,7 +900,7 @@ fn fetch_turn(
     Ok(Some(RecoveredTurn {
         generation: boundary.generation,
         transcript,
-        continuation: boundary.server_initiated,
+        continuation: boundary.continuation,
         success: outcome == "succeeded",
         error,
         acknowledged_steers,
@@ -934,6 +959,7 @@ pub(super) fn reconcile_saved(
         unconfirmed_steers: Vec::new(),
         accepted: true,
         server_initiated: false,
+        continuation: false,
         execution_id: None,
     };
     Ok(

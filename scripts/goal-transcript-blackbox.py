@@ -83,7 +83,8 @@ mod fintwind_client { pub mod goal { pub use fintwind_protocol::goal::GoalStatus
 '''
     native_source = (ROOT / "crates/fintwind-core/src/driver/native.rs").read_text(encoding="utf-8")
     native_functions = [extract_item(native_source, signature) for signature in (
-        "fn translate_native_rows(", "fn ms_to_seconds(", "fn native_image_attachment(",
+        "fn translate_native_rows(", "fn native_goal_objective(", "pub(crate) fn is_native_goal_kickoff(",
+        "fn ms_to_seconds(", "fn native_image_attachment(",
         "fn turn_stats_step(", "fn assistant_parts_visible(", "fn append_assistant_parts(",
         "fn flush_assistant_text(", "fn flush_assistant_activities(", "fn parts_text(",
         "fn reasoning_item(", "fn tool_item(",
@@ -144,9 +145,8 @@ fn main() {
     let rows = folded_transcript_row_kinds_with_retry(&session, &HashSet::new(), false);
     assert_eq!(rows, vec![
         TranscriptRowKind::Message(0), TranscriptRowKind::Message(1),
-        TranscriptRowKind::Message(2), TranscriptRowKind::Message(3),
-        TranscriptRowKind::GoalCompletion, TranscriptRowKind::Message(4),
-    ], "goal card follows the final response and precedes the next unrelated turn");
+        TranscriptRowKind::Message(2), TranscriptRowKind::Message(3), TranscriptRowKind::Message(4),
+    ], "completed goals do not add a separate transcript card");
     println!("settled: {:?}", rows);
 
     let tool_turn = Uuid::from_u128(13);
@@ -172,18 +172,6 @@ fn main() {
         TranscriptRowKind::Message(0), TranscriptRowKind::TurnFold(tool_turn),
     ], "turns without visible answers still produce a fold row");
 
-    let before = transcript_rows_fingerprint_with_retry(&session, &HashSet::new(), false);
-    session.turns[1].started_at = 250;
-    let after = transcript_rows_fingerprint_with_retry(&session, &HashSet::new(), false);
-    let corrected_rows = folded_transcript_row_kinds_with_retry(&session, &HashSet::new(), false);
-    assert_eq!(corrected_rows, vec![
-        TranscriptRowKind::Message(0), TranscriptRowKind::Message(1),
-        TranscriptRowKind::GoalCompletion, TranscriptRowKind::Message(2),
-        TranscriptRowKind::Message(3), TranscriptRowKind::Message(4),
-    ], "restored turn boundaries determine which response owns the goal card");
-    assert_ne!(before, after, "the cache must refresh when restored boundaries move the card");
-    session.turns[1].started_at = 110;
-
     session.turns[1].status = TurnStatus::Running;
     session.turns[1].completed_at = None;
     session.turns.truncate(2);
@@ -194,7 +182,7 @@ fn main() {
         TranscriptRowKind::Message(0), TranscriptRowKind::Message(1),
         TranscriptRowKind::Message(2), TranscriptRowKind::Message(3),
         TranscriptRowKind::WorkingIndicator,
-    ], "a done goal waits while the selected turn is still running");
+    ], "a running turn keeps its working indicator");
     println!("running: {:?}", rows);
 
     let mut guided = AgentSession::new(Uuid::from_u128(3));

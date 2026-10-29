@@ -36,9 +36,9 @@ pub mod git_commit;
 pub mod git_log;
 mod git_process;
 pub mod git_status;
-mod goal_plugin;
 pub mod i18n;
 pub mod identity;
+mod native_goal;
 /// The mermaid check capability a private OpenCode process receives. Public
 /// only for the harness that stands in for that process; values are loopback
 /// addresses and per-daemon tokens.

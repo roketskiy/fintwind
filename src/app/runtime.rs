@@ -700,6 +700,7 @@ impl Fintwind {
             }
             Err(error) => {
                 if self.pending_goal_actions.remove(&session_id).is_some() {
+                    self.goal_status_requests.remove(&session_id);
                     self.show_toast(error.to_string());
                     cx.notify();
                 }
@@ -736,6 +737,7 @@ impl Fintwind {
             Ok(value) => value,
             Err(error) => {
                 self.pending_goal_actions.remove(&session_id);
+                self.goal_status_requests.remove(&session_id);
                 self.show_toast(error.to_string());
                 cx.notify();
                 return;
@@ -3450,6 +3452,8 @@ impl Fintwind {
             | DriverEvent::TurnStatsUpdated(_)
             | DriverEvent::CompactionUpdated(_)
             | DriverEvent::GoalUpdated(_)
+            | DriverEvent::GoalStatusReported(_)
+            | DriverEvent::GoalCommandFailed(_)
             | DriverEvent::ProviderBusy
             | DriverEvent::ProviderRetry { .. }
             | DriverEvent::NativeSessionsChanged

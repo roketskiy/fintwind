@@ -58,9 +58,12 @@ impl GoalSnapshot {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum GoalAction {
     Get,
-    Start { objective: String },
+    Start {
+        objective: String,
+        #[serde(default)]
+        attachments: Vec<crate::model::MessageAttachment>,
+    },
     Pause,
     Resume,
-    Complete,
     Clear,
 }

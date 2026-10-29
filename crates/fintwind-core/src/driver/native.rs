@@ -31,8 +31,8 @@ use fintwind_protocol::model::unix_time;
 use fintwind_protocol::provider_session::{
     IntegrationFormField, IntegrationFormFieldCondition, IntegrationFormFieldOption,
     IntegrationOAuthAttempt, IntegrationOAuthMethod, IntegrationOAuthMode, IntegrationOAuthPoll,
-    IntegrationSummary, McpConnectionState, McpServerStatus, NativeSessionSummary, NativeTranscript,
-    UsageDayShare, UsageEntry, UsageModelLane, UsageStats,
+    IntegrationSummary, McpConnectionState, McpServerStatus, NativeSessionSummary,
+    NativeTranscript, UsageDayShare, UsageEntry, UsageModelLane, UsageStats,
 };
 
 use crate::blob_store::BlobStore;
@@ -1586,7 +1586,9 @@ pub(crate) fn list_integrations(
                 .map(|methods| {
                     methods
                         .iter()
-                        .filter(|method| method.get("type").and_then(Value::as_str) == Some("oauth"))
+                        .filter(|method| {
+                            method.get("type").and_then(Value::as_str) == Some("oauth")
+                        })
                         .filter_map(|method| {
                             let form = method
                                 .get("form")
@@ -1595,7 +1597,8 @@ pub(crate) fn list_integrations(
                                     fields
                                         .iter()
                                         .filter(|field| {
-                                            field.get("type").and_then(Value::as_str) == Some("string")
+                                            field.get("type").and_then(Value::as_str)
+                                                == Some("string")
                                         })
                                         .filter_map(|field| {
                                             Some(IntegrationFormField {
@@ -1645,18 +1648,23 @@ pub(crate) fn list_integrations(
                                                         conditions
                                                             .iter()
                                                             .filter_map(|condition| {
-                                                                Some(IntegrationFormFieldCondition {
-                                                                    key: condition.get("key")?.as_str()?.to_owned(),
-                                                                    op: condition
-                                                                        .get("op")
-                                                                        .and_then(Value::as_str)
-                                                                        .unwrap_or("eq")
-                                                                        .to_owned(),
-                                                                    value: condition
-                                                                        .get("value")
-                                                                        .cloned()
-                                                                        .unwrap_or(Value::Null),
-                                                                })
+                                                                Some(
+                                                                    IntegrationFormFieldCondition {
+                                                                        key: condition
+                                                                            .get("key")?
+                                                                            .as_str()?
+                                                                            .to_owned(),
+                                                                        op: condition
+                                                                            .get("op")
+                                                                            .and_then(Value::as_str)
+                                                                            .unwrap_or("eq")
+                                                                            .to_owned(),
+                                                                        value: condition
+                                                                            .get("value")
+                                                                            .cloned()
+                                                                            .unwrap_or(Value::Null),
+                                                                    },
+                                                                )
                                                             })
                                                             .collect()
                                                     })
@@ -1899,11 +1907,7 @@ pub(crate) fn complete_integration_oauth(
         encode_path_segment(provider_id),
         encode_path_segment(attempt_id)
     );
-    server.request(
-        "POST",
-        &path,
-        Some(&serde_json::json!({ "code": code })),
-    )?;
+    server.request("POST", &path, Some(&serde_json::json!({ "code": code })))?;
     Ok(())
 }
 
@@ -2014,6 +2018,37 @@ pub(crate) fn translate_recovered_rows(rows: &[Value]) -> NativeTranscript {
     translate_native_rows(rows, None, true, None)
 }
 
+/// OpenCode keeps the goal kickoff template in native history. Show only the
+/// user-provided objective, never the provider's private control instructions.
+fn native_goal_objective(row: &Value) -> Option<String> {
+    if row.pointer("/metadata/source").and_then(Value::as_str) != Some("goal") {
+        return None;
+    }
+    let text = row.get("text").and_then(Value::as_str).unwrap_or_default();
+    let objective = text
+        .split_once("<untrusted_objective>")
+        .and_then(|(_, text)| text.split_once("</untrusted_objective>"))
+        .map(|(objective, _)| objective.trim())
+        .or_else(|| {
+            row.get("description")
+                .and_then(Value::as_str)
+                .and_then(|description| description.strip_prefix("Goal: "))
+        })
+        .unwrap_or_default();
+    Some(
+        objective
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&amp;", "&"),
+    )
+}
+
+pub(crate) fn is_native_goal_kickoff(row: &Value) -> bool {
+    row.get("type").and_then(Value::as_str) == Some("synthetic")
+        && row.pointer("/metadata/source").and_then(Value::as_str) == Some("goal")
+        && row.get("description").and_then(Value::as_str).is_some()
+}
+
 fn translate_native_rows(
     rows: &[Value],
     blobs: Option<&BlobStore>,
@@ -2066,7 +2101,10 @@ fn translate_native_rows(
                     streaming: false,
                 });
             }
-            Some("user") => {
+            Some("user") | Some("synthetic")
+                if row.get("type").and_then(Value::as_str) == Some("user")
+                    || is_native_goal_kickoff(row) =>
+            {
                 // Verified against 0.0.0-beta-18743: a user row carries its
                 // prompt as a top-level `text` string and has no `content`
                 // parts at all — unlike assistant rows. Attached files ride
@@ -2074,12 +2112,14 @@ fn translate_native_rows(
                 // daemon-owned storage before the history replaces live rows.
                 // Parts are still accepted so a shifted shape degrades to a
                 // fallback rather than a lost prompt.
-                let mut text = row
-                    .get("text")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_owned();
-                if text.trim().is_empty() {
+                let native_goal = native_goal_objective(row);
+                let mut text = native_goal.clone().unwrap_or_else(|| {
+                    row.get("text")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned()
+                });
+                if text.trim().is_empty() && native_goal.is_none() {
                     text = parts_text(row.get("content"));
                 }
                 let attachments = row
@@ -2112,10 +2152,11 @@ fn translate_native_rows(
                             .and_then(Value::as_str)
                             .map(str::to_owned),
                         provider_prompt: None,
-                        goal_objective: row
-                            .pointer("/metadata/fintwindGoal")
-                            .and_then(Value::as_bool)
-                            == Some(true),
+                        goal_objective: native_goal.is_some()
+                            || row
+                                .pointer("/metadata/fintwindGoal")
+                                .and_then(Value::as_bool)
+                                == Some(true),
                         started_at: created_at,
                         completed_at: Some(created_at),
                         checkpoint: None,
@@ -2125,6 +2166,9 @@ fn translate_native_rows(
                     turn_closed = false;
                 }
                 let turn = transcript.turns.last_mut().expect("user turn owner");
+                // A goal submitted while a turn is already running is a later
+                // input, not the turn's opening user message. Do not label that
+                // earlier message as the goal in the restored transcript.
                 turn.goal_objective |= row
                     .pointer("/metadata/fintwindGoal")
                     .and_then(Value::as_bool)

@@ -178,8 +178,6 @@ settings.mermaid_visualization: Mermaid 可视化提示词
 settings.mermaid_visualization_description: 仅新会话
 settings.keep_screen_awake: 保持屏幕常亮
 settings.keep_screen_awake_description: 开启后，应用运行期间屏幕与系统保持唤醒
-settings.goal: 目标模式
-settings.goal_description: 开启后可用 /goal 设置会话目标，支持暂停与恢复执行
 settings.auto_compact: 自动压缩
 settings.auto_compact_description: 上下文达到下方阈值时压缩一次，前台会话与子代理都适用
 settings.auto_compact_threshold: 压缩阈值
@@ -1558,33 +1556,15 @@ perf.total: 合计
 perf.sample_failed: 采样失败：%{error}
 
 goal.title: "目标"
+goal.usage: "/goal <目标> | pause | resume | clear"
 goal.set: "设定目标"
-goal.actions: "目标操作"
-goal.active: "进行中"
-goal.paused: "已暂停"
-goal.done: "已完成"
-goal.blocked: "受阻"
+goal.active: "目标进行中"
+goal.paused: "目标已暂停"
+goal.done: "目标已完成"
 goal.pause: "暂停"
 goal.resume: "恢复"
-goal.edit: "编辑目标"
-goal.complete: "标记完成"
-goal.clear: "清除目标"
+goal.clear: "清除"
 goal.reconnecting: "正在重连，请连接后重试。"
-goal.draft_present: "请先发送或清空当前草稿。"
-goal.no_attachments: "目标命令不支持附件。"
-goal.enable_first: "请先在设置中启用目标。"
-goal.wait_for_turn: "请先等待当前回复结束或停止执行。"
-goal.executions: "已执行 %{count} 次 · 最多 %{limit} 次"
-goal.card_title: "目标完成"
-goal.card_objective: "目标"
-goal.card_result: "结果"
-goal.card_run: "已执行 %{count} 次"
-goal.card_tools: "工具 %{count} 次"
-goal.card_duration: "用时 %{duration}"
-goal.duration_seconds: "%{count} 秒"
-goal.duration_minutes: "%{count} 分钟"
-goal.duration_hours: "%{h} 小时 %{m} 分"
-goal.last_result: "最近结果：%{reason}"
 usage.healthy: 正常
 usage.unclassified_context: 未分类
 usage.used_context: 已用上下文

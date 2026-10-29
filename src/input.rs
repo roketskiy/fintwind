@@ -2434,13 +2434,16 @@ impl Render for ComposerInput {
             // A composer owns its own metrics; a code editor inherits the
             // caller's, so a gutter beside it can rely on the same line height.
             .when(self.mode == FieldMode::Composer, |field| {
+                let line_height = ui_px(22.0);
+                // The empty field keeps one extra text row of room, so the
+                // card does not resize the moment the first prompt wraps.
                 field
-                    .min_h(px(24.0))
+                    .min_h(ui_px(24.0) + line_height)
                     .max_h(COMPOSER_MAX_HEIGHT)
                     .overflow_y_scroll()
                     .track_scroll(&scroll_handle)
                     .px(padding_x)
-                    .line_height(ui_px(22.0))
+                    .line_height(line_height)
                     .text_size(ui_px(13.5))
             })
             // A search-mode field is visually one line: the text never wraps,

@@ -170,6 +170,13 @@ update.install_failed: "启动更新失败：%{reason}"
 update.dismiss: 关闭更新提示
 settings.local_by_default: 默认存储在本地
 settings.local_by_default_description: 项目、对话和设置均存储在这台电脑上
+settings.image_generation: 图像生成
+settings.image_generation_description: 默认关闭。开启后，模型可用 image_generate 工具创建和编辑图像
+settings.image_generation_model: 默认模型
+settings.image_generation_model_description: 请求未指定模型时使用
+settings.image_generation_model_auto: 自动
+settings.image_generation_load_failed: "读取图像生成设置失败：%{error}"
+settings.image_generation_save_failed: "保存图像生成设置失败：%{error}"
 settings.browser_tools: 浏览器工具
 settings.browser_tools_description: 默认关闭。开启后向模型提供内置浏览器操作工具与使用说明，会占用少量上下文
 settings.scheduled_tools: 定时任务 MCP

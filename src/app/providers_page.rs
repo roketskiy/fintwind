@@ -311,7 +311,7 @@ impl Fintwind {
         self.load_providers_from_config(cx);
         // The built-in roster, the authorized set, and the modality badges'
         // metadata table all load for the visit.
-        self.ensure_builtin_providers(cx);
+        self.ensure_builtin_providers(true, cx);
     }
     /// Load the roster from OpenCode's own configuration off-thread, after
     /// migrating the old app-managed mirror file once. The result replaces

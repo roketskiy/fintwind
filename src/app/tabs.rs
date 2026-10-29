@@ -129,6 +129,9 @@ impl Fintwind {
             .flex_none()
             .mr(px(4.0))
             .rounded(px(7.0))
+            // A resting wash makes the button a visible target beside the
+            // tabs; hover and press climb the same neutral layers the tabs use.
+            .bg(theme.overlay)
             .flex()
             .items_center()
             .justify_center()
@@ -136,7 +139,7 @@ impl Fintwind {
             .track_focus(&self.new_tab_focus)
             .tab_index(0)
             .focus_visible(|style| style.border_1().border_color(theme.accent))
-            .hover(|element| element.bg(theme.overlay))
+            .hover(|element| element.bg(theme.overlay_strong))
             .active(|element| element.bg(theme.overlay_strong))
             .tooltip(Tooltip::text(tr!("tabs.new_session")))
             .child(icon("icons/plus.svg", 14.0, theme.text_tertiary))

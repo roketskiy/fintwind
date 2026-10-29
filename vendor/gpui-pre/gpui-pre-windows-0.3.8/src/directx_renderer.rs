@@ -422,7 +422,7 @@ impl DirectXRenderer {
                 _ => [0.0; 4],
             },
         )?;
-        self.draw_scene(&base_scene)?;
+        self.draw_scene(&base_scene, &base_view)?;
 
         let overlay_view = self
             .overlay_resources
@@ -431,7 +431,7 @@ impl DirectXRenderer {
             .render_target_view
             .clone();
         self.pre_draw(&overlay_view, &[0.0; 4])?;
-        self.draw_scene(&overlay_scene)?;
+        self.draw_scene(&overlay_scene, &overlay_view)?;
 
         unsafe {
             self.resources
@@ -499,12 +499,16 @@ impl DirectXRenderer {
                 _ => [0.0f32; 4],
             },
         )?;
-        self.draw_scene(scene)
+        self.draw_scene(scene, &render_target_view)
     }
 
     /// Uploads `scene`'s instance buffers and encodes every primitive batch
-    /// into the currently bound render target.
-    fn draw_scene(&mut self, scene: &Scene) -> Result<()> {
+    /// into the currently bound render target, restoring it after path rasterization.
+    fn draw_scene(
+        &mut self,
+        scene: &Scene,
+        render_target_view: &Option<ID3D11RenderTargetView>,
+    ) -> Result<()> {
         self.upload_scene_buffers(scene)?;
 
         let annotation = self
@@ -521,7 +525,7 @@ impl DirectXRenderer {
                 PrimitiveBatch::Quads(range) => self.draw_quads(range.start, range.len()),
                 PrimitiveBatch::Paths(range) => {
                     let paths = &scene.paths[range];
-                    self.draw_paths_to_intermediate(paths)?;
+                    self.draw_paths_to_intermediate(paths, render_target_view)?;
                     self.draw_paths_from_intermediate(paths)
                 }
                 PrimitiveBatch::Underlines(range) => self.draw_underlines(range.start, range.len()),
@@ -766,7 +770,11 @@ impl DirectXRenderer {
         )
     }
 
-    fn draw_paths_to_intermediate(&mut self, paths: &[Path<ScaledPixels>]) -> Result<()> {
+    fn draw_paths_to_intermediate(
+        &mut self,
+        paths: &[Path<ScaledPixels>],
+        render_target_view: &Option<ID3D11RenderTargetView>,
+    ) -> Result<()> {
         if paths.is_empty() {
             return Ok(());
         }
@@ -820,10 +828,10 @@ impl DirectXRenderer {
                 0,
                 RENDER_TARGET_FORMAT,
             );
-            // Restore main render target
+            // Restore this scene's target, which may be the overlay rather than the base.
             devices
                 .device_context
-                .OMSetRenderTargets(Some(slice::from_ref(&resources.render_target_view)), None);
+                .OMSetRenderTargets(Some(slice::from_ref(render_target_view)), None);
         }
 
         Ok(())

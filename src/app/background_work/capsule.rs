@@ -80,9 +80,11 @@ impl Fintwind {
             });
         let expanded = handle.is_open();
         let theme = Theme::current(cx);
+        // The changes tab widens into a diff stat while the worktree is dirty,
+        // so the trigger has to be able to grow past its icon-only width.
         let trigger = div()
             .id("task-capsule-trigger")
-            .w(px(108.0))
+            .min_w(px(108.0))
             .h(px(CAPSULE_TABS_HEIGHT + 2.0))
             .child(
                 div()
@@ -121,8 +123,19 @@ impl Fintwind {
             .selected_session
             .map(|id| self.background_work_counts(id))
             .unwrap_or_default();
+        // Read the same cached branch snapshot the card's changes row uses, so
+        // the collapsed capsule and the open card never disagree. While the
+        // card is open its own changes row already carries the totals, so only
+        // the collapsed trigger widens.
+        let changes = self
+            .cached_branch_snapshot()
+            .map(|snapshot| (snapshot.additions, snapshot.deletions))
+            .unwrap_or_default();
         for tab in CapsuleTab::ALL {
             let selected = expanded && self.task_capsule_tab == tab;
+            let diff = (!expanded && tab == CapsuleTab::Changes)
+                .then_some(changes)
+                .filter(|(additions, deletions)| *additions > 0 || *deletions > 0);
             let weak = cx.entity().downgrade();
             let click_weak = weak.clone();
             let click_handle = handle.clone();
@@ -148,12 +161,15 @@ impl Fintwind {
                 .track_focus(&focus)
                 .tab_index(0)
                 .relative()
-                .size(px(28.0))
+                .h(px(28.0))
+                .when(diff.is_none(), |button| button.w(px(28.0)))
+                .when_some(diff, |button, _| button.px(px(8.0)))
                 .rounded(px(7.0))
                 .flex_none()
                 .flex()
                 .items_center()
                 .justify_center()
+                .gap(px(6.0))
                 .cursor_default()
                 .when(selected, |button| button.bg(theme.overlay_strong))
                 .hover(|button| button.bg(theme.overlay))
@@ -168,6 +184,31 @@ impl Fintwind {
                         theme.text_secondary
                     },
                 ))
+                .when_some(diff, |button, (additions, deletions)| {
+                    button.child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(5.0))
+                            .text_size(ui_px(11.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .when(additions > 0, |counts| {
+                                counts.child(
+                                    div()
+                                        .text_color(theme.success_text)
+                                        .child(format!("+{additions}")),
+                                )
+                            })
+                            .when(deletions > 0, |counts| {
+                                counts.child(
+                                    div()
+                                        .text_color(theme.danger_text)
+                                        .child(format!("-{deletions}")),
+                                )
+                            }),
+                    )
+                })
                 .when(count > 0, |button| {
                     button.child(
                         div()
@@ -293,14 +334,19 @@ impl Fintwind {
             .into_any_element()
     }
 
+    /// The cached branch snapshot for the selected workspace. Rendering reads
+    /// this slot only; another workspace's snapshot never answers for it.
+    fn cached_branch_snapshot(&self) -> Option<&BranchSnapshot> {
+        let path = self.selected_workspace_path()?;
+        self.visible_branch_snapshot
+            .as_ref()
+            .filter(|(cached, _)| cached == path)
+            .map(|(_, snapshot)| snapshot)
+    }
+
     fn render_capsule_changes(&self, handle: &ContextMenuHandle, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
-        let snapshot = self.selected_workspace_path().and_then(|path| {
-            self.visible_branch_snapshot
-                .as_ref()
-                .filter(|(cached, _)| cached == path)
-                .map(|(_, snapshot)| snapshot)
-        });
+        let snapshot = self.cached_branch_snapshot();
         let (additions, deletions) = snapshot
             .map(|s| (s.additions, s.deletions))
             .unwrap_or_default();

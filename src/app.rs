@@ -1865,6 +1865,7 @@ pub struct Fintwind {
     /// editor opens and written to the model on confirm. Empty records none,
     /// leaving the image badge and image-model list to the models.dev table.
     providers_model_editor_output_modalities: Vec<String>,
+    providers_model_editor_package: Option<String>,
     /// Generation token for the debounced commit of keystroke-level field
     /// edits; a newer edit supersedes the pending one.
     providers_commit_generation: u64,
@@ -1951,6 +1952,8 @@ pub struct Fintwind {
     /// Catalog image models narrowed to providers this install can use.
     /// Rebuilt only when the catalog or the authorized set changes.
     image_models: Vec<fintwind_client::models_dev::ImageModelChoice>,
+    image_models_generation: u64,
+    image_models_loading: bool,
     /// The Providers page's connectivity probes, keyed by provider id. The
     /// page's one network-status memory; render reads only what a finished
     /// probe stored.
@@ -3921,6 +3924,7 @@ impl Fintwind {
                 providers_model_editor: None,
                 providers_model_editor_modalities: Vec::new(),
                 providers_model_editor_output_modalities: Vec::new(),
+                providers_model_editor_package: None,
                 providers_commit_generation: 0,
                 providers_save_in_flight: false,
                 providers_save_pending: false,
@@ -3950,6 +3954,8 @@ impl Fintwind {
                 image_generate_busy: false,
                 image_generate_generation: 0,
                 image_models: Vec::new(),
+                image_models_generation: 0,
+                image_models_loading: false,
                 provider_connectivity: HashMap::new(),
                 model_latency: HashMap::new(),
                 native_reconcile_generation: 0,

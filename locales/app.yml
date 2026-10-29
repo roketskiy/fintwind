@@ -398,6 +398,10 @@ settings.image_generation_model_description:
   en: Used when a request does not name a model
 settings.image_generation_model_auto:
   en: Automatic
+settings.image_generation_model_unavailable:
+  en: "%{model} (unavailable)"
+providers.protocol_inherit:
+  en: Inherit provider
 settings.image_generation_load_failed:
   en: "Could not read the image generation setting: %{error}"
 settings.image_generation_save_failed:

@@ -230,9 +230,6 @@ impl Fintwind {
             self.sync_network_proxy_input(cx);
             self.load_opencode_shell(cx);
             self.load_image_generate(cx);
-            // The image-model picker reads the catalog and the connected
-            // provider set; both loads are shared with the Providers page.
-            self.ensure_builtin_providers(false, cx);
         }
         if page == SettingsPage::McpServers {
             // Same contract as Providers: transient editors drop, the roster
@@ -557,7 +554,13 @@ impl Fintwind {
                     .iter()
                     .find(|choice| choice.id == model)
                     .map(|choice| choice.label.clone())
-                    .unwrap_or_else(|| model.to_owned())
+                    .unwrap_or_else(|| {
+                        if self.image_models_loading {
+                            model.to_owned()
+                        } else {
+                            tr!("settings.image_generation_model_unavailable", model = model)
+                        }
+                    })
             })
             .unwrap_or_else(|| tr!("settings.image_generation_model_auto"));
         let image_model_choices = self.image_models.clone();
@@ -570,7 +573,11 @@ impl Fintwind {
                 .selected(image_handle.is_open())
                 .w(px(220.0))
                 .justify_between()
-                .disabled(self.image_generate_busy || !image_generate_enabled),
+                .disabled(
+                    self.image_generate_busy
+                        || self.image_models_loading
+                        || !image_generate_enabled,
+                ),
             "image-generate-model-menu",
             &image_handle,
             MenuAlign::BelowRight,
@@ -588,14 +595,12 @@ impl Fintwind {
                         .iter()
                         .any(|choice| &choice.id == *model)
                 }) {
-                    let weak_current = image_weak.clone();
-                    let value = model.clone();
                     items.push(
-                        MenuItem::new(value.clone(), move |_, cx| {
-                            let _ = weak_current.update(cx, |this, cx| {
-                                this.set_image_generate_model(Some(value.clone()), cx)
-                            });
-                        })
+                        MenuItem::new(
+                            tr!("settings.image_generation_model_unavailable", model = model),
+                            |_, _| {},
+                        )
+                        .disabled(true)
                         .selected(true),
                     );
                 }
@@ -2086,6 +2091,9 @@ impl Fintwind {
     /// Read OpenCode's experimental image generation switch off-thread. The
     /// control renders from the stored copy and stays inert until it lands.
     fn load_image_generate(&mut self, cx: &mut Context<Self>) {
+        if self.image_generate_busy {
+            return;
+        }
         self.image_generate_generation += 1;
         let generation = self.image_generate_generation;
         cx.spawn(async move |this, cx| {
@@ -2098,7 +2106,10 @@ impl Fintwind {
                     return;
                 }
                 match result {
-                    Ok(config) => this.image_generate = Some(config),
+                    Ok(config) => {
+                        this.image_generate = Some(config);
+                        this.rebuild_image_models(cx);
+                    }
                     Err(error) => this.show_toast(tr!(
                         "settings.image_generation_load_failed",
                         error = error.to_string()
@@ -2110,61 +2121,65 @@ impl Fintwind {
         .detach();
     }
 
-    /// Recompute the image-model choices from the catalog, the connected
-    /// providers, and the enabled custom providers. Catalog entries stay
-    /// filtered by the authorized set; custom models join when their
-    /// effective output emits images — recorded output wins, else the
-    /// catalog's answer for the id with the provider's slug preferred.
-    /// Without a table only recorded custom outputs can join.
-    pub(super) fn rebuild_image_models(&mut self) {
-        use std::collections::BTreeMap;
-        let mut merged: BTreeMap<String, fintwind_client::models_dev::ImageModelChoice> =
-            BTreeMap::new();
-        if let Some(table) = self.models_dev_table.as_deref() {
-            let mut catalog = table.image_models();
-            if !self.providers_authorized.is_empty() {
-                catalog.retain(|choice| self.providers_authorized.contains(&choice.provider));
-            }
-            for choice in catalog {
-                merged.insert(choice.id.clone(), choice);
-            }
-        }
-        for provider in &self.providers_store {
-            if !provider.enabled {
-                continue;
-            }
-            for model in &provider.models {
-                if !fintwind_client::models_dev::custom_model_emits_image(
-                    model,
-                    &provider.slug,
-                    self.models_dev_table.as_deref(),
-                ) {
-                    continue;
+    /// Fetch availability from the workspace server, never from model metadata.
+    pub(super) fn rebuild_image_models(&mut self, cx: &mut Context<Self>) {
+        self.image_models_generation += 1;
+        let generation = self.image_models_generation;
+        self.image_models.clear();
+        let workspace = self.provider_workspace();
+        let requested_workspace = workspace.clone();
+        let store = fintwind_client::persistence::StateStore::remote(self.daemon.clone());
+        self.image_models_loading = true;
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let (binary, directory) =
+                        workspace.ok_or_else(|| std::io::Error::other("No OpenCode workspace"))?;
+                    if fintwind_client::opencode_config::migrate_image_models_at(
+                        &fintwind_client::opencode_config::config_path(),
+                    )? {
+                        store.reload_opencode_server(binary.clone(), directory.clone())?;
+                    }
+                    store.fetch_image_models(binary, directory)
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.image_models_generation != generation {
+                    return;
                 }
-                let id = format!("{}/{}", provider.slug, model.id);
-                let label = model.display_name().unwrap_or(&model.id).to_owned();
-                merged.entry(id.clone()).or_insert(
-                    fintwind_client::models_dev::ImageModelChoice {
-                        provider: provider.slug.clone(),
-                        id,
-                        label,
-                    },
-                );
-            }
-        }
-        let mut models: Vec<fintwind_client::models_dev::ImageModelChoice> =
-            merged.into_values().collect();
-        models.sort_by(|left, right| {
-            left.provider
-                .to_lowercase()
-                .cmp(&right.provider.to_lowercase())
-                .then_with(|| left.label.to_lowercase().cmp(&right.label.to_lowercase()))
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        self.image_models = models;
+                if this.provider_workspace() != requested_workspace {
+                    this.rebuild_image_models(cx);
+                    return;
+                }
+                this.image_models_loading = false;
+                match result {
+                    Ok(mut models) => {
+                        models.sort_by(|a, b| {
+                            a.provider
+                                .cmp(&b.provider)
+                                .then_with(|| a.label.cmp(&b.label))
+                                .then_with(|| a.id.cmp(&b.id))
+                        });
+                        this.image_models = models;
+                    }
+                    Err(error) => {
+                        this.show_toast(tr!(
+                            "settings.image_generation_load_failed",
+                            error = error.to_string()
+                        ));
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     fn set_image_generate_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.image_generate_busy {
+            return;
+        }
         let Some(mut config) = self.image_generate.clone() else {
             return;
         };
@@ -2176,6 +2191,15 @@ impl Fintwind {
     }
 
     fn set_image_generate_model(&mut self, model: Option<String>, cx: &mut Context<Self>) {
+        if self.image_generate_busy || self.image_models_loading {
+            return;
+        }
+        if model
+            .as_ref()
+            .is_some_and(|model| !self.image_models.iter().any(|choice| &choice.id == model))
+        {
+            return;
+        }
         let Some(mut config) = self.image_generate.clone() else {
             return;
         };
@@ -2193,6 +2217,7 @@ impl Fintwind {
         config: fintwind_client::opencode_image_generate::ImageGenerateConfig,
         cx: &mut Context<Self>,
     ) {
+        self.image_generate_generation += 1;
         let previous = self.image_generate.clone();
         self.image_generate = Some(config.clone());
         self.image_generate_busy = true;

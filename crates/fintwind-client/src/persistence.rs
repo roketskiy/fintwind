@@ -1415,6 +1415,30 @@ impl StateStore {
         }
     }
 
+    /// Live image inventory; never fall back to the metadata catalog.
+    pub fn fetch_image_models(
+        &self,
+        binary: PathBuf,
+        directory: PathBuf,
+    ) -> io::Result<Vec<crate::models_dev::ImageModelChoice>> {
+        match self
+            .daemon
+            .client()
+            .request_with_timeout(
+                Uuid::nil(),
+                Uuid::nil(),
+                Command::FetchImageModels { binary, directory },
+                Duration::from_secs(90),
+            )
+            .map_err(to_io_error)?
+        {
+            ResponsePayload::Json { value } => {
+                serde_json::from_value(value).map_err(io::Error::other)
+            }
+            _ => Err(io::Error::other("Invalid image model inventory")),
+        }
+    }
+
     /// Authorize a catalog provider on the workspace's OpenCode server.
     /// Blocking RPC; call off the UI thread.
     pub fn authorize_provider(

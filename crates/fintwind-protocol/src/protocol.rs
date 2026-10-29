@@ -20,7 +20,7 @@ use crate::workspace::{WorkspaceOperation, WorkspaceResult};
 /// Desktop protocol version. Bumped when the `ClientMessage` or
 /// `ServerMessage` grammar changes; the handshake refuses a mismatch in
 /// either direction, so an old client and a new daemon never half-speak.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// One attachment admitted with an OpenCode prompt. The path is on the daemon
 /// host; the driver turns it into a `file:` URI and does not copy the bytes
@@ -328,6 +328,11 @@ pub enum Command {
     /// each entry's key-method support and live connections. The connection
     /// list is the source of truth for authorization; no file is.
     FetchIntegrations {
+        binary: PathBuf,
+        directory: PathBuf,
+    },
+    /// Runtime image models, scoped to the requested workspace.
+    FetchImageModels {
         binary: PathBuf,
         directory: PathBuf,
     },

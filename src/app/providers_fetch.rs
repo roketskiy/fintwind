@@ -277,7 +277,6 @@ impl Fintwind {
                 if let Some(table) = loaded {
                     this.models_dev_table = Some(std::sync::Arc::new(table));
                 }
-                this.rebuild_image_models();
                 cx.notify();
             });
         })
@@ -770,7 +769,6 @@ impl Fintwind {
             .filter(|integration| !integration.oauth_methods.is_empty())
             .map(|integration| (integration.id.clone(), integration.oauth_methods.clone()))
             .collect();
-        self.rebuild_image_models();
     }
 
     /// The workspace the page's server RPCs anchor to: the probed OpenCode
@@ -1834,6 +1832,20 @@ impl Fintwind {
         theme: &Theme,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        if self
+            .providers_store
+            .iter()
+            .find(|provider| provider.id == provider_id)
+            .and_then(|provider| provider.model(model_id))
+            .is_some_and(|model| {
+                model
+                    .api_package
+                    .as_deref()
+                    .is_some_and(fintwind_client::model_protocol::is_image)
+            })
+        {
+            return div().into_any_element();
+        }
         let key = (provider_id.to_owned(), model_id.to_owned());
         let state = self.model_latency.get(&key);
         let testing = matches!(state, Some(ModelLatencyState::Testing));

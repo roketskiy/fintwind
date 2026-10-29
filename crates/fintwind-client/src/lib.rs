@@ -10,6 +10,7 @@ pub mod composer_complete;
 pub mod custom_providers;
 pub mod driver;
 pub mod git_history;
+pub mod model_protocol;
 pub mod models_dev;
 pub mod opencode_config;
 pub mod opencode_image_generate;

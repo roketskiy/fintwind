@@ -182,6 +182,8 @@ settings.image_generation_description: 既定でオフ。オンにすると、�
 settings.image_generation_model: デフォルトモデル
 settings.image_generation_model_description: リクエストでモデルを指定しない場合に使用します
 settings.image_generation_model_auto: 自動
+settings.image_generation_model_unavailable: "%{model}（利用不可）"
+providers.protocol_inherit: プロバイダーから継承
 settings.image_generation_load_failed: "画像生成の設定を読み込めませんでした：%{error}"
 settings.image_generation_save_failed: "画像生成の設定を保存できませんでした：%{error}"
 settings.browser_tools: ブラウザツール

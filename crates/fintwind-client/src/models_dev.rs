@@ -230,7 +230,7 @@ pub struct RecordBasics {
 }
 
 /// One catalog model that emits images, as the settings page lists it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageModelChoice {
     /// The catalog provider id — the first half of [`Self::id`].
     pub provider: String,
@@ -467,8 +467,8 @@ pub fn custom_model_emits_image(
     provider_slug: &str,
     table: Option<&ModelsDevTable>,
 ) -> bool {
-    if model.output_modalities.iter().any(|mode| mode == "image") {
-        return true;
+    if !model.output_modalities.is_empty() {
+        return model.output_modalities.iter().any(|mode| mode == "image");
     }
     let Some(table) = table else {
         return false;
@@ -670,6 +670,7 @@ pub fn merge_api_models(
             .unwrap_or_default();
         provider.models.push(CustomProviderModel {
             id: api_model.id.clone(),
+            api_package: None,
             name: basics.name.or_else(|| api_model.name.clone()),
             context_window: api_model
                 .context_window

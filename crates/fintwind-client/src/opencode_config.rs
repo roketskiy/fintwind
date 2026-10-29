@@ -88,6 +88,14 @@ pub fn save_providers_with_credentials_at(
     save_providers_at(path, &saved, catalog)?;
     for provider in &mut saved {
         provider.raw = provider_entry(provider, catalog);
+        provider.native = uses_native(provider, catalog);
+        if provider.native {
+            for model in &mut provider.models {
+                model.api_package = provider.raw["models"][&model.id]["package"]
+                    .as_str()
+                    .map(str::to_owned);
+            }
+        }
         provider.npm_touched = false;
     }
     Ok(saved)
@@ -103,8 +111,7 @@ pub fn migrate_provider_credentials_at(
     let Some(before) = read_optional_config(path)? else {
         return Ok(());
     };
-    let mut document: Value = serde_json::from_slice(&before)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let mut document = parse_provider_document(&before)?;
     let mut changed = false;
     if let Some(providers) = document.get_mut("provider").and_then(Value::as_object_mut) {
         for (id, provider) in providers {
@@ -122,13 +129,29 @@ pub fn migrate_provider_credentials_at(
             changed = true;
         }
     }
+    if let Some(providers) = document.get_mut("providers").and_then(Value::as_object_mut) {
+        for (id, provider) in providers {
+            let Some(settings) = provider.get_mut("settings").and_then(Value::as_object_mut) else {
+                continue;
+            };
+            let Some(key) = settings.get("apiKey").and_then(Value::as_str) else {
+                continue;
+            };
+            if key.trim().is_empty() || is_key_reference(key) {
+                continue;
+            }
+            store_key(id, key)?;
+            settings.remove("apiKey");
+            changed = true;
+        }
+    }
     if changed {
         if read_optional_config(path)?.as_deref() != Some(before.as_slice()) {
             return Err(io::Error::other(
                 "OpenCode configuration changed during credential migration",
             ));
         }
-        write_json_atomically(path, &document)?;
+        write_provider_document(path, &document)?;
     }
     Ok(())
 }
@@ -149,13 +172,20 @@ pub fn config_path() -> PathBuf {
         .map(PathBuf::from)
         .filter(|directory| !directory.as_os_str().is_empty())
     {
-        return directory.join("opencode.json");
+        let jsonc = directory.join("opencode.jsonc");
+        return if jsonc.is_file() {
+            jsonc
+        } else {
+            directory.join("opencode.json")
+        };
     }
-    dirs::home_dir()
+    let json = dirs::home_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join(".config")
         .join("opencode")
-        .join("opencode.json")
+        .join("opencode.json");
+    let jsonc = json.with_extension("jsonc");
+    if jsonc.is_file() { jsonc } else { json }
 }
 
 /// Load the user-configured providers from OpenCode's configuration. Every
@@ -167,8 +197,7 @@ pub fn load_providers() -> io::Result<Vec<CustomProvider>> {
 
 pub fn load_providers_at(path: &Path) -> io::Result<Vec<CustomProvider>> {
     let bytes = std::fs::read(path)?;
-    let document: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    let document = parse_provider_document(&bytes)?;
     let disabled: HashSet<String> = document
         .get("disabled_providers")
         .and_then(Value::as_array)
@@ -180,7 +209,7 @@ pub fn load_providers_at(path: &Path) -> io::Result<Vec<CustomProvider>> {
                 .collect()
         })
         .unwrap_or_default();
-    let providers = document
+    let mut providers: Vec<_> = document
         .get("provider")
         .and_then(Value::as_object)
         .map(|entries| {
@@ -190,6 +219,64 @@ pub fn load_providers_at(path: &Path) -> io::Result<Vec<CustomProvider>> {
                 .collect()
         })
         .unwrap_or_default();
+    if let Some(native) = document.get("providers").and_then(Value::as_object) {
+        providers.retain(|provider| !native.contains_key(&provider.slug));
+        for (key, entry) in native {
+            if !entry.is_object()
+                || entry
+                    .get("settings")
+                    .is_some_and(|value| !value.is_object())
+                || entry.get("models").is_some_and(|value| {
+                    !value.is_object()
+                        || value
+                            .as_object()
+                            .is_some_and(|models| models.values().any(|value| !value.is_object()))
+                })
+            {
+                return Err(io::Error::other("Invalid native provider definition"));
+            }
+            let mut provider = provider_from_config(key, entry, &disabled);
+            provider.native = true;
+            provider.api_format = entry
+                .get("package")
+                .and_then(Value::as_str)
+                .and_then(ProviderApiFormat::from_package)
+                .unwrap_or_default();
+            provider.base_url = entry
+                .pointer("/settings/baseURL")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            provider.api_key = entry
+                .pointer("/settings/apiKey")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            for model in &mut provider.models {
+                let spec = &entry["models"][&model.id];
+                model.api_package = spec
+                    .get("package")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let modalities = |kind: &str| {
+                    spec.get("capabilities")
+                        .and_then(|v| v.get(kind))
+                        .and_then(Value::as_array)
+                        .map(|values| {
+                            values
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                model.input_modalities = modalities("input");
+                model.output_modalities = modalities("output");
+            }
+            providers.push(provider);
+        }
+    }
     Ok(providers)
 }
 
@@ -226,6 +313,33 @@ fn provider_from_config(key: &str, entry: &Value, disabled: &HashSet<String>) ->
                     };
                     CustomProviderModel {
                         id: id.clone(),
+                        api_package: spec.pointer("/provider/npm").and_then(Value::as_str).map(
+                            |package| {
+                                let image = spec
+                                    .pointer("/modalities/output")
+                                    .and_then(Value::as_array)
+                                    .is_some_and(|values| {
+                                        values.iter().any(|value| value == "image")
+                                    });
+                                if image
+                                    && let Some(package) =
+                                        crate::model_protocol::image_package(package)
+                                {
+                                    return package.to_owned();
+                                }
+                                ProviderApiFormat::from_package(package)
+                                    .map(|format| format.native_package().to_owned())
+                                    .unwrap_or_else(|| {
+                                        if package.starts_with("@opencode/")
+                                            || package.starts_with("aisdk:")
+                                        {
+                                            package.to_owned()
+                                        } else {
+                                            format!("aisdk:{package}")
+                                        }
+                                    })
+                            },
+                        ),
                         context_window: spec
                             .pointer("/limit/context")
                             .and_then(Value::as_u64)
@@ -265,6 +379,7 @@ fn provider_from_config(key: &str, entry: &Value, disabled: &HashSet<String>) ->
         enabled: !disabled.contains(key),
         models,
         raw: entry.clone(),
+        native: false,
         npm_touched: false,
     }
 }
@@ -287,8 +402,10 @@ pub fn save_providers_at(
     catalog: Option<&ModelsDevTable>,
 ) -> io::Result<()> {
     let mut document: Map<String, Value> = match std::fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+        Ok(bytes) => parse_provider_document(&bytes)?
+            .as_object()
+            .cloned()
+            .ok_or_else(|| io::Error::other("OpenCode configuration must be an object"))?,
         // No file yet: start a minimal document with OpenCode's schema pin.
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let mut document = Map::new();
@@ -307,10 +424,36 @@ pub fn save_providers_at(
         .collect();
 
     let mut provider_map = Map::new();
+    let mut native_map = document
+        .get("providers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    // Remove only providers this editor loaded (or deleted), not unrelated native definitions.
     for provider in providers {
-        provider_map.insert(provider.slug.clone(), provider_entry(provider, catalog));
+        native_map.remove(&provider.slug);
+    }
+    if let Some(existing) = document.get("providers").and_then(Value::as_object) {
+        for (id, entry) in existing {
+            if entry.get("models").is_some() && !managed.contains(id.as_str()) {
+                native_map.remove(id);
+            }
+        }
+    }
+    for provider in providers {
+        let entry = provider_entry(provider, catalog);
+        if uses_native(provider, catalog) {
+            native_map.insert(provider.slug.clone(), entry);
+        } else {
+            provider_map.insert(provider.slug.clone(), entry);
+        }
     }
     document.insert("provider".into(), Value::Object(provider_map));
+    if !native_map.is_empty() {
+        document.insert("providers".into(), Value::Object(native_map));
+    } else {
+        document.remove("providers");
+    }
 
     // Reconcile `disabled_providers`: entries outside the roster survive
     // (catalog providers disabled via the CLI), roster entries follow their
@@ -341,14 +484,267 @@ pub fn save_providers_at(
         document.insert("disabled_providers".into(), Value::from(disabled));
     }
 
-    write_json_atomically(path, &Value::Object(document))
+    write_provider_document(path, &Value::Object(document))
 }
 
 /// The provider entry as it should sit in the configuration: the original
 /// record with only the UI-owned keys rewritten. The models.dev catalog,
 /// when one could be had, fills each model's thinking variants; without it
 /// the models keep whatever variants their raw records already carry.
+fn effective_provider_package(provider: &CustomProvider) -> &str {
+    if provider.npm_touched {
+        return provider.api_format.native_package();
+    }
+    provider
+        .raw
+        .get(if provider.native { "package" } else { "npm" })
+        .and_then(Value::as_str)
+        .unwrap_or("")
+}
+
+fn uses_native(provider: &CustomProvider, catalog: Option<&ModelsDevTable>) -> bool {
+    provider.native
+        || provider.models.iter().any(|model| {
+            model.api_package.is_some()
+                || (crate::models_dev::custom_model_emits_image(model, &provider.slug, catalog)
+                    && crate::model_protocol::image_package(effective_provider_package(provider))
+                        .is_some())
+        })
+}
+
 fn provider_entry(provider: &CustomProvider, catalog: Option<&ModelsDevTable>) -> Value {
+    if !uses_native(provider, catalog) {
+        return legacy_provider_entry(provider, catalog);
+    }
+    let mut entry = if provider.native {
+        provider.raw.clone()
+    } else {
+        crate::model_protocol::native_provider(&legacy_provider_entry(provider, catalog))
+    };
+    let object = entry.as_object_mut().unwrap();
+    set_or_remove_string(object, "name", &provider.name);
+    if provider.npm_touched {
+        object.insert(
+            "package".into(),
+            Value::String(provider.api_format.native_package().to_owned()),
+        );
+    }
+    let settings = object
+        .entry("settings")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .unwrap();
+    set_or_remove_string(settings, "baseURL", &provider.base_url);
+    set_or_remove_string(settings, "apiKey", &provider.api_key);
+    let old_models = object
+        .get("models")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut models = Map::new();
+    for model in &provider.models {
+        let mut spec = old_models
+            .get(&model.id)
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(name) = model.display_name() {
+            spec.insert("name".into(), Value::String(name.to_owned()));
+        }
+        if let Some(context) = model.context_window.filter(|value| *value > 0) {
+            let limit = spec
+                .entry("limit")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+                .unwrap();
+            limit.insert("context".into(), context.into());
+            limit
+                .entry("output")
+                .or_insert_with(|| model.output_limit.unwrap_or(DEFAULT_OUTPUT_LIMIT).into());
+        } else if let Some(limit) = spec.get_mut("limit").and_then(Value::as_object_mut) {
+            limit.remove("context");
+        }
+        let capabilities = spec
+            .entry("capabilities")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .unwrap();
+        for (key, values) in [
+            ("input", &model.input_modalities),
+            ("output", &model.output_modalities),
+        ] {
+            if !values.is_empty() {
+                capabilities.insert(key.into(), serde_json::json!(values));
+            }
+        }
+        let inferred_image =
+            crate::models_dev::custom_model_emits_image(model, &provider.slug, catalog);
+        let package = model.api_package.as_deref().or_else(|| {
+            inferred_image
+                .then(|| crate::model_protocol::image_package(effective_provider_package(provider)))
+                .flatten()
+        });
+        if let Some(package) = package {
+            spec.insert("package".into(), package.into());
+            // Preserve an unfamiliar package/type, which this editor does not own.
+            if crate::model_protocol::PACKAGES.contains(&package) {
+                let image = crate::model_protocol::is_image(package);
+                spec.insert("type".into(), if image { "image" } else { "chat" }.into());
+                if image {
+                    spec["capabilities"]
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("output".into(), serde_json::json!(["image"]));
+                }
+            }
+        } else if model.api_package.is_none() {
+            spec.remove("package");
+            // Keep unrelated native model types (e.g. decision) intact.
+            if old_models
+                .get(&model.id)
+                .and_then(|value| value.get("package"))
+                .and_then(Value::as_str)
+                .is_some_and(|package| crate::model_protocol::PACKAGES.contains(&package))
+                && spec.get("type").and_then(Value::as_str) == Some("image")
+            {
+                spec.remove("type");
+            }
+        }
+        models.insert(model.id.clone(), Value::Object(spec));
+    }
+    object.insert("models".into(), Value::Object(models));
+    entry
+}
+
+/// Repairs only explicitly image-emitting legacy models with a known protocol.
+/// Native definitions take precedence as whole providers, just as in OpenCode.
+pub fn migrate_image_models_at(path: &Path) -> io::Result<bool> {
+    let _guard = PROVIDER_SAVE_LOCK.lock();
+    let Some(before) = read_optional_config(path)? else {
+        return Ok(false);
+    };
+    let mut document = parse_provider_document(&before)?;
+    let providers = load_providers_at(path)?;
+    let mut changed = false;
+    for provider in providers.iter().filter(|provider| {
+        !provider.native
+            && provider.models.iter().any(|model| {
+                model.emits_image()
+                    && model
+                        .api_package
+                        .as_deref()
+                        .map(crate::model_protocol::is_image)
+                        .unwrap_or_else(|| {
+                            crate::model_protocol::image_package(effective_provider_package(
+                                provider,
+                            ))
+                            .is_some()
+                        })
+            })
+    }) {
+        let entry = provider_entry(provider, None);
+        document
+            .as_object_mut()
+            .unwrap()
+            .entry("providers")
+            .or_insert_with(|| serde_json::json!({}))
+            .as_object_mut()
+            .ok_or_else(|| io::Error::other("Invalid providers configuration"))?
+            .insert(provider.slug.clone(), entry);
+        document["provider"]
+            .as_object_mut()
+            .unwrap()
+            .remove(&provider.slug);
+        changed = true;
+    }
+    if changed {
+        if read_optional_config(path)?.as_deref() != Some(before.as_slice()) {
+            return Err(io::Error::other(
+                "OpenCode configuration changed during image migration",
+            ));
+        }
+        let backup = path.with_file_name(format!(
+            "{}.before-image-v2-{}.bak",
+            path.file_name().unwrap_or_default().to_string_lossy(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(backup, &before)?;
+        write_provider_document(path, &document)?;
+    }
+    Ok(changed)
+}
+
+fn parse_provider_document(bytes: &[u8]) -> io::Result<Value> {
+    let text = std::str::from_utf8(bytes).map_err(io::Error::other)?;
+    let root = jsonc_parser::cst::CstRootNode::parse(
+        text.trim_start_matches('\u{feff}'),
+        &Default::default(),
+    )
+    .map_err(io::Error::other)?;
+    root.to_serde_value()
+        .filter(Value::is_object)
+        .ok_or_else(|| io::Error::other("OpenCode configuration must be an object"))
+}
+
+fn write_provider_document(path: &Path, document: &Value) -> io::Result<()> {
+    use jsonc_parser::cst::{CstInputValue, CstRootNode};
+    fn input(value: &Value) -> CstInputValue {
+        match value {
+            Value::Null => CstInputValue::Null,
+            Value::Bool(v) => CstInputValue::Bool(*v),
+            Value::Number(v) => CstInputValue::Number(v.to_string()),
+            Value::String(v) => CstInputValue::String(v.clone()),
+            Value::Array(v) => CstInputValue::Array(v.iter().map(input).collect()),
+            Value::Object(v) => CstInputValue::Object(
+                v.iter()
+                    .map(|(key, value)| (key.clone(), input(value)))
+                    .collect(),
+            ),
+        }
+    }
+    let before = read_optional_config(path)?;
+    let text = before
+        .as_deref()
+        .map(std::str::from_utf8)
+        .transpose()
+        .map_err(io::Error::other)?
+        .unwrap_or("{}");
+    let root = CstRootNode::parse(text.trim_start_matches('\u{feff}'), &Default::default())
+        .map_err(io::Error::other)?;
+    let old = root.to_serde_value().unwrap_or_default();
+    let object = root
+        .object_value()
+        .ok_or_else(|| io::Error::other("Invalid OpenCode configuration"))?;
+    for key in ["provider", "providers", "disabled_providers", "$schema"] {
+        if old.get(key) == document.get(key) {
+            continue;
+        }
+        while let Some(property) = object.get(key) {
+            property.remove();
+        }
+        if let Some(value) = document.get(key) {
+            object.append(key, input(value));
+        }
+    }
+    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&temporary, root.to_string())?;
+    if read_optional_config(path)? != before {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(io::Error::other(
+            "OpenCode configuration changed while saving",
+        ));
+    }
+    let result = std::fs::rename(&temporary, path);
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn legacy_provider_entry(provider: &CustomProvider, catalog: Option<&ModelsDevTable>) -> Value {
     let mut entry = match provider.raw.as_object() {
         Some(raw) => raw.clone(),
         None => Map::new(),

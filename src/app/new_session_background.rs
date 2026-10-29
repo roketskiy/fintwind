@@ -17,7 +17,19 @@ use crate::theme::Theme;
 const FIELD_HEIGHT: f32 = 0.55;
 const CELL_SIZE: f32 = 13.0;
 const CHARACTERS: &[u8] = b" =+xX0S8#@";
-const FRAME_INTERVAL: Duration = Duration::from_millis(100);
+/// How long after the last bounds change the field still counts as resizing.
+const RESIZE_SETTLE: Duration = Duration::from_millis(180);
+/// Detail factor while the bounds are moving. Dragging changes the field size
+/// every frame; full-detail rasterization cannot keep up, so a drag trades
+/// sharpness for motion.
+const RESIZE_DETAIL: f32 = 0.55;
+/// Rasterization budget for one frame. Staying under a 60fps display frame
+/// leaves room for texture upload and painting.
+const RENDER_BUDGET: Duration = Duration::from_millis(12);
+/// Bounds of the adaptive detail factor. A slower machine lowers it until a
+/// frame fits the budget; a faster one returns to native detail.
+const MIN_DETAIL: f32 = 0.5;
+const MAX_DETAIL: f32 = 1.0;
 
 #[derive(Clone, Copy)]
 enum Appearance {
@@ -76,6 +88,19 @@ struct FieldSize {
 impl FieldSize {
     fn scale(self) -> f32 {
         f32::from(self.scale_milli) / 1000.0
+    }
+
+    /// A smaller rasterization of the same field: both the bitmap and the
+    /// glyph scale shrink, so stretching it back over the bounds keeps the
+    /// characters the same size and only loses sharpness.
+    fn reduced(self, factor: f32) -> Self {
+        Self {
+            width: (self.width as f32 * factor).round().max(4.0) as u32,
+            height: (self.height as f32 * factor).round().max(4.0) as u32,
+            scale_milli: (f32::from(self.scale_milli) * factor)
+                .round()
+                .clamp(1.0, f32::from(u16::MAX)) as u16,
+        }
     }
 }
 
@@ -407,16 +432,14 @@ impl FrameSpec {
 /// Retains the latest completed frame. Rasterization stays off the UI thread.
 pub(super) struct NewSessionBackground {
     spec: Option<FrameSpec>,
-    spec_generation: u64,
     image: Option<Arc<RenderImage>>,
-    previous_image: Option<Arc<RenderImage>>,
-    pending_image: Option<Arc<RenderImage>>,
-    image_completed: Option<Instant>,
-    blend_duration: Duration,
     started: Instant,
-    last_started: Option<Instant>,
+    resized_at: Option<Instant>,
     fading_since: Option<Instant>,
     rendering: bool,
+    /// Adaptive rasterization detail: 1.0 is native, lower values keep the
+    /// frame inside `RENDER_BUDGET` by stretching a smaller bitmap.
+    detail: f32,
 }
 
 impl NewSessionBackground {
@@ -425,22 +448,17 @@ impl NewSessionBackground {
             .detach();
         Self {
             spec: None,
-            spec_generation: 0,
             image: None,
-            previous_image: None,
-            pending_image: None,
-            image_completed: None,
-            blend_duration: FRAME_INTERVAL,
             started: Instant::now(),
-            last_started: None,
+            resized_at: None,
             fading_since: None,
             rendering: false,
+            detail: MAX_DETAIL,
         }
     }
 
     pub(super) fn fade_out(&mut self, started: Instant, cx: &mut Context<Self>) {
         self.fading_since = Some(started);
-        self.pending_image = None;
         cx.notify();
     }
 
@@ -453,69 +471,84 @@ impl NewSessionBackground {
     fn set_spec(&mut self, spec: FrameSpec, cx: &mut Context<Self>) {
         if self.spec == Some(spec) {
             if self.image.is_none() && !self.rendering {
-                self.request_frame(true, cx);
+                self.request_frame(cx);
             }
             return;
         }
+        let colors_changed = self
+            .spec
+            .is_none_or(|previous| previous.colors != spec.colors);
         self.spec = Some(spec);
-        self.spec_generation = self.spec_generation.wrapping_add(1);
-        self.pending_image = None;
-        for previous in [self.image.take(), self.previous_image.take()]
-            .into_iter()
-            .flatten()
-        {
-            cx.defer(move |cx| cx.drop_image(previous, None));
+        if colors_changed {
+            if let Some(previous) = self.image.take() {
+                cx.defer(move |cx| cx.drop_image(previous, None));
+            }
+        } else {
+            // A resize keeps the last finished frame on screen while the new
+            // size rasterizes. Dragging the divider changes the bounds every
+            // frame, so discarding the image here blanked the field for the
+            // whole drag. The old frame is stretched until the next finished
+            // frame replaces it.
+            self.resized_at = Some(Instant::now());
         }
-        self.image_completed = None;
-        self.request_frame(true, cx);
+        self.request_frame(cx);
     }
 
-    fn request_frame(&mut self, force: bool, cx: &mut Context<Self>) {
+    fn resizing(&self) -> bool {
+        self.resized_at
+            .is_some_and(|resized| resized.elapsed() < RESIZE_SETTLE)
+    }
+
+    fn request_frame(&mut self, cx: &mut Context<Self>) {
         let Some(spec) = self.spec else { return };
-        if self.rendering
-            || self.pending_image.is_some()
-            || (!force
-                && self
-                    .last_started
-                    .is_some_and(|started| started.elapsed() < FRAME_INTERVAL))
-        {
+        if self.rendering {
             return;
         }
+        let resizing = self.resizing();
         self.rendering = true;
-        self.last_started = Some(Instant::now());
-        let generation = self.spec_generation;
+        let detail = if resizing {
+            self.detail.min(RESIZE_DETAIL)
+        } else {
+            self.detail
+        };
+        let size = spec.size.reduced(detail);
         let seconds = if cx.reduce_motion() {
             0.0
         } else {
             self.started.elapsed().as_secs_f32()
         };
         let task = cx.background_executor().spawn(async move {
-            let mut bitmap = render_field(spec.size, seconds, spec.colors);
+            let started = Instant::now();
+            let mut bitmap = render_field(size, seconds, spec.colors);
             // The GPUI image atlas uses BGRA.
             for pixel in bitmap.pixels_mut() {
                 pixel.0.swap(0, 2);
             }
-            Arc::new(RenderImage::new(vec![Frame::new(bitmap)]))
+            (
+                Arc::new(RenderImage::new(vec![Frame::new(bitmap)])),
+                started.elapsed(),
+            )
         });
         cx.spawn(async move |view, cx| {
-            let image = task.await;
+            let (image, cost) = task.await;
             let _ = view.update(cx, |this, cx| {
                 this.rendering = false;
+                // Cost scales with the pixel area, so the square root of the
+                // budget ratio moves the detail factor toward the target in
+                // one step.
+                let ratio = (RENDER_BUDGET.as_secs_f32() / cost.as_secs_f32().max(0.001)).sqrt();
+                this.detail = (this.detail * ratio).clamp(MIN_DETAIL, MAX_DETAIL);
                 let preserve_fading_frame = this.image.is_some()
                     && this
                         .fading_since
                         .is_some_and(|started| started.elapsed() < NEW_SESSION_MOVE);
-                if this.spec_generation == generation && !preserve_fading_frame {
-                    let blending = !cx.reduce_motion()
-                        && this.previous_image.is_some()
-                        && this
-                            .image_completed
-                            .is_some_and(|completed| completed.elapsed() < this.blend_duration);
-                    if blending {
-                        this.pending_image = Some(image);
-                    } else {
-                        this.accept_image(image, Instant::now(), cx);
-                    }
+                // A frame of an older size is still correct animation; it is
+                // stretched to the current bounds, so a resize only needs the
+                // theme colors to match.
+                if !preserve_fading_frame
+                    && this.spec.is_some_and(|current| current.colors == spec.colors)
+                {
+                    this.accept_image(image, cx);
                 }
                 // A mounted view rechecks its bounds and requests the latest
                 // spec, even when reduced motion leaves animation idle.
@@ -525,16 +558,8 @@ impl NewSessionBackground {
         .detach();
     }
 
-    fn accept_image(&mut self, image: Arc<RenderImage>, now: Instant, cx: &mut Context<Self>) {
-        self.blend_duration = self
-            .image_completed
-            .map(|completed| now.duration_since(completed))
-            .unwrap_or(FRAME_INTERVAL)
-            .clamp(FRAME_INTERVAL, FRAME_INTERVAL * 2);
-        self.image_completed = Some(now);
-        if let Some(previous) = self.image.replace(image)
-            && let Some(retired) = self.previous_image.replace(previous)
-        {
+    fn accept_image(&mut self, image: Arc<RenderImage>, cx: &mut Context<Self>) {
+        if let Some(retired) = self.image.replace(image) {
             cx.defer(move |cx| cx.drop_image(retired, None));
         }
     }
@@ -550,39 +575,23 @@ impl Render for NewSessionBackground {
         if active {
             window.request_animation_frame();
         }
-        let mut blend = if cx.reduce_motion() {
-            1.0
-        } else {
-            self.image_completed.map_or(1.0, |completed| {
-                let now = self.fading_since.unwrap_or_else(Instant::now);
-                (now.saturating_duration_since(completed).as_secs_f32()
-                    / self.blend_duration.as_secs_f32())
-                .clamp(0.0, 1.0)
-            })
-        };
-        if blend >= 1.0
-            && !fading
-            && let Some(pending) = self.pending_image.take()
-        {
-            self.accept_image(pending, Instant::now(), cx);
-            blend = if cx.reduce_motion() { 1.0 } else { 0.0 };
-        }
-        if blend >= 1.0
-            && let Some(previous) = self.previous_image.take()
-        {
-            cx.defer(move |cx| cx.drop_image(previous, None));
-        }
-        if active && !fading && self.spec.is_some_and(|spec| spec.colors == colors) {
-            self.request_frame(false, cx);
+        if !fading && self.spec.is_some_and(|spec| spec.colors == colors) {
+            // Restoring full detail after a drag must not depend on the
+            // animation being active: with reduced motion enabled the field
+            // still rasterizes while the bounds move, and would otherwise
+            // stay on a stretched low-detail frame.
+            if self.resized_at.is_some() && !self.resizing() && !self.rendering {
+                self.resized_at = None;
+                self.request_frame(cx);
+            }
+            if active {
+                self.request_frame(cx);
+            }
         }
         let image = self
             .spec
             .filter(|spec| spec.colors == colors)
             .and(self.image.clone());
-        let previous_image = self
-            .spec
-            .filter(|spec| spec.colors == colors)
-            .and(self.previous_image.clone());
         let background = cx.entity().downgrade();
         div()
             .relative()
@@ -602,29 +611,15 @@ impl Render for NewSessionBackground {
                 .inset_0(),
             )
             .when_some(image, |element, image| {
-                let has_previous = previous_image.is_some();
-                element
-                    .when_some(previous_image, |element, previous| {
-                        element.child(
-                            div()
-                                .absolute()
-                                .bottom_0()
-                                .left_0()
-                                .w_full()
-                                .h(relative(FIELD_HEIGHT))
-                                .child(img(previous).size_full()),
-                        )
-                    })
-                    .child(
-                        div()
-                            .absolute()
-                            .bottom_0()
-                            .left_0()
-                            .w_full()
-                            .h(relative(FIELD_HEIGHT))
-                            .opacity(if has_previous { blend } else { 1.0 })
-                            .child(img(image).size_full()),
-                    )
+                element.child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .w_full()
+                        .h(relative(FIELD_HEIGHT))
+                        .child(img(image).size_full()),
+                )
             })
     }
 }

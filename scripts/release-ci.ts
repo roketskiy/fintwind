@@ -170,41 +170,11 @@ async function checks(): Promise<void> {
   throw new Error(`No successful same-commit Tests within the wait limit. ${help}`);
 }
 
-async function website(): Promise<void> {
-  const tag = required("RELEASE_TAG");
-  if (!tag.startsWith("v") || !stableVersion.test(tag.slice(1))) {
-    throw new Error("RELEASE_TAG must be a stable release tag (vx.y.z)");
-  }
-  const repo = repository();
-  const release = await api<Release>(`/repos/${repo}/releases/tags/${tag}`);
-  if (!release || release.draft || release.prerelease || release.tag_name !== tag) {
-    throw new Error("Website synchronization requires an existing full release");
-  }
-  const owner = repo.split("/")[0];
-  const token = required("WEBSITE_RELEASE_PAT");
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      await api(`/repos/${owner}/fintwind-website/dispatches`, {
-        token,
-        body: { event_type: "release-published", client_payload: { version: tag } },
-      });
-      console.log(`Website synchronization requested for ${tag}`);
-      return;
-    } catch (error) {
-      if (attempt === 2 || (error instanceof ApiError && error.status !== 429 && error.status < 500)) {
-        throw error;
-      }
-      await Bun.sleep(1000 * (attempt + 1));
-    }
-  }
-}
-
 try {
   switch (process.argv[2]) {
     case "prepare": await prepare(); break;
     case "checks": await checks(); break;
-    case "website": await website(); break;
-    default: throw new Error("Usage: bun scripts/release-ci.ts prepare|checks|website");
+    default: throw new Error("Usage: bun scripts/release-ci.ts prepare|checks");
   }
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);

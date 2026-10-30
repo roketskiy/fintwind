@@ -3,7 +3,7 @@
 ## Supported Versions
 
 Only the latest release of Fintwind receives security fixes. Download the
-newest release from https://fintwind.xyz or the GitHub releases page.
+newest release from the GitHub releases page.
 
 ## Reporting a Vulnerability
 

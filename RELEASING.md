@@ -143,21 +143,6 @@ verified version and scope. Run its isolated black-box check when changing this
 integration or the supported OpenCode version. Check the requirements of other
 features separately before claiming a wider compatibility range.
 
-### Website synchronization
-
-Publishing a full release triggers
-[Notify website on release](.github/workflows/notify-website.yml). It sends the
-tag to the separate `fintwind-website` repository using the `WEBSITE_RELEASE_PAT`
-secret. The website owns its version display and deployment. Do not edit website
-version data in this repository. Prereleases do not trigger synchronization.
-
-The notification validates that the tag identifies an existing full release,
-uses a 10-second request timeout, and retries transient dispatch failures up to
-three attempts. If notification fails, use **Run workflow** on **Notify website
-on release** and enter the existing release tag. This resends the notification;
-it does not rebuild or republish Fintwind. A successful notification means the
-website dispatch was accepted, not that its deployment completed.
-
 ### What CI produces
 
 - `fintwind-<version>-x86_64-pc-windows-msvc.zip`
@@ -182,7 +167,6 @@ Configure these repository secrets first:
 | --- | --- |
 | `WINDOWS_CERTIFICATE` | optional; base64-encoded Authenticode `.pfx` |
 | `WINDOWS_CERTIFICATE_PASSWORD` | optional; password for that `.pfx` |
-| `WEBSITE_RELEASE_PAT` | repository dispatch access to `fintwind-website`; required for website synchronization |
 
 ---
 

@@ -216,9 +216,9 @@ fn main() {
         check_portable_css(case, svg);
     }));
 
-    cases.push(success("complex_color_mix", PIE, LIGHT, |case, svg| {
-        // Theme series colors are color-mix(fg N%, bg) results for N = 57, 86, 71.
-        for expected in ["#7f8284", "#3e4246", "#606366"] {
+    cases.push(success("categorical_series", PIE, LIGHT, |case, svg| {
+        // The host supplies distinct colors instead of foreground shades.
+        for expected in ["#0d9488", "#d97706", "#475569"] {
             case.check(
                 svg.contains(expected),
                 format!("series color {expected} is missing"),

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result, bail};
 
-/// The five colors a diagram is drawn with, as sRGB channels.
+/// The five base colors used to derive a diagram's theme, as sRGB channels.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct Theme {
     /// The page and node surface color.
@@ -26,7 +26,7 @@ pub struct Theme {
     pub muted: [u8; 3],
     /// Shape outlines.
     pub border: [u8; 3],
-    /// Emphasis: accent series, critical marks, focus.
+    /// Emphasis: accent series and focus. Critical marks use a separate red.
     pub accent: [u8; 3],
 }
 
@@ -74,10 +74,26 @@ const DRAWING_ATTRIBUTES: [&str; 14] = [
     "marker-end",
 ];
 
-/// The monochrome shades behind series 2..=8, as foreground percentages over
-/// the background; series 1 is the theme accent. The order alternates light
-/// and dark so neighboring slices never blur together.
-const SERIES_SHADES: [u8; 7] = [57, 86, 50, 79, 64, 93, 71];
+/// Categorical colors for series 2..=8; series 1 follows the app accent.
+/// Dark surfaces use lighter colors so thin lines remain visible.
+const SERIES_LIGHT: [[u8; 3]; 7] = [
+    [13, 148, 136],
+    [217, 119, 6],
+    [124, 58, 237],
+    [219, 39, 119],
+    [8, 145, 178],
+    [101, 163, 13],
+    [71, 85, 105],
+];
+const SERIES_DARK: [[u8; 3]; 7] = [
+    [45, 212, 191],
+    [251, 191, 36],
+    [167, 139, 250],
+    [244, 114, 182],
+    [34, 211, 238],
+    [163, 230, 53],
+    [148, 163, 184],
+];
 
 /// Compile against a captured reference date, or a deterministic acceptance date.
 ///
@@ -765,13 +781,18 @@ fn named_color(name: &str) -> Option<Color> {
 }
 
 /// Builds the variable table that Ondine's aliases read.
+/// Host theming contract: https://ondine.sh/docs/guides/theming
 fn theme_vars(theme: Theme) -> HashMap<String, String> {
     let background = hex(theme.background);
     let foreground = hex(theme.foreground);
     let muted = hex(theme.muted);
-    let border = hex(theme.border);
+    let border = hex(mix(theme.accent, 45.0, theme.border));
     let accent = hex(theme.accent);
-    let surface_alt = hex(mix(theme.foreground, 20.0, theme.background));
+    let surface = hex(mix(theme.accent, 10.0, theme.background));
+    let surface_alt = hex(mix(theme.accent, 18.0, theme.background));
+    let [red, green, blue] = theme.background.map(f64::from);
+    let dark = 0.2126 * red + 0.7152 * green + 0.0722 * blue < 128.0;
+    let critical = if dark { "#f87171" } else { "#dc2626" };
 
     let mut vars = HashMap::new();
     for (name, value) in [
@@ -781,11 +802,11 @@ fn theme_vars(theme: Theme) -> HashMap<String, String> {
         // Connector lines read as structure, not secondary text, so they
         // share the outline color instead of the muted text color.
         ("--ondine-line", border.as_str()),
-        ("--ondine-surface", background.as_str()),
+        ("--ondine-surface", surface.as_str()),
         ("--ondine-surface-alt", surface_alt.as_str()),
         ("--ondine-border", border.as_str()),
         ("--ondine-accent", accent.as_str()),
-        ("--ondine-critical", accent.as_str()),
+        ("--ondine-critical", critical),
         ("--ondine-stroke", "2px"),
         ("--ondine-radius", "4"),
         ("--ondine-font", ROOT_FONT),
@@ -796,15 +817,12 @@ fn theme_vars(theme: Theme) -> HashMap<String, String> {
         vars.insert(name.to_owned(), value.to_owned());
     }
 
-    // Series 1 carries the accent so the primary slice of a pie or the first
-    // line of a chart stands out; the rest walk a monochrome ladder. Every
-    // series must stay present: Ondine writes each fill as
-    // `var(--ondine-series-N, color-mix(...))`, and a missing entry unfolds
-    // the mix fallback into an expression this resolver rejects.
+    // Supply all eight slots so charts use the same categorical palette as
+    // author styles, rather than falling back to Ondine's foreground shades.
     vars.insert("--ondine-series-1".to_owned(), accent.clone());
-    for (index, shade) in SERIES_SHADES.iter().enumerate() {
-        let value = hex(mix(theme.foreground, f64::from(*shade), theme.background));
-        vars.insert(format!("--ondine-series-{}", index + 2), value);
+    let series = if dark { SERIES_DARK } else { SERIES_LIGHT };
+    for (index, color) in series.into_iter().enumerate() {
+        vars.insert(format!("--ondine-series-{}", index + 2), hex(color));
     }
 
     for (alias, target) in [

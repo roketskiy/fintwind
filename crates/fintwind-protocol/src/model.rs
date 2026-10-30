@@ -743,9 +743,10 @@ pub struct RuntimeEventCursor {
 /// sessions. `v1` sessions keep their byte-identical instruction; `v2` adds
 /// the `fintwind_mermaid_check` validation loop; `v3` drops the fixed
 /// flowchart/sequence style preset so the model picks the diagram type the
-/// subject needs. New sessions pick this constant, so it always names the
+/// subject needs; `v4` adds Ondine theming guidance and semantic node colors.
+/// New sessions pick this constant, so it always names the
 /// latest version.
-pub const MERMAID_PROMPT_VERSION: &str = "v3";
+pub const MERMAID_PROMPT_VERSION: &str = "v4";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AgentSession {

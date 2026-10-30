@@ -7,7 +7,7 @@
 不是 Electron 套壳。在一个窗口内管理项目、打开多个会话标签页，并查看 agent 的回复、
 思考过程和工具活动。
 
-[官网](https://fintwind.xyz) · [下载](https://github.com/roketskiy/fintwind/releases/latest) · [更新日志](CHANGELOG.md)
+[下载](https://github.com/roketskiy/fintwind/releases/latest) · [更新日志](CHANGELOG.md)
 
 会话演示：切换模型、进行中的会话，以及滚动一条很长的对话记录。
 

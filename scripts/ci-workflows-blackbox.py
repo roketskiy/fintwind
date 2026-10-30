@@ -3,7 +3,8 @@
 Failure inventory: inconsistent manifest/lock/tag, absent or empty notes,
 published version reuse, conflicting lightweight/annotated tags and drafts,
 failed/cancelled/missing/wrong-SHA/PR-only checks, newer failed runs overriding
-old success, unavailable API, and invalid or transient website dispatches.
+old success, and unavailable API. Invalid or transient dispatches to the external
+website repository no longer exist.
 No credentials or application processes are inherited or started.
 """
 
@@ -25,7 +26,6 @@ REPO = "/repos/example/fintwind"
 RELEASE = f"{REPO}/releases/tags/v1.2.3"
 REF = f"{REPO}/git/ref/tags/v1.2.3"
 RUNS = f"{REPO}/actions/workflows/test.yml/runs"
-DISPATCH = "/repos/example/fintwind-website/dispatches"
 
 
 def main():
@@ -97,8 +97,8 @@ def main():
                 "GITHUB_REPOSITORY": "example/fintwind", "GITHUB_SHA": SHA,
                 "GITHUB_EVENT_NAME": "push", "GITHUB_REF_NAME": "v1.2.3",
                 "GITHUB_OUTPUT": str(root / "outputs.txt"),
-                "GITHUB_TOKEN": "fixture-read-token", "WEBSITE_RELEASE_PAT": "fixture-pat",
-                "RELEASE_TAG": "v1.2.3", "RELEASE_CHECK_TIMEOUT_SECONDS": "1",
+                "GITHUB_TOKEN": "fixture-read-token",
+                "RELEASE_CHECK_TIMEOUT_SECONDS": "1",
                 "NO_PROXY": "127.0.0.1,localhost",
             })
             env.update(env_extra or {})
@@ -132,9 +132,6 @@ def main():
             "version=1.2.3", "tag=v1.2.3"]
         assert (root / "release-notes.md").read_text().strip() == "Release notes."
         assert all(call["method"] == "GET" for call in calls)
-
-    def assert_no_post(_root, calls, _completed):
-        assert not any(call["method"] == "POST" for call in calls)
 
     try:
         run_case("fresh tagged release", verify=verify_prepare)
@@ -224,39 +221,6 @@ def main():
         run_case("running checks timeout", "checks", success=False, api={
             ("GET", RUNS): (200, {"workflow_runs": [run_record(
                 status="in_progress", conclusion=None)]})})
-
-        full_release = {"draft": False, "prerelease": False, "tag_name": "v1.2.3"}
-
-        def verify_dispatch(_root, calls, _completed):
-            posts = [call for call in calls if call["method"] == "POST"]
-            assert posts and all(call["path"] == DISPATCH for call in posts)
-            assert json.loads(posts[-1]["body"]) == {
-                "event_type": "release-published", "client_payload": {"version": "v1.2.3"}}
-            assert posts[-1]["auth"] == "Bearer fixture-pat"
-            assert calls[0]["auth"] == "Bearer fixture-read-token"
-
-        run_case("website dispatch validates full release", "website", api={
-            ("GET", RELEASE): (200, full_release), ("POST", DISPATCH): (204, {})},
-            verify=verify_dispatch)
-        for field in ("draft", "prerelease"):
-            run_case(f"website rejects {field}", "website", success=False, api={
-                ("GET", RELEASE): (200, {**full_release, field: True})},
-                verify=assert_no_post)
-        run_case("website rejects missing release", "website", success=False,
-                 verify=assert_no_post)
-        run_case("website rejects malformed tag", "website", success=False,
-                 env_extra={"RELEASE_TAG": "v1.2.3\ninjected"}, verify=assert_no_post)
-        dispatches = []
-
-        def transient_dispatch():
-            dispatches.append(True)
-            return (503, {}) if len(dispatches) == 1 else (204, {})
-
-        run_case("website retries transient dispatch", "website", api={
-            ("GET", RELEASE): (200, full_release), ("POST", DISPATCH): transient_dispatch},
-            verify=verify_dispatch)
-        run_case("website authorization failure", "website", success=False, api={
-            ("GET", RELEASE): (200, full_release), ("POST", DISPATCH): (401, {})})
     finally:
         server.shutdown()
         server.server_close()

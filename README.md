@@ -7,7 +7,7 @@ Built with Rust and [GPUI](https://github.com/zed-industries/zed/tree/main/crate
 not Electron. Manage projects, work in multiple session tabs, and follow the
 agent's replies, reasoning, and tool activity in one window.
 
-[Website](https://fintwind.xyz) · [Downloads](https://github.com/roketskiy/fintwind/releases/latest) · [Changelog](CHANGELOG.md)
+[Downloads](https://github.com/roketskiy/fintwind/releases/latest) · [Changelog](CHANGELOG.md)
 
 Session demo: switching models, a session in progress, and scrolling a long transcript.
 

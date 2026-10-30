@@ -15,10 +15,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
   version:
-    name: Resolve version
+    name: Release preflight
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -27,61 +28,59 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Resolve version from Cargo.toml
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Validate version, notes, and existing release
         id: resolve
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          if [ -z "$version" ]; then
-            echo "::error::No version found in Cargo.toml"
-            exit 1
-          fi
-          # Cargo.toml is the source of truth. A tag push must agree with it;
-          # a manual run has no tag and simply releases what Cargo.toml says.
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            tag="${GITHUB_REF_NAME#v}"
-            if [ "$tag" != "$version" ]; then
-              echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${version}"
-              exit 1
-            fi
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          echo "Releasing $version as v$version"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/release-ci.ts prepare
 
-  windows-x86_64:
-    name: Windows x86_64
+  checks:
+    name: Require same-commit Tests
     needs: version
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    timeout-minutes: 95
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - name: Wait for existing Tests, without triggering another run
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/release-ci.ts checks
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - arch: aarch64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Rust
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal
-          rustup default 1.97.0
-          rustup target add x86_64-pc-windows-msvc
+      - name: Set up Rust and caches
+        id: rust
+        uses: ./.github/actions/setup-rust
+        with:
+          kind: release-build
+          profile: release
 
       - uses: oven-sh/setup-bun@v2
 
       - name: Install Inno Setup
         run: choco install innosetup --yes --no-progress
-
-      - uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: windows-latest-rust-1.97.0-release-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            windows-latest-rust-1.97.0-release-
-
-      # `target/` is restored from the release cache, so the previous
-      # release's bundles are still sitting in `target/release` when this one
-      # starts. Cargo does not own them, so nothing else clears them.
-      - name: Clear stale bundles
-        run: Remove-Item -Force -ErrorAction SilentlyContinue target/release/fintwind-*.zip, target/release/fintwind-*-Setup.exe
 
       - name: Bundle
         env:
@@ -93,74 +92,30 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: windows-x86_64
+          name: windows-${{ matrix.arch }}
           path: |
-            target/release/fintwind-${{ needs.version.outputs.version }}-x86_64-pc-windows-msvc.zip
-            target/release/fintwind-${{ needs.version.outputs.version }}-x86_64-Setup.exe
+            target/release/fintwind-${{ needs.version.outputs.version }}-${{ matrix.target }}.zip
+            target/release/fintwind-${{ needs.version.outputs.version }}-${{ matrix.arch }}-Setup.exe
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
 
-  windows-arm64:
-    name: Windows arm64
-    needs: version
-    runs-on: windows-11-arm
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal
-          rustup default 1.97.0
-          rustup target add aarch64-pc-windows-msvc
-
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install Inno Setup
-        run: choco install innosetup --yes --no-progress
-
-      - uses: actions/cache@v6
+      # Tag-scoped caches cannot warm the next version. Only a successful
+      # manual run on main saves compiler artifacts for subsequent releases.
+      - name: Save compiler artifacts
+        if: success() && github.ref == 'refs/heads/main' && steps.rust.outputs.build-hit != 'true'
+        uses: actions/cache/save@v6
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: windows-11-arm-rust-1.97.0-release-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            windows-11-arm-rust-1.97.0-release-
-
-      # `target/` is restored from the release cache, so the previous
-      # release's bundles are still sitting in `target/release` when this one
-      # starts. Cargo does not own them, so nothing else clears them.
-      - name: Clear stale bundles
-        run: Remove-Item -Force -ErrorAction SilentlyContinue target/release/fintwind-*.zip, target/release/fintwind-*-Setup.exe
-
-      - name: Bundle
-        env:
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-          # CI publishes the stable channel only; beta is a local build.
-          FINTWIND_CHANNEL: stable
-        run: bun scripts/bundle-windows.ts --channel=stable
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: windows-arm64
-          path: |
-            target/release/fintwind-${{ needs.version.outputs.version }}-aarch64-pc-windows-msvc.zip
-            target/release/fintwind-${{ needs.version.outputs.version }}-aarch64-Setup.exe
-          if-no-files-found: error
+          key: ${{ steps.rust.outputs.build-key }}
+          path: ${{ steps.rust.outputs.build-path }}
 
   draft-release:
     name: Draft GitHub release
-    needs:
-      [
-        version,
-        windows-x86_64,
-        windows-arm64,
-      ]
+    needs: [version, checks, windows]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
+      actions: read
       contents: write
     steps:
       - uses: actions/checkout@v6
@@ -178,22 +133,12 @@ jobs:
         run: |
           echo "$VERSION" > artifacts/latest-windows.txt
 
-      - name: Write release notes
+      - name: Revalidate release immediately before updating the draft
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
-          bun -e '
-            import { extractReleaseNotes } from "./scripts/changelog.ts";
-            const version = process.env.VERSION;
-            const file = Bun.file("CHANGELOG.md");
-            const notes = (await file.exists())
-              ? extractReleaseNotes(await file.text(), version)
-              : null;
-            await Bun.write(
-              "release-notes.md",
-              `${notes ?? "See CHANGELOG.md for details."}\n`,
-            );
-          '
+          bun scripts/release-ci.ts checks
+          bun scripts/release-ci.ts prepare
 
       - uses: softprops/action-gh-release@v3
         with:

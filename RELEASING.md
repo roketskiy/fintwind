@@ -18,8 +18,9 @@ do not bump `Cargo.toml` until you are cutting the release — unreleased work
 stays under `## [unreleased]` in [`CHANGELOG.md`](CHANGELOG.md).
 
 Cutting a release is: push a `v*` tag (or run the **Release** workflow). CI
-builds both Windows architectures and opens a draft GitHub release. Review the
-draft, then publish it.
+builds both Windows architectures in parallel with checking the existing
+**Tests** result for that exact commit. Both must succeed before CI opens a
+draft GitHub release. Review the draft, then publish it.
 
 - Windows packaging: [`scripts/bundle-windows.ts`](scripts/bundle-windows.ts)
 - Release notes: [`scripts/changelog.ts`](scripts/changelog.ts)
@@ -87,6 +88,48 @@ packages unsigned binaries and SmartScreen will warn.
    Actions without a tag (it reads `Cargo.toml`).
 5. Review the draft GitHub release, then publish it.
 
+### Release safeguards and recovery
+
+Before building, CI checks that `Cargo.toml`, `Cargo.lock`, the pushed tag,
+and a non-empty CHANGELOG section agree. It refuses to replace a published
+release or reuse a tag pointing to another commit. An existing draft can be
+retried only when its tag, or its exact `target_commitish` if untagged, identifies
+the commit being built. CI repeats these checks and the same-commit Tests gate
+immediately before updating the draft.
+
+The release gate accepts the latest **Tests** run for the exact commit from a
+push to `main` or a manual run. A PR run checks a synthetic merge and does not
+authorize a release. Existing running checks are awaited for up to 90 minutes;
+failed, cancelled, or skipped checks block the draft. CI allows 30 seconds for
+a newly pushed commit's Tests run to appear, then stops if none exists. It
+never triggers a second Tests run or requires Actions write permission.
+
+If checks are missing or cancelled, run **Tests** manually on a branch or tag
+that still points to the release commit, then rerun **Release**. Never move an
+existing release tag to repair a failed check. A retry of a completed published
+release requires a new version instead.
+
+### CI caches and diagnostics
+
+`.github/rust-version` is the CI toolchain source. The shared setup action
+separates Cargo dependency downloads from compiler artifacts. Test,
+release-check, and release-build caches have disjoint namespaces; build keys
+include the source commit. Only successful jobs on `main` save compiler
+artifacts, so PRs and version tags do not create large, low-reuse build caches.
+Manual Release runs on `main` can seed the release-build cache; tag builds can
+restore it but do not save a tag-specific copy. Old cache entries remain subject
+to GitHub's normal eviction policy.
+
+CI disables incremental compilation, and disables debug symbols for debug
+tests only. Local development and shipped release settings are unchanged.
+Compiler caches exclude incremental state, top-level binaries, installers,
+and archives. The first run with the new cache scheme is cold; assess the speed
+and cache size from subsequent successful runs rather than assuming a speedup.
+
+Failed Rust tests upload available recovery E2E `result.json` files for seven
+days. The Workflow tools job checks release automation against an isolated
+loopback API and always uploads its JSON verification report.
+
 ### OpenCode compatibility
 
 Fintwind uses OpenCode 2 (`@opencode/cli`), not OpenCode 1.x. The optional
@@ -107,6 +150,13 @@ Publishing a full release triggers
 tag to the separate `fintwind-website` repository using the `WEBSITE_RELEASE_PAT`
 secret. The website owns its version display and deployment. Do not edit website
 version data in this repository. Prereleases do not trigger synchronization.
+
+The notification validates that the tag identifies an existing full release,
+uses a 10-second request timeout, and retries transient dispatch failures up to
+three attempts. If notification fails, use **Run workflow** on **Notify website
+on release** and enter the existing release tag. This resends the notification;
+it does not rebuild or republish Fintwind. A successful notification means the
+website dispatch was accepted, not that its deployment completed.
 
 ### What CI produces
 
@@ -132,6 +182,7 @@ Configure these repository secrets first:
 | --- | --- |
 | `WINDOWS_CERTIFICATE` | optional; base64-encoded Authenticode `.pfx` |
 | `WINDOWS_CERTIFICATE_PASSWORD` | optional; password for that `.pfx` |
+| `WEBSITE_RELEASE_PAT` | repository dispatch access to `fintwind-website`; required for website synchronization |
 
 ---
 

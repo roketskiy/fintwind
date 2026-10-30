@@ -764,11 +764,21 @@ impl FintwindBackend {
             }
         }
         if settled_unsent {
-            session.status = if fintwind_protocol::submission::has_unsettled_submissions(session) {
+            session.status = if fintwind_protocol::submission::is_session_working(session) {
                 SessionStatus::Working
             } else {
                 SessionStatus::Idle
             };
+        } else if session.status == SessionStatus::Working
+            && !fintwind_protocol::submission::is_session_working(session)
+        {
+            // Repair stale Working projections left by older builds that
+            // treated a lone Unknown as execution (Interrupted + Unknown
+            // with no Running turn). Receipts are untouched; only the
+            // derived status is corrected so the UI stops showing a false
+            // running animation while the submission stays blocking until
+            // reconciled.
+            session.status = SessionStatus::Idle;
         }
         Ok(())
     }
@@ -781,9 +791,7 @@ impl FintwindBackend {
         directory: &Path,
         native_id: &str,
     ) -> anyhow::Result<fintwind_protocol::provider_session::NativeTranscript> {
-        use fintwind_protocol::submission::{
-            has_unsettled_submissions, merge_native_transcript, replace_native_window,
-        };
+        use fintwind_protocol::submission::{merge_native_transcript, replace_native_window};
         let (local, generation, expected_projection) = {
             let mut state = self.task_state.lock();
             let local = state.sessions.iter_mut().find(|session| {
@@ -956,11 +964,12 @@ impl FintwindBackend {
         existing.messages = transcript.messages.clone();
         existing.transcript_blocks = transcript.blocks.clone();
         existing.turns = transcript.turns.clone();
-        existing.status = if has_unsettled_submissions(existing) {
-            SessionStatus::Working
-        } else {
-            SessionStatus::Idle
-        };
+        existing.status =
+            if fintwind_protocol::submission::is_session_working(existing) {
+                SessionStatus::Working
+            } else {
+                SessionStatus::Idle
+            };
         state.mark_session_dirty(local.id);
         self.task_store.save(&mut state)?;
         Ok(transcript)
@@ -1294,6 +1303,11 @@ impl Backend for FintwindBackend {
                     bail!("submission belongs to another session");
                 }
                 self.active_preparations.lock().remove(&submission_id);
+                // Internal preparation cleanup is also used after an uncertain
+                // DispatchSubmission RPC response. Only Preparing proves that
+                // no POST was claimed. Once dispatch began, preserve admission
+                // facts for automatic reconciliation, never turn them into a
+                // user-overridable NotSent receipt.
                 if let Some(saved) = self.task_store.transition_submission(
                     submission_id,
                     SubmissionState::Preparing,
@@ -1318,6 +1332,8 @@ impl Backend for FintwindBackend {
                             {
                                 turn.status = crate::model::TurnStatus::Failed;
                                 turn.completed_at = Some(crate::model::unix_time());
+                            }
+                            if !fintwind_protocol::submission::is_session_working(session) {
                                 session.status = SessionStatus::Idle;
                             }
                         }
@@ -1358,12 +1374,26 @@ impl Backend for FintwindBackend {
                     });
                 }
                 let driver = {
-                    let sessions = self.sessions.lock();
+                    let mut sessions = self.sessions.lock();
                     let (active_runtime_id, driver) = sessions
                         .get(&session_id)
                         .ok_or_else(|| anyhow!("submission runtime is unavailable"))?;
                     if *active_runtime_id != runtime_id {
                         bail!("submission runtime was replaced");
+                    }
+                    // A writable channel is not liveness proof. Refuse a
+                    // dead generation before claiming the submission, and
+                    // drop only the matching handle so a late exit event
+                    // can never remove its replacement.
+                    if !driver.is_transport_live() {
+                        let stale = sessions
+                            .get(&session_id)
+                            .is_some_and(|(active, _)| *active == runtime_id)
+                            .then(|| sessions.remove(&session_id))
+                            .flatten();
+                        drop(stale);
+                        drop(sessions);
+                        bail!("submission runtime exited; reattach before retrying");
                     }
                     driver.clone()
                 };
@@ -1438,6 +1468,34 @@ impl Backend for FintwindBackend {
                 })
             }
             Command::AttachSession => {
+                // Handle existence alone is not attachable: the private
+                // server may have exited while the handle was retained.
+                // Report no runtime and drop the stale generation so the
+                // next explicit submit can acquire a fresh server for the
+                // same native session instead of queuing into the dead one.
+                let stale = {
+                    let sessions = self.sessions.lock();
+                    match sessions.get(&session_id) {
+                        Some((_, driver)) if driver.is_transport_live() => None,
+                        Some((stale_runtime, _)) => Some(*stale_runtime),
+                        None => None,
+                    }
+                };
+                if let Some(stale_runtime) = stale {
+                    let removed = {
+                        let mut sessions = self.sessions.lock();
+                        sessions
+                            .get(&session_id)
+                            .is_some_and(|(active, _)| *active == stale_runtime)
+                            .then(|| sessions.remove(&session_id))
+                            .flatten()
+                    };
+                    drop(removed);
+                    return Ok(ResponsePayload::SessionRuntime {
+                        runtime_id: None,
+                        supports_steer: false,
+                    });
+                }
                 let sessions = self.sessions.lock();
                 let Some((runtime_id, driver)) = sessions.get(&session_id) else {
                     return Ok(ResponsePayload::SessionRuntime {
@@ -1680,10 +1738,21 @@ impl Backend for FintwindBackend {
                             // The creation-time Mermaid instruction is frozen;
                             // a client projection can never change it.
                             existing.mermaid_prompt_version = saved_mermaid_prompt_version;
-                            if fintwind_protocol::submission::has_unsettled_submissions(existing)
+                            // Only live work promotes to Working. A lone
+                            // Unknown must not resurrect a repaired Idle
+                            // projection via a stale client snapshot.
+                            if fintwind_protocol::submission::is_session_working(existing)
                                 && !existing.status.is_busy()
                             {
                                 existing.status = SessionStatus::Working;
+                            }
+                            // Conversely, never let a stale snapshot demote
+                            // a live Working session or overwrite a repaired
+                            // Idle-with-pending-confirmation projection.
+                            if !fintwind_protocol::submission::is_session_working(existing)
+                                && existing.status == SessionStatus::Working
+                            {
+                                existing.status = SessionStatus::Idle;
                             }
                         }
                     } else {

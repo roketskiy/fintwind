@@ -77,3 +77,87 @@ GUI 可以立即展示输入，但后台保存确认之前不向 OpenCode 发送
 仍不做 provider 进程重启后的自动续跑、全库接管、完整执行所有权协调或
 旧历史状态机重构。对账找不到输入或查询不可用时继续保持未知；不能仅凭
 当前进程没有 active 条目断言其他客户端也没有执行。
+
+## 2026-10-30 会话恢复方案 B/C/D 落地记录
+
+对应 `docs/session-recovery-plan.md` 的批次 B（阻止再次损坏）、C（统一恢复
+和旧数据）、D（停止和交互）。线协议无变更（`PROTOCOL_VERSION` 保持 20），
+GUI 与 daemon 仍成对升级。
+
+- 类型化传输结果：`crates/fintwind-core/src/opencode_session.rs` 新增
+  `SubmitTransportOutcome`、`http_status_from_error`、
+  `is_connection_establishment_failure`、`classify_submit_error`。连接建立
+  失败判 NotSent 并同步结束本地轮次；409 与不明确错误判 Unknown 进入对账，
+  不再把任意 `HTTP 4` 视为拒绝。Prompt / Steer / Goal 共用该分类。
+- 失效实例回收：`crates/fintwind-core/src/driver/opencode.rs` 在 POST 前检查
+  `is_alive`，死实例直接结算 NotSent；`crates/fintwind-core/src/driver/mod.rs`
+  新增 `is_transport_live`。daemon 的 `AttachSession` 与 `DispatchSubmission`
+  均校验实例存活并按 generation 移除旧句柄（`crates/fintwind-core/src/daemon.rs`）。
+- 派生投影拆分：`crates/fintwind-protocol/src/submission.rs` 新增
+  `has_pending_confirmation` 与 `is_session_working`。孤立 Unknown 不再显示
+  为 Working，但仍阻止后续 POST；陈旧 Working 投影在 hydrate、冷历史与
+  SaveTaskState 合并时纠正，旧快照不能回滚修复结果。
+- 停止：无活动轮次但残留忙碌投影时 `cancel_turn` 纠正为 Idle
+ （`src/app/sessions.rs`）；队列仍由未结算提交阻塞，不自动出队。
+
+验证产物（隔离环境，固定 fixture 模型，无真实供应商）：
+
+- 批次 A 真实隔离 OpenCode v2.2.1 契约探针 11/11：
+  `temp/session-recovery-contract/e9f500ead47341aab85fc78ca2660552/result.json`
+  （精确 ID 可查、重复 ID 去重无 409、中断终态为 `outcome=interrupted` +
+  `time.idle`、缺失会话 404、SSE 含 inbox 投递事件）。
+- 快速故障矩阵 6 场景 + R1 steer + 2 投影守卫通过：
+  `temp/recovery-e2e/644b344855c54ce2bab7f31c1890da31/result.json`。
+- Long 套件（idle 对账、附件、主动续跑、模板展开）通过：
+  `temp/recovery-e2e/*/result-long.json`、`result-p1.json`、
+  `result-r2.json`、`result-p2.json`。
+- 历史规模矩阵（分页缩减、20 MiB 单消息、90 张截图）通过：
+  `temp/protocol-e2e/c06626b61d074651a8f2d3a1d653f07e`。
+- 真实隔离 OpenCode 连续三轮 + 陈旧终态否决通过：
+  `temp/protocol-e2e/885f6198bf354510a53a17cb22273fb8`。
+
+仍未验证：生产旧库 `Interrupted + Unknown + Working` 的真实重放（须隔离
+脱敏副本）、重启恢复端到端、多会话部分失败与查询故障规模组、真实
+provider、桌面视觉与键盘、性能帧路径。证据不足的旧记录保持待确认，
+不宣称全部自动修复。
+
+### 2026-10-30 验收补充（重启重放、部分失败与查询故障组）
+
+- 重启种子与修复（同一 app.db，先后两个独立 daemon 进程，第二个使用从未
+  见过该输入的全新 fake 服务）：`temp/recovery-restart-<uuid>/result-seed.json`
+  与 `result-repair.json`。drop-ack 输入落为 Unknown 且仅 POST 一次；待确认
+  期间第二次提交被 daemon 门控拒绝且无新增 POST；GUI 式停止保存保留
+  Interrupted 收据、队列与输入身份；重放的 Working 旧记录在 hydrate 时纠正
+  为 Idle，收据保持 Unknown（不翻为 NotSent），重启与重连后零 POST、无自动
+  出队、重试仍被阻止；事后重放的陈旧 Working 快照不能回滚修复。
+- 部分恢复与有界查询故障（单共享 serve）：`temp/recovery-e2e/*/result-partial.json`。
+  会话 A/C 在会话 B 保持 Unknown 的同时正常结算（同进程单 serve 一次启动）；
+  历史 503 的冷核对在预算内失败且收据保持 Unknown、无终态误报；7 个未解决
+  提交下目录读取保持响应。
+- 仍未验证：生产旧库真实重放（须隔离脱敏副本）、重启恢复端到端（GUI+daemon
+  联合）、真实 provider、桌面视觉与键盘、性能帧路径。
+
+### 2026-10-31 移除人工放行，保护自动恢复
+
+- 用户明确不需要“主动放弃待确认”。移除按钮、翻译和客户端强制改写收据及
+  自动出队的处理，不以用户承担重复执行风险作为恢复前提。
+- `AbandonSubmission` 只保留内部准备清理语义：原子地将 `Preparing` 转为
+  `NotSent`。它也是提交 RPC 回执不明时的自动清理入口，因此必须原样返回
+  `Dispatching`、`Unknown` 和 `Accepted`，不得将它们伪装成未发送。
+- 丢失确认后继续由现有自动历史核对确认精确输入及执行终态；核对完成后
+  正常接收下一条显式输入，不需要点击任何修复按钮，不重复 provider POST。
+- 黑盒入口：先构建 `opencode_recovery`，再运行
+  `python scripts/opencode-protocol-e2e.py --submission-cleanup`。使用独占目录、
+  环境白名单和 Windows Job，输出 `result-submission-cleanup.json`。
+- 修复前同一黑盒失败：
+  `temp/recovery-e2e/a430445a709a4aaa89dc82439561d5a6/result-submission-cleanup.json`，
+  在响应屏障内调用自动清理后，Dispatching 被错误改成 NotSent，历史恢复无法确认收据。
+- 修复后同一黑盒通过：
+  `temp/recovery-e2e/b8d11d142c884d4999f20ae114169bfb/result-submission-cleanup.json`，
+  Preparing 清理幂等；Dispatching/Unknown 保留；provider POST 一次；自动完成
+  原输入的接收与终态核对；后续显式输入无需人工放行即可被接收。
+- 六场景快速恢复矩阵通过：
+  `temp/recovery-e2e/da8eba59e1304972bdb3881135824b4a/result.json`。应用和 daemon
+  的 `cargo check --locked --offline` 通过；保留现有 `drag_anchor` 未使用警告。
+- 本轮不宣称完整方案全部落地。旧记录在原生历史与 inbox 均缺失且没有充分
+  接收证据时，仍需完善跨重启自动恢复；不能用人工放行或直接重发掩盖缺口。

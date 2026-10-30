@@ -459,6 +459,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"data": {"id": "msg_unknown", "time": {"created": 0}}})
         log({"event": "steer" if is_steer else "prompt", "turn": index,
              "sid": sid, "input_id": accepted, "body": parsed})
+        release_file = turn.get("ack_release_file")
+        if release_file:
+            deadline = time.monotonic() + 15
+            while not os.path.isfile(release_file):
+                if time.monotonic() >= deadline:
+                    log({"event": "ack_gate_expired", "turn": index})
+                    self.close_connection = True
+                    return
+                time.sleep(0.01)
         if turn.get("drop_ack"):
             # The input is durably stored, but the acknowledgement never comes
             # back: the connection is torn down instead of answering. The driver

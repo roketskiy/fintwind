@@ -215,6 +215,9 @@ pub fn merge_native_transcript(
 
 /// A newer external turn cannot release an unresolved locally owned input.
 /// Used at admission/reconciliation boundaries, not in per-row rendering.
+/// This is the *blocking* gate: while true, no further POST may be issued
+/// for this session. `Unknown` stays blocking until reconciled; it is not
+/// proof of execution, only of an unconfirmed admission.
 pub fn has_unsettled_submissions(session: &crate::model::AgentSession) -> bool {
     session.turns.iter().any(|turn| {
         turn.submission.as_ref().is_some_and(|receipt| {
@@ -222,6 +225,32 @@ pub fn has_unsettled_submissions(session: &crate::model::AgentSession) -> bool {
                 || receipt.state == SubmissionState::Preparing
                 || receipt.state.is_unconfirmed()
         })
+    })
+}
+
+/// True when at least one receipt awaits confirmation (`Unknown`,
+/// including the `Dispatching` claim). Pending confirmation is *not*
+/// execution: it must never be rendered as a running animation.
+pub fn has_pending_confirmation(session: &crate::model::AgentSession) -> bool {
+    session.turns.iter().any(|turn| {
+        turn.submission
+            .as_ref()
+            .is_some_and(|receipt| receipt.state.is_unconfirmed())
+    })
+}
+
+/// Derived busy projection for `SessionStatus`. Only a live turn or a
+/// `Preparing`/`Dispatching` claim implies work; a lone `Unknown` with no
+/// `Running` turn is idle-with-pending-confirmation, never `Working`.
+pub fn is_session_working(session: &crate::model::AgentSession) -> bool {
+    session.turns.iter().any(|turn| {
+        turn.status == crate::model::TurnStatus::Running
+            || turn.submission.as_ref().is_some_and(|receipt| {
+                matches!(
+                    receipt.state,
+                    SubmissionState::Preparing | SubmissionState::Dispatching
+                )
+            })
     })
 }
 

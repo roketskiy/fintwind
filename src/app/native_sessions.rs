@@ -808,9 +808,15 @@ impl Fintwind {
                             session.messages = transcript.messages;
                             session.transcript_blocks = transcript.blocks;
                             session.turns = transcript.turns;
+                            // Blocking gate stays on has_unsettled (Unknown
+                            // still forbids new POSTs), but the busy display
+                            // follows is_session_working so a lone Unknown
+                            // never renders as continuous execution.
                             let unsettled =
                                 fintwind_protocol::submission::has_unsettled_submissions(session);
-                            session.status = if unsettled {
+                            let working =
+                                fintwind_protocol::submission::is_session_working(session);
+                            session.status = if working {
                                 SessionStatus::Working
                             } else {
                                 SessionStatus::Idle

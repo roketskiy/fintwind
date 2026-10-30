@@ -78,6 +78,36 @@ if ($Long) {
     } else {
         Write-Host '[OK] P2 template expansion passed'
     }
+
+    Write-Host '[..] restart seed (drop-ack Unknown, blocked retry, incident record)'
+    $restartRoot = Join-Path $repo (Join-Path 'temp' ('recovery-restart-' + [guid]::NewGuid().ToString('n')))
+    $env:FINTWIND_RESTART_ROOT = $restartRoot
+    & cargo @common opencode_recovery_restart_seed '--' '--ignored' '--nocapture'
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '[X] restart seed failed'
+        exit $LASTEXITCODE
+    } else {
+        Write-Host '[OK] restart seed passed'
+    }
+
+    Write-Host '[..] restart repair (same DB, fresh server, stale-snapshot guard)'
+    & cargo @common opencode_recovery_restart_repair '--' '--ignored' '--nocapture'
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '[X] restart repair failed'
+        exit $LASTEXITCODE
+    } else {
+        Write-Host '[OK] restart repair passed'
+    }
+    Remove-Item Env:\FINTWIND_RESTART_ROOT -ErrorAction SilentlyContinue
+
+    Write-Host '[..] partial sessions plus bounded query faults'
+    & cargo @common opencode_recovery_partial_and_faults '--' '--ignored' '--nocapture'
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '[X] partial/fault matrix failed'
+        exit $LASTEXITCODE
+    } else {
+        Write-Host '[OK] partial/fault matrix passed'
+    }
 }
 
 $artifact = Get-ChildItem -Path (Join-Path 'temp' 'recovery-e2e') -Recurse -Filter 'result*.json' -ErrorAction SilentlyContinue |

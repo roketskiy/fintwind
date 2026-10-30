@@ -1993,6 +1993,21 @@ fn render_code_fragment(
     } else {
         None
     };
+    let expand_toggle = if is_diagram && !show_source {
+        ctx.cache.map(|view| {
+            let _ = view;
+            diagram_source::ExpandDiagram {
+                key: key.clone(),
+                palette: *ctx.palette,
+                source: diagram_source.as_ref().unwrap().clone(),
+                theme: diagram_theme.unwrap(),
+                font_scale: ctx.metrics.text_size / Metrics::BODY.text_size,
+            }
+            .into_any_element()
+        })
+    } else {
+        None
+    };
     let copy_feedback = ctx.cache.map(|view| view.copied_code_blocks.clone());
     let copied = copy_feedback
         .as_ref()
@@ -2110,6 +2125,7 @@ fn render_code_fragment(
             ctx.metrics.text_size / Metrics::BODY.text_size,
             *ctx.palette,
             fallback,
+            SharedString::from(format!("diagram-image-{}-{}", key.row, key.index)),
         )
     } else {
         fallback
@@ -2155,6 +2171,7 @@ fn render_code_fragment(
                             }),
                     )
                     .children(source_toggle)
+                    .children(expand_toggle)
                     .child(copy_button),
             )
         })

@@ -1,5 +1,5 @@
 pub mod cache;
-mod diagram;
+pub(crate) mod diagram;
 pub mod highlight;
 pub mod math;
 pub mod mend;

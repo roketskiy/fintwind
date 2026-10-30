@@ -52,8 +52,8 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, App, EntityId, Global, IntoElement, ObjectFit, RenderImage, RenderOnce,
-    SharedString, SvgRenderer, Window, div, img, prelude::*, px,
+    AnyElement, App, EntityId, Global, IntoElement, KeyDownEvent, ObjectFit, RenderImage,
+    RenderOnce, SharedString, SvgRenderer, Window, div, img, prelude::*, px,
 };
 
 use fintwind_diagram::diagram_compile::{self, Theme};
@@ -436,6 +436,7 @@ pub(super) fn element(
     font_scale: f32,
     palette: Palette,
     fallback: AnyElement,
+    element_id: SharedString,
 ) -> AnyElement {
     DiagramImage {
         source,
@@ -443,6 +444,7 @@ pub(super) fn element(
         font_scale: normalize_font_scale(font_scale),
         palette,
         fallback,
+        element_id,
     }
     .into_any_element()
 }
@@ -451,6 +453,61 @@ pub(super) fn element(
 /// drift from what the renderer looks up.
 fn key_for(source: Arc<Source>, theme: &Theme, font_scale: f32, window: &Window) -> Key {
     Key::new(source, theme, font_scale, window.scale_factor())
+}
+
+/// A user asked to expand a cached diagram into the fullscreen preview.
+/// Stored globally because the clickable image renders without access to the
+/// owning view: the click records the request and notifies the owner, and the
+/// app drains it on its next frame.
+#[derive(Clone)]
+pub struct PreviewRequest {
+    pub image: Arc<RenderImage>,
+    /// Base display size in logical pixels (`logical * font_scale`).
+    pub width: f32,
+    pub height: f32,
+}
+
+struct PendingPreview(RefCell<Option<PreviewRequest>>);
+impl Global for PendingPreview {}
+
+pub fn request_preview(request: PreviewRequest, cx: &mut App) {
+    if !cx.has_global::<PendingPreview>() {
+        cx.set_global(PendingPreview(RefCell::new(None)));
+    }
+    *cx.global::<PendingPreview>().0.borrow_mut() = Some(request);
+}
+
+pub fn take_preview_request(cx: &mut App) -> Option<PreviewRequest> {
+    let pending = cx.try_global::<PendingPreview>()?;
+    pending.0.borrow_mut().take()
+}
+
+/// Read-only peek returning the cached image for the exact key [`element`]
+/// uses, so an expand button cannot drift from what the renderer paints.
+pub(super) fn preview_image(
+    source: Arc<Source>,
+    theme: Theme,
+    font_scale: f32,
+    window: &Window,
+    cx: &App,
+) -> Option<PreviewRequest> {
+    let key = key_for(source, &theme, font_scale, window);
+    let store = cx.try_global::<Store>()?;
+    match store.0.borrow().entries.get(&key) {
+        Some(Entry {
+            state: State::Ready(Ok(rendered)),
+            ..
+        }) => {
+            let width = (rendered.logical_width * key.font_scale()).max(1.0);
+            let height = (rendered.logical_height * key.font_scale()).max(1.0);
+            Some(PreviewRequest {
+                image: rendered.image.clone(),
+                width,
+                height,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// Whether [`element`] would paint a cached image right now, using the same key
@@ -487,6 +544,7 @@ struct DiagramImage {
     font_scale: f32,
     palette: Palette,
     fallback: AnyElement,
+    element_id: SharedString,
 }
 
 impl RenderOnce for DiagramImage {
@@ -495,11 +553,18 @@ impl RenderOnce for DiagramImage {
         match request(key, self.theme, window.current_view(), cx) {
             Lookup::Ready(rendered) => {
                 let width = (rendered.logical_width * self.font_scale).max(1.0);
-                // Size the row from its constrained width before painting the
-                // image. Capping only the image height can truncate a tall row;
-                // deriving height from the unconstrained width can also leave
-                // incorrect space when max_w_full narrows the image.
+                let height = (rendered.logical_height * self.font_scale).max(1.0);
+                let owner = window.current_view();
+                let preview = PreviewRequest {
+                    image: rendered.image.clone(),
+                    width,
+                    height,
+                };
+                let keyboard_preview = preview.clone();
+                let keyboard_owner = owner;
                 div()
+                    .id(self.element_id)
+                    .tab_index(0)
                     .relative()
                     .w(px(width))
                     .max_w_full()
@@ -509,6 +574,10 @@ impl RenderOnce for DiagramImage {
                     .mx_auto()
                     .aspect_ratio(rendered.logical_width / rendered.logical_height)
                     .flex_shrink_0()
+                    .cursor_default()
+                    .focus_visible(|style| {
+                        style.border_1().border_color(self.palette.accent)
+                    })
                     .child(
                         img(rendered.image.clone())
                             .absolute()
@@ -517,6 +586,18 @@ impl RenderOnce for DiagramImage {
                             .size_full()
                             .object_fit(ObjectFit::Contain),
                     )
+                    .on_click(move |_, _, cx| {
+                        request_preview(preview.clone(), cx);
+                        cx.notify(owner);
+                    })
+                    .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                        if !event.keystroke.modifiers.modified()
+                            && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                        {
+                            request_preview(keyboard_preview.clone(), cx);
+                            cx.notify(keyboard_owner);
+                        }
+                    })
                     .into_any_element()
             }
             // The source stays visible until an image exists, and a cached

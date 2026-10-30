@@ -1494,6 +1494,10 @@ pub struct Fintwind {
     /// cached attachment metadata; render never probes the filesystem.
     image_preview: Option<image_preview::ImagePreviewState>,
     image_preview_generation: u64,
+    /// Window-modal expansion of a Mermaid diagram (Issue #13). Holds the
+    /// cached raster plus zoom only; render never recompiles.
+    diagram_preview: Option<diagram_preview::DiagramPreviewState>,
+    diagram_preview_generation: u64,
     /// In-memory GPUI images for daemon-owned bytes. A missing entry schedules
     /// one background fetch only when a visible row asks to render it; the
     /// desktop never creates another attachment file.
@@ -2314,6 +2318,7 @@ mod command_palette;
 mod commit_dialog;
 mod components;
 mod composer;
+mod diagram_preview;
 mod drafts;
 mod file_search;
 mod git_history;
@@ -2359,6 +2364,7 @@ pub use command_palette::init as init_command_palette;
 pub use commit_dialog::init as init_commit_dialog_keys;
 use components::*;
 pub use help::init as init_help_keys;
+pub use diagram_preview::init as init_diagram_preview_keys;
 pub use image_preview::init as init_image_preview_keys;
 pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
@@ -3748,6 +3754,8 @@ impl Fintwind {
                 composer_autocomplete: autocomplete::AutocompleteUi::new(),
                 image_preview: None,
                 image_preview_generation: 0,
+                diagram_preview: None,
+                diagram_preview_generation: 0,
                 remote_images: RefCell::new(HashMap::new()),
                 event_wake_tx,
                 task_state_sync_tx,

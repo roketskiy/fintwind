@@ -269,6 +269,7 @@ pub fn run() {
             crate::app::init_help_keys(cx);
             crate::perf_monitor::init(cx);
             crate::app::init_image_preview_keys(cx);
+            crate::app::init_diagram_preview_keys(cx);
             crate::app::init_update_card_keys(cx);
             crate::app::init_btw_keys(cx);
             crate::app::init_sidebar_keys(cx);

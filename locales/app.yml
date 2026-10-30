@@ -1184,6 +1184,16 @@ common.show_source:
   en: Show Source
 common.show_diagram:
   en: Show Diagram
+diagram.expand_diagram:
+  en: Expand Diagram
+diagram.zoom_in:
+  en: Zoom In
+diagram.zoom_out:
+  en: Zoom Out
+diagram.reset_zoom:
+  en: Reset Zoom (1:1)
+diagram.close_preview:
+  en: Close Preview
 common.copy_expression:
   en: Copy Expression
 quote.add_title:

@@ -288,6 +288,10 @@ impl Render for Fintwind {
             self.tick_fps(window);
         }
         let image_preview = self.render_image_preview(cx);
+        if let Some(request) = crate::md::diagram::take_preview_request(cx) {
+            self.open_diagram_preview(request, window, cx);
+        }
+        let diagram_preview = self.render_diagram_preview(cx);
         let update_card = self.render_update_card(window, cx);
         let changelog = self.render_changelog_card(window, cx);
         // Re-armed every frame this window shows time labels; parks while
@@ -649,6 +653,7 @@ impl Render for Fintwind {
             .children(discard_dialog)
             .children(review_commit_dialog)
             .children(image_preview)
+            .children(diagram_preview)
             .child(crate::ui::menu::context_menu(
                 div().absolute().top_0().left_0(),
                 "transcript-file-menu",

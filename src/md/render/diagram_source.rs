@@ -100,6 +100,70 @@ impl gpui::RenderOnce for SourceToggle {
     }
 }
 
+#[derive(IntoElement)]
+pub(super) struct ExpandDiagram {
+    pub key: TextKey,
+    pub palette: Palette,
+    pub source: std::sync::Arc<super::super::diagram::Source>,
+    pub theme: fintwind_diagram::diagram_compile::Theme,
+    pub font_scale: f32,
+}
+
+impl gpui::RenderOnce for ExpandDiagram {
+    fn render(self, window: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
+        let Some(preview) = super::super::diagram::preview_image(
+            self.source,
+            self.theme,
+            self.font_scale,
+            window,
+            cx,
+        ) else {
+            return div().into_any_element();
+        };
+        let owner = window.current_view();
+        let ordinal = self.key.index;
+        let keyboard_preview = preview.clone();
+        let keyboard_owner = owner;
+        div()
+            .id(SharedString::from(format!(
+                "diagram-expand-{}-{ordinal}",
+                self.key.row
+            )))
+            .tab_index(0)
+            .size(px(24.0))
+            .flex_none()
+            .rounded(px(5.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_default()
+            .focus_visible(|style| style.border_1().border_color(self.palette.accent))
+            .hover(|style| style.bg(self.palette.overlay))
+            .active(|style| style.bg(self.palette.overlay))
+            .tooltip(Tooltip::text(tr!("diagram.expand_diagram")))
+            .child(crate::ui::icon(
+                "icons/window-maximize.svg",
+                12.0,
+                self.palette.ghost,
+            ))
+            .on_click(move |_, _, cx| {
+                super::super::diagram::request_preview(preview.clone(), cx);
+                cx.notify(owner);
+                cx.stop_propagation();
+            })
+            .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                if !event.keystroke.modifiers.modified()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    super::super::diagram::request_preview(keyboard_preview.clone(), cx);
+                    cx.notify(keyboard_owner);
+                    cx.stop_propagation();
+                }
+            })
+            .into_any_element()
+    }
+}
+
 /// Source fallback is a bounded native list, never one 32 KiB text element.
 pub(super) struct SourceDocument {
     parts: Rc<Vec<Rc<FlatText>>>,

@@ -584,6 +584,11 @@ common.copy_to_composer: 入力欄にコピー
 common.copy_code: コードをコピー
 common.show_source: ソースを表示
 common.show_diagram: 図を表示
+diagram.expand_diagram: 図を拡大
+diagram.zoom_in: 拡大
+diagram.zoom_out: 縮小
+diagram.reset_zoom: 1:1 に戻す
+diagram.close_preview: プレビューを閉じる
 common.copy_expression: 数式をコピー
 quote.add_title: 参照を追加
 quote.add_file: ファイルを参照…

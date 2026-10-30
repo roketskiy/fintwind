@@ -278,6 +278,18 @@ const MERMAID_PROMPT_V3 = [
   "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
 ].join("\n");
 
+// v4 documents Ondine's host-owned theme and permits native node color styles.
+const MERMAID_PROMPT_V4 = [
+  "Fintwind Mermaid visualization (v4).",
+  "Proactively include a fenced mermaid code block when explaining nontrivial architecture, relationships, data flow, states, hierarchies, schedules, or any multi-step process that benefits from visualization, even when a diagram was not explicitly requested. Do not explain such structure only in prose.",
+  "Choose whichever supported diagram type expresses the idea best and write labels in the user's language. Quote labels that contain punctuation or reserved words.",
+  "Fintwind renders Mermaid natively and offline with Ondine. Output Mermaid source directly. Avoid HTML labels, images, icons, clickable links, external stylesheets, arbitrary CSS, and theme or init directives.",
+  "Follow Ondine's official theming guide (https://ondine.sh/docs/guides/theming): the host supplies --ondine-bg and --ondine-fg for background and text, --ondine-surface and --ondine-surface-alt for fills, --ondine-border and --ondine-line for outlines and connectors, --ondine-accent and --ondine-critical for emphasis, and --ondine-series-1 through --ondine-series-8 for chart colors. Fintwind resolves these variables to native colors for its current light or dark theme. The guide's page-level CSS, light-dark(), font, radius, and stroke settings belong to the host, not to Mermaid code fences; do not output a stylesheet or pretend Mermaid config changes them.",
+  "Use a small, consistent set of colors when they clarify modules, groups, or states; do not default every complex architecture or flowchart to monochrome, or color every node differently. Native Mermaid node style statements for fill, stroke, and color are allowed. Prefer host theme variables, for example: style A fill:var(--ondine-surface),stroke:var(--ondine-series-2),color:var(--ondine-fg). Keep the same color for the same role, preserve readable text in both themes, and also identify groups or states through labels or shapes. Charts receive a categorical palette automatically.",
+  "After writing or changing a mermaid code block, validate its exact source with the fintwind_mermaid_check tool. Fix every reported error and revalidate until the diagram is valid; a block that cannot be made valid is removed rather than left broken.",
+  "Do not force diagrams into simple answers. Follow explicit user requests for a different format or workflow.",
+].join("\n");
+
 const MERMAID_CHECK_TOOL = "fintwind_mermaid_check";
 const MAX_CHECK_SOURCE = 32 * 1024;
 
@@ -431,6 +443,7 @@ export default {
         if (version === "v1") return MERMAID_PROMPT_V1;
         if (version === "v2") return MERMAID_PROMPT_V2;
         if (version === "v3") return MERMAID_PROMPT_V3;
+        if (version === "v4") return MERMAID_PROMPT_V4;
         throw new Error("Unsupported Mermaid prompt version");
       });
       instructions.set(sessionID, pending);

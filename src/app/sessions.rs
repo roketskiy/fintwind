@@ -1562,6 +1562,18 @@ impl Fintwind {
             self.capture_latest_turn_checkpoint_for(session_id);
             self.start_pending_checkpoint_captures(cx);
         }
+        if !has_active_turn
+            && let Some(session) = self.state.session_mut(session_id)
+            && session.status.is_busy()
+            && !fintwind_protocol::submission::is_session_working(session)
+        {
+            // No live turn exists, but an older build left Working behind
+            // for a lone Unknown (Interrupted + Unknown). Correct the
+            // derived projection without touching receipts: the submission
+            // stays blocking until reconciled, the queue stays paused, and
+            // Stop is no longer a silent no-op.
+            session.status = SessionStatus::Idle;
+        }
         if let Some(previous_kinds) = previous_kinds.as_deref() {
             self.splice_active_transcript_rows_after_visibility_change(previous_kinds);
         }

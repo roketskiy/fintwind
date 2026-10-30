@@ -202,3 +202,24 @@ cargo run --locked --manifest-path scripts/fixtures/memory-storage/Cargo.toml --
 进程崩溃的 `ProcessExited` 正例未由此模拟矩阵覆盖。正常 daemon 退出会清理
 模拟私有服务，但这不等同于真实进程故障验收。旧版桌面端不认识新恢复事件，
 因此更新时桌面端与 daemon 必须来自同一构建，不应只替换其中一个。
+
+### 2026-10-30 验收补充（会话恢复方案批次 A/E）
+
+- 批次 A 真实隔离 OpenCode v2.2.1 契约探针 11/11 通过，脚本
+  `scripts/session-recovery-contract-probe.py`，产物
+  `temp/session-recovery-contract/e9f500ead47341aab85fc78ca2660552/result.json`。
+  关键发现：v2.2.1 会话终态证据为 `outcome` + `time.idle`（`status` 为空
+  对象），精确输入 ID 可查且重复提交被去重（无 409、无重复执行），中断终态
+  为 `outcome=interrupted`。实现侧仍按精确 ID 核对、绝不盲目重发。
+- Long 套件与历史规模矩阵、真实隔离三轮验收于同日重跑通过：
+  `temp/recovery-e2e/*/result-long.json`、`result-p1.json`、`result-r2.json`、
+  `result-p2.json`，`temp/protocol-e2e/c06626b61d074651a8f2d3a1d653f07e`
+ （分页缩减与截图外置），`temp/protocol-e2e/885f6198bf354510a53a17cb22273fb8`
+  （真实三轮 + 陈旧终态否决）。
+- 重启重放与部分/故障组（2026-10-30，同日接入 `-Long`）：
+  `temp/recovery-restart-*/result-seed.json`、`result-repair.json`、
+  `temp/recovery-e2e/*/result-partial.json`（单共享 serve 下 A/C 结算、B 保持
+  待确认；503 冷核对有界失败；7 未解决下目录读取响应）。
+- 仍未验证：生产旧库真实重放、重启恢复端到端、多会话部分失败与查询故障
+  规模组、真实 provider、桌面视觉与键盘、性能帧路径。状态结论以
+  `docs/submission-reliability.md` 当日记录为准。

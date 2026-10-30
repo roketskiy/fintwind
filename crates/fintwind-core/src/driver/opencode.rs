@@ -296,17 +296,17 @@ fn reject_chain(rejected: &Mutex<HashSet<String>>, root: &str, chain: &[String])
 }
 
 fn is_http_not_found(error: &anyhow::Error) -> bool {
-    error.to_string().contains("HTTP 404")
+    crate::opencode_session::http_status_from_error(error) == Some(404)
 }
 
 fn is_http_bad_request(error: &anyhow::Error) -> bool {
-    error.to_string().contains("HTTP 400")
+    crate::opencode_session::http_status_from_error(error) == Some(400)
 }
 
 /// A form that was already answered or cancelled elsewhere. Dismissing it
 /// here has the outcome the caller asked for, so it is not a failure.
 fn is_http_conflict(error: &anyhow::Error) -> bool {
-    error.to_string().contains("HTTP 409")
+    crate::opencode_session::http_status_from_error(error) == Some(409)
 }
 
 /// Posts a permission decision in the v2.0.11+ shape, then the previous
@@ -1382,6 +1382,62 @@ impl OpenCodeDriver {
                             files,
                             durable,
                         } => {
+                            // A dead private instance can never accept a new
+                            // POST. Settle deterministically as not sent
+                            // before touching the fence, so a stale handle
+                            // cannot produce another Unknown that locks the UI.
+                            if !worker_server.is_alive() {
+                                crate::opencode_diagnostics::record(
+                                    "submit_server_dead_precheck",
+                                    worker_server.port,
+                                    0,
+                                );
+                                if let Some((record, store)) = &durable {
+                                    if let Ok(Some(saved)) = store.transition_submission(
+                                        record.receipt.id,
+                                        SubmissionState::Dispatching,
+                                        SubmissionState::NotSent,
+                                        Some(&worker_session),
+                                    ) {
+                                        crate::opencode_diagnostics::submission(
+                                            "prompt_receipt_dead_server",
+                                            &saved,
+                                            worker_server.port,
+                                            0,
+                                        );
+                                        let _ = worker_events
+                                            .send(DriverEvent::SubmissionUpdated(saved.receipt));
+                                    }
+                                }
+                                let _ = worker_events.send(DriverEvent::Error(tr!(
+                                    "errors.provider_prompt_unconfirmed_detail",
+                                    provider = "OpenCode",
+                                    error = "the private OpenCode server exited before sending"
+                                )));
+                                if std::mem::take(&mut *worker_turn.lock()) {
+                                    submissions.lock().clear();
+                                    let _ = worker_events.send(DriverEvent::TurnFinished {
+                                        success: false,
+                                        summary: Some(tr!(
+                                            "errors.provider_start_turn",
+                                            provider = "OpenCode"
+                                        )),
+                                    });
+                                } else if durable.is_some() {
+                                    // No active flag yet, but the durable turn
+                                    // was claimed: still settle it locally so a
+                                    // dead server cannot leave it Running.
+                                    submissions.lock().clear();
+                                    let _ = worker_events.send(DriverEvent::TurnFinished {
+                                        success: false,
+                                        summary: Some(tr!(
+                                            "errors.provider_start_turn",
+                                            provider = "OpenCode"
+                                        )),
+                                    });
+                                }
+                                continue;
+                            }
                             if let Some((record, store)) = &durable {
                                 // Persist the native session association before
                                 // the side effect; failed storage forbids POST.
@@ -1496,14 +1552,22 @@ impl OpenCodeDriver {
                             if let Some((record, store)) = &durable {
                                 let state = match &posted {
                                     Ok(_) => SubmissionState::Accepted,
-                                    Err(error)
-                                        if invalid_input
-                                            || (error.to_string().contains("HTTP 4")
-                                                && !error.to_string().contains("HTTP 409")) =>
-                                    {
-                                        SubmissionState::Rejected
+                                    Err(error) => {
+                                        match crate::opencode_session::classify_submit_error(
+                                            error,
+                                            invalid_input,
+                                        ) {
+                                            crate::opencode_session::SubmitTransportOutcome::NotSent => {
+                                                SubmissionState::NotSent
+                                            }
+                                            crate::opencode_session::SubmitTransportOutcome::Rejected => {
+                                                SubmissionState::Rejected
+                                            }
+                                            crate::opencode_session::SubmitTransportOutcome::Unknown => {
+                                                SubmissionState::Unknown
+                                            }
+                                        }
                                     }
-                                    Err(_) => SubmissionState::Unknown,
                                 };
                                 match store.transition_submission(
                                     record.receipt.id,
@@ -1535,11 +1599,18 @@ impl OpenCodeDriver {
                                 }
                             }
                             if let Err(error) = posted {
-                                let rejected = invalid_input
-                                    || (error.to_string().contains("HTTP 4")
-                                        && !(durable.is_some()
-                                            && error.to_string().contains("HTTP 409")));
-                                if !rejected {
+                                let outcome = crate::opencode_session::classify_submit_error(
+                                    &error,
+                                    invalid_input,
+                                );
+                                // A lost acknowledgement may still have stored
+                                // the input: keep the fence for reconciliation
+                                // and never auto-resent. A definitive NotSent
+                                // or Rejected settles the local turn instead
+                                // of hanging on an execution that never began.
+                                if outcome
+                                    == crate::opencode_session::SubmitTransportOutcome::Unknown
+                                {
                                     submissions.lock().unconfirmed(submission);
                                     let _ = worker_events.send(DriverEvent::Error(tr!(
                                         "errors.provider_prompt_unconfirmed_detail",
@@ -1547,6 +1618,15 @@ impl OpenCodeDriver {
                                         error = error
                                     )));
                                     continue;
+                                }
+                                if outcome
+                                    == crate::opencode_session::SubmitTransportOutcome::NotSent
+                                {
+                                    crate::opencode_diagnostics::record(
+                                        "prompt_not_sent",
+                                        worker_server.port,
+                                        submission,
+                                    );
                                 }
                                 let _ = worker_events.send(DriverEvent::Error(tr!(
                                     "errors.provider_rejected_prompt_detail",
@@ -1625,7 +1705,18 @@ impl OpenCodeDriver {
                                         .send(DriverEvent::SteerAccepted { message: text });
                                 }
                                 Err(error) => {
-                                    if !invalid_input && !error.to_string().contains("HTTP 4") {
+                                    // Steers share the prompt contract: a
+                                    // definite NotSent clears the steer, a
+                                    // definite rejection reports it, and a
+                                    // possible in-flight write reconciles.
+                                    let outcome =
+                                        crate::opencode_session::classify_submit_error(
+                                            &error,
+                                            invalid_input,
+                                        );
+                                    if outcome
+                                        == crate::opencode_session::SubmitTransportOutcome::Unknown
+                                    {
                                         submissions.lock().unconfirmed_steer(steering, text);
                                         let _ = worker_events.send(DriverEvent::Error(tr!(
                                             "errors.provider_prompt_unconfirmed_detail",
@@ -1667,7 +1758,9 @@ impl OpenCodeDriver {
                                 // the outcome, so stay quiet rather than
                                 // reporting a failure that is really
                                 // "already running".
-                                if !error.to_string().contains("HTTP 409") {
+                                if crate::opencode_session::http_status_from_error(&error)
+                                    != Some(409)
+                                {
                                     let _ = worker_events.send(DriverEvent::CompactionUpdated(
                                         CompactionState {
                                             status: CompactionStatus::Failed,
@@ -1797,9 +1890,13 @@ impl OpenCodeDriver {
                                 }
                                 Err(error) => {
                                     let detail = error.to_string();
-                                    let rejected = invalid_input
-                                        || (detail.contains("HTTP 4")
-                                            && !detail.contains("HTTP 409"))
+                                    let outcome =
+                                        crate::opencode_session::classify_submit_error(
+                                            &error,
+                                            invalid_input,
+                                        );
+                                    let rejected = outcome
+                                        != crate::opencode_session::SubmitTransportOutcome::Unknown
                                         // These official command errors happen before
                                         // any goal write or execution admission.
                                         || (detail.contains("CommandExecutionError")
@@ -2416,6 +2513,15 @@ impl DriverControl for OpenCodeDriver {
 
     fn supports_steer(&self) -> bool {
         true
+    }
+
+    fn is_transport_live(&self) -> bool {
+        // A writable command channel is not liveness proof. The private
+        // server may have exited while this stale handle is still retained.
+        if self.event_feed.is_cancelled() {
+            return false;
+        }
+        self.server.as_ref().is_some_and(|server| server.is_alive())
     }
 
     fn steer(&self, prompt: String, files: Vec<PromptFile>) {

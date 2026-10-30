@@ -75,7 +75,78 @@ fn release_port(port: u16) {
 }
 
 fn is_http_not_found(error: &anyhow::Error) -> bool {
-    error.to_string().contains("HTTP 404")
+    http_status_from_error(error) == Some(404)
+}
+
+/// Structured submit transport outcome for durable admission.
+///
+/// `NotSent` means the request definitely left no provider-visible effect
+/// (serialization or connection establishment failed before any byte could
+/// be processed). `Rejected` is a definitive provider refusal. Everything
+/// else that traversed the wire — or may have — stays `Unknown` for
+/// reconciliation and must never be auto-resent.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SubmitTransportOutcome {
+    NotSent,
+    Unknown,
+    Rejected,
+}
+
+/// Extracts the HTTP status from the `HTTP {code}` envelope produced by
+/// [`parse_http_response`]. String matching on `HTTP 4` substrings is
+/// forbidden: callers must branch on this typed status instead.
+pub(crate) fn http_status_from_error(error: &anyhow::Error) -> Option<u16> {
+    error
+        .chain()
+        .filter_map(|cause| {
+            let text = cause.to_string();
+            let marker = text.find("HTTP ")?;
+            text[marker + 5..]
+                .split(|c: char| !c.is_ascii_digit())
+                .next()
+                .and_then(|digits| digits.parse::<u16>().ok())
+        })
+        .next()
+}
+
+/// True only when the TCP connect itself never succeeded, so no request
+/// bytes could have reached the provider. Read/write failures after a
+/// successful connect are *not* included: the request may already be
+/// in flight and must reconcile as `Unknown`.
+pub(crate) fn is_connection_establishment_failure(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .to_string()
+            .contains("could not connect to OpenCode on local port")
+    })
+}
+
+/// Classifies a failed prompt/command POST without guessing from error
+/// text. `invalid_input` covers serialization/attachment failures before
+/// any POST was attempted: definitely not sent. A 409 (input-ID conflict)
+/// or an unclear status never counts as a rejection; it reconciles.
+pub(crate) fn classify_submit_error(
+    error: &anyhow::Error,
+    invalid_input: bool,
+) -> SubmitTransportOutcome {
+    if invalid_input {
+        return SubmitTransportOutcome::NotSent;
+    }
+    if is_connection_establishment_failure(error) {
+        return SubmitTransportOutcome::NotSent;
+    }
+    match http_status_from_error(error) {
+        // 409 is an input-identity conflict, not a safe rejection: the
+        // earlier attempt may already be stored. Reconcile by exact input ID.
+        Some(409) => SubmitTransportOutcome::Unknown,
+        // Only a clear validation refusal settles as rejected. All other
+        // 4xx (auth, missing session, rate limit, unknown contract) stay
+        // Unknown so a missing history/inbox read can never be upgraded
+        // into a false rejection or a blind retry.
+        Some(400) | Some(422) => SubmitTransportOutcome::Rejected,
+        Some(status) if (400..500).contains(&status) => SubmitTransportOutcome::Unknown,
+        _ => SubmitTransportOutcome::Unknown,
+    }
 }
 
 /// Lists pending forms, trying `GET /api/form` before the removed
@@ -417,10 +488,10 @@ fn fork_bodies(before: Option<&str>, last_id: Option<&str>) -> (Value, Option<Va
 /// `boundary` body by ignoring it and copying the whole transcript, so
 /// falling back on a business 400 would undo a truncation.
 fn is_legacy_contract_rejection(error: &anyhow::Error) -> bool {
-    let text = error.to_string();
-    if !text.contains("HTTP 400") || text.contains("empty_session") {
+    if http_status_from_error(error) != Some(400) || error.to_string().contains("empty_session") {
         return false;
     }
+    let text = error.to_string();
     text.contains("Missing key")
         || text.contains("Unexpected")
         || text.contains("additionalProperties")

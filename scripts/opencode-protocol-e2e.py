@@ -26,6 +26,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--fault-matrix", action="store_true")
     parser.add_argument("--idle-matrix", action="store_true")
+    parser.add_argument("--submission-cleanup", action="store_true")
     parser.add_argument("--history-matrix", action="store_true")
     parser.add_argument("--history-page", type=Path)
     parser.add_argument("--history-input")
@@ -63,7 +64,7 @@ def main():
         raise RuntimeError("Build opencode_recovery first.")
     log = output / "test.log"
     command = output / "run.cmd"
-    name = "opencode_large_history_completion" if args.history_matrix else "opencode_recovery_fast_faults" if args.fault_matrix else (
+    name = "opencode_recovery_submission_cleanup" if args.submission_cleanup else "opencode_large_history_completion" if args.history_matrix else "opencode_recovery_fast_faults" if args.fault_matrix else (
         "opencode_recovery_idle_reconciliation" if args.idle_matrix else "opencode_real_turn_completion")
     ignored = "" if args.fault_matrix else "--ignored"
     command.write_text(f'@echo off\n"{tests[-1]}" {name} {ignored} --nocapture > "{log}" 2>&1\n', encoding="utf-8")

@@ -101,6 +101,10 @@ impl DriverHandle {
         self.inner.supports_steer()
     }
 
+    pub fn is_transport_live(&self) -> bool {
+        self.inner.is_transport_live()
+    }
+
     pub fn steer(&self, prompt: String, files: Vec<PromptFile>) {
         self.inner.steer(prompt, files);
     }
@@ -161,6 +165,13 @@ pub trait DriverControl: Send + Sync {
     }
     fn supports_steer(&self) -> bool {
         false
+    }
+    /// Whether the underlying provider instance can still accept work.
+    /// A command channel being writable is not proof: the private server
+    /// may already have exited. Attach and dispatch must refuse a dead
+    /// generation instead of queuing into it.
+    fn is_transport_live(&self) -> bool {
+        true
     }
     /// Deliver a steering message to the running turn. Implementations report
     /// the outcome asynchronously through `DriverEvent::SteerAccepted` or

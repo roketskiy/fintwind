@@ -43,6 +43,7 @@ use fintwind_core::composer_complete::{SlashCommand, expanded_submission};
 use fintwind_core::daemon::FintwindBackend;
 use fintwind_core::model::{
     ActivityItem, ActivityKind, AgentSession, AgentTurn, Message, MessageRole, TurnStatus,
+    Project, ProviderResumeCursor, QueuedMessage, SessionStatus,
 };
 use fintwind_core::persistence::StateStore;
 use fintwind_core::settings::DaemonSettingsStore;
@@ -53,6 +54,7 @@ use fintwind_core::{
 use fintwind_protocol::composer::CommandScope;
 use fintwind_protocol::model::{MessageAttachment, TranscriptBlock};
 use fintwind_protocol::provider_session::NativeTranscript;
+use fintwind_protocol::submission::{SubmissionRecord, SubmissionState};
 
 const DAEMON_TOKEN: &str = "opencode-recovery-e2e-token";
 
@@ -4128,5 +4130,1022 @@ fn opencode_attachment_only_user_projection_is_preserved() {
         user.attachments,
         vec![pdf, txt, directory],
         "the PDF/txt/dir attachments must be preserved, not dropped or swapped",
+    );
+}
+
+// -- restart replay + partial/fault groups (plan §8/§11) ---------------------
+//
+// Three ignored processes run by scripts/opencode-recovery-e2e.ps1 -Long:
+//   * restart_seed   — drives a drop-ack Unknown through the real durable
+//     flow, proves a second submission is blocked with exactly one POST,
+//     emulates a GUI stop-save (Interrupted + Working-looking + queued
+//     follow-up), then rewrites the persisted status to Working so the next
+//     process restarts from the exact incident record.
+//   * restart_repair — on the same app.db with a fresh fake that never saw
+//     the input: proves Unknown is preserved (never flipped to NotSent),
+//     the projection heals to Idle, the queue survives, nothing auto-POSTs,
+//     retries stay blocked, and a stale Working snapshot cannot regress it.
+//   * partial_and_faults — one shared serve settles A and C while B stays
+//     Unknown-pending; a fault-injecting fake fails boundedly without
+//     flipping receipts; many unresolved sessions keep the daemon responsive.
+
+fn durable_submission(project: &Project, prompt: &str) -> (AgentSession, SubmissionRecord) {
+    let mut session = AgentSession::new(project.id);
+    let turn = session.begin_turn(prompt);
+    session.bind_active_prompt_transport(prompt);
+    let record = SubmissionRecord::new(session.id, turn, prompt.to_owned(), Vec::new());
+    session
+        .turns
+        .last_mut()
+        .expect("the turn exists")
+        .submission = Some(record.receipt.clone());
+    session.status = SessionStatus::Connecting;
+    (session, record)
+}
+
+fn wait_for_receipt_state(
+    rx: &Receiver<SequencedEvent>,
+    want: &str,
+    timeout: Duration,
+) -> Option<Value> {
+    // SubmissionState serializes camelCase on the wire: Unknown arrives as
+    // "unknown", NotSent as "notSent". Compare case-insensitively so the
+    // test asserts the state, not its casing.
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(event) => {
+                if event.event.kind == "submissionUpdated"
+                    && event
+                        .event
+                        .payload
+                        .get("state")
+                        .and_then(Value::as_str)
+                        .is_some_and(|state| state.eq_ignore_ascii_case(want))
+                {
+                    return Some(event.event.payload.clone());
+                }
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    None
+}
+
+fn fake_prompt_posts(fixture: &Fixture) -> u64 {
+    read_jsonl(&fixture.server_log)
+        .iter()
+        .filter(|entry| entry.get("event").and_then(Value::as_str) == Some("prompt"))
+        .count() as u64
+}
+
+fn fake_first_prompt_sid(fixture: &Fixture) -> Option<String> {
+    read_jsonl(&fixture.server_log).iter().find_map(|entry| {
+        (entry.get("event").and_then(Value::as_str) == Some("prompt"))
+            .then(|| {
+                entry
+                    .get("sid")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .flatten()
+    })
+}
+
+fn hydrate_full(client: &DaemonClient, session_id: Uuid) -> Option<AgentSession> {
+    match client.request(
+        session_id,
+        Uuid::nil(),
+        Command::HydrateSession { session_id },
+    ) {
+        Ok(ResponsePayload::Session { session }) => session,
+        other => panic!("HydrateSession must answer with a session, got {other:?}"),
+    }
+}
+
+fn restart_root_or_new() -> (PathBuf, String, bool) {
+    if let Some(root) = std::env::var_os("FINTWIND_RESTART_ROOT").map(PathBuf::from) {
+        fs::create_dir_all(&root).expect("the restart handoff dir should be created");
+        let uuid = root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("restart")
+            .to_owned();
+        (root, uuid, true)
+    } else {
+        let run = Run::new();
+        (run.root, run.uuid, false)
+    }
+}
+
+fn write_artifact(path: &Path, uuid: &str, started: u64, reports: &[(&str, &Fact)]) {
+    let mut artifact = finish_artifact(reports, Vec::new());
+    artifact["uuid"] = Value::String(uuid.to_owned());
+    artifact["started_unix"] = Value::from(started);
+    artifact["fake_binary"] = Value::String(fake_opencode_py().to_string_lossy().into_owned());
+    fs::write(path, serde_json::to_vec_pretty(&artifact).unwrap())
+        .expect("the artifact should be written");
+    for (name, report) in reports {
+        eprintln!(
+            "[opencode-recovery] {name}: {} {}",
+            if report.failures.is_empty() {
+                "PASS"
+            } else {
+                "FAIL"
+            },
+            report.failures.join("; ")
+        );
+    }
+    eprintln!("[opencode-recovery] artifact: {}", path.display());
+    for (name, report) in reports {
+        assert!(
+            report.failures.is_empty(),
+            "scenario {name} failed: {:?} (artifact: {})",
+            report.failures,
+            path.display(),
+        );
+    }
+    assert!(
+        artifact.get("result").and_then(Value::as_str) == Some("pass"),
+        "recovery E2E global contract failed (artifact: {})",
+        path.display(),
+    );
+}
+
+/// Failure inventory: automatic RPC cleanup must not revoke an in-flight or
+/// unacknowledged admission, release the next POST, or prevent history recovery.
+/// Preparing-only cleanup remains safe and idempotent. Exercise the real daemon,
+/// wire client, durable store and driver, with an explicit response barrier.
+#[test]
+#[ignore = "owns an isolated daemon; run via opencode-protocol-e2e.py --submission-cleanup"]
+fn opencode_recovery_submission_cleanup() {
+    let run = Run::new();
+    let harness = start_harness(&run.root);
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let mut report = Fact::default();
+    let workspace = run.workspace("submission-cleanup");
+    let project = Project::from_path(workspace.clone());
+
+    let (preparing, prepared) = durable_submission(&project, "Unsent preparation");
+    harness.client.request(preparing.id, Uuid::nil(), Command::AcceptSubmission {
+        project: project.clone(), session: Box::new(preparing.clone()),
+        submission: Box::new(prepared.clone()),
+    }).expect("accept the unsent preparation");
+    for _ in 0..2 {
+        let response = harness.client.request(preparing.id, Uuid::nil(), Command::AbandonSubmission {
+            submission_id: prepared.receipt.id,
+        }).expect("cleanup of unsent preparation must succeed");
+        report.expect(matches!(response, ResponsePayload::SubmissionSaved { receipt }
+            if receipt.state == SubmissionState::NotSent),
+            "preparing-only cleanup must be safe and idempotent");
+    }
+
+    let gate = run.root.join("release-admission-ack");
+    let created = 1_700_000_000_000u64;
+    let fixture = build_fixture(&run, "submission-cleanup", &json!({
+        "turns": [{
+            "user_msg_id": "msg_cleanup_input", "created_ms": created,
+            "drop_ack": true, "ack_release_file": gate, "rebase_clock": true,
+            "sse": [],
+            "durable_messages": settled_history("msg_cleanup_input", "msg_cleanup_answer",
+                created, "Automatically recovered", "succeeded"),
+            "session_status": "idle", "session_outcome": "succeeded",
+            "session_time_idle": created + 2000, "active": false,
+        }],
+    }));
+    report.server_log = Some(fixture.server_log.clone());
+    let (session, record) = durable_submission(&project, "Recover without user intervention");
+    let runtime_id = Uuid::new_v4();
+    harness.client.request(session.id, Uuid::nil(), Command::AcceptSubmission {
+        project: project.clone(), session: Box::new(session.clone()),
+        submission: Box::new(record.clone()),
+    }).expect("accept the durable submission");
+    harness.client.request(session.id, runtime_id, Command::Start {
+        options: start_options(&fixture.bin, &workspace),
+    }).expect("start the isolated driver");
+    let events = harness.client.subscribe(session.id, runtime_id);
+    let response = harness.client.request(session.id, runtime_id, Command::DispatchSubmission {
+        submission_id: record.receipt.id, workspace: session.workspace.clone(),
+    }).expect("dispatch the input once");
+    report.expect(matches!(response, ResponsePayload::SubmissionSaved { receipt }
+        if receipt.state == SubmissionState::Dispatching), "dispatch must return its claimed receipt");
+    let deadline = Instant::now() + Duration::from_secs(8);
+    while fake_prompt_posts(&fixture) == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    report.expect(fake_prompt_posts(&fixture) == 1, "the provider must be holding exactly one admission");
+
+    let response = harness.client.request(session.id, Uuid::nil(), Command::AbandonSubmission {
+        submission_id: record.receipt.id,
+    }).expect("RPC cleanup must return the current receipt");
+    report.expect(matches!(&response, ResponsePayload::SubmissionSaved { receipt }
+        if receipt.state == SubmissionState::Dispatching),
+        "RPC cleanup must preserve a possibly delivered Dispatching receipt");
+    report.facts.insert("inflight_cleanup".into(), json!(format!("{response:?}")));
+    fs::write(&gate, b"release").expect("release the owned provider response");
+
+    report.expect(wait_for_receipt_state(&events, "Unknown", Duration::from_secs(20)).is_some(),
+        "a dropped acknowledgement must remain Unknown, not NotSent");
+    let response = harness.client.request(session.id, Uuid::nil(), Command::AbandonSubmission {
+        submission_id: record.receipt.id,
+    }).expect("repeated RPC cleanup must return the current receipt");
+    report.expect(matches!(&response, ResponsePayload::SubmissionSaved { receipt }
+        if receipt.state == SubmissionState::Unknown),
+        "automatic cleanup must preserve Unknown for reconciliation");
+    report.facts.insert("unknown_cleanup".into(), json!(format!("{response:?}")));
+    harness.client.request(session.id, runtime_id, Command::DispatchSubmission {
+        submission_id: record.receipt.id, workspace: session.workspace.clone(),
+    }).expect("a repeated dispatch returns the existing receipt without POSTing");
+
+    observe(&events, Duration::from_secs(30), Duration::from_millis(500), &mut report.collected);
+    let recovered = hydrate_full(&harness.client, session.id).expect("the recovered session exists");
+    report.expect(fake_prompt_posts(&fixture) == 1, "cleanup and recovery must never repeat the provider POST");
+    report.expect(report.collected.finishes.len() == 1 && report.collected.finishes[0].0,
+        "the driver must recover the completed execution automatically");
+    report.expect(report.collected.snapshot_before_finish(), "full history must precede the terminal event");
+    report.expect(recovered.turns.last().is_some_and(|turn| {
+        turn.status == TurnStatus::Completed && turn.submission.as_ref().is_some_and(|receipt| {
+            receipt.state == SubmissionState::Accepted && receipt.input_id == record.receipt.input_id
+        })
+    }), "automatic recovery must settle the original input identity as Accepted and Completed");
+
+    // New work is admitted only after automatic recovery, not via a user escape hatch.
+    let mut next = recovered;
+    let turn_id = next.begin_turn("Next explicit input");
+    let next_record = SubmissionRecord::new(session.id, turn_id, "Next explicit input".into(), Vec::new());
+    next.turns.last_mut().unwrap().submission = Some(next_record.receipt.clone());
+    next.status = SessionStatus::Connecting;
+    let admitted = harness.client.request(session.id, Uuid::nil(), Command::AcceptSubmission {
+        project, session: Box::new(next), submission: Box::new(next_record.clone()),
+    });
+    report.expect(matches!(admitted, Ok(ResponsePayload::SubmissionSaved { receipt })
+        if receipt.state == SubmissionState::Preparing),
+        "a new explicit input must be admitted after automatic recovery");
+    let _ = harness.client.request(session.id, Uuid::nil(), Command::AbandonSubmission {
+        submission_id: next_record.receipt.id,
+    });
+    report.facts.insert("provider_posts".into(), json!(fake_prompt_posts(&fixture)));
+    write_artifact(&run.root.join("result-submission-cleanup.json"), &run.uuid, started,
+        &[("automatic_cleanup_preserves_delivery_and_history_recovery", &report)]);
+}
+
+#[test]
+#[ignore = "restart seed: run via scripts/opencode-recovery-e2e.ps1 -Long"]
+fn opencode_recovery_restart_seed() {
+    let (root, uuid, _) = restart_root_or_new();
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let harness = start_harness(&root);
+    let mut report = Fact::default();
+
+    // The incident input: stored durably, acknowledgement dropped mid-flight.
+    let behavior = json!({
+        "scenario": "restart-drop-ack",
+        "turns": [{
+            "user_msg_id": "msg_user_1", "created_ms": 1_700_000_100_000u64,
+            "drop_ack": true,
+        }],
+    });
+    let fixture = build_fixture(
+        &Run {
+            root: root.clone(),
+            uuid: uuid.clone(),
+        },
+        "restart-drop-ack",
+        &behavior,
+    );
+    report.server_log = Some(fixture.server_log.clone());
+    let ws = {
+        let path = root.join("workspaces").join("restart");
+        fs::create_dir_all(&path).expect("workspace should be created");
+        path
+    };
+    let project = Project::from_path(ws.clone());
+
+    let (session, record) = durable_submission(&project, "Restart replay ping");
+    let session_id = session.id;
+    let submission_id = record.receipt.id;
+    harness
+        .client
+        .request(
+            session_id,
+            Uuid::nil(),
+            Command::AcceptSubmission {
+                project: project.clone(),
+                session: Box::new(session.clone()),
+                submission: Box::new(record.clone()),
+            },
+        )
+        .expect("the first submission must be accepted");
+    let started_runtime = Uuid::new_v4();
+    match harness.client.request(
+        session_id,
+        started_runtime,
+        Command::Start {
+            options: start_options(&fixture.bin, &ws),
+        },
+    ) {
+        Ok(ResponsePayload::Started { .. }) => {}
+        other => {
+            report.failures.push(format!("driver start failed: {other:?}"));
+        }
+    }
+    let events = harness.client.subscribe(session_id, started_runtime);
+    harness
+        .client
+        .request(
+            session_id,
+            started_runtime,
+            Command::DispatchSubmission {
+                submission_id,
+                workspace: session.workspace.clone(),
+            },
+        )
+        .expect("dispatch must claim the prepared submission");
+
+    let receipt = wait_for_receipt_state(&events, "Unknown", Duration::from_secs(20))
+        .expect("the dropped ack must settle the receipt as Unknown, never resend");
+    let input_id = receipt
+        .get("input_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let native_sid = receipt
+        .get("native_session_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    report.expect(
+        !input_id.is_empty() && !native_sid.is_empty(),
+        format!("the Unknown receipt must carry input and native ids: {receipt}"),
+    );
+    report.expect(
+        fake_prompt_posts(&fixture) == 1,
+        format!(
+            "exactly one provider POST must exist, saw {}",
+            fake_prompt_posts(&fixture)
+        ),
+    );
+    report.facts.insert("input_id_len".into(), json!(input_id.len()));
+    report
+        .facts
+        .insert("native_session_id_len".into(), json!(native_sid.len()));
+
+    // A second submission while Unknown is pending must be refused before any
+    // transport work: Unknown keeps blocking new POSTs.
+    let (retry_session, retry_record) = durable_submission(&project, "Restart replay retry");
+    let mut retry_session = retry_session;
+    retry_session.id = session_id;
+    let mut retry_record = retry_record;
+    retry_record.session_id = session_id;
+    retry_record.receipt.id = Uuid::new_v4();
+    retry_session.turns.last_mut().expect("retry turn").id = retry_record.receipt.id;
+    retry_session.turns.last_mut().expect("retry turn").submission =
+        Some(retry_record.receipt.clone());
+    match harness.client.request(
+        session_id,
+        Uuid::nil(),
+        Command::AcceptSubmission {
+            project: project.clone(),
+            session: Box::new(retry_session),
+            submission: Box::new(retry_record),
+        },
+    ) {
+        Ok(payload) => report.failures.push(format!(
+            "a retry while Unknown is pending must be refused, got {payload:?}"
+        )),
+        Err(_) => {}
+    }
+    report.expect(
+        fake_prompt_posts(&fixture) == 1,
+        "the refused retry must not reach the provider",
+    );
+
+    // Emulate the GUI stop-save that produced the incident record: the turn is
+    // Interrupted, the receipt stays Unknown, a follow-up is queued. The
+    // current build heals the projection to Idle on save; the persisted row is
+    // then rewritten to Working below so the repair process restarts from the
+    // exact incident record.
+    let mut snapshot = hydrate_full(&harness.client, session_id).expect("session hydrates");
+    snapshot
+        .turns
+        .last_mut()
+        .expect("the turn exists")
+        .status = TurnStatus::Interrupted;
+    snapshot.status = SessionStatus::Working;
+    snapshot
+        .queued_messages
+        .push(QueuedMessage::new("Restart replay follow-up"));
+    snapshot.updated_at += 5;
+    match harness.client.request(
+        session_id,
+        Uuid::nil(),
+        Command::SaveTaskState {
+            projects: vec![project.clone()],
+            live_session_ids: Vec::new(),
+            sessions: vec![snapshot],
+        },
+    ) {
+        Ok(ResponsePayload::TaskStateSaved { .. }) => {}
+        other => report
+            .failures
+            .push(format!("the stop-save must be accepted: {other:?}")),
+    }
+    let healed = hydrate_full(&harness.client, session_id).expect("session hydrates");
+    report.expect(
+        healed.status == SessionStatus::Idle,
+        format!(
+            "the stop-save must not leave a false Working projection, got {:?}",
+            healed.status
+        ),
+    );
+    report.expect(
+        healed.turns.last().and_then(|turn| turn.submission.as_ref()).is_some_and(
+            |receipt| receipt.state == SubmissionState::Unknown && receipt.input_id == input_id,
+        ),
+        "the stop-save must preserve the Unknown receipt and its input id",
+    );
+    report.expect(
+        healed.queued_messages.len() == 1
+            && healed.queued_messages[0].content == "Restart replay follow-up",
+        "the queued follow-up must survive the stop-save",
+    );
+
+    // Persist the exact incident record: Working with an Interrupted turn and
+    // an Unknown receipt. The repair process must heal this on load.
+    let store = StateStore::daemon(root.join("app.db"));
+    let mut persisted = store.load().expect("the persisted state reloads");
+    let stored = persisted
+        .sessions
+        .iter_mut()
+        .find(|candidate| candidate.id == session_id)
+        .expect("the session row exists");
+    stored.status = SessionStatus::Working;
+    persisted.mark_session_dirty(session_id);
+    store
+        .save(&mut persisted)
+        .expect("the incident Working record persists");
+
+    fs::write(
+        root.join("handoff.json"),
+        serde_json::to_vec_pretty(&json!({
+            "session_id": session_id.to_string(),
+            "submission_id": submission_id.to_string(),
+            "input_id": input_id,
+            "native_session_id": native_sid,
+            "queued": "Restart replay follow-up",
+            "project_id": project.id.to_string(),
+            "project_path": project.path.to_string_lossy(),
+        }))
+        .unwrap(),
+    )
+    .expect("the repair handoff should be written");
+    report.facts.insert(
+        "handoff".into(),
+        json!({"session_id": session_id.to_string()}),
+    );
+    write_artifact(&root.join("result-seed.json"), &uuid, started, &[("seed", &report)]);
+}
+
+#[test]
+#[ignore = "restart repair: run via scripts/opencode-recovery-e2e.ps1 -Long after the seed"]
+fn opencode_recovery_restart_repair() {
+    let root = std::env::var_os("FINTWIND_RESTART_ROOT")
+        .map(PathBuf::from)
+        .expect("FINTWIND_RESTART_ROOT must point at the seed run dir");
+    let uuid = root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("repair")
+        .to_owned();
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let handoff: Value = serde_json::from_slice(
+        &fs::read(root.join("handoff.json")).expect("the seed handoff must exist"),
+    )
+    .expect("the handoff must be JSON");
+    let session_id = Uuid::parse_str(handoff["session_id"].as_str().unwrap()).unwrap();
+    let input_id = handoff["input_id"].as_str().unwrap().to_owned();
+    let native_sid = handoff["native_session_id"].as_str().unwrap().to_owned();
+    let queued = handoff["queued"].as_str().unwrap().to_owned();
+    let project_id = Uuid::parse_str(handoff["project_id"].as_str().unwrap()).unwrap();
+    let project_path = PathBuf::from(handoff["project_path"].as_str().unwrap());
+
+    // A fresh backend on the same app.db: the incident record loads as-is.
+    let harness = start_harness(&root);
+    let mut report = Fact::default();
+    let loaded = hydrate_full(&harness.client, session_id).expect("session hydrates");
+    report.expect(
+        loaded.status == SessionStatus::Working,
+        format!(
+            "the incident record must replay as Working before repair, got {:?}",
+            loaded.status
+        ),
+    );
+    report.expect(
+        loaded.turns.last().and_then(|turn| turn.submission.as_ref()).is_some_and(
+            |receipt| receipt.state == SubmissionState::Unknown && receipt.input_id == input_id,
+        ),
+        "the incident Unknown receipt and input id must survive the restart",
+    );
+
+    // Resume against a fresh private server that never saw the input.
+    let repair_ws = {
+        let path = root.join("workspaces").join("restart-repair");
+        fs::create_dir_all(&path).expect("workspace should be created");
+        path
+    };
+    let repair_fixture = build_fixture(&Run { root: root.clone(), uuid: uuid.clone() }, "restart-fresh", &json!({
+        "scenario": "restart-fresh",
+        "turns": [],
+    }));
+    report.server_log = Some(repair_fixture.server_log.clone());
+    let repair_runtime = Uuid::new_v4();
+    let mut resume_options = start_options(&repair_fixture.bin, &repair_ws);
+    resume_options.provider_cursor = Some(
+        serde_json::to_value(ProviderResumeCursor::OpenCode {
+            session_id: native_sid.clone(),
+        })
+        .unwrap(),
+    );
+    match harness.client.request(
+        session_id,
+        repair_runtime,
+        Command::Start {
+            options: resume_options,
+        },
+    ) {
+        Ok(ResponsePayload::Started { .. }) => {}
+        other => report
+            .failures
+            .push(format!("resume against the fresh server failed: {other:?}")),
+    }
+    // The resume itself hydrates; a refused new submission also hydrates. Use
+    // the refusal to prove the gate, then read the repaired projection. The
+    // retry must carry the original project identity so the refusal comes
+    // from the unsettled-submission gate, not an identity mismatch.
+    let retry_project = Project {
+        id: project_id,
+        name: project_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("restart")
+            .to_owned(),
+        path: project_path,
+        created_at: 0,
+    };
+    let (mut retry_session, retry_record) = durable_submission(&retry_project, "Restart repair retry");
+    retry_session.id = session_id;
+    let mut retry_record = retry_record;
+    retry_record.session_id = session_id;
+    let retry_turn = Uuid::new_v4();
+    retry_session.turns.last_mut().expect("retry turn").id = retry_turn;
+    retry_record.receipt.id = retry_turn;
+    retry_session.turns.last_mut().expect("retry turn").submission =
+        Some(retry_record.receipt.clone());
+    match harness.client.request(
+        session_id,
+        Uuid::nil(),
+        Command::AcceptSubmission {
+            project: retry_project,
+            session: Box::new(retry_session),
+            submission: Box::new(retry_record),
+        },
+    ) {
+        Ok(payload) => report.failures.push(format!(
+            "a retry after restart while Unknown is pending must still be refused, got {payload:?}"
+        )),
+        Err(_) => {}
+    }
+    let repaired = hydrate_full(&harness.client, session_id).expect("session hydrates");
+    report.expect(
+        repaired.status == SessionStatus::Idle,
+        format!(
+            "the restart must heal Working to Idle for a lone Unknown, got {:?}",
+            repaired.status
+        ),
+    );
+    report.expect(
+        repaired.turns.last().and_then(|turn| turn.submission.as_ref()).is_some_and(
+            |receipt| receipt.state == SubmissionState::Unknown && receipt.input_id == input_id,
+        ),
+        "repair must preserve the Unknown receipt, never flip it to NotSent",
+    );
+    report.expect(
+        repaired.turns.last().map(|turn| turn.status) == Some(TurnStatus::Interrupted),
+        "the Interrupted turn must be preserved, not resurrected",
+    );
+    report.expect(
+        repaired.queued_messages.len() == 1 && repaired.queued_messages[0].content == queued,
+        "the queued follow-up must survive the restart without auto-dispatch",
+    );
+    report.expect(
+        fake_prompt_posts(&repair_fixture) == 0,
+        "no provider POST may happen on restart or resume",
+    );
+    report.facts.insert(
+        "native_binding".into(),
+        json!(repaired
+            .turns
+            .last()
+            .and_then(|turn| turn.submission.as_ref())
+            .and_then(|receipt| receipt.native_session_id.clone())),
+    );
+
+    // A stale Working snapshot saved after the repair must not regress it.
+    let mut stale = repaired.clone();
+    stale.status = SessionStatus::Working;
+    stale.updated_at += 50;
+    match harness.client.request(
+        session_id,
+        Uuid::nil(),
+        Command::SaveTaskState {
+            projects: Vec::new(),
+            live_session_ids: Vec::new(),
+            sessions: vec![stale],
+        },
+    ) {
+        Ok(ResponsePayload::TaskStateSaved { .. }) => {}
+        other => report
+            .failures
+            .push(format!("the stale save must be accepted: {other:?}")),
+    }
+    let after_stale = hydrate_full(&harness.client, session_id).expect("session hydrates");
+    report.expect(
+        after_stale.status == SessionStatus::Idle,
+        "a stale Working snapshot must not resurrect the repaired Idle projection",
+    );
+    report.expect(
+        after_stale.turns.last().and_then(|turn| turn.submission.as_ref()).is_some_and(
+            |receipt| receipt.state == SubmissionState::Unknown && receipt.input_id == input_id,
+        ),
+        "a stale snapshot must not touch the Unknown receipt",
+    );
+    write_artifact(
+        &root.join("result-repair.json"),
+        &uuid,
+        started,
+        &[("repair", &report)],
+    );
+}
+
+#[test]
+#[ignore = "partial sessions plus bounded query faults: run via scripts/opencode-recovery-e2e.ps1 -Long"]
+fn opencode_recovery_partial_and_faults() {
+    let run = Run::new();
+    let started = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let harness = start_harness(&run.root);
+    let mut partial = Fact::default();
+
+    // Sessions A, B, C share one private serve (same fixture binary = one
+    // pool slot). A settles live, B stays Unknown-pending, C must still
+    // settle: a partial recovery failure must not drag the others down, and
+    // the pool must not restart the server per broken session.
+    let behavior = json!({
+        "scenario": "partial-shared-serve",
+        "turns": [
+            {
+                "user_msg_id": "msg_a", "created_ms": 1_700_000_200_000u64,
+                "sse": [
+                    {"step_started": true}, {"text_started": true},
+                    {"delta": "A done"}, {"text_ended": "A done"},
+                    {"inbox_delivered": true}, {"terminal": "succeeded"},
+                ],
+                "durable_messages": settled_history("msg_a", "msg_a_asst", 1_700_000_200_000, "A done", "succeeded"),
+                "session_status": "idle", "session_outcome": "succeeded",
+                "session_time_idle": 1_700_000_202_000u64, "active": false,
+            },
+            {"user_msg_id": "msg_b", "created_ms": 1_700_000_210_000u64, "drop_ack": true},
+            {
+                "user_msg_id": "msg_c", "created_ms": 1_700_000_220_000u64,
+                "sse": [
+                    {"step_started": true}, {"text_started": true},
+                    {"delta": "C done"}, {"text_ended": "C done"},
+                    {"inbox_delivered": true}, {"terminal": "succeeded"},
+                ],
+                "durable_messages": settled_history("msg_c", "msg_c_asst", 1_700_000_220_000, "C done", "succeeded"),
+                "session_status": "idle", "session_outcome": "succeeded",
+                "session_time_idle": 1_700_000_222_000u64, "active": false,
+            },
+            {
+                "user_msg_id": "msg_e0", "created_ms": 1_700_000_230_000u64, "drop_ack": true,
+            },
+            {
+                "user_msg_id": "msg_e1", "created_ms": 1_700_000_231_000u64, "drop_ack": true,
+            },
+            {
+                "user_msg_id": "msg_e2", "created_ms": 1_700_000_232_000u64, "drop_ack": true,
+            },
+            {
+                "user_msg_id": "msg_e3", "created_ms": 1_700_000_233_000u64, "drop_ack": true,
+            },
+            {
+                "user_msg_id": "msg_e4", "created_ms": 1_700_000_234_000u64, "drop_ack": true,
+            },
+        ],
+    });
+    let fixture = build_fixture(&run, "partial-shared-serve", &behavior);
+    partial.server_log = Some(fixture.server_log.clone());
+
+    let settle = |tag: &str, prompt: &str| -> (Uuid, Uuid, Receiver<SequencedEvent>) {
+        let ws = run.workspace(&format!("partial-{tag}"));
+        let project = Project::from_path(ws.clone());
+        let (session, record) = durable_submission(&project, prompt);
+        let session_id = session.id;
+        let submission_id = record.receipt.id;
+        let runtime_id = Uuid::new_v4();
+        harness
+            .client
+            .request(
+                session_id,
+                Uuid::nil(),
+                Command::AcceptSubmission {
+                    project,
+                    session: Box::new(session),
+                    submission: Box::new(record),
+                },
+            )
+            .unwrap_or_else(|error| panic!("{tag} accept failed: {error}"));
+        harness
+            .client
+            .request(
+                session_id,
+                runtime_id,
+                Command::Start {
+                    options: start_options(&fixture.bin, &ws),
+                },
+            )
+            .unwrap_or_else(|error| panic!("{tag} start failed: {error}"));
+        let events = harness.client.subscribe(session_id, runtime_id);
+        let hydrated = hydrate_full(&harness.client, session_id).expect("session hydrates");
+        harness
+            .client
+            .request(
+                session_id,
+                runtime_id,
+                Command::DispatchSubmission {
+                    submission_id,
+                    workspace: hydrated.workspace.clone(),
+                },
+            )
+            .unwrap_or_else(|error| panic!("{tag} dispatch failed: {error}"));
+        (session_id, runtime_id, events)
+    };
+
+    let (session_a, _, events_a) = settle("a", "Partial A ping");
+    let mut collected_a = Collected::default();
+    observe(
+        &events_a,
+        Duration::from_secs(25),
+        Duration::from_millis(500),
+        &mut collected_a,
+    );
+    partial.expect(
+        collected_a.finishes.len() == 1 && collected_a.finishes[0].0,
+        format!("session A must settle live while B is broken: {:?}", collected_a.finishes),
+    );
+
+    let (session_b, _, events_b) = settle("b", "Partial B ping");
+    let unknown_b = wait_for_receipt_state(&events_b, "Unknown", Duration::from_secs(20));
+    partial.expect(
+        unknown_b.is_some(),
+        "session B must land Unknown after the dropped ack",
+    );
+    // A short negative window: no finish may arrive for the pending session.
+    let mut collected_b = Collected::default();
+    observe(
+        &events_b,
+        Duration::from_secs(5),
+        Duration::from_millis(200),
+        &mut collected_b,
+    );
+    partial.expect(
+        collected_b.finishes.is_empty(),
+        format!("session B must stay pending, got {:?}", collected_b.finishes),
+    );
+
+    let (session_c, _, events_c) = settle("c", "Partial C ping");
+    let mut collected_c = Collected::default();
+    observe(
+        &events_c,
+        Duration::from_secs(25),
+        Duration::from_millis(500),
+        &mut collected_c,
+    );
+    partial.expect(
+        collected_c.finishes.len() == 1 && collected_c.finishes[0].0,
+        format!("session C must settle live despite B pending: {:?}", collected_c.finishes),
+    );
+    let hydrated_b = hydrate_full(&harness.client, session_b).expect("session hydrates");
+    partial.expect(
+        hydrated_b.turns.last().and_then(|turn| turn.submission.as_ref()).is_some_and(
+            |receipt| receipt.state == SubmissionState::Unknown,
+        ),
+        "session B must stay Unknown while A and C settle around it",
+    );
+    let spawns = read_jsonl(&fixture.spawn_log).len();
+    partial.expect(
+        spawns == 1,
+        format!("A, B and C must share one private serve, saw {spawns} spawns"),
+    );
+    partial.facts.insert(
+        "settled".into(),
+        json!({"a": collected_a.finishes, "c": collected_c.finishes}),
+    );
+    let _ = session_a;
+    let _ = session_c;
+
+    // Bounded query faults: history unavailable must fail fast and preserve
+    // the Unknown receipt instead of flipping success or hanging.
+    let mut faults = Fact::default();
+    let fault_fixture = build_fixture(&run, "fault-history", &json!({
+        "scenario": "fault-history",
+        "messages_status": 503,
+        "turns": [{"user_msg_id": "msg_d", "created_ms": 1_700_000_300_000u64, "drop_ack": true}],
+    }));
+    let fault_ws = run.workspace("fault-history");
+    let fault_project = Project::from_path(fault_ws.clone());
+    let (fault_session, fault_record) = durable_submission(&fault_project, "Fault ping");
+    let fault_session_id = fault_session.id;
+    let fault_submission_id = fault_record.receipt.id;
+    let fault_runtime = Uuid::new_v4();
+    harness
+        .client
+        .request(
+            fault_session_id,
+            Uuid::nil(),
+            Command::AcceptSubmission {
+                project: fault_project,
+                session: Box::new(fault_session),
+                submission: Box::new(fault_record),
+            },
+        )
+        .expect("fault accept failed");
+    harness
+        .client
+        .request(
+            fault_session_id,
+            fault_runtime,
+            Command::Start {
+                options: start_options(&fault_fixture.bin, &fault_ws),
+            },
+        )
+        .expect("fault start failed");
+    let fault_events = harness.client.subscribe(fault_session_id, fault_runtime);
+    let hydrated_fault = hydrate_full(&harness.client, fault_session_id).expect("session hydrates");
+    harness
+        .client
+        .request(
+            fault_session_id,
+            fault_runtime,
+            Command::DispatchSubmission {
+                submission_id: fault_submission_id,
+                workspace: hydrated_fault.workspace.clone(),
+            },
+        )
+        .expect("fault dispatch failed");
+    faults.expect(
+        wait_for_receipt_state(&fault_events, "Unknown", Duration::from_secs(20)).is_some(),
+        "the fault session must land Unknown",
+    );
+    let fault_sid = fake_first_prompt_sid(&fault_fixture).expect("the fault fake saw the prompt");
+    let fault_started = Instant::now();
+    let fetch_outcome = harness.client.request(
+        Uuid::nil(),
+        Uuid::nil(),
+        Command::FetchNativeTranscript {
+            binary: fault_fixture.bin.clone(),
+            directory: fault_ws.clone(),
+            session_id: fault_sid,
+        },
+    );
+    let fault_elapsed = fault_started.elapsed();
+    faults.expect(
+        fetch_outcome.is_err(),
+        format!("history-unavailable reconciliation must fail, got {fetch_outcome:?}"),
+    );
+    faults.expect(
+        fault_elapsed < Duration::from_secs(30),
+        format!("the failed reconciliation must stay bounded, took {fault_elapsed:?}"),
+    );
+    let mut collected_fault = Collected::default();
+    observe(
+        &fault_events,
+        Duration::from_secs(3),
+        Duration::from_millis(200),
+        &mut collected_fault,
+    );
+    faults.expect(
+        collected_fault.finishes.is_empty(),
+        "a failed history read must not settle the turn",
+    );
+    faults.expect(
+        hydrate_full(&harness.client, fault_session_id)
+            .and_then(|session| session.turns.last().and_then(|turn| turn.submission.clone()))
+            .is_some_and(|receipt| receipt.state == SubmissionState::Unknown),
+        "a failed history read must preserve the Unknown receipt",
+    );
+    faults.facts.insert(
+        "fetch_elapsed_ms".into(),
+        json!(fault_elapsed.as_millis() as u64),
+    );
+
+    // Many unresolved sessions must keep the daemon responsive: six pending
+    // Unknown submissions, then a timed catalog read.
+    let mut scale = Fact::default();
+    for index in 0..5 {
+        let ws = run.workspace(&format!("scale-{index}"));
+        let project = Project::from_path(ws.clone());
+        let (session, record) = durable_submission(&project, "Scale ping");
+        let session_id = session.id;
+        let submission_id = record.receipt.id;
+        let runtime_id = Uuid::new_v4();
+        harness
+            .client
+            .request(
+                session_id,
+                Uuid::nil(),
+                Command::AcceptSubmission {
+                    project,
+                    session: Box::new(session),
+                    submission: Box::new(record),
+                },
+            )
+            .unwrap_or_else(|error| panic!("scale {index} accept failed: {error}"));
+        harness
+            .client
+            .request(
+                session_id,
+                runtime_id,
+                Command::Start {
+                    options: start_options(&fixture.bin, &ws),
+                },
+            )
+            .unwrap_or_else(|error| panic!("scale {index} start failed: {error}"));
+        let events = harness.client.subscribe(session_id, runtime_id);
+        let hydrated = hydrate_full(&harness.client, session_id).expect("session hydrates");
+        harness
+            .client
+            .request(
+                session_id,
+                runtime_id,
+                Command::DispatchSubmission {
+                    submission_id,
+                    workspace: hydrated.workspace.clone(),
+                },
+            )
+            .unwrap_or_else(|error| panic!("scale {index} dispatch failed: {error}"));
+        scale.expect(
+            wait_for_receipt_state(&events, "Unknown", Duration::from_secs(20)).is_some(),
+            format!("scale session {index} must land Unknown"),
+        );
+    }
+    let catalog_started = Instant::now();
+    match harness.client.request(
+        Uuid::nil(),
+        Uuid::nil(),
+        Command::LoadTaskState,
+    ) {
+        Ok(ResponsePayload::TaskState { sessions, .. }) => {
+            scale.expect(
+                sessions.len() >= 8,
+                format!("the catalog must list every session, saw {}", sessions.len()),
+            );
+        }
+        other => scale
+            .failures
+            .push(format!("LoadTaskState must stay responsive: {other:?}")),
+    }
+    scale.expect(
+        catalog_started.elapsed() < Duration::from_secs(10),
+        format!(
+            "the catalog read must not scan the world per call, took {:?}",
+            catalog_started.elapsed()
+        ),
+    );
+    scale.facts.insert(
+        "unresolved_sessions".into(),
+        json!(7),
+    );
+    write_artifact(
+        &run.root.join("result-partial.json"),
+        &run.uuid,
+        started,
+        &[
+            ("partial_shared_serve", &partial),
+            ("fault_bounded_history_failure", &faults),
+            ("many_unresolved_projection", &scale),
+        ],
     );
 }

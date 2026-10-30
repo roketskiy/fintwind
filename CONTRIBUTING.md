@@ -96,6 +96,18 @@ cargo check
 cargo test
 ```
 
+GitHub runs Tests on pushes to `main` and on pull requests, not on every
+feature-branch push. Use **Actions → Tests → Run workflow** to check a branch
+without opening a PR. The CI Rust version is maintained in
+`.github/rust-version`.
+
+For workflow or release-automation changes, also run the isolated black-box
+check (Python 3 and Bun; no application, provider credentials, or GitHub access):
+
+```sh
+python scripts/ci-workflows-blackbox.py --output temp/workflow-tools/result.json
+```
+
 For user-visible changes, wait for the watcher to report a successful rebuild
 and validate the freshly relaunched app. Include screenshots or a short
 recording in the pull request when they make the result easier to review.

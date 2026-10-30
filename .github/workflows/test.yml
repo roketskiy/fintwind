@@ -3,8 +3,9 @@ name: Tests
 on:
   push:
     branches:
-      - "**"
+      - main
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,6 +13,12 @@ permissions:
 concurrency:
   group: tests-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
 
 jobs:
   test:
@@ -23,27 +30,34 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Install Rust
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal
-          rustup default 1.97.0
+      - name: Set up Rust and caches
+        id: rust
+        uses: ./.github/actions/setup-rust
+        with:
+          kind: test
+          profile: debug
 
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
 
-      - name: Cache Cargo
-        uses: actions/cache@v6
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: windows-latest-rust-1.97.0-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            windows-latest-rust-1.97.0-cargo-
-
       - name: Run tests
         run: cargo test --locked
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-failure-diagnostics
+          path: temp/recovery-e2e/**/result.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Save compiler artifacts
+        if: success() && github.ref == 'refs/heads/main' && steps.rust.outputs.build-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ steps.rust.outputs.build-key }}
+          path: ${{ steps.rust.outputs.build-path }}
 
   # Debug tests never compile the release-only channel code, so this job
   # checks the stable release configuration that CI actually ships. Beta is
@@ -58,21 +72,36 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Install Rust
-        run: |
-          rustup toolchain install 1.97.0 --profile minimal
-          rustup default 1.97.0
-
-      - name: Cache Cargo
-        uses: actions/cache@v6
+      - name: Set up Rust and caches
+        id: rust
+        uses: ./.github/actions/setup-rust
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: windows-latest-rust-1.97.0-release-check-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            windows-latest-rust-1.97.0-release-check-
+          kind: release-check
+          profile: release
 
       - name: Check stable release
         run: cargo check --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon
+
+      - name: Save compiler artifacts
+        if: success() && github.ref == 'refs/heads/main' && steps.rust.outputs.build-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          key: ${{ steps.rust.outputs.build-key }}
+          path: ${{ steps.rust.outputs.build-path }}
+
+  workflow-tools:
+    name: Workflow tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - name: Check release automation against an isolated API
+        run: python3 scripts/ci-workflows-blackbox.py --output "$RUNNER_TEMP/workflow-tools/result.json"
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: workflow-tools-report
+          path: ${{ runner.temp }}/workflow-tools/result.json
+          retention-days: 7

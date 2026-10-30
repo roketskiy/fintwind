@@ -1,0 +1,56 @@
+name: Set up Rust and caches
+description: Shared toolchain, dependency downloads, and bounded-profile build caches
+inputs:
+  kind:
+    description: Separate cache namespace (test, release-check, release-build)
+    required: true
+  profile:
+    description: Cargo output profile directory (debug or release)
+    required: true
+outputs:
+  build-key:
+    description: Exact build cache key to save after a successful main-branch job
+    value: ${{ steps.build.outputs.cache-primary-key }}
+  build-hit:
+    description: Whether the exact build cache already exists
+    value: ${{ steps.build.outputs.cache-hit }}
+  build-path:
+    description: Only compiler artifacts, not incremental state or distributable bundles
+    value: |
+      target/${{ inputs.profile }}/deps
+      target/${{ inputs.profile }}/build
+      target/${{ inputs.profile }}/.fingerprint
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      shell: pwsh
+      run: |
+        $version = (Get-Content '.github/rust-version' -Raw).Trim()
+        rustup toolchain install $version --profile minimal
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        rustup default $version
+
+    - name: Cache dependency downloads
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: |
+          cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Restore compiler artifacts
+      id: build
+      uses: actions/cache/restore@v6
+      with:
+        path: |
+          target/${{ inputs.profile }}/deps
+          target/${{ inputs.profile }}/build
+          target/${{ inputs.profile }}/.fingerprint
+        key: cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}-${{ github.sha }}
+        restore-keys: |
+          cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}-
+          cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', '.cargo/config.toml') }}-

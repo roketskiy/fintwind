@@ -78,6 +78,8 @@ ratex-parser = "=0.1.14"
 ratex-layout = "=0.1.14"
 ratex-types = "=0.1.14"
 ratex-svg = { version = "=0.1.14", features = ["embed-fonts"] }
+# Share GPUI's SVG parser to measure outlined math ink on background workers.
+usvg = "=0.46.0"
 regex = "1"
 rusqlite = { version = "0.37", features = ["bundled"] }
 rust-i18n = "4"

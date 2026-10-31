@@ -34,9 +34,11 @@ release was not code-signed. Choose **More info → Run anyway**.
 
 ## Updating
 
-An installed copy updates itself. When fintwind starts it checks the
-[GitHub release](https://github.com/roketskiy/fintwind/releases) page, and the
-notice it shows carries **Update now**: fintwind downloads the installer for
+An installed copy updates itself. When fintwind starts it asks the update
+gateway (`fintwind.roketskiy.top`, which caches the
+[GitHub release](https://github.com/roketskiy/fintwind/releases) list so the
+check never hits the GitHub API rate limit) whether a newer release exists,
+and the notice it shows carries **Update now**: fintwind downloads the installer for
 your architecture, checks it against the digest published with the release,
 and installs it silently. No UAC prompt, because the installer is per-user.
 fintwind closes while it installs and comes back by itself. **Go to Release to

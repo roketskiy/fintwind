@@ -31,3 +31,7 @@ skills-lock.json
 
 # Generated architecture diagram (archify), local only
 docs/architecture*
+
+# Cloudflare Worker local state and generated types (regen via `wrangler types`)
+.wrangler/
+workers/**/worker-configuration.d.ts

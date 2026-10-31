@@ -130,6 +130,11 @@ Failed Rust tests upload available recovery E2E `result.json` files for seven
 days. The Workflow tools job checks release automation against an isolated
 loopback API and always uploads its JSON verification report.
 
+Both Windows check jobs also upload Cargo fingerprint logs on success and
+failure. See [Cargo cache diagnostics](docs/cargo-cache-diagnostics.md) for the
+artifact names, the isolated local reproduction, and how to distinguish a
+cache download hit from actual compiler-artifact reuse.
+
 ### OpenCode compatibility
 
 Fintwind uses OpenCode 2 (`@opencode/cli`), not OpenCode 1.x. The optional

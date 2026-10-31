@@ -3247,10 +3247,14 @@ scheduled_tasks.mode_at_time:
   en: At time
 scheduled_tasks.mode_interval:
   en: Interval
+scheduled_tasks.mode_once:
+  en: Once
 scheduled_tasks.repeat_label:
   en: Days
 scheduled_tasks.interval_unit:
   en: minutes
+scheduled_tasks.date_placeholder:
+  en: YYYY-MM-DD
 scheduled_tasks.every_day:
   en: Every day
 scheduled_tasks.at_time_summary:
@@ -3259,6 +3263,8 @@ scheduled_tasks.every_minutes:
   en: Every %{count} min
 scheduled_tasks.every_hours:
   en: Every %{count} h
+scheduled_tasks.once_summary:
+  en: Once %{time}
 scheduled_tasks.weekday_mon:
   en: Mon
 scheduled_tasks.weekday_tue:
@@ -3353,6 +3359,10 @@ scheduled_tasks.error_weekdays:
   en: Select at least one day
 scheduled_tasks.error_interval:
   en: Interval must be 1 to 525600 minutes
+scheduled_tasks.error_datetime:
+  en: Use YYYY-MM-DD and HH:MM
+scheduled_tasks.error_past:
+  en: Use a future time
 scheduled_tasks.error_project:
   en: Select a project
 scheduled_tasks.error_session:

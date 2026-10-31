@@ -96,6 +96,7 @@ impl ScheduledTasksView {
                 schedule: ScheduleKind::AtTime,
                 time: "09:00".into(),
                 weekdays: 0,
+                once_date: Local::now().format("%Y-%m-%d").to_string(),
                 interval_minutes: "60".into(),
                 target: TargetKind::NewSession,
                 project_id: self.projects.first().map(|project| project.id),
@@ -439,21 +440,22 @@ impl ScheduledTasksView {
             [
                 Choice::new("fixed", tr!("scheduled_tasks.mode_at_time")),
                 Choice::new("interval", tr!("scheduled_tasks.mode_interval")),
+                Choice::new("once", tr!("scheduled_tasks.mode_once")),
             ],
         )
-        .selected(if editor.schedule == ScheduleKind::AtTime {
-            "fixed"
-        } else {
-            "interval"
+        .selected(match editor.schedule {
+            ScheduleKind::AtTime => "fixed",
+            ScheduleKind::Every => "interval",
+            ScheduleKind::Once => "once",
         })
         .disabled(busy)
         .on_change(cx.listener(|this, value: &SharedString, _, cx| {
             this.edit(
                 |draft| {
-                    draft.schedule = if value.as_ref() == "fixed" {
-                        ScheduleKind::AtTime
-                    } else {
-                        ScheduleKind::Every
+                    draft.schedule = match value.as_ref() {
+                        "fixed" => ScheduleKind::AtTime,
+                        "once" => ScheduleKind::Once,
+                        _ => ScheduleKind::Every,
                     }
                 },
                 cx,
@@ -472,6 +474,56 @@ impl ScheduledTasksView {
                         )
                     });
                 })
+                .into_any_element()
+        } else if editor.schedule == ScheduleKind::Once {
+            let weak = cx.entity().downgrade();
+            let min_day = Local::now().format("%Y-%m-%d").to_string().parse().ok();
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    DatePicker::new("scheduled-once-date", editor.once_date.parse().ok())
+                        .placeholder(tr!("scheduled_tasks.date_placeholder"))
+                        .range(min_day, None)
+                        .disabled(busy)
+                        .on_change({
+                            let weak = weak.clone();
+                            move |date, _, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.edit(
+                                        |draft| {
+                                            draft.once_date =
+                                                date.strftime("%Y-%m-%d").to_string()
+                                        },
+                                        cx,
+                                    )
+                                });
+                                }
+                        }),
+                )
+                .child(
+                    TimePicker::new("scheduled-once-time", editor.time.parse().ok())
+                        .step(1)
+                        .disabled(busy)
+                        .on_change({
+                            let weak = weak.clone();
+                            move |time, _, cx| {
+                                let _ = weak.update(cx, |this, cx| {
+                                    this.edit(
+                                        |draft| {
+                                            draft.time = format!(
+                                                "{:02}:{:02}",
+                                                time.hour(),
+                                                time.minute()
+                                            )
+                                        },
+                                        cx,
+                                    )
+                                });
+                            }
+                        }),
+                )
                 .into_any_element()
         } else {
             div()

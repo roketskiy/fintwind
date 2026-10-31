@@ -27,11 +27,13 @@ return await tools.fintwind_scheduled_tasks.create({
 新会话沿用当前会话的工作区、模型和权限配置，不接受其他项目或会话的 ID。
 任务进入现有定时任务模块，可在应用中编辑、暂停、删除或立即运行。
 
-定时规则支持两种形式：
+定时规则支持三种形式：
 
 - `every`：`intervalSeconds` 在 60 秒到 365 天之间，首次运行在一个间隔之后。
 - `atTime`：例如 `{kind: "atTime", time: "09:15", weekdays: ["monday", "friday"]}`。
   时刻使用 daemon 所在机器的本地时区，工具说明包含当前时区偏移。
+- `once`：例如 `{kind: "once", at: "2026-11-02 09:15"}` 或 RFC3339 时间。
+  在 daemon 本地时区执行一次，运行后自动停用并保留历史记录；启用时必须是未来时间。
 
 `enabled: false` 创建暂停的任务。返回值包含任务 ID、已保存的规则和目标，
 以及 `nextDueAt` 和带时区偏移的 `nextRunLocal`；暂停任务的下次运行时间为

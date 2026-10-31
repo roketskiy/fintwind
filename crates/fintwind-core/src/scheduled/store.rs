@@ -243,8 +243,13 @@ impl ScheduledStore {
                     at: now,
                     outcome: DispatchOutcome::Missed,
                 });
-                let next = stored.schedule.next_due(now).ok();
-                update_task_state(&transaction, id, next, &stored)?;
+                let one_shot = stored.schedule.is_once();
+                let next = if one_shot {
+                    None
+                } else {
+                    stored.schedule.next_due(now).ok()
+                };
+                update_task_state(&transaction, id, !one_shot, next, &stored)?;
                 continue;
             }
             let occurrence = Occurrence {
@@ -381,11 +386,23 @@ impl ScheduledStore {
                 let next_due_at = if occurrence.manual {
                     current_due
                 } else if enabled {
-                    stored.schedule.next_due(now).ok()
+                    let one_shot = stored.schedule.is_once();
+                    if one_shot {
+                        None
+                    } else {
+                        stored.schedule.next_due(now).ok()
+                    }
                 } else {
                     None
                 };
-                update_task_state(&transaction, occurrence.task_id, next_due_at, &stored)?;
+                let enabled_next = enabled && (occurrence.manual || !stored.schedule.is_once());
+                update_task_state(
+                    &transaction,
+                    occurrence.task_id,
+                    enabled_next,
+                    next_due_at,
+                    &stored,
+                )?;
             }
             None => {
                 transaction.execute(
@@ -597,13 +614,15 @@ fn insert_occurrence(connection: &Connection, occurrence: &Occurrence) -> Result
 fn update_task_state(
     connection: &Connection,
     id: ScheduledTaskId,
+    enabled: bool,
     next_due_at: Option<u64>,
     stored: &StoredTask,
 ) -> Result<()> {
     connection.execute(
-        "UPDATE scheduled_tasks SET next_due_at = ?2, data = ?3 WHERE id = ?1",
+        "UPDATE scheduled_tasks SET enabled = ?2, next_due_at = ?3, data = ?4 WHERE id = ?1",
         params![
             id.0.to_string(),
+            flag(enabled),
             optional_time(next_due_at)?,
             serde_json::to_string(stored)?
         ],
@@ -629,8 +648,10 @@ fn next_due(draft: &ScheduledTaskDraft, now: u64) -> Result<Option<u64>> {
 }
 
 fn missed(now: u64, due_at: u64, schedule: Recurrence) -> bool {
-    matches!(schedule, Recurrence::AtTime { .. })
-        && due_at.saturating_add(FIXED_TIME_GRACE_SECS) < now
+    matches!(
+        schedule,
+        Recurrence::AtTime { .. } | Recurrence::Once { .. }
+    ) && due_at.saturating_add(FIXED_TIME_GRACE_SECS) < now
 }
 
 fn state_name(state: OccurrenceState) -> &'static str {

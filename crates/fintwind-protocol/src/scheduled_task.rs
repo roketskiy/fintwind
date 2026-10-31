@@ -89,6 +89,7 @@ impl<'de> Deserialize<'de> for Weekdays {
 pub enum Recurrence {
     Every { interval_secs: u32 },
     AtTime { at: ClockTime, weekdays: Weekdays },
+    Once { at: u64 },
 }
 
 impl<'de> Deserialize<'de> for Recurrence {
@@ -102,10 +103,12 @@ impl<'de> Deserialize<'de> for Recurrence {
         enum Wire {
             Every { interval_secs: u32 },
             AtTime { at: ClockTime, weekdays: Weekdays },
+            Once { at: u64 },
         }
         let recurrence = match Wire::deserialize(deserializer)? {
             Wire::Every { interval_secs } => Self::Every { interval_secs },
             Wire::AtTime { at, weekdays } => Self::AtTime { at, weekdays },
+            Wire::Once { at } => Self::Once { at },
         };
         recurrence.validate().map_err(D::Error::custom)?;
         Ok(recurrence)
@@ -113,11 +116,23 @@ impl<'de> Deserialize<'de> for Recurrence {
 }
 
 impl Recurrence {
+    pub fn is_once(&self) -> bool {
+        matches!(self, Self::Once { .. })
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if let Self::Every { interval_secs } = self
             && !(MIN_INTERVAL_SECS..=MAX_INTERVAL_SECS).contains(interval_secs)
         {
             return Err("Interval must be between one minute and 365 days".into());
+        }
+        if let Self::Once { at } = self {
+            if *at == 0 {
+                return Err("One-time run time is invalid".into());
+            }
+            if i64::try_from(*at).is_err() {
+                return Err("One-time run time is out of range".into());
+            }
         }
         Ok(())
     }
@@ -128,6 +143,12 @@ impl Recurrence {
             return after
                 .checked_add(u64::from(*interval_secs))
                 .ok_or_else(|| "Next run exceeds the timestamp range".into());
+        }
+        if let Self::Once { at } = self {
+            if *at > after {
+                return Ok(*at);
+            }
+            return Err("One-time run is in the past".into());
         }
         let Self::AtTime { at, weekdays } = self else {
             unreachable!()

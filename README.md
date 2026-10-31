@@ -108,7 +108,8 @@ detection, data locations, and WebView2 details.
   **Settings → General → Data management**; existing sessions keep their paths.
 - **Session controls.** Switch model, reasoning effort where supported, and
   access mode (Ask, Auto-accept edits, Full access). Queue or steer a follow-up
-  while the agent works and reorder queued messages by dragging. Choose the
+  while the agent works; queued messages live inside the composer card in a
+  collapsible section and reorder by dragging. Choose the
   default send behavior in General settings. Question cards can be skipped,
   collapsed, or expanded. Use OpenCode's
   native revert and restore for eligible Git-backed turns. `/btw` asks a
@@ -116,7 +117,9 @@ detection, data locations, and WebView2 details.
   the task in progress.
 - **Turn recovery.** Recover missed replies and completion events from OpenCode's
   stored history. History reads accept responses up to 64 MiB and reduce page
-  sizes when image or tool payloads make a page too large.
+  sizes when image or tool payloads make a page too large. Interrupted sessions
+  repair stale Working projections instead of staying stuck, and dead runtimes
+  are rebuilt on the next submit.
 - **Provider marks.** Recognized vendors use their brand marks in the model picker
   and provider settings, with light and dark variants where available.
 - **Readable agent activity.** View streaming replies, reasoning, tool calls,
@@ -151,7 +154,9 @@ detection, data locations, and WebView2 details.
   use OpenCode credentials; models can inherit the provider protocol or select
   their own, including OpenAI Images and Google Images.
 - **Scheduled tasks.** Open the clock icon in the sidebar to run instructions
-  on selected weekdays at a set time, or at a fixed interval. Create a session
+  on selected weekdays at a set time, at a fixed interval, or once at a specific
+  date and time. Pick the date from a calendar; one-shot tasks deactivate after
+  running but keep history. Create a session
   with a chosen project, model, and access mode, or reuse an existing session.
   Pause, resume, run immediately, and inspect results. Tasks do not run while
   Fintwind is fully closed, and missed runs are not replayed. Enable **Scheduled
@@ -163,12 +168,17 @@ detection, data locations, and WebView2 details.
   login, and check connection status. Listings use vendor-operated endpoints
   where available.
 - **Native Mermaid diagrams.** Read flowcharts, sequence diagrams, class
-  diagrams, state diagrams, and more directly in conversations. Switch to
+  diagrams, state diagrams, and more directly in conversations. Click a diagram
+  (or press Enter/Space on it) to open a fullscreen preview with zoom in, zoom out,
+  and reset to 1:1. Diagrams use accent-tinted surfaces and a color series that adapts
+  to light and dark themes. Switch to
   source or inspect compilation errors. Enable the Mermaid visualization
   prompt in General settings to give new sessions diagram guidance and a
   built-in validation tool. Existing sessions retain their original preference.
 - **Native math.** Typeset inline and display formulas, including `\(…\)` and
-  `\[…\]`, with layout work performed on background workers.
+  `\[…\]`, with layout work performed on background workers. Inline math renders
+  at 1.21x and display math at 1.25x; overwide formulas keep natural size on their
+  own horizontally scrollable row.
 
 ## Local data and scope
 

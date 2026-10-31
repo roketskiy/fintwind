@@ -40,9 +40,14 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Initialize MSVC environment for the isolated compiler checks
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Verify Cargo cache freshness offline
         timeout-minutes: 3
-        run: python scripts/cargo-cache-diagnostics-blackbox.py --sysroot (rustc --print sysroot) --output (Join-Path $env:RUNNER_TEMP 'cargo-cache-freshness/result.json')
+        run: python scripts/cargo-cache-diagnostics-blackbox.py --require-msvc-env --sysroot (rustc --print sysroot) --output (Join-Path $env:RUNNER_TEMP 'cargo-cache-freshness/result.json')
 
       - name: Upload cache freshness verification
         if: always()

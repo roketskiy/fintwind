@@ -95,6 +95,20 @@ The Rust test job runs this offline check with a three-minute step timeout and
 uploads `cargo-cache-freshness-report` even on failure. Its fixtures and Cargo
 home are isolated from the real compilation and its cache snapshot.
 
+CI activates the x64 MSVC developer environment before entering the isolated
+fixture, then passes `--require-msvc-env`. The runner preserves only allowlisted
+SDK/toolchain variables (`PATH`, `LIB`, `INCLUDE`, `LIBPATH`, and installation
+metadata); user data and Cargo home remain private. The preflight checks that
+`link.exe` comes from `VCToolsInstallDir` and that library paths are configured,
+and records that information in the JSON report. Otherwise it fails before
+compiling. This prevents accidentally invoking Git's unrelated GNU `link.exe`,
+which reports `link: extra operand` for MSVC arguments.
+
+For the same strict preflight locally, start an x64 Visual Studio Developer
+Command Prompt and add `--require-msvc-env` to the command above. A normal
+local invocation without that flag can still use rustc's automatic MSVC
+discovery, but does not establish that the CI developer environment is ready.
+
 ## Confirmed cause
 
 The controlled reproduction confirms that unchanged path-dependency source

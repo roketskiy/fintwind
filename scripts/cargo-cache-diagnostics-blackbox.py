@@ -7,6 +7,7 @@ loss of Cargo's nonzero exit status, resource/build-script/list changes hidden
 by timestamp restoration, malformed/profile-mismatched snapshots, path traversal,
 and following junctions outside a package. No project target or Cargo home is used.
 All compiler descendants stay inside a newly created Windows Job Object.
+CI additionally requires an activated MSVC toolset, not Git's GNU link.exe.
 """
 
 import argparse
@@ -30,6 +31,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--sysroot", type=Path, required=True)
+    parser.add_argument("--require-msvc-env", action="store_true",
+                        help="Require an activated MSVC developer environment (used in CI)")
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("This reproduction requires Windows Job Objects")
@@ -86,10 +89,11 @@ def main():
     cargo_bin = args.sysroot.resolve() / "bin"
     if not (cargo_bin / "cargo.exe").is_file() or not (cargo_bin / "rustc.exe").is_file():
         raise RuntimeError("sysroot must contain the actual Cargo and rustc executables")
-    environment = {key: value for key, value in os.environ.items() if key.upper() in {
+    environment = {key.upper(): value for key, value in os.environ.items() if key.upper() in {
         "SYSTEMROOT", "WINDIR", "COMSPEC", "PATH", "PATHEXT", "PROCESSOR_ARCHITECTURE",
         "NUMBER_OF_PROCESSORS", "PROGRAMFILES", "PROGRAMFILES(X86)", "VSINSTALLDIR",
-        "VCTOOLSINSTALLDIR", "WINDOWSSDKDIR", "INCLUDE", "LIB", "LIBPATH",
+        "VCTOOLSINSTALLDIR", "VCINSTALLDIR", "WINDOWSSDKDIR", "WINDOWSSDKVERSION",
+        "VSCMD_ARG_HOST_ARCH", "VSCMD_ARG_TGT_ARCH", "INCLUDE", "LIB", "LIBPATH",
     }}
     for key in ("HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "CARGO_HOME"):
         path = run / key
@@ -203,6 +207,22 @@ def main():
     report = {"passed": False, "fixture": str(run), "cases": results,
               "stampOperations": stamp_operations}
     try:
+        linker = shutil.which("link.exe", path=environment["PATH"])
+        toolset = environment.get("VCTOOLSINSTALLDIR")
+        native_linker = bool(linker and toolset and
+                             Path(linker).resolve().is_relative_to(Path(toolset).resolve()))
+        report["msvc"] = {
+            "required": args.require_msvc_env, "linker": linker, "toolset": toolset,
+            "nativeLinker": native_linker, "libraryPathsConfigured": bool(environment.get("LIB")),
+            "targetArch": environment.get("VSCMD_ARG_TGT_ARCH"),
+        }
+        if args.require_msvc_env and (not native_linker or not environment.get("LIB")):
+            raise RuntimeError(
+                "Activate the MSVC developer environment before this isolated check. "
+                f"Expected link.exe under VCToolsInstallDir with LIB configured; got {linker!r}. "
+                "Git's GNU link.exe is not an MSVC linker."
+            )
+        print(f"[INFO] Fixture linker on PATH: {linker}")
         execute("cold", expect_compile=True)
         execute("same-checkout-warm", expect_compile=False)
         for name in ("deps", "build", ".fingerprint"):

@@ -1,7 +1,9 @@
 use crate::theme::ui_px;
+use crate::ui::ActivationExt;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant, IconButton},
     layout::Collapsible,
+    motion::Reorder,
     primitives::IconName,
     theme::ControlSize,
 };
@@ -35,51 +37,6 @@ pub(super) fn composer_submit_action(
 /// the composer card watches the group so the drop ring shows while the
 /// pointer is still over the transcript, not only once it reaches the card.
 pub(super) const CHAT_FILE_DROP_GROUP: &str = "chat-file-drop";
-
-#[derive(Clone)]
-struct QueuedMessageDrag {
-    session_id: Uuid,
-    message_id: Uuid,
-    content: SharedString,
-}
-
-struct QueuedMessageDragPreview {
-    content: SharedString,
-    cursor_offset: gpui::Point<Pixels>,
-}
-
-impl Render for QueuedMessageDragPreview {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::current(cx);
-        div()
-            .pl(self.cursor_offset.x)
-            .pt(self.cursor_offset.y)
-            .child(
-                div()
-                    .w(px(320.0))
-                    .h(px(32.0))
-                    .px(px(12.0))
-                    .flex()
-                    .items_center()
-                    .gap(px(9.0))
-                    .rounded(px(7.0))
-                    .border_1()
-                    .border_color(theme.accent)
-                    .bg(theme.composer)
-                    .shadow_md()
-                    .child(icon("icons/queue.svg", 13.0, theme.text_tertiary))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_size(ui_px(13.0))
-                            .text_color(theme.text)
-                            .child(self.content.clone()),
-                    ),
-            )
-    }
-}
 
 // ── Control-row width budget ─────────────────────────────────────────────
 //
@@ -2461,7 +2418,12 @@ impl Fintwind {
         }
     }
 
-    /// Pending follow-ups with editing, reordering, and live-turn delivery.
+    /// Pending follow-ups, drawn as a section inside the composer card.
+    ///
+    /// Same geometry as the goal banner above the input (`px 10`, bottom
+    /// divider, 28px summary row), so the two stack with one rhythm when
+    /// both are present. The rows keep their editing, reordering and
+    /// live-turn delivery; only the outer card is gone.
     pub(super) fn render_queued_messages(&self, cx: &mut Context<Self>) -> Option<Div> {
         let session_id = self.state.selected_session?;
         let session = self.selected_session()?;
@@ -2475,7 +2437,39 @@ impl Fintwind {
                 .runtimes
                 .get(&session.id)
                 .is_some_and(|runtime| runtime.driver.supports_steer());
-        let mut list = div().flex().flex_col().py_1();
+        let collapsed = self.collapsed_queued.contains(&session_id);
+        let summary_focus = self.menu_handle("queued-summary", cx);
+        // The display order at render time. Ely's `Reorder` reports moves
+        // as index pairs against it; they are resolved back to message ids
+        // on drop, so a turn that consumed a row mid-drag cannot misplace
+        // another one.
+        let order: Vec<Uuid> = session.queued_messages.iter().map(|m| m.id).collect();
+        let mut reorder =
+            Reorder::new(SharedString::from(format!("queued-messages-{session_id}"))).on_reorder({
+            let weak = cx.entity().downgrade();
+            let order = order.clone();
+            move |from, to, _window, cx| {
+                let Some(drag_id) = order.get(from).copied() else {
+                    return;
+                };
+                let shortened: Vec<Uuid> = order
+                    .iter()
+                    .enumerate()
+                    .filter(|(ix, _)| *ix != from)
+                    .map(|(_, id)| *id)
+                    .collect();
+                let (target_id, after) = if to < shortened.len() {
+                    (shortened[to], false)
+                } else if let Some(last) = shortened.last().copied() {
+                    (last, true)
+                } else {
+                    return;
+                };
+                let _ = weak.update(cx, |this, cx| {
+                    this.reorder_queued_message(session_id, drag_id, target_id, after, cx);
+                });
+            }
+        });
         for (index, message) in session.queued_messages.iter().enumerate() {
             let message_id = message.id;
             let previous_id = index
@@ -2485,7 +2479,7 @@ impl Fintwind {
                 .queued_messages
                 .get(index + 1)
                 .map(|message| message.id);
-            let content = if message.visible_content().trim().is_empty() {
+            let content = SharedString::from(if message.visible_content().trim().is_empty() {
                 message
                     .attachments
                     .iter()
@@ -2494,12 +2488,7 @@ impl Fintwind {
                     .join(", ")
             } else {
                 message.visible_content().to_owned()
-            };
-            let drag = QueuedMessageDrag {
-                session_id,
-                message_id,
-                content: SharedString::from(content),
-            };
+            });
             let weak = cx.entity().downgrade();
             let steer_control = steerable.then(|| {
                 let weak = weak.clone();
@@ -2543,17 +2532,20 @@ impl Fintwind {
                     this.remove_queued_message(session_id, message_id, cx);
                 });
             });
-            list = list.child(
+            reorder = reorder.row(
+                message_id.to_string(),
                 div()
                     .id(SharedString::from(format!("queued-message-{message_id}")))
                     .relative()
-                    .min_h(px(44.0))
-                    .py_1()
-                    .pl(px(12.0))
-                    .pr(px(6.0))
+                    .px(px(8.0))
+                    .py(px(6.0))
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.raised)
                     .flex()
                     .items_center()
-                    .gap(px(9.0))
+                    .gap(px(8.0))
                     .cursor_default()
                     .hover(|element| element.bg(theme.overlay))
                     .active(|element| element.bg(theme.overlay_strong))
@@ -2600,7 +2592,7 @@ impl Fintwind {
                             ))
                             .tooltip(Tooltip::text(tr!("composer.reorder_followup")))
                             .child(icon(
-                                "icons/chevrons-up-down.svg",
+                                "icons/grip-vertical.svg",
                                 13.0,
                                 theme.text_tertiary,
                             ))
@@ -2611,14 +2603,8 @@ impl Fintwind {
                                     .truncate()
                                     .text_size(ui_px(13.0))
                                     .text_color(theme.text)
-                                    .child(drag.content.clone()),
-                            )
-                            .on_drag(drag, |drag, cursor_offset, _, cx| {
-                                cx.new(|_| QueuedMessageDragPreview {
-                                    content: drag.content.clone(),
-                                    cursor_offset,
-                                })
-                            }),
+                                    .child(content.clone()),
+                            ),
                     )
                     .child(
                         div()
@@ -2631,88 +2617,65 @@ impl Fintwind {
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.edit_queued_message(session_id, message_id, window, cx);
-                    }))
-                    // The two halves provide insertion targets without changing
-                    // row layout or intercepting ordinary clicks on its controls.
-                    .when(cx.has_active_drag(), |row| {
-                        row.children([false, true].map(|after| {
-                            div()
-                                .id(SharedString::from(format!(
-                                    "queued-message-drop-{message_id}-{after}"
-                                )))
-                                .absolute()
-                                .left_0()
-                                .right_0()
-                                .h(gpui::relative(0.5))
-                                .when(after, |zone| zone.bottom_0())
-                                .when(!after, |zone| zone.top_0())
-                                // Accept no-op drops too so GPUI always refreshes
-                                // after removing the drag preview and drop zones.
-                                .drag_over::<QueuedMessageDrag>(move |style, drag, _, _| {
-                                    if drag.session_id != session_id
-                                        || drag.message_id == message_id
-                                    {
-                                        return style;
-                                    }
-                                    let style = if after {
-                                        style.border_b_2()
-                                    } else {
-                                        style.border_t_2()
-                                    };
-                                    style.border_color(theme.accent)
-                                })
-                                .on_drop(cx.listener(
-                                    move |this, drag: &QueuedMessageDrag, _, cx| {
-                                        if drag.session_id == session_id {
-                                            this.reorder_queued_message(
-                                                session_id,
-                                                drag.message_id,
-                                                message_id,
-                                                after,
-                                                cx,
-                                            );
-                                        }
-                                    },
-                                ))
-                        }))
-                    }),
+                    })),
             );
         }
+        // Ely's `Reorder` lifts the held row and glides the rest aside, so
+        // the list itself only provides the scroll viewport around it.
+        let list = div()
+            .id("queued-messages-list")
+            .flex()
+            .flex_col()
+            .gap(px(4.0))
+            .pt(px(5.0))
+            .max_h(px(160.0))
+            .overflow_y_scroll()
+            .child(reorder);
         Some(
-            div().flex_none().px(px(20.0)).child(
-                div()
-                    .w_full()
-                    .max_w(px(crate::theme::transcript_width()))
-                    .mx_auto()
-                    .px(px(14.0))
-                    .child(
-                        div()
-                            .rounded_lg()
-                            .mb_2()
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.raised)
-                            .overflow_hidden()
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap_2()
-                                    .px_3()
-                                    .py_2()
-                                    .border_b_1()
-                                    .border_color(theme.border)
-                                    .text_size(ui_px(12.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(icon("icons/queue.svg", 13.0, theme.text_secondary))
-                                    .child(tr!(
-                                        "composer.queued_messages",
-                                        count = session.queued_messages.len()
-                                    )),
-                            )
-                            .child(list),
-                    ),
-            ),
+            div()
+                .px(px(10.0))
+                .pb(px(8.0))
+                .mb(px(6.0))
+                .border_b_1()
+                .border_color(theme.border)
+                .text_size(ui_px(12.0))
+                .text_color(theme.text_secondary)
+                .child(
+                    div()
+                        .id("queued-summary")
+                        .track_focus(summary_focus.trigger_focus_handle())
+                        .tab_index(0)
+                        .focus_visible(|style| style.border_1().border_color(theme.accent))
+                        .h(px(28.0))
+                        .px(px(8.0))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.0))
+                        .rounded(px(6.0))
+                        .cursor_default()
+                        .hover(|element| element.bg(theme.overlay))
+                        .child(icon("icons/queue.svg", 14.0, theme.text_secondary))
+                        .child(tr!(
+                            "composer.queued_messages",
+                            count = session.queued_messages.len()
+                        ))
+                        .child(icon(
+                            if collapsed {
+                                "icons/chevron-down.svg"
+                            } else {
+                                "icons/chevron-up.svg"
+                            },
+                            11.0,
+                            theme.text_tertiary,
+                        ))
+                        .on_activation(cx, move |this, _, cx| {
+                            if !this.collapsed_queued.remove(&session_id) {
+                                this.collapsed_queued.insert(session_id);
+                            }
+                            cx.notify();
+                        }),
+                )
+                .when(!collapsed, |section| section.child(list)),
         )
     }
 
@@ -2881,6 +2844,7 @@ impl Fintwind {
                     card.child(self.render_composer_references(cx))
                 })
                 .children(self.render_goal(cx))
+                .children(self.render_queued_messages(cx))
                 .child(div().pt(px(2.0)).child(self.composer.clone()))
                 .child(
                     div()

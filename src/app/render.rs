@@ -221,7 +221,6 @@ impl Fintwind {
             .child(div().flex_1().min_h(px(16.0)))
             .child(self.render_empty_state(true, cx))
             .children(self.render_permission(cx))
-            .children(self.render_queued_messages(cx))
             .child(self.render_composer(window, cx))
             .child(self.render_workspace_footer(cx))
             .child(
@@ -370,7 +369,6 @@ impl Render for Fintwind {
                         .children(self.render_permission(cx))
                         .when(self.selected_project().is_some(), |element| {
                             element
-                                .children(self.render_queued_messages(cx))
                                 .child(self.render_composer(window, cx))
                                 .child(self.render_workspace_footer(cx))
                         })

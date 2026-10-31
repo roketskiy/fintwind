@@ -2206,6 +2206,7 @@ dependencies = [
  "unicode-linebreak",
  "unicode-segmentation",
  "url",
+ "usvg 0.46.0",
  "uuid",
  "webview2-com",
  "windows 0.62.2",

@@ -7,10 +7,30 @@ use crate::md::math;
 use crate::ui::menu::MenuItem;
 use gpui::{
     App, AvailableSpace, Element, ElementId, GlobalElementId, InspectorElementId, LayoutId,
-    ShapedLine, Size, TextAlign,
+    ScrollWheelEvent, ShapedLine, Size, TextAlign,
 };
 use std::sync::Arc;
 use unicode_segmentation::UnicodeSegmentation;
+
+#[cfg(test)]
+mod e2e;
+
+const SCROLL_LANE: f32 = 14.0;
+
+#[derive(Debug, Default)]
+struct FormulaScroll {
+    offsets: HashMap<usize, f32>,
+    active: Option<usize>,
+    drag: Option<(usize, f32)>,
+}
+
+impl FormulaScroll {
+    fn set(&mut self, index: usize, offset: f32, max: f32) -> bool {
+        let offset = offset.clamp(0.0, max);
+        self.active = Some(index);
+        self.offsets.insert(index, offset).unwrap_or(0.0) != offset
+    }
+}
 
 #[derive(Debug)]
 pub struct MathSpan {
@@ -24,6 +44,7 @@ pub struct MathData {
     spans: Vec<MathSpan>,
     cache: RefCell<LayoutCache>,
     active_link: Rc<Cell<Option<usize>>>,
+    scroll: Rc<RefCell<FormulaScroll>>,
 }
 
 impl MathData {
@@ -32,6 +53,7 @@ impl MathData {
             spans,
             cache: RefCell::new(LayoutCache::default()),
             active_link: Rc::new(Cell::new(None)),
+            scroll: Rc::new(RefCell::new(FormulaScroll::default())),
         }
     }
 }
@@ -117,7 +139,10 @@ struct Flow {
 }
 
 #[derive(Clone, Default)]
-pub struct Geometry(Rc<RefCell<Option<(Bounds<Pixels>, Rc<Flow>)>>>);
+pub struct Geometry(
+    Rc<RefCell<Option<(Bounds<Pixels>, Rc<Flow>)>>>,
+    Rc<RefCell<FormulaScroll>>,
+);
 
 impl Geometry {
     pub fn is_missing(&self) -> bool {
@@ -142,11 +167,8 @@ impl Geometry {
                 return None;
             };
             Bounds::new(
-                bounds.origin + fragment.origin,
-                size(
-                    px(fragment.token.width),
-                    px(fragment.token.ascent + fragment.token.descent),
-                ),
+                bounds.origin + point(fragment.origin.x, px(fragment.row_top)),
+                size(px(fragment.token.width), px(fragment.row_height)),
             )
             .contains(&position)
             .then_some(index)
@@ -196,13 +218,15 @@ impl Geometry {
                 let range = &fragment.token.range;
                 let offset = match &fragment.token.content {
                     Content::Text(line) => range.start + line.closest_index_for_x(px(x)),
-                    Content::Formula(_) | Content::Break => {
-                        if x < fragment.token.width / 2.0 {
+                    Content::Formula(index) => {
+                        let offset = self.1.borrow().offsets.get(index).copied().unwrap_or(0.0);
+                        if x + offset < fragment.token.width / 2.0 {
                             range.start
                         } else {
                             range.end
                         }
                     }
+                    Content::Break => range.start,
                 };
                 best = Some((distance, offset));
             }
@@ -232,7 +256,11 @@ impl Geometry {
             let rect = Bounds::new(
                 bounds.origin + point(fragment.origin.x + left, px(fragment.row_top)),
                 size(right - left, px(fragment.row_height)),
-            );
+            )
+            .intersect(bounds);
+            if rect.size.width <= px(0.0) || rect.size.height <= px(0.0) {
+                continue;
+            }
             if let Some(last) = rects.last_mut()
                 && last.top() == rect.top()
                 && (f32::from(last.right() - rect.left())).abs() < 0.1
@@ -244,15 +272,120 @@ impl Geometry {
         }
         rects
     }
+
+    fn scroll_wheel(&self, event: &ScrollWheelEvent) -> bool {
+        let delta = event.delta.pixel_delta(px(20.0));
+        if !event.modifiers.shift && delta.y.abs() > delta.x.abs() {
+            return false;
+        }
+        let delta = if event.modifiers.shift && delta.x == px(0.0) {
+            delta.y
+        } else {
+            delta.x
+        };
+        if delta == px(0.0) {
+            return false; // Preserve ordinary vertical transcript scrolling.
+        }
+        let Some(index) = self.formula_at(event.position) else {
+            return false;
+        };
+        let frame = self.0.borrow();
+        let Some((bounds, flow)) = frame.as_ref() else {
+            return false;
+        };
+        let Some(fragment) = flow.fragments.iter().find(
+            |fragment| matches!(fragment.token.content, Content::Formula(found) if found == index),
+        ) else {
+            return false;
+        };
+        let max = fragment.token.width - f32::from(bounds.size.width);
+        if max <= 0.0 {
+            return false;
+        }
+        let mut scroll = self.1.borrow_mut();
+        let offset = scroll.offsets.get(&index).copied().unwrap_or(0.0);
+        scroll.set(index, offset - f32::from(delta), max)
+    }
+
+    fn scroll_key(&self, key: &str) -> bool {
+        let frame = self.0.borrow();
+        let Some((bounds, flow)) = frame.as_ref() else {
+            return false;
+        };
+        let overflowing = flow
+            .fragments
+            .iter()
+            .filter_map(|fragment| {
+                let Content::Formula(index) = fragment.token.content else {
+                    return None;
+                };
+                let max = fragment.token.width - f32::from(bounds.size.width);
+                (max > 0.0).then_some((index, max))
+            })
+            .collect::<Vec<_>>();
+        if overflowing.is_empty() {
+            return false;
+        }
+        let mut scroll = self.1.borrow_mut();
+        let current = overflowing
+            .iter()
+            .position(|(index, _)| Some(*index) == scroll.active)
+            .unwrap_or(0);
+        let (index, max) = overflowing[current];
+        let offset = scroll.offsets.get(&index).copied().unwrap_or(0.0);
+        match key {
+            "left" => {
+                scroll.set(index, offset - 40.0, max);
+            }
+            "right" => {
+                scroll.set(index, offset + 40.0, max);
+            }
+            "home" => {
+                scroll.set(index, 0.0, max);
+            }
+            "end" => {
+                scroll.set(index, max, max);
+            }
+            "up" | "down" if overflowing.len() > 1 => {
+                let next = if key == "down" {
+                    (current + 1) % overflowing.len()
+                } else {
+                    (current + overflowing.len() - 1) % overflowing.len()
+                };
+                scroll.active = Some(overflowing[next].0);
+            }
+            _ => return false,
+        }
+        true
+    }
 }
 
 pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement {
-    let geometry = Geometry::default();
+    let geometry = Geometry(Rc::default(), flat.math.as_ref().unwrap().scroll.clone());
+    let scroll_geometry = geometry.clone();
+    let keyboard_geometry = geometry.clone();
+    let has_links = !flat.links.is_empty();
     let mut wrapper = div()
         .relative()
         .w_full()
         .min_w_0()
-        .cursor(CursorStyle::IBeam);
+        .cursor(CursorStyle::IBeam)
+        .on_scroll_wheel(move |event, window, cx| {
+            if scroll_geometry.scroll_wheel(event) {
+                window.refresh();
+                cx.stop_propagation();
+            }
+        })
+        .on_key_down(move |event, window, cx| {
+            if !has_links
+                && !event.keystroke.modifiers.modified()
+                && keyboard_geometry.scroll_key(&event.keystroke.key)
+            {
+                window.refresh();
+                window.prevent_default();
+                cx.stop_propagation();
+            }
+        });
     if !flat.links.is_empty() {
         // Keep link activation in source coordinates, exactly like selection.
         // A focused paragraph cycles its links with arrows and opens with Enter.
@@ -284,7 +417,16 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
         });
         let links = flat.links.clone();
         let handler = ctx.link_handler.clone();
+        let keyboard_geometry = geometry.clone();
         wrapper = wrapper.on_key_down(move |event, window, cx| {
+            if !event.keystroke.modifiers.modified()
+                && keyboard_geometry.scroll_key(&event.keystroke.key)
+            {
+                window.refresh();
+                window.prevent_default();
+                cx.stop_propagation();
+                return;
+            }
             let current = focused_link.get().unwrap_or(0).min(links.len() - 1);
             match event.keystroke.key.as_str() {
                 "right" | "down" => focused_link.set(Some((current + 1) % links.len())),
@@ -306,8 +448,6 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
             window.refresh();
         });
     }
-    let has_links = !flat.links.is_empty();
-    let has_menu = ctx.math_menu.is_some();
     if let Some(menu) = &ctx.math_menu {
         let data = flat.math.as_ref().unwrap().clone();
         let hit = geometry.clone();
@@ -369,20 +509,17 @@ pub(super) fn element(flat: Rc<FlatText>, key: TextKey, ctx: &Ctx) -> AnyElement
             "math-{}-{}",
             key.row, key.index
         )))
-        .when(has_links || has_menu, |element| {
-            element
-                .tab_group()
-                .tab_index(0)
-                .when(has_links, |element| {
-                    element.border_1().border_color(gpui::transparent_black())
-                })
-                .focus_visible(|style| {
-                    if has_links {
-                        style.border_color(ctx.palette.accent)
-                    } else {
-                        style.bg(ctx.palette.overlay)
-                    }
-                })
+        .tab_group()
+        .tab_index(0)
+        .when(has_links, |element| {
+            element.border_1().border_color(gpui::transparent_black())
+        })
+        .focus_visible(|style| {
+            if has_links {
+                style.border_color(ctx.palette.accent)
+            } else {
+                style.bg(ctx.palette.overlay)
+            }
         })
         .child(body)
         .into_any_element()
@@ -392,6 +529,143 @@ fn copy_expression_item(latex: Arc<str>, label: String) -> MenuItem {
     MenuItem::new(label, move |_, cx| {
         cx.write_to_clipboard(ClipboardItem::new_string(latex.to_string()));
     })
+}
+
+// A formula's own scroll lane, not a paragraph-wide scroller: surrounding
+// prose stays wrapped and stationary. No timers, animation or new raster work.
+fn paint_formula_scrollbar(
+    fragment: &Fragment,
+    bounds: Bounds<Pixels>,
+    state: &Rc<RefCell<FormulaScroll>>,
+    palette: &Palette,
+    hitbox: &Hitbox,
+    window: &mut Window,
+) {
+    let Content::Formula(index) = fragment.token.content else {
+        return;
+    };
+    let width = f32::from(bounds.size.width);
+    let max = fragment.token.width - width;
+    let thumb_width = (width * width / fragment.token.width).max(24.0).min(width);
+    let travel = width - thumb_width;
+    let track = Bounds::new(
+        bounds.origin
+            + point(
+                px(0.0),
+                px(fragment.row_top + fragment.row_height - SCROLL_LANE),
+            ),
+        size(bounds.size.width, px(SCROLL_LANE)),
+    );
+    let offset = state
+        .borrow()
+        .offsets
+        .get(&index)
+        .copied()
+        .unwrap_or(0.0)
+        .clamp(0.0, max);
+    let thumb_left = track.left() + px(travel * offset / max);
+    let active = state.borrow().active == Some(index);
+    let thumb = Bounds::new(
+        point(thumb_left, track.top() + px(5.0)),
+        size(px(thumb_width), px(if active { 5.0 } else { 4.0 })),
+    );
+    window.paint_quad(quad(
+        Bounds::new(
+            point(track.left(), track.top() + px(6.0)),
+            size(track.size.width, px(2.0)),
+        ),
+        px(1.0),
+        palette.border,
+        px(0.0),
+        gpui::transparent_black(),
+        BorderStyle::default(),
+    ));
+    window.paint_quad(quad(
+        thumb,
+        px(2.0),
+        if active {
+            palette.accent
+        } else {
+            palette.tertiary
+        },
+        px(0.0),
+        gpui::transparent_black(),
+        BorderStyle::default(),
+    ));
+    let owner = window.current_view();
+    window.on_mouse_event({
+        let state = state.clone();
+        let hitbox = hitbox.clone();
+        move |event: &MouseDownEvent, phase, window, cx| {
+            if phase != gpui::DispatchPhase::Capture
+                || event.button != MouseButton::Left
+                || !track.contains(&event.position)
+                || !hitbox.is_hovered(window)
+            {
+                return;
+            }
+            let grab = if thumb.contains(&event.position) {
+                f32::from(event.position.x - thumb_left)
+            } else {
+                thumb_width / 2.0
+            };
+            let mut state = state.borrow_mut();
+            state.drag = Some((index, grab));
+            if travel > 0.0 {
+                state.set(
+                    index,
+                    f32::from(event.position.x - track.left() - px(grab)) / travel * max,
+                    max,
+                );
+            }
+            cx.notify(owner);
+            cx.stop_propagation();
+        }
+    });
+    window.on_mouse_event({
+        let state = state.clone();
+        move |event: &MouseMoveEvent, phase, _, cx| {
+            if phase != gpui::DispatchPhase::Capture {
+                return;
+            }
+            let mut state = state.borrow_mut();
+            let Some((dragged, grab)) = state.drag else {
+                return;
+            };
+            if dragged != index {
+                return;
+            }
+            if !event.dragging() {
+                state.drag = None;
+                return;
+            }
+            if travel > 0.0
+                && state.set(
+                    index,
+                    f32::from(event.position.x - track.left() - px(grab)) / travel * max,
+                    max,
+                )
+            {
+                cx.notify(owner);
+            }
+            cx.stop_propagation();
+        }
+    });
+    window.on_mouse_event({
+        let state = state.clone();
+        move |event: &MouseUpEvent, phase, _, cx| {
+            if phase == gpui::DispatchPhase::Capture
+                && event.button == MouseButton::Left
+                && state
+                    .borrow()
+                    .drag
+                    .is_some_and(|(dragged, _)| dragged == index)
+            {
+                state.borrow_mut().drag = None;
+                cx.stop_propagation();
+            }
+        }
+    });
 }
 
 struct MathText {
@@ -447,7 +721,7 @@ impl Element for MathText {
                     math::Key::new(
                         span.latex.clone(),
                         span.display,
-                        font_size,
+                        math::font_size(font_size, span.display),
                         scale,
                         self.palette.text,
                     )
@@ -530,6 +804,17 @@ impl Element for MathText {
         if let Some((stored, _)) = self.geometry.0.borrow_mut().as_mut() {
             *stored = bounds;
         }
+        if let Some((_, flow)) = self.geometry.0.borrow().as_ref() {
+            let mut scroll = self.geometry.1.borrow_mut();
+            for fragment in &flow.fragments {
+                if let Content::Formula(index) = fragment.token.content {
+                    let max = (fragment.token.width - f32::from(bounds.size.width)).max(0.0);
+                    if let Some(offset) = scroll.offsets.get_mut(&index) {
+                        *offset = offset.clamp(0.0, max);
+                    }
+                }
+            }
+        }
         window.insert_hitbox(bounds, HitboxBehavior::Normal)
     }
 
@@ -593,20 +878,40 @@ impl Element for MathText {
                     }
                     Content::Formula(index) => {
                         if let Some(image) = &images[*index] {
+                            let offset = self
+                                .geometry
+                                .1
+                                .borrow()
+                                .offsets
+                                .get(index)
+                                .copied()
+                                .unwrap_or(0.0);
                             let image_bounds = Bounds::new(
-                                origin,
+                                origin - point(px(offset), px(0.0)),
                                 size(
                                     px(fragment.token.width),
                                     px(fragment.token.ascent + fragment.token.descent),
                                 ),
                             );
+                            let viewport =
+                                Bounds::new(origin, image_bounds.size).intersect(&bounds);
                             let _ = window.paint_image(
-                                bounds,
+                                viewport,
                                 image_bounds,
                                 Default::default(),
                                 image.image.clone(),
                                 0,
                                 false,
+                            );
+                        }
+                        if fragment.token.width > f32::from(bounds.size.width) {
+                            paint_formula_scrollbar(
+                                fragment,
+                                bounds,
+                                &self.geometry.1,
+                                &self.palette,
+                                hitbox,
+                                window,
                             );
                         }
                     }
@@ -712,7 +1017,7 @@ fn text_tokens(
                     &runs,
                     None,
                 );
-                let leading = (line_height - f32::from(line.ascent + line.descent)) / 2.0;
+                let leading = (line_height - f32::from(line.ascent + line.descent)).max(0.0) / 2.0;
                 tokens.push(Token {
                     range: start..end,
                     width: f32::from(line.width()),
@@ -742,10 +1047,19 @@ fn arrange(tokens: &[Token], width: f32, line_height: f32, align: TextAlign) -> 
     let mut row_start = 0;
     let mut x = 0.0;
     let mut y = 0.0;
-    let mut ascent = line_height * 0.8;
-    let mut descent = line_height * 0.2;
+    let mut ascent = 0.0f32;
+    let mut descent = 0.0f32;
+    let mut scroll_lane = 0.0f32;
     let mut max_width = 0.0f32;
-    let finish_row = |flow: &mut Flow, start: usize, x: f32, y: f32, ascent: f32, descent: f32| {
+    let finish_row = |flow: &mut Flow,
+                      start: usize,
+                      x: f32,
+                      y: f32,
+                      ascent: f32,
+                      descent: f32,
+                      scroll_lane: f32| {
+        let leading = (line_height - ascent - descent).max(0.0) / 2.0;
+        let row_height = ascent + descent + leading * 2.0 + scroll_lane;
         let inset = if width.is_finite() {
             match align {
                 TextAlign::Center => (width - x).max(0.0) / 2.0,
@@ -757,30 +1071,26 @@ fn arrange(tokens: &[Token], width: f32, line_height: f32, align: TextAlign) -> 
         };
         for fragment in &mut flow.fragments[start..] {
             fragment.origin.x += px(inset);
-            fragment.origin.y = px(y + ascent - fragment.token.ascent);
+            fragment.origin.y = px(y + ascent + leading - fragment.token.ascent);
             fragment.row_top = y;
-            fragment.row_height = ascent + descent;
+            fragment.row_height = row_height;
         }
+        row_height
     };
     for original in tokens {
-        let mut token = original.clone();
-        if matches!(token.content, Content::Formula(_)) && token.width > width {
-            let scale = width / token.width;
-            token.width = width;
-            token.ascent *= scale;
-            token.descent *= scale;
-        }
+        let token = original.clone();
         let mut remainder = Some(token);
         while let Some(mut token) = remainder.take() {
             let hard_break = matches!(token.content, Content::Break);
             if hard_break || (x > 0.0 && x + token.width > width) {
-                finish_row(&mut flow, row_start, x, y, ascent, descent);
+                let height = finish_row(&mut flow, row_start, x, y, ascent, descent, scroll_lane);
                 max_width = max_width.max(x);
-                y += ascent + descent;
+                y += height;
                 row_start = flow.fragments.len();
                 x = 0.0;
-                ascent = line_height * 0.8;
-                descent = line_height * 0.2;
+                ascent = 0.0;
+                descent = 0.0;
+                scroll_lane = 0.0;
             }
             if hard_break {
                 continue;
@@ -813,6 +1123,9 @@ fn arrange(tokens: &[Token], width: f32, line_height: f32, align: TextAlign) -> 
             }
             ascent = ascent.max(token.ascent);
             descent = descent.max(token.descent);
+            if matches!(token.content, Content::Formula(_)) && token.width > width {
+                scroll_lane = SCROLL_LANE;
+            }
             let token_width = token.width;
             flow.fragments.push(Fragment {
                 token,
@@ -823,11 +1136,11 @@ fn arrange(tokens: &[Token], width: f32, line_height: f32, align: TextAlign) -> 
             x += token_width;
         }
     }
-    finish_row(&mut flow, row_start, x, y, ascent, descent);
+    let height = finish_row(&mut flow, row_start, x, y, ascent, descent, scroll_lane);
     max_width = max_width.max(x);
     flow.size = size(
         px(if width.is_finite() { width } else { max_width }),
-        px(y + ascent + descent),
+        px(y + height),
     );
     flow
 }
@@ -1035,7 +1348,7 @@ mod tests {
     }
 
     #[test]
-    fn formulas_wrap_atomically_align_baselines_and_scale_to_narrow_widths() {
+    fn formulas_wrap_atomically_align_baselines_and_keep_their_natural_size() {
         let tokens = vec![
             formula(0..3, 40.0, 10.0, 3.0),
             formula(3..9, 50.0, 25.0, 8.0),
@@ -1049,8 +1362,8 @@ mod tests {
         assert!(wrapped.fragments[1].row_top >= wrapped.fragments[0].row_height);
         let narrow = arrange(&tokens[1..], 20.0, 21.0, TextAlign::Center);
         assert_eq!(narrow.size.width, px(20.0));
-        assert_eq!(narrow.fragments[0].token.width, 20.0);
-        assert_eq!(narrow.fragments[0].token.ascent, 10.0);
+        assert_eq!(narrow.fragments[0].token.width, 50.0);
+        assert_eq!(narrow.fragments[0].token.ascent, 25.0);
     }
 
     #[test]

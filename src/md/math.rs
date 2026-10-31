@@ -17,6 +17,13 @@ const WORKERS: usize = 2;
 const BATCH_SIZE: usize = 8;
 const MAX_PIXELS: f64 = 2_000_000.0;
 
+// KaTeX's optical size compensation: mathematical italic and script glyphs
+// look smaller than UI text at the same numeric em size. Keep display sizing
+// separate so it can be tuned without changing inline text or TeX script ratios.
+pub(super) fn font_size(body_size: f32, display: bool) -> f32 {
+    body_size * if display { 1.25 } else { 1.21 }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct Key {
     pub latex: Arc<str>,
@@ -304,13 +311,9 @@ fn render(key: &Key, renderer: &SvgRenderer) -> anyhow::Result<Rendered> {
         }
     }
     let font_size = f32::from_bits(key.font_size) as f64;
-    let metrics = Metrics {
-        width: (list.width * font_size + 2.0) as f32,
-        ascent: (list.height * font_size + 1.0) as f32,
-        descent: (list.depth * font_size + 1.0) as f32,
-    };
-    let width = metrics.width as f64;
-    let height = (metrics.ascent + metrics.descent) as f64;
+    let width = list.width * font_size + 2.0;
+    let height = (list.height + list.depth) * font_size + 2.0;
+    let baseline = list.height * font_size + 1.0;
     // GPUI supersamples SVGs at 2x in addition to the display's scale factor.
     let raster_scale = f32::from_bits(key.scale) as f64 * 2.0;
     anyhow::ensure!(
@@ -328,6 +331,7 @@ fn render(key: &Key, renderer: &SvgRenderer) -> anyhow::Result<Rendered> {
         &ratex_svg::SvgOptions {
             font_size,
             padding: 1.0,
+            stroke_width: (font_size / 26.0).max(0.5),
             embed_glyphs: true,
             ..Default::default()
         },
@@ -335,6 +339,39 @@ fn render(key: &Key, renderer: &SvgRenderer) -> anyhow::Result<Rendered> {
     );
     // RaTeX labels its viewport in pt; our metrics are logical pixels.
     let svg = svg.replacen("pt\"", "\"", 2);
+    // Like Ely's outlined math framing, preserve TeX's layout box AND any
+    // overhanging ink. Expanding the viewport must not scale glyphs or move the
+    // alphabetic baseline. This parse is confined to the background worker.
+    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default())?;
+    let ink = tree.root().abs_stroke_bounding_box();
+    let left = f64::from(ink.left()).min(1.0) - 1.0;
+    let top = f64::from(ink.top()).min(1.0) - 1.0;
+    let right = (f64::from(ink.right()) + 1.0).max(width);
+    let bottom = (f64::from(ink.bottom()) + 1.0).max(height);
+    let (width, height) = (right - left, bottom - top);
+    anyhow::ensure!(
+        width.is_finite()
+            && height.is_finite()
+            && width * raster_scale <= 4096.0
+            && height * raster_scale <= 4096.0
+            && width * height * raster_scale * raster_scale <= MAX_PIXELS,
+        "math ink limit"
+    );
+    let open = svg
+        .find('>')
+        .ok_or_else(|| anyhow::anyhow!("math SVG root"))?;
+    let close = svg
+        .rfind("</svg>")
+        .ok_or_else(|| anyhow::anyhow!("math SVG end"))?;
+    let svg = format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{left} {top} {width} {height}\" width=\"{width}\" height=\"{height}\">{}</svg>",
+        &svg[open + 1..close]
+    );
+    let metrics = Metrics {
+        width: width as f32,
+        ascent: (baseline - top) as f32,
+        descent: (bottom - baseline) as f32,
+    };
     let image = renderer.render_single_frame(svg.as_bytes(), f32::from_bits(key.scale))?;
     Ok(Rendered { metrics, image })
 }

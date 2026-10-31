@@ -41,7 +41,16 @@ jobs:
         uses: oven-sh/setup-bun@v2
 
       - name: Run tests
-        run: cargo test --locked
+        run: ./scripts/cargo-cache-diagnostics.ps1 -Mode Test -LogDirectory (Join-Path $env:RUNNER_TEMP 'cargo-cache-test')
+
+      - name: Upload Cargo cache diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-cache-diagnostics-test
+          path: ${{ runner.temp }}/cargo-cache-test/
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Upload failure diagnostics
         if: failure()
@@ -80,7 +89,16 @@ jobs:
           profile: release
 
       - name: Check stable release
-        run: cargo check --locked --release --package fintwind --bin fintwind --package fintwind-daemon --bin fintwind-daemon
+        run: ./scripts/cargo-cache-diagnostics.ps1 -Mode StableRelease -LogDirectory (Join-Path $env:RUNNER_TEMP 'cargo-cache-release-check')
+
+      - name: Upload Cargo cache diagnostics
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-cache-diagnostics-release-check
+          path: ${{ runner.temp }}/cargo-cache-release-check/
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Save compiler artifacts
         if: success() && github.ref == 'refs/heads/main' && steps.rust.outputs.build-hit != 'true'

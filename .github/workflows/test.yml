@@ -40,6 +40,19 @@ jobs:
       - name: Install Bun
         uses: oven-sh/setup-bun@v2
 
+      - name: Verify Cargo cache freshness offline
+        timeout-minutes: 3
+        run: python scripts/cargo-cache-diagnostics-blackbox.py --sysroot (rustc --print sysroot) --output (Join-Path $env:RUNNER_TEMP 'cargo-cache-freshness/result.json')
+
+      - name: Upload cache freshness verification
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-cache-freshness-report
+          path: ${{ runner.temp }}/cargo-cache-freshness/result.json
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Run tests
         run: ./scripts/cargo-cache-diagnostics.ps1 -Mode Test -LogDirectory (Join-Path $env:RUNNER_TEMP 'cargo-cache-test')
 

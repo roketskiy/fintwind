@@ -126,6 +126,13 @@ Compiler caches exclude incremental state, top-level binaries, installers,
 and archives. The first run with the new cache scheme is cold; assess the speed
 and cache size from subsequent successful runs rather than assuming a speedup.
 
+The setup action preserves timestamps for the two unchanged vendored GPUI
+packages only after checking their complete contents and file trees against a
+pre-build snapshot stored with compiler artifacts. Changed packages and all
+application sources keep their normal timestamps. Missing or invalid snapshots
+skip restoration. The helper is part of the compiler-cache key, so adopting or
+changing it requires one successful cold run before warm reuse can be measured.
+
 Failed Rust tests upload available recovery E2E `result.json` files for seven
 days. The Workflow tools job checks release automation against an isolated
 loopback API and always uploads its JSON verification report.

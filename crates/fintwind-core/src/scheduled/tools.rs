@@ -1,7 +1,7 @@
 use std::sync::{Arc, Weak};
 
 use anyhow::{Context as _, bail};
-use chrono::Local;
+use chrono::{Local, TimeZone};
 use fintwind_protocol::scheduled_task::{
     ClockTime, MAX_INTERVAL_SECS, MIN_INTERVAL_SECS, Recurrence, ScheduledTask, ScheduledTaskDraft,
     TaskTarget, Weekdays,
@@ -47,6 +47,7 @@ pub(crate) enum Target {
 enum Schedule {
     Every { interval_seconds: u32 },
     AtTime { time: String, weekdays: Vec<Day> },
+    Once { at: String },
 }
 
 #[derive(Deserialize)]
@@ -106,6 +107,9 @@ impl CreateTask {
                     weekdays: Weekdays::new(bits).map_err(anyhow::Error::msg)?,
                 }
             }
+            Schedule::Once { at } => Recurrence::Once {
+                at: parse_once_at(&at)?,
+            },
         };
         let draft = ScheduledTaskDraft {
             title: self.title,
@@ -119,6 +123,27 @@ impl CreateTask {
     }
 }
 
+fn parse_once_at(text: &str) -> anyhow::Result<u64> {
+    let text = text.trim();
+    if text.is_empty() {
+        bail!("at must use 'YYYY-MM-DD HH:MM' or RFC3339");
+    }
+    if let Ok(moment) = chrono::DateTime::parse_from_rfc3339(text) {
+        return u64::try_from(moment.timestamp()).context("one-time run time is out of range");
+    }
+    for format in ["%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S"] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(text, format) {
+            let local = Local
+                .from_local_datetime(&naive)
+                .earliest()
+                .context("one-time run time does not exist in the local time zone")?;
+            return u64::try_from(local.timestamp())
+                .context("one-time run time is out of range");
+        }
+    }
+    bail!("at must use 'YYYY-MM-DD HH:MM' or RFC3339");
+}
+
 pub(crate) fn definition() -> Value {
     json!({
         "name": "create",
@@ -126,7 +151,7 @@ pub(crate) fn definition() -> Value {
             "Create a recurring task in Fintwind's scheduled tasks module. Ask the user to resolve any unspecified execution target, schedule, time zone, or task instructions before calling; never invent defaults. \
              target=currentSession continues this conversation; target=newSession starts a conversation in the same workspace, copying the current model and permission settings. \
              Use details already specified by the user; ask only for missing choices. AtTime schedules use the daemon's local time zone (currently {}). \
-             Every schedules run first after the interval. Tasks run while the Fintwind daemon is running. \
+             Every schedules run first after the interval. Once schedules run a single time and then disable themselves while keeping their history. \
              Return the created task ID and next run time to the user. A lost response may mean creation succeeded; do not automatically repeat a create.",
             Local::now().format("%Z %:z")
         ),
@@ -149,7 +174,11 @@ pub(crate) fn definition() -> Value {
                             "time": {"type": "string", "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$", "description": "HH:MM in the daemon's local time zone."},
                             "weekdays": {"type": "array", "minItems": 1, "maxItems": 7, "uniqueItems": true,
                                 "items": {"type": "string", "enum": ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]}}},
-                        "required": ["kind", "time", "weekdays"]}
+                        "required": ["kind", "time", "weekdays"]},
+                    {"type": "object", "additionalProperties": false,
+                        "properties": {"kind": {"type": "string", "const": "once"},
+                            "at": {"type": "string", "description": "One-time run time: 'YYYY-MM-DD HH:MM' in the daemon's local time zone, or RFC3339. Must be in the future when enabled."}},
+                        "required": ["kind", "at"]}
                 ]}
             },
             "required": ["title", "prompt", "enabled", "target", "schedule"]

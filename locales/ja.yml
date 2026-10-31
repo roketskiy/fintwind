@@ -1651,12 +1651,15 @@ scheduled_tasks.prompt_placeholder: セッションで実行する内容
 scheduled_tasks.schedule_label: スケジュール
 scheduled_tasks.mode_at_time: 時刻
 scheduled_tasks.mode_interval: 間隔
+scheduled_tasks.mode_once: 1回
 scheduled_tasks.repeat_label: 曜日
 scheduled_tasks.interval_unit: 分
+scheduled_tasks.date_placeholder: YYYY-MM-DD
 scheduled_tasks.every_day: 毎日
 scheduled_tasks.at_time_summary: "%{days} %{time}"
 scheduled_tasks.every_minutes: "%{count} 分ごと"
 scheduled_tasks.every_hours: "%{count} 時間ごと"
+scheduled_tasks.once_summary: "1回 %{time}"
 scheduled_tasks.weekday_mon: 月
 scheduled_tasks.weekday_tue: 火
 scheduled_tasks.weekday_wed: 水
@@ -1704,6 +1707,8 @@ scheduled_tasks.error_prompt: プロンプトを入力してください
 scheduled_tasks.error_time: HH:MM 形式で入力してください
 scheduled_tasks.error_weekdays: 曜日を1つ以上選択してください
 scheduled_tasks.error_interval: 間隔は1〜525600分です
+scheduled_tasks.error_datetime: YYYY-MM-DDとHH:MMで入力してください
+scheduled_tasks.error_past: 未来の日時を入力してください
 scheduled_tasks.error_project: プロジェクトを選択してください
 scheduled_tasks.error_session: セッションを選択してください
 scheduled_tasks.error_model: モデルを入力してください

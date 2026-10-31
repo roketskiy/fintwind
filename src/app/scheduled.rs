@@ -9,7 +9,9 @@ use crate::ui::icon;
 use crate::ui::toggle_switch;
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant, SegmentedControl},
-    forms::{Choice, Combobox, Input, InputEvent, MultiSelect, Select, TextInput, TimePicker},
+    forms::{
+        Choice, Combobox, DatePicker, Input, InputEvent, MultiSelect, Select, TextInput, TimePicker,
+    },
     overlays::Dialog,
     primitives::IconName,
     theme::ControlSize,
@@ -21,6 +23,8 @@ use fintwind_client::scheduled_task::{
 };
 use fintwind_client::{Command, DaemonClient, DaemonSupervisor, ResponsePayload};
 use gpui::{ElementId, EventEmitter, Task};
+
+use chrono::TimeZone as _;
 
 use super::*;
 
@@ -106,6 +110,7 @@ impl ScheduledWake {
 enum ScheduleKind {
     AtTime,
     Every,
+    Once,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -124,6 +129,7 @@ struct Editor {
     schedule: ScheduleKind,
     time: String,
     weekdays: u8,
+    once_date: String,
     interval_minutes: String,
     target: TargetKind,
     project_id: Option<Uuid>,
@@ -134,19 +140,31 @@ struct Editor {
 
 impl Editor {
     fn for_task(task: &ScheduledTask) -> Self {
-        let (schedule, time, weekdays, interval_minutes) = match task.schedule {
+        let (schedule, time, weekdays, once_date, interval_minutes) = match task.schedule {
             Recurrence::AtTime { at, weekdays } => (
                 ScheduleKind::AtTime,
                 format_clock(at),
                 weekdays.bits(),
+                String::new(),
                 "60".to_owned(),
             ),
             Recurrence::Every { interval_secs } => (
                 ScheduleKind::Every,
                 "09:00".to_owned(),
                 Weekdays::every_day().bits(),
+                String::new(),
                 (interval_secs / 60).max(1).to_string(),
             ),
+            Recurrence::Once { at } => {
+                let (date, clock) = format_once_parts(at);
+                (
+                    ScheduleKind::Once,
+                    clock,
+                    Weekdays::every_day().bits(),
+                    date,
+                    "60".to_owned(),
+                )
+            }
         };
         let (target, project_id, session_id, launch) = match &task.target {
             TaskTarget::NewSession {
@@ -181,6 +199,7 @@ impl Editor {
             schedule,
             time,
             weekdays,
+            once_date,
             interval_minutes,
             target,
             project_id,
@@ -221,6 +240,16 @@ impl Editor {
                     .filter(|secs| (60..=31_536_000).contains(secs))
                     .ok_or_else(|| tr!("scheduled_tasks.error_interval"))?;
                 Recurrence::Every { interval_secs }
+            }
+            ScheduleKind::Once => {
+                let at = parse_once_datetime(&self.once_date, &self.time)
+                    .ok_or_else(|| tr!("scheduled_tasks.error_datetime"))?;
+                if self.enabled
+                    && at <= Local::now().timestamp().max(0) as u64
+                {
+                    return Err(tr!("scheduled_tasks.error_past"));
+                }
+                Recurrence::Once { at }
             }
         };
         let target = match self.target {
@@ -343,6 +372,45 @@ fn format_clock(at: ClockTime) -> String {
     format!("{:02}:{:02}", at.hour(), at.minute())
 }
 
+fn parse_once_datetime(date: &str, time: &str) -> Option<u64> {
+    let date = date.trim();
+    let clock = parse_clock(time)?;
+    let moment = chrono::NaiveDateTime::parse_from_str(
+        &format!("{date} {:02}:{:02}", clock.hour(), clock.minute()),
+        "%Y-%m-%d %H:%M",
+    )
+    .ok()?;
+    let local = Local.from_local_datetime(&moment).earliest()?;
+    u64::try_from(local.timestamp()).ok()
+}
+
+fn format_once_parts(at: u64) -> (String, String) {
+    let text = i64::try_from(at)
+        .ok()
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+        .map(|time| {
+            let local = time.with_timezone(&Local);
+            (
+                local.format("%Y-%m-%d").to_string(),
+                local.format("%H:%M").to_string(),
+            )
+        })
+        .unwrap_or_default();
+    text
+}
+
+fn format_once(at: u64) -> String {
+    i64::try_from(at)
+        .ok()
+        .and_then(|seconds| DateTime::<Utc>::from_timestamp(seconds, 0))
+        .map(|time| {
+            time.with_timezone(&Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
+}
+
 fn format_timestamp(seconds: u64) -> String {
     i64::try_from(seconds)
         .ok()
@@ -379,6 +447,9 @@ fn schedule_summary(schedule: Recurrence) -> String {
                     count = (interval_secs / 60).max(1)
                 )
             }
+        }
+        Recurrence::Once { at } => {
+            tr!("scheduled_tasks.once_summary", time = format_once(at))
         }
     }
 }

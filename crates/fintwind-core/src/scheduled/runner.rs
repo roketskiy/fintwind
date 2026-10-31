@@ -339,6 +339,9 @@ fn reconcile_preparing(
 
 fn missed_window(occurrence: &Occurrence, now: u64) -> bool {
     !occurrence.manual
-        && matches!(occurrence.draft.schedule, Recurrence::AtTime { .. })
+        && matches!(
+            occurrence.draft.schedule,
+            Recurrence::AtTime { .. } | Recurrence::Once { .. }
+        )
         && now.saturating_sub(occurrence.due_at) > FIXED_TIME_GRACE_SECS
 }

@@ -1,0 +1,38 @@
+name: Verify inputs and save compiler artifacts
+description: Never pair a changed build input tree with previously compiled outputs
+inputs:
+  kind:
+    required: true
+    description: test, release-check, or release-build
+  profile:
+    required: true
+    description: debug or release
+  build-key:
+    required: true
+    description: Content-addressed key produced by setup-rust
+  build-hit:
+    required: true
+    description: Whether that immutable key already exists
+  build-path:
+    required: true
+    description: Compiler-only paths from setup-rust
+runs:
+  using: composite
+  steps:
+    - name: Reject snapshots changed during compilation
+      id: verified
+      shell: pwsh
+      env:
+        CARGO_CACHE_PROFILE: ${{ inputs.profile }}
+        CARGO_CACHE_KIND: ${{ inputs.kind }}
+        CARGO_CACHE_KEY: ${{ inputs.build-key }}
+      run: |
+        python scripts/cargo-cache-workspace.py verify --profile $env:CARGO_CACHE_PROFILE --kind $env:CARGO_CACHE_KIND --expected-key $env:CARGO_CACHE_KEY --report (Join-Path (Join-Path $env:RUNNER_TEMP ('cargo-cache-' + $env:CARGO_CACHE_KIND)) 'source-inputs-verify.json')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    - name: Save the successful content-addressed compiler cache
+      if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && inputs.build-hit != 'true' && steps.verified.outputs.cacheable == 'true'
+      uses: actions/cache/save@v6
+      with:
+        key: ${{ inputs.build-key }}
+        path: ${{ inputs.build-path }}

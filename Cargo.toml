@@ -1,6 +1,6 @@
 [package]
 name = "fintwind"
-version = "0.2.19"
+version = "0.2.20"
 edition = "2024"
 # Ondine (crates/fintwind-diagram) requires 1.97; CI pins the same toolchain.
 rust-version = "1.97"

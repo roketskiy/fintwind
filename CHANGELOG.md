@@ -18,6 +18,16 @@ the original feature bullet instead of adding separate entries for them.
 
 ## [unreleased]
 
+## [0.2.20]
+
+### 改进
+
+- 更新检查改走边缘网关：启动时一次缓存查询代替匿名分页轮询 GitHub API，不再受共享限流影响；网关不可用时自动回退直连，行为与之前一致。
+
+### 兼容性
+
+继续使用 OpenCode 2（`@opencode/cli`）作为后端，不适用于 OpenCode 1.x。图像生成需要 OpenCode 2.2.1 或更新版本，具体可用性取决于已连接的提供商及模型；官方 Goal 适配依据 OpenCode 2.2.1，旧版本没有官方 Goal 时不能使用；定时任务 MCP 需要 OpenCode 2.1.4 或更新版本，使用实验性 MCP 接口。未验证完整的模型或版本兼容区间，功能范围见 [Goal 说明](docs/goals.md)、[图像模型配置](docs/image-generation.md)与 [定时任务 MCP 说明](docs/scheduled-tasks-mcp.md)。
+
 ## [0.2.19]
 
 ### 新功能

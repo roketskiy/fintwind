@@ -50,7 +50,23 @@ runs:
           target/${{ inputs.profile }}/deps
           target/${{ inputs.profile }}/build
           target/${{ inputs.profile }}/.fingerprint
-        key: cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}-${{ github.sha }}
+        key: cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', 'scripts/cargo-cache-source-stamps.py', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}-${{ github.sha }}
         restore-keys: |
-          cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}-
-          cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', '.cargo/config.toml') }}-
+          cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', 'scripts/cargo-cache-source-stamps.py', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}-
+          cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', 'scripts/cargo-cache-source-stamps.py', '.cargo/config.toml') }}-
+
+    - name: Restore unchanged vendored GPUI timestamps
+      shell: pwsh
+      env:
+        CARGO_CACHE_PROFILE: ${{ inputs.profile }}
+        CARGO_CACHE_KIND: ${{ inputs.kind }}
+      run: python scripts/cargo-cache-source-stamps.py restore --profile $env:CARGO_CACHE_PROFILE --report (Join-Path (Join-Path $env:RUNNER_TEMP ('cargo-cache-' + $env:CARGO_CACHE_KIND)) 'source-stamps-restore.json')
+
+    # Capture before compilation, so build-time source edits cannot acquire
+    # trusted timestamps. The snapshot lives inside the cached .fingerprint.
+    - name: Capture GPUI inputs for the next successful compiler cache
+      shell: pwsh
+      env:
+        CARGO_CACHE_PROFILE: ${{ inputs.profile }}
+        CARGO_CACHE_KIND: ${{ inputs.kind }}
+      run: python scripts/cargo-cache-source-stamps.py capture --profile $env:CARGO_CACHE_PROFILE --report (Join-Path (Join-Path $env:RUNNER_TEMP ('cargo-cache-' + $env:CARGO_CACHE_KIND)) 'source-stamps-capture.json')

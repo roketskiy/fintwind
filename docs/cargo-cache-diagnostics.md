@@ -3,9 +3,10 @@
 ## Scope
 
 The Tests workflow records Cargo fingerprint decisions for both debug tests
-and the stable release compile check. This is instrumentation, not a cache
-policy change: the setup action, cache keys, cached paths, source timestamps,
-and compiler settings are unchanged.
+and the stable release compile check. The shared setup action also restores
+timestamps for two unchanged vendored GPUI packages using the content-checked
+snapshot described below. Compiler settings and Cargo freshness checks remain
+unchanged.
 
 `scripts/cargo-cache-diagnostics.ps1` executes the existing Cargo commands and
 preserves their exit codes. The workflow uploads diagnostics on success and
@@ -14,9 +15,10 @@ failure, retaining them for seven days:
 - `cargo-cache-diagnostics-test`
 - `cargo-cache-diagnostics-release-check`
 
-These artifacts become available only after this workflow change is pushed
-and the corresponding job runs. No remote diagnostic run was performed during
-the initial local investigation.
+The initial instrumentation was verified in
+[run 41163358066](https://github.com/roketskiy/fintwind/actions/runs/41163358066).
+The timestamp fix still requires a successful cold run followed by a warm run
+after being pushed; local verification alone is not a CI speed measurement.
 
 ## Artifact contents
 
@@ -26,6 +28,8 @@ the initial local investigation.
 | `cargo.stdout.log` | Test output |
 | `fingerprint-summary.log` | Dirty/stale reasons, fingerprint errors, completion, and compiler errors |
 | `diagnostics.json` | Cargo/rustc versions, command, profile, selected compiler environment, timing, exit code, and pre-build timestamps |
+| `source-stamps-restore.json` | Which GPUI packages were restored or skipped, and why |
+| `source-stamps-capture.json` | Pre-Cargo snapshot status and scan time |
 
 The metadata includes hashes and timestamps of selected project and vendored
 GPUI inputs, plus restored GPUI fingerprint timestamps. It does not dump the
@@ -80,14 +84,24 @@ real GPUI implementation. The checks cover:
 - A genuine source edit that must rebuild.
 - A compiler error whose original nonzero exit code must survive the wrapper.
 - Cold and warm stable release compile-check commands.
+- Actual snapshot capture/restoration for both pinned vendor roots, including
+  a default-scanning Windows build script and a watched resource directory.
+- Source, build-script, resource, file-addition/deletion, and environment changes
+  that must still rebuild; application-only changes that must not rebuild GPUI.
+- Missing, malformed, profile-mismatched, and traversal-bearing snapshots, plus
+  a junction pointing outside the package, without touching outside timestamps.
 
-## Local finding and remaining boundary
+The Rust test job runs this offline check with a three-minute step timeout and
+uploads `cargo-cache-freshness-report` even on failure. Its fixtures and Cargo
+home are isolated from the real compilation and its cache snapshot.
+
+## Confirmed cause
 
 The controlled reproduction confirms that unchanged path-dependency source
 bytes with newer modification times can produce:
 
 ```text
-stale: changed ".../vendor/gpui-pre/src/lib.rs"
+stale: changed ".../vendor/gpui-pre/gpui-pre-0.3.8/build.rs"
 dirty: FsStatusOutdated(StaleItem(ChangedFile { ... }))
 ```
 
@@ -95,9 +109,47 @@ The application then becomes dirty through `StaleDepFingerprint`. With the
 same cached artifacts and the original timestamps restored, the fixture stays
 fresh. Genuine source changes still rebuild.
 
-This establishes the timestamp mechanism locally, not the first invalidation
-in the real GitHub Runner. The previous CI logs showed repeated compilation
-of real vendored GPUI but did not include fingerprint reasons. A targeted
-production fix remains deferred until the newly recorded Runner trace confirms
-the trigger. No timestamps or existing caches were rewritten as part of this
-diagnostic change.
+Run 41163358066 confirmed the same mechanism in both real Windows jobs. The
+compiler caches were restored from commit `de089a8`, while checkout gave both
+GPUI `build.rs` files newer modification times. The trace reported
+`ChangedFile` / `FsStatusOutdated`, followed by dependent crate invalidations.
+Neither vendored GPUI package changed between `de089a8` and that run's commit
+`dd8d61f`. The debug Windows build script also reported
+`PrecalculatedComponentsChanged`: without rerun directives it fingerprints the
+package's file timestamps, so restoring only `build.rs` would be insufficient.
+
+## Content-checked timestamp restoration
+
+`scripts/cargo-cache-source-stamps.py` handles only:
+
+- `vendor/gpui-pre/gpui-pre-0.3.8`
+- `vendor/gpui-pre/gpui-pre-windows-0.3.8`
+
+After restoring compiler artifacts, the setup action compares each package's
+complete file/directory list, SHA-256 file hashes, sizes, and modes with the
+snapshot in the cache. It restores file and directory modification times only
+if the entire package matches. A changed package is left alone; Cargo still
+detects changes in source, resources, build scripts, dependencies, profiles,
+features, and declared environment inputs. The application, configuration,
+migrations, and other workspace sources are never backdated.
+
+The action then captures a new snapshot BEFORE compiling. It is stored at
+`target/<profile>/.fingerprint/fintwind-gpui-source-stamps.json`, alongside the
+compiler artifacts, and saved only by the existing successful-main-job cache
+step. Do not generate a snapshot from sources after compilation and pair it
+with older outputs. The helper is for private, immutable CI checkouts, not a
+live development directory being edited by another process.
+
+Missing or invalid snapshots, mismatched package trees, unsupported filesystem
+entries, and links/junctions cause restoration to be skipped. Snapshot paths
+and timestamps are validated before any source metadata is changed. The scan
+and timestamp restoration do not follow source links or reparse points. I/O
+failures while applying validated timestamps fail the job rather than silently
+continuing after a partial restore.
+
+The helper's code participates in compiler-cache keys. The first run after
+adoption therefore builds a new compiler cache; dependency-download caches
+remain reusable. A later unchanged run must report both packages as
+`restored`, and its Cargo trace must show no timestamp-driven GPUI rebuild.
+Real GPUI input capture was measured locally over 188 files at about 0.11
+seconds; this does not predict total CI build time.

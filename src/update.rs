@@ -22,6 +22,17 @@ pub const RELEASES_LATEST_URL: &str = "https://github.com/roketskiy/fintwind/rel
 const RELEASES_API: &str = "https://api.github.com/repos/roketskiy/fintwind/releases";
 const RELEASES_PAGE_SIZE: usize = 100;
 
+/// The update gateway: a Cloudflare Worker that pages the releases API with
+/// a server-side token, picks the newest stable release, and caches the
+/// answer at the edge. One small GET here replaces the anonymous,
+/// rate-limited page loop below. See `workers/update-gateway/README.md`.
+/// Overridable at runtime for tests: `FINTWIND_UPDATE_GATEWAY`.
+const UPDATE_GATEWAY_URL: &str = "https://fintwind.roketskiy.top/v1/latest";
+
+/// Bounds the gateway probe: a small JSON document must answer fast, or the
+/// direct API remains the fallback rather than the delay.
+const GATEWAY_MAX_TIME_SECS: u64 = 10;
+
 /// The architecture token the release file names carry, which is the Rust
 /// target's own name — exactly what `bundle-windows.ts` writes into them.
 const INSTALLER_ARCH: &str = std::env::consts::ARCH;
@@ -130,7 +141,103 @@ pub fn fetch_newer_release() -> Option<ReleaseInfo> {
     if crate::BUILD_CHANNEL != crate::BuildChannel::Stable {
         return None;
     }
+    // The gateway first: one cached GET, no anonymous rate limit. Any failure
+    // — unreachable, unexpected status, unparsable body — falls through to
+    // the direct API, so a gateway outage reads as before, not as silence.
+    if let Some(release) = fetch_gateway_release(APP_VERSION) {
+        return Some(release);
+    }
     fetch_newer_release_from(RELEASES_API, APP_VERSION)
+}
+
+fn gateway_url() -> String {
+    std::env::var("FINTWIND_UPDATE_GATEWAY")
+        .ok()
+        .filter(|url| !url.trim().is_empty())
+        .unwrap_or_else(|| UPDATE_GATEWAY_URL.to_owned())
+}
+
+/// The gateway's trimmed release shape: the newest stable release already
+/// picked server-side, so no paging or ordering is left to do here.
+#[derive(Deserialize)]
+struct GatewayRelease {
+    version: String,
+    #[serde(default)]
+    notes: String,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    assets: Vec<GatewayAsset>,
+}
+
+#[derive(Deserialize)]
+struct GatewayAsset {
+    name: String,
+    #[serde(default)]
+    browser_download_url: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    size: u64,
+    #[serde(default)]
+    sha256: Option<String>,
+}
+
+fn fetch_gateway_release(current_version: &str) -> Option<ReleaseInfo> {
+    fetch_gateway_release_from(&gateway_url(), current_version)
+}
+
+pub(crate) fn fetch_gateway_release_from(gateway: &str, current_version: &str) -> Option<ReleaseInfo> {
+    let endpoint = format!("{gateway}?current={current_version}");
+    let headers = [
+        format!("User-Agent: fintwind/{APP_VERSION}"),
+        "Accept: application/json".to_string(),
+    ];
+    let (status, body) =
+        fintwind_protocol::http::http_get(&endpoint, &headers, GATEWAY_MAX_TIME_SECS).ok()?;
+    // The gateway answers 204 when the installed version is already current.
+    if status == 204 {
+        return None;
+    }
+    if status != 200 {
+        return None;
+    }
+    parse_gateway_release(&body, current_version)
+}
+
+fn parse_gateway_release(body: &str, current_version: &str) -> Option<ReleaseInfo> {
+    let release = serde_json::from_str::<GatewayRelease>(body).ok()?;
+    let version = release.version.trim().to_owned();
+    if version.is_empty() {
+        return None;
+    }
+    // Publication order stays authoritative server-side; the only comparison
+    // left here is "is this what is already installed".
+    if version.trim().trim_start_matches(['v', 'V'])
+        == current_version.trim().trim_start_matches(['v', 'V'])
+    {
+        return None;
+    }
+    Some(ReleaseInfo {
+        version,
+        notes: release.notes,
+        url: release
+            .url
+            .filter(|url| !url.trim().is_empty())
+            .unwrap_or_else(|| RELEASES_LATEST_URL.to_string()),
+        assets: release
+            .assets
+            .into_iter()
+            .filter_map(|asset| {
+                Some(ReleaseAsset {
+                    name: asset.name,
+                    url: asset.browser_download_url.or(asset.url)?,
+                    size: asset.size,
+                    sha256: asset.sha256,
+                })
+            })
+            .collect(),
+    })
 }
 
 pub(crate) fn fetch_newer_release_from(api: &str, current_version: &str) -> Option<ReleaseInfo> {

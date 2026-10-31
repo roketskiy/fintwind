@@ -111,7 +111,126 @@ fn check(
     Ok(())
 }
 
+fn gateway(version: &str) -> Value {
+    json!({
+        "version": version,
+        "notes": "Publication order update",
+        "url": format!("https://example.invalid/releases/tag/v{version}"),
+        "assets": [{
+            "name": format!("fintwind-{version}-{}-Setup.exe", std::env::consts::ARCH),
+            "browser_download_url": "https://example.invalid/installer.exe",
+            "size": 1234,
+            "sha256": "a".repeat(64)
+        }]
+    })
+}
+
+fn check_gateway(
+    name: &str,
+    current: &str,
+    status: u16,
+    body: Value,
+    expected: Option<&str>,
+) -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0")?;
+    listener.set_nonblocking(true)?;
+    let endpoint = format!("http://{}/v1/latest", listener.local_addr()?);
+    let current = current.to_owned();
+    let expected_request = format!("GET /v1/latest?current={current} HTTP/1.1\r\n");
+    let server = std::thread::spawn(move || -> Result<()> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let stream = loop {
+            match listener.accept() {
+                Ok((stream, _)) => break stream,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    ensure!(Instant::now() < deadline, "missing gateway request");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        ensure!(
+            line == expected_request,
+            "unexpected request: {line}"
+        );
+        loop {
+            line.clear();
+            ensure!(reader.read_line(&mut line)? > 0, "truncated request");
+            if line == "\r\n" {
+                break;
+            }
+        }
+        let body = serde_json::to_vec(&body)?;
+        write!(
+            reader.get_mut(),
+            "HTTP/1.1 {status} Fixture\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )?;
+        reader.get_mut().write_all(&body)?;
+        Ok(())
+    });
+    let result = update::fetch_gateway_release_from(&endpoint, &current);
+    server.join().expect("gateway fixture panicked")?;
+    ensure!(
+        result.as_ref().map(|release| release.version.as_str()) == expected,
+        "{name}: expected {expected:?}, got {result:?}"
+    );
+    if let Some(release) = result {
+        let installer = release
+            .installer()
+            .expect("installer for the selected release");
+        ensure!(installer.size == 1234, "installer metadata lost");
+    }
+    println!("PASS {name}");
+    Ok(())
+}
+
+fn gateway_checks() -> Result<()> {
+    check_gateway(
+        "gateway offers the newer release",
+        "0.2.13",
+        200,
+        gateway("0.2.14"),
+        Some("0.2.14"),
+    )?;
+    check_gateway(
+        "gateway 204 means the installed release is current",
+        "0.2.14",
+        204,
+        json!(null),
+        None,
+    )?;
+    check_gateway(
+        "gateway echo of the installed version is not offered",
+        "0.2.13",
+        200,
+        gateway("0.2.13"),
+        None,
+    )?;
+    check_gateway(
+        "gateway failure offers nothing",
+        "0.2.13",
+        502,
+        json!({"error": "unavailable"}),
+        None,
+    )?;
+    check_gateway(
+        "gateway garbage offers nothing",
+        "0.2.13",
+        200,
+        json!({"unexpected": true}),
+        None,
+    )?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
+    gateway_checks()?;
     let old = release(10, "v2.0.13", "2026-10-21T12:00:00Z");
     let corrected = release(11, "v0.2.14", "2026-10-22T12:00:00Z");
     let mut draft = release(12, "v9.0.0", "2026-10-23T12:00:00Z");

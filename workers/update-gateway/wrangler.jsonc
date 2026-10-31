@@ -1,0 +1,23 @@
+{
+  // Custom domain lives on the roketskiy.top zone (DNS already on Cloudflare).
+  // Deploy with the Cloudflare CLI from this directory:
+  //   wrangler login && wrangler secret put GITHUB_TOKEN && wrangler deploy
+  "name": "fintwind-update-gateway",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-31",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "vars": {
+    "GITHUB_REPO": "roketskiy/fintwind"
+  },
+  // GITHUB_TOKEN is a secret, never a var:
+  //   wrangler secret put GITHUB_TOKEN
+  // A fine-grained classic/PAT with public-repo read (or no scopes for public
+  // data) is enough; it only raises the server-side rate limit.
+  "routes": [{ "pattern": "fintwind.roketskiy.top/*", "zone_name": "roketskiy.top" }],
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.01 }
+  }
+}

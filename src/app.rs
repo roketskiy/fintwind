@@ -2280,6 +2280,9 @@ pub struct Fintwind {
     /// frames so a redraw that changes no label shapes no text.
     composer_row_cache: RefCell<composer::ComposerRowCache>,
     expanded_goal: Option<Uuid>,
+    /// Sessions whose queued follow-up section is collapsed inside the
+    /// composer. Empty means expanded, matching the old always-open list.
+    collapsed_queued: HashSet<Uuid>,
     goal_details_scroll: gpui::ScrollHandle,
     pending_goal_actions: HashMap<Uuid, fintwind_client::goal::GoalAction>,
     goal_status_requests: HashSet<Uuid>,
@@ -4120,6 +4123,7 @@ impl Fintwind {
                 menus: RefCell::new(HashMap::new()),
                 composer_row_cache: RefCell::new(composer::ComposerRowCache::default()),
                 expanded_goal: None,
+                collapsed_queued: HashSet::new(),
                 goal_details_scroll: gpui::ScrollHandle::new(),
                 pending_goal_actions: HashMap::new(),
                 goal_status_requests: HashSet::new(),

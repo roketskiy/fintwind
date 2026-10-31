@@ -3,7 +3,9 @@ param(
     [ValidateSet('Test', 'StableRelease')]
     [string]$Mode,
     [Parameter(Mandatory = $true)]
-    [string]$LogDirectory
+    [string]$LogDirectory,
+    [ValidateRange(1, 5400)]
+    [int]$TimeoutSeconds = 3000
 )
 
 $ErrorActionPreference = 'Stop'
@@ -66,6 +68,7 @@ if (Test-Path -LiteralPath $fingerprints) {
 $recordedEnvironment = [ordered]@{}
 foreach ($name in @(
     'CARGO_INCREMENTAL', 'CARGO_PROFILE_DEV_DEBUG', 'CARGO_PROFILE_TEST_DEBUG',
+    'CARGO_PROFILE_DEV_OPT_LEVEL', 'CARGO_PROFILE_TEST_OPT_LEVEL',
     'CARGO_TARGET_DIR', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTC_WRAPPER',
     'RUSTC_WORKSPACE_WRAPPER', 'CARGO_BUILD_TARGET', 'CARGO_BUILD_JOBS'
 )) {
@@ -87,7 +90,7 @@ try {
     $rustcVersion = @(& rustc --version --verbose 2>&1 | ForEach-Object { $_.ToString() })
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read rustc version' }
     Write-Output ('[INFO] Cargo fingerprint diagnostics: ' + $LogDirectory)
-    & cargo @cargoArguments 1> $stdoutPath 2> $stderrPath
+    & python (Join-Path $PSScriptRoot 'cargo-cache-live.py') --mode $Mode --log-directory $LogDirectory --timeout-seconds $TimeoutSeconds
     $exitCode = $LASTEXITCODE
 } catch {
     $failure = $_.Exception.Message
@@ -114,6 +117,11 @@ try {
         environment = $recordedEnvironment
         sourceStampsBeforeCargo = $sourceStamps
         fingerprintStampsBeforeCargo = $fingerprintStamps
+        phases = $null
+    }
+    $phasesPath = Join-Path $LogDirectory 'phases.json'
+    if (Test-Path -LiteralPath $phasesPath) {
+        $metadata.phases = Get-Content -LiteralPath $phasesPath -Raw | ConvertFrom-Json
     }
     $metadata | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $metadataPath -Encoding utf8
     if (Test-Path -LiteralPath $stderrPath) {
@@ -125,5 +133,14 @@ try {
     }
     if (Test-Path -LiteralPath $stdoutPath) { Get-Content -LiteralPath $stdoutPath | Select-Object -Last 25 }
     Write-Output ('[INFO] Cargo exit code: ' + $exitCode)
+    if ($env:GITHUB_STEP_SUMMARY) {
+        $lines = @(('### Cargo ' + $Mode), '', '| Result | Value |', '| --- | --- |',
+            ('| Exit code | ' + $exitCode + ' |'), ('| Total seconds | ' + $metadata.seconds + ' |'))
+        if ($metadata.phases) {
+            $lines += ('| Compile seconds | ' + $metadata.phases.compileSeconds + ' |')
+            $lines += ('| Tests and finalization seconds | ' + $metadata.phases.afterCompileSeconds + ' |')
+        }
+        $lines | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+    }
 }
 exit $exitCode

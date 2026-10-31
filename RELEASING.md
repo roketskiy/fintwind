@@ -113,32 +113,42 @@ release requires a new version instead.
 
 `.github/rust-version` is the CI toolchain source. The shared setup action
 separates Cargo dependency downloads from compiler artifacts. Test,
-release-check, and release-build caches have disjoint namespaces; build keys
-include the source commit. Only successful jobs on `main` save compiler
+release-check, and release-build caches have disjoint namespaces; v3 build keys
+identify build context and full input contents, not the source commit. Only successful jobs on `main` save compiler
 artifacts, so PRs and version tags do not create large, low-reuse build caches.
 Manual Release runs on `main` can seed the release-build cache; tag builds can
 restore it but do not save a tag-specific copy. Old cache entries remain subject
 to GitHub's normal eviction policy.
 
-CI disables incremental compilation, and disables debug symbols for debug
-tests only. Local development and shipped release settings are unchanged.
+CI disables incremental compilation and debug symbols for debug tests, and
+sets workspace dev/test opt-level=0 while retaining dependency overrides.
+Local development and shipped release settings are unchanged.
 Compiler caches exclude incremental state, top-level binaries, installers,
 and archives. The first run with the new cache scheme is cold; assess the speed
 and cache size from subsequent successful runs rather than assuming a speedup.
 
-The setup action preserves timestamps for the two unchanged vendored GPUI
-packages only after checking their complete contents and file trees against a
-pre-build snapshot stored with compiler artifacts. Changed packages and all
-application sources keep their normal timestamps. Missing or invalid snapshots
-skip restoration. The helper is part of the compiler-cache key, so adopting or
-changing it requires one successful cold run before warm reuse can be measured.
+The setup action restores timestamps only for content-identical workspace
+inputs, including vendored GPUI, embedded resources/translations/migrations and
+the embedded changelog. Directory restoration requires a matching entire
+subtree. Changed content is never backdated. A pre-build snapshot is verified
+again before saving. Missing/invalid snapshots skip restoration; unsupported or
+build-time-mutated inputs disable saving. Example outputs are cached too.
+Adoption of v3 requires a cold run before warm reuse can be measured.
+
+Successful main Tests runs maintain the newest two compiler-cache generations
+per architecture/profile and a recent dependency-download cache. Cleanup is
+limited to explicit Fintwind main-branch namespaces, defers while other runs
+are active, and reports against a 7.5 GB soft budget within GitHub's default
+10 GB free cache allowance. It never changes billing settings. See the
+diagnostics guide for migration, quota and concurrency caveats.
 
 Failed Rust tests upload available recovery E2E `result.json` files for seven
 days. The Workflow tools job checks release automation against an isolated
 loopback API and always uploads its JSON verification report.
 
-Both Windows check jobs also upload Cargo fingerprint logs on success and
-failure. See [Cargo cache diagnostics](docs/cargo-cache-diagnostics.md) for the
+Both Windows check jobs stream real-time progress and upload Cargo fingerprint
+logs and phase timing on success and failure. An independent Windows job runs
+offline cache/logging checks in parallel. See [Cargo cache diagnostics](docs/cargo-cache-diagnostics.md) for the
 artifact names, the isolated local reproduction, and how to distinguish a
 cache download hit from actual compiler-artifact reuse.
 

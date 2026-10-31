@@ -102,12 +102,48 @@ jobs:
 
       # Tag-scoped caches cannot warm the next version. Only a successful
       # manual run on main saves compiler artifacts for subsequent releases.
-      - name: Save compiler artifacts
-        if: success() && github.ref == 'refs/heads/main' && steps.rust.outputs.build-hit != 'true'
-        uses: actions/cache/save@v6
+      - name: Verify inputs and save compiler artifacts
+        uses: ./.github/actions/save-rust-cache
         with:
-          key: ${{ steps.rust.outputs.build-key }}
-          path: ${{ steps.rust.outputs.build-path }}
+          kind: release-build
+          profile: release
+          build-key: ${{ steps.rust.outputs.build-key }}
+          build-hit: ${{ steps.rust.outputs.build-hit }}
+          build-path: ${{ steps.rust.outputs.build-path }}
+
+      - name: Upload cache input verification
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-cache-inputs-${{ matrix.arch }}
+          path: ${{ runner.temp }}/cargo-cache-release-build/*.json
+          retention-days: 3
+
+  cache-maintenance:
+    name: Bound main-branch compiler caches
+    needs: [windows, checks]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: cargo-cache-maintenance
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Retain recent successful generations within the free cache budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/cargo-cache-retention.py --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --report "$RUNNER_TEMP/cache-retention.json" --apply
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: release-cache-retention-report
+          path: ${{ runner.temp }}/cache-retention.json
+          retention-days: 3
 
   draft-release:
     name: Draft GitHub release

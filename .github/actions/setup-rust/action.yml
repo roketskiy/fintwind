@@ -9,7 +9,7 @@ inputs:
     required: true
 outputs:
   build-key:
-    description: Exact build cache key to save after a successful main-branch job
+    description: Content-addressed build key to save after input verification
     value: ${{ steps.build.outputs.cache-primary-key }}
   build-hit:
     description: Whether the exact build cache already exists
@@ -20,9 +20,18 @@ outputs:
       target/${{ inputs.profile }}/deps
       target/${{ inputs.profile }}/build
       target/${{ inputs.profile }}/.fingerprint
+      target/${{ inputs.profile }}/examples
 runs:
   using: composite
   steps:
+    - name: Initialize the native MSVC and SDK environment
+      shell: pwsh
+      env:
+        CARGO_CACHE_NATIVE_ARCH: ${{ runner.arch == 'ARM64' && 'arm64' || 'x64' }}
+      run: |
+        python scripts/cargo-cache-msvc.py --arch $env:CARGO_CACHE_NATIVE_ARCH
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
     - name: Install Rust
       shell: pwsh
       run: |
@@ -37,10 +46,22 @@ runs:
         path: |
           ~/.cargo/registry/index
           ~/.cargo/registry/cache
+          ~/.cargo/registry/src
           ~/.cargo/git/db
-        key: cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          ~/.cargo/git/checkouts
+        key: cargo-downloads-v3-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
         restore-keys: |
-          cargo-downloads-v2-${{ runner.os }}-${{ runner.arch }}-
+          cargo-downloads-v3-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Identify the complete workspace build inputs
+      id: inputs
+      shell: pwsh
+      env:
+        CARGO_CACHE_PROFILE: ${{ inputs.profile }}
+        CARGO_CACHE_KIND: ${{ inputs.kind }}
+      run: |
+        python scripts/cargo-cache-workspace.py prepare --profile $env:CARGO_CACHE_PROFILE --kind $env:CARGO_CACHE_KIND --report (Join-Path (Join-Path $env:RUNNER_TEMP ('cargo-cache-' + $env:CARGO_CACHE_KIND)) 'source-inputs-prepare.json')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     - name: Restore compiler artifacts
       id: build
@@ -50,23 +71,27 @@ runs:
           target/${{ inputs.profile }}/deps
           target/${{ inputs.profile }}/build
           target/${{ inputs.profile }}/.fingerprint
-        key: cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', 'scripts/cargo-cache-source-stamps.py', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}-${{ github.sha }}
+          target/${{ inputs.profile }}/examples
+        key: cargo-build-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ steps.inputs.outputs.compatibility-hash }}-${{ steps.inputs.outputs.input-hash }}
         restore-keys: |
-          cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', 'scripts/cargo-cache-source-stamps.py', '.cargo/config.toml') }}-${{ hashFiles('Cargo.lock', '**/Cargo.toml') }}-
-          cargo-build-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ hashFiles('.github/rust-version', '.github/actions/setup-rust/action.yml', 'scripts/cargo-cache-source-stamps.py', '.cargo/config.toml') }}-
+          cargo-build-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.kind }}-${{ steps.inputs.outputs.compatibility-hash }}-
 
-    - name: Restore unchanged vendored GPUI timestamps
+    - name: Restore content-verified workspace input timestamps
       shell: pwsh
       env:
         CARGO_CACHE_PROFILE: ${{ inputs.profile }}
         CARGO_CACHE_KIND: ${{ inputs.kind }}
-      run: python scripts/cargo-cache-source-stamps.py restore --profile $env:CARGO_CACHE_PROFILE --report (Join-Path (Join-Path $env:RUNNER_TEMP ('cargo-cache-' + $env:CARGO_CACHE_KIND)) 'source-stamps-restore.json')
+      run: |
+        python scripts/cargo-cache-workspace.py restore --profile $env:CARGO_CACHE_PROFILE --kind $env:CARGO_CACHE_KIND --report (Join-Path (Join-Path $env:RUNNER_TEMP ('cargo-cache-' + $env:CARGO_CACHE_KIND)) 'source-inputs-restore.json')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     # Capture before compilation, so build-time source edits cannot acquire
     # trusted timestamps. The snapshot lives inside the cached .fingerprint.
-    - name: Capture GPUI inputs for the next successful compiler cache
+    - name: Capture inputs before compilation
       shell: pwsh
       env:
         CARGO_CACHE_PROFILE: ${{ inputs.profile }}
         CARGO_CACHE_KIND: ${{ inputs.kind }}
-      run: python scripts/cargo-cache-source-stamps.py capture --profile $env:CARGO_CACHE_PROFILE --report (Join-Path (Join-Path $env:RUNNER_TEMP ('cargo-cache-' + $env:CARGO_CACHE_KIND)) 'source-stamps-capture.json')
+      run: |
+        python scripts/cargo-cache-workspace.py capture --profile $env:CARGO_CACHE_PROFILE --kind $env:CARGO_CACHE_KIND --report (Join-Path (Join-Path $env:RUNNER_TEMP ('cargo-cache-' + $env:CARGO_CACHE_KIND)) 'source-inputs-capture.json')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

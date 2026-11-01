@@ -341,11 +341,25 @@ impl Render for Fintwind {
                     transition.map(|(_, _, opacity)| opacity)
                 };
                 let background = background_opacity.map(|opacity| {
-                    div().absolute().inset_0().opacity(opacity).child(
-                        self.new_session_background
-                            .clone()
-                            .cached(StyleRefinement::default().size_full()),
-                    )
+                    // Bleed through the workspace card's bottom padding so the
+                    // glow touches the card's bottom edge instead of ending on
+                    // a surface strip. Layout is untouched: only the background
+                    // overpaints the padding. The corner matches the card and
+                    // clips the bleed.
+                    div()
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .right_0()
+                        .bottom(px(-WORKSPACE_CORNER_RADIUS))
+                        .rounded_bl(px(WORKSPACE_CORNER_RADIUS))
+                        .overflow_hidden()
+                        .opacity(opacity)
+                        .child(
+                            self.new_session_background
+                                .clone()
+                                .cached(StyleRefinement::default().size_full()),
+                        )
                 });
                 let content = if centered {
                     self.new_session_pane

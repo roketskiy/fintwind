@@ -575,7 +575,7 @@ fn context_card(theme: &Theme) -> Div {
     div()
         .p(px(12.0))
         .rounded(theme.card_radius())
-        .bg(theme.card_bg())
+        .bg(theme.surface)
         .border_1()
         .border_color(theme.card_border())
         .shadow(theme.card_shadow())

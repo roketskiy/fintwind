@@ -383,16 +383,6 @@ impl Theme {
         px(14.0)
     }
 
-    /// Cards sit one step above their canvas: paper-white in light, the
-    /// raised graphite in dark.
-    pub fn card_bg(&self) -> Hsla {
-        if self.is_dark {
-            self.raised
-        } else {
-            rgb(0xFFFFFF).into()
-        }
-    }
-
     /// Card edge only; the global border keeps its own weight.
     pub fn card_border(&self) -> Hsla {
         if self.is_dark {

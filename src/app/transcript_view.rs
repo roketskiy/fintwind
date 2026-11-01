@@ -1935,7 +1935,7 @@ impl Fintwind {
             .w_full()
             .min_w_0()
             .rounded(theme.card_radius())
-            .bg(theme.card_bg())
+            .bg(theme.raised)
             .border_1()
             .border_color(theme.card_border())
             .shadow(theme.card_shadow())

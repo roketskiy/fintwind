@@ -2797,9 +2797,9 @@ impl Fintwind {
                 .w_full()
                 .max_w(px(crate::theme::transcript_width()))
                 .mx_auto()
-                .rounded(px(13.0))
+                .rounded(theme.card_radius())
                 .border_1()
-                .border_color(theme.border)
+                .border_color(theme.card_border())
                 .bg(theme.composer)
                 .shadow(theme.card_shadow())
                 // Horizontal insets live on each row (and inside the field's

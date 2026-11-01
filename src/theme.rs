@@ -377,17 +377,54 @@ impl Theme {
         ]
     }
 
-    /// A quiet downward lift for the context panel's cards, in the same
-    /// two-layer idiom as the sidebar and workspace shadows but smaller.
-    pub fn card_shadow(&self) -> Vec<BoxShadow> {
-        let (key, ambient) = if self.is_dark {
-            (0.16, 0.09)
+    /// One corner radius for every card, so the three surfaces read as one
+    /// family instead of three near-misses.
+    pub fn card_radius(&self) -> Pixels {
+        px(14.0)
+    }
+
+    /// Cards sit one step above their canvas: paper-white in light, the
+    /// raised graphite in dark.
+    pub fn card_bg(&self) -> Hsla {
+        if self.is_dark {
+            self.raised
         } else {
-            (0.05, 0.03)
+            rgb(0xFFFFFF).into()
+        }
+    }
+
+    /// Card edge only; the global border keeps its own weight.
+    pub fn card_border(&self) -> Hsla {
+        if self.is_dark {
+            hsla(220.0 / 360.0, 0.10, 0.90, 0.08)
+        } else {
+            hsla(0.0, 0.0, 0.12, 0.12)
+        }
+    }
+
+    /// Inset 1px top edge: the cards' only implied light source.
+    /// `BoxShadow::inset` paints after the fill and before the border,
+    /// which is exactly a hairline highlight.
+    pub fn card_top_highlight(&self) -> BoxShadow {
+        let alpha = if self.is_dark { 0.10 } else { 0.70 };
+        BoxShadow::new(px(0.0), px(1.0), hsla(0.0, 0.0, 1.0, alpha)).inset()
+    }
+
+    /// Three black-only layers for lift: contact, mid, ambient. The top
+    /// highlight rides along so a caller cannot paint a card without it.
+    pub fn card_shadow(&self) -> Vec<BoxShadow> {
+        let (contact, mid, ambient) = if self.is_dark {
+            (0.30, 0.18, 0.12)
+        } else {
+            (0.05, 0.04, 0.08)
         };
         vec![
-            BoxShadow::new(px(0.0), px(1.0), hsla(0.0, 0.0, 0.0, key)).blur_radius(px(2.0)),
-            BoxShadow::new(px(0.0), px(3.0), hsla(0.0, 0.0, 0.0, ambient)).blur_radius(px(7.0)),
+            BoxShadow::new(px(0.0), px(1.0), hsla(0.0, 0.0, 0.0, contact)).blur_radius(px(1.0)),
+            BoxShadow::new(px(0.0), px(2.0), hsla(0.0, 0.0, 0.0, mid))
+                .blur_radius(px(if self.is_dark { 8.0 } else { 6.0 })),
+            BoxShadow::new(px(0.0), px(12.0), hsla(0.0, 0.0, 0.0, ambient))
+                .blur_radius(px(if self.is_dark { 28.0 } else { 24.0 })),
+            self.card_top_highlight(),
         ]
     }
 

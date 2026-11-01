@@ -2775,7 +2775,7 @@ impl Fintwind {
         // as the same target. The wash arrives pre-blended because a
         // drag-over refinement replaces the card's fill rather than
         // compositing over it.
-        let drop_wash = theme.composer.blend(theme.overlay_strong);
+        let drop_wash = theme.card_bg().blend(theme.overlay_strong);
         let drop_ring = theme.accent.opacity(0.7);
         let container = div().flex_none().px(px(20.0)).flex().flex_col().when(
             self.selected_workspace_path().is_some(),
@@ -2797,10 +2797,10 @@ impl Fintwind {
                 .w_full()
                 .max_w(px(crate::theme::transcript_width()))
                 .mx_auto()
-                .rounded(px(13.0))
+                .rounded(theme.card_radius())
                 .border_1()
-                .border_color(theme.border)
-                .bg(theme.composer)
+                .border_color(theme.card_border())
+                .bg(theme.card_bg())
                 .shadow(theme.card_shadow())
                 // Horizontal insets live on each row (and inside the field's
                 // scroll viewport, via `padding_x`) rather than on the card,

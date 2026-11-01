@@ -569,15 +569,15 @@ impl Fintwind {
     }
 }
 
-/// The floating card the context panel's sections share: one surface, one
-/// hairline border, one quiet shadow.
+/// The floating card the context panel's sections share: one bento card
+/// surface, hairline border, and three-layer lift.
 fn context_card(theme: &Theme) -> Div {
     div()
         .p(px(12.0))
-        .rounded(px(10.0))
-        .bg(theme.surface)
+        .rounded(theme.card_radius())
+        .bg(theme.card_bg())
         .border_1()
-        .border_color(theme.border)
+        .border_color(theme.card_border())
         .shadow(theme.card_shadow())
         .flex()
         .flex_col()

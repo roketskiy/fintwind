@@ -7,7 +7,7 @@
 
 use crate::theme::ui_px;
 
-use gpui::{KeyBinding, ScrollDelta, ScrollWheelEvent, actions};
+use gpui::{KeyBinding, PinchEvent, ScrollDelta, ScrollWheelEvent, actions};
 
 use super::*;
 
@@ -236,9 +236,6 @@ impl Fintwind {
             .flex_1()
             .w_full()
             .min_h_0()
-            .flex()
-            .items_center()
-            .justify_center()
             .overflow_scroll()
             .on_mouse_down(MouseButton::Left, |_, _, cx| {
                 cx.stop_propagation();
@@ -261,30 +258,49 @@ impl Fintwind {
                     cx.stop_propagation();
                 },
             ))
+            .on_pinch(cx.listener(|this, event: &PinchEvent, _, cx| {
+                if event.delta == 0.0 {
+                    return;
+                }
+                let factor = (1.0 + event.delta).clamp(0.5, 2.0);
+                this.zoom_diagram_preview(factor, cx);
+                cx.stop_propagation();
+            }))
+            // Wrapper carries the zoomed size with `flex_none`, so the scroll
+            // container cannot shrink it back to fit. `mx_auto` keeps a small
+            // diagram centered, but collapses when zoomed past the viewport so
+            // the start stays reachable by scrolling.
             .child(
-                img(image_source)
+                div()
+                    .flex_none()
                     .w(px(display_width))
                     .h(px(display_height))
-                    .rounded(px(6.0))
-                    .border_1()
-                    .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.1))
-                    .shadow_lg()
-                    .with_fallback(move || {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .gap(px(8.0))
-                            .text_size(ui_px(12.0))
-                            .text_color(gpui::white().opacity(0.78))
-                            .child(icon(
-                                "icons/alert.svg",
-                                18.0,
-                                gpui::white().opacity(0.78),
-                            ))
-                            .child(tr_cow!("attachments.preview_unavailable"))
-                            .into_any_element()
-                    }),
+                    .mx_auto()
+                    .child(
+                        img(image_source)
+                            .size_full()
+                            .flex_none()
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(gpui::hsla(0.0, 0.0, 1.0, 0.1))
+                            .shadow_lg()
+                            .with_fallback(move || {
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .text_size(ui_px(12.0))
+                                    .text_color(gpui::white().opacity(0.78))
+                                    .child(icon(
+                                        "icons/alert.svg",
+                                        18.0,
+                                        gpui::white().opacity(0.78),
+                                    ))
+                                    .child(tr_cow!("attachments.preview_unavailable"))
+                                    .into_any_element()
+                            }),
+                    ),
             );
 
         let content = div()

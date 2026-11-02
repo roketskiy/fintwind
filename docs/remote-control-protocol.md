@@ -27,6 +27,7 @@ Read-only requests may also include a top-level `ifRevision` containing a 64-cha
 | `listWorkspaces` | None |
 | `listSessions` | `projectId` |
 | `getSession` | `sessionId` |
+| `watchSession` | `sessionId`, `watchId` (UUID), `enabled` (read-only; requires `sessionDeltas`) |
 | `getComposer` | `sessionId` (read-only; requires `composerOptions`) |
 | `configureSession` | `sessionId`, optional `model`, `interactionMode`, `reasoningEffort` |
 | `uploadChunk` | `sessionId`, `uploadId`, `name`, `offset`, `dataBase64`, `complete` |
@@ -64,6 +65,35 @@ Slow composer discovery and final attachment imports have independent bounded re
 
 The phone refreshes bounded views on demand and while a task is open. It preserves the selected workspace and task independently of desktop selection. Rendering untrusted text uses DOM text content, never HTML.
 
+### Optional session updates
+
+`sessionDeltas` opts into updates on the existing encrypted connection. Neither
+handshake nor `ready` changes. An old client never receives updates, and a new
+client uses the 2.5-second conditional read fallback with an old desktop.
+`watchSession` returns `{accepted:true}`. One watch replaces the previous watch;
+disabling only affects a matching `watchId`. It does not accept `ifRevision`.
+
+The first encrypted push is `{type:"sessionUpdate",watchId,snapshot}`. This is
+the bounded `getSession` projection with `revision` and an empty legacy
+`messages` array; ordered `entries` are authoritative. Subsequent pushes are a
+smaller full snapshot or `{type:"sessionUpdate",watchId,baseRevision,revision,edits}`.
+Each edit has a string-array `path` and exactly one of `set` (replace a value),
+`append` (text suffix), or `truncate` (shorten an array). Array paths use decimal
+indices. Edits run in order and also replace the snapshot's revision. The client
+checks the base revision, bounded paths/values, and the complete reconstructed
+session through its existing parser. Invalid or missing bases trigger a fresh
+read and subscription; a repeated failure falls back to conditional reads.
+
+The desktop folds entity notifications for 200ms, without adding window
+notifications or frames. Projection is bounded; hashing, diffing, serialization
+and encryption of wire frames run on the transport thread. Active Goal clocks also sample at
+approximately one second. A one-item snapshot channel bounds backpressure.
+Unchanged projections send nothing. Errors use `{type:"sessionUpdate",watchId,error}`.
+Every projection rechecks activation, project membership, and session recency.
+Closing the socket or replacing/disabling the watch drops its receiver and stops
+the producer. A hidden phone page disables its watch, pauses reads, and creates a
+new watch and full baseline on return. Stale watch IDs cannot update its display.
+
 ## Desktop adapter boundary
 
 The `fintwind-remote` crate exports the following interface. Transport and cryptographic state stay private.
@@ -74,7 +104,10 @@ impl RelayConfig {
     pub fn load_default() -> anyhow::Result<Self>;
 }
 pub enum RemoteStatus { Connecting, Waiting, Connected, Failed(String) }
-pub enum RemoteEvent { Status(RemoteStatus), Request(DesktopRequest) }
+pub enum RemoteEvent {
+    Status(RemoteStatus), Request(DesktopRequest),
+    WatchSession { session_id: uuid::Uuid, snapshots: smol::channel::Sender<Result<serde_json::Value, String>> },
+}
 pub struct DesktopRequest {
     pub id: uuid::Uuid,
     pub command: RemoteCommand,

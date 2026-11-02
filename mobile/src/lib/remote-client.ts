@@ -3,6 +3,7 @@ import type {
   CommandMap,
   CommandType,
   ConnectionPhase,
+  SessionDetail,
 } from "./types";
 import { forgetPairing, loadPairing, rememberPairing, type SavedPairing } from "./pairing-store";
 import {
@@ -22,6 +23,7 @@ import {
   parseResult,
   textBytes,
 } from "./remote-validation";
+import { SessionUpdates } from "./session-updates";
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -97,6 +99,23 @@ export class RemoteClient {
   private onlineHandler: (() => void) | null = null;
   private offlineHandler: (() => void) | null = null;
   private storageHandler: ((event: StorageEvent) => void) | null = null;
+  private sessionWatch: { id: string; updates: SessionUpdates; receive: (detail: SessionDetail) => void; fail: (error: Error) => void } | null = null;
+
+  watchSession(sessionId: string, receive: (detail: SessionDetail) => void, fail: (error: Error) => void): () => void {
+    const id = crypto.randomUUID();
+    const watch = { id, updates: new SessionUpdates(sessionId), receive, fail };
+    this.sessionWatch = watch;
+    void this.command("watchSession", { sessionId, watchId: id, enabled: true }).catch((error: unknown) => {
+      if (this.sessionWatch === watch) {
+        this.sessionWatch = null;
+        fail(error instanceof Error ? error : new Error("无法订阅会话。"));
+      }
+    });
+    return () => {
+      if (this.sessionWatch === watch) this.sessionWatch = null;
+      if (this.ready) void this.command("watchSession", { sessionId, watchId: id, enabled: false }).catch(() => {});
+    };
+  }
 
   subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener);
@@ -145,6 +164,7 @@ export class RemoteClient {
   stop(): void {
     if (!this.started && this.ws === null && this.reconnectTimer === 0) return;
     this.started = false;
+    this.sessionWatch = null;
     this.lease?.release();
     this.lease = null;
     this.transportGeneration += 1;
@@ -752,6 +772,7 @@ export class RemoteClient {
   }
 
   private interruptInflight(): void {
+    this.sessionWatch = null;
     for (const item of this.inflight.values()) {
       window.clearTimeout(item.timer);
       const pending = this.unresolved.get(item.scope);
@@ -820,6 +841,18 @@ export class RemoteClient {
         this.ready = true;
         this.reconnectDelay = RECONNECT_BASE_MS;
         this.setPhase("connected", null);
+        return;
+      }
+      if (response["type"] === "sessionUpdate") {
+        const watch = this.sessionWatch;
+        if (!watch || response["watchId"] !== watch.id) return;
+        try {
+          if (Object.hasOwn(response, "error")) throw new Error(typeof response["error"] === "string" ? response["error"].slice(0, 512) : "无法读取会话。");
+          watch.receive(watch.updates.apply(response));
+        } catch (error) {
+          this.sessionWatch = null;
+          watch.fail(error instanceof Error ? error : new Error("会话增量已失效。"));
+        }
         return;
       }
       if (typeof response["id"] !== "string" || !UUID_RE.test(response["id"]))

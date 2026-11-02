@@ -40,6 +40,7 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScrollerScrollable,
 } from "@/components/ui/message-scroller";
 import { Trace } from "@/components/ui/trace";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -74,11 +75,34 @@ const ActivityRow = React.memo(
   },
 );
 
-function ActivityBranch({ activities }: { activities: RemoteActivity[] }) {
+const ACTIVITY_PAGE_SIZE = 5;
+
+const ActivityBranch = React.memo(function ActivityBranch({ activities }: { activities: RemoteActivity[] }) {
   const working = activities.some((activity) => !activity.complete && !activity.failed);
   const failures = activities.filter((activity) => activity.failed).length;
   const [manualExpanded, setManualExpanded] = React.useState<boolean | null>(null);
-  const expanded = manualExpanded ?? working;
+  const { end: readingAboveLatest } = useMessageScrollerScrollable();
+  const [autoExpanded, setAutoExpanded] = React.useState(working);
+  const [range, setRange] = React.useState<{ first: string; last: string; manual: boolean } | null>(null);
+  const tailStart = Math.max(0, activities.length - ACTIVITY_PAGE_SIZE);
+  const pinnedEnd = range ? activities.findIndex((activity) => activity.id === range.last) : -1;
+  const end = pinnedEnd >= 0 ? pinnedEnd + 1 : activities.length;
+  const start = pinnedEnd >= 0 && range
+    ? Math.max(0, activities.findIndex((activity) => activity.id === range.first)) : tailStart;
+  React.useLayoutEffect(() => {
+    if (range && pinnedEnd < 0) setRange(null);
+    else if (!readingAboveLatest && range && !range.manual) setRange(null);
+    else if (readingAboveLatest && !range && activities[tailStart] && activities.at(-1)) {
+      setRange({ first: activities[tailStart]!.id, last: activities.at(-1)!.id, manual: false });
+    }
+  }, [activities, readingAboveLatest, range, pinnedEnd, tailStart]);
+  React.useEffect(() => {
+    if (working) setAutoExpanded(true);
+    else if (!readingAboveLatest) setAutoExpanded(false);
+  }, [working, readingAboveLatest]);
+  // Do not remove the activity a reader is inspecting when it completes.
+  // Normal completion still folds at the bottom; manual choices always win.
+  const expanded = manualExpanded ?? (working || (autoExpanded && readingAboveLatest));
   return <Collapsible className="bui-branch" open={expanded} onOpenChange={setManualExpanded}>
     <CollapsibleTrigger className="bui-branch-trigger">
       <ChevronRightIcon className="bui-branch-chevron" />
@@ -88,14 +112,20 @@ function ActivityBranch({ activities }: { activities: RemoteActivity[] }) {
       </span>
     </CollapsibleTrigger>
     <CollapsibleContent>
+      {(start > 0 || range?.manual || end < activities.length) && <div className="flex items-center gap-2">
+        {start > 0 && <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => {
+          setRange({ first: activities[Math.max(0, start - ACTIVITY_PAGE_SIZE)]!.id, last: activities[end - 1]!.id, manual: true });
+        }}>更早的 {Math.min(ACTIVITY_PAGE_SIZE, start)} 项</Button>}
+        {(range?.manual || end < activities.length) && <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => setRange(null)}>最新 {ACTIVITY_PAGE_SIZE} 项</Button>}
+      </div>}
       <Trace className="bui-branch-list" role="list">
-        {activities.map((activity) => <div className="bui-branch-item" role="listitem" data-kind={activity.kind} key={activity.id}>
+        {activities.slice(start, end).map((activity) => <div className="bui-branch-item" role="listitem" data-kind={activity.kind} key={activity.id}>
           <ActivityRow activity={activity} />
         </div>)}
       </Trace>
     </CollapsibleContent>
   </Collapsible>;
-}
+}, (previous, next) => previous.activities.length === next.activities.length && previous.activities.every((activity, index) => activity === next.activities[index]));
 
 function transcriptGroups(entries: TranscriptEntry[]) {
   const groups: {
@@ -109,7 +139,7 @@ function transcriptGroups(entries: TranscriptEntry[]) {
     else {
       const previous = groups.at(-1);
       if (previous?.activities) previous.activities.push(entry);
-      else groups.push({ id: `activity:${entry.id}`, activities: [entry] });
+      else groups.push({ id: previous ? `activity:after:${previous.id}` : "activity:start", activities: [entry] });
     }
   }
   return groups;
@@ -353,7 +383,6 @@ export function Conversation({
                   <MessageScrollerItem
                     key={group.id}
                     messageId={group.id}
-                    scrollAnchor={group.message?.role === "user"}
                   >
                     {group.message ? (
                       <MessageRow

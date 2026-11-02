@@ -124,6 +124,10 @@ pub enum RemoteStatus {
 pub enum RemoteEvent {
     Status(RemoteStatus),
     Request(DesktopRequest),
+    WatchSession {
+        session_id: Uuid,
+        snapshots: channel::Sender<Result<Value, String>>,
+    },
 }
 
 pub struct DesktopRequest {
@@ -146,6 +150,11 @@ pub enum RemoteCommand {
     },
     GetSession {
         session_id: Uuid,
+    },
+    WatchSession {
+        session_id: Uuid,
+        watch_id: Uuid,
+        enabled: bool,
     },
     GetComposer {
         session_id: Uuid,
@@ -202,6 +211,7 @@ impl RemoteCommand {
             Self::ListWorkspaces
                 | Self::ListSessions { .. }
                 | Self::GetSession { .. }
+                | Self::WatchSession { .. }
                 | Self::GetComposer { .. }
         )
     }
@@ -210,6 +220,11 @@ impl RemoteCommand {
         let ok = |s: &str, max: usize| !s.is_empty() && s.len() <= max;
         match self {
             Self::ListWorkspaces => true,
+            Self::WatchSession {
+                session_id,
+                watch_id,
+                ..
+            } => !session_id.is_nil() && !watch_id.is_nil(),
             Self::ListSessions { project_id } | Self::CreateSession { project_id } => {
                 !project_id.is_nil()
             }

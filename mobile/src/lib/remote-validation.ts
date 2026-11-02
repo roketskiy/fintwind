@@ -68,7 +68,8 @@ export function mutationScope(
     type === "listWorkspaces" ||
     type === "listSessions" ||
     type === "getSession" ||
-    type === "getComposer"
+    type === "getComposer" ||
+    type === "watchSession"
   )
     return "";
   if (fields.sessionId) return `session:${fields.sessionId}`;
@@ -85,6 +86,11 @@ export function checkFieldBounds(
     if (typeof value !== "string" || !value || value.length > 256) throw bad();
   };
   switch (type) {
+    case "watchSession":
+      id(fields["sessionId"]);
+      id(fields["watchId"]);
+      reqBool(fields["enabled"]);
+      return;
     case "listWorkspaces":
       return;
     case "listSessions":
@@ -372,6 +378,7 @@ export function parseResult(type: CommandType, data: unknown): unknown {
           };
         }),
       };
+    case "watchSession":
     case "configureSession":
     case "sendPrompt":
     case "stop":

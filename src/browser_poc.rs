@@ -1020,20 +1020,12 @@ impl BrowserPocRoot {
                         entity.update(cx, |view, cx| view.cancel_browser_request(request_id, cx));
                     }
                 }
-                // The daemon refused this publish (over the page limit, a page
-                // another connection already owns, or a runtime that is not
-                // live). The pages it named are not shared, so the UI must not
-                // keep claiming they are.
+                // The daemon refused this publish (over the page limit or a
+                // page another connection already owns). The pages it named
+                // are not shared, so the UI must not keep claiming they are.
                 BrowserNotification::ShareRejected { scopes, message } => {
                     eprintln!("[browser-poc] publish refused by the daemon: {message}");
                     // Only the daemon's message is logged; never the token.
-                    self.revoke_matching(&scopes, cx);
-                }
-                // The daemon dropped these grants: the runtime was replaced, or
-                // the session's work moved elsewhere. Match each scope to the
-                // page that currently holds it, so a page that was re-shared
-                // under a new grant is not revoked by an older one.
-                BrowserNotification::ScopesRevoked(scopes) => {
                     self.revoke_matching(&scopes, cx);
                 }
                 BrowserNotification::Disconnected => {
@@ -1051,14 +1043,16 @@ impl BrowserPocRoot {
         cx.notify();
     }
 
-    /// Revoke only the pages whose *current* share matches one of `scopes`.
-    /// A page that has since been re-shared under a new grant keeps it.
+    /// Revoke only the pages whose *current* page id matches one of `scopes`.
     fn revoke_matching(&mut self, scopes: &[BrowserScope], cx: &mut Context<Self>) {
         for index in 0..self.pages.len() {
             let entity = self.pages[index].entity.clone();
             let matches = entity.read_with(cx, |view, _| {
-                view.browser_share()
-                    .is_some_and(|share| scopes.contains(&share.scope))
+                view.browser_share().is_some_and(|share| {
+                    scopes
+                        .iter()
+                        .any(|scope| scope.page_id == share.scope.page_id)
+                })
             });
             if matches {
                 entity.update(cx, |view, cx| view.revoke_browser_share(cx));
@@ -1068,7 +1062,7 @@ impl BrowserPocRoot {
 
     /// Publish exactly the shares the live views currently hold. Publishing
     /// replaces this connection's whole set, so closing a page or revoking a
-    /// grant reaches the daemon on the next call rather than lingering.
+    /// share reaches the daemon on the next call rather than lingering.
     ///
     /// A refused publish is not a silent no-op: the pages it named are revoked
     /// here too, so the UI never claims a share the daemon does not hold. The

@@ -127,12 +127,12 @@ pub(crate) fn handle(
                 match command {
                     BrowserToolMessage::List {
                         request_id,
-                        session_id,
+                        session_id: _,
                     } => {
                         let result = if request_id.is_nil() {
                             BrowserResult::error("browser tool request id must not be nil")
                         } else {
-                            match tools.list(id, &session_id) {
+                            match tools.list(id) {
                                 Ok(pages) => BrowserResult::Ok {
                                     value: serde_json::to_value(pages)?,
                                 },
@@ -146,7 +146,7 @@ pub(crate) fn handle(
                     }
                     BrowserToolMessage::Invoke {
                         request_id,
-                        session_id,
+                        session_id: _,
                         page_id,
                         grant_id,
                         action,
@@ -179,14 +179,8 @@ pub(crate) fn handle(
                             .name("fintwind-browser-tool".into())
                             .spawn(move || {
                                 let _permit = permit;
-                                let result = tools.invoke(
-                                    id,
-                                    &session_id,
-                                    request_id,
-                                    page_id,
-                                    grant_id,
-                                    action,
-                                );
+                                let result =
+                                    tools.invoke(id, request_id, page_id, grant_id, action);
                                 let _ =
                                     outgoing.send(BrowserToolReply::Result { request_id, result });
                             })?;
@@ -198,12 +192,12 @@ pub(crate) fn handle(
                     }
                     BrowserToolMessage::Open {
                         request_id,
-                        session_id,
+                        session_id: _,
                         url,
                     } => {
                         // Same bounded-worker rule as invoke: an open waits
-                        // for the GUI round trip, including the owner's
-                        // approval, so it must not occupy this reader thread.
+                        // for the GUI round trip, so it must not occupy this
+                        // reader thread.
                         if active
                             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                                 (n < 4).then_some(n + 1)
@@ -228,7 +222,7 @@ pub(crate) fn handle(
                             .name("fintwind-browser-tool".into())
                             .spawn(move || {
                                 let _permit = permit;
-                                let result = tools.open(id, &session_id, request_id, &url);
+                                let result = tools.open(id, request_id, &url);
                                 let _ =
                                     outgoing.send(BrowserToolReply::Result { request_id, result });
                             })?;

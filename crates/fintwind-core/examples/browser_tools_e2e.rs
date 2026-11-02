@@ -4,8 +4,8 @@
 //! exactly as `fintwind-daemon` does, with the real [`fintwind_core::browser_tools::BrowserTools`]
 //! registry attached to the real [`fintwind_core::browser_broker::BrowserBroker`].
 //! A private-process stand-in issues its own credential through
-//! `BrowserTools::issue_server`, binds one Fintwind runtime per OpenCode
-//! session id, and a native WebSocket client speaks the real
+//! `BrowserTools::issue_server`, holds session-string leases that carry no
+//! routing, and a native WebSocket client speaks the real
 //! `fintwind_protocol::browser_tools` wire against `/v1/browser-tools`.
 //!
 //! # What is real and what is faked (read this before trusting a pass)
@@ -14,18 +14,19 @@
 //!
 //! - the daemon listener, the handshake, the versioned `/v1` endpoint and the
 //!   restricted `/v1/browser-tools` endpoint (`browser_tools_transport`);
-//! - the browser registry's credential issue / bind / retire / revoke logic
+//! - the browser registry's credential issue / lease / revoke logic
 //!   and its lock order with the broker;
-//! - the broker's scope matching, grant currency, request-id tombstoning,
-//!   result bounds, revocation on runtime replacement and disconnect cleanup;
-//! - the broker's launcher registration, exact-match open routing,
-//!   ambiguity refusal and launcher revocation, driven from the real plugin
-//!   message grammar (`open`) and the real desktop message grammar
-//!   (`browserHost`);
+//! - the broker's page-id matching, request-id tombstoning,
+//!   result bounds and disconnect cleanup;
+//! - the broker's launcher registration and global open routing: the one
+//!   registered launcher serves every open, a new registration replaces the
+//!   old one, and launcher withdrawal fails a pending open, driven from the
+//!   real plugin message grammar (`open`) and the real desktop message
+//!   grammar (`browserHost`);
 //! - the desktop protocol, driven through the real `fintwind_client::DaemonClient`;
-//! - a retired caller's transport ending: once a binding is replaced or the
-//!   capability is revoked, the daemon stops serving that connection instead
-//! of continuing to answer it.
+//! - a retired caller's transport ending: once the capability is revoked,
+//!   the daemon stops serving that connection instead of continuing to
+//!   answer it.
 //!
 //! Faked (in-process stand-ins, named honestly):
 //!
@@ -35,13 +36,13 @@
 //!   is a recorded action, nothing is rendered;
 //! - the GUI **launcher** registers a synthetic scope (its page and grant
 //!   ids are launcher identities, never a tab) and answers an open with a
-//!   canned page value. The real GUI's tab creation, navigation and
-//!   full-access approval decision are not exercised;
+//!   canned page value. The real GUI's tab creation and navigation are not
+//!   exercised;
 //! - the provider runtime is `Command::Start` returning `Started` without
 //!   spawning OpenCode: no private `opencode` process, no plugin binary, no
 //!   model request, no agent tool call;
-//! - the OpenCode session ids (`ses_e2e_...`) are strings generated here; no
-//!   real OpenCode session exists.
+//! - the OpenCode session ids (`ses_e2e_...`) are strings generated here
+//!   and ignored by routing; no real OpenCode session exists.
 //!
 //! Therefore a pass here proves the daemon-side browser-tool contract only.
 //! It does **not** verify real plugin loading, real tool execution, real page
@@ -51,11 +52,11 @@
 //!
 //! Taken from `docs/browser-tools.md`, in the order they bite:
 //!
-//! - two tasks on one private service crossing pages, because the tool
-//!   parameters could name a Fintwind session or runtime;
-//! - an unknown or child OpenCode session inheriting the parent's page,
-//!   instead of being refused with no "current page" fallback;
-//! - a stale grant, a replaced runtime or a superseded mapping still answering;
+//! - two tool connections seeing different pages, because list or invoke
+//!   filtered by session;
+//! - an unknown page falling back to another page instead of being refused;
+//! - a replaced runtime revoking live pages, or a dropped lease retiring a
+//!   live connection;
 //! - the plugin credential authenticating the desktop endpoint, or the daemon
 //!   credential authenticating the browser endpoint;
 //! - browser-origin traffic reaching the private endpoint at all;
@@ -63,18 +64,18 @@
 //!   answering (forging) results or shutting the daemon down;
 //! - a cancel that arrived before dispatch being lost, a cancel during
 //!   approval leaving the GUI acting, or a late answer resurrecting a request;
-//! - a disconnect or a dropped binding leaving a caller or page acting alone;
+//! - a disconnect leaving a caller or page acting alone;
 //! - an unbounded result crossing the bridge, or unknown fields widening the
 //!   message grammar.
 //!
-//! Plus the launcher contract from `docs/browser-automation-fixes.md`:
+//! Plus the launcher contract:
 //!
 //! - an open with no registered launcher succeeding, or being routed to a
-//!   page grant instead of to the one launcher of the live session runtime;
-//! - two launchers for one session runtime with the broker guessing one, or
-//!   a launcher of another session or a stale runtime being used;
-//! - a wrong connection answering an open, a launcher unregistered or
-//!   replaced mid-flight still completing, or a page publish silently
+//!   page instead of to the one global launcher;
+//! - two launcher registrations with the broker guessing one, instead of
+//!   the newest replacing the oldest;
+//! - a wrong connection answering an open, a launcher unregistered
+//!   mid-flight still completing, or a page publish silently
 //!   cancelling a pending open;
 //! - the launcher's identity leaking into a page list, or a scroll outside
 //!   its bound (including the real `{"kind":"scroll","deltaY":…}` wire form)
@@ -219,9 +220,9 @@ impl Report {
                 "realComponents": [
                     "fintwind_core::server::serve on a loopback listener",
                     "the /v1 desktop endpoint and the /v1/browser-tools endpoint",
-                    "browser_tools::BrowserTools registry (issue, bind, retire, revoke)",
+                    "browser_tools::BrowserTools registry (issue, lease, revoke)",
                     "browser_tools_transport restricted reader",
-                    "browser_broker::BrowserBroker scope matching, launcher registration and revocation",
+                    "browser_broker::BrowserBroker page-id matching, global launcher registration and revocation",
                     "fintwind_client::DaemonClient as the desktop connection",
                 ],
                 "fakedComponents": [
@@ -783,9 +784,9 @@ impl ToolClient {
         self.result_frame(request_id, INVOKE_TIMEOUT)
     }
 
-    /// Ask the daemon to open a new tab for this connection's session. The
-    /// caller names no page: the daemon resolves the live session runtime
-    /// from the binding and routes to its registered launcher.
+    /// Ask the daemon to open a new tab through the registered global
+    /// launcher. The caller never names a page: the daemon routes to the
+    /// one registered launcher.
     fn open(&self, request_id: Uuid, session: &str, url: &str) -> anyhow::Result<BrowserResult> {
         self.send(&BrowserToolMessage::Open {
             request_id,
@@ -1013,9 +1014,6 @@ fn owner_loop(
                     json!({"event": "shareRejected", "scopes": scopes, "message": message}),
                 );
             }
-            Ok(fintwind_client::BrowserNotification::ScopesRevoked(scopes)) => {
-                owner_note(&log, json!({"event": "scopesRevoked", "scopes": scopes}));
-            }
             Ok(fintwind_client::BrowserNotification::Disconnected) => {
                 owner_note(&log, json!({"event": "disconnected"}));
                 break;
@@ -1103,9 +1101,10 @@ impl FakeOwner {
         self.client.publish_browser_pages(pages)
     }
 
-    /// Register this connection's launcher for one live session runtime.
-    /// The scope's page and grant ids are launcher identities: they are not
-    /// a shared page and may not address a page action.
+    /// Register this connection's global launcher. The scope's page and
+    /// grant ids are launcher identities: they are not a shared page and
+    /// may not address a page action. A new registration replaces any
+    /// launcher from another connection.
     fn register_host(&self, scope: &BrowserScope) -> anyhow::Result<()> {
         self.client.publish_browser_host(Some(scope.clone()))?;
         // Publish only enqueues on the desktop socket. A reply on that same
@@ -1342,20 +1341,18 @@ struct Harness {
     runtime_b: Uuid,
     native_session: String,
     native_session_b: String,
-    /// A third native session, deliberately mapped to a runtime that never
-    /// started. Nothing about it is live, so it proves a stale mapping
-    /// fails closed even while a valid launcher exists for the active
-    /// runtime.
+    /// A third native session string, deliberately naming a runtime that
+    /// never started. Routing ignores it, so it proves session strings
+    /// never gate an open while a launcher exists.
     native_session_c: String,
-    /// The Fintwind runtime the broker currently answers for `session`.
+    /// The Fintwind runtime the harness currently names in new shares.
     active_runtime: Uuid,
     binding: Option<BrowserToolBinding>,
-    /// The other Fintwind session's guard, for the whole run.
+    /// The other session string's lease, for the whole run.
     binding_b: Option<BrowserToolBinding>,
-    /// The stale mapping's guard, for the whole run.
+    /// The third session string's lease, for the whole run.
     binding_c: Option<BrowserToolBinding>,
-    /// The guard a replacement binding superseded; dropping it must not remove
-    /// the replacement.
+    /// The lease a replacement superseded; dropping it must change nothing.
     superseded: Option<BrowserToolBinding>,
     owner: FakeOwner,
     owner_b: FakeOwner,
@@ -1378,7 +1375,7 @@ impl Harness {
     fn tool_c(&self) -> anyhow::Result<&ToolClient> {
         self.tool_c
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("the stale-mapping tool connection is not live"))
+            .ok_or_else(|| anyhow::anyhow!("the third tool connection is not live"))
     }
 
     fn take_tool(&mut self) -> Option<ToolClient> {
@@ -1429,8 +1426,9 @@ impl Harness {
         Ok(scope)
     }
 
-    /// Replace the binding for the test's own native session, keeping the
-    /// superseded guard so its late drop can be checked separately.
+    /// Replace the lease for the test's own native session, keeping the
+    /// superseded guard so its late drop can be checked separately. Leases
+    /// carry no routing: any connection may address any live page.
     fn rebind(&mut self, session: Uuid, runtime: Uuid) -> anyhow::Result<()> {
         let guard = self.server.bind(
             self.native_session.clone(),
@@ -1630,8 +1628,9 @@ fn build_harness(report: &mut Report, dir: &PathBuf) -> anyhow::Result<Harness> 
     }
     report.startup_ok("second runtime start", format!("{session_b} / {runtime_b}"));
 
-    // One private process owns one credential; its native sessions are bound
-    // to the Fintwind runtimes that opened them.
+    // One private process owns one credential. Native session strings ride
+    // along on the wire for compatibility and are ignored: any tool
+    // connection may address any live page by page id.
     let native_session = format!("ses_e2e_{}", Uuid::new_v4().simple());
     let native_session_b = format!("ses_e2e_{}", Uuid::new_v4().simple());
     let binding = server.bind(
@@ -1642,8 +1641,8 @@ fn build_harness(report: &mut Report, dir: &PathBuf) -> anyhow::Result<Harness> 
             runtime_id: runtime,
         },
     )?;
-    // The second binding must outlive the harness build: dropping it retires
-    // its own connection, so it lives exactly as long as the run does.
+    // The second lease must outlive the harness build: it lives exactly
+    // as long as the run does.
     let binding_b = server.bind(
         native_session_b.clone(),
         &BrowserToolRuntime {
@@ -1652,10 +1651,8 @@ fn build_harness(report: &mut Report, dir: &PathBuf) -> anyhow::Result<Harness> 
             runtime_id: runtime_b,
         },
     )?;
-    // The third binding maps its native session to a runtime that was never
-    // started. Nothing about it is live; the stale-mapping check proves an
-    // open through it is refused even while a valid launcher exists for the
-    // active runtime.
+    // The third binding names a runtime that was never started. Bindings
+    // carry no routing: this only proves the lease itself is accepted.
     let native_session_c = format!("ses_e2e_{}", Uuid::new_v4().simple());
     let binding_c = server.bind(
         native_session_c.clone(),
@@ -1666,14 +1663,14 @@ fn build_harness(report: &mut Report, dir: &PathBuf) -> anyhow::Result<Harness> 
         },
     )?;
     report.startup_ok(
-        "native session bindings",
-        format!("{native_session} -> {session}, {native_session_b} -> {session_b}"),
+        "native session strings",
+        "three native session strings leased, every one accepted on any connection".to_owned(),
     );
 
     let tool = ToolClient::connect(&tools_url, &browser_token)?;
     let tool_b = ToolClient::connect(&tools_url, &browser_token)?;
     let tool_c = ToolClient::connect(&tools_url, &browser_token)?;
-    // Setup smoke test: each native session must resolve through its own
+    // Setup smoke test: every native session string is accepted on every
     // connection before any check runs, so a later refusal is meaningful.
     for (label, client, native) in [
         ("first", &tool, native_session.as_str()),
@@ -1689,8 +1686,8 @@ fn build_harness(report: &mut Report, dir: &PathBuf) -> anyhow::Result<Harness> 
         }
     }
     report.startup_ok(
-        "browser tool connections",
-        "two native WebSocket clients authenticated, and each native session resolves through its own connection".to_owned(),
+        "native session strings",
+        "two native WebSocket clients authenticated, and every native session string is accepted on any connection".to_owned(),
     );
 
     report.versions["daemonAddress"] = json!(address);
@@ -1731,7 +1728,7 @@ fn build_harness(report: &mut Report, dir: &PathBuf) -> anyhow::Result<Harness> 
 
 fn run_checks(e2e: &mut E2E) {
     e2e.check(
-        "an-unshared-mapping-lists-nothing-and-refuses-an-action",
+        "empty-pages-list-nothing-and-unknown-page-is-refused",
         |h| {
             let (result, frame) = h.tool()?.list_frame(Uuid::new_v4(), &h.native_session)?;
             let pages = expect_ok(&result)?
@@ -1751,27 +1748,25 @@ fn run_checks(e2e: &mut E2E) {
                 Uuid::new_v4(),
                 BrowserAction::Snapshot,
             )?;
-            let message = expect_refused(&outcome, &["no live browser page", "not well formed"])?;
-            // Nothing was offered to the owner: there is no "current page".
+            let message = expect_refused(&outcome, &["no live browser page"])?;
+            // Nothing was offered to any owner: there is no "current page".
             if !h.owner.events_of("browserRequest").is_empty() {
-                bail!("an unshared page still reached the fake owner");
+                bail!("an unknown page still reached the fake owner");
             }
             Ok(format!(
-                "the mapped session listed nothing and its first action was refused: {message}"
+                "with no pages the list was empty and an unknown page was refused: {message}"
             ))
         },
     );
 
-    e2e.check("an-unknown-opencode-session-is-refused", |h| {
+    e2e.check("native-session-strings-are-accepted-and-ignored", |h| {
         let unknown = format!("ses_unknown_{}", Uuid::new_v4().simple());
         let empty = String::new();
-        // Far beyond any documented session-id bound, so it is refused as an
-        // identity rather than as an unknown mapping.
-        let oversized = "s".repeat(4096);
+        let oversized = "s".repeat(40_000);
         let requests_before = h.owner.events_of("browserRequest").len();
-        for session in [unknown.as_str(), empty.as_str(), oversized.as_str()] {
+        for session in [unknown.as_str(), empty.as_str()] {
             let listed = h.tool()?.list(Uuid::new_v4(), session)?;
-            expect_refused(&listed, &["no fintwind browser binding", "invalid opencode session"])?;
+            expect_ok(&listed)?;
             let invoked = h.tool()?.invoke(
                 Uuid::new_v4(),
                 session,
@@ -1779,40 +1774,57 @@ fn run_checks(e2e: &mut E2E) {
                 Uuid::new_v4(),
                 BrowserAction::Snapshot,
             )?;
-            expect_refused(&invoked, &["no fintwind browser binding", "invalid opencode session"])?;
+            expect_refused(&invoked, &["no live browser page"])?;
+        }
+        // An over-long frame is refused before it is even parsed.
+        let oversized_message = json!({
+            "type": "list",
+            "requestId": Uuid::new_v4(),
+            "sessionId": oversized,
+        });
+        let (frames, _closed) = tool_probe(&h.tools_url, &h.browser_token, std::slice::from_ref(&oversized_message))?;
+        let refused = frames.iter().find_map(|frame| {
+            serde_json::from_str::<BrowserToolReply>(frame).ok().and_then(|reply| match reply {
+                BrowserToolReply::Rejected { message } => Some(message),
+                _ => None,
+            })
+        }).ok_or_else(|| anyhow::anyhow!("the oversized frame was not refused: {frames:?}"))?;
+        if !refused.to_lowercase().contains("size limit") {
+            bail!("the oversized frame was refused with `{refused}`");
         }
         if h.owner.events_of("browserRequest").len() != requests_before {
-            bail!("an unmapped session still reached the fake owner");
+            bail!("a session string still reached the fake owner by itself");
         }
-        Ok("three unmapped identities (unknown, empty, over-long) were refused for list and invoke, and none reached a page owner".to_owned())
+        Ok("unknown and empty session strings list fine and refuse only for the unknown page; an over-long one is refused as oversized".to_owned())
     });
 
-    e2e.check("a-child-session-does-not-inherit-and-a-connection-cannot-switch", |h| {
+    e2e.check("any-connection-serves-any-session-string", |h| {
         let child = format!("ses_child_{}", Uuid::new_v4().simple());
-        let inherited = h.tool()?.list(Uuid::new_v4(), &child)?;
-        expect_refused(&inherited, &["no fintwind browser binding"])?;
-        // An explicit binding is what makes a child session work at all.
-        let child_guard = h.server.bind(child.clone(), &h.native_runtime(h.session, h.active_runtime))?;
+        // No binding is needed at all: the child session string resolves
+        // immediately on a fresh connection.
         let child_tool = ToolClient::connect(&h.tools_url, &h.browser_token)?;
         let (result, frame) = child_tool.list_frame(Uuid::new_v4(), &child)?;
         let value = expect_ok(&result)?;
         if !value.as_array().is_some_and(|pages| pages.is_empty()) {
-            bail!("an explicitly bound child session did not resolve: {value}");
+            bail!("a child session string did not resolve: {value}");
         }
         if frame.contains(&h.session.to_string()) || frame.contains(&h.active_runtime.to_string()) {
             bail!("the child session list named the Fintwind session or runtime: {frame}");
         }
-        // One connection serves exactly one OpenCode session.
-        let switched = h.tool()?.list(Uuid::new_v4(), &h.native_session_b)?;
-        expect_refused(&switched, &["cannot change session binding"])?;
-        // The same connection still serves its own session afterwards.
+        // One connection serves every session string, including another
+        // connection's native session.
+        expect_ok(&h.tool()?.list(Uuid::new_v4(), &h.native_session_b)?)?;
+        // The same connection still serves its own session string afterwards.
         expect_ok(&h.tool()?.list(Uuid::new_v4(), &h.native_session)?)?;
+        // A binding lease changes nothing about routing.
+        let child_guard = h.server.bind(child.clone(), &h.native_runtime(h.session, h.active_runtime))?;
+        expect_ok(&child_tool.list(Uuid::new_v4(), &child)?)?;
         drop(child_guard);
         drop(child_tool);
-        Ok("an unmapped child is refused, an explicitly bound child resolves, and a connection cannot switch to another session".to_owned())
+        Ok("any session string resolves on any connection, connections are not pinned to one session, and a binding lease changes nothing".to_owned())
     });
 
-    e2e.check("the-mapped-session-invokes-exactly-its-own-page", |h| {
+    e2e.check("a-live-page-is-listed-and-invoked-by-page-id", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let (listed, frame) = h.tool()?.list_frame(Uuid::new_v4(), &h.native_session)?;
         let pages = expect_ok(&listed)?
@@ -1820,7 +1832,7 @@ fn run_checks(e2e: &mut E2E) {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("the list answer was not an array"))?;
         if pages.len() != 1 {
-            bail!("the mapped session listed {} pages: {pages:?}", pages.len());
+            bail!("with one live page the list held {} pages: {pages:?}", pages.len());
         }
         let page = &pages[0];
         if !json_id(&page["pageId"], &scope.page_id) || !json_id(&page["grantId"], &scope.grant_id) {
@@ -1843,14 +1855,12 @@ fn run_checks(e2e: &mut E2E) {
         if value["text"] != "fake-owner-snapshot" {
             bail!("the owner's answer did not come back unchanged: {value}");
         }
-        // The daemon delivered the owner's own scope, not a guessed one.
+        // The daemon delivered the page by page id; session and runtime
+        // ride along ignored (the GUI publishes nil ids).
         let delivered = h.owner.wait_event(
             |event| {
                 event["event"] == "browserRequest"
                     && json_id(&event["scope"]["pageId"], &scope.page_id)
-                    && json_id(&event["scope"]["grantId"], &scope.grant_id)
-                    && json_id(&event["scope"]["sessionId"], &h.session)
-                    && json_id(&event["scope"]["runtimeId"], &h.active_runtime)
             },
             Duration::from_secs(5),
         )?;
@@ -1860,10 +1870,10 @@ fn run_checks(e2e: &mut E2E) {
         if !h.owner.performed().is_empty() {
             bail!("a snapshot is observation, so nothing may be recorded as performed");
         }
-        Ok("the mapped session listed only its own page without Fintwind ids, and its snapshot routed through the exact scope and back".to_owned())
+        Ok("the live page was listed without Fintwind ids, and its snapshot routed by page id and back".to_owned())
     });
 
-    e2e.check("another-fintwind-sessions-page-is-invisible", |h| {
+    e2e.check("every-connection-lists-and-reaches-every-page", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let scope_b = h.share(&h.owner_b, h.session_b, h.runtime_b)?;
         let own = expect_ok(&h.tool()?.list(Uuid::new_v4(), &h.native_session)?)?;
@@ -1871,18 +1881,25 @@ fn run_checks(e2e: &mut E2E) {
             .as_array()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("the list answer was not an array"))?;
-        if own.len() != 1 || !json_id(&own[0]["pageId"], &scope.page_id) {
-            bail!("the mapped session saw more than its own page: {own:?}");
+        if own.len() != 2
+            || !own.iter().any(|page| json_id(&page["pageId"], &scope.page_id))
+            || !own.iter().any(|page| json_id(&page["pageId"], &scope_b.page_id))
+        {
+            bail!("a connection did not list every live page: {own:?}");
         }
         let other = expect_ok(&h.tool_b.as_ref().unwrap().list(Uuid::new_v4(), &h.native_session_b)?)?;
         let other = other
             .as_array()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("the list answer was not an array"))?;
-        if other.len() != 1 || !json_id(&other[0]["pageId"], &scope_b.page_id) {
-            bail!("the other session's connection saw more than its own page: {other:?}");
+        if other.len() != 2
+            || !other.iter().any(|page| json_id(&page["pageId"], &scope.page_id))
+            || !other.iter().any(|page| json_id(&page["pageId"], &scope_b.page_id))
+        {
+            bail!("the second connection did not list every live page: {other:?}");
         }
-        // The tool cannot widen its own scope by naming another task's page.
+        // Any connection can act on any page: the other owner's page is
+        // reachable through this connection too, and routes to its owner.
         let cross = h.tool()?.invoke(
             Uuid::new_v4(),
             &h.native_session,
@@ -1890,16 +1907,15 @@ fn run_checks(e2e: &mut E2E) {
             scope_b.grant_id,
             BrowserAction::Snapshot,
         )?;
-        expect_refused(&cross, &["no live browser page", "runtime"])?;
-        let cross_click = h.tool()?.invoke(
-            Uuid::new_v4(),
-            &h.native_session,
-            scope_b.page_id,
-            scope_b.grant_id,
-            BrowserAction::Click { selector: "#count".to_owned() },
+        expect_ok(&cross)?;
+        let delivered_cross = h.owner_b.wait_event(
+            |event| event["event"] == "browserRequest" && json_id(&event["scope"]["pageId"], &scope_b.page_id),
+            Duration::from_secs(5),
         )?;
-        expect_refused(&cross_click, &["no live browser page", "runtime"])?;
-        // The other owner is reachable through its own mapping only.
+        if delivered_cross["action"] != json!(BrowserAction::Snapshot) {
+            bail!("the cross-connection action arrived differently: {delivered_cross}");
+        }
+        // The other owner is reachable through its own connection as well.
         let legitimate = h.tool_b.as_ref().unwrap().invoke(
             Uuid::new_v4(),
             &h.native_session_b,
@@ -1908,33 +1924,16 @@ fn run_checks(e2e: &mut E2E) {
             BrowserAction::Snapshot,
         )?;
         expect_ok(&legitimate)?;
-        let delivered = h.owner_b.wait_event(
-            |event| event["event"] == "browserRequest" && json_id(&event["scope"]["pageId"], &scope_b.page_id),
-            Duration::from_secs(5),
-        )?;
-        if !json_id(&delivered["scope"]["sessionId"], &h.session_b) {
-            bail!("the other owner was addressed with the wrong session: {delivered}");
-        }        let leaked = h
-            .owner
-            .events_of("browserRequest")
-            .into_iter()
-            .filter(|event| json_id(&event["scope"]["pageId"], &scope_b.page_id))
-            .count();
-        if leaked != 0 {
-            bail!("the first owner received {leaked} requests addressed to the other session's page");
-        }
-        Ok("each mapping listed and reached only its own page; naming the other session's page from this mapping was refused".to_owned())
+        Ok("every connection listed every live page, and any connection reached any page through its owning connection".to_owned())
     });
 
-    e2e.check("a-wrong-or-superseded-grant-is-refused", |h| {
+    e2e.check("unknown-pages-are-refused-and-grants-are-ignored", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
-        let cases = [
-            (scope.page_id, Uuid::new_v4(), "a fresh, never-issued grant"),
-            (Uuid::new_v4(), scope.grant_id, "an unknown page under a live grant"),
-            (Uuid::nil(), scope.grant_id, "a nil page id"),
-            (scope.page_id, Uuid::nil(), "a nil grant id"),
-        ];
-        for (page_id, grant_id, _label) in cases {
+        // Unknown and nil page ids are refused.
+        for (page_id, grant_id) in [
+            (Uuid::new_v4(), scope.grant_id),
+            (Uuid::nil(), scope.grant_id),
+        ] {
             let outcome = h.tool()?.invoke(
                 Uuid::new_v4(),
                 &h.native_session,
@@ -1942,35 +1941,37 @@ fn run_checks(e2e: &mut E2E) {
                 grant_id,
                 BrowserAction::Snapshot,
             )?;
-            expect_refused(&outcome, &["no live browser page", "not well formed", "runtime"])?;
+            expect_refused(&outcome, &["no live browser page", "page id"])?;
         }
-        // A republished lease replaces the old grant for the same page.
+        // Grant ids ride along ignored: a never-issued or nil grant on the
+        // live page still routes and answers.
+        for grant_id in [Uuid::new_v4(), Uuid::nil()] {
+            let outcome = h.tool()?.invoke(
+                Uuid::new_v4(),
+                &h.native_session,
+                scope.page_id,
+                grant_id,
+                BrowserAction::Snapshot,
+            )?;
+            expect_ok(&outcome)?;
+        }
+        // Republishing the same page keeps it reachable under any grant.
         let stale = h.share(&h.owner, h.session, h.active_runtime)?;
-        let stale_grant = scope.grant_id;
-        let replaced = stale.page_id;
-        let stale_call = h.tool()?.invoke(
-            Uuid::new_v4(),
-            &h.native_session,
-            replaced,
-            Uuid::new_v4(),
-            BrowserAction::Snapshot,
-        )?;
-        expect_refused(&stale_call, &["no live browser page", "runtime"])?;
         let live = h.tool()?.invoke(
             Uuid::new_v4(),
             &h.native_session,
-            replaced,
-            stale.grant_id,
+            stale.page_id,
+            scope.grant_id,
             BrowserAction::Snapshot,
         )?;
         expect_ok(&live)?;
-        if stale_grant == stale.grant_id {
-            bail!("the republished grant was not a fresh capability");
-        }
         if !h.owner.performed().is_empty() {
-            bail!("a refused scope still recorded a performed action");
+            bail!("a refused page still recorded a performed action");
         }
-        Ok("wrong page, wrong grant, nil ids and an unknown grant were all refused, while the current lease still worked".to_owned())
+        Ok(
+            "unknown and nil pages were refused, while any grant on the live page routed"
+                .to_owned(),
+        )
     });
 
     e2e.check("the-browser-token-cannot-authenticate-the-desktop-endpoint", |h| {
@@ -2091,7 +2092,7 @@ fn run_checks(e2e: &mut E2E) {
         Ok("task RPC, page publish, a forged result and shutdown were each refused on the browser endpoint, and the daemon kept running".to_owned())
     });
 
-    e2e.check("a-replaced-runtime-purges-the-old-mapping", |h| {
+    e2e.check("a-replaced-runtime-keeps-pages-and-leases", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         expect_ok(&h.tool()?.invoke(
             Uuid::new_v4(),
@@ -2100,40 +2101,28 @@ fn run_checks(e2e: &mut E2E) {
             scope.grant_id,
             BrowserAction::Snapshot,
         )?)?;
-        // Replace the session runtime through the real daemon path.
+        // Replace the session runtime through the real daemon path. Pages
+        // are not bound to runtimes, so nothing is revoked and the same
+        // page stays reachable.
         let replacement = Uuid::new_v4();
         h.owner.start_runtime(h.session, replacement)?;
-        h.owner.wait_event(|event| event["event"] == "scopesRevoked", Duration::from_secs(10))?;
-        // The old mapping still names the replaced runtime.
-        expect_refused(
-            &h.tool()?.invoke(
-                Uuid::new_v4(),
-                &h.native_session,
-                scope.page_id,
-                scope.grant_id,
-                BrowserAction::Snapshot,
-            )?,
-            &["no live browser page", "runtime"],
-        )?;
-        // A native session already owned by this Fintwind session cannot be
-        // pointed at another one.
-        let stolen = h.server.bind(
+        expect_ok(&h.tool()?.invoke(
+            Uuid::new_v4(),
+            &h.native_session,
+            scope.page_id,
+            scope.grant_id,
+            BrowserAction::Snapshot,
+        )?)?;
+        // A native session string can be named for any Fintwind session:
+        // leases carry no routing.
+        h.server.bind(
             h.native_session.clone(),
             &h.native_runtime(h.session_b, h.runtime_b),
-        );
-        match stolen {
-            Ok(_) => bail!("a native session was rebound to another Fintwind session"),
-            Err(error) => {
-                let message = error.to_string();
-                if !message.contains("already belongs to another Fintwind session") {
-                    bail!("the cross-task rebind was refused with an unexpected reason: {message}");
-                }
-            }
-        }
-        // Rebind to the replacement runtime. The connection that resolved the
-        // old binding is retired, so its transport ends instead of answering.
+        )?;
+        // Rebinding updates the harness cursor. The old connection keeps
+        // serving: leases retire no transport.
         h.rebind(h.session, replacement)?;
-        terminal_outcome(h.tool()?.list(Uuid::new_v4(), &h.native_session))?;
+        expect_ok(&h.tool()?.list(Uuid::new_v4(), &h.native_session)?)?;
         let old_tool = h.take_tool();
         let tool = ToolClient::connect(&h.tools_url, &h.browser_token)?;
         let fresh = h.share(&h.owner, h.session, h.active_runtime)?;
@@ -2141,8 +2130,8 @@ fn run_checks(e2e: &mut E2E) {
             .as_array()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("the list answer was not an array"))?;
-        if pages.len() != 1 || !json_id(&pages[0]["pageId"], &fresh.page_id) {
-            bail!("the replacement binding listed the wrong pages: {pages:?}");
+        if !pages.iter().any(|page| json_id(&page["pageId"], &fresh.page_id)) {
+            bail!("a fresh connection did not list the live page: {pages:?}");
         }
         expect_ok(&tool.invoke(
             Uuid::new_v4(),
@@ -2153,22 +2142,25 @@ fn run_checks(e2e: &mut E2E) {
         )?)?;
         h.put_tool(tool);
         drop(old_tool);
-        Ok("the replaced runtime revoked the old grant, the stale connection was retired, and the rebind served only the new runtime".to_owned())
+        Ok("the replaced runtime revoked nothing, a lease for another session still bound, and old and new connections kept serving".to_owned())
     });
 
-    e2e.check("dropping-the-superseded-binding-keeps-the-replacement", |h| {
+    e2e.check("dropping-a-superseded-lease-changes-nothing", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let guard = h
             .superseded
             .take()
-            .ok_or_else(|| anyhow::anyhow!("no superseded binding was kept for this check"))?;
+            .ok_or_else(|| anyhow::anyhow!("no superseded lease was kept for this check"))?;
         drop(guard);
         let pages = expect_ok(&h.tool()?.list(Uuid::new_v4(), &h.native_session)?)?
             .as_array()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("the list answer was not an array"))?;
-        if pages.len() != 1 || !json_id(&pages[0]["pageId"], &scope.page_id) {
-            bail!("dropping the old binding removed the replacement: {pages:?}");
+        if !pages
+            .iter()
+            .any(|page| json_id(&page["pageId"], &scope.page_id))
+        {
+            bail!("dropping the old lease removed the live page: {pages:?}");
         }
         expect_ok(&h.tool()?.invoke(
             Uuid::new_v4(),
@@ -2177,7 +2169,10 @@ fn run_checks(e2e: &mut E2E) {
             scope.grant_id,
             BrowserAction::Snapshot,
         )?)?;
-        Ok("the late drop of the superseded guard left the replacement binding and its page intact".to_owned())
+        Ok(
+            "the late drop of the superseded lease left the connection and its page intact"
+                .to_owned(),
+        )
     });
 
     e2e.check("a-cancel-before-dispatch-refuses-the-late-invoke", |h| {
@@ -2575,14 +2570,13 @@ fn run_checks(e2e: &mut E2E) {
     });
 
     // -- 20 ------------------------------------------------------------------
-    // The launcher contract: an open is routed only to the one launcher the
-    // GUI registered for the live session runtime. A page grant is never a
-    // launcher, another session's launcher is never visible, two launchers
-    // for one session runtime are refused instead of guessed, and a
-    // launcher that disappears mid-flight fails its pending open.
+    // The launcher contract: an open is routed only to the one globally
+    // registered launcher. A page is never a launcher, a new registration
+    // replaces the old one, and a launcher that disappears mid-flight
+    // fails its pending open.
     e2e.check("an-open-without-a-launcher-is-refused", |h| {
-        // No launcher is registered for this session runtime, and a shared
-        // page must never stand in for one: opening is not a page action.
+        // No launcher is registered, and a shared page must never stand in
+        // for one: opening is not a page action.
         let page = h.share(&h.owner, h.session, h.active_runtime)?;
         let requests_before = h.owner.events_of("browserRequest").len();
         let performed_before = h.owner.performed().len();
@@ -2598,7 +2592,7 @@ fn run_checks(e2e: &mut E2E) {
                 &[
                     "browser host",
                     "launcher",
-                    "return to this chat",
+                    "local Fintwind window",
                     "invalid browser url",
                     "size limit",
                 ],
@@ -2617,9 +2611,9 @@ fn run_checks(e2e: &mut E2E) {
     });
 
     e2e.check("a-registered-launcher-receives-and-answers-the-open", |h| {
-        // The GUI registers one launcher for the live session runtime. Its
-        // page and grant ids are launcher identities, not a tab: they must
-        // not appear in the page list.
+        // The GUI registers one global launcher. Its page and grant ids
+        // are launcher identities, not a tab: they must not appear in the
+        // page list.
         let host_scope = BrowserScope {
             session_id: h.session,
             runtime_id: h.active_runtime,
@@ -2637,9 +2631,8 @@ fn run_checks(e2e: &mut E2E) {
         {
             bail!("the launcher's identity appeared in the page list: {listed:?}");
         }
-        // An open is not the default-permission observation, so the owner
-        // holds it for approval — the point where a real GUI's full-access
-        // decision happens — and only then answers it.
+        // An open waits for the launcher and is answered once the owner
+        // acts; the hold below is the harness stand-in for that GUI work.
         let url = "file:///C:/browser-e2e/local-fixture.html";
         let request_id = Uuid::new_v4();
         let tool = h.tool()?;
@@ -2854,11 +2847,11 @@ fn run_checks(e2e: &mut E2E) {
     );
 
     e2e.check(
-        "a-duplicate-launcher-is-refused-and-another-session-launcher-is-invisible",
+        "a-new-launcher-replaces-the-old-one-globally",
         |h| {
-            // The other session's launcher is not this session's: an open
-            // here is refused instead of reaching another session's
-            // capability.
+            // There is a single global launcher slot: any connection's open
+            // routes to whichever launcher registered last, regardless of
+            // which session string the tool names.
             let foreign = BrowserScope {
                 session_id: h.session_b,
                 runtime_id: h.runtime_b,
@@ -2867,50 +2860,15 @@ fn run_checks(e2e: &mut E2E) {
             };
             h.owner_b.register_host(&foreign)?;
             let foreign_requests_before = h.owner_b.events_of("browserRequest").len();
-            let outcome = h.tool()?.open(
-                Uuid::new_v4(),
-                &h.native_session,
-                "https://example.invalid/cross-session",
-            )?;
-            expect_refused(&outcome, &["launcher"])?;
-            if h.owner_b.events_of("browserRequest").len() != foreign_requests_before {
-                bail!("another session's launcher received this session's open");
-            }
-            // A second connection registering a launcher for the same session
-            // runtime would make the open target ambiguous, so it is
-            // refused rather than one being guessed.
-            let mut raw = RawOwner::connect(&h.address, &h.daemon_token)?;
-            raw.send(&ClientMessage::BrowserHost {
-                scope: Some(foreign.clone()),
-            })?;
-            match raw.next_message(PROBE_TIMEOUT)? {
-                ServerMessage::BrowserShareRejected { scopes, message } => {
-                    if scopes != vec![foreign.clone()] {
-                        bail!("the refused registration carried unexpected scopes: {scopes:?}");
-                    }
-                    if !message.to_lowercase().contains("launcher") {
-                        bail!("the duplicate launcher was refused with `{message}`");
-                    }
-                }
-                other => bail!(
-                    "the daemon accepted a second launcher for one session runtime: {other:?}"
-                ),
-            }
-            // The refused registration changed nothing: the session's one
-            // launcher still receives and answers its own open.
-            let tool_b = h
-                .tool_b
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("the second tool connection is not live"))?;
-            let request_id = Uuid::new_v4();
+            let tool = h.tool()?;
             let owner_b = &h.owner_b;
-            let native_session_b = h.native_session_b.clone();
-            let (delivered, result) = std::thread::scope(|scope_thread| {
+            let native_session = h.native_session.clone();
+            let (delivered_first, result_first) = std::thread::scope(|scope_thread| {
                 let pending = scope_thread.spawn(move || {
-                    tool_b.open(
-                        request_id,
-                        &native_session_b,
-                        "https://example.invalid/opened-on-session-b",
+                    tool.open(
+                        Uuid::new_v4(),
+                        &native_session,
+                        "https://example.invalid/global-open",
                     )
                 });
                 let delivered = owner_b.wait_event(
@@ -2926,46 +2884,131 @@ fn run_checks(e2e: &mut E2E) {
                     .map_err(|_| anyhow::anyhow!("the open thread panicked"))??;
                 Ok::<_, anyhow::Error>((delivered, result))
             })?;
-            expect_ok(&result)?;
-            if delivered["scope"] != json!(foreign) {
+            let value = expect_ok(&result_first)?;
+            if value["issued"] != json!(true) {
+                bail!("the global launcher did not answer the open: {value}");
+            }
+            if delivered_first["scope"] != json!(foreign) {
                 bail!(
-                    "the open was not routed to the registered launcher's exact scope: {}",
+                    "the open was not routed to the global launcher: {}",
+                    delivered_first["scope"]
+                );
+            }
+            if h.owner_b.events_of("browserRequest").len() == foreign_requests_before {
+                bail!("the global launcher never received this session's open");
+            }
+            // A second registration replaces the first instead of being
+            // refused: the next open routes to the newest launcher.
+            let replacement = BrowserScope {
+                session_id: h.session,
+                runtime_id: h.active_runtime,
+                page_id: Uuid::new_v4(),
+                grant_id: Uuid::new_v4(),
+            };
+            h.owner.register_host(&replacement)?;
+            let owner_requests_before = h.owner.events_of("browserRequest").len();
+            let tool_b = h
+                .tool_b
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("the second tool connection is not live"))?;
+            let request_id = Uuid::new_v4();
+            let owner = &h.owner;
+            let native_session_b = h.native_session_b.clone();
+            let (delivered, result) = std::thread::scope(|scope_thread| {
+                let pending = scope_thread.spawn(move || {
+                    tool_b.open(
+                        request_id,
+                        &native_session_b,
+                        "https://example.invalid/opened-after-replacement",
+                    )
+                });
+                let delivered = owner.wait_event(
+                    |event| {
+                        event["event"] == "browserRequest"
+                            && json_id(&event["scope"]["pageId"], &replacement.page_id)
+                    },
+                    INVOKE_TIMEOUT,
+                )?;
+                approve_held(owner, internal_request_id(&delivered)?)?;
+                let result = pending
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("the open thread panicked"))??;
+                Ok::<_, anyhow::Error>((delivered, result))
+            })?;
+            expect_ok(&result)?;
+            if delivered["scope"] != json!(replacement) {
+                bail!(
+                    "the open was not routed to the replacement launcher: {}",
                     delivered["scope"]
                 );
             }
+            if h.owner.events_of("browserRequest").len() == owner_requests_before {
+                bail!("the replacement launcher never received the open");
+            }
+            h.owner.clear_host()?;
             h.owner_b.clear_host()?;
-            Ok("another session's launcher was invisible, a second launcher for one session runtime was refused, and the single launcher still served its own open".to_owned())
+            Ok("opens routed to the one global launcher, and a new registration replaced it without refusal".to_owned())
         },
     );
 
-    e2e.check("a-stale-runtime-mapping-cannot-open", |h| {
-        // A valid launcher exists for the active runtime...
-        let host_scope = BrowserScope {
-            session_id: h.session,
-            runtime_id: h.active_runtime,
-            page_id: Uuid::new_v4(),
-            grant_id: Uuid::new_v4(),
-        };
-        h.owner.register_host(&host_scope)?;
-        let requests_before = h.owner.events_of("browserRequest").len();
-        // ...but the third native session is mapped to a runtime that never
-        // started, so its open is refused before any GUI work, and the live
-        // launcher is not a fallback.
-        let outcome = h.tool_c()?.open(
-            Uuid::new_v4(),
-            &h.native_session_c,
-            "https://example.invalid/stale-runtime",
-        )?;
-        expect_refused(&outcome, &["runtime"])?;
-        if h.owner.events_of("browserRequest").len() != requests_before {
-            bail!("a stale runtime mapping still reached the launcher");
-        }
-        h.owner.clear_host()?;
-        Ok("a mapping to a never-started runtime was refused with no GUI work, even while a valid launcher existed for the active runtime".to_owned())
-    });
+    e2e.check(
+        "any-session-string-opens-through-the-global-launcher",
+        |h| {
+            // A launcher exists for the shared slot...
+            let host_scope = BrowserScope {
+                session_id: h.session,
+                runtime_id: h.active_runtime,
+                page_id: Uuid::new_v4(),
+                grant_id: Uuid::new_v4(),
+            };
+            h.owner.register_host(&host_scope)?;
+            let requests_before = h.owner.events_of("browserRequest").len();
+            // ...and the third native session, which names a runtime that never
+            // started, still opens through it: session strings are ignored.
+            let tool_c = h.tool_c()?;
+            let owner = &h.owner;
+            let native_session_c = h.native_session_c.clone();
+            let (delivered, result) = std::thread::scope(|scope_thread| {
+                let pending = scope_thread.spawn(move || {
+                    tool_c.open(
+                        Uuid::new_v4(),
+                        &native_session_c,
+                        "https://example.invalid/any-session-opens",
+                    )
+                });
+                let delivered = owner.wait_event(
+                    |event| {
+                        event["event"] == "browserRequest"
+                            && json_id(&event["scope"]["pageId"], &host_scope.page_id)
+                    },
+                    INVOKE_TIMEOUT,
+                )?;
+                approve_held(owner, internal_request_id(&delivered)?)?;
+                let result = pending
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("the open thread panicked"))??;
+                Ok::<_, anyhow::Error>((delivered, result))
+            })?;
+            expect_ok(&result)?;
+            if delivered["scope"] != json!(host_scope) {
+                bail!(
+                    "the open was not routed to the global launcher: {}",
+                    delivered["scope"]
+                );
+            }
+            if h.owner.events_of("browserRequest").len() == requests_before {
+                bail!("the open from another session string never reached the launcher");
+            }
+            h.owner.clear_host()?;
+            Ok(
+                "an open naming an unstarted runtime still routed to the one global launcher"
+                    .to_owned(),
+            )
+        },
+    );
 
     e2e.check(
-        "a-page-grant-cannot-open-and-a-launcher-cannot-scroll",
+        "an-open-invoke-routes-to-the-launcher-while-a-launcher-cannot-act",
         |h| {
             let page = h.share(&h.owner, h.session, h.active_runtime)?;
             let host_scope = BrowserScope {
@@ -2975,18 +3018,40 @@ fn run_checks(e2e: &mut E2E) {
                 grant_id: Uuid::new_v4(),
             };
             h.owner.register_host(&host_scope)?;
-            // A page grant never authorizes an open: the action is routed
-            // only to launchers.
-            let outcome = h.tool()?.invoke(
-                Uuid::new_v4(),
-                &h.native_session,
-                page.page_id,
-                page.grant_id,
-                BrowserAction::Open {
-                    url: "https://example.invalid/via-page-grant".to_owned(),
-                },
-            )?;
-            expect_refused(&outcome, &["launcher"])?;
+            // `Open` is launcher-routed no matter which scope the invoke
+            // names: even a page scope opens through the one launcher.
+            let tool = h.tool()?;
+            let owner = &h.owner;
+            let native_session = h.native_session.clone();
+            let (delivered_open, result_open) = std::thread::scope(|scope_thread| {
+                let pending = scope_thread.spawn(move || {
+                    tool.invoke(
+                        Uuid::new_v4(),
+                        &native_session,
+                        page.page_id,
+                        page.grant_id,
+                        BrowserAction::Open {
+                            url: "https://example.invalid/via-page-scope".to_owned(),
+                        },
+                    )
+                });
+                let delivered = owner.wait_event(
+                    |event| {
+                        event["event"] == "browserRequest"
+                            && json_id(&event["scope"]["pageId"], &host_scope.page_id)
+                    },
+                    INVOKE_TIMEOUT,
+                )?;
+                approve_held(owner, internal_request_id(&delivered)?)?;
+                let result = pending
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("the invoke thread panicked"))??;
+                Ok::<_, anyhow::Error>((delivered, result))
+            })?;
+            expect_ok(&result_open)?;
+            if delivered_open["action"]["url"] != json!("https://example.invalid/via-page-scope") {
+                bail!("the open carried a different URL: {}", delivered_open["action"]);
+            }
             // A launcher never authorizes a page action.
             let outcome = h.tool()?.invoke(
                 Uuid::new_v4(),
@@ -3039,7 +3104,7 @@ fn run_checks(e2e: &mut E2E) {
                 bail!("the scroll's answer did not survive the round trip: {value}");
             }
             h.owner.clear_host()?;
-            Ok("a page grant could not open, a launcher could not scroll, out-of-bound deltas were refused, and the real `deltaY` wire scroll routed and answered".to_owned())
+            Ok("an open invoke with a page scope still routed to the launcher, a launcher could not scroll, out-of-bound deltas were refused, and the real `deltaY` wire scroll routed and answered".to_owned())
         },
     );
 
@@ -3123,12 +3188,7 @@ fn run_checks(e2e: &mut E2E) {
         )?;
         let message = expect_refused(
             &outcome,
-            &[
-                "current chat",
-                "browser host",
-                "return to this chat",
-                "authorize",
-            ],
+            &["local Fintwind window", "browser host", "launcher"],
         )?;
         if started.elapsed() < Duration::from_secs(2) {
             bail!("a missing host was rejected before the registration wait elapsed: {message}");
@@ -3136,14 +3196,14 @@ fn run_checks(e2e: &mut E2E) {
         Ok(message.to_owned())
     });
 
-    e2e.check("dropping-the-binding-cancels-a-pending-invoke", |h| {
+    e2e.check("dropping-a-lease-leaves-a-pending-invoke-alone", |h| {
         let scope = h.share(&h.owner, h.session, h.active_runtime)?;
         let performed_before = h.owner.performed().len();
         let request_id = Uuid::new_v4();
         let guard = h
             .binding
             .take()
-            .ok_or_else(|| anyhow::anyhow!("no live binding was kept for this check"))?;
+            .ok_or_else(|| anyhow::anyhow!("no live lease was kept for this check"))?;
         let tool = h.tool()?;
         let owner = &h.owner;
         let native_session = h.native_session.clone();
@@ -3163,30 +3223,24 @@ fn run_checks(e2e: &mut E2E) {
                 },
                 INVOKE_TIMEOUT,
             )?;
-            // The driver that owned the native session goes away.
+            // The lease that owned the native session goes away mid-flight.
+            // Leases carry no routing, so the pending call is unaffected.
             drop(guard);
+            approve_held(owner, internal_request_id(&delivered)?)?;
             let result = match pending.join() {
                 Ok(result) => result,
                 Err(_) => Err(anyhow::anyhow!("the invoke thread panicked")),
             };
             Ok::<_, anyhow::Error>((delivered, result))
         })?;
-        terminal_outcome(result)?;
-        let internal = delivered["requestId"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("the owner log carried no internal request id"))?
-            .to_owned();
-        h.owner.wait_event(
-            |event| event["event"] == "browserCancel" && event["requestId"] == internal,
-            Duration::from_secs(5),
-        )?;
-        if h.owner.performed().len() != performed_before {
-            bail!("the pending action still ran after the binding was dropped");
+        expect_ok(&result)?;
+        let _ = delivered;
+        if h.owner.performed().len() == performed_before {
+            bail!("the approved action was not recorded as performed");
         }
-        // The retired caller's transport ends; it cannot keep using the old
-        // mapping through a socket the daemon no longer serves.
-        terminal_outcome(h.tool()?.list(Uuid::new_v4(), &h.native_session))?;
-        Ok("dropping the runtime binding ended the pending call, told the owner to stop, and left no usable connection".to_owned())
+        // The connection keeps serving after the lease is gone.
+        expect_ok(&h.tool()?.list(Uuid::new_v4(), &h.native_session)?)?;
+        Ok("dropping the lease mid-invoke changed nothing: the call completed and the connection kept serving".to_owned())
     });
 
     e2e.check("revoking-the-server-stops-new-connections-and-fails-pending", |h| {

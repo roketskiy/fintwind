@@ -4,6 +4,7 @@ import type {
   CommandType,
   ConnectionPhase,
 } from "./types";
+import { forgetPairing, loadPairing, rememberPairing, type SavedPairing } from "./pairing-store";
 import {
   MAX_SAFE_SEQ,
   decodeBase64Url,
@@ -81,7 +82,10 @@ export class RemoteClient {
   private transportGeneration = 0;
   private epochCounter = 0;
   private route = "";
-  private secret: Uint8Array | null = null;
+  private secret: CryptoKey | null = null;
+  private pairPromise: Promise<SavedPairing> | null = null;
+  private forgetting = false;
+  private lease: { route: string; release: () => void } | null = null;
   private ready = false;
   private inflight = new Map<string, InflightItem>();
   private unresolved = new Map<string, PendingOperation>();
@@ -92,6 +96,7 @@ export class RemoteClient {
   private reconnectDelay = RECONNECT_BASE_MS;
   private onlineHandler: (() => void) | null = null;
   private offlineHandler: (() => void) | null = null;
+  private storageHandler: ((event: StorageEvent) => void) | null = null;
 
   subscribe = (listener: Listener): (() => void) => {
     this.listeners.add(listener);
@@ -103,7 +108,7 @@ export class RemoteClient {
   getSnapshot = (): ClientSnapshot => this.snapshot;
 
   start(): void {
-    if (this.started) return;
+    if (this.started || this.forgetting) return;
     this.started = true;
     this.onlineHandler = () => {
       if (!this.started) return;
@@ -121,12 +126,27 @@ export class RemoteClient {
     };
     window.addEventListener("online", this.onlineHandler);
     window.addEventListener("offline", this.offlineHandler);
+    this.storageHandler = (event) => {
+      if (event.storageArea !== localStorage || (event.key !== "fintwind-paired-route" && event.key !== null)) return;
+      if (event.newValue === this.route) return;
+      this.stop();
+      this.route = "";
+      this.secret = null;
+      this.pairPromise = null;
+      this.readCache.clear();
+      this.readCacheBytes = 0;
+      this.unresolved.clear();
+      this.setPhase("unpaired", "配对已移除或更新，请重新打开配对页面。");
+    };
+    window.addEventListener("storage", this.storageHandler);
     this.connectNow();
   }
 
   stop(): void {
     if (!this.started && this.ws === null && this.reconnectTimer === 0) return;
     this.started = false;
+    this.lease?.release();
+    this.lease = null;
     this.transportGeneration += 1;
     this.ready = false;
     this.sendKey = null;
@@ -142,6 +162,8 @@ export class RemoteClient {
       window.removeEventListener("offline", this.offlineHandler);
     this.onlineHandler = null;
     this.offlineHandler = null;
+    if (this.storageHandler) window.removeEventListener("storage", this.storageHandler);
+    this.storageHandler = null;
     this.interruptInflight();
     const owned = this.ws;
     this.ws = null;
@@ -181,6 +203,35 @@ export class RemoteClient {
     this.connectNow();
   }
 
+  async forget(): Promise<void> {
+    if (this.forgetting) return;
+    this.forgetting = true;
+    this.stop();
+    try {
+    // Let a pending remember finish before deleting it. Never let it recreate the pairing afterward.
+    await this.pairPromise?.catch(() => {});
+    await forgetPairing();
+    this.clearRouteState(this.route, "");
+    this.route = "";
+    this.secret = null;
+    this.pairPromise = null;
+    localStorage.removeItem("fintwind-paired-route");
+    localStorage.removeItem("fintwind-page");
+    this.setPhase("unpaired", null);
+    } finally { this.forgetting = false; }
+  }
+
+  private claimBrowser(route: string, generation: number): Promise<boolean> {
+    if (this.lease?.route === route) return Promise.resolve(true);
+    if (!navigator.locks) return Promise.reject(new Error("此浏览器不支持安全的多页面保护，请更新浏览器。"));
+    return new Promise((resolve) => {
+      void navigator.locks.request(`fintwind-phone:${route}`, { ifAvailable: true }, async (lock) => {
+        if (!lock || generation !== this.transportGeneration || !this.started) { resolve(false); return; }
+        await new Promise<void>((release) => { this.lease = { route, release }; resolve(true); });
+      }).catch(() => resolve(false));
+    });
+  }
+
   async command<K extends CommandType>(
     type: K,
     fields: CommandMap[K]["fields"],
@@ -203,7 +254,11 @@ export class RemoteClient {
         at: Date.now(),
         epoch: this.epochCounter,
       });
-      this.saveUnresolved();
+      if (!this.saveUnresolved()) {
+        this.unresolved.delete(scope);
+        this.refreshSnapshot();
+        throw new Error("无法保存操作状态。请允许网站存储后重试。");
+      }
       this.refreshSnapshot();
     }
     const generation = this.transportGeneration;
@@ -335,7 +390,7 @@ export class RemoteClient {
     const parse = (text: string | null): void => {
       if (!text) return;
       const saved = JSON.parse(text) as unknown;
-      if (!Array.isArray(saved)) return;
+      if (!Array.isArray(saved)) throw new Error("保存的操作状态无效，请重新配对。");
       for (const entry of saved.slice(0, UNRESOLVED_MAX_ITEMS)) {
         if (!Array.isArray(entry) || typeof entry[0] !== "string") continue;
         const value = entry[1] as { id?: unknown; at?: unknown } | null;
@@ -350,32 +405,29 @@ export class RemoteClient {
       }
     };
     try {
+    const persisted = localStorage.getItem(this.unresolvedKey(route));
+    if (persisted !== null) parse(persisted);
+    else {
       parse(sessionStorage.getItem(this.unresolvedKey(route)));
-      if (next.size === 0) {
-        parse(sessionStorage.getItem(UNRESOLVED_PREFIX));
-        if (next.size > 0) {
-          sessionStorage.setItem(
-            this.unresolvedKey(route),
-            JSON.stringify([...next]),
-          );
-          sessionStorage.removeItem(UNRESOLVED_PREFIX);
-        }
-      }
-    } catch {
-      return new Map();
+      if (next.size === 0) parse(sessionStorage.getItem(UNRESOLVED_PREFIX));
+      localStorage.setItem(this.unresolvedKey(route), JSON.stringify([...next]));
     }
+    sessionStorage.removeItem(this.unresolvedKey(route));
+    sessionStorage.removeItem(UNRESOLVED_PREFIX);
+    } catch { throw new Error("无法读取保存的操作状态。请在设置中忘记这台电脑，再重新扫码。"); }
     return next;
   }
 
-  private saveUnresolved(): void {
-    if (!this.route) return;
+  private saveUnresolved(): boolean {
+    if (!this.route) return true;
     try {
-      sessionStorage.setItem(
+      localStorage.setItem(
         this.unresolvedKey(this.route),
         JSON.stringify([...this.unresolved]),
       );
+      return true;
     } catch {
-      /* memory state still guards this tab */
+      return false;
     }
   }
 
@@ -385,9 +437,13 @@ export class RemoteClient {
     this.unresolved.clear();
     try {
       if (previous) sessionStorage.removeItem(this.unresolvedKey(previous));
+      if (previous) localStorage.removeItem(this.unresolvedKey(previous));
       sessionStorage.removeItem(UNRESOLVED_PREFIX);
       sessionStorage.removeItem(PROJECT_KEY);
       sessionStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem(PROJECT_KEY);
+      localStorage.removeItem(SESSION_KEY);
+      localStorage.removeItem("fintwind-page");
     } catch {
       /* memory state is already clear */
     }
@@ -395,7 +451,11 @@ export class RemoteClient {
     this.refreshSnapshot();
   }
 
-  private pairing(): { route: string; key: string } {
+  private pairing(): Promise<SavedPairing> {
+    return this.pairPromise ??= this.restorePairing();
+  }
+
+  private async restorePairing(): Promise<SavedPairing> {
     const values = new URLSearchParams(window.location.hash.slice(1));
     if (window.location.hash)
       window.history.replaceState(
@@ -418,25 +478,15 @@ export class RemoteClient {
       };
       if (!validToken(next.route) || !validToken(next.key))
         throw new Error("配对链接无效");
-      let saved: unknown = null;
-      try {
-        saved = JSON.parse(sessionStorage.getItem(PAIR_KEY) || "null");
-      } catch {
-        /* A new valid link replaces damaged storage. */
-      }
-      if (
-        isRecord(saved) &&
-        typeof saved.route === "string" &&
-        saved.route !== next.route
-      )
-        this.clearRouteState(saved.route, next.route);
-      try {
-        sessionStorage.setItem(PAIR_KEY, JSON.stringify(next));
-      } catch {
-        throw new Error("配对信息无法保存");
-      }
-      return next;
+      const previous = localStorage.getItem("fintwind-paired-route");
+      const pair = await rememberPairing(next.route, next.key);
+      if (previous !== next.route) this.clearRouteState(previous || "", next.route);
+      localStorage.setItem("fintwind-paired-route", next.route);
+      sessionStorage.removeItem(PAIR_KEY);
+      return pair;
     }
+    const remembered = await loadPairing();
+    if (remembered) return remembered;
     let saved: string | null = null;
     try {
       saved = sessionStorage.getItem(PAIR_KEY);
@@ -460,7 +510,10 @@ export class RemoteClient {
       !validToken(next["key"])
     )
       throw new Error("配对信息无效");
-    return { route: next["route"], key: next["key"] };
+    const pair = await rememberPairing(next["route"], next["key"]);
+    localStorage.setItem("fintwind-paired-route", pair.route);
+    sessionStorage.removeItem(PAIR_KEY);
+    return pair;
   }
 
   private sendRaw(value: string, target: WebSocket | null): void {
@@ -544,7 +597,7 @@ export class RemoteClient {
     }
   }
 
-  private connectNow(): void {
+  private async connectNow(): Promise<void> {
     if (!this.started) return;
     if (window.location.protocol !== "https:") {
       this.setPhase("error", "远程控制需要 HTTPS");
@@ -568,10 +621,26 @@ export class RemoteClient {
     this.receiveSeq = 0;
     this.sendQueue = Promise.resolve();
     this.receiveQueue = Promise.resolve();
-    let pair: { route: string; key: string };
+    let pair: SavedPairing;
     try {
-      pair = this.pairing();
+      pair = await this.pairing();
+      if (generation !== this.transportGeneration || !this.started) return;
+      if (!(await this.claimBrowser(pair.route, generation))) {
+        if (generation === this.transportGeneration && this.started) this.setPhase("error", "此电脑已在另一个页面打开，请返回原页面。");
+        return;
+      }
+      if (generation !== this.transportGeneration || !this.started) return;
+      if (this.route && this.route !== pair.route) this.clearRouteState(this.route, pair.route);
+      this.route = pair.route;
+      this.secret = pair.material;
+      if (this.unresolved.size === 0) {
+        this.unresolved = this.loadUnresolved(this.route);
+        this.refreshSnapshot();
+      }
     } catch (error) {
+      if (generation !== this.transportGeneration || !this.started) return;
+      this.lease?.release();
+      this.lease = null;
       const message = error instanceof Error ? error.message : "配对信息无效";
       this.setPhase(
         error instanceof Error && error.name === "MissingPairing"
@@ -581,18 +650,7 @@ export class RemoteClient {
       );
       return;
     }
-    if (this.route && this.route !== pair.route)
-      this.clearRouteState(this.route, pair.route);
-    this.route = pair.route;
-    if (!validToken(pair.key)) {
-      this.setPhase("error", "配对信息无效");
-      return;
-    }
-    this.secret = decodeBase64Url(pair.key);
-    if (this.unresolved.size === 0) {
-      this.unresolved = this.loadUnresolved(this.route);
-      this.refreshSnapshot();
-    }
+    if (generation !== this.transportGeneration || !this.started) return;
     const previous = this.ws;
     this.ws = null;
     if (previous) {

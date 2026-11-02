@@ -4,7 +4,7 @@ use crate::ui::ActivationExt;
 use fintwind_client::goal::{GoalAction, GoalStatus};
 
 /// Match the single layer of quotes stripped by OpenCode's Goal command.
-fn goal_argument(text: &str) -> &str {
+pub(super) fn goal_argument(text: &str) -> &str {
     let text = text.trim();
     for (open, close) in [("\"", "\""), ("'", "'"), ("“", "”"), ("‘", "’")] {
         if let Some(inner) = text

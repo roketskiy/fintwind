@@ -1,20 +1,20 @@
-import { useEffect, useRef, useState, type ClipboardEvent } from "react";
+// Prompt layout and token selection adapted from Beautiful UI PromptBar (MIT).
+import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import {
   ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
   CloseIcon,
-  ExpandIcon,
   PaperclipIcon,
   TerminalIcon,
+  BotIcon,
+  PlusIcon,
+  SparkleIcon,
 } from "@/components/icons";
+import { GlideMenu, PixelLoader } from "@/components/beautiful/primitives";
+import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { composerCommands, slashQuery, type ComposerCommand } from "@/lib/composer-commands";
 import { Button } from "@/components/ui/button";
-import {
-  Drawer,
-  DrawerContent,
-  DrawerHeader,
-  DrawerTitle,
-} from "@/components/ui/drawer";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import {
@@ -43,6 +43,7 @@ interface Props {
     type: K,
     fields: CommandMap[K]["fields"],
   ) => Promise<CommandMap[K]["result"] | null>;
+  previewOptions?: ComposerOptions;
 }
 type PickedFile = { id: string; file: File; preview?: string };
 
@@ -63,9 +64,10 @@ export function Composer({
   busy,
   onError,
   mutate,
+  previewOptions,
 }: Props) {
   const [panel, setPanel] = useState<
-    "model" | "options" | "commands" | "editor" | null
+    "model" | "options" | null
   >(null);
   const [options, setOptions] = useState<ComposerOptions | null>(null);
   const [optionsLoading, setOptionsLoading] = useState(false);
@@ -74,6 +76,9 @@ export function Composer({
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const [highlight, setHighlight] = useState(0);
+  const [dismissed, setDismissed] = useState<string | null>(null);
   const active = useRef(true);
   const filesRef = useRef(files);
   filesRef.current = files;
@@ -82,6 +87,36 @@ export function Composer({
   const attachmentsSupported = session.features.includes("attachments");
   const running = ["connecting", "working", "waiting"].includes(session.status);
   const locked = disabled || busy || uploading;
+  const query = slashQuery(draft);
+  const commands = composerCommands(session, previewOptions ?? options);
+  const matches = commands.filter((command) => command.name.toLowerCase().includes(query ?? ""));
+  const commandOpen = query !== null && dismissed !== draft && !panel && !locked;
+
+  useEffect(() => { setHighlight(0); }, [draft]);
+  useEffect(() => {
+    if (!commandOpen) return;
+    document.getElementById(`slash-option-${highlight}`)?.scrollIntoView({ block: "nearest" });
+  }, [highlight, commandOpen]);
+
+  function chooseCommand(command: ComposerCommand) {
+    onDraft(command.value);
+    setDismissed(command.value);
+    setPanel(null);
+    textarea.current?.focus();
+  }
+
+  function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.nativeEvent.isComposing) return;
+    if (commandOpen && ["ArrowDown", "ArrowUp", "Enter", "Tab", "Escape"].includes(event.key)) {
+      if (event.key === "Escape") { event.preventDefault(); setDismissed(draft); return; }
+      if (!matches.length) return;
+      event.preventDefault();
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") setHighlight((value) => (value + (event.key === "ArrowDown" ? 1 : -1) + matches.length) % matches.length);
+      else chooseCommand(matches[Math.min(highlight, matches.length - 1)]);
+    } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault(); void send();
+    }
+  }
 
   useEffect(() => {
     active.current = true;
@@ -94,10 +129,9 @@ export function Composer({
   }, []);
 
   useEffect(() => {
-    if (!panel || panel === "editor" || !configurable || disabled) return;
+    if ((!panel && query === null) || !configurable || disabled || previewOptions) return;
     let current = true;
     setOptionsLoading(true);
-    setOptions(null);
     void remoteClient
       .command("getComposer", { sessionId: session.id })
       .then((result) => {
@@ -113,7 +147,7 @@ export function Composer({
     return () => {
       current = false;
     };
-  }, [panel, session.id, configurable, disabled, onError]);
+  }, [panel, query !== null, session.id, configurable, disabled, onError, previewOptions]);
 
   function pick(incoming: File[]) {
     if (locked || !attachmentsSupported) return;
@@ -227,11 +261,31 @@ export function Composer({
     if (result && active.current) setPanel(null);
   }
 
-  const model = options?.models.find(
+  const catalog = previewOptions ?? options;
+  const model = catalog?.models.find(
     (candidate) => candidate.id === session.model,
   );
   return (
+    <Popover open={panel !== null} onOpenChange={(open) => { if (!open) setPanel(null); }}>
     <div className="composer-region">
+      {commandOpen && (
+        <div className="slash-palette">
+          <div className="palette-heading"><TerminalIcon /><span>命令</span><kbd>esc</kbd></div>
+          <GlideMenu className="slash-results">
+            <div id="slash-commands" role="listbox" aria-label="斜杠命令">
+              {matches.map((command, index) => <Button type="button" variant="row" key={command.name}
+                id={`slash-option-${index}`} role="option" aria-selected={index === Math.min(highlight, matches.length - 1)}
+                tabIndex={-1} data-menu-row data-highlighted={index === Math.min(highlight, matches.length - 1) || undefined}
+                onPointerDown={(event) => event.preventDefault()} onClick={() => chooseCommand(command)}>
+                <span className="command-symbol">{command.name.startsWith("goal") ? <SparkleIcon /> : <TerminalIcon />}</span>
+                <span className="command-copy"><strong>/{command.name}</strong><small>{command.description}</small></span>
+                <span aria-hidden="true">↵</span>
+              </Button>)}
+              {!matches.length && <p className="palette-empty">{optionsLoading ? "正在加载命令…" : "没有匹配的命令"}</p>}
+            </div>
+          </GlideMenu>
+        </div>
+      )}
       <input
         type="file"
         multiple
@@ -283,7 +337,7 @@ export function Composer({
       {!configurable && (
         <p className="composer-notice">更新桌面端后可使用模型选项和附件。</p>
       )}
-      <form
+      <form className="prompt-card"
         onSubmit={(event) => {
           event.preventDefault();
           void send();
@@ -296,14 +350,21 @@ export function Composer({
             </FieldLabel>
             <InputGroup>
               <InputGroupTextarea
+                ref={textarea}
                 id="message-input"
-                placeholder={running ? "补充消息…" : "发送消息…"}
-                rows={2}
+                placeholder={running ? "补充消息，或输入 / 命令…" : "发送消息，或输入 / 命令…"}
+                rows={1}
                 value={draft}
                 maxLength={32768}
                 disabled={uploading || busy}
                 onPaste={paste}
-                onChange={(event) => onDraft(event.target.value)}
+                onChange={(event) => { setDismissed(null); onDraft(event.target.value); }}
+                onKeyDown={keyDown}
+                role="combobox"
+                aria-autocomplete="list"
+                aria-expanded={commandOpen}
+                aria-controls={commandOpen ? "slash-commands" : undefined}
+                aria-activedescendant={commandOpen && matches.length ? `slash-option-${Math.min(highlight, matches.length - 1)}` : undefined}
               />
               <InputGroupAddon align="block-end">
                 {attachmentsSupported && (
@@ -315,11 +376,11 @@ export function Composer({
                     aria-label="添加图片或文件"
                     onClick={() => input.current?.click()}
                   >
-                    <PaperclipIcon />
+                    <PlusIcon />
                   </Button>
                 )}
                 {configurable && (
-                  <Button
+                  <PopoverTrigger render={<Button
                     type="button"
                     variant="ghost"
                     size="sm"
@@ -329,23 +390,14 @@ export function Composer({
                       setSearch("");
                       setPanel("model");
                     }}
-                  >
+                  />}>
+                    <BotIcon data-icon="inline-start" />
                     <span className="truncate">
                       {session.modelName || "选择模型"}
                     </span>
                     <ChevronDownIcon data-icon="inline-end" />
-                  </Button>
+                  </PopoverTrigger>
                 )}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="展开编辑"
-                  disabled={uploading || busy}
-                  onClick={() => setPanel("editor")}
-                >
-                  <ExpandIcon />
-                </Button>
                 <div className="composer-spacer" />
                 {running ? (
                   <Button
@@ -380,81 +432,32 @@ export function Composer({
       </form>
       {configurable && (
         <div className="composer-options-bar">
-          <Button
+          <PopoverTrigger render={<Button
             variant="ghost"
             size="sm"
             disabled={locked}
             onClick={() => setPanel("options")}
-          >
+          />}>
             {session.interactionMode === "plan" ? "Plan" : "Build"}
             <ChevronDownIcon data-icon="inline-end" />
-          </Button>
-          <Button
+          </PopoverTrigger>
+          <PopoverTrigger render={<Button
             variant="ghost"
             size="sm"
             disabled={locked}
             onClick={() => setPanel("options")}
-          >
+          />}>
+            <SparkleIcon data-icon="inline-start" />
             {session.reasoningEffort || "默认思考"}
-          </Button>
-          <div className="composer-spacer" />
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={locked}
-            onClick={() => setPanel("commands")}
-          >
-            <TerminalIcon data-icon="inline-start" />
-            命令
-          </Button>
+          </PopoverTrigger>
         </div>
       )}
-      <Drawer
-        open={panel !== null}
-        onOpenChange={(open) => {
-          if (!open) setPanel(null);
-        }}
-        showSwipeHandle
-      >
-        <DrawerContent>
-          <DrawerHeader>
-            <DrawerTitle>
-              {panel === "model"
-                ? "模型"
-                : panel === "commands"
-                  ? "命令"
-                  : panel === "editor"
-                    ? "编辑消息"
-                    : "会话选项"}
-            </DrawerTitle>
-          </DrawerHeader>
-          <div className="composer-panel">
-            {panel === "editor" ? (
-              <>
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel className="sr-only" htmlFor="expanded-message">
-                      消息
-                    </FieldLabel>
-                    <InputGroup>
-                      <InputGroupTextarea
-                        id="expanded-message"
-                        autoFocus
-                        rows={12}
-                        value={draft}
-                        disabled={uploading || busy}
-                        maxLength={32768}
-                        onPaste={paste}
-                        onChange={(event) => onDraft(event.target.value)}
-                      />
-                    </InputGroup>
-                  </Field>
-                </FieldGroup>
-                <Button onClick={() => setPanel(null)}>完成</Button>
-              </>
-            ) : optionsLoading ? (
-              <Spinner aria-label="正在加载选项" />
-            ) : !options ? (
+      <PopoverContent side="top" align="start" sideOffset={12} className="composer-popover">
+        <PopoverTitle>{panel === "model" ? "模型" : "会话选项"}</PopoverTitle>
+        <div className="composer-panel">
+            {optionsLoading && !catalog ? (
+              <PixelLoader label="正在加载选项" />
+            ) : !catalog ? (
               <p>无法加载选项，请关闭后重试。</p>
             ) : (
               <>
@@ -474,7 +477,7 @@ export function Composer({
                       </Field>
                     </FieldGroup>
                     <div className="model-list">
-                      {options.models
+                      {catalog.models
                         .filter((item) =>
                           `${item.name} ${item.provider} ${item.id}`
                             .toLowerCase()
@@ -485,7 +488,7 @@ export function Composer({
                             key={item.id}
                             variant="row"
                             disabled={
-                              locked || running || !options.canConfigure
+                              locked || running || !catalog.canConfigure
                             }
                             onClick={() => void configure({ model: item.id })}
                           >
@@ -507,7 +510,7 @@ export function Composer({
                       <FieldLabel>模式</FieldLabel>
                       <ToggleGroup
                         value={[session.interactionMode || "build"]}
-                        disabled={locked || running || !options.canConfigure}
+                        disabled={locked || running || !catalog.canConfigure}
                         onValueChange={(values) => {
                           if (values[0])
                             void configure({
@@ -525,7 +528,7 @@ export function Composer({
                         <ToggleGroup
                           className="flex-wrap"
                           value={[session.reasoningEffort]}
-                          disabled={locked || running || !options.canConfigure}
+                          disabled={locked || running || !catalog.canConfigure}
                           onValueChange={(values) => {
                             if (values[0])
                               void configure({
@@ -544,37 +547,11 @@ export function Composer({
                     {running && <p>运行结束后可修改会话选项。</p>}
                   </FieldGroup>
                 )}
-                {panel === "commands" && (
-                  <div className="model-list">
-                    {options.commands.length ? (
-                      options.commands.map((command) => (
-                        <Button
-                          key={command.name}
-                          variant="row"
-                          disabled={locked}
-                          onClick={() => {
-                            onDraft(
-                              `/${command.name.replace(/^\//, "")} ${draft}`,
-                            );
-                            setPanel(null);
-                          }}
-                        >
-                          <span>
-                            <strong>/{command.name.replace(/^\//, "")}</strong>
-                            <small>{command.description}</small>
-                          </span>
-                        </Button>
-                      ))
-                    ) : (
-                      <p>当前会话没有已登记命令。</p>
-                    )}
-                  </div>
-                )}
               </>
             )}
           </div>
-        </DrawerContent>
-      </Drawer>
+      </PopoverContent>
     </div>
+    </Popover>
   );
 }

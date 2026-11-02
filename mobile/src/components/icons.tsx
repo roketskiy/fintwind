@@ -16,8 +16,14 @@ import loading from "../../../assets/icons/loader-circle.svg?raw";
 import search from "../../../assets/icons/search.svg?raw";
 import close from "../../../assets/icons/x.svg?raw";
 import paperclip from "../../../assets/icons/paperclip.svg?raw";
-import maximize from "../../../assets/icons/window-maximize.svg?raw";
 import terminal from "../../../assets/icons/terminal.svg?raw";
+import settings from "../../../assets/icons/settings.svg?raw";
+import target from "../../../assets/icons/target.svg?raw";
+import sparkle from "../../../assets/icons/sparkle.svg?raw";
+import pause from "../../../assets/icons/pause.svg?raw";
+import play from "../../../assets/icons/play.svg?raw";
+import bot from "../../../assets/icons/bot.svg?raw";
+import trash from "../../../assets/icons/trash.svg?raw";
 
 function embeddedIcon(source: string) {
   const themed = source.replace(/(?:#000000|#000|\bblack\b)/gi, "currentColor");
@@ -49,5 +55,11 @@ export const LoaderIcon = embeddedIcon(loading);
 export const SearchIcon = embeddedIcon(search);
 export const CloseIcon = embeddedIcon(close);
 export const PaperclipIcon = embeddedIcon(paperclip);
-export const ExpandIcon = embeddedIcon(maximize);
 export const TerminalIcon = embeddedIcon(terminal);
+export const SettingsIcon = embeddedIcon(settings);
+export const TargetIcon = embeddedIcon(target);
+export const SparkleIcon = embeddedIcon(sparkle);
+export const PauseIcon = embeddedIcon(pause);
+export const PlayIcon = embeddedIcon(play);
+export const BotIcon = embeddedIcon(bot);
+export const TrashIcon = embeddedIcon(trash);

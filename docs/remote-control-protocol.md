@@ -27,8 +27,11 @@ Read-only requests may also include a top-level `ifRevision` containing a 64-cha
 | `listWorkspaces` | None |
 | `listSessions` | `projectId` |
 | `getSession` | `sessionId` |
+| `getComposer` | `sessionId` (read-only; requires `composerOptions`) |
+| `configureSession` | `sessionId`, optional `model`, `interactionMode`, `reasoningEffort` |
+| `uploadChunk` | `sessionId`, `uploadId`, `name`, `offset`, `dataBase64`, `complete` |
 | `createSession` | `projectId` |
-| `sendPrompt` | `sessionId`, `text` |
+| `sendPrompt` | `sessionId`, `text`, optional `attachmentIds` |
 | `stop` | `sessionId` |
 | `respondPermission` | `sessionId`, `requestId`, `optionId` |
 | `answerQuestions` | `sessionId`, `requestId`, `answers` |
@@ -43,7 +46,15 @@ The phone keeps unresolved operation identities in per-tab session storage. Afte
 
 `listWorkspaces` returns `{workspaces:[{id,name}],selectedProjectId}`. Only activation-scoped projects that still exist are included. `listSessions` returns `{sessions:[{id,projectId,title,status,updatedAt}],cutoff}`. The cutoff is the current time minus 72 hours. Every read and mutation rechecks project membership and session recency.
 
-`getSession` returns `{id,projectId,title,status,messages,truncated,permission,questions,desktopRequired,canSend}`. Each message is `{id,role,text}`. Roles are `user` or `assistant`. Only a bounded tail of text is included. Internal control events, attachments, environment values and full daemon objects are excluded. The adapter does not read files or transfer attachment bodies. Oversized approval or question forms set `desktopRequired` instead of presenting an incomplete form. A live session without hydrated history returns its available messages with `canSend:false`; after it becomes idle, hydration waits for a matching stored event cursor before replacing the incomplete history.
+`getSession` returns `{id,projectId,title,status,messages,truncated,permission,questions,desktopRequired,canSend}`. Each legacy message is `{id,role,text}`. Roles are `user` or `assistant`. Only a bounded tail is included. New desktops also return `features:["orderedTranscript","composerOptions","attachments"]`, `entries`, `model`, `modelName`, `interactionMode`, and `reasoningEffort`. Clients must not send the new commands to a desktop that does not advertise them.
+
+`entries` interleaves `{type:"message",id,role,text,attachments:[{name,isImage}]}` and `{type:"activity",id,kind,title,text,complete,failed,truncated}` in transcript order. Tools carry only their name and status, never their arguments, output or target details. Only reasoning entries carry bounded thinking text. The list is capped at 200 entries and a 128 KiB serialized budget. Private control events, environment values and full daemon objects are excluded. The read adapter does not open files or transfer attachment bodies. Oversized approval or question forms set `desktopRequired` instead of presenting an incomplete form. A live session without hydrated history returns its available messages with `canSend:false`; after it becomes idle, hydration waits for a matching stored event cursor before replacing the incomplete history.
+
+`getComposer` returns `{models:[{id,name,provider,efforts:[{id,label}]}],commands:[{name,description}],canConfigure}`. Discovery runs off the UI thread for the target workspace, without changing desktop selection. Configuration validates model and effort against that workspace's catalog, refuses busy/preparing sessions and leaves permission levels unchanged.
+
+Slow composer discovery and final attachment imports have independent bounded requests (at most eight). Their responses may arrive out of request order, with IDs used for matching. Encryption sequences are still emitted by one transport loop in strict order. These operations do not block status handling or stop requests. Ordinary mutations retain the existing serialized request path. Catalogs are cleared when pairing stops; remote model metadata has a 60-second lifetime and composer selections a 30-second lifetime, plus binary-generation and current-location catalog checks.
+
+`uploadChunk` accepts standard base64, at most 65,536 characters per chunk. `offset` is the number of base64 characters already acknowledged; non-final chunks cannot contain padding. A complete file is at most 2 MiB decoded. At most 8 uploads and roughly 8 MiB decoded total are retained per activation for ten minutes. Completed uploads are imported into the daemon's attachment store on a background worker. The response is `{accepted:true,offset}`. `sendPrompt.attachmentIds` accepts only completed, same-session uploads from the current activation; no phone-provided paths or durable references are accepted. Attachment-only prompts are valid. Accepted sends consume these upload IDs; neither sends nor upload chunks are automatically retried. Unreferenced imported files use the daemon's existing cleanup policy.
 
 `permission` is null or `{requestId,title,options:[{id,label,allow}]}`. `questions` is null or `{requestId,questions:[{id,header,question,multiSelect,options:[{label,description}]}]}`. `createSession` returns `{sessionId}`. Other mutations return `{accepted:true}`.
 

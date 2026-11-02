@@ -1,5 +1,6 @@
 use super::*;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ely_gpui_component::{
     buttons::{Button, ButtonVariant},
     primitives::IconName,
@@ -8,6 +9,99 @@ use ely_gpui_component::{
 use image::{Frame, Rgba, RgbaImage};
 use qrcode::{Color as QrColor, QrCode};
 use serde_json::{Value, json};
+
+struct RemoteUpload {
+    session_id: Uuid,
+    name: String,
+    encoded: String,
+    touched: Instant,
+    stored: Option<MessageAttachment>,
+    finalizing: bool,
+}
+
+#[derive(Default)]
+pub(super) struct RemoteUploads(std::collections::HashMap<Uuid, RemoteUpload>);
+
+impl RemoteUploads {
+    fn append(
+        &mut self,
+        session_id: Uuid,
+        id: Uuid,
+        name: &str,
+        offset: usize,
+        data: &str,
+        complete: bool,
+    ) -> Result<Option<String>, String> {
+        self.0
+            .retain(|_, upload| upload.touched.elapsed() < Duration::from_secs(600));
+        if name.is_empty()
+            || name.len() > 128
+            || name.contains(['/', '\\', ':'])
+            || name.chars().any(char::is_control)
+            || name == "."
+            || name == ".."
+            || data.len() > 64 * 1024
+            || data.len() % 4 != 0
+            || (!complete && data.contains('='))
+            || !data
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"+/=".contains(&b))
+        {
+            return Err("附件参数无效。".into());
+        }
+        let total: usize = self.0.values().map(|upload| upload.encoded.len()).sum();
+        if total.saturating_add(data.len()) > 11_184_832
+            || (!self.0.contains_key(&id) && self.0.len() >= 8)
+        {
+            return Err("附件总量超限，请重新配对后重试。".into());
+        }
+        if !self.0.contains_key(&id) && offset != 0 {
+            return Err("附件上传已过期，请重新选择。".into());
+        }
+        let upload = self.0.entry(id).or_insert_with(|| RemoteUpload {
+            session_id,
+            name: name.to_owned(),
+            encoded: String::new(),
+            touched: Instant::now(),
+            stored: None,
+            finalizing: false,
+        });
+        if upload.session_id != session_id
+            || upload.name != name
+            || upload.encoded.len() != offset
+            || upload.stored.is_some()
+            || upload.finalizing
+            || offset.saturating_add(data.len()) > 2_796_204
+        {
+            return Err("附件上传状态无效，请重新选择。".into());
+        }
+        upload.encoded.push_str(data);
+        upload.touched = Instant::now();
+        upload.finalizing = complete;
+        Ok(complete.then(|| upload.encoded.clone()))
+    }
+
+    fn resolve(&self, session_id: Uuid, ids: &[Uuid]) -> Result<Vec<MessageAttachment>, String> {
+        let mut unique = std::collections::HashSet::new();
+        ids.iter()
+            .map(|id| {
+                let upload = self
+                    .0
+                    .get(id)
+                    .filter(|upload| {
+                        upload.session_id == session_id
+                            && upload.touched.elapsed() < Duration::from_secs(600)
+                            && unique.insert(*id)
+                    })
+                    .ok_or("附件上传已过期，请重新选择。")?;
+                upload
+                    .stored
+                    .clone()
+                    .ok_or_else(|| "附件尚未上传完成。".into())
+            })
+            .collect()
+    }
+}
 
 const REMOTE_WINDOW_SECS: u64 = 72 * 60 * 60;
 const REMOTE_SESSION_LIMIT: usize = 200;
@@ -447,12 +541,118 @@ impl Fintwind {
                         });
                     }
                     fintwind_remote::RemoteEvent::Request(request) => {
+                        let _ = this.update(cx, |_, cx| {
+                        cx.spawn(async move |this, cx| {
+                        if let fintwind_remote::RemoteCommand::GetComposer { session_id } = &request.command {
+                            let context = this.update(cx, |app, _| {
+                                if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                let index = app.remote_session_index(*session_id)?;
+                                let directory = app.workspace_path_for_session(&app.state.sessions[index]).ok_or("工作区不可用。")?.to_path_buf();
+                                let cached = (app.provider_probe_directory.as_ref() == Some(&directory)).then(|| app.provider_probe().cloned()).flatten();
+                                Ok((app.daemon.clone(), directory, cached, app.provider_binary_generation))
+                            }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()));
+                            let response = match context {
+                                Err(error) => Err(error),
+                                Ok((daemon, directory, cached, binary_generation)) => {
+                                    let probe = match cached {
+                                        Some(probe) => Ok(probe),
+                                        None => {
+                                            let location = directory.clone();
+                                            cx.background_executor().spawn(async move {
+                                                match daemon.client().request(Uuid::nil(), Uuid::nil(), fintwind_client::Command::ProbeProvider {
+                                                    binary_override: None, directory: Some(location), discover_models: true, probe_version: false,
+                                                }) {
+                                                    Ok(fintwind_client::ResponsePayload::ProviderProbe { probe, .. }) => Ok(probe),
+                                                    _ => Err("无法加载此工作区的模型。".to_owned()),
+                                                }
+                                            }).await
+                                        }
+                                    };
+                                    match probe {
+                                        Err(error) => Err(error),
+                                        Ok(probe) => {
+                                            let result = this.update(cx, |app, _| {
+                                                if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                                if app.provider_binary_generation != binary_generation { return Err("模型目录已更新，请重试。".into()); }
+                                                let index = app.remote_session_index(*session_id)?;
+                                                if app.workspace_path_for_session(&app.state.sessions[index]) != Some(directory.as_path()) { return Err("工作区已改变。".into()); }
+                                                if app.remote_model_catalogs.len() >= 8 && !app.remote_model_catalogs.contains_key(&directory) { app.remote_model_catalogs.clear(); }
+                                                app.remote_model_catalogs.insert(directory.clone(), (Instant::now(), probe.clone()));
+                                                if app.remote_composer_catalogs.len() >= 8 { app.remote_composer_catalogs.clear(); }
+                                                app.remote_composer_catalogs.insert(*session_id, (directory.clone(), probe.clone(), Instant::now(), app.provider_binary_generation));
+                                                Ok(app.remote_composer_snapshot(index, &probe))
+                                            }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()));
+                                            result
+                                        }
+                                    }
+                                }
+                            };
+                            let _ = request.respond.send(response).await;
+                            return;
+                        }
+                        if let fintwind_remote::RemoteCommand::UploadChunk { session_id, upload_id, name, offset, data_base64, complete } = &request.command {
+                            let allowed = this.update(cx, |app, _| {
+                                if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                app.remote_session_index(*session_id)?;
+                                let encoded = app.remote_uploads.append(*session_id, *upload_id, name, *offset, data_base64, *complete)?;
+                                Ok((app.daemon.clone(), encoded))
+                            }).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()));
+                            let response = match allowed {
+                                Err(error) => Err(error),
+                                Ok((daemon, encoded)) => {
+                                        let mut result = Ok(json!({"accepted": true, "offset": offset + data_base64.len()}));
+                                        if let Some(encoded) = encoded {
+                                            let name = name.clone();
+                                            let imported = cx.background_executor().spawn(async move {
+                                                let bytes = STANDARD.decode(&encoded).map_err(|_| "附件编码无效。".to_owned())?;
+                                                if bytes.is_empty() || bytes.len() > 2 * 1024 * 1024 { return Err("单个附件不能超过 2 MiB。".to_owned()); }
+                                                let response = daemon.client().request(Uuid::nil(), Uuid::nil(), fintwind_client::Command::ImportAttachment {
+                                                    name, upload: fintwind_protocol::attachments::AttachmentUpload::File { data_base64: encoded }
+                                                }).map_err(|_| "无法保存附件。".to_owned())?;
+                                                let fintwind_client::ResponsePayload::AttachmentStored { attachment } = response else { return Err("附件保存响应无效。".to_owned()); };
+                                                Ok(attachment)
+                                            }).await;
+                                            result = this.update(cx, |app, _| {
+                                                if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                                app.remote_session_index(*session_id)?;
+                                                match imported {
+                                                Ok(stored) => {
+                                                    if let Some(upload) = app.remote_uploads.0.get_mut(upload_id) {
+                                                        let extension = std::path::Path::new(&stored.name).extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+                                                        upload.stored = Some(MessageAttachment { path: stored.path, mention: stored.name.clone(), name: stored.name, is_dir: false,
+                                                            is_image: matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif"), blob_reference: Some(stored.reference) });
+                                                    } else { return Err("附件上传已过期。".into()); }
+                                                    Ok(json!({"accepted": true, "offset": offset + data_base64.len()}))
+                                                }
+                                                Err(error) => { app.remote_uploads.0.remove(upload_id); Err(error) }
+                                            }}).unwrap_or_else(|_| Err("桌面窗口已关闭。".into()));
+                                        }
+                                        result
+                                    }
+                            };
+                            let _ = request.respond.send(response).await;
+                            return;
+                        }
+                        let attachment_ids = match &request.command {
+                            fintwind_remote::RemoteCommand::SendPrompt { attachment_ids, .. } => attachment_ids.clone(),
+                            _ => Vec::new(),
+                        };
                         let response = this
                             .update(cx, |app, cx| {
                                 if app.remote_generation != generation {
                                     return Err("Remote control has been stopped".to_owned());
                                 }
-                                app.dispatch_remote_command(request.command, cx)
+                                let attachments = match &request.command {
+                                    fintwind_remote::RemoteCommand::SendPrompt { session_id, attachment_ids, .. } => app.remote_uploads.resolve(*session_id, attachment_ids)?,
+                                    _ => Vec::new(),
+                                };
+                                let catalog = match &request.command {
+                                    fintwind_remote::RemoteCommand::ConfigureSession { session_id, .. } => app.remote_composer_catalogs.get(session_id).cloned(),
+                                    _ => None,
+                                };
+                                let result = app.dispatch_remote_command(request.command, attachments, catalog.as_ref(), cx);
+                                if result.is_ok() { for id in attachment_ids { app.remote_uploads.0.remove(&id); } }
+                                result
                             })
                             .unwrap_or_else(|_| {
                                 Err("Desktop window is no longer available".to_owned())
@@ -463,6 +663,8 @@ impl Fintwind {
                                 let _ = sender.send(response).await;
                             })
                             .detach();
+                        }).detach();
+                        });
                     }
                 }
             }
@@ -487,6 +689,9 @@ impl Fintwind {
             control.stop();
         }
         self.remote_project_ids.clear();
+        self.remote_uploads.0.clear();
+        self.remote_composer_catalogs.clear();
+        self.remote_model_catalogs.clear();
         self.remote_pairing_url = None;
         self.remote_pairing_qr = None;
         self.remote_error = None;
@@ -496,6 +701,8 @@ impl Fintwind {
     pub(super) fn dispatch_remote_command(
         &mut self,
         command: fintwind_remote::RemoteCommand,
+        attachments: Vec<MessageAttachment>,
+        catalog: Option<&(PathBuf, ProviderProbe, Instant, u64)>,
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
         match command {
@@ -554,6 +761,89 @@ impl Fintwind {
                 }
                 Ok(self.remote_session_snapshot(index))
             }
+            fintwind_remote::RemoteCommand::GetComposer { .. } => {
+                Err("请重新打开会话选项。".into())
+            }
+            fintwind_remote::RemoteCommand::ConfigureSession {
+                session_id,
+                model,
+                interaction_mode,
+                reasoning_effort,
+            } => {
+                let index = self.remote_session_index(session_id)?;
+                let (directory, probe, at, binary_generation) =
+                    catalog.ok_or("请重新打开会话选项。")?;
+                if at.elapsed() > Duration::from_secs(30)
+                    || *binary_generation != self.provider_binary_generation
+                    || (self.provider_probe_directory.as_ref() == Some(directory)
+                        && self
+                            .provider_probe()
+                            .is_none_or(|current| current.models != probe.models))
+                {
+                    return Err("模型选项已更新，请重新打开选择器。".into());
+                }
+                if self.workspace_path_for_session(&self.state.sessions[index])
+                    != Some(directory.as_path())
+                {
+                    return Err("工作区已改变，请重新打开会话选项。".into());
+                }
+                if !self.state.sessions[index].detail_loaded
+                    || !self.state.sessions[index].can_choose_model()
+                    || self.submission_preparations.contains(&session_id)
+                    || self.response_fork_preparations.contains_key(&session_id)
+                {
+                    return Err("请等待当前操作结束后再修改会话选项。".into());
+                }
+                let current_model = self.state.sessions[index]
+                    .model
+                    .clone()
+                    .or_else(|| probe.preferred_model().map(|model| model.id.clone()));
+                let selected_model = model.as_deref().or(current_model.as_deref());
+                let metadata = probe
+                    .models
+                    .iter()
+                    .find(|candidate| Some(candidate.id.as_str()) == selected_model);
+                if model.is_some() && metadata.is_none() {
+                    return Err("所选模型当前不可用。".into());
+                }
+                if let Some(effort) = reasoning_effort.as_ref()
+                    && !metadata.is_some_and(|value| {
+                        value
+                            .reasoning_efforts
+                            .iter()
+                            .any(|option| &option.id == effort)
+                    })
+                {
+                    return Err("该模型不支持所选思考强度。".into());
+                }
+                let default_effort =
+                    metadata.and_then(|value| value.default_reasoning_effort.clone());
+                let session = self.state.session_mut(session_id).ok_or("会话不可用。")?;
+                if let Some(model) = model {
+                    session.model = Some(model);
+                    session.reasoning_effort = default_effort;
+                    session.service_tier = None;
+                    session.context_window = None;
+                }
+                if let Some(mode) = interaction_mode {
+                    session.interaction_mode = match mode.as_str() {
+                        "plan" => InteractionMode::Plan,
+                        "build" => InteractionMode::Build,
+                        _ => return Err("无效的会话模式。".into()),
+                    };
+                }
+                if let Some(effort) = reasoning_effort {
+                    session.reasoning_effort = Some(effort);
+                }
+                session.updated_at = unix_time();
+                if self.state.selected_session == Some(session_id) {
+                    self.browser_access_mode_changed(cx);
+                }
+                self.apply_session_options(session_id, cx);
+                self.save();
+                cx.notify();
+                Ok(json!({"accepted": true}))
+            }
             fintwind_remote::RemoteCommand::CreateSession { project_id } => {
                 self.remote_check_project(project_id)?;
                 let session = self.state.new_session(project_id);
@@ -563,9 +853,14 @@ impl Fintwind {
                 cx.notify();
                 Ok(json!({"sessionId": session_id}))
             }
-            fintwind_remote::RemoteCommand::SendPrompt { session_id, text } => {
+            fintwind_remote::RemoteCommand::UploadChunk { .. } => {
+                Err("附件必须通过上传通道处理。".into())
+            }
+            fintwind_remote::RemoteCommand::SendPrompt {
+                session_id, text, ..
+            } => {
                 let index = self.remote_session_index(session_id)?;
-                if text.trim().is_empty() || text.len() > 32 * 1024 {
+                if (text.trim().is_empty() && attachments.is_empty()) || text.len() > 32 * 1024 {
                     return Err("Prompt text is empty or too long".to_owned());
                 }
                 if !self.state.sessions[index].detail_loaded {
@@ -577,7 +872,15 @@ impl Fintwind {
                 {
                     return Err("The session is preparing another operation".to_owned());
                 }
-                self.submit_submission_for_session(session_id, ComposerSubmission::plain(text), cx);
+                self.submit_submission_for_session(
+                    session_id,
+                    ComposerSubmission {
+                        prompt: text,
+                        display_content: None,
+                        attachments,
+                    },
+                    cx,
+                );
                 Ok(json!({"accepted": true}))
             }
             fintwind_remote::RemoteCommand::Stop { session_id } => {
@@ -787,25 +1090,53 @@ impl Fintwind {
                     })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
             }));
+        let (entries, entries_truncated) = remote_transcript_entries(session);
         let mut snapshot = json!({
             "id": session.id,
             "projectId": session.project_id,
             "title": bounded_text(&session.display_title(), 1024),
             "status": serde_json::to_value(session.status).unwrap_or(Value::Null),
             "messages": messages,
-            "truncated": truncated,
+            "truncated": truncated || entries_truncated,
             "permission": permission,
             "questions": questions,
             "desktopRequired": !permission_supported || !questions_supported,
             "canSend": session.detail_loaded,
+            "entries": entries,
+            "features": ["orderedTranscript", "composerOptions", "attachments"],
+            "model": self.model_for_session(session),
+            "modelName": bounded_text(self.model_metadata_for_session(session).map(|model| model.name.as_str()).or_else(|| self.model_for_session(session)).unwrap_or("OpenCode"), 256),
+            "interactionMode": session.interaction_mode,
+            "reasoningEffort": self.session_options(session).reasoning_effort,
         });
         if serde_json::to_vec(&snapshot)
             .map_or(true, |bytes| bytes.len() > REMOTE_RESPONSE_LIMIT - 1024)
         {
             snapshot["messages"] = json!([]);
+            snapshot["entries"] = json!([]);
             snapshot["truncated"] = Value::Bool(true);
         }
         snapshot
+    }
+
+    fn remote_composer_snapshot(&self, index: usize, probe: &ProviderProbe) -> Value {
+        let session = &self.state.sessions[index];
+        let mut budget = 192 * 1024usize;
+        let models = probe.models.iter().filter(|model| !model.id.is_empty() && model.id.len() <= 512)
+            .take(1024).map(|model| json!({
+                "id": bounded_text(&model.id, 512), "name": bounded_text(&model.name, 256),
+                "provider": model.sub_provider.as_deref().map(|value| bounded_text(value, 128)),
+                "efforts": model.reasoning_efforts.iter().take(32).map(|option| json!({"id": bounded_text(&option.id, 128), "label": bounded_text(&option.label, 128)})).collect::<Vec<_>>()
+            })).take_while(|value| {
+                let size = serde_json::to_vec(value).map_or(budget + 1, |bytes| bytes.len());
+                if size > budget { return false; }
+                budget -= size;
+                true
+            }).collect::<Vec<_>>();
+        json!({
+            "models": models, "canConfigure": session.detail_loaded && session.can_choose_model(),
+            "commands": session.available_commands.iter().take(64).map(|command| json!({"name": bounded_text(&command.name, 128), "description": bounded_text(&command.description, 256)})).collect::<Vec<_>>()
+        })
     }
 
     fn hydrate_remote_session(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
@@ -896,6 +1227,79 @@ impl Fintwind {
         })
         .detach();
     }
+}
+
+fn remote_transcript_entries(session: &AgentSession) -> (Vec<Value>, bool) {
+    enum Entry<'a> {
+        Message(&'a crate::model::Message),
+        Activity(&'a ActivityItem),
+    }
+    let start = session.messages.len().saturating_sub(REMOTE_MESSAGE_LIMIT);
+    let mut ordered = Vec::new();
+    for (index, message) in session.messages.iter().enumerate().skip(start) {
+        if matches!(message.role, MessageRole::User | MessageRole::Assistant) {
+            ordered.push((index, 1usize, (0usize, 0usize), Entry::Message(message)));
+        }
+    }
+    for (block_index, block) in session.transcript_blocks.iter().enumerate().rev().take(200) {
+        if block.after_message < start {
+            continue;
+        }
+        let offset = block.activities.len().saturating_sub(64);
+        for (index, activity) in block.activities.iter().enumerate().skip(offset) {
+            ordered.push((
+                block.after_message,
+                0,
+                (block_index, index),
+                Entry::Activity(activity),
+            ));
+        }
+    }
+    ordered.sort_by_key(|(anchor, kind, index, _)| (*anchor, *kind, *index));
+    let mut remaining = 128 * 1024usize;
+    let mut entries = Vec::new();
+    let mut truncated = start > 0 || ordered.len() > 200;
+    for (_, _, _, entry) in ordered.into_iter().rev().take(200) {
+        let value = match entry {
+            Entry::Message(message) => {
+                let content = message.visible_content();
+                let text = if message.role == MessageRole::Assistant {
+                    bounded_tail_text(content, 16 * 1024)
+                } else {
+                    bounded_text(content, 16 * 1024)
+                };
+                truncated |= text.len() != content.len();
+                json!({"type": "message", "id": message.id, "role": message.role, "text": text, "createdAt": message.created_at, "streaming": message.streaming,
+                    "attachments": message.attachments.iter().take(8).map(|file| json!({"name": bounded_text(&file.name, 128), "isImage": file.is_image})).collect::<Vec<_>>()})
+            }
+            Entry::Activity(activity) => {
+                let content = if activity.kind == ActivityKind::Reasoning {
+                    activity
+                        .reasoning
+                        .as_ref()
+                        .map(|reasoning| reasoning.content.as_str())
+                        .unwrap_or("")
+                } else {
+                    ""
+                };
+                let limit = 12 * 1024;
+                let text = bounded_tail_text(content, limit);
+                json!({"type": "activity", "id": activity.id, "kind": activity.kind,
+                    "title": bounded_text(&activity.title, 256),
+                    "text": text, "complete": activity.complete, "failed": activity.failed,
+                    "truncated": content.len() > limit})
+            }
+        };
+        let bytes = serde_json::to_vec(&value).map_or(remaining + 1, |bytes| bytes.len());
+        if bytes > remaining {
+            truncated = true;
+            break;
+        }
+        remaining -= bytes;
+        entries.push(value);
+    }
+    entries.reverse();
+    (entries, truncated)
 }
 
 fn remote_button(

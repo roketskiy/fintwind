@@ -304,6 +304,7 @@ impl Fintwind {
                     .when_some(self.latest_available.as_ref(), |footer, update| {
                         footer.child(self.render_mode_rail_update(update, cx))
                     })
+                    .child(self.render_remote_rail_entry(cx))
                     .child(self.render_help_rail_entry(cx))
                     .child(self.render_mode_rail_entry(
                         "rail-settings",
@@ -313,6 +314,59 @@ impl Fintwind {
                     )),
             )
             .pb(px(4.0))
+    }
+
+    fn render_remote_rail_entry(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let theme = Theme::current(cx);
+        let active = self.mode == WorkspaceMode::Settings
+            && self.settings_page == SettingsPage::RemoteControl;
+        div()
+            .id("rail-remote-control")
+            .track_focus(&self.remote_control_focus)
+            .tab_index(0)
+            .relative()
+            .w(px(MODE_RAIL_WIDTH))
+            .h(px(MODE_RAIL_WIDTH))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_default()
+            .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
+            .hover(|style| style.bg(theme.sidebar_item_background))
+            .tooltip(Tooltip::text(tr!("remote.title")))
+            .child(icon(
+                "icons/smartphone.svg",
+                20.0,
+                if active {
+                    theme.text
+                } else {
+                    theme.text_tertiary
+                },
+            ))
+            .when(active, |entry| {
+                entry.child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .w(px(2.0))
+                        .h(px(20.0))
+                        .bg(theme.text),
+                )
+            })
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.open_settings_page(SettingsPage::RemoteControl, cx);
+                cx.stop_propagation();
+            }))
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _, cx| {
+                if !event.keystroke.modifiers.modified()
+                    && matches!(event.keystroke.key.as_str(), "enter" | "space")
+                {
+                    this.open_settings_page(SettingsPage::RemoteControl, cx);
+                    cx.stop_propagation();
+                }
+            }))
     }
 
     /// The rail's help entry, in the same full-square shape as the mode
@@ -378,7 +432,9 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let theme = Theme::current(cx);
-        let active = self.mode == mode;
+        let active = self.mode == mode
+            && !(mode == WorkspaceMode::Settings
+                && self.settings_page == SettingsPage::RemoteControl);
         let label = match mode {
             WorkspaceMode::Sessions => tr!("rail.sessions"),
             WorkspaceMode::SourceControl => tr!("rail.source_control"),
@@ -510,6 +566,11 @@ impl Fintwind {
     /// switch that visibly changes nothing reads as a dead control — and
     /// each mode brings its own on-enter side effects.
     fn activate_mode(&mut self, mode: WorkspaceMode, cx: &mut Context<Self>) {
+        if mode == WorkspaceMode::Settings && self.settings_page == SettingsPage::RemoteControl {
+            self.open_settings_page(SettingsPage::General, cx);
+            self.set_sidebar_visible(true, cx);
+            return;
+        }
         if self.mode == mode {
             // Usage has no second column; there is nothing to collapse.
             if self.has_secondary_column() {

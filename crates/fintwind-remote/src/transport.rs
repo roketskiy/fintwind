@@ -352,6 +352,14 @@ fn connect_and_run(
     }
 }
 
+struct DeferredResponse {
+    id: Uuid,
+    receiver: channel::Receiver<Result<Value, String>>,
+    deadline: Instant,
+    read_only: bool,
+    if_revision: Option<String>,
+}
+
 fn serve_phone(
     socket: &mut Socket,
     socket_id: &str,
@@ -385,10 +393,37 @@ fn serve_phone(
     let (mut outbound, mut inbound) = crypto::directions(secret, &phone_nonce, &desktop_nonce)?;
     send_sealed(socket, socket_id, &mut outbound, &json!({"type":"ready"}))?;
     let mut authenticated = false;
+    let mut deferred: Vec<DeferredResponse> = Vec::new();
     loop {
         if cancelled.load(Ordering::Acquire) {
             let _ = send_json(socket, &json!({"t":"wclose","id":socket_id,"code":1000}));
             return Ok(());
+        }
+        let mut index = 0;
+        while index < deferred.len() {
+            let answer = match deferred[index].receiver.try_recv() {
+                Ok(answer) => Some(answer),
+                Err(channel::TryRecvError::Closed) => {
+                    Some(Err("Desktop request handler stopped".into()))
+                }
+                Err(channel::TryRecvError::Empty) if Instant::now() >= deferred[index].deadline => {
+                    Some(Err("操作结果待确认，请勿重复提交。".into()))
+                }
+                Err(channel::TryRecvError::Empty) => None,
+            };
+            if let Some(answer) = answer {
+                let item = deferred.swap_remove(index);
+                let answer = if item.read_only {
+                    answer.map(|value| {
+                        crate::snapshot::conditional_response(value, item.if_revision.as_deref())
+                    })
+                } else {
+                    answer
+                };
+                reply(socket, socket_id, &mut outbound, item.id, answer)?;
+            } else {
+                index += 1;
+            }
         }
         match read_message(socket)? {
             Some(Message::Text(text)) => {
@@ -472,6 +507,21 @@ fn serve_phone(
                     continue;
                 }
                 let read_only = !request.command.is_mutation();
+                let allow_deferred = matches!(
+                    &request.command,
+                    RemoteCommand::GetComposer { .. }
+                        | RemoteCommand::UploadChunk { complete: true, .. }
+                );
+                if allow_deferred && deferred.len() >= 8 {
+                    reply(
+                        socket,
+                        socket_id,
+                        &mut outbound,
+                        request.id,
+                        Err("正在处理其他请求，请稍后重试。".into()),
+                    )?;
+                    continue;
+                }
                 if request.if_revision.as_deref().is_some_and(|revision| {
                     !read_only || !crate::snapshot::valid_revision(revision)
                 }) {
@@ -505,6 +555,16 @@ fn serve_phone(
                     .context("desktop request queue timed out")?
                     .context("desktop request handler stopped")?;
                 let deadline = Instant::now() + REQUEST_TIMEOUT;
+                if allow_deferred {
+                    deferred.push(DeferredResponse {
+                        id: request.id,
+                        receiver: response_rx,
+                        deadline,
+                        read_only,
+                        if_revision: request.if_revision,
+                    });
+                    continue;
+                }
                 let answer = loop {
                     if cancelled.load(Ordering::Acquire) {
                         return Ok(());

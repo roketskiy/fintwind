@@ -57,12 +57,6 @@ const SETTINGS_PAGES: &[(SettingsPage, &str, &str, &str)] = &[
         "settings.general_keywords",
     ),
     (
-        SettingsPage::RemoteControl,
-        "remote.title",
-        "icons/laptop.svg",
-        "remote.keywords",
-    ),
-    (
         SettingsPage::Appearance,
         "settings.appearance",
         "icons/appearance.svg",

@@ -147,12 +147,31 @@ pub enum RemoteCommand {
     GetSession {
         session_id: Uuid,
     },
+    GetComposer {
+        session_id: Uuid,
+    },
+    ConfigureSession {
+        session_id: Uuid,
+        model: Option<String>,
+        interaction_mode: Option<String>,
+        reasoning_effort: Option<String>,
+    },
     CreateSession {
         project_id: Uuid,
     },
     SendPrompt {
         session_id: Uuid,
         text: String,
+        #[serde(default)]
+        attachment_ids: Vec<Uuid>,
+    },
+    UploadChunk {
+        session_id: Uuid,
+        upload_id: Uuid,
+        name: String,
+        offset: usize,
+        data_base64: String,
+        complete: bool,
     },
     Stop {
         session_id: Uuid,
@@ -180,7 +199,10 @@ impl RemoteCommand {
     fn is_mutation(&self) -> bool {
         !matches!(
             self,
-            Self::ListWorkspaces | Self::ListSessions { .. } | Self::GetSession { .. }
+            Self::ListWorkspaces
+                | Self::ListSessions { .. }
+                | Self::GetSession { .. }
+                | Self::GetComposer { .. }
         )
     }
 
@@ -191,9 +213,48 @@ impl RemoteCommand {
             Self::ListSessions { project_id } | Self::CreateSession { project_id } => {
                 !project_id.is_nil()
             }
-            Self::GetSession { session_id } | Self::Stop { session_id } => !session_id.is_nil(),
-            Self::SendPrompt { session_id, text } => {
-                !session_id.is_nil() && !text.trim().is_empty() && text.len() <= 32 * 1024
+            Self::GetSession { session_id }
+            | Self::GetComposer { session_id }
+            | Self::Stop { session_id } => !session_id.is_nil(),
+            Self::ConfigureSession {
+                session_id,
+                model,
+                interaction_mode,
+                reasoning_effort,
+            } => {
+                !session_id.is_nil()
+                    && model.as_deref().is_none_or(|value| ok(value, 512))
+                    && interaction_mode
+                        .as_deref()
+                        .is_none_or(|value| matches!(value, "build" | "plan"))
+                    && reasoning_effort
+                        .as_deref()
+                        .is_none_or(|value| ok(value, 128))
+            }
+            Self::SendPrompt {
+                session_id,
+                text,
+                attachment_ids,
+            } => {
+                !session_id.is_nil()
+                    && (!text.trim().is_empty() || !attachment_ids.is_empty())
+                    && text.len() <= 32 * 1024
+                    && attachment_ids.len() <= 8
+                    && attachment_ids.iter().all(|id| !id.is_nil())
+            }
+            Self::UploadChunk {
+                session_id,
+                upload_id,
+                name,
+                offset,
+                data_base64,
+                ..
+            } => {
+                !session_id.is_nil()
+                    && !upload_id.is_nil()
+                    && ok(name, 128)
+                    && *offset <= 2_796_204
+                    && ok(data_base64, 64 * 1024)
             }
             Self::RespondPermission {
                 session_id,

@@ -798,7 +798,12 @@ impl Fintwind {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_settings_page(self.settings_page, cx);
+        let page = if self.settings_page == SettingsPage::RemoteControl {
+            SettingsPage::General
+        } else {
+            self.settings_page
+        };
+        self.open_settings_page(page, cx);
         window.focus(&self.settings_focus, cx);
     }
 
@@ -948,6 +953,10 @@ impl Fintwind {
     /// the width sanitizer clamps the zero up to the default width and an
     /// empty column shows.
     pub(super) fn has_secondary_column(&self) -> bool {
+        if self.mode == WorkspaceMode::Settings && self.settings_page == SettingsPage::RemoteControl
+        {
+            return false;
+        }
         !matches!(
             self.mode,
             WorkspaceMode::Usage | WorkspaceMode::ScheduledTasks

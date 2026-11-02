@@ -1,10 +1,14 @@
 // Public client boundary substitute for the real hook/view E2E fixture.
 // It cannot open sockets, pair, read files, or call a daemon.
-import type { ClientSnapshot, CommandMap, CommandType, SessionDetail } from "../lib/types";
+import type { ClientSnapshot, CommandMap, CommandType, RuntimeMode, SessionDetail } from "../lib/types";
+import { checkFieldBounds } from "../lib/remote-validation";
 
 const params = new URLSearchParams(location.search);
+const permissions = params.get("permissions") === "1";
+let runtimeMode: RuntimeMode = "ask";
+const configurations: CommandMap["configureSession"]["fields"][] = [];
 const noop = () => {};
-const historical = Array.from({ length: params.get("activities") === "1" ? 20 : 60 }, (_, index) => [
+const historical = Array.from({ length: permissions ? 0 : params.get("activities") === "1" ? 20 : 60 }, (_, index) => [
   { id: `u${index}`, role: "user" as const, text: `历史问题 ${index}` },
   { id: `a${index}`, role: "assistant" as const, text: `历史回答 ${index}\n\n${"用于核对阅读位置的历史内容。".repeat(24)}` },
 ]).flat();
@@ -23,11 +27,12 @@ let snapshot: ClientSnapshot = { connection: "idle", error: null, pendingScopes:
 const listeners = new Set<() => void>();
 const counters = { reads: 0, watches: 0, activeWatches: 0, mutations: 0, deliveries: 0 };
 function publish() {
-  document.documentElement.dataset.fixtureState = JSON.stringify({ ...counters, tick, hidden, held: releaseRead !== null });
+  document.documentElement.dataset.fixtureState = JSON.stringify({ ...counters, tick, hidden, held: releaseRead !== null, runtimeMode, configurations });
 }
 function detail(): SessionDetail {
-  return { id: "fixture-session", projectId: "fixture-project", title: "隔离流式会话", status: turnEnded ? "idle" : waiting ? "waiting" : "working", messages: [],
-    features: params.get("legacy") === "1" ? [] : ["sessionDeltas"],
+  return { id: "fixture-session", projectId: "fixture-project", title: "隔离流式会话", status: permissions && params.get("busy") !== "1" ? "idle" : turnEnded ? "idle" : waiting ? "waiting" : "working", messages: [],
+    features: permissions ? ["composerOptions", ...(params.get("legacy") === "1" ? [] : ["sessionDeltas", "sessionPermissions"])] : params.get("legacy") === "1" ? [] : ["sessionDeltas"],
+    ...(permissions && params.get("legacy") !== "1" ? { runtimeMode } : {}),
     model: "fixture", modelName: "Fixture", interactionMode: "build", reasoningEffort: "high", truncated: false,
     permission: null, questions: null, desktopRequired: false, canSend: true,
     entries: [...historical,
@@ -69,10 +74,19 @@ export const remoteClient = {
       }
       if (failRead) { failRead = false; throw new Error("隔离读取失败"); }
       result = detail();
-    } else if (type === "getComposer") result = { canConfigure: false, models: [], commands: [] };
+    } else if (type === "getComposer") result = { canConfigure: permissions, models: [], commands: [] };
     else {
       counters.mutations++;
       if (failMutation) { failMutation = false; throw new Error("隔离操作结果待确认"); }
+      if (type === "configureSession") {
+        checkFieldBounds(type, _fields);
+        if (!permissions || detail().status !== "idle") throw new Error("会话当前不可配置");
+        const fields = _fields as CommandMap["configureSession"]["fields"];
+        if (fields.sessionId !== "fixture-session") throw new Error("会话不匹配");
+        if (fields.runtimeMode) runtimeMode = fields.runtimeMode;
+        configurations.push({ ...fields });
+        publish();
+      }
       result = { accepted: true };
     }
     return result as CommandMap[K]["result"];

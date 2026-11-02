@@ -25,8 +25,8 @@ fn main() -> anyhow::Result<()> {
     entries.push(json!({"type":"activity", "id":"reasoning", "kind":"reasoning", "title":"", "text":"", "complete":false, "failed":false, "truncated":false}));
     entries.push(json!({"type":"message", "id":"live", "role":"assistant", "text":"", "attachments":[], "streaming":true}));
     let mut value = json!({"id": session_id, "projectId":"synthetic", "title":"Synthetic stream", "status":"working",
-        "messages":[], "entries":entries, "features":["orderedTranscript","sessionDeltas"],
-        "model":"test", "modelName":"Test", "interactionMode":"build", "reasoningEffort":"high",
+        "messages":[], "entries":entries, "features":["orderedTranscript","sessionDeltas","sessionPermissions"],
+        "model":"test", "modelName":"Test", "interactionMode":"build", "reasoningEffort":"high", "runtimeMode":"ask",
         "permission":null, "questions":null, "desktopRequired":false, "canSend":true, "truncated":false, "goal":null});
     let (mut outbound, _) = crypto::directions(&[7; 32], &[11; 32], &[17; 32])?;
     let mut previous: Option<Value> = None;
@@ -36,6 +36,9 @@ fn main() -> anyhow::Result<()> {
     let mut update_bytes = 0;
     let start = Instant::now();
     for tick in 0..60 {
+        if tick == 15 { value["runtimeMode"] = json!("autoAcceptEdits"); }
+        if tick == 35 { value["runtimeMode"] = json!("fullAccess"); }
+        if tick == 55 { value["runtimeMode"] = json!("ask"); }
         let list = value["entries"].as_array_mut().unwrap();
         let live = list.iter_mut().find(|row| row["id"] == "live").unwrap();
         live["text"] = json!(format!(

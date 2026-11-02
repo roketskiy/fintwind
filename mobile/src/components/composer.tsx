@@ -415,6 +415,26 @@ export function Composer({
                         <ToggleGroupItem value="plan"><span className="bui-segment-face">Plan</span></ToggleGroupItem>
                       </ToggleGroup>
                     </Field>
+                    {session.features.includes("sessionPermissions") && session.runtimeMode !== undefined && (
+                      <Field orientation="horizontal" className="session-option-row">
+                        <FieldLabel id={`${optionsId}-permissions`}>权限</FieldLabel>
+                        <ToggleGroup
+                          className="bui-segments" spacing={0} size="sm"
+                          aria-labelledby={`${optionsId}-permissions`}
+                          value={[session.runtimeMode]}
+                          disabled={locked || running || !catalog.canConfigure}
+                          onValueChange={(values) => {
+                            const runtimeMode = values[0];
+                            if (runtimeMode === "ask" || runtimeMode === "autoAcceptEdits" || runtimeMode === "fullAccess")
+                              void configure({ runtimeMode });
+                          }}
+                        >
+                          <ToggleGroupItem value="ask"><span className="bui-segment-face">监督</span></ToggleGroupItem>
+                          <ToggleGroupItem value="autoAcceptEdits"><span className="bui-segment-face">自动接受修改</span></ToggleGroupItem>
+                          <ToggleGroupItem value="fullAccess"><span className="bui-segment-face">完全访问</span></ToggleGroupItem>
+                        </ToggleGroup>
+                      </Field>
+                    )}
                     {!!model?.efforts.length && (
                       <Field orientation="horizontal" className="session-option-row">
                         <FieldLabel id={`${optionsId}-effort`}>思考强度</FieldLabel>

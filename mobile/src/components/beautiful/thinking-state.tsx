@@ -13,6 +13,7 @@ import {
   PackageIcon, PencilIcon, SearchIcon, SparkleIcon, TerminalIcon, WrenchIcon,
 } from "@/components/icons";
 import { CollapsibleTrigger } from "@/components/ui/collapsible";
+import { MessageScroller, MessageScrollerContent, MessageScrollerItem, MessageScrollerProvider, MessageScrollerViewport } from "@/components/ui/message-scroller";
 import {
   TraceCollapsible,
   TraceCollapsibleContent,
@@ -109,7 +110,15 @@ export function ReasoningActivityRow({
         </CollapsibleTrigger>
         <TraceCollapsibleContent>
           {activity.truncated && <p>较早的思考已省略</p>}
-          <div className="reasoning-text">{activity.text}</div>
+          <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+            <MessageScroller className="reasoning-scroller">
+              <MessageScrollerViewport className="reasoning-text" aria-label="思考输出" onWheel={(event) => event.stopPropagation()} onTouchMove={(event) => event.stopPropagation()}>
+                <MessageScrollerContent className="reasoning-content">
+                  <MessageScrollerItem messageId={activity.id}>{activity.text}</MessageScrollerItem>
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+            </MessageScroller>
+          </MessageScrollerProvider>
         </TraceCollapsibleContent>
       </TraceCollapsible>
     </div>

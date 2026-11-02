@@ -822,6 +822,7 @@ impl Fintwind {
                 model,
                 interaction_mode,
                 reasoning_effort,
+                runtime_mode,
             } => {
                 let index = self.remote_session_index(session_id)?;
                 let (directory, probe, at, binary_generation) =
@@ -871,6 +872,13 @@ impl Fintwind {
                 }
                 let default_effort =
                     metadata.and_then(|value| value.default_reasoning_effort.clone());
+                let access = match runtime_mode.as_deref() {
+                    None => None,
+                    Some("ask") => Some(RuntimeMode::Ask),
+                    Some("autoAcceptEdits") => Some(RuntimeMode::AutoAcceptEdits),
+                    Some("fullAccess") => Some(RuntimeMode::FullAccess),
+                    Some(_) => return Err("无效的权限模式。".into()),
+                };
                 let session = self.state.session_mut(session_id).ok_or("会话不可用。")?;
                 if let Some(model) = model {
                     session.model = Some(model);
@@ -887,6 +895,9 @@ impl Fintwind {
                 }
                 if let Some(effort) = reasoning_effort {
                     session.reasoning_effort = Some(effort);
+                }
+                if let Some(access) = access {
+                    session.runtime_mode = access;
                 }
                 session.updated_at = unix_time();
                 if self.state.selected_session == Some(session_id) {
@@ -1209,7 +1220,7 @@ impl Fintwind {
                 })).collect::<Vec<_>>(),
             }));
         let (entries, entries_truncated) = remote_transcript_entries(session, &timing);
-        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges"];
+        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges", "sessionPermissions"];
         if session.provider == "opencode" { features.push("goals"); }
         let mut snapshot = json!({
             "id": session.id,
@@ -1238,6 +1249,7 @@ impl Fintwind {
             "model": self.model_for_session(session),
             "modelName": bounded_text(self.model_metadata_for_session(session).map(|model| model.name.as_str()).or_else(|| self.model_for_session(session)).unwrap_or("OpenCode"), 256),
             "interactionMode": session.interaction_mode,
+            "runtimeMode": session.runtime_mode.access(),
             "reasoningEffort": self.session_options(session).reasoning_effort,
         });
         if serde_json::to_vec(&snapshot)

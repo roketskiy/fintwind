@@ -25,12 +25,15 @@ const updates = new SessionUpdates(bundle.sessionId);
 let previous: ReturnType<SessionUpdates["apply"]> | null = null;
 let reused = 0;
 let maximumApplyMs = 0;
+const permissionModes = new Set<string>();
 const plainFrames: Record<string, unknown>[] = [];
 for (const [index, sealed] of bundle.frames.entries()) {
   const frame = await openEnvelope(sealed, receiveKey, index) as Record<string, unknown>;
   plainFrames.push(frame);
   const start = performance.now();
   const detail = updates.apply(frame);
+  if (detail.runtimeMode !== bundle.expected[index].runtimeMode) throw new Error(`Permission projection mismatch at ${index}`);
+  if (detail.runtimeMode) permissionModes.add(detail.runtimeMode);
   maximumApplyMs = Math.max(maximumApplyMs, performance.now() - start);
   if (JSON.stringify(detail) !== JSON.stringify(parseResult("getSession", bundle.expected[index]))) throw new Error(`Projection mismatch at ${index}`);
   if (previous && index !== 30 && detail.entries?.[0] === previous.entries?.[0]) reused++;
@@ -49,11 +52,12 @@ rejected({ ...second, edits: [{ path: ["__proto__", "polluted"], set: true }] },
 rejected({ ...second, edits: [{ path: ["entries", "999999"], set: {} }] }, "array growth");
 rejected({ ...second, edits: [{ path: ["entries", "121", "text"], append: "x".repeat(65537) }] }, "oversized text");
 rejected({ ...second, revision: "invalid" }, "revision format");
+rejected({ ...second, edits: [{ path: ["runtimeMode"], set: "auto" }, { path: ["revision"], set: second.revision }] }, "permission mode");
 let replayRejected = false;
 try { await openEnvelope(bundle.frames[1], receiveKey, 2); } catch { replayRejected = true; }
-if (!replayRejected || reused < 50) throw new Error("Replay or structural sharing failed");
+if (!replayRejected || reused < 50 || permissionModes.size !== 3) throw new Error("Replay, structural sharing or permission round-trip failed");
 const report = { ...bundle.metrics, receiverMaximumApplyMs: maximumApplyMs, reusedHistoryFrames: reused,
-  invalidCasesRejected: 6, plaintextReduction: 1 - bundle.metrics.updateBytes / bundle.metrics.fullSnapshotBytes,
+  invalidCasesRejected: 7, permissionModes: [...permissionModes], plaintextReduction: 1 - bundle.metrics.updateBytes / bundle.metrics.fullSnapshotBytes,
   scope: "synthetic Rust-to-TypeScript encrypted codec integration; not a live desktop/relay test" };
 await Bun.write(resolve(artifacts, "report.json"), JSON.stringify(report, null, 2));
 await Bun.write(resolve(artifacts, "browser-fixture.json"), JSON.stringify({ sessionId: bundle.sessionId, frames: plainFrames }));

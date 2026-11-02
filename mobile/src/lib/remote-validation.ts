@@ -3,6 +3,7 @@ import type {
   Permission,
   Questions,
   RemoteMessage,
+  RuntimeMode,
   TranscriptEntry,
   SessionDetail,
   SessionStatus,
@@ -22,6 +23,12 @@ const SESSION_STATUSES: readonly SessionStatus[] = [
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseRuntimeMode(value: unknown): RuntimeMode {
+  if (value !== "ask" && value !== "autoAcceptEdits" && value !== "fullAccess")
+    throw new Error("权限模式无效");
+  return value;
 }
 
 export function reqStr(value: unknown, max: number, min = 1): string {
@@ -105,6 +112,7 @@ export function checkFieldBounds(
       return;
     case "configureSession":
       id(fields["sessionId"]);
+      if (fields["runtimeMode"] !== undefined) parseRuntimeMode(fields["runtimeMode"]);
       if (fields["model"] !== undefined) reqStr(fields["model"], 512);
       if (fields["reasoningEffort"] !== undefined)
         reqStr(fields["reasoningEffort"], 128);
@@ -348,6 +356,7 @@ export function parseResult(type: CommandType, data: unknown): unknown {
         canSend: reqBool(data["canSend"]),
       };
       const revision = parseRevision(data["revision"]);
+      if (data["runtimeMode"] !== undefined) detail.runtimeMode = parseRuntimeMode(data["runtimeMode"]);
       if (data["workspaceChanges"] !== undefined) {
         const changes = data["workspaceChanges"];
         if (changes === null) detail.workspaceChanges = null;

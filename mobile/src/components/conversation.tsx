@@ -83,19 +83,21 @@ const ActivityBranch = React.memo(function ActivityBranch({ activities, turnActi
   const [manualExpanded, setManualExpanded] = React.useState<boolean | null>(null);
   const { end: readingAboveLatest } = useMessageScrollerScrollable();
   const [autoExpanded, setAutoExpanded] = React.useState(turnActive);
-  const [range, setRange] = React.useState<{ first: string; last: string; manual: boolean } | null>(null);
+  const [showAll, setShowAll] = React.useState(false);
+  const [range, setRange] = React.useState<{ first: string; last: string } | null>(null);
   const tailStart = Math.max(0, activities.length - ACTIVITY_PAGE_SIZE);
   const pinnedEnd = range ? activities.findIndex((activity) => activity.id === range.last) : -1;
-  const end = pinnedEnd >= 0 ? pinnedEnd + 1 : activities.length;
-  const start = pinnedEnd >= 0 && range
+  const end = !showAll && pinnedEnd >= 0 ? pinnedEnd + 1 : activities.length;
+  const start = showAll ? 0 : pinnedEnd >= 0 && range
     ? Math.max(0, activities.findIndex((activity) => activity.id === range.first)) : tailStart;
   React.useLayoutEffect(() => {
+    if (showAll) return;
     if (range && pinnedEnd < 0) setRange(null);
-    else if (!readingAboveLatest && range && !range.manual) setRange(null);
+    else if (!readingAboveLatest && range) setRange(null);
     else if (readingAboveLatest && !range && activities[tailStart] && activities.at(-1)) {
-      setRange({ first: activities[tailStart]!.id, last: activities.at(-1)!.id, manual: false });
+      setRange({ first: activities[tailStart]!.id, last: activities.at(-1)!.id });
     }
-  }, [activities, readingAboveLatest, range, pinnedEnd, tailStart]);
+  }, [activities, readingAboveLatest, range, pinnedEnd, tailStart, showAll]);
   React.useEffect(() => {
     if (turnActive) setAutoExpanded(true);
     else if (!readingAboveLatest) setAutoExpanded(false);
@@ -112,10 +114,8 @@ const ActivityBranch = React.memo(function ActivityBranch({ activities, turnActi
         {failures > 0 && <span className="bui-branch-status" data-failed>{failures} 项失败</span>}
       </CollapsibleTrigger>
       {expanded && <div className="bui-branch-actions">
-        {start > 0 && <Button type="button" variant="ghost" size="sm" className="bui-branch-range" aria-label={`查看更早的 ${Math.min(ACTIVITY_PAGE_SIZE, start)} 项活动`} onClick={() => {
-          setRange({ first: activities[Math.max(0, start - ACTIVITY_PAGE_SIZE)]!.id, last: activities[end - 1]!.id, manual: true });
-        }}>更早 {Math.min(ACTIVITY_PAGE_SIZE, start)} 项</Button>}
-        {(range?.manual || end < activities.length) && <Button type="button" variant="ghost" size="sm" className="bui-branch-range" aria-label={`只显示最新 ${ACTIVITY_PAGE_SIZE} 项活动`} onClick={() => setRange(null)}>最新</Button>}
+        {start > 0 && <Button type="button" variant="ghost" size="sm" className="bui-branch-range" aria-label={`展开全部 ${activities.length} 项活动`} onClick={() => setShowAll(true)}>全部展开</Button>}
+        {(showAll || end < activities.length) && <Button type="button" variant="ghost" size="sm" className="bui-branch-range" aria-label={`只显示最新 ${ACTIVITY_PAGE_SIZE} 项活动`} onClick={() => { setShowAll(false); setRange(null); }}>最新</Button>}
       </div>}
     </div>
     <CollapsibleContent>
@@ -405,7 +405,7 @@ export function Conversation({
   }
 
   return (
-    <div className="conversation-body flex min-h-0 min-w-0 flex-1 flex-col">
+    <div className="conversation-body flex min-h-0 min-w-0 flex-1 flex-col" data-capsule-clearance={Boolean(session.todos?.total || session.workspaceChanges || session.features.includes("todoList") || session.features.includes("workspaceChanges")) || undefined}>
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller>
           <MessageScrollerViewport aria-label="消息" preserveScrollOnPrepend>

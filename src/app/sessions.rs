@@ -1435,7 +1435,6 @@ impl Fintwind {
         {
             let session_id = session.id;
             session.runtime_mode = mode;
-            self.browser_access_mode_changed(cx);
             self.apply_session_options(session_id, cx);
             self.save();
             cx.notify();
@@ -1448,7 +1447,6 @@ impl Fintwind {
         {
             let session_id = session.id;
             session.interaction_mode = mode;
-            self.browser_access_mode_changed(cx);
             self.apply_session_options(session_id, cx);
             self.save();
             cx.notify();

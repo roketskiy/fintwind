@@ -88,9 +88,8 @@
 //!   the run, never evidence that the call ended;
 //! - a reply that arrives for another request while one is awaited is kept
 //!   whole and still answers its own request, so nothing is lost or re-read;
-//! - a list of legal pages whose serialized form dwarfs the bridge's result
-//!   bound is answered with a refusal envelope, never a payload, and the page
-//!   URLs do not survive inside that refusal.
+//! - a large legal page list remains available without widening the bound on
+//!   ordinary action results.
 //!
 //! # Contract with a human running it
 //!
@@ -143,7 +142,7 @@ use fintwind_protocol::browser::{
 };
 use fintwind_protocol::browser_tools::{
     BROWSER_TOOL_ENDPOINT, BROWSER_TOOL_VERSION, BrowserToolMessage, BrowserToolReply,
-    MAX_BROWSER_TOOL_MESSAGE_BYTES,
+    MAX_BROWSER_TOOL_LIST_BYTES,
 };
 use fintwind_protocol::{
     ClientMessage, Command, PROTOCOL_VERSION, ReplayCursor, ResponseOutcome, ServerMessage,
@@ -602,8 +601,8 @@ fn pump_tool_socket(
 impl ToolClient {
     fn connect(url: &str, token: &str) -> anyhow::Result<Self> {
         let config = WebSocketConfig::default()
-            .max_message_size(Some(MAX_BROWSER_TOOL_MESSAGE_BYTES))
-            .max_frame_size(Some(MAX_BROWSER_TOOL_MESSAGE_BYTES));
+            .max_message_size(Some(MAX_BROWSER_TOOL_LIST_BYTES))
+            .max_frame_size(Some(MAX_BROWSER_TOOL_LIST_BYTES));
         let (mut socket, _) = connect_with_config(url, Some(config), 3)
             .with_context(|| format!("could not open a browser tool connection to {url}"))?;
         send_value(
@@ -2429,12 +2428,9 @@ fn run_checks(e2e: &mut E2E) {
         Ok("unknown fields, a nil request id, an incompatible version and a repeated hello were each refused, and the endpoint kept serving".to_owned())
     });
 
-    e2e.check("a-large-list-is-refused-without-leaking-its-pages", |h| {
-        // Sixteen legal pages is the most one connection may share, and each
-        // URL is long but inside MAX_BROWSER_URL_BYTES. Serialized, that list
-        // is an order of magnitude past the bridge's result bound, so the
-        // endpoint must answer with a refusal envelope instead of a payload —
-        // and must not let a page URL through in that refusal.
+    e2e.check("a-large-session-page-list-is-available", |h| {
+        // Every legal page remains visible even when the list is much larger
+        // than the ordinary action-result budget.
         let prefix = "https://fake-owner.invalid/";
         let url = format!("{prefix}{}", "p".repeat(4090 - prefix.len()));
         let pages: Vec<BrowserShare> = (0..MAX_BROWSER_PAGES_PER_CONNECTION)
@@ -2454,10 +2450,10 @@ fn run_checks(e2e: &mut E2E) {
             bail!("the fixture no longer clears the result bound ({payload_estimate} bytes)");
         }
         h.owner.share_many(pages.clone())?;
-        // The broker has to really hold all sixteen scopes before the list.
+        // The broker has to really hold every scope before the list.
         let wanted: Vec<Uuid> = pages.iter().map(|page| page.scope.page_id).collect();
         wait_until(
-            "the broker accepted all sixteen shares",
+            "the broker accepted all page scopes",
             Duration::from_secs(10),
             || {
                 h.owner.shares(h.session, h.active_runtime).ok().and_then(|shares| {
@@ -2470,21 +2466,16 @@ fn run_checks(e2e: &mut E2E) {
             },
         )?;
         let (listed, frame) = h.tool()?.list_frame(Uuid::new_v4(), &h.native_session)?;
-        let message = expect_refused(&listed, &["size limit", "exceeds"])?;
-        // An answer, never a timeout (a timeout fails this run), and an
-        // envelope rather than a payload.
-        if frame.len() > MAX_BROWSER_RESULT_BYTES {
-            bail!("the refusal frame itself exceeded the result bound: {} bytes", frame.len());
-        }
-        if frame.len() * 8 > payload_estimate {
-            bail!(
-                "the refusal frame is {} bytes against a {payload_estimate}-byte list; it looks like payload, not a refusal",
-                frame.len()
-            );
+        let list_value = expect_ok(&listed)?;
+        let listed_pages = list_value.as_array()
+            .ok_or_else(|| anyhow::anyhow!("the list was not an array"))?;
+        if listed_pages.len() != pages.len() || frame.len() > MAX_BROWSER_TOOL_LIST_BYTES {
+            bail!("the full page list was not returned within its budget");
         }
         for page in &pages {
-            if frame.contains(&page.url) {
-                bail!("the refused list still carried a page URL ({} bytes)", page.url.len());
+            if !listed_pages.iter().any(|listed| json_id(&listed["pageId"], &page.scope.page_id)
+                && listed["url"].as_str() == Some(page.url.as_str())) {
+                bail!("a page identity or its exact URL was lost from the list");
             }
         }
         // The share set returns to one page, and the endpoint still serves it.
@@ -2495,11 +2486,11 @@ fn run_checks(e2e: &mut E2E) {
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("the restored list was not an array"))?;
         if restored_pages.len() != 1 || !json_id(&restored_pages[0]["pageId"], &restored.page_id) {
-            bail!("after the refused list the share set was not restored: {restored_pages:?}");
+            bail!("after the large list the share set was not restored: {restored_pages:?}");
         }
         Ok(format!(
-            "a {payload_estimate}-byte list of sixteen legal pages was refused with `{message}`; the {}-byte reply carried no page URL",
-            frame.len()
+            "all {} pages and their URLs were returned in a {}-byte reply, above the {MAX_BROWSER_RESULT_BYTES}-byte action limit",
+            pages.len(), frame.len()
         ))
     });
 
@@ -2608,8 +2599,7 @@ fn run_checks(e2e: &mut E2E) {
                     "browser host",
                     "launcher",
                     "return to this chat",
-                    "http and https",
-                    "credentials",
+                    "invalid browser url",
                     "size limit",
                 ],
             )?;
@@ -2621,7 +2611,7 @@ fn run_checks(e2e: &mut E2E) {
             bail!("an open without a launcher still ran");
         }
         Ok(format!(
-            "an open with no launcher was refused alike for a missing launcher, a non-HTTP scheme, embedded credentials and a malformed URL; page {} was never used as one",
+            "an open with no launcher was refused for valid URLs and a malformed URL; page {} was never used as a launcher",
             page.page_id
         ))
     });
@@ -2650,7 +2640,7 @@ fn run_checks(e2e: &mut E2E) {
         // An open is not the default-permission observation, so the owner
         // holds it for approval — the point where a real GUI's full-access
         // decision happens — and only then answers it.
-        let url = "https://example.invalid/opened-by-launcher";
+        let url = "file:///C:/browser-e2e/local-fixture.html";
         let request_id = Uuid::new_v4();
         let tool = h.tool()?;
         let owner = &h.owner;
@@ -2684,7 +2674,7 @@ fn run_checks(e2e: &mut E2E) {
             bail!("the launcher's answer did not survive the round trip: {value}");
         }
         h.owner.clear_host()?;
-        Ok("the registered launcher received the open on its exact scope with the exact URL, held it for approval, and its answer came back unchanged".to_owned())
+        Ok("the registered launcher received a file URL on its exact scope, and its answer came back unchanged".to_owned())
     });
 
     e2e.check("only-the-launcher-owner-may-answer-an-open", |h| {

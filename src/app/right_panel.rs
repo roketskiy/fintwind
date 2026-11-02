@@ -1198,9 +1198,8 @@ impl Fintwind {
         }
         self.ensure_right_panel_terminals(cx);
         self.retain_right_panel_browsers();
-        // A grant names one session and one runtime. Switching tasks takes
-        // every share with it: the user shares the page they are looking at,
-        // and the new task starts with none.
+        // A page scope names one session and runtime. Retire the old scopes
+        // before publishing the restored session's own browser tabs.
         self.revoke_all_browser_shares(cx);
         self.reset_browser_automation_for_session(cx);
         if self.right_panel_visible {

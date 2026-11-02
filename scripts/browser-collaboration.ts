@@ -6,7 +6,8 @@
  * - a scope from another session, another runtime or a superseded grant;
  * - a mutation reaching the page before a human approves it;
  * - a trusted-input regression (synthesized clicks, focus theft from GPUI);
- * - a snapshot that leaks input values, cookie values or an unbounded page;
+ * - a snapshot that omits permitted form values or returns unbounded page data;
+ * - a password input or a local file URL being refused despite full access;
  * - a cancel or revoke that still mutates, a repeated request id that runs
  *   twice, or a navigation that keeps a lease;
  * - a reconnect that inherits a lease, or a second client answering for a page;
@@ -34,7 +35,7 @@ import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { startFixture } from './browser-poc-fixture.ts';
 
@@ -485,10 +486,8 @@ try {
     assert.equal(candidates.length, 1, `Exactly one owned page for ${id}`);
     pages[id] = candidates[0]!;
   }
-  // Fixture setup only: values that must never cross the bridge. The fixture
-  // ships no password field and sets no cookie, so this adds the ones the
-  // snapshot check needs. A textarea's *default* text lives in textContent, so
-  // both are set: a reader that only skips `value` would still leak it.
+  // Synthetic values only: the full-access snapshot must expose form values
+  // while remaining bounded. No real account or credential is involved.
   await pages.alpha!.evaluate(({passwordValue, hiddenValue, textareaValue, cookieValue, longText}) => {
     const password = document.createElement('input');
     password.id = 'e2e-password'; password.type = 'password'; password.value = passwordValue;
@@ -507,6 +506,13 @@ try {
     document.body.append(long);
     document.cookie = `e2e-cookie=${cookieValue}; path=/`;
   }, {passwordValue: PASSWORD_VALUE, hiddenValue: HIDDEN_VALUE, textareaValue: TEXTAREA_VALUE, cookieValue: COOKIE_VALUE, longText: LONG_TEXT});
+  await pages.gamma!.evaluate(() => {
+    const label = document.createElement('label');
+    label.textContent = 'test password ';
+    const input = document.createElement('input');
+    input.type = 'password'; input.id = 'e2e-automatic-password';
+    label.append(input); document.body.append(label);
+  });
 
   const scopeFor = (page: PageId, grantId: string): Scope => ({
     sessionId, runtimeId: activeRuntimeId, pageId: pageIds.get(page)!, grantId,
@@ -583,22 +589,21 @@ try {
     return 'One lease, one page, exact scope; the controls stayed visible and native keyboard ownership did not change.';
   });
 
-  await check('a snapshot carries no input values, cookies or unbounded page', async () => {
+  await check('a snapshot includes form values and remains bounded', async () => {
     const share = (await requireState()).browserShares[0]!;
     const snapshot = await invoke(share.scope, { kind: 'snapshot' });
     assert.equal(snapshot.kind, 'ok', JSON.stringify(snapshot));
     const value = snapshot.kind === 'ok' ? snapshot.value as { url: string; title: string; text: string; controls: unknown[]; truncated: boolean } : null!;
     assert.equal(value.url, `${origin}/page/alpha?run=${runId}`);
     assert(JSON.stringify(value).includes('count'), 'the control name is visible');
-    assert(!JSON.stringify(value).includes(PASSWORD_VALUE), 'a password value must never cross the bridge');
-    assert(!JSON.stringify(value).includes(HIDDEN_VALUE), 'a hidden input value must never cross the bridge');
-    assert(!JSON.stringify(value).includes(TEXTAREA_VALUE), 'a textarea default value must never cross the bridge');
-    assert(!JSON.stringify(value).includes(COOKIE_VALUE), 'a cookie value must never cross the bridge');
+    assert(JSON.stringify(value).includes(PASSWORD_VALUE), 'the password input value is available');
+    assert(JSON.stringify(value).includes(HIDDEN_VALUE), 'the hidden input value is available');
+    assert(JSON.stringify(value).includes(TEXTAREA_VALUE), 'the textarea value is available');
     assert(value.text.length <= 8000 && !value.text.includes(LONG_TEXT), 'the long page text is bounded, not dumped');
     const bytes = new TextEncoder().encode(JSON.stringify(value)).length;
     assert(bytes <= 28000, `a snapshot is byte-bounded, got ${bytes}`);
     assert(value.controls.length > 0, 'controls are described');
-    return `Snapshot ${bytes} bytes, ${value.controls.length} controls, no secret values.`;
+    return `Snapshot ${bytes} bytes, ${value.controls.length} controls, synthetic form values included.`;
   });
 
   await check('a click waits for approval and leaves the page alone', async () => {
@@ -920,7 +925,7 @@ try {
   // not claim to test the complete product's FullAccess picker or open button.
   let automaticScope: Scope;
   let previousRef = '';
-  type NativeSnapshot = { controls: Array<{ name: string; ref?: string; selector: string }> };
+  type NativeSnapshot = { url: string; text: string; controls: Array<{ name: string; ref?: string; selector: string }> };
   const automaticSnapshot = async (): Promise<NativeSnapshot> => {
     const outcome = await invoke(automaticScope, {kind:'snapshot'});
     assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
@@ -965,6 +970,30 @@ try {
     await poll('the no-id input received text', () => pages.gamma!.locator('[data-automation="no-id-input-value"]').textContent(), value => value === text);
     assert.equal(await pages.gamma!.evaluate(() => (window as any).automationEvents.inputTrusted), true);
     assert.equal((await requireState()).pendingBrowserRequests.length, 0);
+  });
+
+  await check('automatic access fills a password input without approval', async () => {
+    const selector = findRef(await automaticSnapshot(), 'test password');
+    const text = `synthetic-password-${runId}`;
+    const outcome = await invoke(automaticScope, {kind:'fill', selector, text});
+    assert.equal(outcome.kind, 'ok', JSON.stringify(outcome));
+    assert.equal(await pages.gamma!.locator('#e2e-automatic-password').inputValue(), text);
+    assert.equal((await requireState()).pendingBrowserRequests.length, 0);
+  });
+
+  await check('automatic navigation opens a local file and keeps the page accessible', async () => {
+    const marker = `local-file-${runId}`;
+    const path = join(output, 'local-page.html');
+    await writeFile(path, `<html><body><p>${marker}</p></body></html>`);
+    const url = pathToFileURL(path).href;
+    const opened = await invoke(automaticScope, {kind:'navigate', url});
+    assert.equal(opened.kind, 'ok', JSON.stringify(opened));
+    const local = await automaticSnapshot();
+    assert.equal(local.url, url);
+    assert(local.text.includes(marker));
+    const returned = await invoke(automaticScope, {kind:'navigate', url:`${origin}/page/gamma?run=${runId}`});
+    assert.equal(returned.kind, 'ok', JSON.stringify(returned));
+    await automaticSnapshot();
   });
 
   await check('automatic scrolling moves the viewport without approval', async () => {
@@ -1214,7 +1243,7 @@ try {
   }
   if (interrupted && !report.errors.includes('E2E interrupted.')) report.errors.push('E2E interrupted.');
   report.finishedAt = new Date().toISOString();
-  if (report.checks.length !== 37) report.errors.push(`Expected 37 behavior checks; ran ${report.checks.length}.`);
+  if (report.checks.length !== 39) report.errors.push(`Expected 39 behavior checks; ran ${report.checks.length}.`);
   report.status = report.errors.length || report.checks.some(check => check.status === 'failed')
     || report.cleanup.some(step => step.status === 'failed') ? 'failed' : 'passed';
   await writeFile(join(output, 'report.json'), JSON.stringify(report, null, 2));

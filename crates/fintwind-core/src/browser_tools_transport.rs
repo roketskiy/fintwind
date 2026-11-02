@@ -13,7 +13,8 @@ use tungstenite::{Message, WebSocket};
 use crate::browser_tools::BrowserTools;
 use fintwind_protocol::browser::BrowserResult;
 use fintwind_protocol::browser_tools::{
-    BROWSER_TOOL_VERSION, BrowserToolMessage, BrowserToolReply, MAX_BROWSER_TOOL_MESSAGE_BYTES,
+    BROWSER_TOOL_VERSION, BrowserToolMessage, BrowserToolReply, MAX_BROWSER_TOOL_LIST_BYTES,
+    MAX_BROWSER_TOOL_MESSAGE_BYTES,
 };
 
 struct ConnectionGuard {
@@ -138,7 +139,7 @@ pub(crate) fn handle(
                                 Err(error) => BrowserResult::error(error.to_string()),
                             }
                         };
-                        write(
+                        write_list(
                             &mut socket,
                             &BrowserToolReply::Result { request_id, result },
                         )?;
@@ -257,9 +258,22 @@ pub(crate) fn handle(
 }
 
 fn write(socket: &mut WebSocket<TcpStream>, reply: &BrowserToolReply) -> anyhow::Result<()> {
+    write_with_budget(socket, reply, None)
+}
+
+fn write_list(socket: &mut WebSocket<TcpStream>, reply: &BrowserToolReply) -> anyhow::Result<()> {
+    write_with_budget(socket, reply, Some(MAX_BROWSER_TOOL_LIST_BYTES))
+}
+
+fn write_with_budget(
+    socket: &mut WebSocket<TcpStream>,
+    reply: &BrowserToolReply,
+    list_budget: Option<usize>,
+) -> anyhow::Result<()> {
     let reply = match reply {
         BrowserToolReply::Result { request_id, result }
-            if serde_json::to_vec(result)?.len() > result.wire_budget() =>
+            if serde_json::to_vec(result)?.len()
+                > list_budget.unwrap_or_else(|| result.wire_budget()) =>
         {
             BrowserToolReply::Result {
                 request_id: *request_id,

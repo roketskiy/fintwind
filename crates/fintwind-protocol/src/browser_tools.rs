@@ -15,6 +15,9 @@ use crate::browser::{BrowserAction, BrowserResult};
 pub const BROWSER_TOOL_VERSION: u32 = 1;
 pub const BROWSER_TOOL_ENDPOINT: &str = "/v1/browser-tools";
 pub const MAX_BROWSER_TOOL_MESSAGE_BYTES: usize = 32 * 1024;
+/// A session's page list may contain many URLs and titles. This does not widen
+/// the smaller result budget for individual browser actions.
+pub const MAX_BROWSER_TOOL_LIST_BYTES: usize = 5 * 1024 * 1024;
 
 #[derive(Deserialize, Serialize)]
 #[serde(

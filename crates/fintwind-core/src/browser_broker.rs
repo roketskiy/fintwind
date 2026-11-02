@@ -53,7 +53,7 @@ use fintwind_protocol::browser::{
 
 /// Global bound on live publications, so a crowd of connections cannot grow
 /// the broker without limit.
-pub const MAX_BROWSER_PUBLICATIONS: usize = 256;
+pub const MAX_BROWSER_PUBLICATIONS: usize = 1024;
 /// One in-flight action per scope: a second request for the same page queues
 /// an error instead of racing the first one.
 pub const MAX_BROWSER_PENDING_PER_SCOPE: usize = 1;
@@ -780,7 +780,7 @@ impl BrowserBroker {
             let Some(scope) = launchers.next() else {
                 if std::time::Instant::now() >= deadline {
                     return BrowserResult::error(
-                        "no browser host (launcher) is connected to the current chat; return to this chat and authorize browser access",
+                        "no browser host (launcher) is connected to the current chat; return to this chat in the local Fintwind window",
                     );
                 }
                 let wait = deadline

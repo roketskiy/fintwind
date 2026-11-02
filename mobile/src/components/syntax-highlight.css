@@ -1,0 +1,23 @@
+:root {
+  --code-comment: #6e7781;
+  --code-keyword: #cf222e;
+  --code-string: #0a3069;
+  --code-number: #0550ae;
+  --code-title: #8250df;
+  --code-attribute: #953800;
+}
+.dark {
+  --code-comment: #8b949e;
+  --code-keyword: #ff7b72;
+  --code-string: #a5d6ff;
+  --code-number: #79c0ff;
+  --code-title: #d2a8ff;
+  --code-attribute: #ffa657;
+}
+.syntax-code :is(.hljs-comment, .hljs-quote) { color: var(--code-comment); }
+.syntax-code :is(.hljs-keyword, .hljs-selector-tag, .hljs-meta, .hljs-doctag) { color: var(--code-keyword); }
+.syntax-code :is(.hljs-string, .hljs-regexp, .hljs-addition) { color: var(--code-string); }
+.syntax-code :is(.hljs-number, .hljs-literal, .hljs-symbol, .hljs-bullet) { color: var(--code-number); }
+.syntax-code :is(.hljs-title, .hljs-section, .hljs-selector-class, .hljs-selector-id) { color: var(--code-title); }
+.syntax-code :is(.hljs-attr, .hljs-attribute, .hljs-built_in, .hljs-type, .hljs-variable, .hljs-template-variable) { color: var(--code-attribute); }
+.syntax-code .hljs-deletion { color: var(--code-keyword); }

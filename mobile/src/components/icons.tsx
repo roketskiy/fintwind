@@ -24,6 +24,7 @@ import pause from "../../../assets/icons/pause.svg?raw";
 import play from "../../../assets/icons/play.svg?raw";
 import bot from "../../../assets/icons/bot.svg?raw";
 import trash from "../../../assets/icons/trash.svg?raw";
+import stop from "../../../assets/icons/stop.svg?raw";
 
 function embeddedIcon(source: string) {
   const themed = source.replace(/(?:#000000|#000|\bblack\b)/gi, "currentColor");
@@ -63,3 +64,4 @@ export const PauseIcon = embeddedIcon(pause);
 export const PlayIcon = embeddedIcon(play);
 export const BotIcon = embeddedIcon(bot);
 export const TrashIcon = embeddedIcon(trash);
+export const StopIcon = embeddedIcon(stop);

@@ -1,7 +1,7 @@
 /* Adapted from Beautiful UI by Shane Levine (MIT), revision 44a274e598395ab61e7c96c26fda2758780253b7.
  * Sources: components/primitives/ThinkingState.tsx (expandable trace, status,
- * rail), ToolChips.tsx (compact tool rows, status chips), StreamingText.tsx
- * (stream caret), ApprovalCard.tsx (one-question step nav, pill footer),
+ * rail), ToolChips.tsx (compact tool rows, status chips),
+ * ApprovalCard.tsx (one-question step nav, pill footer),
  * CodeBlock.tsx (header, gutter).
  * Demo timers, staged fake progress, portals, Canvas and synthetic tool states are
  * intentionally excluded: every state here derives from real session data.
@@ -9,10 +9,10 @@
  * Theme tokens come from the app index.css. --bui-* vars (defined by the main
  * agent) are used with theme fallbacks so nothing renders a fixed color. */
 
-/* Compact message body: 15px, cards not enlarged. */
+/* Compact message body: 14px, cards not enlarged. */
 .conversation-content :is(.assistant-message, .user-message) :is(.markdown-body, .user-message-text) {
-  font-size: 15px;
-  line-height: 1.65;
+  font-size: 14px;
+   line-height: 1.6;
 }
 
 /* Press feedback only. */
@@ -27,7 +27,7 @@
 
 /* Thinking trace rail spacing. The rail itself comes from the trace primitive. */
 .bui-think {
-  padding-block: 2px;
+  padding-block: 0;
 }
 
 .bui-thinking-trigger {
@@ -41,7 +41,7 @@
   min-height: 44px;
   min-width: 44px;
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   text-align: left;
 }
@@ -49,6 +49,20 @@
 .bui-thinking-trigger > .app-icon { width: 16px; height: 16px; }
 .bui-thinking-trigger > .bui-thinking-chevron { width: 14px; height: 14px; transition: transform 200ms var(--bui-ease); }
 .bui-thinking-trigger[aria-expanded="true"] > .bui-thinking-chevron { transform: rotate(180deg); }
+.bui-branch { min-width: 0; padding-left: 10px; border-left: 1px solid var(--border); }
+.bui-branch-trigger { display: flex; align-items: center; gap: 6px; min-height: 44px; min-width: 44px; max-width: 100%; padding: 0 4px; border-radius: 6px; color: var(--foreground); font-size: 12px; font-weight: 500; text-align: left; }
+.bui-branch-trigger:focus-visible { outline: 2px solid var(--bui-blue); outline-offset: 1px; }
+.bui-branch-trigger:active { background: var(--muted); }
+.bui-branch-chevron { width: 14px; height: 14px; transition: transform 120ms var(--bui-ease); }
+.bui-branch-trigger[aria-expanded="true"] .bui-branch-chevron { transform: rotate(90deg); }
+.bui-branch-status { margin-left: 2px; color: var(--muted-foreground); font-size: 11px; font-weight: 400; }
+.bui-branch-status[data-failed] { color: var(--destructive); }
+.bui-branch .bui-branch-list { gap: 0; margin-left: 12px; width: auto; }
+.bui-branch-item { --branch-anchor: 16px; position: relative; min-width: 0; padding-left: 24px; }
+.bui-branch-item[data-kind="reasoning"] { --branch-anchor: 22px; }
+.bui-branch-item::before { content: ""; position: absolute; top: 0; left: 0; width: 14px; height: var(--branch-anchor); border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); border-bottom-left-radius: 8px; pointer-events: none; }
+.bui-branch-item:not(:last-child)::after { content: ""; position: absolute; top: var(--branch-anchor); bottom: 0; left: 0; border-left: 1px solid var(--border); pointer-events: none; }
+.bui-branch-item .bui-tool { min-height: 32px; }
 .bui-think [data-slot="trace-collapsible-content-inner"] { margin: 0 0 4px 13px; padding-left: 16px; }
 .bui-reasoning-shimmer { color: transparent; background: linear-gradient(90deg, var(--muted-foreground) 35%, var(--foreground) 50%, var(--muted-foreground) 65%); background-size: 200% 100%; background-clip: text; animation: bui-reasoning-shimmer 1.4s linear infinite; }
 @keyframes bui-reasoning-shimmer { to { background-position: -200% 0; } }
@@ -75,28 +89,6 @@
   color: var(--destructive, var(--muted-foreground));
 }
 
-/* Streaming assistant message: caret only, no fake timers. */
-.bui-streaming-caret {
-  display: inline-block;
-  width: 2px;
-  height: 0.9em;
-  margin-inline-start: 2px;
-  border-radius: 999px;
-  background: var(--foreground);
-  vertical-align: baseline;
-  animation: bui-caret-blink 1.1s ease-in-out infinite;
-}
-
-@keyframes bui-caret-blink {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0;
-  }
-}
-
 /* Message footer: real time + elapsed + copy in one compact row. */
 .bui-msg-footer {
   display: flex;
@@ -107,7 +99,7 @@
 }
 
 .bui-msg-time {
-  font-size: 12px;
+  font-size: 11px;
   color: var(--muted-foreground);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -189,12 +181,13 @@
 
 .bui-codeblock [data-slot="code-block-content"] {
   background: transparent;
+  padding: 6px 12px 10px;
 }
+.bui-codeblock [data-slot="code-block-header"] { min-height: 44px; padding: 0 8px 0 12px; }
+.bui-codeblock [data-slot="code-block-title"] { font-size: 11px; }
+.bui-codeblock [data-slot="code-block-copy-button"] { min-width: 44px; min-height: 44px; }
 
-/* Reduced motion: static caret, no transitions. */
+/* Reduced motion: no decorative shimmer. */
 @media (prefers-reduced-motion: reduce) {
   .bui-reasoning-shimmer { animation: none; color: var(--muted-foreground); background: none; }
-  .bui-streaming-caret {
-    animation: none;
-  }
 }

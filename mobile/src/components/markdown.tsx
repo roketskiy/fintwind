@@ -1,6 +1,7 @@
 import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { HighlightedCode } from "./highlighted-code";
 
 import {
   CodeBlock,
@@ -61,7 +62,7 @@ function MarkdownCodeBlock({
           <CodeBlockCopyButton value={code} />
         </CodeBlockActions>
       </CodeBlockHeader>
-      <CodeBlockContent>{code}</CodeBlockContent>
+      <CodeBlockContent><HighlightedCode code={code} language={language} /></CodeBlockContent>
     </CodeBlock>
   );
 }

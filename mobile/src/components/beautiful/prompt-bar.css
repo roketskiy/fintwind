@@ -1,0 +1,26 @@
+/* Beautiful UI PromptBar: 14px surface, 4px inset, 32px control faces.
+   Touch slots remain 44px; the painted face does not become a 44px block. */
+.bui-prompt { display: flex; flex-direction: column; min-width: 0; padding: 4px; border: 1px solid var(--border); border-radius: 14px; background: var(--bui-card-surface); box-shadow: var(--bui-card-shadow); }
+.bui-prompt:focus-within { border-color: var(--ring); }
+.composer-region .bui-prompt-input { display: block; width: 100%; min-width: 0; min-height: 30px; max-height: min(144px, 24dvh); margin: 0; padding: 4px 7px 0; border: 0; border-radius: 0; background: transparent; color: var(--foreground); font: inherit; font-size: 16px; font-weight: 400; line-height: 24px; resize: none; field-sizing: content; outline: none; }
+.bui-prompt-input::placeholder { color: var(--muted-foreground); }
+.bui-prompt-controls { display: flex; align-items: center; gap: 0; min-width: 0; }
+.bui-prompt .bui-prompt-control { position: relative; display: inline-flex; align-items: center; justify-content: center; height: 44px; min-height: 44px; min-width: 0; flex: none; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: var(--muted-foreground); font-family: inherit; font-size: 12px; line-height: 16px; font-weight: 500; -webkit-tap-highlight-color: transparent; }
+.bui-prompt .bui-prompt-control:disabled { opacity: .45; }
+.bui-prompt .bui-prompt-control:focus-visible { outline: 2px solid var(--bui-blue); outline-offset: -3px; }
+.bui-prompt .bui-prompt-icon { width: 44px; padding: 6px; }
+.bui-prompt-surface { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 8px; transition: transform 100ms var(--bui-ease); }
+.bui-prompt-control:active:not(:disabled) .bui-prompt-surface { transform: scale(.97); background: var(--muted); }
+.bui-prompt-surface > .app-icon { width: 16px; height: 16px; }
+.bui-prompt .bui-prompt-model { flex: 1 1 0; justify-content: flex-start; gap: 4px; overflow: hidden; }
+.bui-prompt-model-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bui-prompt-model > .app-icon { width: 11px; height: 11px; }
+.bui-prompt .bui-prompt-options { gap: 4px; max-width: 112px; }
+.bui-prompt-divider { color: var(--muted-foreground); opacity: .6; }
+.bui-prompt-effort { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bui-prompt-options:active:not(:disabled), .bui-prompt-model:active:not(:disabled) { color: var(--foreground); }
+.bui-prompt-send .bui-prompt-surface { background: var(--primary); color: var(--primary-foreground); }
+.bui-prompt-send:active:not(:disabled) .bui-prompt-surface { background: var(--primary); }
+.bui-prompt-stop .app-icon { width: 14px; height: 14px; }
+.bui-prompt .attachment-tray { padding: 2px 4px 4px; }
+@media (prefers-reduced-motion: reduce) { .bui-prompt-control:active:not(:disabled) .bui-prompt-surface { transform: none; } }

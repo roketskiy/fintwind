@@ -1,0 +1,71 @@
+/* Adapted from Beautiful UI FineTuneCard.tsx (MIT), revision
+   44a274e598395ab61e7c96c26fda2758780253b7: inset track and raised selection.
+   Keep Base UI selection/keyboard behavior; no demo slider or moving overlay. */
+.bui-segments[data-slot="toggle-group"] {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
+  gap: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+}
+/* Paint a 36px track around the 32px face, not around its 44px touch slot. */
+.bui-segments::before {
+  content: "";
+  position: absolute;
+  inset: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: inherit;
+  background: var(--bui-inset);
+  pointer-events: none;
+}
+.bui-segments [data-slot="toggle-group-item"] {
+  position: relative;
+  display: flex;
+  flex: 1 0 56px;
+  min-width: 44px;
+  max-width: 100%;
+  min-height: 44px;
+  height: auto;
+  padding: 6px 2px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted-foreground);
+  box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.bui-segment-face {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  padding: 5px 3px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.bui-segments [aria-pressed="true"] .bui-segment-face {
+  border-color: var(--border);
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: inset 0 1px 0 color-mix(in oklch, var(--foreground) 4%, transparent), 0 1px 2px color-mix(in oklch, var(--foreground) 8%, transparent);
+  font-weight: 650;
+}
+.bui-segments [data-slot="toggle-group-item"]:active:not(:disabled) .bui-segment-face {
+  background: var(--accent);
+}
+.bui-segments [data-slot="toggle-group-item"]:focus-visible {
+  outline: 2px solid var(--bui-blue);
+  outline-offset: -2px;
+}

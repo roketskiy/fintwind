@@ -21,6 +21,8 @@
 .bui-prompt-options:active:not(:disabled), .bui-prompt-model:active:not(:disabled) { color: var(--foreground); }
 .bui-prompt-send .bui-prompt-surface { background: var(--primary); color: var(--primary-foreground); }
 .bui-prompt-send:active:not(:disabled) .bui-prompt-surface { background: var(--primary); }
+.bui-prompt-stop { background: var(--muted); color: var(--foreground); }
+.bui-prompt-control:active:not(:disabled) .bui-prompt-stop { background: color-mix(in oklab, var(--muted) 92%, var(--foreground)); }
 .bui-prompt-stop .app-icon { width: 14px; height: 14px; }
 .bui-prompt .attachment-tray { padding: 2px 4px 4px; }
 @media (prefers-reduced-motion: reduce) { .bui-prompt-control:active:not(:disabled) .bui-prompt-surface { transform: none; } }

@@ -16,6 +16,8 @@ let holdRead = false;
 let releaseRead: (() => void) | null = null;
 let failWatch: (() => void) | null = null;
 let activityComplete = false;
+let turnEnded = false;
+let waiting = false;
 let activityCount = params.get("activities") === "1" ? 100 : 1;
 let snapshot: ClientSnapshot = { connection: "idle", error: null, pendingScopes: [] };
 const listeners = new Set<() => void>();
@@ -24,13 +26,22 @@ function publish() {
   document.documentElement.dataset.fixtureState = JSON.stringify({ ...counters, tick, hidden, held: releaseRead !== null });
 }
 function detail(): SessionDetail {
-  return { id: "fixture-session", projectId: "fixture-project", title: "隔离流式会话", status: "working", messages: [],
+  return { id: "fixture-session", projectId: "fixture-project", title: "隔离流式会话", status: turnEnded ? "idle" : waiting ? "waiting" : "working", messages: [],
     features: params.get("legacy") === "1" ? [] : ["sessionDeltas"],
     model: "fixture", modelName: "Fixture", interactionMode: "build", reasoningEffort: "high", truncated: false,
     permission: null, questions: null, desktopRequired: false, canSend: true,
     entries: [...historical,
+      ...(params.get("footers") === "1" ? [
+        { id: "live-prompt", role: "user" as const, text: "检查阶段性答复页脚", createdAt: 1793635200 },
+        { id: "progress-before", role: "assistant" as const, text: "先检查实现，再执行验证。", createdAt: 1793635201 },
+      ] : []),
       ...Array.from({ length: activityCount }, (_, index) => ({ id: `live-tool-${index}`, type: "activity" as const, kind: "tool", title: `隔离活动 ${index + 1}`, target: "", text: "", complete: activityComplete || index < activityCount - 1, failed: false, truncated: false })),
-      { id: "live", role: "assistant", text: `更新 ${tick}\n\n${"持续输出的内容。\n".repeat(Math.min(tick, 180))}` },
+      ...(params.get("footers") === "1" ? [
+        { id: "progress-after", role: "assistant" as const, text: "实现已完成，正在核对结果。", createdAt: 1793635202 },
+        { id: "verify-tool", type: "activity" as const, kind: "tool", title: "验证", target: "", text: "", complete: true, failed: false, truncated: false },
+      ] : []),
+      { id: "live", role: "assistant", text: `更新 ${tick}\n\n${"持续输出的内容。\n".repeat(Math.min(tick, 180))}`, streaming: !turnEnded, createdAt: 1793635210,
+        ...(turnEnded ? { elapsedSeconds: 10 } : {}) },
     ] };
 }
 function phase(connection: ClientSnapshot["connection"]) {
@@ -82,6 +93,8 @@ export const fixture = {
   counters,
   completeActivity: () => { activityComplete = true; },
   appendActivity: () => { activityCount++; },
+  finishTurn: () => { activityComplete = true; turnEnded = true; },
+  waitForApproval: () => { activityComplete = true; waiting = true; },
   failRead: () => { failRead = true; },
   holdRead: () => { holdRead = true; },
   releaseRead: () => releaseRead?.(),

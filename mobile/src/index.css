@@ -88,6 +88,9 @@
   --sidebar-ring: oklch(0.708 0 0);
   --bui-blue: oklch(0.53 0.19 259);
   --bui-green: oklch(0.48 0.12 158);
+  /* A light Claude terracotta tint, scoped to user bubbles only. */
+  --user-message-background: color-mix(in oklab, #d97757 18%, var(--card));
+  --user-message-foreground: var(--foreground);
   --bui-inset: oklch(0.967 0.003 265);
   --bui-shadow: 0 0 0 1px oklch(0.2 0.01 265 / 4%), 0 2px 4px oklch(0.2 0.01 265 / 3%), 0 6px 16px oklch(0.2 0.01 265 / 4%);
   --bui-shadow-raised: 0 0 0 1px oklch(0.2 0.01 265 / 6%), 0 4px 8px oklch(0.2 0.01 265 / 4%), 0 12px 40px oklch(0.2 0.01 265 / 10%);
@@ -637,11 +640,14 @@
   margin-top: 0.25rem;
 }
 .user-message [data-slot="bubble"] {
-  border-radius: 0.75rem;
+  border-radius: 8px;
 }
 .user-message [data-slot="bubble-content"] {
   padding: 8px 10px;
+  border-radius: 8px;
   font-size: 14px;
+  background: var(--user-message-background);
+  color: var(--user-message-foreground);
 }
 .conversation-content [data-slot="trace"] {
   gap: 0.125rem;

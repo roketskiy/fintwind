@@ -14,6 +14,7 @@ import {
   MessageIcon,
 } from "@/components/icons";
 import { Markdown } from "@/components/markdown";
+import { TodoCapsule } from "@/components/todo-capsule";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import {
   ReasoningActivityRow,
@@ -77,12 +78,11 @@ const ActivityRow = React.memo(
 
 const ACTIVITY_PAGE_SIZE = 5;
 
-const ActivityBranch = React.memo(function ActivityBranch({ activities }: { activities: RemoteActivity[] }) {
-  const working = activities.some((activity) => !activity.complete && !activity.failed);
+const ActivityBranch = React.memo(function ActivityBranch({ activities, turnActive }: { activities: RemoteActivity[]; turnActive: boolean }) {
   const failures = activities.filter((activity) => activity.failed).length;
   const [manualExpanded, setManualExpanded] = React.useState<boolean | null>(null);
   const { end: readingAboveLatest } = useMessageScrollerScrollable();
-  const [autoExpanded, setAutoExpanded] = React.useState(working);
+  const [autoExpanded, setAutoExpanded] = React.useState(turnActive);
   const [range, setRange] = React.useState<{ first: string; last: string; manual: boolean } | null>(null);
   const tailStart = Math.max(0, activities.length - ACTIVITY_PAGE_SIZE);
   const pinnedEnd = range ? activities.findIndex((activity) => activity.id === range.last) : -1;
@@ -97,35 +97,38 @@ const ActivityBranch = React.memo(function ActivityBranch({ activities }: { acti
     }
   }, [activities, readingAboveLatest, range, pinnedEnd, tailStart]);
   React.useEffect(() => {
-    if (working) setAutoExpanded(true);
+    if (turnActive) setAutoExpanded(true);
     else if (!readingAboveLatest) setAutoExpanded(false);
-  }, [working, readingAboveLatest]);
+  }, [turnActive, readingAboveLatest]);
   // Do not remove the activity a reader is inspecting when it completes.
-  // Normal completion still folds at the bottom; manual choices always win.
-  const expanded = manualExpanded ?? (working || (autoExpanded && readingAboveLatest));
-  return <Collapsible className="bui-branch" open={expanded} onOpenChange={setManualExpanded}>
-    <CollapsibleTrigger className="bui-branch-trigger">
-      <ChevronRightIcon className="bui-branch-chevron" />
-      <span>{activities.length} 项活动</span>
-      <span className="bui-branch-status" data-failed={failures > 0 || undefined}>
-        {failures ? `${failures} 项失败` : working ? "进行中" : "已完成"}
-      </span>
-    </CollapsibleTrigger>
-    <CollapsibleContent>
-      {(start > 0 || range?.manual || end < activities.length) && <div className="flex items-center gap-2">
-        {start > 0 && <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => {
+  // The next assistant reply closes this activity segment. A completed tool
+  // alone does not. Preserve reading position and explicit disclosure choices.
+  const expanded = manualExpanded ?? (turnActive || (autoExpanded && readingAboveLatest));
+  return <Collapsible className="bui-branch" data-active-segment={turnActive} data-manual-disclosure={manualExpanded === null ? undefined : manualExpanded ? "open" : "closed"} open={expanded} onOpenChange={setManualExpanded}>
+    <div className="bui-branch-header">
+      <CollapsibleTrigger className="bui-branch-trigger">
+        <ChevronRightIcon className="bui-branch-chevron" />
+        <span>{activities.length} 项活动</span>
+        {failures > 0 && <span className="bui-branch-status" data-failed>{failures} 项失败</span>}
+      </CollapsibleTrigger>
+      {expanded && <div className="bui-branch-actions">
+        {start > 0 && <Button type="button" variant="ghost" size="sm" className="bui-branch-range" aria-label={`查看更早的 ${Math.min(ACTIVITY_PAGE_SIZE, start)} 项活动`} onClick={() => {
           setRange({ first: activities[Math.max(0, start - ACTIVITY_PAGE_SIZE)]!.id, last: activities[end - 1]!.id, manual: true });
-        }}>更早的 {Math.min(ACTIVITY_PAGE_SIZE, start)} 项</Button>}
-        {(range?.manual || end < activities.length) && <Button type="button" variant="ghost" size="sm" className="min-h-11" onClick={() => setRange(null)}>最新 {ACTIVITY_PAGE_SIZE} 项</Button>}
+        }}>更早 {Math.min(ACTIVITY_PAGE_SIZE, start)} 项</Button>}
+        {(range?.manual || end < activities.length) && <Button type="button" variant="ghost" size="sm" className="bui-branch-range" aria-label={`只显示最新 ${ACTIVITY_PAGE_SIZE} 项活动`} onClick={() => setRange(null)}>最新</Button>}
       </div>}
+    </div>
+    <CollapsibleContent>
+      <div className="bui-branch-panel">
       <Trace className="bui-branch-list" role="list">
         {activities.slice(start, end).map((activity) => <div className="bui-branch-item" role="listitem" data-kind={activity.kind} key={activity.id}>
           <ActivityRow activity={activity} />
         </div>)}
       </Trace>
+      </div>
     </CollapsibleContent>
   </Collapsible>;
-}, (previous, next) => previous.activities.length === next.activities.length && previous.activities.every((activity, index) => activity === next.activities[index]));
+}, (previous, next) => previous.turnActive === next.turnActive && previous.activities.length === next.activities.length && previous.activities.every((activity, index) => activity === next.activities[index]));
 
 function transcriptGroups(entries: TranscriptEntry[]) {
   const groups: {
@@ -138,7 +141,7 @@ function transcriptGroups(entries: TranscriptEntry[]) {
       groups.push({ id: `message:${entry.id}`, message: entry });
     else {
       const previous = groups.at(-1);
-      if (previous?.activities) previous.activities.push(entry);
+      if (previous?.activities && previous.activities[0]?.turnId === entry.turnId) previous.activities.push(entry);
       else groups.push({ id: previous ? `activity:after:${previous.id}` : "activity:start", activities: [entry] });
     }
   }
@@ -228,9 +231,11 @@ function MessageCopyButton({
 const MessageRow = React.memo(
   function MessageRow({
     message,
+    responseComplete,
     onError,
   }: {
     message: RemoteMessage;
+    responseComplete: boolean;
     onError: (message: string) => void;
   }) {
     // Real turn metadata projected by desktop (RemoteMessage.createdAt unix
@@ -279,7 +284,7 @@ const MessageRow = React.memo(
       );
     }
 
-    const showFooter = Boolean(message.text || clock || elapsed);
+    const showFooter = responseComplete && Boolean(message.text || clock || elapsed);
     return (
       <Message align="start" className="assistant-message">
         <MessageContent>
@@ -315,6 +320,7 @@ const MessageRow = React.memo(
       ba = b.attachments ?? [];
     return (
       previous.onError === next.onError &&
+      previous.responseComplete === next.responseComplete &&
       a.id === b.id &&
       a.role === b.role &&
       a.text === b.text &&
@@ -337,10 +343,47 @@ export function Conversation({
   onAnswers,
   onError,
 }: ConversationProps) {
+  const groups = transcriptGroups(session.entries ?? session.messages);
+  // Old desktops have no turn IDs. Keep their conservative fallback, but use
+  // desktop-owned turn state and final-part flags whenever they are available.
+  let currentTurnStart = -1;
+  for (let index = groups.length - 1; index >= 0; index--) {
+    if (groups[index]?.message?.role === "user") { currentTurnStart = index; break; }
+  }
+  const turnActive = ["working", "connecting", "waiting"].includes(session.status);
+  const lastReplyByTurn = new Map<string, number>();
+  let lastReply = -1;
+  groups.forEach((group, index) => {
+    if (group.message?.role !== "assistant") return;
+    lastReply = index;
+    if (group.message.turnId) lastReplyByTurn.set(group.message.turnId, index);
+  });
+  // Only a settled trailing assistant part owns a response footer. Tool rows
+  // invalidate preceding commentary; another prompt seals the preceding turn.
+  // Do not infer completion from a timestamp or a temporarily finished tool.
+  const responseFooters = new Set<string>();
+  let finalPart: RemoteMessage | undefined;
+  for (const group of groups) {
+    if (group.message?.role === "user") {
+      if (finalPart && !finalPart.streaming) responseFooters.add(finalPart.id);
+      finalPart = undefined;
+    } else if (group.message) finalPart = group.message;
+    else finalPart = undefined;
+  }
+  if (!turnActive && finalPart && !finalPart.streaming) responseFooters.add(finalPart.id);
+  for (const group of groups) {
+    const message = group.message;
+    if (message?.responseComplete !== undefined) {
+      responseFooters.delete(message.id);
+      if (message.responseComplete && !message.streaming) responseFooters.add(message.id);
+    }
+  }
   const pending = session.permission !== null || session.questions !== null;
   const desktopBlocked = session.desktopRequired;
   const empty =
     (session.entries ?? session.messages).length === 0 &&
+    !session.todos?.total &&
+    !session.workspaceChanges &&
     !session.truncated &&
     !pending &&
     !desktopBlocked &&
@@ -378,23 +421,31 @@ export function Conversation({
                 </MessageScrollerItem>
               ) : null}
 
-              {transcriptGroups(session.entries ?? session.messages).map(
-                (group) => (
+              {groups.map((group, index) => {
+                const message = group.message;
+                const activity = group.activities?.[0];
+                const segmentRunning = activity?.turnRunning ?? (turnActive && index > currentTurnStart);
+                const lastSegmentReply = activity?.turnId ? lastReplyByTurn.get(activity.turnId) ?? -1 : lastReply;
+                const intermediate = Boolean(message?.role === "assistant" && !responseFooters.has(message.id) && index < groups.length - 1);
+                const kind = group.activities ? "activity" : message?.role === "user" ? "prompt" : intermediate ? "progress" : "answer";
+                return (
                   <MessageScrollerItem
                     key={group.id}
                     messageId={group.id}
+                    data-transcript-kind={kind}
                   >
                     {group.message ? (
                       <MessageRow
                         message={group.message}
+                        responseComplete={responseFooters.has(group.message.id)}
                         onError={onError}
                       />
                     ) : (
-                      <ActivityBranch activities={group.activities ?? []} />
+                      <ActivityBranch activities={group.activities ?? []} turnActive={segmentRunning && index > lastSegmentReply} />
                     )}
                   </MessageScrollerItem>
-                ),
-              )}
+                );
+              })}
 
               {desktopBlocked ? (
                 <MessageScrollerItem
@@ -452,6 +503,7 @@ export function Conversation({
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
+      <TodoCapsule key={session.id} todos={session.todos} changes={session.workspaceChanges} />
     </div>
   );
 }

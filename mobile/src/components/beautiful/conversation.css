@@ -15,6 +15,15 @@
    line-height: 1.6;
 }
 
+/* Assistant commentary remains ordinary body text, as on desktop. Activity
+ * disclosures use compact spacing; replies return to the main text axis. */
+.conversation-content [data-transcript-kind="activity"] + :is([data-transcript-kind="progress"], [data-transcript-kind="answer"]) {
+  padding-block-start: 4px;
+}
+.conversation-content [data-transcript-kind="prompt"]:not(:first-child) {
+  padding-block-start: 12px;
+}
+
 /* Press feedback only. */
 .conversation-body .bui-press:active {
   background-color: var(--muted);
@@ -25,7 +34,7 @@
   outline-offset: 2px;
 }
 
-/* Thinking trace rail spacing. The rail itself comes from the trace primitive. */
+/* Thinking trace spacing. */
 .bui-think {
   padding-block: 0;
 }
@@ -49,19 +58,25 @@
 .bui-thinking-trigger > .app-icon { width: 16px; height: 16px; }
 .bui-thinking-trigger > .bui-thinking-chevron { width: 14px; height: 14px; transition: transform 200ms var(--bui-ease); }
 .bui-thinking-trigger[aria-expanded="true"] > .bui-thinking-chevron { transform: rotate(180deg); }
-.bui-branch { min-width: 0; padding-left: 10px; border-left: 1px solid var(--border); }
-.bui-branch-trigger { display: flex; align-items: center; gap: 6px; min-height: 44px; min-width: 44px; max-width: 100%; padding: 0 4px; border-radius: 6px; color: var(--foreground); font-size: 12px; font-weight: 500; text-align: left; }
+.bui-branch { --bui-branch-line: color-mix(in oklab, var(--border) 65%, var(--muted-foreground)); min-width: 0; }
+.bui-branch-header { display: flex; align-items: center; min-width: 0; gap: 4px; }
+.bui-branch-trigger { display: flex; flex: 1; align-items: center; gap: 6px; min-height: 44px; min-width: 44px; max-width: 100%; padding: 0; border-radius: 6px; color: var(--muted-foreground); font-size: 12px; font-weight: 500; text-align: left; }
+.bui-branch-trigger > span { white-space: nowrap; }
+.bui-branch-actions { display: flex; flex-shrink: 0; align-items: center; gap: 0; }
+.bui-branch-header .bui-branch-range { min-height: 44px; min-width: 44px; height: 44px; padding-inline: 6px; background: transparent; color: var(--muted-foreground); font-size: 11px; font-weight: 400; border-radius: 6px; }
+.bui-branch-header .bui-branch-range:active { background: var(--muted); }
+.bui-branch-panel { padding: 0 0 2px 6px; }
 .bui-branch-trigger:focus-visible { outline: 2px solid var(--bui-blue); outline-offset: 1px; }
 .bui-branch-trigger:active { background: var(--muted); }
 .bui-branch-chevron { width: 14px; height: 14px; transition: transform 120ms var(--bui-ease); }
 .bui-branch-trigger[aria-expanded="true"] .bui-branch-chevron { transform: rotate(90deg); }
 .bui-branch-status { margin-left: 2px; color: var(--muted-foreground); font-size: 11px; font-weight: 400; }
 .bui-branch-status[data-failed] { color: var(--destructive); }
-.bui-branch .bui-branch-list { gap: 0; margin-left: 12px; width: auto; }
-.bui-branch-item { --branch-anchor: 16px; position: relative; min-width: 0; padding-left: 24px; }
+.bui-branch .bui-branch-list { gap: 0; margin-left: 0; width: auto; }
+.bui-branch-item { --branch-anchor: 16px; position: relative; min-width: 0; padding-left: 20px; }
 .bui-branch-item[data-kind="reasoning"] { --branch-anchor: 22px; }
-.bui-branch-item::before { content: ""; position: absolute; top: 0; left: 0; width: 14px; height: var(--branch-anchor); border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); border-bottom-left-radius: 8px; pointer-events: none; }
-.bui-branch-item:not(:last-child)::after { content: ""; position: absolute; top: var(--branch-anchor); bottom: 0; left: 0; border-left: 1px solid var(--border); pointer-events: none; }
+.bui-branch-item::before { content: ""; position: absolute; top: 0; left: 0; width: 12px; height: var(--branch-anchor); border-left: 1px solid var(--bui-branch-line); border-bottom: 1px solid var(--bui-branch-line); border-bottom-left-radius: 6px; pointer-events: none; }
+.bui-branch-item:not(:last-child)::after { content: ""; position: absolute; top: var(--branch-anchor); bottom: 0; left: 0; border-left: 1px solid var(--bui-branch-line); pointer-events: none; }
 .bui-branch-item .bui-tool { min-height: 32px; }
 .bui-think [data-slot="trace-collapsible-content-inner"] { margin: 0 0 4px 13px; padding-left: 16px; }
 .bui-reasoning-shimmer { color: transparent; background: linear-gradient(90deg, var(--muted-foreground) 35%, var(--foreground) 50%, var(--muted-foreground) 65%); background-size: 200% 100%; background-clip: text; animation: bui-reasoning-shimmer 1.4s linear infinite; }

@@ -53,6 +53,31 @@ The phone keeps unresolved operation identities in route-scoped local storage, w
 
 Message projections may include `createdAt` (Unix seconds) and `elapsedSeconds`. The terminal assistant part of a settled turn uses its real completion timestamp and the checked difference between completion and start; intermediate parts do not repeat the turn duration. Other message timestamps come from the stored message record. Missing or zero timestamps are omitted by the client, never replaced with the browser's current time. Duration zero remains a valid measured value. This is wall-clock turn duration, not token streaming time or throughput. Older desktops without these fields remain readable without a fabricated footer.
 
+Desktops advertising `todoList` also return `todos:null` or
+`{items:[{content,status}],completed,total,truncated}`. This is the newest valid
+plan snapshot from the same parser used by the desktop capsule, independent of
+the bounded transcript tail. An empty latest list clears the capsule. Status is
+`pending`, `in_progress`, `completed` or `cancelled`. At most 64 items are sent,
+with each content bounded to 512 UTF-8 bytes; counts describe the full plan and
+`truncated` marks any omitted items or text. No raw tool arguments or outputs are
+exposed. Session deltas carry these fields through the existing validation path.
+Old desktops omit the field; clients show no capsule rather than invent a plan.
+The capsule is read-only and floats above the composer. Scrollable bottom
+padding lets the last transcript row move above the collapsed pill. Opening the
+plan does not add padding, reduce the viewport or adjust the scroll position.
+
+`workspaceChanges` adds `workspaceChanges:null` or `{additions,deletions}` to the
+session projection. Totals use the desktop's `InspectBranches` operation,
+including tracked changes against HEAD and eligible untracked text files. The
+adapter resolves the requested session's workspace, not desktop selection. It
+performs IPC and Git work in the background, shares pending requests by path,
+and bounds its cache and in-flight requests to eight paths. Active subscriptions
+check at most once per five seconds; hidden or closed watches stop requesting
+refreshes. Unchanged counts do not notify the desktop or produce a new wire
+snapshot. Activation and current workspace checks reject late results. Unknown,
+failed and non-Git results are null, never fabricated zero counts. No repository
+paths, file names or diff bodies are transferred.
+
 `getComposer` returns `{models:[{id,name,provider,efforts:[{id,label}]}],commands:[{name,description}],canConfigure}`. Discovery runs off the UI thread for the target workspace, without changing desktop selection. Configuration validates model and effort against that workspace's catalog, refuses busy/preparing sessions and leaves permission levels unchanged.
 
 OpenCode sessions may additionally advertise `goals` and return `goal:null` or `{objective,status,turns,maxTurns,reason,result,elapsedSeconds,tools}`. Status is `active`, `paused`, `blocked` or `done`. Objective and result are bounded to 8 KiB each, reason to 2 KiB. Turn counts are budgets, not a completion percentage. `sendPrompt.text` uses the existing desktop `/goal` command: no argument gets status; `pause`, `resume`, `clear` control it; any other argument starts an objective. Control commands reject attachments. Goal actions use the existing desktop control path and pending-preparation checks, not a new remote protocol command. Clients only offer Goal when `goals` is advertised.

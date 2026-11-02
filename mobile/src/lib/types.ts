@@ -16,6 +16,10 @@ export interface SessionSummary {
   updatedAt: number;
 }
 export interface RemoteMessage {
+  turnId?: string;
+  turnRunning?: boolean;
+  responseComplete?: boolean;
+  streaming?: boolean;
   createdAt?: number;
   elapsedSeconds?: number;
   type?: "message";
@@ -25,6 +29,8 @@ export interface RemoteMessage {
   attachments?: { name: string; isImage: boolean }[];
 }
 export interface RemoteActivity {
+  turnId?: string;
+  turnRunning?: boolean;
   type: "activity";
   id: string;
   kind: string;
@@ -62,7 +68,15 @@ export interface Questions {
   requestId: string;
   questions: Question[];
 }
+export interface TodoSnapshot {
+  items: { content: string; status: "pending" | "in_progress" | "completed" | "cancelled" }[];
+  completed: number;
+  total: number;
+  truncated: boolean;
+}
 export interface SessionDetail {
+  workspaceChanges?: { additions: number; deletions: number } | null;
+  todos?: TodoSnapshot | null;
   goal?: { objective: string; status: "active" | "paused" | "blocked" | "done"; turns: number; maxTurns: number; reason: string; result: string; elapsedSeconds?: number; tools?: number } | null;
   id: string;
   projectId: string;

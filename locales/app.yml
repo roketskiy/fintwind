@@ -1,4 +1,32 @@
 _version: 2
+remote.title:
+  en: Mobile remote control
+remote.keywords:
+  en: mobile remote pairing QR code link
+remote.status_off:
+  en: Off
+remote.status_connecting:
+  en: Connecting
+remote.status_waiting:
+  en: Waiting for phone
+remote.status_connected:
+  en: Phone connected
+remote.status_failed:
+  en: Connection failed
+remote.start:
+  en: Start remote control
+remote.stop:
+  en: Stop
+remote.refresh:
+  en: Pair again
+remote.copy_link:
+  en: Copy pairing link
+remote.copied:
+  en: Pairing link copied
+remote.start_failed:
+  en: Could not start remote control
+remote.connection_failed:
+  en: Remote connection failed
 capsule.task_list:
   en: Tasks
 capsule.todo:

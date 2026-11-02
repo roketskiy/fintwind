@@ -57,6 +57,12 @@ const SETTINGS_PAGES: &[(SettingsPage, &str, &str, &str)] = &[
         "settings.general_keywords",
     ),
     (
+        SettingsPage::RemoteControl,
+        "remote.title",
+        "icons/laptop.svg",
+        "remote.keywords",
+    ),
+    (
         SettingsPage::Appearance,
         "settings.appearance",
         "icons/appearance.svg",
@@ -392,7 +398,8 @@ impl Fintwind {
         // width cap, no card. Window chrome stays in the unified top bar.
         if matches!(
             page,
-            SettingsPage::Skills
+            SettingsPage::RemoteControl
+                | SettingsPage::Skills
                 | SettingsPage::Providers
                 | SettingsPage::McpServers
                 | SettingsPage::McpMarket
@@ -407,6 +414,7 @@ impl Fintwind {
                 .border_color(theme.sidebar_border)
                 .bg(theme.surface)
                 .child(div().flex_1().min_h_0().child(match page {
+                    SettingsPage::RemoteControl => self.render_remote_control(window, cx),
                     SettingsPage::Skills => self.render_skills_settings(window, cx),
                     SettingsPage::McpServers => self.render_mcp_page(window, cx),
                     SettingsPage::McpMarket => self.render_mcp_market_page(cx),
@@ -431,6 +439,7 @@ impl Fintwind {
                     .text_color(theme.text)
                     .child(match page {
                         SettingsPage::General => tr!("settings.general"),
+                        SettingsPage::RemoteControl => tr!("remote.title"),
                         SettingsPage::Providers => tr!("settings.providers"),
                         SettingsPage::Skills => tr!("settings.skills"),
                         SettingsPage::McpServers => tr!("settings.mcp_servers"),
@@ -440,6 +449,7 @@ impl Fintwind {
             )
             .child(match page {
                 SettingsPage::General => self.render_general_settings(window, cx),
+                SettingsPage::RemoteControl => self.render_remote_control(window, cx),
                 SettingsPage::Providers => self.render_providers_page(cx),
                 SettingsPage::Skills => self.render_skills_settings(window, cx),
                 SettingsPage::McpServers => self.render_mcp_page(window, cx),
@@ -2215,9 +2225,7 @@ impl Fintwind {
         report_failure: bool,
     ) {
         cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_secs(6))
-                .await;
+            cx.background_executor().timer(Duration::from_secs(6)).await;
             let _ = this.update(cx, |this, cx| {
                 if this.image_models_generation != failed_generation {
                     return;

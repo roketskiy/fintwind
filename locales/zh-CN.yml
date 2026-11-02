@@ -1,4 +1,18 @@
 _version: 1
+remote.title: 手机远控
+remote.keywords: 手机 远控 配对 二维码 链接
+remote.status_off: 已关闭
+remote.status_connecting: 正在连接
+remote.status_waiting: 等待手机连接
+remote.status_connected: 手机已连接
+remote.status_failed: 连接失败
+remote.start: 开启远控
+remote.stop: 停止
+remote.refresh: 重新配对
+remote.copy_link: 复制配对链接
+remote.copied: 配对链接已复制
+remote.start_failed: 无法开启远控
+remote.connection_failed: 远控连接失败
 common.open_default_app: 用默认应用打开
 btw.command_description: 临时旁问，不加入主对话
 btw.argument_hint: 问题

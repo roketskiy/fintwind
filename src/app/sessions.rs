@@ -1493,6 +1493,10 @@ impl Fintwind {
         let Some(session_id) = self.state.selected_session else {
             return;
         };
+        self.cancel_turn_for_session(session_id, cx);
+    }
+
+    pub(super) fn cancel_turn_for_session(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
         // Worktree/checkpoint preparation has no safe interrupt contract. The
         // composer deliberately shows a spinner rather than Stop until the
         // provider runtime exists, and the keyboard action follows the same
@@ -1602,14 +1606,97 @@ impl Fintwind {
         let Some(session_id) = self.state.selected_session else {
             return;
         };
+        self.respond_permission_for_session(session_id, request_id, option_id, cx);
+    }
+
+    pub(super) fn respond_permission_for_session(
+        &mut self,
+        session_id: Uuid,
+        request_id: String,
+        option_id: String,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let valid = self
+            .runtimes
+            .get(&session_id)
+            .and_then(|runtime| runtime.pending_permission.as_ref())
+            .is_some_and(|pending| {
+                pending.request_id == request_id
+                    && pending.options.iter().any(|option| option.id == option_id)
+            });
+        if !valid {
+            return false;
+        }
         if let Some(runtime) = self.runtimes.get_mut(&session_id) {
             runtime.driver.respond(request_id, option_id);
             runtime.pending_permission = None;
         }
-        if let Some(session) = self.selected_session_mut() {
+        if let Some(session) = self.state.session_mut(session_id) {
             session.status = SessionStatus::Working;
         }
         cx.notify();
+        true
+    }
+
+    pub(super) fn respond_user_input_for_session(
+        &mut self,
+        session_id: Uuid,
+        request_id: String,
+        answers: Vec<UserInputAnswer>,
+        validate_remote_answers: bool,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(pending) = self
+            .runtimes
+            .get(&session_id)
+            .and_then(|runtime| runtime.pending_user_input.as_ref())
+        else {
+            return false;
+        };
+        if pending.request_id != request_id || answers.len() != pending.questions.len() {
+            return false;
+        }
+        let mut seen = HashSet::with_capacity(answers.len());
+        let mut total_answer_bytes = 0usize;
+        for answer in &answers {
+            let Some(question) = pending
+                .questions
+                .iter()
+                .find(|q| q.id == answer.question_id)
+            else {
+                return false;
+            };
+            if !seen.insert(answer.question_id.as_str())
+                || answer.answers.is_empty()
+                || (validate_remote_answers
+                    && answer.answers.len() > if question.multi_select { 32 } else { 1 })
+                || answer.answers.iter().any(|value| {
+                    value.trim().is_empty() || (validate_remote_answers && value.len() > 4096)
+                })
+            {
+                return false;
+            }
+            total_answer_bytes = match answer
+                .answers
+                .iter()
+                .try_fold(total_answer_bytes, |total, value| {
+                    total.checked_add(value.len())
+                }) {
+                Some(total) if !validate_remote_answers || total <= 64 * 1024 => total,
+                _ => return false,
+            };
+        }
+        if let Some(runtime) = self.runtimes.get_mut(&session_id) {
+            runtime.driver.respond_user_input(request_id, answers);
+            runtime.pending_user_input = None;
+        } else {
+            return false;
+        }
+        if let Some(session) = self.state.session_mut(session_id) {
+            session.status = SessionStatus::Working;
+        }
+        cx.notify();
+        true
     }
 
     pub(super) fn sync_user_input_answer(&mut self, cx: &mut Context<Self>) {
@@ -1770,7 +1857,7 @@ impl Fintwind {
         let Some(session_id) = self.state.selected_session else {
             return;
         };
-        let should_submit = {
+        let submission = {
             let Some(pending) = self
                 .runtimes
                 .get_mut(&session_id)
@@ -1794,28 +1881,17 @@ impl Fintwind {
             }
             if pending.question_index + 1 < pending.questions.len() {
                 pending.question_index += 1;
-                false
+                None
             } else {
-                true
+                Some((pending.request_id.clone(), pending.answers()))
             }
         };
 
-        if should_submit {
-            let Some(runtime) = self.runtimes.get_mut(&session_id) else {
-                return;
-            };
-            let Some(pending) = runtime.pending_user_input.take() else {
-                return;
-            };
-            let answers = pending.answers();
-            runtime
-                .driver
-                .respond_user_input(pending.request_id, answers);
-            if let Some(session) = self.state.session_mut(session_id) {
-                session.status = SessionStatus::Working;
+        if let Some((request_id, answers)) = submission {
+            if self.respond_user_input_for_session(session_id, request_id, answers, false, cx) {
+                self.user_input_answer
+                    .update(cx, |input, cx| input.clear(cx));
             }
-            self.user_input_answer
-                .update(cx, |input, cx| input.clear(cx));
         } else {
             self.sync_user_input_answer(cx);
         }

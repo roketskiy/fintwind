@@ -267,6 +267,7 @@ enum BranchPickerAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SettingsPage {
     General,
+    RemoteControl,
     Providers,
     Skills,
     McpServers,
@@ -1346,6 +1347,15 @@ pub struct Fintwind {
     /// app entity. Debug builds can replace it independently after a rebuild;
     /// all live driver handles below are lightweight RPC proxies.
     daemon: fintwind_client::DaemonSupervisor,
+    remote_control: Option<fintwind_remote::RemoteControl>,
+    remote_generation: u64,
+    remote_project_ids: HashSet<Uuid>,
+    remote_status: remote::RemoteUiStatus,
+    remote_pairing_url: Option<String>,
+    remote_pairing_qr: Option<Arc<gpui::RenderImage>>,
+    remote_starting: bool,
+    remote_error: Option<String>,
+    remote_session_hydrations: HashSet<Uuid>,
     /// Session details currently being fetched from the daemon. Sidebar rows
     /// stay usable while the selected transcript hydrates asynchronously.
     session_hydrations: HashSet<Uuid>,
@@ -2336,6 +2346,7 @@ mod providers_fetch;
 mod providers_page;
 mod providers_quota;
 mod quote;
+mod remote;
 mod render;
 mod right_panel;
 mod runtime;
@@ -2366,8 +2377,8 @@ pub use btw::init as init_btw_keys;
 pub use command_palette::init as init_command_palette;
 pub use commit_dialog::init as init_commit_dialog_keys;
 use components::*;
-pub use help::init as init_help_keys;
 pub use diagram_preview::init as init_diagram_preview_keys;
+pub use help::init as init_help_keys;
 pub use image_preview::init as init_image_preview_keys;
 pub use mcp_market_page::init as init_mcp_market_keys;
 pub use settings::init as init_settings_keys;
@@ -3270,6 +3281,7 @@ impl Fintwind {
             // true app quit, persist the final state before stopping the
             // desktop-owned daemon and its OpenCode backend processes.
             cx.on_app_quit(|this, cx| {
+                this.stop_remote_control();
                 // The detached pump must not consume the completion while the
                 // quit barrier owns the final model and waits for that save.
                 this.event_wake_tx.close();
@@ -3675,6 +3687,15 @@ impl Fintwind {
 
             Self {
                 daemon,
+                remote_control: None,
+                remote_generation: 0,
+                remote_project_ids: HashSet::new(),
+                remote_status: remote::RemoteUiStatus::Off,
+                remote_pairing_url: None,
+                remote_pairing_qr: None,
+                remote_starting: false,
+                remote_error: None,
+                remote_session_hydrations: HashSet::new(),
                 session_hydrations: HashSet::new(),
                 pending_session_activation: None,
                 state,
@@ -4176,6 +4197,7 @@ impl Fintwind {
             // instance's own handle is closed; no window is looked up by
             // name and no other window is touched.
             cx.on_release(|fintwind: &mut Fintwind, cx: &mut App| {
+                fintwind.stop_remote_control();
                 if let Some(handle) = fintwind.perf_window.take() {
                     let _ = handle.update(cx, |_, window, _| window.remove_window());
                 }

@@ -96,6 +96,7 @@ export interface CommandMap {
     result: { sessions: SessionSummary[]; cutoff: number; revision?: string };
   };
   getSession: { fields: { sessionId: string }; result: SessionDetail };
+  watchSession: { fields: { sessionId: string; watchId: string; enabled: boolean }; result: { accepted: boolean } };
   getComposer: { fields: { sessionId: string }; result: ComposerOptions };
   configureSession: {
     fields: {

@@ -360,6 +360,55 @@ struct DeferredResponse {
     if_revision: Option<String>,
 }
 
+struct SessionWatch {
+    id: Uuid,
+    snapshots: channel::Receiver<Result<Value, String>>,
+    previous: Option<Value>,
+}
+
+impl SessionWatch {
+    fn send_pending(
+        &mut self,
+        socket: &mut Socket,
+        socket_id: &str,
+        outbound: &mut crypto::Direction,
+    ) -> anyhow::Result<()> {
+        let value = match self.snapshots.try_recv() {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => {
+                send_sealed(
+                    socket,
+                    socket_id,
+                    outbound,
+                    &json!({"type":"sessionUpdate", "watchId": self.id, "error": error.chars().take(512).collect::<String>()}),
+                )?;
+                return Ok(());
+            }
+            Err(_) => return Ok(()),
+        };
+        let next = crate::snapshot::conditional_response(value, None);
+        if self.previous.as_ref() == Some(&next) {
+            return Ok(());
+        }
+        let full = json!({"type":"sessionUpdate", "watchId": self.id, "snapshot": next});
+        let update = if let Some(previous) = &self.previous {
+            let edits = crate::snapshot::delta(previous, &next);
+            let delta = json!({"type":"sessionUpdate", "watchId": self.id,
+                "baseRevision": previous["revision"], "revision": next["revision"], "edits": edits});
+            if serde_json::to_vec(&delta)?.len() < serde_json::to_vec(&full)?.len() {
+                delta
+            } else {
+                full
+            }
+        } else {
+            full
+        };
+        send_sealed(socket, socket_id, outbound, &update)?;
+        self.previous = Some(next);
+        Ok(())
+    }
+}
+
 fn serve_phone(
     socket: &mut Socket,
     socket_id: &str,
@@ -394,10 +443,14 @@ fn serve_phone(
     send_sealed(socket, socket_id, &mut outbound, &json!({"type":"ready"}))?;
     let mut authenticated = false;
     let mut deferred: Vec<DeferredResponse> = Vec::new();
+    let mut watch: Option<SessionWatch> = None;
     loop {
         if cancelled.load(Ordering::Acquire) {
             let _ = send_json(socket, &json!({"t":"wclose","id":socket_id,"code":1000}));
             return Ok(());
+        }
+        if let Some(watch) = &mut watch {
+            watch.send_pending(socket, socket_id, &mut outbound)?;
         }
         let mut index = 0;
         while index < deferred.len() {
@@ -503,6 +556,49 @@ fn serve_phone(
                         &mut outbound,
                         request.id,
                         Err("Invalid request".into()),
+                    )?;
+                    continue;
+                }
+                // Opt-in only: old clients never receive unsolicited updates.
+                if let RemoteCommand::WatchSession {
+                    session_id,
+                    watch_id,
+                    enabled,
+                } = &request.command
+                {
+                    if request.if_revision.is_some() {
+                        reply(
+                            socket,
+                            socket_id,
+                            &mut outbound,
+                            request.id,
+                            Err("Subscriptions do not accept snapshot versions".into()),
+                        )?;
+                        continue;
+                    }
+                    if *enabled {
+                        let (snapshots, receiver) = channel::bounded(1);
+                        let event = RemoteEvent::WatchSession {
+                            session_id: *session_id,
+                            snapshots,
+                        };
+                        smol::block_on(timeout(Duration::from_secs(15), events.send(event)))
+                            .context("desktop request queue timed out")?
+                            .context("desktop request handler stopped")?;
+                        watch = Some(SessionWatch {
+                            id: *watch_id,
+                            snapshots: receiver,
+                            previous: None,
+                        });
+                    } else if watch.as_ref().is_some_and(|watch| watch.id == *watch_id) {
+                        watch = None;
+                    }
+                    reply(
+                        socket,
+                        socket_id,
+                        &mut outbound,
+                        request.id,
+                        Ok(json!({"accepted":true})),
                     )?;
                     continue;
                 }

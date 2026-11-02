@@ -1,11 +1,12 @@
 // Isolated visual fixtures. This entry never calls useRemote/start and is not a production input.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { RemoteView } from "@/app";
 import type { useRemote } from "@/hooks/use-remote";
 import { applyTheme } from "@/lib/theme";
 import type { CommandMap, ComposerOptions, SessionDetail } from "@/lib/types";
 import "@/index.css";
+import { Conversation } from "@/components/conversation";
 
 const params = new URLSearchParams(location.search);
 applyTheme(params.get("theme") === "dark" ? "dark" : "light");
@@ -76,4 +77,26 @@ function Preview() {
   };
   return <RemoteView app={app} previewOptions={options} />;
 }
-createRoot(document.getElementById("root")!).render(<Preview />);
+// A deterministic, local-only stream. No real connection or mutation is made.
+function StreamPreview() {
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((value) => value + 1), 200);
+    return () => window.clearInterval(timer);
+  }, []);
+  const history = Array.from({ length: 60 }, (_, index) => [
+    { id: `u${index}`, role: "user" as const, text: `历史问题 ${index}\n请保持当前位置。` },
+    { id: `a${index}`, role: "assistant" as const, text: `历史回答 ${index}\n\n${"这是一段用于核对阅读位置的历史内容。".repeat(18)}` },
+  ]).flat();
+  const session: SessionDetail = { ...detail, goal: null, status: "working", entries: [
+    ...history,
+    { id: "live-user", role: "user", text: "开始隔离流式输出" },
+    { id: "live-tool", type: "activity", kind: "tool", title: "隔离活动", target: "", text: "", complete: tick % 40 >= 20, failed: false, truncated: false },
+    { id: "live-assistant", role: "assistant", text: `更新 ${tick}\n\n${"持续输出的内容。\n".repeat(Math.min(tick, 200))}` },
+  ] };
+  return <div style={{ height: "100dvh", width: "min(100%, 390px)", marginInline: "auto", display: "flex", flexDirection: "column" }} data-stream-tick={tick}>
+    <Conversation session={session} disabled={false} busy={false} onPermission={previewNoop} onAnswers={previewNoop} onError={previewNoop} />
+  </div>;
+}
+function previewNoop() {}
+createRoot(document.getElementById("root")!).render(params.get("scene") === "stream" ? <StreamPreview /> : <Preview />);

@@ -540,6 +540,44 @@ impl Fintwind {
                             }
                         });
                     }
+                    fintwind_remote::RemoteEvent::WatchSession { session_id, snapshots } => {
+                        let _ = this.update(cx, |_, cx| {
+                            let (changed, changes) = smol::channel::bounded(1);
+                            let _ = changed.try_send(());
+                            let entity = cx.entity();
+                            let observation = cx.observe(&entity, move |_, _, _| {
+                                let _ = changed.try_send(());
+                            });
+                            cx.spawn(async move |this, cx| {
+                                let _observation = observation;
+                                let mut clock = false;
+                                loop {
+                                    if snapshots.is_closed() { break; }
+                                    let notified = smol::future::or(
+                                        async { changes.recv().await.is_ok() },
+                                        async { smol::Timer::after(Duration::from_secs(1)).await; false },
+                                    ).await;
+                                    if !notified && !clock { continue; }
+                                    // Fold notifications, never the provider's individual chunks.
+                                    smol::Timer::after(Duration::from_millis(200)).await;
+                                    while changes.try_recv().is_ok() {}
+                                    if snapshots.is_closed() { break; }
+                                    let result = this.update(cx, |app, _| {
+                                        if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                        let index = app.remote_session_index(session_id)?;
+                                        Ok(app.remote_session_projection(index, true))
+                                    });
+                                    let value = match result {
+                                        Ok(value) => value,
+                                        Err(_) => break,
+                                    };
+                                    clock = value.as_ref().ok().and_then(|value| value["goal"]["status"].as_str()).is_some_and(|status| status == "active");
+                                    let failed = value.is_err();
+                                    if snapshots.send(value).await.is_err() || failed { break; }
+                                }
+                            }).detach();
+                        });
+                    }
                     fintwind_remote::RemoteEvent::Request(request) => {
                         let _ = this.update(cx, |_, cx| {
                         cx.spawn(async move |this, cx| {
@@ -706,6 +744,9 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
         match command {
+            fintwind_remote::RemoteCommand::WatchSession { .. } => {
+                Err("Subscription must be handled by the encrypted transport".to_owned())
+            }
             fintwind_remote::RemoteCommand::ListWorkspaces => {
                 let workspaces = self
                     .state
@@ -979,6 +1020,10 @@ impl Fintwind {
     }
 
     fn remote_session_snapshot(&self, index: usize) -> Value {
+        self.remote_session_projection(index, false)
+    }
+
+    fn remote_session_projection(&self, index: usize, ordered_only: bool) -> Value {
         let session = &self.state.sessions[index];
         let timing = remote_message_timing(session);
         let mut remaining = 60 * 1024;
@@ -988,7 +1033,7 @@ impl Fintwind {
             .iter()
             .rev()
             .filter(|message| matches!(message.role, MessageRole::User | MessageRole::Assistant))
-            .take(REMOTE_MESSAGE_LIMIT)
+            .take(if ordered_only { 0 } else { REMOTE_MESSAGE_LIMIT })
             .collect::<Vec<_>>();
         let mut truncated = session.messages.len() > REMOTE_MESSAGE_LIMIT;
         for message in visible {
@@ -1116,7 +1161,7 @@ impl Fintwind {
                 })).collect::<Vec<_>>(),
             }));
         let (entries, entries_truncated) = remote_transcript_entries(session, &timing);
-        let mut features = vec!["orderedTranscript", "composerOptions", "attachments"];
+        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas"];
         if session.provider == "opencode" { features.push("goals"); }
         let mut snapshot = json!({
             "id": session.id,

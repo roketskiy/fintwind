@@ -133,8 +133,12 @@ export function useRemote() {
     const epoch = ++generation.current;
     let active = true;
     let fetching = false;
+    let unwatch: (() => void) | null = null;
+    let streamUnavailable = false;
+    let streamFailures = 0;
+    const stopWatching = () => { unwatch?.(); unwatch = null; };
     const refresh = async () => {
-      if (!active || fetching || document.hidden) return;
+      if (!active || fetching || document.hidden || unwatch) return;
       fetching = true;
       try {
         if (selection.page === "conversation" && selection.sessionId) {
@@ -153,6 +157,20 @@ export function useRemote() {
             value.detail === detail ? value : { ...value, detail },
           );
           setError(null);
+          if (!document.hidden && !streamUnavailable && detail.features.includes("sessionDeltas")) {
+            unwatch = remoteClient.watchSession(selection.sessionId, (updated) => {
+              if (!active || epoch !== generation.current || document.hidden) return;
+              setData((value) => ({ ...value, detail: updated }));
+              setError(null);
+            }, () => {
+              if (!active || epoch !== generation.current) return;
+              stopWatching();
+              // Retry from a complete snapshot; repeated failures use the old
+              // low-frequency protocol rather than a reconnect storm.
+              streamUnavailable = ++streamFailures >= 2;
+              void refresh();
+            });
+          }
           return;
         }
         const cached = workspaceCache.current;
@@ -198,8 +216,8 @@ export function useRemote() {
         setError(null);
       } catch (cause) {
         if (active && epoch === generation.current) {
-          if (selection.page === "conversation")
-            setData((value) => ({ ...value, detail: null }));
+          // A transient read failure must not unmount the transcript and lose
+          // its scroll position. Selection changes clear stale content below.
           setError(cause instanceof Error ? cause.message : "无法刷新会话。");
         }
       } finally {
@@ -214,11 +232,13 @@ export function useRemote() {
       selection.page === "conversation" ? 2500 : 8000,
     );
     const onVisible = () => {
-      if (!document.hidden) void refresh();
+      if (document.hidden) stopWatching();
+      else { streamUnavailable = false; streamFailures = 0; void refresh(); }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       active = false;
+      stopWatching();
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
@@ -272,12 +292,14 @@ export function useRemote() {
       setError(null);
       try {
         const result = await remoteClient.command(type, fields);
-        setRefreshVersion((value) => value + 1);
         return result;
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : "操作失败。");
         return null;
       } finally {
+        // A timeout still needs a fresh read to resolve operation identities;
+        // unsolicited pushes are not proof of a post-operation snapshot.
+        setRefreshVersion((value) => value + 1);
         operation.current = false;
         setBusy(false);
       }

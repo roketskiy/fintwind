@@ -73,7 +73,10 @@ function MessageScrollerItem({
       data-slot="message-scroller-item"
       scrollAnchor={scrollAnchor}
       className={cn(
-        "min-w-0 shrink-0 [contain-intrinsic-size:auto_10rem] [content-visibility:auto]",
+        // The primitive measures every row for its bottom/anchor calculation.
+        // Estimated content-visibility heights change as history enters view
+        // and invalidate that calculation. The remote window is bounded.
+        "min-w-0 shrink-0",
         className,
       )}
       {...props}

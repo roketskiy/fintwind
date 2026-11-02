@@ -3233,7 +3233,7 @@ fn run_checks(e2e: &mut E2E) {
             };
             Ok::<_, anyhow::Error>((delivered, result))
         })?;
-        expect_ok(&result)?;
+        expect_ok(&result?)?;
         let _ = delivered;
         if h.owner.performed().len() == performed_before {
             bail!("the approved action was not recorded as performed");

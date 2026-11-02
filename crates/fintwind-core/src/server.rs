@@ -133,7 +133,6 @@ impl EventSink {
 #[derive(Clone)]
 pub struct SystemChannel {
     hub: Arc<Hub>,
-    broker: Arc<BrowserBroker>,
 }
 
 impl SystemChannel {
@@ -611,10 +610,9 @@ pub fn serve(
     ));
     let options = Arc::new(options);
     let active_connections = Arc::new(AtomicUsize::new(0));
-    backend.clone().attach_system_channel(SystemChannel {
-        hub: hub.clone(),
-        broker: broker.clone(),
-    })?;
+    backend
+        .clone()
+        .attach_system_channel(SystemChannel { hub: hub.clone() })?;
     while !shutdown.load(Ordering::Acquire) {
         match listener.accept() {
             Ok((stream, _)) => {

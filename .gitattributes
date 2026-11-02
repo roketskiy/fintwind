@@ -1,0 +1,6 @@
+deploy/remote-control/*.sh text eol=lf
+deploy/remote-control/*.service text eol=lf
+deploy/remote-control/Caddyfile text eol=lf
+deploy/remote-control/relay/*.mjs text eol=lf
+deploy/remote-control/relay/*.json text eol=lf
+mobile/** text eol=lf

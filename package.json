@@ -2,6 +2,7 @@
   "name": "fintwind",
   "type": "module",
   "scripts": {
+    "mobile:build": "bun run --cwd mobile build",
     "dev": "bun ./scripts/dev.ts",
     "browser:poc": "bun ./scripts/browser-poc.ts",
     "browser:collaboration": "bun ./scripts/browser-collaboration.ts",

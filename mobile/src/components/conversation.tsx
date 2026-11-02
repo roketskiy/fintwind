@@ -5,7 +5,13 @@ import {
   PermissionCard,
   QuestionsCard,
 } from "@/components/approvals";
-import { CheckIcon, CopyIcon, MessageIcon } from "@/components/icons";
+import {
+  CheckIcon,
+  CopyIcon,
+  MessageIcon,
+  LoaderIcon,
+  SearchIcon,
+} from "@/components/icons";
 import { Markdown } from "@/components/markdown";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
@@ -29,7 +35,93 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import type { RemoteMessage, SessionDetail } from "@/lib/types";
+import {
+  Trace,
+  TraceLine,
+  TraceIcon,
+  TraceTitle,
+  TraceDescription,
+  TraceCollapsible,
+  TraceCollapsibleTrigger,
+  TraceCollapsibleContent,
+} from "@/components/ui/trace";
+import type {
+  RemoteMessage,
+  RemoteActivity,
+  SessionDetail,
+  TranscriptEntry,
+} from "@/lib/types";
+
+const ActivityRow = React.memo(
+  function ActivityRow({ activity }: { activity: RemoteActivity }) {
+    const reasoning = activity.kind === "reasoning";
+    const status = activity.failed
+      ? "error"
+      : !activity.complete
+        ? "running"
+        : undefined;
+    const line = (
+      <TraceLine status={status}>
+        <TraceIcon>
+          {!activity.complete ? (
+            <LoaderIcon />
+          ) : reasoning ? (
+            <MessageIcon />
+          ) : (
+            <SearchIcon />
+          )}
+        </TraceIcon>
+        <TraceTitle>
+          {reasoning ? "思考" : activity.title || "工具调用"}
+        </TraceTitle>
+        <TraceDescription>
+          {activity.failed ? "失败" : activity.complete ? "完成" : "进行中"}
+        </TraceDescription>
+      </TraceLine>
+    );
+    if (!reasoning || !activity.text) return line;
+    return (
+      <TraceCollapsible>
+        <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
+        <TraceCollapsibleContent>
+          {activity.truncated && <p>较早的思考已省略</p>}
+          <div className="reasoning-text">{activity.text}</div>
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
+    );
+  },
+  (previous, next) => {
+    const a = previous.activity,
+      b = next.activity;
+    return (
+      a.id === b.id &&
+      a.kind === b.kind &&
+      a.title === b.title &&
+      a.text === b.text &&
+      a.complete === b.complete &&
+      a.failed === b.failed &&
+      a.truncated === b.truncated
+    );
+  },
+);
+
+function transcriptGroups(entries: TranscriptEntry[]) {
+  const groups: {
+    id: string;
+    message?: RemoteMessage;
+    activities?: RemoteActivity[];
+  }[] = [];
+  for (const entry of entries) {
+    if (entry.type !== "activity")
+      groups.push({ id: `message:${entry.id}`, message: entry });
+    else {
+      const previous = groups.at(-1);
+      if (previous?.activities) previous.activities.push(entry);
+      else groups.push({ id: `activity:${entry.id}`, activities: [entry] });
+    }
+  }
+  return groups;
+}
 
 export interface ConversationProps {
   session: SessionDetail;
@@ -94,13 +186,22 @@ const MessageRow = React.memo(
   }) {
     if (message.role === "user") {
       return (
-        <Message align="end">
+        <Message align="end" className="user-message">
           <MessageContent>
             <span className="sr-only">你</span>
             <Bubble variant="secondary" align="end">
               <BubbleContent>
                 <div className="user-message-text whitespace-pre-wrap">
                   {message.text}
+                  {!!message.attachments?.length && (
+                    <div className="sent-attachments">
+                      {message.attachments.map((file, index) => (
+                        <span key={index}>
+                          {file.isImage ? "图片" : "文件"} · {file.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </BubbleContent>
             </Bubble>
@@ -110,7 +211,7 @@ const MessageRow = React.memo(
     }
 
     return (
-      <Message align="start">
+      <Message align="start" className="assistant-message">
         <MessageContent>
           <span className="sr-only">助手</span>
           <Bubble variant="ghost" align="start" className="w-full">
@@ -127,10 +228,23 @@ const MessageRow = React.memo(
       </Message>
     );
   },
-  (previous, next) =>
-    previous.message.id === next.message.id &&
-    previous.message.role === next.message.role &&
-    previous.message.text === next.message.text,
+  (previous, next) => {
+    const a = previous.message,
+      b = next.message;
+    const aa = a.attachments ?? [],
+      ba = b.attachments ?? [];
+    return (
+      previous.onError === next.onError &&
+      a.id === b.id &&
+      a.role === b.role &&
+      a.text === b.text &&
+      aa.length === ba.length &&
+      aa.every(
+        (file, index) =>
+          file.name === ba[index]?.name && file.isImage === ba[index]?.isImage,
+      )
+    );
+  },
 );
 
 export function Conversation({
@@ -144,7 +258,7 @@ export function Conversation({
   const pending = session.permission !== null || session.questions !== null;
   const desktopBlocked = session.desktopRequired;
   const empty =
-    session.messages.length === 0 &&
+    (session.entries ?? session.messages).length === 0 &&
     !session.truncated &&
     !pending &&
     !desktopBlocked &&
@@ -182,15 +296,25 @@ export function Conversation({
                 </MessageScrollerItem>
               ) : null}
 
-              {session.messages.map((message) => (
-                <MessageScrollerItem
-                  key={message.id}
-                  messageId={message.id}
-                  scrollAnchor={message.role === "user"}
-                >
-                  <MessageRow message={message} onError={onError} />
-                </MessageScrollerItem>
-              ))}
+              {transcriptGroups(session.entries ?? session.messages).map(
+                (group) => (
+                  <MessageScrollerItem
+                    key={group.id}
+                    messageId={group.id}
+                    scrollAnchor={group.message?.role === "user"}
+                  >
+                    {group.message ? (
+                      <MessageRow message={group.message} onError={onError} />
+                    ) : (
+                      <Trace>
+                        {group.activities?.map((activity) => (
+                          <ActivityRow key={activity.id} activity={activity} />
+                        ))}
+                      </Trace>
+                    )}
+                  </MessageScrollerItem>
+                ),
+              )}
 
               {desktopBlocked ? (
                 <MessageScrollerItem

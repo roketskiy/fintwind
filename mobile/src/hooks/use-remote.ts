@@ -35,9 +35,9 @@ const emptyData: Data = {
 function savedSelection(): Selection {
   try {
     return {
-      projectId: sessionStorage.getItem("fintwind-project") || "",
-      sessionId: sessionStorage.getItem("fintwind-session") || "",
-      page: "sessions",
+      projectId: localStorage.getItem("fintwind-project") || "",
+      sessionId: localStorage.getItem("fintwind-session") || "",
+      page: localStorage.getItem("fintwind-page") === "conversation" && localStorage.getItem("fintwind-session") ? "conversation" : "sessions",
     };
   } catch {
     return { projectId: "", sessionId: "", page: "sessions" };
@@ -46,8 +46,8 @@ function savedSelection(): Selection {
 
 function saveSelection(key: string, value: string) {
   try {
-    if (value) sessionStorage.setItem(key, value);
-    else sessionStorage.removeItem(key);
+    if (value) localStorage.setItem(key, value);
+    else localStorage.removeItem(key);
   } catch {
     /* Selection is optional; pairing handles unavailable storage. */
   }
@@ -99,14 +99,30 @@ export function useRemote() {
           page: "conversation",
         });
       } else setSelection((value) => ({ ...value, page: "sessions" }));
+      saveSelection("fintwind-page", next?.fintwindPage === "conversation" ? "conversation" : "sessions");
     };
+    const onHide = () => remoteClient.stop();
+    const onShow = () => remoteClient.start();
+    window.addEventListener("pagehide", onHide);
+    window.addEventListener("pageshow", onShow);
     window.addEventListener("popstate", onPop);
     return () => {
       generation.current++;
       window.removeEventListener("popstate", onPop);
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("pageshow", onShow);
       remoteClient.stop();
     };
   }, []);
+
+  useEffect(() => {
+    if (client.connection !== "connected") return;
+    const restored = savedSelection();
+    setSelection((current) => current.projectId === restored.projectId && current.sessionId === restored.sessionId && current.page === restored.page ? current : restored);
+    if (restored.page === "conversation" && history.state?.fintwindPage !== "conversation") {
+      history.pushState({ fintwindPage: "conversation", sessionId: restored.sessionId, projectId: restored.projectId }, "");
+    }
+  }, [client.connection]);
 
   useEffect(() => {
     if (client.connection !== "connected") {
@@ -122,6 +138,13 @@ export function useRemote() {
       fetching = true;
       try {
         if (selection.page === "conversation" && selection.sessionId) {
+          if (!workspaceCache.current || Date.now() - workspaceCache.current.at >= 30000) {
+            void remoteClient.command("listWorkspaces", {}).then((result) => {
+              if (!active || epoch !== generation.current) return;
+              workspaceCache.current = { at: Date.now(), data: result };
+              setData((value) => ({ ...value, workspaces: result.workspaces }));
+            }).catch(() => { /* Session reads report their own error; workspace labels are optional. */ });
+          }
           const detail = await remoteClient.command("getSession", {
             sessionId: selection.sessionId,
           });
@@ -133,14 +156,10 @@ export function useRemote() {
           return;
         }
         const cached = workspaceCache.current;
-        const workspaceData =
-          cached && Date.now() - cached.at < 30000
-            ? cached.data
-            : await remoteClient.command("listWorkspaces", {});
-        workspaceCache.current = {
-          at: cached?.data === workspaceData ? cached.at : Date.now(),
-          data: workspaceData,
-        };
+        const workspaceData = cached && Date.now() - cached.at < 30000
+          ? cached.data : await remoteClient.command("listWorkspaces", {});
+        if (!active || epoch !== generation.current) return;
+        workspaceCache.current = { at: cached?.data === workspaceData ? cached.at : Date.now(), data: workspaceData };
         if (!active || epoch !== generation.current) return;
         const projectId = workspaceData.workspaces.some(
           (row) => row.id === selection.projectId,
@@ -158,6 +177,8 @@ export function useRemote() {
         }
         if (projectId !== selection.projectId) {
           saveSelection("fintwind-project", projectId);
+          saveSelection("fintwind-session", "");
+          saveSelection("fintwind-page", "sessions");
           setSelection((value) => ({
             ...value,
             projectId,
@@ -216,6 +237,7 @@ export function useRemote() {
     setSelection({ projectId, sessionId: "", page: "sessions" });
     saveSelection("fintwind-project", projectId);
     saveSelection("fintwind-session", "");
+    saveSelection("fintwind-page", "sessions");
   }, []);
 
   const openSession = useCallback((sessionId: string) => {
@@ -232,12 +254,14 @@ export function useRemote() {
       );
     setSelection((value) => ({ ...value, sessionId, page: "conversation" }));
     saveSelection("fintwind-session", sessionId);
+    saveSelection("fintwind-page", "conversation");
   }, []);
 
   const back = useCallback(() => {
     generation.current++;
     if (history.state?.fintwindPage === "conversation") history.back();
     else setSelection((value) => ({ ...value, page: "sessions" }));
+    saveSelection("fintwind-page", "sessions");
   }, []);
 
   const mutate = useCallback(
@@ -287,5 +311,14 @@ export function useRemote() {
     setError,
     refresh: () => setRefreshVersion((value) => value + 1),
     reconnect: () => remoteClient.reconnect(),
+    forget: async () => {
+      try {
+        await remoteClient.forget();
+        generation.current++;
+        setData(emptyData);
+        setSelection({ projectId: "", sessionId: "", page: "sessions" });
+        setError(null);
+      } catch (cause) { setError(cause instanceof Error ? cause.message : "无法忘记配对。"); }
+    },
   };
 }

@@ -29,17 +29,10 @@ export function validToken(text: unknown): text is string {
 }
 
 export async function deriveKeys(
-  secret: Uint8Array,
+  secret: CryptoKey,
   phoneNonce: Uint8Array,
   desktopNonce: Uint8Array,
 ): Promise<[CryptoKey, CryptoKey]> {
-  const material = await crypto.subtle.importKey(
-    "raw",
-    new Uint8Array(secret),
-    "HKDF",
-    false,
-    ["deriveKey"],
-  );
   const salt = new Uint8Array(64);
   salt.set(phoneNonce);
   salt.set(desktopNonce, 32);
@@ -51,7 +44,7 @@ export async function deriveKeys(
         salt,
         info: new TextEncoder().encode(info),
       },
-      material,
+      secret,
       { name: "AES-GCM", length: 256 },
       false,
       ["encrypt", "decrypt"],

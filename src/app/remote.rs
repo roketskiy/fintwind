@@ -869,8 +869,30 @@ impl Fintwind {
                 }
                 if self.submission_preparations.contains(&session_id)
                     || self.response_fork_preparations.contains_key(&session_id)
+                    || self.pending_goal_actions.contains_key(&session_id)
                 {
                     return Err("The session is preparing another operation".to_owned());
+                }
+                let prompt = text.trim();
+                let end = prompt.find(char::is_whitespace).unwrap_or(prompt.len());
+                if prompt[..end].eq_ignore_ascii_case("/goal") {
+                    if self.state.sessions[index].provider != "opencode" { return Err("此会话不支持 Goal。".into()); }
+                    let raw = prompt[end..].trim();
+                    let argument = super::goal::goal_argument(raw);
+                    if !attachments.is_empty() && matches!(argument.to_ascii_lowercase().as_str(), "" | "pause" | "resume" | "clear") { return Err("Goal 控制命令不能附带文件。".into()); }
+                    let action = match argument.to_ascii_lowercase().as_str() {
+                        "" => { self.goal_status_requests.insert(session_id); fintwind_client::goal::GoalAction::Get },
+                        "pause" => fintwind_client::goal::GoalAction::Pause,
+                        "resume" => fintwind_client::goal::GoalAction::Resume,
+                        "clear" => fintwind_client::goal::GoalAction::Clear,
+                        _ => {
+                            if let Some(session) = self.state.session_mut(session_id) { session.set_title_from_prompt(argument); }
+                            fintwind_client::goal::GoalAction::Start { objective: raw.to_owned(), attachments }
+                        }
+                    };
+                    self.control_goal(session_id, action, cx);
+                    self.save();
+                    return Ok(json!({"accepted": true}));
                 }
                 self.submit_submission_for_session(
                     session_id,
@@ -958,6 +980,7 @@ impl Fintwind {
 
     fn remote_session_snapshot(&self, index: usize) -> Value {
         let session = &self.state.sessions[index];
+        let timing = remote_message_timing(session);
         let mut remaining = 60 * 1024;
         let mut messages = Vec::new();
         let visible = session
@@ -997,6 +1020,8 @@ impl Fintwind {
                     _ => continue,
                 },
                 "text": text,
+                "createdAt": timing.get(&message.id).and_then(|(at, _)| (*at > 0).then_some(*at)),
+                "elapsedSeconds": timing.get(&message.id).and_then(|(_, elapsed)| *elapsed),
             }));
         }
         messages.reverse();
@@ -1090,7 +1115,9 @@ impl Fintwind {
                     })).collect::<Vec<_>>(),
                 })).collect::<Vec<_>>(),
             }));
-        let (entries, entries_truncated) = remote_transcript_entries(session);
+        let (entries, entries_truncated) = remote_transcript_entries(session, &timing);
+        let mut features = vec!["orderedTranscript", "composerOptions", "attachments"];
+        if session.provider == "opencode" { features.push("goals"); }
         let mut snapshot = json!({
             "id": session.id,
             "projectId": session.project_id,
@@ -1103,7 +1130,13 @@ impl Fintwind {
             "desktopRequired": !permission_supported || !questions_supported,
             "canSend": session.detail_loaded,
             "entries": entries,
-            "features": ["orderedTranscript", "composerOptions", "attachments"],
+            "features": features,
+            "goal": session.goal.as_ref().map(|goal| json!({
+                "objective": bounded_text(&goal.objective, 8192), "status": goal.status,
+                "turns": goal.turns, "maxTurns": goal.max_turns,
+                "reason": bounded_text(&goal.reason, 2048), "result": goal.result.as_deref().map(|result| bounded_text(result, 8192)),
+                "elapsedSeconds": goal.elapsed_seconds_at(unix_time()), "tools": goal.tools,
+            })),
             "model": self.model_for_session(session),
             "modelName": bounded_text(self.model_metadata_for_session(session).map(|model| model.name.as_str()).or_else(|| self.model_for_session(session)).unwrap_or("OpenCode"), 256),
             "interactionMode": session.interaction_mode,
@@ -1229,7 +1262,31 @@ impl Fintwind {
     }
 }
 
-fn remote_transcript_entries(session: &AgentSession) -> (Vec<Value>, bool) {
+// Resolve the bounded message tail in one pass. A duration belongs only to the
+// terminal assistant part of a settled turn, never to interim commentary.
+fn remote_message_timing(session: &AgentSession) -> HashMap<Uuid, (u64, Option<u64>)> {
+    let mut timing = HashMap::new();
+    let mut terminal = HashMap::new();
+    for message in session.messages.iter().rev().take(REMOTE_MESSAGE_LIMIT) {
+        if !matches!(message.role, MessageRole::User | MessageRole::Assistant) {
+            continue;
+        }
+        timing.insert(message.id, (message.created_at, None));
+        if message.role == MessageRole::Assistant && let Some(turn_id) = message.turn_id {
+            terminal.entry(turn_id).or_insert((message.id, message.streaming));
+        }
+    }
+    for turn in &session.turns {
+        let Some(&(message_id, streaming)) = terminal.get(&turn.id) else { continue; };
+        if streaming || turn.status == crate::model::TurnStatus::Running { continue; }
+        let Some(completed_at) = turn.completed_at.filter(|at| *at > 0) else { continue; };
+        let elapsed = (turn.started_at > 0).then(|| completed_at.checked_sub(turn.started_at)).flatten();
+        timing.insert(message_id, (completed_at, elapsed));
+    }
+    timing
+}
+
+fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64, Option<u64>)>) -> (Vec<Value>, bool) {
     enum Entry<'a> {
         Message(&'a crate::model::Message),
         Activity(&'a ActivityItem),
@@ -1269,7 +1326,9 @@ fn remote_transcript_entries(session: &AgentSession) -> (Vec<Value>, bool) {
                     bounded_text(content, 16 * 1024)
                 };
                 truncated |= text.len() != content.len();
-                json!({"type": "message", "id": message.id, "role": message.role, "text": text, "createdAt": message.created_at, "streaming": message.streaming,
+                json!({"type": "message", "id": message.id, "role": message.role, "text": text,
+                    "createdAt": timing.get(&message.id).and_then(|(at, _)| (*at > 0).then_some(*at)),
+                    "elapsedSeconds": timing.get(&message.id).and_then(|(_, elapsed)| *elapsed), "streaming": message.streaming,
                     "attachments": message.attachments.iter().take(8).map(|file| json!({"name": bounded_text(&file.name, 128), "isImage": file.is_image})).collect::<Vec<_>>()})
             }
             Entry::Activity(activity) => {

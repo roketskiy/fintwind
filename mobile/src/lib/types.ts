@@ -16,6 +16,8 @@ export interface SessionSummary {
   updatedAt: number;
 }
 export interface RemoteMessage {
+  createdAt?: number;
+  elapsedSeconds?: number;
   type?: "message";
   id: string;
   role: "user" | "assistant";
@@ -61,6 +63,7 @@ export interface Questions {
   questions: Question[];
 }
 export interface SessionDetail {
+  goal?: { objective: string; status: "active" | "paused" | "blocked" | "done"; turns: number; maxTurns: number; reason: string; result: string; elapsedSeconds?: number; tools?: number } | null;
   id: string;
   projectId: string;
   title: string;

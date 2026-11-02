@@ -1,5 +1,7 @@
 import * as React from "react";
 
+import "./beautiful/conversation.css";
+
 import {
   DesktopRequiredAlert,
   PermissionCard,
@@ -9,11 +11,13 @@ import {
   CheckIcon,
   CopyIcon,
   MessageIcon,
-  LoaderIcon,
-  SearchIcon,
 } from "@/components/icons";
 import { Markdown } from "@/components/markdown";
 import { Bubble, BubbleContent } from "@/components/ui/bubble";
+import {
+  ReasoningActivityRow,
+  ToolActivityRow,
+} from "@/components/beautiful/thinking-state";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -35,16 +39,7 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
-import {
-  Trace,
-  TraceLine,
-  TraceIcon,
-  TraceTitle,
-  TraceDescription,
-  TraceCollapsible,
-  TraceCollapsibleTrigger,
-  TraceCollapsibleContent,
-} from "@/components/ui/trace";
+import { Trace } from "@/components/ui/trace";
 import type {
   RemoteMessage,
   RemoteActivity,
@@ -52,43 +47,14 @@ import type {
   TranscriptEntry,
 } from "@/lib/types";
 
+// Thinking + tool rows live in beautiful/thinking-state.tsx, adapted from
+// Beautiful UI ThinkingState.tsx Reasoning variant (MIT, rev 44a274e).
 const ActivityRow = React.memo(
   function ActivityRow({ activity }: { activity: RemoteActivity }) {
-    const reasoning = activity.kind === "reasoning";
-    const status = activity.failed
-      ? "error"
-      : !activity.complete
-        ? "running"
-        : undefined;
-    const line = (
-      <TraceLine status={status}>
-        <TraceIcon>
-          {!activity.complete ? (
-            <LoaderIcon />
-          ) : reasoning ? (
-            <MessageIcon />
-          ) : (
-            <SearchIcon />
-          )}
-        </TraceIcon>
-        <TraceTitle>
-          {reasoning ? "思考" : activity.title || "工具调用"}
-        </TraceTitle>
-        <TraceDescription>
-          {activity.failed ? "失败" : activity.complete ? "完成" : "进行中"}
-        </TraceDescription>
-      </TraceLine>
-    );
-    if (!reasoning || !activity.text) return line;
-    return (
-      <TraceCollapsible>
-        <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
-        <TraceCollapsibleContent>
-          {activity.truncated && <p>较早的思考已省略</p>}
-          <div className="reasoning-text">{activity.text}</div>
-        </TraceCollapsibleContent>
-      </TraceCollapsible>
-    );
+    if (activity.kind === "reasoning") {
+      return <ReasoningActivityRow activity={activity} />;
+    }
+    return <ToolActivityRow activity={activity} />;
   },
   (previous, next) => {
     const a = previous.activity,
@@ -136,6 +102,32 @@ async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
 }
 
+// Cached formatter: one instance for all message rows.
+const clockFormatter = new Intl.DateTimeFormat("zh-CN", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+function formatClock(createdAt: number) {
+  const date = new Date(createdAt * 1000);
+  return { label: clockFormatter.format(date), iso: date.toISOString() };
+}
+
+function formatElapsed(totalSeconds: number) {
+  const total = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) {
+    return minutes > 0 ? `用时 ${hours}小时${minutes}分` : `用时 ${hours}小时`;
+  }
+  if (minutes > 0) {
+    return seconds > 0 ? `用时 ${minutes}分${seconds}秒` : `用时 ${minutes}分`;
+  }
+  return `用时 ${seconds}秒`;
+}
+
 function MessageCopyButton({
   text,
   onError,
@@ -160,6 +152,7 @@ function MessageCopyButton({
         type="button"
         variant="ghost"
         size="icon-xs"
+        className="bui-press min-h-11 min-w-11"
         aria-label={copied ? "已复制" : "复制回答"}
         onClick={() => {
           void copyText(text)
@@ -179,11 +172,26 @@ function MessageCopyButton({
 const MessageRow = React.memo(
   function MessageRow({
     message,
+    streaming,
     onError,
   }: {
     message: RemoteMessage;
+    streaming?: boolean;
     onError: (message: string) => void;
   }) {
+    // Real turn metadata projected by desktop (RemoteMessage.createdAt unix
+    // seconds, elapsedSeconds non-negative). Absent fields render nothing.
+    const clock =
+      typeof message.createdAt === "number" && message.createdAt > 0
+        ? formatClock(message.createdAt)
+        : null;
+    const elapsed =
+      message.role === "assistant" &&
+      typeof message.elapsedSeconds === "number" &&
+      message.elapsedSeconds >= 0
+        ? formatElapsed(message.elapsedSeconds)
+        : null;
+
     if (message.role === "user") {
       return (
         <Message align="end" className="user-message">
@@ -205,23 +213,49 @@ const MessageRow = React.memo(
                 </div>
               </BubbleContent>
             </Bubble>
+            {clock ? (
+              <MessageFooter className="bui-msg-footer">
+                <time dateTime={clock.iso} className="bui-msg-time">
+                  {clock.label}
+                </time>
+              </MessageFooter>
+            ) : null}
           </MessageContent>
         </Message>
       );
     }
 
+    const showFooter = Boolean(message.text || clock || elapsed);
     return (
       <Message align="start" className="assistant-message">
         <MessageContent>
           <span className="sr-only">助手</span>
           <Bubble variant="ghost" align="start" className="w-full">
+            {/* Streaming caret adapted from Beautiful UI StreamingText.tsx; no
+                demo timers, citations or follow-ups. */}
             <BubbleContent className="w-full">
               <Markdown text={message.text} />
+              {streaming ? (
+                <span
+                  aria-hidden="true"
+                  className="bui-streaming-caret"
+                />
+              ) : null}
             </BubbleContent>
           </Bubble>
-          {message.text ? (
-            <MessageFooter>
-              <MessageCopyButton text={message.text} onError={onError} />
+          {showFooter ? (
+            <MessageFooter className="bui-msg-footer">
+              {clock ? (
+                <time dateTime={clock.iso} className="bui-msg-time">
+                  {clock.label}
+                </time>
+              ) : null}
+              {elapsed ? (
+                <span className="bui-msg-time">{elapsed}</span>
+              ) : null}
+              {message.text ? (
+                <MessageCopyButton text={message.text} onError={onError} />
+              ) : null}
             </MessageFooter>
           ) : null}
         </MessageContent>
@@ -235,9 +269,12 @@ const MessageRow = React.memo(
       ba = b.attachments ?? [];
     return (
       previous.onError === next.onError &&
+      previous.streaming === next.streaming &&
       a.id === b.id &&
       a.role === b.role &&
       a.text === b.text &&
+      a.createdAt === b.createdAt &&
+      a.elapsedSeconds === b.elapsedSeconds &&
       aa.length === ba.length &&
       aa.every(
         (file, index) =>
@@ -279,6 +316,20 @@ export function Conversation({
     );
   }
 
+  const streamingId =
+    session.status === "working"
+      ? (() => {
+          const entries = session.entries ?? session.messages;
+          for (let index = entries.length - 1; index >= 0; index -= 1) {
+            const entry = entries[index];
+            if (entry.type !== "activity" && entry.role === "assistant") {
+              return entry.id;
+            }
+          }
+          return null;
+        })()
+      : null;
+
   return (
     <div className="conversation-body flex min-h-0 min-w-0 flex-1 flex-col">
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
@@ -304,7 +355,11 @@ export function Conversation({
                     scrollAnchor={group.message?.role === "user"}
                   >
                     {group.message ? (
-                      <MessageRow message={group.message} onError={onError} />
+                      <MessageRow
+                        message={group.message}
+                        streaming={group.message.id === streamingId}
+                        onError={onError}
+                      />
                     ) : (
                       <Trace>
                         {group.activities?.map((activity) => (

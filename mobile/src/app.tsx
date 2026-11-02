@@ -10,7 +10,11 @@ import {
   MessageIcon,
   PlusIcon,
   SearchIcon,
+  CloseIcon,
 } from "@/components/icons";
+import { GlideMenu, PixelLoader } from "@/components/beautiful/primitives";
+import { GoalCard } from "@/components/goal-card";
+import { PhoneSettings } from "@/components/phone-settings";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,6 +46,7 @@ import type {
   SessionStatus,
   SessionSummary,
   Workspace,
+  ComposerOptions,
 } from "@/lib/types";
 
 const statusLabels: Record<SessionStatus, string> = {
@@ -189,6 +194,7 @@ function LoadingList() {
       role="status"
       aria-label="正在加载会话"
     >
+      <PixelLoader label="正在加载会话" />
       {[0, 1, 2, 3].map((id) => (
         <div className="session-skeleton" key={id}>
           <Skeleton className="size-11 rounded-2xl" />
@@ -248,6 +254,10 @@ function PairingState({
 
 export function App() {
   const app = useRemote();
+  return <RemoteView app={app} />;
+}
+
+export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof useRemote>; previewOptions?: ComposerOptions }) {
   const [search, setSearch] = useState("");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const backRef = useRef<HTMLButtonElement>(null);
@@ -263,15 +273,6 @@ export function App() {
       .toLocaleLowerCase()
       .includes(search.toLocaleLowerCase()),
   );
-
-  useEffect(() => {
-    const media = matchMedia("(prefers-color-scheme: dark)");
-    const update = () =>
-      document.documentElement.classList.toggle("dark", media.matches);
-    update();
-    media.addEventListener("change", update);
-    return () => media.removeEventListener("change", update);
-  }, []);
 
   useEffect(() => {
     if (app.page === "conversation")
@@ -314,6 +315,8 @@ export function App() {
             selected={app.projectId}
             onSelect={app.selectWorkspace}
           />
+          <div className="header-actions">
+          <PhoneSettings onForget={async () => { await app.forget(); setDrafts({}); }} />
           <Button
             variant="ghost"
             size="icon"
@@ -325,6 +328,7 @@ export function App() {
           >
             <PlusIcon />
           </Button>
+          </div>
         </header>
         <div className="list-toolbar">
           <div className="flex min-w-0 items-center justify-between gap-3">
@@ -343,6 +347,7 @@ export function App() {
             <InputGroupAddon>
               <SearchIcon />
             </InputGroupAddon>
+            {search && <InputGroupAddon align="inline-end"><Button variant="ghost" size="icon-sm" aria-label="清除搜索" onClick={() => setSearch("")}><CloseIcon /></Button></InputGroupAddon>}
           </InputGroup>
         </div>
         <div className="list-scroll">
@@ -411,14 +416,16 @@ export function App() {
             sessionGroups(visibleSessions).map(([label, sessions]) => (
               <section className="session-group" key={label} aria-label={label}>
                 <h2>{label}</h2>
-                <div className="session-group-items">
+                <GlideMenu className="session-group-items">
                   {sessions.map((session) => (
                     <Button
                       key={session.id}
                       variant="row"
                       className="session-row"
+                      data-menu-row
                       onClick={() => app.openSession(session.id)}
                     >
+                      <span className="session-symbol"><MessageIcon /></span>
                       <span className="session-row-content">
                         <span className="session-row-title">
                           {session.title || "未命名会话"}
@@ -441,7 +448,7 @@ export function App() {
                       <ChevronRightIcon data-icon="inline-end" />
                     </Button>
                   ))}
-                </div>
+                </GlideMenu>
               </section>
             ))
           )}
@@ -476,6 +483,7 @@ export function App() {
           ) : (
             <ConnectionBadge connection={app.connection} />
           )}
+          <PhoneSettings onForget={async () => { await app.forget(); setDrafts({}); }} />
         </header>
         {!connected && (
           <div className="connection-strip" role="status">
@@ -491,6 +499,7 @@ export function App() {
             <AlertDescription>{app.error}</AlertDescription>
           </Alert>
         )}
+        {detail?.goal && <GoalCard goal={detail.goal} disabled={disabled || !detail.canSend || detail.desktopRequired} onControl={(action) => { void app.mutate("sendPrompt", { sessionId: detail.id, text: `/goal ${action}` }); }} />}
         {detail ? (
           <Suspense
             fallback={
@@ -577,6 +586,7 @@ export function App() {
               key={detail.id}
               session={detail}
               draft={drafts[detail.id] || ""}
+              previewOptions={previewOptions}
               onDraft={(value) =>
                 setDrafts((previous) => ({ ...previous, [detail.id]: value }))
               }

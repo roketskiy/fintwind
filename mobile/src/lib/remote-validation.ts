@@ -192,6 +192,8 @@ export function parseRemoteMessage(value: unknown): RemoteMessage {
     id: reqStr(value["id"], 256),
     role,
     text: reqStr(value["text"], 65536, 0),
+    ...(value["createdAt"] == null || value["createdAt"] === 0 ? {} : { createdAt: timestamp(value["createdAt"]) }),
+    ...(value["elapsedSeconds"] == null ? {} : { elapsedSeconds: timestamp(value["elapsedSeconds"]) }),
     attachments:
       value["attachments"] === undefined
         ? []
@@ -330,6 +332,14 @@ export function parseResult(type: CommandType, data: unknown): unknown {
       const revision = parseRevision(data["revision"]);
       if (data["entries"] !== undefined)
         detail.entries = reqArr(data["entries"], 200, parseEntry);
+      if (data["goal"] != null) {
+        const goal = data["goal"];
+        if (!isRecord(goal) || !["active", "paused", "blocked", "done"].includes(String(goal["status"]))) throw new Error("响应格式无效");
+        detail.goal = { objective: reqStr(goal["objective"], 32768, 0), status: goal["status"] as "active" | "paused" | "blocked" | "done",
+          turns: reqNum(goal["turns"]), maxTurns: reqNum(goal["maxTurns"]), reason: reqStr(goal["reason"], 8192, 0), result: goal["result"] == null ? "" : reqStr(goal["result"], 32768, 0),
+          ...(goal["elapsedSeconds"] == null ? {} : { elapsedSeconds: reqNum(goal["elapsedSeconds"]) }),
+          ...(goal["tools"] == null ? {} : { tools: reqNum(goal["tools"]) }) };
+      }
       if (revision !== undefined) detail.revision = revision;
       return detail;
     }

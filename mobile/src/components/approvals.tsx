@@ -82,7 +82,7 @@ export function PermissionCard({
 
   if (permission.options.length === 0) {
     return (
-      <Alert className="approval-card">
+      <Alert className="approval-card bui-approval">
         {permission.title ? (
           <AlertTitle className="wrap-break-word">
             {permission.title}
@@ -96,7 +96,8 @@ export function PermissionCard({
   }
 
   return (
-    <Card className="approval-card min-w-0">
+    // Approval surface adapted from Beautiful UI ApprovalCard.tsx (MIT, rev 44a274e).
+    <Card className="approval-card bui-approval min-w-0">
       {permission.title ? (
         <CardHeader>
           <CardTitle className="wrap-break-word">{permission.title}</CardTitle>
@@ -109,7 +110,7 @@ export function PermissionCard({
             type="button"
             variant={option.allow ? "default" : "outline"}
             disabled={locked}
-            className="h-auto min-h-9 max-w-full whitespace-normal wrap-break-word py-2 text-left"
+            className="bui-option h-auto min-h-11 max-w-full whitespace-normal wrap-break-word py-2 text-left"
             onClick={() => onPermission(option.id)}
           >
             {option.label || option.id}
@@ -122,7 +123,7 @@ export function PermissionCard({
 
 export function DesktopRequiredAlert() {
   return (
-    <Alert className="approval-card">
+    <Alert className="approval-card bui-approval">
       <AlertTitle>需要桌面端</AlertTitle>
       <AlertDescription className="wrap-break-word">
         审批和回答只能在电脑上完成。
@@ -169,7 +170,20 @@ function QuestionForm({
     questions.questions.map(() => ({ selected: [], custom: "" })),
   );
   const [errors, setErrors] = React.useState<Array<string | undefined>>([]);
+  // One-question-per-page step nav adapted from Beautiful UI ApprovalCard.tsx
+  // (MIT, rev 44a274e). No auto-advance: every answer still goes through the
+  // same validation and a single final submit.
+  const [step, setStep] = React.useState(0);
+  const [reviewing, setReviewing] = React.useState(false);
+  const total = questions.questions.length;
   const locked = disabled || busy;
+  const pendingFocus = React.useRef<number | null>(null);
+  React.useLayoutEffect(() => {
+    if (pendingFocus.current === null || reviewing) return;
+    const index = pendingFocus.current;
+    pendingFocus.current = null;
+    focusQuestion(index);
+  });
 
   function clearError(index: number) {
     setErrors((previous) => {
@@ -261,46 +275,88 @@ function QuestionForm({
       : picked.slice(0, 1);
   }
 
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function errorFor(questionIndex: number) {
+    const custom = (answers[questionIndex] ?? emptyAnswer).custom.trim();
+    const resolved = resolveAnswers(questionIndex);
 
+    if (custom && textBytes(custom) > MAX_ANSWER_BYTES) {
+      return "回答过长。";
+    }
+
+    if (!resolved.length) {
+      return "请回答此问题。";
+    }
+
+    if (resolved.length > MAX_ANSWERS) {
+      return `最多选择 ${MAX_ANSWERS} 项。`;
+    }
+
+    if (resolved.some((answer) => textBytes(answer) > MAX_ANSWER_BYTES)) {
+      return "回答过长。";
+    }
+
+    return undefined;
+  }
+
+  function focusQuestion(questionIndex: number) {
+    document
+      .getElementById(
+        firstControlId(formId, questionIndex, questions.questions[questionIndex]),
+      )
+      ?.focus();
+  }
+
+  function goQuestion(next: number) {
+    pendingFocus.current = Math.min(Math.max(next, 0), total - 1);
+    setReviewing(false);
+    setStep(Math.min(Math.max(next, 0), total - 1));
+  }
+
+  function continueFrom(questionIndex: number) {
     if (locked) {
       return;
     }
 
-    const nextErrors = questions.questions.map((_, index) => {
-      const custom = (answers[index] ?? emptyAnswer).custom.trim();
-      const resolved = resolveAnswers(index);
-
-      if (custom && textBytes(custom) > MAX_ANSWER_BYTES) {
-        return "回答过长。";
-      }
-
-      if (!resolved.length) {
-        return "请回答此问题。";
-      }
-
-      if (resolved.length > MAX_ANSWERS) {
-        return `最多选择 ${MAX_ANSWERS} 项。`;
-      }
-
-      if (resolved.some((answer) => textBytes(answer) > MAX_ANSWER_BYTES)) {
-        return "回答过长。";
-      }
-
-      return undefined;
+    const message = errorFor(questionIndex);
+    setErrors((previous) => {
+      const next = previous.slice();
+      next[questionIndex] = message;
+      return next;
     });
+    if (message) {
+      focusQuestion(questionIndex);
+      return;
+    }
+
+    if (questionIndex < total - 1) {
+      pendingFocus.current = questionIndex + 1;
+      setStep(questionIndex + 1);
+    } else {
+      setReviewing(true);
+    }
+  }
+
+  function editQuestion(questionIndex: number) {
+    pendingFocus.current = questionIndex;
+    setReviewing(false);
+    setStep(questionIndex);
+  }
+
+  function submit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (locked) return;
+    if (!reviewing) { continueFrom(step); return; }
+
+    const nextErrors = questions.questions.map((_, index) => errorFor(index));
 
     setErrors(nextErrors);
 
     const firstInvalid = nextErrors.findIndex(Boolean);
     if (firstInvalid >= 0) {
-      const fieldId = firstControlId(
-        formId,
-        firstInvalid,
-        questions.questions[firstInvalid],
-      );
-      document.getElementById(fieldId)?.focus();
+      pendingFocus.current = firstInvalid;
+      setReviewing(false);
+      setStep(firstInvalid);
       return;
     }
 
@@ -324,8 +380,44 @@ function QuestionForm({
           <CardTitle>等待回答</CardTitle>
         </CardHeader>
         <CardContent className="min-w-0">
+          {reviewing ? (
+            <div aria-live="polite">
+              {questions.questions.map((question, questionIndex) => {
+                const resolved = resolveAnswers(questionIndex);
+                return (
+                  <div
+                    key={`${question.id}:${questionIndex}`}
+                    className="bui-review-row min-w-0"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="wrap-break-word text-sm font-medium">
+                        {question.question ||
+                          question.header ||
+                          `问题 ${questionIndex + 1}`}
+                      </div>
+                      <div className="wrap-break-word text-sm text-muted-foreground">
+                        {resolved.length ? resolved.join("、") : "未回答"}
+                      </div>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={locked}
+                      className="min-h-11 shrink-0"
+                      onClick={() => editQuestion(questionIndex)}
+                    >
+                      修改
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
           <FieldGroup>
             {questions.questions.map((question, questionIndex) => {
+              if (questionIndex !== step) {
+                return null;
+              }
               const answer = answers[questionIndex] ?? emptyAnswer;
               const error = errors[questionIndex];
               const errorId = controlId(formId, questionIndex, "error");
@@ -371,7 +463,7 @@ function QuestionForm({
                               `opt${optionIndex}`,
                             )}
                             value={optionValue(optionIndex)}
-                            className="h-auto min-h-9 max-w-full whitespace-normal wrap-break-word py-2 text-left"
+                            className="bui-option h-auto min-h-11 max-w-full whitespace-normal wrap-break-word py-2 text-left"
                           >
                             <span className="flex min-w-0 flex-col items-start gap-0.5">
                               <span>{optionText(option, optionIndex)}</span>
@@ -518,12 +610,55 @@ function QuestionForm({
               );
             })}
           </FieldGroup>
+          )}
         </CardContent>
-        <CardFooter className="justify-end">
-          <Button type="submit" disabled={locked}>
-            {busy ? <Spinner data-icon="inline-start" /> : null}
-            提交
-          </Button>
+        <CardFooter className="justify-between gap-3">
+          <div className="bui-step-nav" aria-label="问题导航">
+            <button
+              type="button"
+              aria-label="上一题"
+              disabled={locked || (!reviewing && step <= 0)}
+              onClick={() =>
+                reviewing ? setReviewing(false) : goQuestion(step - 1)
+              }
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M18 15l-6-6-6 6" />
+              </svg>
+            </button>
+            <span className="bui-step-counter" aria-live="polite">
+              {reviewing ? "检查" : `${step + 1} / ${total}`}
+            </span>
+            <button
+              type="button"
+              aria-label="下一题"
+              disabled={locked || reviewing || step >= total - 1}
+              onClick={() => goQuestion(step + 1)}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+          </div>
+          {reviewing ? (
+            <Button
+              type="submit"
+              disabled={locked}
+              className="min-h-11"
+            >
+              {busy ? <Spinner data-icon="inline-start" /> : null}
+              提交
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              disabled={locked}
+              className="min-h-11"
+              onClick={() => continueFrom(step)}
+            >
+              {step < total - 1 ? "继续" : "检查"}
+            </Button>
+          )}
         </CardFooter>
       </Card>
     </form>

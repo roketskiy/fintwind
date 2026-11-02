@@ -2108,7 +2108,7 @@ impl Fintwind {
                 match result {
                     Ok(config) => {
                         this.image_generate = Some(config);
-                        this.rebuild_image_models(cx);
+                        this.rebuild_image_models_report(cx, true);
                     }
                     Err(error) => this.show_toast(tr!(
                         "settings.image_generation_load_failed",
@@ -2122,7 +2122,28 @@ impl Fintwind {
     }
 
     /// Fetch availability from the workspace server, never from model metadata.
+    /// Background refreshes stay silent: the server needs time to load
+    /// configuration after start, so a first failure waits and retries once
+    /// before any toast. Only the retry's failure surfaces, and only when
+    /// the caller asked to report it.
     pub(super) fn rebuild_image_models(&mut self, cx: &mut Context<Self>) {
+        self.rebuild_image_models_report(cx, false);
+    }
+
+    pub(super) fn rebuild_image_models_report(
+        &mut self,
+        cx: &mut Context<Self>,
+        report_failure: bool,
+    ) {
+        self.rebuild_image_models_inner(cx, report_failure, false);
+    }
+
+    fn rebuild_image_models_inner(
+        &mut self,
+        cx: &mut Context<Self>,
+        report_failure: bool,
+        is_retry: bool,
+    ) {
         self.image_models_generation += 1;
         let generation = self.image_models_generation;
         self.image_models.clear();
@@ -2149,12 +2170,12 @@ impl Fintwind {
                     return;
                 }
                 if this.provider_workspace() != requested_workspace {
-                    this.rebuild_image_models(cx);
+                    this.rebuild_image_models_inner(cx, report_failure, false);
                     return;
                 }
-                this.image_models_loading = false;
                 match result {
                     Ok(mut models) => {
+                        this.image_models_loading = false;
                         models.sort_by(|a, b| {
                             a.provider
                                 .cmp(&b.provider)
@@ -2164,13 +2185,47 @@ impl Fintwind {
                         this.image_models = models;
                     }
                     Err(error) => {
-                        this.show_toast(tr!(
-                            "settings.image_generation_load_failed",
-                            error = error.to_string()
-                        ));
+                        if is_retry {
+                            this.image_models_loading = false;
+                            if report_failure {
+                                this.show_toast(tr!(
+                                    "settings.image_generation_load_failed",
+                                    error = error.to_string()
+                                ));
+                            }
+                        } else {
+                            this.schedule_image_models_retry(cx, generation, report_failure);
+                        }
                     }
                 }
                 cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Retry one image-model fetch after the server had time to finish
+    /// loading configuration. The loading flag stays set across the wait so
+    /// the selector shows pending rather than empty; a newer rebuild
+    /// supersedes the wait.
+    fn schedule_image_models_retry(
+        &mut self,
+        cx: &mut Context<Self>,
+        failed_generation: u64,
+        report_failure: bool,
+    ) {
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_secs(6))
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.image_models_generation != failed_generation {
+                    return;
+                }
+                if !this.image_models_loading {
+                    return;
+                }
+                this.rebuild_image_models_inner(cx, report_failure, true);
             });
         })
         .detach();

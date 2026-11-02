@@ -135,15 +135,15 @@ export class GuiProtocolOwner {
         this.notices.push({ type: 'browserCancel', requestId: message.requestId });
         return;
       case 'browserScopesRevoked': {
+        // Legacy: the daemon no longer sends this. Kept so old recordings
+        // still drain; matching is by page id only.
         const scopes = (message.scopes as Scope[]) ?? [];
         for (const scope of scopes) {
-          const page = this.pages.get(scope.pageId);
-          if (page?.scope.grantId === scope.grantId && page.scope.runtimeId === scope.runtimeId
-            && page.scope.sessionId === scope.sessionId) this.pages.delete(scope.pageId);
+          if (this.pages.has(scope.pageId)) this.pages.delete(scope.pageId);
         }
         for (const id of [...this.pending.keys()]) {
           const action = this.pending.get(id)!;
-          if (scopes.some(scope => scope.pageId === action.scope.pageId && scope.grantId === action.scope.grantId)) {
+          if (scopes.some(scope => scope.pageId === action.scope.pageId)) {
             this.pending.delete(id);
           }
         }

@@ -73,14 +73,6 @@ pub struct BrowserToolRuntime {
     pub runtime_id: Uuid,
 }
 
-/// Held while a driver owns a native OpenCode session. Late drop of an old
-/// binding cannot remove a replacement binding for the same native session.
-pub struct BrowserToolBinding {
-    server: Arc<BrowserToolServer>,
-    native_session_id: String,
-    mapping: Mapping,
-}
-
 impl std::fmt::Debug for BrowserToolRuntime {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BrowserToolRuntime")

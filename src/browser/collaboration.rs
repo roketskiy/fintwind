@@ -1,14 +1,13 @@
-//! Explicit page capabilities and one-at-a-time, user-approved operations.
+//! Session-scoped browser pages and one-at-a-time operations.
 //!
 //! Failure modes: stale grants, navigation during approval/execution, duplicate
 //! requests, cancellation between CDP calls, ambiguous/hidden targets, unbounded
 //! page data, and accidentally exposing arbitrary JavaScript or raw CDP.
 //!
-//! Two authorization shapes live here. The original is a manual, per-page share
-//! the user confirms and every mutation on it asks again ([`begin_browser_share`]).
-//! The second is *automatic*: full-access sessions get continuous automation on
-//! a page ([`begin_browser_automation`] / [`set_browser_automatic`]). Automatic
-//! authority is bound to a tab, so navigation keeps the scope and grant but
+//! Production pages always use continuous access. The earlier supervised
+//! behavior remains in the isolated `browser-poc` host for historical bridge
+//! scenarios, but is not an authorization path in the application. Access is
+//! bound to a tab, so navigation keeps the scope and grant but
 //! rotates the document guard — the old guard is invalidated the instant a new
 //! document starts and a fresh one replaces it only once loading finishes, so a
 //! stale element reference or an in-flight input step can never resume against a
@@ -58,6 +57,7 @@ const AUTOMATION_LOAD_WAIT: Duration = Duration::from_secs(10);
 pub(crate) enum BrowserCollaborationEvent {
     ShareRequested,
     ShareChanged,
+    PageReady,
     Finished {
         request_id: Uuid,
         result: BrowserResult,
@@ -111,6 +111,28 @@ enum WaitStep {
 impl BrowserView {
     pub(crate) fn browser_share(&self) -> Option<BrowserShare> {
         self.collaboration.share.clone()
+    }
+
+    pub(crate) fn browser_automation_visible(&self) -> bool {
+        self.host
+            .as_ref()
+            .is_some_and(|host| host.collaboration_visible())
+    }
+
+    pub(super) fn note_title_changed(&mut self, cx: &mut Context<Self>) {
+        let title = self
+            .page_title
+            .as_deref()
+            .unwrap_or_default()
+            .chars()
+            .take(256)
+            .collect::<String>();
+        if let Some(share) = self.collaboration.share.as_mut()
+            && share.title != title
+        {
+            share.title = title;
+            cx.emit(BrowserCollaborationEvent::ShareChanged);
+        }
     }
 
     /// Whether an explicit stop was requested during this automation launch.
@@ -181,12 +203,9 @@ impl BrowserView {
         cx.notify();
     }
 
-    /// Full-access automatic automation for the page this tab just opened. The
-    /// caller has already confirmed full access and waited for a real, loaded
-    /// page; this never changes keyboard ownership. Returns whether the page
-    /// was actually shared: an explicit stop during load, a still-loading or
-    /// invalid page, or a missing host
-    /// all answer `false` and leave nothing shared.
+    /// Make a ready session tab available without changing keyboard ownership.
+    /// A cancelled opening, an invalid or still-loading page, or a missing host
+    /// returns `false` and leaves nothing published.
     pub(crate) fn begin_browser_automation(
         &mut self,
         scope: BrowserScope,
@@ -206,9 +225,7 @@ impl BrowserView {
         if !scope.is_well_formed() {
             return false;
         }
-        let Some(url) = self.current_url.as_deref() else {
-            return false;
-        };
+        let url = self.current_url.as_deref().unwrap_or("about:blank");
         if self.loading || self.host.is_none() || url.len() > 4096 || valid_url(url).is_err() {
             return false;
         }
@@ -323,6 +340,14 @@ impl BrowserView {
         }
     }
 
+    pub(crate) fn cancel_browser_opening(&mut self, cx: &mut Context<Self>) {
+        self.navigation_automation_cancelled = true;
+        if let Some(flag) = self.collaboration.automation_intervention.borrow().as_ref() {
+            flag.store(true, Ordering::SeqCst);
+        }
+        self.finish_browser_opening(cx);
+    }
+
     /// A document transition is beginning (a real navigation, a reload, history,
     /// or an automation launch). A manual grant ends here; an automatic one
     /// keeps its scope and grant but its document guard is already invalidated
@@ -363,13 +388,25 @@ impl BrowserView {
         if !self.collaboration.automatic {
             return;
         }
-        if let Some(share) = self.collaboration.share.as_mut() {
-            share.url = url.chars().take(4096).collect();
+        if valid_url(url).is_ok()
+            && let Some(share) = self.collaboration.share.as_mut()
+        {
+            share.url = url.to_owned();
         }
         let valid = Arc::new(AtomicBool::new(true));
         *self.collaboration.native_invalidation.borrow_mut() = Some(valid.clone());
         self.collaboration.valid = Some(valid);
         cx.emit(BrowserCollaborationEvent::ShareChanged);
+    }
+
+    /// A failed load does not withdraw a tab's access. A subsequent navigate
+    /// must still be able to recover the tab, using a fresh document guard.
+    pub(super) fn note_document_failed(&mut self, url: &str, cx: &mut Context<Self>) {
+        if self.collaboration.automatic && self.collaboration.share.is_some() {
+            self.note_document_ready(url, cx);
+        } else {
+            self.revoke_browser_share(cx);
+        }
     }
 
     /// A same-document navigation (a router pushing hash/state). An automatic
@@ -384,10 +421,10 @@ impl BrowserView {
             .as_ref()
             .is_some_and(|_| self.collaboration.automatic)
         {
-            if let Some(share) = self.collaboration.share.as_mut()
-                && !url.is_empty()
+            if valid_url(url).is_ok()
+                && let Some(share) = self.collaboration.share.as_mut()
             {
-                share.url = url.chars().take(4096).collect();
+                share.url = url.to_owned();
             }
             let valid = Arc::new(AtomicBool::new(true));
             *self.collaboration.native_invalidation.borrow_mut() = Some(valid.clone());
@@ -436,18 +473,20 @@ impl BrowserView {
             self.finish_browser_request(request.request_id, BrowserResult::Error { message }, cx);
             return;
         }
-        // Full access runs continuously: only a manual, non-automatic share
-        // still stops for per-mutation approval. Observation is always allowed.
+        // The legacy supervised path is kept only for the isolated PoC host;
+        // production requests always run without a per-action approval.
+        #[cfg(feature = "browser-poc")]
         let needs_approval = request.action.requires_approval() && !self.collaboration.automatic;
+        #[cfg(feature = "browser-poc")]
         if needs_approval {
             self.collaboration
                 .summary_scroll
                 .set_offset(gpui::Point::default());
             self.collaboration.pending = Some(request);
             cx.notify();
-        } else {
-            self.start_browser_request(request, cx);
+            return;
         }
+        self.start_browser_request(request, cx);
     }
 
     pub(crate) fn approve_browser_request(&mut self, id: Uuid, cx: &mut Context<Self>) {
@@ -1057,16 +1096,8 @@ impl CompletionGuard {
 }
 
 fn valid_url(raw: &str) -> Result<url::Url, String> {
+    BrowserAction::validate_url(raw)?;
     let url = url::Url::parse(raw).map_err(|_| "Invalid browser URL".to_owned())?;
-    if !matches!(url.scheme(), "http" | "https")
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.host_str().is_none()
-    {
-        return Err(
-            "Only HTTP(S) pages without URL credentials may be shared or navigated.".into(),
-        );
-    }
     Ok(url)
 }
 
@@ -1627,7 +1658,7 @@ async fn execute(
             // restriction: the key press must land on the resolved control —
             // a button, a card — not on whatever held focus before.
             resolve_target(&host, context, &selector, true, false, guard, executor).await?;
-            evaluate(&host, context, FILL_TARGET_CHECK.into(), guard, executor).await?;
+            evaluate(&host, context, FOCUSED_TARGET_CHECK.into(), guard, executor).await?;
             let mapped = map_key(&key)?;
             // `text` is what the press types into the page; with Ctrl or Alt
             // held it would type the wrong thing, so it is only sent for
@@ -1742,6 +1773,27 @@ async fn execute(
 /// input/textarea may be focused and its contents selected — a press, which
 /// also focuses, must reach buttons and other controls too.
 fn target_expression(selector: &str, focus: bool, require_input: bool) -> String {
+    // The original target resolver also performs its visibility and stale-ref
+    // checks. Full browser access lifts only its sensitive-input exclusions.
+    // Insert the caller's JSON selector only after transforming the template,
+    // so selector text can never be rewritten into a different target.
+    target_expression_with_legacy_filter("\"__FINTWIND_SELECTOR__\"", focus, require_input)
+        .replace(
+            "  if(t==='password'||t==='file')return fail('password','password and file targets are not supported');\n",
+            "",
+        )
+        .replace(
+            "['text','search','email','url','tel']",
+            "['text','search','email','url','tel','password']",
+        )
+        .replace("\"__FINTWIND_SELECTOR__\"", selector)
+}
+
+fn target_expression_with_legacy_filter(
+    selector: &str,
+    focus: bool,
+    require_input: bool,
+) -> String {
     let fill_literal = if focus { "true" } else { "false" };
     let strict_literal = if require_input { "true" } else { "false" };
     format!(
@@ -1850,7 +1902,8 @@ async fn dispatch_drag(
     release.map(|_| ())
 }
 
-const FILL_TARGET_CHECK: &str = "(() => { const e=globalThis.__fintwindFillTarget; if(!e || !e.isConnected || document.activeElement!==e || e.disabled || e.readOnly || (e.tagName==='INPUT'&&!['text','search','email','url','tel'].includes((e.type||'').toLowerCase()))) throw new Error(); return true; })()";
+const FILL_TARGET_CHECK: &str = "(() => { const e=globalThis.__fintwindFillTarget; if(!e || !e.isConnected || document.activeElement!==e || e.disabled || e.readOnly || (e.tagName==='INPUT'&&!['text','search','email','url','tel','password'].includes((e.type||'').toLowerCase()))) throw new Error(); return true; })()";
+const FOCUSED_TARGET_CHECK: &str = "(() => { const e=globalThis.__fintwindFillTarget; if(!e || !e.isConnected || document.activeElement!==e || e.disabled) throw new Error(); return true; })()";
 
 /// Observe → reference. Runs in the isolated world, mints a per-snapshot nonce,
 /// and records each visible control's element object in a fresh
@@ -1860,11 +1913,8 @@ const FILL_TARGET_CHECK: &str = "(() => { const e=globalThis.__fintwindFillTarge
 /// token from an older one stops resolving (an explicit stale error); a document
 /// change tears the world down and does the same.
 ///
-/// Sensitive fields are never read: input values are not exported, and a
-/// password/hidden/file control is skipped entirely (its name/label is not
-/// leaked either). Text below form fields is omitted so a textarea's default
-/// value cannot surface. Names come only from aria/associated labels, bounded.
-/// This intentionally does not read cookies, storage or raw HTML.
+/// Form values, including password and hidden inputs, are included under the
+/// browser's full-access contract. The result remains bounded and untrusted.
 const SNAPSHOT: &str = r#"(() => {
   const clip=(text,limit)=>{text=String(text==null?'':text);return text.slice(0,Math.max(0,limit)).toWellFormed();};
   const visibleText=(root,limit,budget)=>{
@@ -1882,8 +1932,6 @@ const SNAPSHOT: &str = r#"(() => {
    return clip(text,limit);
   };
   const controlName=(e)=>{
-   const t=(e.type||'').toLowerCase();
-   if(t==='password'||t==='hidden'||t==='file')return '';
    let al=e.getAttribute&&e.getAttribute('aria-label'); if(al&&al.trim())return clip(al.trim(),120);
    const alby=e.getAttribute&&e.getAttribute('aria-labelledby');
     if(alby){let out='';alby.split(/\s+/).slice(0,16).forEach(function(id){const n=id&&document.getElementById(id); if(n&&out.length<120)out+=' '+visibleText(n,120-out.length,200);}); out=out.trim(); if(out)return clip(out,120);}
@@ -1897,19 +1945,22 @@ const SNAPSHOT: &str = r#"(() => {
   };
   const nonce=(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():('ns'+Date.now().toString(36)+Math.random().toString(36).slice(2));
   const store=(globalThis.__fintwindElementRefs=new Map());
-  const controls=[];
+  const visibleControls=[],hiddenControls=[];
   const elements=document.createTreeWalker(document.documentElement,NodeFilter.SHOW_ELEMENT);
   let scannedControls=0,e;
-  while(scannedControls++<2000 && controls.length<60 && (e=elements.nextNode())) {
+  while(scannedControls++<2000 && (e=elements.nextNode())) {
    if(!e.matches('button,a[href],input,textarea,select,[role="button"],[role="link"],[role="textbox"],[role="checkbox"],[role="tab"],[role="menuitem"],[role="option"]'))continue;
    const t=(e.type||'').toLowerCase();
-   if(t==='password'||t==='hidden'||t==='file')continue;
    const r=e.getBoundingClientRect(),s=getComputedStyle(e);
-   if(r.width<=0||r.height<=0||s.display==='none'||s.visibility!=='visible')continue;
-   const ref='ref:'+nonce+':'+controls.length;
+   const hidden=r.width<=0||r.height<=0||s.display==='none'||s.visibility!=='visible';
+   const group=hidden?hiddenControls:visibleControls;
+   if(group.length>=60)continue;
+   const ref='ref:'+nonce+':'+(visibleControls.length+hiddenControls.length);
    store.set(ref,e);
-   controls.push({tag:(e.tagName||'').toLowerCase(),role:clip((e.getAttribute&&e.getAttribute('role'))||(e.tagName||'').toLowerCase(),64),name:controlName(e),ref:ref,selector:ref,disabled:!!(e.disabled===true||(e.getAttribute&&e.getAttribute('aria-disabled')==='true'))});
+   group.push({tag:(e.tagName||'').toLowerCase(),type:t,role:clip((e.getAttribute&&e.getAttribute('role'))||(e.tagName||'').toLowerCase(),64),name:controlName(e),value:typeof e.value==='string'?clip(e.value,512):undefined,hidden,ref:ref,selector:ref,disabled:!!(e.disabled===true||(e.getAttribute&&e.getAttribute('aria-disabled')==='true'))});
   }
+  const controls=visibleControls.concat(hiddenControls);
+  while(controls.length>60){const dropped=controls.pop();if(dropped)store.delete(dropped.ref);}
   const text=visibleText(document.body,8000,2000);
   const result={url:clip(location.href,4096),title:clip(document.title,256),text:text,controls:controls,truncated:true,scope:'main_document',untrustedPageContent:true,refNonce:nonce};
   const encoder=new TextEncoder();

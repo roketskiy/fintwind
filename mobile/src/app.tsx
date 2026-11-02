@@ -1,14 +1,6 @@
-import {
-  lazy,
-  Suspense,
-  useEffect,
-  useRef,
-  useState,
-  type FormEvent,
-} from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   ArrowLeftIcon,
-  ArrowUpIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -37,12 +29,10 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty";
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupInput,
-  InputGroupTextarea,
 } from "@/components/ui/input-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Spinner } from "@/components/ui/spinner";
@@ -73,6 +63,11 @@ const connectionLabels: Record<ClientSnapshot["connection"], string> = {
 const Conversation = lazy(() =>
   import("@/components/conversation").then((module) => ({
     default: module.Conversation,
+  })),
+);
+const Composer = lazy(() =>
+  import("@/components/composer").then((module) => ({
+    default: module.Composer,
   })),
 );
 
@@ -259,12 +254,9 @@ export function App() {
   const titleRef = useRef<HTMLHeadingElement>(null);
   const connected = app.connection === "connected";
   const detail = app.detail;
-  const draft = drafts[app.sessionId] || "";
   const sessionPending = app.pendingScopes.includes(`session:${app.sessionId}`);
   const projectPending = app.pendingScopes.includes(`project:${app.projectId}`);
   const disabled = !connected || app.busy || sessionPending;
-  const canSend =
-    !!detail && detail.canSend && !disabled && !detail.desktopRequired;
   const currentSummary = app.sessions.find((item) => item.id === app.sessionId);
   const visibleSessions = app.sessions.filter((session) =>
     (session.title || "未命名会话")
@@ -309,22 +301,6 @@ export function App() {
     };
   }, []);
 
-  async function send(event: FormEvent) {
-    event.preventDefault();
-    if (!canSend || !draft.trim()) return;
-    if (new TextEncoder().encode(draft).byteLength > 32768) {
-      app.setError("消息过长，请缩短后发送。");
-      return;
-    }
-    const sessionId = app.sessionId;
-    const text = draft;
-    const result = await app.mutate("sendPrompt", { sessionId, text });
-    if (result)
-      setDrafts((values) =>
-        values[sessionId] === text ? { ...values, [sessionId]: "" } : values,
-      );
-  }
-
   return (
     <main className="app-shell">
       <section
@@ -333,39 +309,30 @@ export function App() {
         aria-label="会话列表"
       >
         <header className="app-header">
-          <div className="brand">
-            <span className="brand-symbol" aria-hidden="true">
-              f.
-            </span>
-            <span>Fintwind</span>
-          </div>
-          <ConnectionBadge connection={app.connection} />
+          <WorkspacePicker
+            workspaces={app.workspaces}
+            selected={app.projectId}
+            onSelect={app.selectWorkspace}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="新建会话"
+            disabled={
+              !connected || app.busy || projectPending || !app.projectId
+            }
+            onClick={() => void app.createSession()}
+          >
+            <PlusIcon />
+          </Button>
         </header>
         <div className="list-toolbar">
           <div className="flex min-w-0 items-center justify-between gap-3">
             <h1 ref={titleRef} tabIndex={-1}>
               会话
             </h1>
-            <Button
-              variant="default"
-              disabled={
-                !connected || app.busy || projectPending || !app.projectId
-              }
-              onClick={() => void app.createSession()}
-            >
-              {app.busy ? (
-                <Spinner data-icon="inline-start" />
-              ) : (
-                <PlusIcon data-icon="inline-start" />
-              )}
-              新建
-            </Button>
+            <ConnectionBadge connection={app.connection} />
           </div>
-          <WorkspacePicker
-            workspaces={app.workspaces}
-            selected={app.projectId}
-            onSelect={app.selectWorkspace}
-          />
           <InputGroup>
             <InputGroupInput
               aria-label="搜索会话"
@@ -452,9 +419,6 @@ export function App() {
                       className="session-row"
                       onClick={() => app.openSession(session.id)}
                     >
-                      <span className="session-symbol">
-                        <MessageIcon />
-                      </span>
                       <span className="session-row-content">
                         <span className="session-row-title">
                           {session.title || "未命名会话"}
@@ -482,14 +446,6 @@ export function App() {
             ))
           )}
         </div>
-        <footer className="list-footer">
-          <LockIcon />
-          <span>端到端加密</span>
-          <span className="footer-divider" aria-hidden="true">
-            ·
-          </span>
-          <span>最近 72 小时</span>
-        </footer>
       </section>
 
       <section
@@ -595,7 +551,7 @@ export function App() {
             </EmptyContent>
           </Empty>
         )}
-        <div className="composer-region">
+        <div className="composer-status">
           {sessionPending && (
             <p className="composer-notice" role="status">
               操作结果待确认，请勿重复提交。
@@ -608,61 +564,29 @@ export function App() {
                 : "会话内容正在加载。"}
             </p>
           )}
-          <form onSubmit={(event) => void send(event)}>
-            <FieldGroup>
-              <Field data-disabled={!detail || app.busy}>
-                <FieldLabel className="sr-only" htmlFor="message-input">
-                  消息
-                </FieldLabel>
-                <InputGroup>
-                  <InputGroupTextarea
-                    id="message-input"
-                    placeholder="发送消息…"
-                    rows={1}
-                    value={draft}
-                    maxLength={32768}
-                    disabled={!detail || app.busy}
-                    onChange={(event) =>
-                      setDrafts((values) => ({
-                        ...values,
-                        [app.sessionId]: event.target.value,
-                      }))
-                    }
-                  />
-                  <InputGroupAddon align="block-end">
-                    <span className="composer-context">
-                      <LockIcon />
-                      <span>{connected ? "加密连接" : "离线草稿"}</span>
-                    </span>
-                    {detail &&
-                      ["connecting", "working", "waiting"].includes(
-                        detail.status,
-                      ) && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={disabled}
-                          onClick={() =>
-                            void app.mutate("stop", { sessionId: detail.id })
-                          }
-                        >
-                          停止
-                        </Button>
-                      )}
-                    <Button
-                      type="submit"
-                      size="icon"
-                      aria-label="发送消息"
-                      disabled={!canSend || !draft.trim()}
-                    >
-                      {app.busy ? <Spinner /> : <ArrowUpIcon />}
-                    </Button>
-                  </InputGroupAddon>
-                </InputGroup>
-              </Field>
-            </FieldGroup>
-          </form>
         </div>
+        {detail && (
+          <Suspense
+            fallback={
+              <div className="composer-region">
+                <Skeleton className="h-20 w-full" />
+              </div>
+            }
+          >
+            <Composer
+              key={detail.id}
+              session={detail}
+              draft={drafts[detail.id] || ""}
+              onDraft={(value) =>
+                setDrafts((previous) => ({ ...previous, [detail.id]: value }))
+              }
+              disabled={disabled || app.page !== "conversation"}
+              busy={app.busy}
+              onError={app.setError}
+              mutate={app.mutate}
+            />
+          </Suspense>
+        )}
       </section>
     </main>
   );

@@ -3,6 +3,7 @@ import type {
   Permission,
   Questions,
   RemoteMessage,
+  TranscriptEntry,
   SessionDetail,
   SessionStatus,
   SessionSummary,
@@ -66,7 +67,8 @@ export function mutationScope(
   if (
     type === "listWorkspaces" ||
     type === "listSessions" ||
-    type === "getSession"
+    type === "getSession" ||
+    type === "getComposer"
   )
     return "";
   if (fields.sessionId) return `session:${fields.sessionId}`;
@@ -90,17 +92,48 @@ export function checkFieldBounds(
       id(fields["projectId"]);
       return;
     case "getSession":
+    case "getComposer":
     case "stop":
       id(fields["sessionId"]);
       return;
+    case "configureSession":
+      id(fields["sessionId"]);
+      if (fields["model"] !== undefined) reqStr(fields["model"], 512);
+      if (fields["reasoningEffort"] !== undefined)
+        reqStr(fields["reasoningEffort"], 128);
+      if (
+        fields["interactionMode"] !== undefined &&
+        !["build", "plan"].includes(String(fields["interactionMode"]))
+      )
+        throw bad();
+      return;
     case "sendPrompt": {
       id(fields["sessionId"]);
-      if (typeof fields["text"] !== "string" || !fields["text"].trim())
+      const attachments = fields["attachmentIds"] ?? [];
+      if (!Array.isArray(attachments) || attachments.length > 8) throw bad();
+      attachments.forEach(id);
+      if (
+        typeof fields["text"] !== "string" ||
+        (!fields["text"].trim() && !attachments.length)
+      )
         throw bad();
       if (textBytes(fields["text"]) > 32768)
         throw new Error("消息不能超过 32 KiB。");
       return;
     }
+    case "uploadChunk":
+      id(fields["sessionId"]);
+      id(fields["uploadId"]);
+      reqStr(fields["name"], 128);
+      reqStr(fields["dataBase64"], 65536);
+      reqBool(fields["complete"]);
+      if (
+        !Number.isSafeInteger(fields["offset"]) ||
+        Number(fields["offset"]) < 0 ||
+        Number(fields["offset"]) > 2796204
+      )
+        throw bad();
+      return;
     case "respondPermission":
       id(fields["sessionId"]);
       reqStr(fields["requestId"], 256);
@@ -159,6 +192,16 @@ export function parseRemoteMessage(value: unknown): RemoteMessage {
     id: reqStr(value["id"], 256),
     role,
     text: reqStr(value["text"], 65536, 0),
+    attachments:
+      value["attachments"] === undefined
+        ? []
+        : reqArr(value["attachments"], 8, (entry) => {
+            if (!isRecord(entry)) throw new Error("响应格式无效");
+            return {
+              name: reqStr(entry["name"], 512),
+              isImage: reqBool(entry["isImage"]),
+            };
+          }),
   };
 }
 
@@ -176,6 +219,24 @@ export function parsePermission(value: unknown): Permission | null {
         allow: reqBool(entry["allow"]),
       };
     }),
+  };
+}
+
+function parseEntry(value: unknown): TranscriptEntry {
+  if (!isRecord(value)) throw new Error("响应格式无效");
+  if (value["type"] === "message")
+    return { ...parseRemoteMessage(value), type: "message" };
+  if (value["type"] !== "activity") throw new Error("响应格式无效");
+  return {
+    type: "activity",
+    id: reqStr(value["id"], 256),
+    kind: reqStr(value["kind"], 64),
+    title: optStr(value["title"], 1024),
+    target: value["target"] == null ? "" : optStr(value["target"], 2048),
+    text: reqStr(value["text"], 65536, 0),
+    complete: reqBool(value["complete"]),
+    failed: reqBool(value["failed"]),
+    truncated: reqBool(value["truncated"]),
   };
 }
 
@@ -245,6 +306,21 @@ export function parseResult(type: CommandType, data: unknown): unknown {
         title: optStr(data["title"], 1024),
         status: status as SessionStatus,
         messages: reqArr(data["messages"], 200, parseRemoteMessage),
+        features:
+          data["features"] === undefined
+            ? []
+            : reqArr(data["features"], 32, (entry) => reqStr(entry, 128)),
+        model: data["model"] == null ? "" : optStr(data["model"], 512),
+        modelName:
+          data["modelName"] == null ? "" : optStr(data["modelName"], 1024),
+        interactionMode:
+          data["interactionMode"] == null
+            ? ""
+            : optStr(data["interactionMode"], 32),
+        reasoningEffort:
+          data["reasoningEffort"] == null
+            ? ""
+            : optStr(data["reasoningEffort"], 128),
         truncated: reqBool(data["truncated"]),
         permission: parsePermission(data["permission"]),
         questions: parseQuestions(data["questions"]),
@@ -252,17 +328,50 @@ export function parseResult(type: CommandType, data: unknown): unknown {
         canSend: reqBool(data["canSend"]),
       };
       const revision = parseRevision(data["revision"]);
+      if (data["entries"] !== undefined)
+        detail.entries = reqArr(data["entries"], 200, parseEntry);
       if (revision !== undefined) detail.revision = revision;
       return detail;
     }
     case "createSession":
       return { sessionId: reqStr(data["sessionId"], 256) };
+    case "getComposer":
+      return {
+        canConfigure: reqBool(data["canConfigure"]),
+        models: reqArr(data["models"], 1024, (entry) => {
+          if (!isRecord(entry)) throw new Error("响应格式无效");
+          return {
+            id: reqStr(entry["id"], 512),
+            name: optStr(entry["name"], 1024),
+            provider:
+              entry["provider"] == null ? "" : optStr(entry["provider"], 512),
+            efforts: reqArr(entry["efforts"], 32, (effort) => {
+              if (!isRecord(effort)) throw new Error("响应格式无效");
+              return {
+                id: reqStr(effort["id"], 128),
+                label: optStr(effort["label"], 512),
+              };
+            }),
+          };
+        }),
+        commands: reqArr(data["commands"], 64, (entry) => {
+          if (!isRecord(entry)) throw new Error("响应格式无效");
+          return {
+            name: reqStr(entry["name"], 128),
+            description: optStr(entry["description"], 1024),
+          };
+        }),
+      };
+    case "configureSession":
     case "sendPrompt":
     case "stop":
     case "respondPermission":
     case "answerQuestions":
       if (data["accepted"] !== true) throw new Error("响应格式无效");
       return { accepted: true };
+    case "uploadChunk":
+      if (data["accepted"] !== true) throw new Error("响应格式无效");
+      return { accepted: true, offset: reqNum(data["offset"]) };
   }
 }
 

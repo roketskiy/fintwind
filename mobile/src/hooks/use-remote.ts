@@ -72,6 +72,10 @@ export function useRemote() {
   const currentSelection = useRef(selection);
   const [refreshVersion, setRefreshVersion] = useState(0);
   currentSelection.current = selection;
+  const workspaceCache = useRef<{
+    at: number;
+    data: CommandMap["listWorkspaces"]["result"];
+  } | null>(null);
 
   useEffect(() => {
     remoteClient.start();
@@ -106,6 +110,7 @@ export function useRemote() {
 
   useEffect(() => {
     if (client.connection !== "connected") {
+      workspaceCache.current = null;
       setLoading(false);
       return;
     }
@@ -116,7 +121,26 @@ export function useRemote() {
       if (!active || fetching || document.hidden) return;
       fetching = true;
       try {
-        const workspaceData = await remoteClient.command("listWorkspaces", {});
+        if (selection.page === "conversation" && selection.sessionId) {
+          const detail = await remoteClient.command("getSession", {
+            sessionId: selection.sessionId,
+          });
+          if (!active || epoch !== generation.current) return;
+          setData((value) =>
+            value.detail === detail ? value : { ...value, detail },
+          );
+          setError(null);
+          return;
+        }
+        const cached = workspaceCache.current;
+        const workspaceData =
+          cached && Date.now() - cached.at < 30000
+            ? cached.data
+            : await remoteClient.command("listWorkspaces", {});
+        workspaceCache.current = {
+          at: cached?.data === workspaceData ? cached.at : Date.now(),
+          data: workspaceData,
+        };
         if (!active || epoch !== generation.current) return;
         const projectId = workspaceData.workspaces.some(
           (row) => row.id === selection.projectId,
@@ -150,26 +174,13 @@ export function useRemote() {
           detail: value.detail,
           projectId,
         }));
-        if (selection.page === "conversation" && selection.sessionId) {
-          if (!list.sessions.some((row) => row.id === selection.sessionId)) {
-            setData((value) => ({ ...value, detail: null }));
-            setError("此会话已不可用。");
-          } else {
-            const detail = await remoteClient.command("getSession", {
-              sessionId: selection.sessionId,
-            });
-            if (!active || epoch !== generation.current) return;
-            setData((value) =>
-              value.detail === detail ? value : { ...value, detail },
-            );
-            setError(null);
-          }
-        } else {
-          setError(null);
-        }
+        setError(null);
       } catch (cause) {
-        if (active && epoch === generation.current)
+        if (active && epoch === generation.current) {
+          if (selection.page === "conversation")
+            setData((value) => ({ ...value, detail: null }));
           setError(cause instanceof Error ? cause.message : "无法刷新会话。");
+        }
       } finally {
         fetching = false;
         if (active && epoch === generation.current) setLoading(false);

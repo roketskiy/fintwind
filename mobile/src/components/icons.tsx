@@ -15,15 +15,19 @@ import laptop from "../../../assets/icons/laptop.svg?raw";
 import loading from "../../../assets/icons/loader-circle.svg?raw";
 import search from "../../../assets/icons/search.svg?raw";
 import close from "../../../assets/icons/x.svg?raw";
+import paperclip from "../../../assets/icons/paperclip.svg?raw";
+import maximize from "../../../assets/icons/window-maximize.svg?raw";
+import terminal from "../../../assets/icons/terminal.svg?raw";
 
 function embeddedIcon(source: string) {
+  const themed = source.replace(/(?:#000000|#000|\bblack\b)/gi, "currentColor");
   return function EmbeddedIcon(props: HTMLAttributes<HTMLSpanElement>) {
     return (
       <span
         aria-hidden="true"
         {...props}
         className={cn("app-icon", props.className)}
-        dangerouslySetInnerHTML={{ __html: source }}
+        dangerouslySetInnerHTML={{ __html: themed }}
       />
     );
   };
@@ -44,3 +48,6 @@ export const LaptopIcon = embeddedIcon(laptop);
 export const LoaderIcon = embeddedIcon(loading);
 export const SearchIcon = embeddedIcon(search);
 export const CloseIcon = embeddedIcon(close);
+export const PaperclipIcon = embeddedIcon(paperclip);
+export const ExpandIcon = embeddedIcon(maximize);
+export const TerminalIcon = embeddedIcon(terminal);

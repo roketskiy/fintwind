@@ -24,6 +24,7 @@ members = [
     "crates/fintwind-daemon",
     "crates/fintwind-diagram",
     "crates/fintwind-protocol",
+    "crates/fintwind-remote",
 ]
 default-members = [
     ".",
@@ -32,6 +33,7 @@ default-members = [
     "crates/fintwind-daemon",
     "crates/fintwind-diagram",
     "crates/fintwind-protocol",
+    "crates/fintwind-remote",
 ]
 resolver = "2"
 
@@ -72,6 +74,7 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 fintwind-client = { path = "crates/fintwind-client" }
 fintwind-diagram = { path = "crates/fintwind-diagram" }
 fintwind-protocol = { path = "crates/fintwind-protocol" }
+fintwind-remote = { path = "crates/fintwind-remote" }
 pulldown-cmark = "0.13"
 # Native, offline math typesetting; all layout and raster work runs on workers.
 ratex-parser = "=0.1.14"
@@ -81,6 +84,7 @@ ratex-svg = { version = "=0.1.14", features = ["embed-fonts"] }
 # Share GPUI's SVG parser to measure outlined math ink on background workers.
 usvg = "=0.46.0"
 regex = "1"
+qrcode = "0.14"
 rusqlite = { version = "0.37", features = ["bundled"] }
 rust-i18n = "4"
 # Verifies a downloaded update installer against the digest GitHub publishes

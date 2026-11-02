@@ -2181,6 +2181,7 @@ dependencies = [
  "fintwind-client",
  "fintwind-diagram",
  "fintwind-protocol",
+ "fintwind-remote",
  "futures",
  "futures-lite",
  "gpui-kit",
@@ -2190,6 +2191,7 @@ dependencies = [
  "nucleo-matcher",
  "parking_lot",
  "pulldown-cmark",
+ "qrcode",
  "ratex-layout",
  "ratex-parser",
  "ratex-svg",
@@ -2301,6 +2303,24 @@ dependencies = [
  "serde_json",
  "similar",
  "uuid",
+]
+
+[[package]]
+name = "fintwind-remote"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "fintwind-protocol",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "smol",
+ "tungstenite",
+ "url",
+ "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6126,6 +6146,9 @@ name = "qrcode"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+dependencies = [
+ "image",
+]
 
 [[package]]
 name = "quick-error"

@@ -1,31 +1,19 @@
 import * as React from "react";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldError,
-  FieldGroup,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-} from "@/components/ui/field";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
+import { FieldError } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { textBytes } from "@/lib/remote-validation";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { RadioGroup } from "@/components/ui/radio-group";
+import {
+  ApprovalAction,
+  ApprovalCheckOption,
+  ApprovalRadioOption,
+} from "@/components/beautiful/approval-card";
+import "./beautiful/approval-card.css";
 import type { Permission, Question, Questions } from "@/lib/types";
 
 const MAX_ANSWERS = 32;
@@ -45,6 +33,10 @@ function optionValue(index: number) {
 
 function optionText(option: Question["options"][number], index: number) {
   return option.label || option.description || `选项 ${index + 1}`;
+}
+
+function optionDescription(option: Question["options"][number]) {
+  return option.label && option.description ? option.description : undefined;
 }
 
 function questionKey(questions: Questions) {
@@ -82,39 +74,39 @@ export function PermissionCard({
 
   if (permission.options.length === 0) {
     return (
-      <Alert className="approval-card bui-approval">
+      <Alert className="apc-card min-w-0">
         {permission.title ? (
-          <AlertTitle className="wrap-break-word">
-            {permission.title}
-          </AlertTitle>
+          <AlertTitle className="apc-q">{permission.title}</AlertTitle>
         ) : null}
-        <AlertDescription className="wrap-break-word">
-          没有可用的操作。
-        </AlertDescription>
+        <AlertDescription>没有可用的操作。</AlertDescription>
       </Alert>
     );
   }
 
   return (
-    // Approval surface adapted from Beautiful UI ApprovalCard.tsx (MIT, rev 44a274e).
-    <Card className="approval-card bui-approval min-w-0">
+    // Approval surface adapted from Beautiful UI ApprovalCard.tsx
+    // (MIT, rev 44a274e). Same compact surface as questions; authorization
+    // buttons keep their allow/deny meaning.
+    <Card size="sm" className="apc-card min-w-0">
       {permission.title ? (
-        <CardHeader>
-          <CardTitle className="wrap-break-word">{permission.title}</CardTitle>
-        </CardHeader>
+        <CardContent className="min-w-0">
+          <div className="apc-q">{permission.title}</div>
+        </CardContent>
       ) : null}
-      <CardFooter className="flex flex-wrap justify-end gap-2">
+      <CardFooter className="apc-perm-actions">
         {permission.options.map((option, index) => (
-          <Button
+          <ApprovalAction
             key={`${option.id}:${index}`}
             type="button"
             variant={option.allow ? "default" : "outline"}
             disabled={locked}
-            className="bui-option h-auto min-h-11 max-w-full whitespace-normal wrap-break-word py-2 text-left"
             onClick={() => onPermission(option.id)}
           >
+            {busy && option.allow ? (
+              <Spinner data-icon="inline-start" />
+            ) : null}
             {option.label || option.id}
-          </Button>
+          </ApprovalAction>
         ))}
       </CardFooter>
     </Card>
@@ -123,11 +115,9 @@ export function PermissionCard({
 
 export function DesktopRequiredAlert() {
   return (
-    <Alert className="approval-card bui-approval">
+    <Alert className="apc-card">
       <AlertTitle>需要桌面端</AlertTitle>
-      <AlertDescription className="wrap-break-word">
-        审批和回答只能在电脑上完成。
-      </AlertDescription>
+      <AlertDescription>审批和回答只能在电脑上完成。</AlertDescription>
     </Alert>
   );
 }
@@ -375,46 +365,41 @@ function QuestionForm({
       onSubmit={submit}
       className="min-w-0"
     >
-      <Card className="approval-card min-w-0">
-        <CardHeader>
-          <CardTitle>等待回答</CardTitle>
-        </CardHeader>
+      <Card size="sm" className="apc-card min-w-0">
         <CardContent className="min-w-0">
           {reviewing ? (
-            <div aria-live="polite">
+            <div aria-live="polite" className="apc-review">
               {questions.questions.map((question, questionIndex) => {
                 const resolved = resolveAnswers(questionIndex);
                 return (
                   <div
                     key={`${question.id}:${questionIndex}`}
-                    className="bui-review-row min-w-0"
+                    className="apc-review-row"
                   >
-                    <div className="min-w-0 flex-1">
-                      <div className="wrap-break-word text-sm font-medium">
+                    <div className="apc-review-text min-w-0">
+                      <div className="apc-review-q">
                         {question.question ||
                           question.header ||
                           `问题 ${questionIndex + 1}`}
                       </div>
-                      <div className="wrap-break-word text-sm text-muted-foreground">
+                      <div className="apc-review-a">
                         {resolved.length ? resolved.join("、") : "未回答"}
                       </div>
                     </div>
-                    <Button
+                    <ApprovalAction
                       type="button"
                       variant="outline"
                       disabled={locked}
-                      className="min-h-11 shrink-0"
                       onClick={() => editQuestion(questionIndex)}
                     >
                       修改
-                    </Button>
+                    </ApprovalAction>
                   </div>
                 );
               })}
             </div>
           ) : (
-          <FieldGroup>
-            {questions.questions.map((question, questionIndex) => {
+            questions.questions.map((question, questionIndex) => {
               if (questionIndex !== step) {
                 return null;
               }
@@ -422,105 +407,31 @@ function QuestionForm({
               const error = errors[questionIndex];
               const errorId = controlId(formId, questionIndex, "error");
               const otherId = controlId(formId, questionIndex, "other");
-              const useToggleGroup =
-                question.options.length >= 2 && question.options.length <= 7;
               const legendId = controlId(formId, questionIndex, "legend");
 
               return (
-                <FieldSet
+                <fieldset
                   key={`${question.id}:${questionIndex}`}
-                  className="min-w-0"
+                  className="apc-fieldset min-w-0"
                 >
-                  <FieldLegend id={legendId} className="wrap-break-word">
+                  <legend id={legendId} className="apc-q">
                     {question.question ||
                       question.header ||
                       `问题 ${questionIndex + 1}`}
-                  </FieldLegend>
+                  </legend>
 
-                  {useToggleGroup ? (
-                    <Field
-                      data-invalid={error ? true : undefined}
-                      data-disabled={locked || undefined}
-                    >
-                      <ToggleGroup
-                        className="w-full flex-wrap"
-                        value={answer.selected}
-                        multiple={question.multiSelect}
-                        aria-labelledby={legendId}
-                        disabled={locked}
-                        aria-invalid={error ? true : undefined}
-                        aria-describedby={error ? errorId : undefined}
-                        onValueChange={(value) =>
-                          setSelected(questionIndex, value)
-                        }
-                      >
-                        {question.options.map((option, optionIndex) => (
-                          <ToggleGroupItem
-                            key={optionValue(optionIndex)}
-                            id={controlId(
-                              formId,
-                              questionIndex,
-                              `opt${optionIndex}`,
-                            )}
-                            value={optionValue(optionIndex)}
-                            className="bui-option h-auto min-h-11 max-w-full whitespace-normal wrap-break-word py-2 text-left"
-                          >
-                            <span className="flex min-w-0 flex-col items-start gap-0.5">
-                              <span>{optionText(option, optionIndex)}</span>
-                              {option.label && option.description ? (
-                                <span className="wrap-break-word text-muted-foreground">
-                                  {option.description}
-                                </span>
-                              ) : null}
-                            </span>
-                          </ToggleGroupItem>
-                        ))}
-                      </ToggleGroup>
-                    </Field>
-                  ) : question.options.length > 0 && !question.multiSelect ? (
+                  {question.options.length > 0 && !question.multiSelect ? (
                     <RadioGroup
                       value={answer.selected[0] || ""}
                       disabled={locked}
                       aria-labelledby={legendId}
+                      aria-invalid={error ? true : undefined}
+                      aria-describedby={error ? errorId : undefined}
                       onValueChange={(value) =>
                         setSelected(questionIndex, [String(value)])
                       }
+                      className="apc-opts"
                     >
-                      {question.options.map((option, optionIndex) => {
-                        const id = controlId(
-                          formId,
-                          questionIndex,
-                          `opt${optionIndex}`,
-                        );
-                        return (
-                          <Field
-                            key={optionIndex}
-                            orientation="horizontal"
-                            data-invalid={error ? true : undefined}
-                            data-disabled={locked || undefined}
-                          >
-                            <RadioGroupItem
-                              id={id}
-                              value={optionValue(optionIndex)}
-                              aria-invalid={error ? true : undefined}
-                              aria-describedby={error ? errorId : undefined}
-                            />
-                            <FieldContent>
-                              <FieldLabel htmlFor={id}>
-                                {optionText(option, optionIndex)}
-                              </FieldLabel>
-                              {option.label && option.description && (
-                                <FieldDescription>
-                                  {option.description}
-                                </FieldDescription>
-                              )}
-                            </FieldContent>
-                          </Field>
-                        );
-                      })}
-                    </RadioGroup>
-                  ) : question.options.length > 0 ? (
-                    <FieldGroup className="gap-3">
                       {question.options.map((option, optionIndex) => {
                         const id = controlId(
                           formId,
@@ -530,70 +441,74 @@ function QuestionForm({
                         const value = optionValue(optionIndex);
 
                         return (
-                          <Field
+                          <ApprovalRadioOption
                             key={value}
-                            orientation="horizontal"
-                            data-invalid={error ? true : undefined}
-                            data-disabled={locked || undefined}
-                          >
-                            <Checkbox
-                              id={id}
-                              checked={answer.selected.includes(value)}
-                              disabled={locked}
-                              aria-invalid={error ? true : undefined}
-                              aria-describedby={error ? errorId : undefined}
-                              onCheckedChange={(checked) =>
-                                setChecked(questionIndex, optionIndex, checked)
-                              }
-                            />
-                            <FieldContent>
-                              <FieldLabel
-                                htmlFor={id}
-                                className="max-w-full wrap-break-word"
-                              >
-                                {optionText(option, optionIndex)}
-                              </FieldLabel>
-                              {option.label && option.description ? (
-                                <FieldDescription className="wrap-break-word">
-                                  {option.description}
-                                </FieldDescription>
-                              ) : null}
-                            </FieldContent>
-                          </Field>
+                            id={id}
+                            value={value}
+                            label={optionText(option, optionIndex)}
+                            description={optionDescription(option)}
+                            selected={answer.selected.includes(value)}
+                            disabled={locked}
+                          />
                         );
                       })}
-                    </FieldGroup>
+                    </RadioGroup>
+                  ) : question.options.length > 0 ? (
+                    <div
+                      role="group"
+                      aria-labelledby={legendId}
+                      aria-invalid={error ? true : undefined}
+                      aria-describedby={error ? errorId : undefined}
+                      className="apc-opts"
+                    >
+                      {question.options.map((option, optionIndex) => {
+                        const id = controlId(
+                          formId,
+                          questionIndex,
+                          `opt${optionIndex}`,
+                        );
+                        const value = optionValue(optionIndex);
+
+                        return (
+                          <ApprovalCheckOption
+                            key={value}
+                            id={id}
+                            label={optionText(option, optionIndex)}
+                            description={optionDescription(option)}
+                            checked={answer.selected.includes(value)}
+                            disabled={locked}
+                            onCheckedChange={(checked) =>
+                              setChecked(questionIndex, optionIndex, checked)
+                            }
+                          />
+                        );
+                      })}
+                    </div>
                   ) : null}
 
-                  <Field
-                    data-invalid={error ? true : undefined}
-                    data-disabled={locked || undefined}
-                  >
-                    <FieldLabel
-                      htmlFor={otherId}
-                      className={
-                        question.options.length > 0 ? undefined : "sr-only"
-                      }
-                    >
-                      {question.options.length > 0 ? "其他" : "回答"}
-                    </FieldLabel>
+                  <div className="apc-custom">
+                    <label htmlFor={otherId} className="sr-only">
+                      {question.options.length > 0 ? "其他回答" : "回答"}
+                    </label>
                     {question.options.length > 0 ? (
                       <Input
                         id={otherId}
                         value={answer.custom}
                         maxLength={MAX_ANSWER_LENGTH}
                         disabled={locked}
+                        placeholder="其他回答…"
                         aria-invalid={error ? true : undefined}
                         aria-describedby={error ? errorId : undefined}
                         onChange={(event) =>
                           setCustom(questionIndex, event.target.value)
                         }
+                        className="apc-custom-input"
                       />
                     ) : (
                       <Textarea
                         id={otherId}
                         value={answer.custom}
-                        rows={3}
+                        rows={2}
                         maxLength={MAX_ANSWER_LENGTH}
                         disabled={locked}
                         aria-invalid={error ? true : undefined}
@@ -601,63 +516,68 @@ function QuestionForm({
                         onChange={(event) =>
                           setCustom(questionIndex, event.target.value)
                         }
+                        className="apc-custom-area"
                       />
                     )}
-                  </Field>
+                  </div>
 
                   {error ? <FieldError id={errorId}>{error}</FieldError> : null}
-                </FieldSet>
+                </fieldset>
               );
-            })}
-          </FieldGroup>
+            })
           )}
         </CardContent>
         <CardFooter className="justify-between gap-3">
-          <div className="bui-step-nav" aria-label="问题导航">
-            <button
-              type="button"
-              aria-label="上一题"
-              disabled={locked || (!reviewing && step <= 0)}
-              onClick={() =>
-                reviewing ? setReviewing(false) : goQuestion(step - 1)
-              }
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M18 15l-6-6-6 6" />
-              </svg>
-            </button>
-            <span className="bui-step-counter" aria-live="polite">
-              {reviewing ? "检查" : `${step + 1} / ${total}`}
-            </span>
-            <button
-              type="button"
-              aria-label="下一题"
-              disabled={locked || reviewing || step >= total - 1}
-              onClick={() => goQuestion(step + 1)}
-            >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
+          <div className="apc-step" aria-label="问题导航">
+            {total <= 1 ? (
+              <span className="apc-counter" aria-live="polite">
+                {reviewing ? "检查" : `${step + 1} / ${total}`}
+              </span>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="apc-step-btn"
+                  aria-label="上一题"
+                  disabled={locked || (!reviewing && step <= 0)}
+                  onClick={() =>
+                    reviewing ? setReviewing(false) : goQuestion(step - 1)
+                  }
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M18 15l-6-6-6 6" />
+                  </svg>
+                </button>
+                <span className="apc-counter" aria-live="polite">
+                  {reviewing ? "检查" : `${step + 1} / ${total}`}
+                </span>
+                <button
+                  type="button"
+                  className="apc-step-btn"
+                  aria-label="下一题"
+                  disabled={locked || reviewing || step >= total - 1}
+                  onClick={() => goQuestion(step + 1)}
+                >
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M6 9l6 6 6-6" />
+                  </svg>
+                </button>
+              </>
+            )}
           </div>
           {reviewing ? (
-            <Button
-              type="submit"
-              disabled={locked}
-              className="min-h-11"
-            >
+            <ApprovalAction type="submit" disabled={locked}>
               {busy ? <Spinner data-icon="inline-start" /> : null}
               提交
-            </Button>
+            </ApprovalAction>
           ) : (
-            <Button
+            <ApprovalAction
               type="button"
               disabled={locked}
-              className="min-h-11"
               onClick={() => continueFrom(step)}
             >
               {step < total - 1 ? "继续" : "检查"}
-            </Button>
+            </ApprovalAction>
           )}
         </CardFooter>
       </Card>

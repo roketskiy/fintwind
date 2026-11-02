@@ -1,29 +1,21 @@
 // Prompt layout and token selection adapted from Beautiful UI PromptBar (MIT).
-import { useEffect, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import {
-  ArrowUpIcon,
   CheckIcon,
-  ChevronDownIcon,
   CloseIcon,
   PaperclipIcon,
   TerminalIcon,
-  BotIcon,
-  PlusIcon,
   SparkleIcon,
 } from "@/components/icons";
 import { GlideMenu, PixelLoader } from "@/components/beautiful/primitives";
-import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTitle } from "@/components/ui/popover";
+import { PromptBar } from "@/components/beautiful/prompt-bar";
 import { composerCommands, slashQuery, type ComposerCommand } from "@/lib/composer-commands";
 import { Button } from "@/components/ui/button";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupTextarea,
-} from "@/components/ui/input-group";
-import { Spinner } from "@/components/ui/spinner";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import "./beautiful/segmented-control.css";
 import { remoteClient } from "@/lib/remote-client";
 import type {
   CommandMap,
@@ -84,6 +76,7 @@ export function Composer({
   filesRef.current = files;
   const sending = useRef(false);
   const configurable = session.features.includes("composerOptions");
+  const optionsId = useId();
   const attachmentsSupported = session.features.includes("attachments");
   const running = ["connecting", "working", "waiting"].includes(session.status);
   const locked = disabled || busy || uploading;
@@ -298,7 +291,20 @@ export function Composer({
           event.target.value = "";
         }}
       />
-      {!!files.length && (
+      <PromptBar ref={textarea}
+        draft={draft} placeholder={running ? "补充消息…" : "发送消息…"}
+        inputDisabled={uploading || busy} locked={locked}
+        canSend={!locked && session.canSend && !session.desktopRequired && (!!draft.trim() || !!files.length)}
+        sending={uploading || busy} running={running} attachmentsSupported={attachmentsSupported}
+        configurable={configurable} modelName={session.modelName}
+        mode={session.interactionMode === "plan" ? "Plan" : "Build"} effort={session.reasoningEffort || "默认思考"}
+        commandsOpen={commandOpen}
+        activeCommand={commandOpen && matches.length ? `slash-option-${Math.min(highlight, matches.length - 1)}` : undefined}
+        onDraft={(value) => { setDismissed(null); onDraft(value); }} onPaste={paste} onKeyDown={keyDown}
+        onAttach={() => input.current?.click()}
+        onModel={() => { setSearch(""); setPanel("model"); }} onOptions={() => setPanel("options")}
+        onStop={() => { void mutate("stop", { sessionId: session.id }); }} onSend={() => { void send(); }}
+        attachments={!!files.length && (
         <div className="attachment-tray">
           {files.map((entry) => (
             <div className="attachment-chip" key={entry.id}>
@@ -328,7 +334,7 @@ export function Composer({
             </div>
           ))}
         </div>
-      )}
+      )} />
       {progress && (
         <p className="composer-notice" role="status">
           {progress}
@@ -337,122 +343,7 @@ export function Composer({
       {!configurable && (
         <p className="composer-notice">更新桌面端后可使用模型选项和附件。</p>
       )}
-      <form className="prompt-card"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
-        <FieldGroup>
-          <Field>
-            <FieldLabel className="sr-only" htmlFor="message-input">
-              消息
-            </FieldLabel>
-            <InputGroup>
-              <InputGroupTextarea
-                ref={textarea}
-                id="message-input"
-                placeholder={running ? "补充消息，或输入 / 命令…" : "发送消息，或输入 / 命令…"}
-                rows={1}
-                value={draft}
-                maxLength={32768}
-                disabled={uploading || busy}
-                onPaste={paste}
-                onChange={(event) => { setDismissed(null); onDraft(event.target.value); }}
-                onKeyDown={keyDown}
-                role="combobox"
-                aria-autocomplete="list"
-                aria-expanded={commandOpen}
-                aria-controls={commandOpen ? "slash-commands" : undefined}
-                aria-activedescendant={commandOpen && matches.length ? `slash-option-${Math.min(highlight, matches.length - 1)}` : undefined}
-              />
-              <InputGroupAddon align="block-end">
-                {attachmentsSupported && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-sm"
-                    disabled={locked}
-                    aria-label="添加图片或文件"
-                    onClick={() => input.current?.click()}
-                  >
-                    <PlusIcon />
-                  </Button>
-                )}
-                {configurable && (
-                  <PopoverTrigger render={<Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="model-chip"
-                    disabled={locked}
-                    onClick={() => {
-                      setSearch("");
-                      setPanel("model");
-                    }}
-                  />}>
-                    <BotIcon data-icon="inline-start" />
-                    <span className="truncate">
-                      {session.modelName || "选择模型"}
-                    </span>
-                    <ChevronDownIcon data-icon="inline-end" />
-                  </PopoverTrigger>
-                )}
-                <div className="composer-spacer" />
-                {running ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={locked}
-                    onClick={() =>
-                      void mutate("stop", { sessionId: session.id })
-                    }
-                  >
-                    停止
-                  </Button>
-                ) : null}
-                <Button
-                  type="submit"
-                  size="icon-sm"
-                  disabled={
-                    locked ||
-                    !session.canSend ||
-                    session.desktopRequired ||
-                    (!draft.trim() && !files.length)
-                  }
-                  aria-label={running ? "加入待发送" : "发送消息"}
-                >
-                  {uploading || busy ? <Spinner /> : <ArrowUpIcon />}
-                </Button>
-              </InputGroupAddon>
-            </InputGroup>
-          </Field>
-        </FieldGroup>
-      </form>
-      {configurable && (
-        <div className="composer-options-bar">
-          <PopoverTrigger render={<Button
-            variant="ghost"
-            size="sm"
-            disabled={locked}
-            onClick={() => setPanel("options")}
-          />}>
-            {session.interactionMode === "plan" ? "Plan" : "Build"}
-            <ChevronDownIcon data-icon="inline-end" />
-          </PopoverTrigger>
-          <PopoverTrigger render={<Button
-            variant="ghost"
-            size="sm"
-            disabled={locked}
-            onClick={() => setPanel("options")}
-          />}>
-            <SparkleIcon data-icon="inline-start" />
-            {session.reasoningEffort || "默认思考"}
-          </PopoverTrigger>
-        </div>
-      )}
-      <PopoverContent side="top" align="start" sideOffset={12} className="composer-popover">
+      <PopoverContent side="top" align="start" sideOffset={8} className="composer-popover">
         <PopoverTitle>{panel === "model" ? "模型" : "会话选项"}</PopoverTitle>
         <div className="composer-panel">
             {optionsLoading && !catalog ? (
@@ -505,10 +396,12 @@ export function Composer({
                   </>
                 )}
                 {panel === "options" && (
-                  <FieldGroup>
-                    <Field>
-                      <FieldLabel>模式</FieldLabel>
+                  <FieldGroup className="session-options">
+                    <Field orientation="horizontal" className="session-option-row">
+                      <FieldLabel id={`${optionsId}-mode`}>模式</FieldLabel>
                       <ToggleGroup
+                        className="bui-segments" spacing={0} size="sm"
+                        aria-labelledby={`${optionsId}-mode`}
                         value={[session.interactionMode || "build"]}
                         disabled={locked || running || !catalog.canConfigure}
                         onValueChange={(values) => {
@@ -518,15 +411,16 @@ export function Composer({
                             });
                         }}
                       >
-                        <ToggleGroupItem value="build">Build</ToggleGroupItem>
-                        <ToggleGroupItem value="plan">Plan</ToggleGroupItem>
+                        <ToggleGroupItem value="build"><span className="bui-segment-face">Build</span></ToggleGroupItem>
+                        <ToggleGroupItem value="plan"><span className="bui-segment-face">Plan</span></ToggleGroupItem>
                       </ToggleGroup>
                     </Field>
                     {!!model?.efforts.length && (
-                      <Field>
-                        <FieldLabel>思考强度</FieldLabel>
+                      <Field orientation="horizontal" className="session-option-row">
+                        <FieldLabel id={`${optionsId}-effort`}>思考强度</FieldLabel>
                         <ToggleGroup
-                          className="flex-wrap"
+                          className="bui-segments" spacing={0} size="sm"
+                          aria-labelledby={`${optionsId}-effort`}
                           value={[session.reasoningEffort]}
                           disabled={locked || running || !catalog.canConfigure}
                           onValueChange={(values) => {
@@ -538,13 +432,13 @@ export function Composer({
                         >
                           {model.efforts.map((effort) => (
                             <ToggleGroupItem key={effort.id} value={effort.id}>
-                              {effort.label}
+                              <span className="bui-segment-face">{effort.label}</span>
                             </ToggleGroupItem>
                           ))}
                         </ToggleGroup>
                       </Field>
                     )}
-                    {running && <p>运行结束后可修改会话选项。</p>}
+                    {running && <p className="session-options-status">运行结束后可修改会话选项。</p>}
                   </FieldGroup>
                 )}
               </>

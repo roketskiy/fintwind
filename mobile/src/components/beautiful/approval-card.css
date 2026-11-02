@@ -1,0 +1,211 @@
+/* Adapted from Beautiful UI by Shane Levine (MIT), revision 44a274e598395ab61e7c96c26fda2758780253b7.
+ * Source: components/primitives/ApprovalCard.tsx — question-as-heading,
+ * vertical option rows, compact step footer. Timed auto-advance, staged slide
+ * animation, dismiss and skip are intentionally excluded.
+ * No :hover styling anywhere in this scope — press (:active) feedback only.
+ * Colors and the shared card finish come from the mobile theme tokens. */
+
+/* Shared compact surface for question and permission cards. */
+.apc-card {
+  --card-spacing: 10px;
+  background: var(--bui-card-surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--bui-card-shadow);
+}
+
+/* The question itself is the heading: no extra title row above it. */
+.apc-fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.apc-q {
+  padding: 0;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--foreground);
+  overflow-wrap: break-word;
+}
+
+/* Vertical option rows. */
+.apc-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 6px;
+}
+
+/* Full row is the 44px hit area; the indicator and text are the 16px surface. */
+.apc-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 44px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  transition: background-color 120ms var(--bui-ease);
+}
+
+.apc-opt[data-selected] {
+  background: color-mix(in oklch, var(--foreground) 6%, transparent);
+}
+
+.apc-opt:active {
+  background: color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+.apc-opt[data-selected]:active {
+  background: color-mix(in oklch, var(--foreground) 12%, transparent);
+}
+
+.apc-indicator {
+  margin-top: 2px;
+  flex: none;
+}
+
+.apc-opt-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.apc-opt-label {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--foreground);
+  overflow-wrap: break-word;
+}
+
+.apc-opt-desc {
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted-foreground);
+  overflow-wrap: break-word;
+}
+
+/* Compact free-text answer: screen-reader label only, no extra title row. */
+.apc-custom {
+  margin-top: 6px;
+}
+
+.apc-custom-input {
+  border-radius: 8px;
+  font-size: 16px;
+}
+.apc-custom-input::placeholder { font-size: 12px; }
+
+.apc-custom-area {
+  border-radius: 8px;
+  font-size: 16px;
+}
+
+/* Compact footer: small counter, 32px action inside a 44px hit area. */
+.apc-step {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--muted-foreground);
+}
+
+.apc-step-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 8px;
+  color: inherit;
+}
+
+.apc-step-btn:disabled {
+  opacity: 0.3;
+}
+
+.apc-step-btn:not(:disabled):active {
+  color: var(--foreground);
+  background: color-mix(in oklch, var(--foreground) 8%, transparent);
+}
+
+.apc-step-btn:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: 2px;
+}
+
+.apc-counter {
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+.apc-card .apc-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  height: 44px;
+  min-width: 44px;
+  padding: 6px 0;
+  border: 0;
+  background: transparent;
+  flex: none;
+}
+.apc-action-face { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 0 12px; border: 1px solid transparent; border-radius: 8px; font-size: 12px; font-weight: 500; line-height: 16px; }
+.apc-action[data-apc-tone="default"] .apc-action-face { background: var(--primary); color: var(--primary-foreground); }
+.apc-action[data-apc-tone="outline"] .apc-action-face { border-color: var(--border); color: var(--foreground); }
+.apc-action:active:not(:disabled) .apc-action-face { transform: scale(.98); }
+@media (prefers-reduced-motion: reduce) { .apc-action:active:not(:disabled) .apc-action-face { transform: none; } }
+
+/* Review list: one compact row per question, editable in place. */
+.apc-review {
+  display: flex;
+  flex-direction: column;
+}
+
+.apc-review-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  padding-block: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.apc-review-row:last-child {
+  border-bottom: 0;
+}
+
+.apc-review-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.apc-review-q {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--foreground);
+  overflow-wrap: break-word;
+}
+
+.apc-review-a {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+  overflow-wrap: break-word;
+}
+
+/* Permission actions share the compact surface and footer sizing. */
+.apc-perm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}

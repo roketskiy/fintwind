@@ -4,6 +4,7 @@ import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/compone
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { SettingsIcon, TrashIcon } from "@/components/icons";
 import { usePhoneTheme, type PhoneTheme } from "@/lib/theme";
+import "./beautiful/segmented-control.css";
 
 export function PhoneSettings({ onForget }: { onForget: () => Promise<void> }) {
   const { theme, setTheme } = usePhoneTheme();
@@ -13,10 +14,10 @@ export function PhoneSettings({ onForget }: { onForget: () => Promise<void> }) {
     <PopoverTrigger render={<Button variant="ghost" size="icon" aria-label="设置" />}><SettingsIcon /></PopoverTrigger>
     <PopoverContent align="end" className="phone-settings">
       <PopoverTitle>外观</PopoverTitle>
-      <ToggleGroup aria-label="配色" value={[theme]} onValueChange={(values) => { if (values[0]) setTheme(String(values[0]) as PhoneTheme); }}>
-        <ToggleGroupItem value="light">日间</ToggleGroupItem>
-        <ToggleGroupItem value="dark">夜间</ToggleGroupItem>
-        <ToggleGroupItem value="system">跟随系统</ToggleGroupItem>
+      <ToggleGroup className="bui-segments" spacing={0} size="sm" aria-label="配色" value={[theme]} onValueChange={(values) => { if (values[0]) setTheme(String(values[0]) as PhoneTheme); }}>
+        <ToggleGroupItem value="light"><span className="bui-segment-face">日间</span></ToggleGroupItem>
+        <ToggleGroupItem value="dark"><span className="bui-segment-face">夜间</span></ToggleGroupItem>
+        <ToggleGroupItem value="system"><span className="bui-segment-face">跟随系统</span></ToggleGroupItem>
       </ToggleGroup>
       {confirm ? <div className="forget-confirm">
         <p>忘记后需重新扫码配对。</p>

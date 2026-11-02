@@ -9,6 +9,7 @@ import {
 } from "@/components/approvals";
 import {
   CheckIcon,
+  ChevronRightIcon,
   CopyIcon,
   MessageIcon,
 } from "@/components/icons";
@@ -19,6 +20,7 @@ import {
   ToolActivityRow,
 } from "@/components/beautiful/thinking-state";
 import { Button } from "@/components/ui/button";
+import { PixelLoader } from "@/components/beautiful/primitives";
 import {
   Empty,
   EmptyHeader,
@@ -40,6 +42,7 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller";
 import { Trace } from "@/components/ui/trace";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type {
   RemoteMessage,
   RemoteActivity,
@@ -70,6 +73,29 @@ const ActivityRow = React.memo(
     );
   },
 );
+
+function ActivityBranch({ activities }: { activities: RemoteActivity[] }) {
+  const working = activities.some((activity) => !activity.complete && !activity.failed);
+  const failures = activities.filter((activity) => activity.failed).length;
+  const [manualExpanded, setManualExpanded] = React.useState<boolean | null>(null);
+  const expanded = manualExpanded ?? working;
+  return <Collapsible className="bui-branch" open={expanded} onOpenChange={setManualExpanded}>
+    <CollapsibleTrigger className="bui-branch-trigger">
+      <ChevronRightIcon className="bui-branch-chevron" />
+      <span>{activities.length} 项活动</span>
+      <span className="bui-branch-status" data-failed={failures > 0 || undefined}>
+        {failures ? `${failures} 项失败` : working ? "进行中" : "已完成"}
+      </span>
+    </CollapsibleTrigger>
+    <CollapsibleContent>
+      <Trace className="bui-branch-list" role="list">
+        {activities.map((activity) => <div className="bui-branch-item" role="listitem" data-kind={activity.kind} key={activity.id}>
+          <ActivityRow activity={activity} />
+        </div>)}
+      </Trace>
+    </CollapsibleContent>
+  </Collapsible>;
+}
 
 function transcriptGroups(entries: TranscriptEntry[]) {
   const groups: {
@@ -172,11 +198,9 @@ function MessageCopyButton({
 const MessageRow = React.memo(
   function MessageRow({
     message,
-    streaming,
     onError,
   }: {
     message: RemoteMessage;
-    streaming?: boolean;
     onError: (message: string) => void;
   }) {
     // Real turn metadata projected by desktop (RemoteMessage.createdAt unix
@@ -231,16 +255,8 @@ const MessageRow = React.memo(
         <MessageContent>
           <span className="sr-only">助手</span>
           <Bubble variant="ghost" align="start" className="w-full">
-            {/* Streaming caret adapted from Beautiful UI StreamingText.tsx; no
-                demo timers, citations or follow-ups. */}
             <BubbleContent className="w-full">
               <Markdown text={message.text} />
-              {streaming ? (
-                <span
-                  aria-hidden="true"
-                  className="bui-streaming-caret"
-                />
-              ) : null}
             </BubbleContent>
           </Bubble>
           {showFooter ? (
@@ -269,7 +285,6 @@ const MessageRow = React.memo(
       ba = b.attachments ?? [];
     return (
       previous.onError === next.onError &&
-      previous.streaming === next.streaming &&
       a.id === b.id &&
       a.role === b.role &&
       a.text === b.text &&
@@ -316,20 +331,6 @@ export function Conversation({
     );
   }
 
-  const streamingId =
-    session.status === "working"
-      ? (() => {
-          const entries = session.entries ?? session.messages;
-          for (let index = entries.length - 1; index >= 0; index -= 1) {
-            const entry = entries[index];
-            if (entry.type !== "activity" && entry.role === "assistant") {
-              return entry.id;
-            }
-          }
-          return null;
-        })()
-      : null;
-
   return (
     <div className="conversation-body flex min-h-0 min-w-0 flex-1 flex-col">
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
@@ -357,15 +358,10 @@ export function Conversation({
                     {group.message ? (
                       <MessageRow
                         message={group.message}
-                        streaming={group.message.id === streamingId}
                         onError={onError}
                       />
                     ) : (
-                      <Trace>
-                        {group.activities?.map((activity) => (
-                          <ActivityRow key={activity.id} activity={activity} />
-                        ))}
-                      </Trace>
+                      <ActivityBranch activities={group.activities ?? []} />
                     )}
                   </MessageScrollerItem>
                 ),
@@ -384,6 +380,7 @@ export function Conversation({
                     <MessageScrollerItem
                       key={`permission:${session.permission.requestId}`}
                       messageId={`permission:${session.permission.requestId}`}
+                      className="approval-surface-item"
                     >
                       <PermissionCard
                         permission={session.permission}
@@ -398,6 +395,7 @@ export function Conversation({
                     <MessageScrollerItem
                       key={`questions:${session.questions.requestId}`}
                       messageId={`questions:${session.questions.requestId}`}
+                      className="approval-surface-item"
                     >
                       <QuestionsCard
                         questions={session.questions}
@@ -415,8 +413,8 @@ export function Conversation({
                   key="system:working"
                   messageId="system:working"
                 >
-                  <Marker aria-live="polite">
-                    <MarkerContent>正在处理</MarkerContent>
+                  <Marker>
+                    <MarkerContent><PixelLoader label="正在处理" /></MarkerContent>
                   </Marker>
                 </MessageScrollerItem>
               ) : null}

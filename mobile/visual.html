@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="zh-CN">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Fintwind 隔离视觉预览</title>
-<style>body{margin:0;background:#e6e7eb;font:13px system-ui;color:#24262d}header{display:flex;align-items:center;flex-wrap:wrap;gap:16px;padding:12px 20px;background:#fff;border-bottom:1px solid #ccc}label{display:flex;align-items:center;gap:6px}select{padding:6px}main{display:flex;justify-content:center;padding:20px}iframe{border:1px solid #c7c9ce;border-radius:16px;background:#fff;width:390px;height:844px;box-shadow:0 8px 40px #0002}</style></head>
+<style>body{margin:0;background:#e6e7eb;font:13px system-ui;color:#24262d}header{display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:8px 12px;background:#fff;border-bottom:1px solid #ccc}label{display:flex;align-items:center;gap:6px}select{padding:4px}main{display:flex;justify-content:center;padding:12px}iframe{border:1px solid #c7c9ce;border-radius:12px;background:#fff;width:390px;height:640px;box-shadow:0 8px 40px #0002}</style></head>
 <body><header><strong>隔离视觉预览 · 无远控连接</strong>
-<label>宽度<select id="width"><option>320</option><option selected>390</option><option>768</option></select></label>
+<label>宽度<select id="width"><option>320</option><option>360</option><option selected>390</option><option>768</option></select></label>
 <label>配色<select id="theme"><option value="light">日间</option><option value="dark">夜间</option></select></label>
-<label>场景<select id="scene"><option value="conversation">对话与工具</option><option value="approval">审批问答</option><option value="list">会话列表</option></select></label>
+<label>场景<select id="scene"><option value="conversation">对话与工具</option><option value="approval">长问题与忙碌输入</option><option value="multi">多题与多选</option><option value="list">会话列表</option><option value="code">代码高亮</option></select></label>
 </header><main><iframe id="phone" title="手机网页预览" src="/visual-frame.html?theme=light&scene=conversation"></iframe></main>
 <script type="module">
 const phone=document.querySelector('#phone');

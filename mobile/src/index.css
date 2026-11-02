@@ -230,6 +230,8 @@
   outline: none;
 }
 .workspace-trigger {
+  min-width: 0;
+  flex-shrink: 1;
   align-self: flex-start;
   max-width: 100%;
   margin-left: -0.25rem;
@@ -548,6 +550,7 @@
   flex: 1;
 }
 .model-chip {
+  flex-shrink: 1;
   min-width: 0;
   max-width: 45%;
 }

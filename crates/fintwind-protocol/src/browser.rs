@@ -5,13 +5,11 @@
 //! Authorization is issued per page by the GUI and bound to one session,
 //! runtime, page and grant; the daemon never guesses a "current page". Every
 //! design decision favors failing closed: an unknown scope answers with an
-//! error instead of falling back to another page. No message on this channel
-//! carries arbitrary CDP method names, cookies or local file contents. One
-//! raw capability is deliberate: [`BrowserAction::Evaluate`] carries a single
-//! bounded JavaScript expression — it is authorized exactly like every other
-//! mutation (per-action approval on a manual share, continuous under a
-//! full-access share), runs in the page's isolated world, and its output is
-//! untrusted page data, never instructions.
+//! error instead of falling back to another page. Tools have full access to the
+//! current session's pages, including local files and page data. The bounded
+//! [`BrowserAction::Evaluate`] runs in the page's isolated world; its output is
+//! untrusted page data, never instructions. Arbitrary CDP method names are not
+//! accepted by this channel.
 //!
 //! A GUI connection may additionally register one *launcher* scope per live
 //! session runtime. The launcher's page and grant ids are capability
@@ -59,7 +57,7 @@ pub const MAX_BROWSER_KEY_BYTES: usize = 32;
 pub const MAX_BROWSER_SCROLL_DELTA: u64 = 2_000;
 /// Pages one connection may publish at once. Mirrored by the daemon broker
 /// and pre-checked by the client so an oversized publish fails locally.
-pub const MAX_BROWSER_PAGES_PER_CONNECTION: usize = 16;
+pub const MAX_BROWSER_PAGES_PER_CONNECTION: usize = 256;
 
 /// A fresh, GUI-issued capability for one page and one live session runtime.
 /// The transport additionally binds it to the publishing GUI connection.
@@ -91,9 +89,9 @@ pub struct BrowserShare {
     pub title: String,
 }
 
-/// No arbitrary CDP method names, cookies or file access. Selector and text
-/// bounds keep a broken page from steering unbounded payloads, and navigation
-/// is restricted to scheme-checked HTTP(S) URLs without embedded credentials.
+/// Selector and text bounds keep a broken page from steering unbounded
+/// payloads. Navigation accepts URLs supported by the native browser, including
+/// local files; the browser decides which schemes it can load.
 ///
 /// [`Self::Open`] is the one launcher-side action: only a registered browser
 /// launcher may ever be routed an `Open`. [`Self::Scroll`] is an ordinary
@@ -104,8 +102,8 @@ pub struct BrowserShare {
 /// page's isolated world with an untrusted, size-capped result. See the
 /// module documentation. [`Self::Screenshot`] answers as
 /// [`BrowserResult::Media`], bounded by capture parameters rather than trust.
-/// [`Self::Close`] is launcher-side like `Open`: the app host closes the
-/// surface, and only a page this session opened automatically qualifies.
+/// [`Self::Close`] is launcher-side like `Open`: the app host closes any
+/// surface belonging to this session.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -181,8 +179,8 @@ pub enum BrowserAction {
         to: String,
     },
     /// Close the page this grant names. Launcher-side like [`Self::Open`]:
-    /// only the app host can close the surface, and only a page this session
-    /// opened automatically qualifies; a manually shared tab is the user's.
+    /// only the app host can close the surface, and it must belong to this
+    /// session's live runtime.
     Close,
 }
 
@@ -196,22 +194,25 @@ impl BrowserAction {
         !matches!(self, Self::Snapshot)
     }
 
-    /// Scheme and credential rules shared by navigation actions and by page
-    /// publication, so a shared page's URL is held to the same standard as a
-    /// URL the daemon asks the GUI to open.
+    /// Check the URL envelope without limiting the browser's schemes. The
+    /// native browser performs the actual URL parsing and navigation.
     pub fn validate_url(url: &str) -> Result<(), String> {
-        if url.len() > MAX_BROWSER_URL_BYTES {
-            return Err("browser URL exceeds the size limit".into());
+        if url.is_empty() || url.len() > MAX_BROWSER_URL_BYTES {
+            return Err("browser URL is empty or exceeds the size limit".into());
         }
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err("browser navigation only supports HTTP and HTTPS".into());
-        }
-        // `https://user:password@host/` would carry credentials through
-        // the bridge, so any authority with userinfo is refused.
-        let authority = url.split_once("://").map(|(_, rest)| rest).unwrap_or(url);
-        let authority = authority.split(['/', '?', '#']).next().unwrap_or(authority);
-        if authority.contains('@') {
-            return Err("browser navigation must not carry credentials".into());
+        let Some((scheme, _)) = url.split_once(':') else {
+            return Err("browser URL must include a scheme".into());
+        };
+        if !scheme
+            .as_bytes()
+            .first()
+            .is_some_and(u8::is_ascii_alphabetic)
+            || !scheme
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
+            || url.chars().any(char::is_control)
+        {
+            return Err("invalid browser URL".into());
         }
         Ok(())
     }

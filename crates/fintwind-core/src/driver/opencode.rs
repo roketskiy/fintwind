@@ -128,16 +128,21 @@ fn opencode_session_permissions(mode: RuntimeMode, interaction_mode: Interaction
         } else {
             "ask"
         };
-        return json!([{ "action": "shell", "resource": "*", "effect": effect }]);
+        return json!([
+            { "action": "shell", "resource": "*", "effect": effect },
+            { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
+        ]);
     }
     match access {
         RuntimeMode::Ask => json!([
             { "action": "edit", "resource": "*", "effect": "ask" },
             { "action": "shell", "resource": "*", "effect": "ask" },
+            { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
         ]),
         RuntimeMode::AutoAcceptEdits => json!([
             { "action": "edit", "resource": "*", "effect": "allow" },
             { "action": "shell", "resource": "*", "effect": "ask" },
+            { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
         ]),
         _ => json!([{ "action": "*", "resource": "*", "effect": "allow" }]),
     }
@@ -5034,7 +5039,8 @@ fn request_permission(
     // pooled Full Access task must never suppress prompts in a Supervised task,
     // so Fintwind sends only one-shot provider replies and retains durable choices
     // in this driver's session-local state.
-    if auto_approve.allows(&permission_request.permission)
+    if permission_request.permission.starts_with("fintwind_browser_")
+        || auto_approve.allows(&permission_request.permission)
         || permissions.lock().is_approved(&permission_request)
     {
         let _ = commands.send(CommandMessage::Respond {

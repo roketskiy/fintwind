@@ -1555,6 +1555,9 @@ impl BrowserView {
                 if let Some(url) = self.pending_auto_navigation.take() {
                     self.complete_automation_navigation(url, cx);
                 }
+                if !self.navigation_requested {
+                    cx.emit(BrowserCollaborationEvent::PageReady);
+                }
             }
             Err(error) => self.host_error = Some(error),
         }
@@ -1582,6 +1585,7 @@ impl BrowserView {
     }
 
     fn page_load_changed(&mut self, event: PageLoad, url: String, cx: &mut Context<Self>) {
+        let ready = matches!(&event, PageLoad::Finished);
         match event {
             PageLoad::Started => {
                 // A fresh document invalidates the previous page's guard; an
@@ -1601,18 +1605,20 @@ impl BrowserView {
                 self.note_document_ready(url.as_str(), cx);
             }
             PageLoad::Failed { web_error } => {
-                // A committed navigation that failed to load records a transient
-                // error and revokes any automatic grant: a failed load is never
-                // shared, and there is no valid document to hand a fresh guard.
+                // Keep an existing tab addressable so a later navigation can
+                // recover from the failed load, but rotate its document guard.
                 self.loading = false;
                 self.navigation_error =
                     Some(format!("The page failed to load (web error {web_error})."));
                 self.navigation_automation_pending = false;
-                self.revoke_browser_share(cx);
+                self.note_document_failed(url.as_str(), cx);
             }
         }
         if !url.is_empty() {
             self.current_url = Some(url);
+        }
+        if ready {
+            cx.emit(BrowserCollaborationEvent::PageReady);
         }
         self.refresh_navigation_state();
         self.echo_page_url(cx);
@@ -1623,6 +1629,7 @@ impl BrowserView {
         let title = (!title.trim().is_empty()).then_some(title);
         if self.page_title != title {
             self.page_title = title;
+            self.note_title_changed(cx);
             cx.notify();
         }
     }
@@ -1674,6 +1681,11 @@ impl BrowserView {
         self.note_document_unloading(cx);
         self.navigation_error = None;
         self.navigation_automation_pending = false;
+        self.navigation_automation_cancelled = false;
+        self.collaboration
+            .automation_intervention
+            .borrow_mut()
+            .take();
         let Some(host) = &self.host else {
             self.pending_url = Some(url);
             return;
@@ -1724,6 +1736,15 @@ impl BrowserView {
         self.complete_automation_navigation(url, cx);
     }
 
+    /// A newly created tab shows the app's start page until it is used. Its
+    /// native WebView still has an about:blank document; activate it before a
+    /// tool acts so that its surface has real bounds and can receive input.
+    pub(crate) fn ensure_automation_document(&mut self, cx: &mut Context<Self>) {
+        if !self.navigation_requested && self.host.is_some() {
+            self.navigate_to_url_with_focus("about:blank".to_owned(), false, cx);
+        }
+    }
+
     /// Finish an automation navigation whose host already exists, without
     /// re-arming the interception flags (called both directly and from
     /// `webview_ready` once the controller lands).
@@ -1753,10 +1774,8 @@ impl BrowserView {
         cx.notify();
     }
 
-    /// Whether the page an agent launcher opened is ready to be shared. Pure
-    /// in-memory read — no I/O. `Ok(true)` a real, loaded HTTP(S) page;
-    /// `Ok(false)` still loading or not yet navigated; `Err(..)` a host failure,
-    /// a failed load, or a cancelled launch — none of which may be shared.
+    /// Whether a tab can be made available to the session. This is a pure
+    /// in-memory read; a ready start page represents `about:blank`.
     pub(crate) fn browser_ready_for_automation(&self) -> Result<bool, String> {
         if let Some(error) = self.host_error.as_deref() {
             return Err(error.to_owned());
@@ -1774,16 +1793,17 @@ impl BrowserView {
         if self.host.is_none() {
             return Ok(false);
         }
-        // The controller existing is not enough: an initial about:blank reports
-        // `loading == false` until a navigation commits, so require a real
-        // navigation that has settled on an HTTP(S) URL.
-        if !self.navigation_requested || self.loading {
+        // A requested navigation must settle before its page is published.
+        if self.loading {
             return Ok(false);
         }
-        let navigated = self
-            .current_url
-            .as_deref()
-            .is_some_and(|url| url.starts_with("http://") || url.starts_with("https://"));
+        if !self.navigation_requested {
+            return Ok(true);
+        }
+        let navigated = self.current_url.as_deref().is_some_and(|url| {
+            fintwind_protocol::browser::BrowserAction::validate_url(url).is_ok()
+                && url::Url::parse(url).is_ok()
+        });
         Ok(navigated)
     }
 
@@ -2080,7 +2100,6 @@ impl BrowserView {
         let progress = self
             .loading
             .then(|| (self.estimated_progress().clamp(0.04, 1.0) * 1000.0).round() / 1000.0);
-        let collaboration = self.render_collaboration_control(cx);
 
         div()
             .h(px(TOOLBAR_HEIGHT))
@@ -2170,7 +2189,6 @@ impl BrowserView {
                 |this, _, cx| this.open_external(cx),
                 cx,
             ))
-            .when_some(collaboration, |toolbar, control| toolbar.child(control))
     }
 
     fn render_start_page(&self, theme: Theme) -> Div {
@@ -2413,10 +2431,6 @@ impl Render for BrowserView {
         } else {
             self.render_start_page(theme).into_any_element()
         };
-        let collaboration = self
-            .render_collaboration_bar(window, cx)
-            .map(|bar| bar.into_any_element());
-
         div()
             .id("browser-surface")
             .track_focus(&self.focus_handle)
@@ -2439,7 +2453,6 @@ impl Render for BrowserView {
             .flex()
             .flex_col()
             .child(self.render_toolbar(cx))
-            .when_some(collaboration, |element, bar| element.child(bar))
             .child(body)
     }
 }

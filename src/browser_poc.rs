@@ -1111,7 +1111,7 @@ impl BrowserPocRoot {
     /// One event per page: a share changed, or one operation finished.
     fn on_browser_event(&mut self, event: &BrowserCollaborationEvent, cx: &mut Context<Self>) {
         match event {
-            BrowserCollaborationEvent::ShareRequested => {}
+            BrowserCollaborationEvent::ShareRequested | BrowserCollaborationEvent::PageReady => {}
             BrowserCollaborationEvent::ShareChanged => self.publish_browser_shares(cx),
             BrowserCollaborationEvent::Finished { request_id, result } => {
                 // The completion rides back on the same connection, so a

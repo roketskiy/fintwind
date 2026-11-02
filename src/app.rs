@@ -1348,6 +1348,7 @@ pub struct Fintwind {
     /// all live driver handles below are lightweight RPC proxies.
     daemon: fintwind_client::DaemonSupervisor,
     remote_control: Option<fintwind_remote::RemoteControl>,
+    remote_control_focus: FocusHandle,
     remote_generation: u64,
     remote_project_ids: HashSet<Uuid>,
     remote_status: remote::RemoteUiStatus,
@@ -1356,6 +1357,9 @@ pub struct Fintwind {
     remote_starting: bool,
     remote_error: Option<String>,
     remote_session_hydrations: HashSet<Uuid>,
+    remote_model_catalogs: HashMap<PathBuf, (Instant, ProviderProbe)>,
+    remote_composer_catalogs: HashMap<Uuid, (PathBuf, ProviderProbe, Instant, u64)>,
+    remote_uploads: remote::RemoteUploads,
     /// Session details currently being fetched from the daemon. Sidebar rows
     /// stay usable while the selected transcript hydrates asynchronously.
     session_hydrations: HashSet<Uuid>,
@@ -3688,6 +3692,7 @@ impl Fintwind {
             Self {
                 daemon,
                 remote_control: None,
+                remote_control_focus: cx.focus_handle(),
                 remote_generation: 0,
                 remote_project_ids: HashSet::new(),
                 remote_status: remote::RemoteUiStatus::Off,
@@ -3696,6 +3701,9 @@ impl Fintwind {
                 remote_starting: false,
                 remote_error: None,
                 remote_session_hydrations: HashSet::new(),
+                remote_model_catalogs: HashMap::new(),
+                remote_composer_catalogs: HashMap::new(),
+                remote_uploads: remote::RemoteUploads::default(),
                 session_hydrations: HashSet::new(),
                 pending_session_activation: None,
                 state,

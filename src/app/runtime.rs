@@ -1198,10 +1198,22 @@ impl Fintwind {
 
     pub(super) fn model_for_session<'a>(&'a self, session: &'a AgentSession) -> Option<&'a str> {
         session.model.as_deref().or_else(|| {
-            self.provider_probe()
+            self.model_probe_for_session(session)
                 .and_then(ProviderProbe::preferred_model)
                 .map(|model| model.id.as_str())
         })
+    }
+
+    fn model_probe_for_session(&self, session: &AgentSession) -> Option<&ProviderProbe> {
+        let directory = self.workspace_path_for_session(session);
+        if directory == self.provider_probe_directory.as_deref() {
+            return self.provider_probe();
+        }
+        directory
+            .and_then(|directory| self.remote_model_catalogs.get(directory))
+            .filter(|(at, _)| at.elapsed() < Duration::from_secs(60))
+            .map(|(_, probe)| probe)
+            .or_else(|| self.provider_probe())
     }
 
     pub(super) fn model_display_name(&self, model: Option<&str>) -> String {
@@ -1219,7 +1231,7 @@ impl Fintwind {
         session: &AgentSession,
     ) -> Option<&ProviderModel> {
         let model = self.model_for_session(session)?;
-        self.provider_probe()?
+        self.model_probe_for_session(session)?
             .models
             .iter()
             .find(|candidate| candidate.id == model)
@@ -2037,11 +2049,7 @@ impl Fintwind {
     /// and in-session option changes both go through this so they cannot
     /// disagree about what the session is currently set to.
     pub(super) fn session_options(&self, session: &AgentSession) -> SessionOptions {
-        let model = session.model.clone().or_else(|| {
-            self.provider_probe()
-                .and_then(ProviderProbe::preferred_model)
-                .map(|model| model.id.clone())
-        });
+        let model = self.model_for_session(session).map(str::to_owned);
         let model_metadata = self.model_metadata_for_session(session);
         let reasoning_effort = session
             .reasoning_effort

@@ -60,18 +60,19 @@ pub enum ClientMessage {
         resume_from: Vec<ReplayCursor>,
     },
     Request(Request),
-    /// Share live browser pages with the daemon. Live-only: the grant is
-    /// bound to this connection and a session runtime, is never persisted,
-    /// and dies with the connection or the runtime.
+    /// Share live browser pages with the daemon. Live-only: bound to this
+    /// connection, never persisted, and dies with the connection. Pages are
+    /// addressed by page id; session, runtime and grant ids ride along for
+    /// wire compatibility and are ignored.
     BrowserPublish {
         pages: Vec<BrowserShare>,
     },
-    /// Register — or clear, with `None` — this connection's browser launcher
-    /// capability for one live session runtime. The scope's page and grant
-    /// ids are launcher identities, not a real tab: they never appear in any
-    /// page list, and only [`crate::browser::BrowserAction::Open`] is routed
-    /// to them. A refusal is answered with
-    /// [`ServerMessage::BrowserShareRejected`] carrying the attempted scope.
+    /// Register — or clear, with `None` — this connection's global browser
+    /// launcher. There is a single launcher slot: a new registration
+    /// replaces any launcher from another connection, and only
+    /// [`crate::browser::BrowserAction::Open`] is routed to it. A refusal is
+    /// answered with [`ServerMessage::BrowserShareRejected`] carrying the
+    /// attempted scope.
     BrowserHost {
         scope: Option<BrowserScope>,
     },
@@ -525,12 +526,13 @@ pub enum Command {
     },
     CloseTerminal,
     CloseSession,
-    /// List the browser pages currently shared for this request's session
-    /// runtime. Empty when the runtime is not active.
+    /// List the currently shared browser pages. No session filter: every
+    /// live page is listed.
     BrowserList,
-    /// Ask the GUI that owns a shared page to perform one action. The outer
-    /// request's session and runtime must match the scope; the daemon waits
-    /// for the owner's answer and answers this RPC with a serialized
+    /// Ask the GUI that owns a shared page to perform one action. Pages are
+    /// addressed by page id only; the outer request's session and runtime
+    /// are provider routing and are ignored. The daemon waits for the
+    /// owner's answer and answers this RPC with a serialized
     /// [`BrowserResult`]. A timeout is terminal and never retried.
     BrowserInvoke {
         scope: BrowserScope,
@@ -621,24 +623,19 @@ pub enum ServerMessage {
         request: BrowserRequest,
     },
     /// Tell the owning connection to abandon a browser request: the daemon
-    /// timed out, the invoking client vanished, or the runtime was replaced.
+    /// timed out or the invoking client vanished.
     BrowserCancel {
         request_id: Uuid,
     },
-    /// The daemon refused a page publish. Carries the attempted scopes so the
-    /// GUI can drop exactly the grants the daemon did not accept. This is
-    /// not a generic rejection channel: it is sent only for a refused
-    /// `ClientMessage::BrowserPublish` or a refused
+    /// The daemon refused a page publish or launcher registration. Carries
+    /// the attempted scopes so the GUI can drop exactly what the daemon did
+    /// not accept. This is validation (duplicate page, oversized title, bad
+    /// URL, too many pages) — never a session or grant decision. Sent only
+    /// for a refused `ClientMessage::BrowserPublish` or a refused
     /// `ClientMessage::BrowserHost`.
     BrowserShareRejected {
         scopes: Vec<BrowserScope>,
         message: String,
-    },
-    /// Scopes that just lost their grant because their session runtime ended
-    /// or was replaced. Live-only: never replayed, and a later re-share
-    /// under a new grant is a different scope that is not revoked by this.
-    BrowserScopesRevoked {
-        scopes: Vec<BrowserScope>,
     },
     /// The daemon-owned project/task catalog changed through another client.
     /// Clients should invalidate their lightweight task-state snapshot; live

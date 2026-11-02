@@ -1,17 +1,15 @@
-//! Session-scoped browser pages and one-at-a-time operations.
+//! Browser pages with full tool access and one-at-a-time operations.
 //!
-//! Failure modes: stale grants, navigation during approval/execution, duplicate
-//! requests, cancellation between CDP calls, ambiguous/hidden targets, unbounded
-//! page data, and accidentally exposing arbitrary JavaScript or raw CDP.
+//! Failure modes: navigation during execution, duplicate
+//! requests, cancellation between CDP calls, ambiguous/hidden targets,
+//! unbounded page data, and accidentally exposing arbitrary JavaScript or raw CDP.
 //!
-//! Production pages always use continuous access. The earlier supervised
-//! behavior remains in the isolated `browser-poc` host for historical bridge
-//! scenarios, but is not an authorization path in the application. Access is
-//! bound to a tab, so navigation keeps the scope and grant but
-//! rotates the document guard — the old guard is invalidated the instant a new
-//! document starts and a fresh one replaces it only once loading finishes, so a
-//! stale element reference or an in-flight input step can never resume against a
-//! document it did not observe.
+//! Production pages use continuous access without per-action approval.
+//! Access is bound to a tab by page id, so navigation keeps the page
+//! addressable but rotates the document guard — the old guard is invalidated
+//! the instant a new document starts and a fresh one replaces it only once
+//! loading finishes, so a stale element reference or an in-flight input step
+//! can never resume against a document it did not observe.
 //!
 //! References follow the mature observe → reference → re-observe pattern rather
 //! than copying any one framework: a snapshot runs in an isolated world, mints a
@@ -77,8 +75,9 @@ pub(super) struct BrowserCollaboration {
     /// finished launch's flag cannot cancel a newer one. Native focus and
     /// ordinary pointer input are deliberately not permission changes.
     pub(super) automation_intervention: Rc<RefCell<Option<Arc<AtomicBool>>>>,
-    /// Whether the current share is full-access automatic automation. Automatic
-    /// shares skip per-action approval and keep their grant across navigation.
+    /// Whether the current share is full-access automatic automation.
+    /// Automatic shares skip per-action approval and stay addressable
+    /// across navigation by page id.
     automatic: bool,
     control_enabled: bool,
     pending: Option<BrowserRequest>,
@@ -349,11 +348,11 @@ impl BrowserView {
     }
 
     /// A document transition is beginning (a real navigation, a reload, history,
-    /// or an automation launch). A manual grant ends here; an automatic one
-    /// keeps its scope and grant but its document guard is already invalidated
-    /// natively, so we drop it here too and let the load events install a fresh
-    /// one — a request landing now waits for the load instead of asking the user
-    /// to re-share. Any still-open approval is retired.
+    /// or an automation launch). A manual share ends here; an automatic one
+    /// stays addressable by page id but its document guard is already
+    /// invalidated natively, so we drop it here too and let the load events
+    /// install a fresh one — a request landing now waits for the load instead
+    /// of asking the user to re-share. Any still-open approval is retired.
     pub(super) fn note_document_unloading(&mut self, cx: &mut Context<Self>) {
         if self
             .collaboration
@@ -410,10 +409,10 @@ impl BrowserView {
     }
 
     /// A same-document navigation (a router pushing hash/state). An automatic
-    /// share keeps its grant and refreshes its published URL, and rotates to a
-    /// fresh guard — the document, and therefore its element references, is
-    /// preserved, so a token from the prior snapshot still resolves to the same
-    /// element. A manual grant is revoked as before.
+    /// share stays addressable and refreshes its published URL, and rotates
+    /// to a fresh guard — the document, and therefore its element references,
+    /// is preserved, so a token from the prior snapshot still resolves to the
+    /// same element. A manual share is revoked as before.
     pub(super) fn note_source_changed(&mut self, url: &str, cx: &mut Context<Self>) {
         if self
             .collaboration
@@ -440,16 +439,16 @@ impl BrowserView {
         request: BrowserRequest,
         cx: &mut Context<Self>,
     ) {
-        // Opening or closing a page is a launcher capability, never a page
-        // grant: the app host routes `Open` and owns the surface's lifetime,
-        // so a page-level grant must refuse both rather than act beyond the
-        // page it was granted.
+        // Opening or closing a page is a host capability, never a page
+        // action: the app host routes `Open` and owns the surface's
+        // lifetime, so a page-level request must refuse both rather than
+        // act beyond the page it names.
         let refusal = match &request.action {
             BrowserAction::Open { .. } => {
-                Some("Opening a page is handled by the app host, not by this page's grant.")
+                Some("Opening a page is handled by the app host, not by this page.")
             }
             BrowserAction::Close => {
-                Some("Closing a page is handled by the app host, not by this page's grant.")
+                Some("Closing a page is handled by the app host, not by this page.")
             }
             _ => None,
         };
@@ -457,10 +456,13 @@ impl BrowserView {
             self.finish_browser_request(request.request_id, BrowserResult::error(message), cx);
             return;
         }
-        let error = if self.collaboration.share.as_ref().map(|share| &share.scope)
-            != Some(&request.scope)
+        let error = if self
+            .collaboration
+            .share
+            .as_ref()
+            .is_none_or(|share| share.scope.page_id != request.scope.page_id)
         {
-            Some("Page is not shared with this session and runtime.".to_owned())
+            Some("Page is not published.".to_owned())
         } else if self.collaboration.pending.is_some() || self.collaboration.running.is_some() {
             Some(
                 "A browser request is already pending; observe again after it completes."
@@ -554,11 +556,16 @@ impl BrowserView {
     }
 
     fn start_browser_request(&mut self, request: BrowserRequest, cx: &mut Context<Self>) {
-        if self.collaboration.share.as_ref().map(|share| &share.scope) != Some(&request.scope) {
+        if self
+            .collaboration
+            .share
+            .as_ref()
+            .is_none_or(|share| share.scope.page_id != request.scope.page_id)
+        {
             self.finish_browser_request(
                 request.request_id,
                 BrowserResult::Error {
-                    message: "Browser authorization expired before execution.".into(),
+                    message: "Browser page is no longer published.".into(),
                 },
                 cx,
             );
@@ -595,11 +602,16 @@ impl BrowserView {
         cancelled: Arc<AtomicBool>,
         cx: &mut Context<Self>,
     ) {
-        if self.collaboration.share.as_ref().map(|share| &share.scope) != Some(&request.scope) {
+        if self
+            .collaboration
+            .share
+            .as_ref()
+            .is_none_or(|share| share.scope.page_id != request.scope.page_id)
+        {
             self.finish_browser_request(
                 request.request_id,
                 BrowserResult::Error {
-                    message: "Browser authorization expired before execution.".into(),
+                    message: "Browser page is no longer published.".into(),
                 },
                 cx,
             );
@@ -616,7 +628,7 @@ impl BrowserView {
             return;
         };
         // Only reachable for a manual share (automatic requests wait above): a
-        // live manual grant with an in-flight load means the document is
+        // live manual share with an in-flight load means the document is
         // mid-transition, which is refused rather than operated against.
         if self.loading {
             self.finish_browser_request(
@@ -1042,7 +1054,13 @@ fn evaluate_wait(
     if this.navigation_automation_cancelled {
         return WaitStep::Cancelled;
     }
-    if this.collaboration.share.as_ref().map(|share| &share.scope) != Some(scope) {
+    if this
+        .collaboration
+        .share
+        .as_ref()
+        .map(|share| share.scope.page_id)
+        != Some(scope.page_id)
+    {
         return WaitStep::Cancelled;
     }
     if !this.loading {
@@ -1063,7 +1081,7 @@ impl OperationGuard {
         if self.valid.load(Ordering::SeqCst) && !self.cancelled.load(Ordering::SeqCst) {
             Ok(())
         } else {
-            Err("Browser authorization was cancelled. An issued operation may have occurred; do not retry automatically.".into())
+            Err("Browser page was revoked. An issued operation may have occurred; do not retry automatically.".into())
         }
     }
 
@@ -1448,21 +1466,17 @@ async fn execute(
     executor: &gpui::BackgroundExecutor,
 ) -> Result<BrowserOutcome, String> {
     action.validate()?;
-    // A page grant never opens or closes a page; the app host owns both.
+    // A page never opens or closes a page; the app host owns both.
     // `Navigate` acknowledges dispatch without waiting for the load: completion
     // is not success, the document guard rotates on the load events. A
     // screenshot observes the visible page directly, so it is answered here
     // too, before the frame and isolated-world setup below.
     match &action {
         BrowserAction::Open { .. } => {
-            return Err(
-                "Opening a new page is handled by the app host, not by this page's grant.".into(),
-            );
+            return Err("Opening a new page is handled by the app host, not by this page.".into());
         }
         BrowserAction::Close => {
-            return Err(
-                "Closing a page is handled by the app host, not by this page's grant.".into(),
-            );
+            return Err("Closing a page is handled by the app host, not by this page.".into());
         }
         BrowserAction::Navigate { url } => {
             valid_url(url)?;

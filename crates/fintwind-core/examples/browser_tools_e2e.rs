@@ -1013,9 +1013,6 @@ fn owner_loop(
                     json!({"event": "shareRejected", "scopes": scopes, "message": message}),
                 );
             }
-            Ok(fintwind_client::BrowserNotification::ScopesRevoked(scopes)) => {
-                owner_note(&log, json!({"event": "scopesRevoked", "scopes": scopes}));
-            }
             Ok(fintwind_client::BrowserNotification::Disconnected) => {
                 owner_note(&log, json!({"event": "disconnected"}));
                 break;

@@ -318,10 +318,12 @@ impl Fintwind {
 
     fn render_remote_rail_entry(&self, cx: &mut Context<Self>) -> Stateful<Div> {
         let theme = Theme::current(cx);
+        let group = SharedString::from("rail-remote-control");
         let active = self.mode == WorkspaceMode::Settings
             && self.settings_page == SettingsPage::RemoteControl;
         div()
             .id("rail-remote-control")
+            .group(group.clone())
             .track_focus(&self.remote_control_focus)
             .tab_index(0)
             .relative()
@@ -333,17 +335,19 @@ impl Fintwind {
             .justify_center()
             .cursor_default()
             .focus_visible(|style| style.border_1().border_color(theme.accent_focus))
-            .hover(|style| style.bg(theme.sidebar_item_background))
             .tooltip(Tooltip::text(tr!("remote.title")))
-            .child(icon(
-                "icons/smartphone.svg",
-                20.0,
-                if active {
-                    theme.text
-                } else {
-                    theme.text_tertiary
-                },
-            ))
+            .child(
+                icon(
+                    "icons/smartphone.svg",
+                    20.0,
+                    if active {
+                        theme.text
+                    } else {
+                        theme.text_tertiary
+                    },
+                )
+                .group_hover(group, |style| style.text_color(theme.text)),
+            )
             .when(active, |entry| {
                 entry.child(
                     div()

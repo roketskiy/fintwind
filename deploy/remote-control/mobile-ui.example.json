@@ -1,0 +1,6 @@
+{
+  "SshTarget": "deploy@server.example.invalid",
+  "IdentityFile": "C:/path/to/private-key",
+  "Domain": "mobile.example.invalid",
+  "SitePath": "/etc/caddy/mobile.example.caddy"
+}

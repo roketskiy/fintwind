@@ -1,0 +1,33 @@
+[Unit]
+Description=Fintwind mobile control Alma relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=fintwind-alma-relay
+Group=fintwind-alma-relay
+WorkingDirectory=/opt/fintwind-alma-relay/app
+EnvironmentFile=/etc/fintwind-alma-relay.env
+ExecStart=/opt/fintwind-alma-relay/node/bin/node /opt/fintwind-alma-relay/app/index.mjs
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+CapabilityBoundingSet=
+LimitNOFILE=4096
+MemoryMax=256M
+TasksMax=64
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

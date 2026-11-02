@@ -10,6 +10,7 @@ __pycache__/
 /dist
 /examples/
 node_modules
+mobile/dist/
 temp/
 
 # Local resources, not part of the source tree

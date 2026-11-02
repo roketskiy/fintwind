@@ -42,6 +42,7 @@ export interface RemoteActivity {
   truncated: boolean;
 }
 export type TranscriptEntry = RemoteMessage | RemoteActivity;
+export type RuntimeMode = "ask" | "autoAcceptEdits" | "fullAccess";
 export interface ComposerOptions {
   canConfigure: boolean;
   models: {
@@ -88,6 +89,7 @@ export interface SessionDetail {
   model: string;
   modelName: string;
   interactionMode: string;
+  runtimeMode?: RuntimeMode;
   reasoningEffort: string;
   truncated: boolean;
   permission: Permission | null;
@@ -117,6 +119,7 @@ export interface CommandMap {
       sessionId: string;
       model?: string;
       interactionMode?: string;
+      runtimeMode?: RuntimeMode;
       reasoningEffort?: string;
     };
     result: { accepted: boolean };

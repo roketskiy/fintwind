@@ -164,6 +164,7 @@ pub enum RemoteCommand {
         model: Option<String>,
         interaction_mode: Option<String>,
         reasoning_effort: Option<String>,
+        runtime_mode: Option<String>,
     },
     CreateSession {
         project_id: Uuid,
@@ -236,6 +237,7 @@ impl RemoteCommand {
                 model,
                 interaction_mode,
                 reasoning_effort,
+                runtime_mode,
             } => {
                 !session_id.is_nil()
                     && model.as_deref().is_none_or(|value| ok(value, 512))
@@ -245,6 +247,9 @@ impl RemoteCommand {
                     && reasoning_effort
                         .as_deref()
                         .is_none_or(|value| ok(value, 128))
+                    && runtime_mode.as_deref().is_none_or(|value| {
+                        matches!(value, "ask" | "autoAcceptEdits" | "fullAccess")
+                    })
             }
             Self::SendPrompt {
                 session_id,

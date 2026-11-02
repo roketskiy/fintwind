@@ -73,10 +73,14 @@
 .bui-branch-status { margin-left: 2px; color: var(--muted-foreground); font-size: 11px; font-weight: 400; }
 .bui-branch-status[data-failed] { color: var(--destructive); }
 .bui-branch .bui-branch-list { gap: 0; margin-left: 0; width: auto; }
-.bui-branch-item { --branch-anchor: 16px; position: relative; min-width: 0; padding-left: 20px; }
+.bui-branch-item { --branch-anchor: 16px; --branch-radius: 6px; position: relative; min-width: 0; padding-left: 20px; }
 .bui-branch-item[data-kind="reasoning"] { --branch-anchor: 22px; }
-.bui-branch-item::before { content: ""; position: absolute; top: 0; left: 0; width: 12px; height: var(--branch-anchor); border-left: 1px solid var(--bui-branch-line); border-bottom: 1px solid var(--bui-branch-line); border-bottom-left-radius: 6px; pointer-events: none; }
-.bui-branch-item:not(:last-child)::after { content: ""; position: absolute; top: var(--branch-anchor); bottom: 0; left: 0; border-left: 1px solid var(--bui-branch-line); pointer-events: none; }
+/* Draw the trunk independently from each elbow. A rounded border bends away
+ * from the trunk before the row anchor; continuing only below that anchor
+ * leaves a radius-sized gap at every junction. Only the final elbow ends it. */
+.bui-branch-item::before { content: ""; position: absolute; top: calc(var(--branch-anchor) - var(--branch-radius)); left: 0; width: 12px; height: var(--branch-radius); border-left: 1px solid var(--bui-branch-line); border-bottom: 1px solid var(--bui-branch-line); border-bottom-left-radius: var(--branch-radius); pointer-events: none; }
+.bui-branch-item::after { content: ""; position: absolute; top: 0; bottom: 0; left: 0; border-left: 1px solid var(--bui-branch-line); pointer-events: none; }
+.bui-branch-item:last-child::after { bottom: auto; height: calc(var(--branch-anchor) - var(--branch-radius)); }
 .bui-branch-item .bui-tool { min-height: 32px; }
 .bui-think [data-slot="trace-collapsible-content-inner"] { margin: 0 0 4px 13px; padding-left: 16px; }
 .bui-reasoning-shimmer { color: transparent; background: linear-gradient(90deg, var(--muted-foreground) 35%, var(--foreground) 50%, var(--muted-foreground) 65%); background-size: 200% 100%; background-clip: text; animation: bui-reasoning-shimmer 1.4s linear infinite; }

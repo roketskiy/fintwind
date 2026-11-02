@@ -503,14 +503,17 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
         {detail ? (
           <Suspense
             fallback={
-              <div
-                className="chat-loading"
-                role="status"
-                aria-label="正在加载对话"
-              >
-                <Skeleton className="h-5 w-3/4" />
-                <Skeleton className="h-5 w-full" />
-              </div>
+              <>
+                <div
+                  className="chat-loading"
+                  role="status"
+                  aria-label="正在加载对话"
+                >
+                  <Skeleton className="h-5 w-3/4" />
+                  <Skeleton className="h-5 w-full" />
+                </div>
+                <div className="composer-region"><Skeleton className="h-20 w-full" /></div>
+              </>
             }
           >
             <Conversation
@@ -536,6 +539,23 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
                   });
               }}
             />
+            <div className="composer-status">
+              {sessionPending && <p className="composer-notice" role="status">操作结果待确认，请勿重复提交。</p>}
+              {detail.canSend === false && !sessionPending && <p className="composer-notice">
+                {detail.desktopRequired ? "请在电脑上继续处理。" : "会话内容正在加载。"}
+              </p>}
+            </div>
+            <Composer
+              key={detail.id}
+              session={detail}
+              draft={drafts[detail.id] || ""}
+              previewOptions={previewOptions}
+              onDraft={(value) => setDrafts((previous) => ({ ...previous, [detail.id]: value }))}
+              disabled={disabled || app.page !== "conversation"}
+              busy={app.busy}
+              onError={app.setError}
+              mutate={app.mutate}
+            />
           </Suspense>
         ) : app.loading ? (
           <div className="chat-loading" role="status" aria-label="正在加载对话">
@@ -559,43 +579,6 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
               </Button>
             </EmptyContent>
           </Empty>
-        )}
-        <div className="composer-status">
-          {sessionPending && (
-            <p className="composer-notice" role="status">
-              操作结果待确认，请勿重复提交。
-            </p>
-          )}
-          {detail?.canSend === false && !sessionPending && (
-            <p className="composer-notice">
-              {detail.desktopRequired
-                ? "请在电脑上继续处理。"
-                : "会话内容正在加载。"}
-            </p>
-          )}
-        </div>
-        {detail && (
-          <Suspense
-            fallback={
-              <div className="composer-region">
-                <Skeleton className="h-20 w-full" />
-              </div>
-            }
-          >
-            <Composer
-              key={detail.id}
-              session={detail}
-              draft={drafts[detail.id] || ""}
-              previewOptions={previewOptions}
-              onDraft={(value) =>
-                setDrafts((previous) => ({ ...previous, [detail.id]: value }))
-              }
-              disabled={disabled || app.page !== "conversation"}
-              busy={app.busy}
-              onError={app.setError}
-              mutate={app.mutate}
-            />
-          </Suspense>
         )}
       </section>
     </main>

@@ -27,8 +27,13 @@ Failure cases to cover before implementation:
 - A slow consumer grows an unbounded queue; unchanged snapshots consume network.
 - An old desktop/client receives unsolicited new protocol frames.
 - Hundreds of consecutive activities all mount by default, or a moving tail
-  removes activities while the reader is inspecting them. Loading earlier rows
-  must preserve the selected range as new activities arrive.
+  removes activities while the reader is inspecting them. Explicitly expanding
+  all activities must retain that choice as new activities arrive.
+- Long reasoning opens at the top, grows beyond its height cap, or stops following
+  appended output at the bottom. Scrolling upward must pause follow; returning
+  to the bottom must restore it. Inner scrolling must not move the transcript.
+- On refresh, the capsule appears before the pending transcript scroll completes,
+  clearance arrives late, or separately loaded composer code resizes the viewport.
 
 Repeatable scroll reproduction: build `mobile/vite.visual.config.ts`, run
 `bun scripts/serve-mobile-visual.ts` with a 910-second timeout, and open the
@@ -40,6 +45,25 @@ Before the anchor fix this moved from 20998px to 0px. The fixture has no network
 connection and cannot send messages.
 
 ## Hook and view checks
+
+Permission-setting failure cases (before implementation):
+
+- Old desktop capabilities display an unusable permission control or imply a
+  default permission that was not received from the desktop.
+- A permission change affects the selected desktop session instead of the
+  requested remote session, changes Build/Plan, or is not persisted/applied.
+- Invalid, legacy, null, or unknown runtime modes bypass request validation.
+- Busy/loading/unconfirmed sessions accept a setting change, or failed changes
+  optimistically display a new permission that the desktop did not accept.
+- Full snapshots or deltas lose the current permission; reopening shows a stale
+  selection. Legacy requests without runtimeMode must continue to deserialize.
+
+For the isolated client boundary, use `?permissions=1` to expose the production
+options menu and record configuration fields without real pairing or writes.
+Verify all three choices and reopen after each accepted change. Use
+`?permissions=1&legacy=1` for no permission control and
+`?permissions=1&busy=1` for disabled controls. These checks are not live desktop
+permission enforcement. Do not send real approvals or prompts to validate them.
 
 Build `bunx vite build --config vite.remote-fixture.config.ts` from `mobile`,
 then serve with the same bounded static preview command. Open the printed origin
@@ -68,9 +92,11 @@ The visible fixture controls support these repeatable checks:
    inspecting or move the viewport. Return to latest: the settled branch folds.
    Manual expansion/collapse must survive activity and turn completion.
 6. Open `?activities=1`: a 100-item branch must mount only items 96–100. Append
-   an activity while following: only items 97–101 mount. Scroll to the branch and
-   load earlier: items 92–101 mount. Append again while reading: the same ten
-   items remain, with zero viewport offset change. `最新 5 项` restores 98–102.
+    an activity while following: only items 97–101 mount. Scroll to the branch and
+    choose `全部展开`: items 1–101 mount in one action. Append again while reading:
+    items 1–102 remain available without resetting the all-items choice. `最新`
+    restores items 98–102. Without expanding all, up-scrolled readers retain their
+    selected five-row window until returning to latest.
    Both range controls must retain a 44px hit height. Group keys follow their
    preceding message, not the first activity that a bounded projection can evict.
 7. Open `?footers=1`: `progress-before`, `progress-after`, and the streaming
@@ -111,6 +137,27 @@ Check these boundaries before live validation:
 Keep private captures outside Git and save observed counts and layout metrics
 under `target/` as local validation artifacts.
 
+## Reasoning and refresh layout
+
+Use the private recorded preview for real grouping, branch geometry, and capsule
+layout. Capture frame changes for the first 120 animation frames: outer viewport
+height, scrollTop, pending-scroll, visibility, bottom padding, capsule visibility,
+and composer height. The capsule must remain hidden while the outer viewport is
+pending; the first visible transcript must already have its 96px clearance and
+final composer height. Opening the capsule must not alter these measurements.
+
+If captured reasoning is too short to overflow, run a separately labelled local
+component check: replace only the mounted reasoning item's DOM text with numbered
+lines, append lines at the bottom, scroll up with a wheel/keyboard event, append
+again, then return to the bottom and append once more. Record the inner viewport
+height, scrollHeight, scrollTop, and outer scrollTop at each stage. This checks the
+production scroll primitive and CSS only, not React streaming or live transport.
+Reload the private preview afterwards so the displayed conversation is unmodified.
+
+Check lazy loading separately with `/remote-fixture.html`, which runs RemoteView
+but uses a synthetic transport boundary. Do not present its content as real
+conversation evidence. Production phone/desktop/relay validation is still separate.
+
 ## Cross-language encrypted integration
 
 First build `cargo build --locked --package fintwind-remote --example stream_fixture`
@@ -122,7 +169,8 @@ does not launch or terminate Cargo/rustc descendants. The producer uses the
 shipping snapshot/delta and AES/HKDF implementations. The receiver uses shipping
 phone crypto, parsing and reconciliation. It compares all 60 reconstructed
 sessions with full projections, including Unicode, history shifts, appended and
-removed activities, permission changes and completion. Six malformed/replay
+removed activities, approval changes, all three runtime permission modes and
+completion. Seven malformed/replay
 cases must be rejected. No unit tests or running application services are used.
 
 The script writes `report.json` and `browser-fixture.json` into

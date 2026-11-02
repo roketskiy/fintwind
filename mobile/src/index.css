@@ -1,6 +1,7 @@
 @import "tailwindcss" source(none);
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@import "./components/beautiful/todo-capsule.css";
 @source ".";
 
 @custom-variant dark (&:is(.dark *));
@@ -670,6 +671,9 @@
   font-size: 12px;
   line-height: 1.6;
 }
+.bui-think .reasoning-scroller { height: auto; max-height: 18rem; }
+.bui-think .reasoning-text { height: auto; min-height: 0; }
+.bui-think .reasoning-content { min-height: 0; gap: 0; }
 [data-slot="input-group-control"] {
   font-size: 1rem;
 }

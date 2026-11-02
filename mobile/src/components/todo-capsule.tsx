@@ -2,7 +2,6 @@ import { useRef, useState } from "react";
 import { CheckIcon, ChevronDownIcon, CloseIcon, FileDiffIcon, ListIcon, LoaderIcon } from "@/components/icons";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { SessionDetail, TodoSnapshot } from "@/lib/types";
-import "./beautiful/todo-capsule.css";
 
 const statusLabels = {
   pending: "待办",

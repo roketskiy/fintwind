@@ -5,8 +5,10 @@
 .todo-region[data-open] { width: calc(100% - 24px); }
 /* Clearance is only for the collapsed pill. Opening the plan must not change
  * transcript padding, viewport size or scroll position. */
-.conversation-body:has(> .todo-region) .conversation-content { padding-bottom: 96px; }
-.conversation-body:has(> .todo-region) [data-slot="message-scroller-button"][data-direction="end"] { bottom: 64px; }
+.conversation-body[data-capsule-clearance] .conversation-content { padding-bottom: 96px; }
+.conversation-body[data-capsule-clearance] [data-slot="message-scroller-button"][data-direction="end"] { bottom: 64px; }
+/* The initial scroll is hidden by the primitive. Its sibling must wait too. */
+.conversation-body:has(> [data-slot="message-scroller"] > [data-slot="message-scroller-viewport"][data-pending-scroll]) > .todo-region { visibility: hidden; }
 .todo-capsule-trigger { display: flex; align-items: center; min-height: 44px; min-width: 44px; padding: 0; border-radius: 8px; text-align: start; }
 .todo-capsule-label { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--muted-foreground); font-size: 12px; line-height: 20px; box-shadow: var(--bui-shadow); white-space: nowrap; }
 .workspace-change-count { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-variant-numeric: tabular-nums; }

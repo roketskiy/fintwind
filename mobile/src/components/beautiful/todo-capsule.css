@@ -1,0 +1,33 @@
+/* Float above the composer; clearance belongs to the scrollable history, not
+ * a reserved footer strip. Keep the full message viewport available. */
+.conversation-body { position: relative; }
+.todo-region { position: absolute; bottom: 4px; left: 12px; width: max-content; max-width: min(420px, calc(100% - 24px)); min-width: 0; }
+.todo-region[data-open] { width: calc(100% - 24px); }
+/* Clearance is only for the collapsed pill. Opening the plan must not change
+ * transcript padding, viewport size or scroll position. */
+.conversation-body:has(> .todo-region) .conversation-content { padding-bottom: 96px; }
+.conversation-body:has(> .todo-region) [data-slot="message-scroller-button"][data-direction="end"] { bottom: 64px; }
+.todo-capsule-trigger { display: flex; align-items: center; min-height: 44px; min-width: 44px; padding: 0; border-radius: 8px; text-align: start; }
+.todo-capsule-label { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--muted-foreground); font-size: 12px; line-height: 20px; box-shadow: var(--bui-shadow); white-space: nowrap; }
+.workspace-change-count { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.workspace-additions { color: var(--bui-green); }
+.workspace-deletions { color: var(--destructive); }
+.todo-capsule-divider { color: var(--muted-foreground); }
+.todo-capsule-label .app-icon { width: 14px; height: 14px; }
+.todo-capsule-trigger:active .todo-capsule-label { background: var(--muted); }
+.todo-capsule-trigger:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
+.todo-capsule-trigger[aria-expanded="true"] .todo-chevron { transform: rotate(180deg); }
+.todo-count { font-size: 11px; font-variant-numeric: tabular-nums; }
+.todo-capsule-panel { min-width: 0; }
+.todo-capsule-list { max-height: min(28dvh, 240px); overflow-y: auto; overscroll-behavior: contain; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); }
+.todo-capsule-list:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.todo-capsule-list ol { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.todo-capsule-list li { display: flex; align-items: start; gap: 8px; font-size: 12px; line-height: 18px; }
+.todo-mark { display: flex; flex: none; align-items: center; justify-content: center; width: 16px; height: 18px; color: var(--muted-foreground); }
+.todo-mark .app-icon { width: 14px; height: 14px; }
+.todo-pending-mark { width: 6px; height: 6px; border: 1px solid currentColor; border-radius: 50%; }
+.todo-content { min-width: 0; overflow-wrap: anywhere; }
+.todo-capsule-list li[data-status="pending"], .todo-capsule-list li[data-status="cancelled"], .todo-capsule-list li[data-status="completed"] { color: var(--muted-foreground); }
+.todo-capsule-list li[data-status="completed"] .todo-content { text-decoration: line-through; }
+.todo-capsule-list li[data-status="in_progress"] .todo-mark { color: var(--primary); }
+.todo-truncated { margin: 10px 0 0; color: var(--muted-foreground); font-size: 11px; }

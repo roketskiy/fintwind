@@ -7,6 +7,7 @@ import type {
   SessionDetail,
   SessionStatus,
   SessionSummary,
+  TodoSnapshot,
   Workspace,
 } from "./types";
 
@@ -197,7 +198,10 @@ export function parseRemoteMessage(value: unknown): RemoteMessage {
   return {
     id: reqStr(value["id"], 256),
     role,
+    ...parseTurnMetadata(value),
+    ...(value["responseComplete"] == null ? {} : { responseComplete: reqBool(value["responseComplete"]) }),
     text: reqStr(value["text"], 65536, 0),
+    ...(value["streaming"] === undefined ? {} : { streaming: reqBool(value["streaming"]) }),
     ...(value["createdAt"] == null || value["createdAt"] === 0 ? {} : { createdAt: timestamp(value["createdAt"]) }),
     ...(value["elapsedSeconds"] == null ? {} : { elapsedSeconds: timestamp(value["elapsedSeconds"]) }),
     attachments:
@@ -230,6 +234,13 @@ export function parsePermission(value: unknown): Permission | null {
   };
 }
 
+function parseTurnMetadata(value: Record<string, unknown>): { turnId?: string; turnRunning?: boolean } {
+  return {
+    ...(value["turnId"] == null ? {} : { turnId: reqStr(value["turnId"], 256) }),
+    ...(value["turnRunning"] == null ? {} : { turnRunning: reqBool(value["turnRunning"]) }),
+  };
+}
+
 function parseEntry(value: unknown): TranscriptEntry {
   if (!isRecord(value)) throw new Error("响应格式无效");
   if (value["type"] === "message")
@@ -237,6 +248,7 @@ function parseEntry(value: unknown): TranscriptEntry {
   if (value["type"] !== "activity") throw new Error("响应格式无效");
   return {
     type: "activity",
+    ...parseTurnMetadata(value),
     id: reqStr(value["id"], 256),
     kind: reqStr(value["kind"], 64),
     title: optStr(value["title"], 1024),
@@ -336,6 +348,37 @@ export function parseResult(type: CommandType, data: unknown): unknown {
         canSend: reqBool(data["canSend"]),
       };
       const revision = parseRevision(data["revision"]);
+      if (data["workspaceChanges"] !== undefined) {
+        const changes = data["workspaceChanges"];
+        if (changes === null) detail.workspaceChanges = null;
+        else {
+          if (!isRecord(changes)) throw new Error("响应格式无效");
+          detail.workspaceChanges = { additions: timestamp(changes["additions"]), deletions: timestamp(changes["deletions"]) };
+        }
+      }
+      if (data["todos"] !== undefined) {
+        const todos = data["todos"];
+        if (todos === null) detail.todos = null;
+        else {
+          if (!isRecord(todos)) throw new Error("响应格式无效");
+          const completed = timestamp(todos["completed"]);
+          const total = timestamp(todos["total"]);
+          const truncated = reqBool(todos["truncated"]);
+          const items = reqArr<TodoSnapshot["items"][number]>(todos["items"], 64, (item) => {
+            if (!isRecord(item)) throw new Error("响应格式无效");
+            const status = item["status"];
+            if (status !== "pending" && status !== "in_progress" && status !== "completed" && status !== "cancelled")
+              throw new Error("响应格式无效");
+            return { content: reqStr(item["content"], 512), status };
+          });
+          const visibleCompleted = items.filter((item) => item.status === "completed").length;
+          if (completed > total || items.length > total || visibleCompleted > completed ||
+            completed - visibleCompleted > total - items.length ||
+            (!truncated && (items.length !== total || visibleCompleted !== completed)))
+            throw new Error("响应格式无效");
+          detail.todos = { items, completed, total, truncated };
+        }
+      }
       if (data["entries"] !== undefined)
         detail.entries = reqArr(data["entries"], 200, parseEntry);
       if (data["goal"] != null) {

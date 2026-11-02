@@ -1,10 +1,18 @@
 # Remote stream validation
 
-Use only synthetic sessions, loopback listeners, and isolated browser origins.
+Use synthetic sessions for transport fixtures. For real-record rendering, use
+only private, read-only captures on loopback origins and never commit the data.
 Do not send prompts or approvals to a paired desktop. No process cleanup is
 needed: the static preview owns no children and expires after 15 minutes.
 
 Failure cases to cover before implementation:
+
+- Intermediate assistant commentary incorrectly gets a timestamp/copy footer.
+  While streaming no assistant part in the current turn owns a footer; after
+  settling only its terminal answer does. Historical final answers remain usable.
+- Activity groups must fold at the next assistant reply, not after each tool.
+  A later activity starts a new expanded segment. Manual expansion/collapse
+  must win over automatic boundary changes; no records may be reordered.
 
 - A child-list mutation with unchanged row count selects an old user anchor.
 - A temporary read failure unmounts the transcript and resets its position.
@@ -52,21 +60,56 @@ The visible fixture controls support these repeatable checks:
    replacing the viewport. `streamError` once must re-read and re-subscribe;
    twice within that effect must fall back without new watches.
 4. Open `?legacy=1`: reads continue at the old interval, with zero watches.
-5. While up-scrolled, `completeActivity` must not collapse the open activity or
-   move the viewport. Return to latest: the completed branch folds. A manual
-   expansion must survive subsequent updates.
+5. `completeActivity` must not collapse the current turn's branch, including
+   at the bottom: a completed tool does not finish its turn. `appendActivity`
+   must not produce a collapse/reopen flicker. `waitForApproval` also keeps the
+   branch open. Only `finishTurn` folds automatically at the bottom. While
+   up-scrolled, finishing the turn must not collapse what the reader is
+   inspecting or move the viewport. Return to latest: the settled branch folds.
+   Manual expansion/collapse must survive activity and turn completion.
 6. Open `?activities=1`: a 100-item branch must mount only items 96–100. Append
    an activity while following: only items 97–101 mount. Scroll to the branch and
    load earlier: items 92–101 mount. Append again while reading: the same ten
    items remain, with zero viewport offset change. `最新 5 项` restores 98–102.
    Both range controls must retain a 44px hit height. Group keys follow their
    preceding message, not the first activity that a bounded projection can evict.
+7. Open `?footers=1`: `progress-before`, `progress-after`, and the streaming
+   `live` message must each have zero footer/time/copy controls. Run `finishTurn`:
+   only `live` gains one footer, one timestamp and one copy button. Intermediate
+   messages still have none. Historical final answers retain their copy button;
+   user timestamps are unaffected. The fixture supplies real-shaped metadata,
+   including `streaming` and a measured zero-or-positive `elapsedSeconds`.
 
 `document.documentElement.dataset.fixtureState` exposes counters and
 `dataset.fixtureApp` exposes the displayed state. They work with the in-app
 browser's isolated evaluation world; page-world globals do not. These attributes
 are fixture-only. Save observed measurements in
 `target/remote-stream-blackbox/browser-report.json`.
+
+## Workspace capsule
+
+Use the private real-record preview, with `workspaceChanges` obtained by the
+shipping `git_branch::inspect` for that recorded session's resolved placement.
+Never substitute the current desktop selection or a hand-written count. This
+checks the recorded UI and real read-only Git inspection, not live subscription
+transport. New desktop code still needs a rebuild before installed clients can
+receive the field.
+
+Check these boundaries before live validation:
+
+- A remote session in another worktree must not display the selected desktop
+  worktree's totals. A placement change or stopped activation rejects late work.
+- Unknown, non-Git or failed inspection is null; a known clean tree is +0 / -0.
+- With no todo list, totals remain readable without a dead expansion control.
+- The one capsule keeps its 44px hit area, 8px corners and 96px collapsed-pill
+  scroll clearance. Opening its todo panel must leave padding, viewport height
+  and scroll position unchanged.
+- Reads and active watches share a bounded background refresh per workspace;
+  unchanged totals must not cause a desktop notify or a new encrypted payload.
+- Hidden or closed subscriptions do not start further workspace inspections.
+
+Keep private captures outside Git and save observed counts and layout metrics
+under `target/` as local validation artifacts.
 
 ## Cross-language encrypted integration
 

@@ -109,6 +109,13 @@ const REMOTE_MESSAGE_LIMIT: usize = 100;
 const REMOTE_RESPONSE_LIMIT: usize = 512 * 1024;
 const REMOTE_MESSAGE_TEXT_LIMIT: usize = 16 * 1024;
 const REMOTE_QR_SIZE: f32 = 224.0;
+const REMOTE_WORKSPACE_REFRESH: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+pub(super) struct RemoteWorkspaceChanges {
+    entries: HashMap<PathBuf, (Instant, Option<(u64, u64)>)>,
+    pending: std::collections::HashSet<PathBuf>,
+}
 
 #[derive(Clone, Debug)]
 pub(super) enum RemoteUiStatus {
@@ -551,20 +558,23 @@ impl Fintwind {
                             cx.spawn(async move |this, cx| {
                                 let _observation = observation;
                                 let mut clock = false;
+                                let mut workspace_check = Instant::now();
                                 loop {
                                     if snapshots.is_closed() { break; }
                                     let notified = smol::future::or(
                                         async { changes.recv().await.is_ok() },
                                         async { smol::Timer::after(Duration::from_secs(1)).await; false },
                                     ).await;
-                                    if !notified && !clock { continue; }
+                                    if !notified && !clock && workspace_check.elapsed() < REMOTE_WORKSPACE_REFRESH { continue; }
                                     // Fold notifications, never the provider's individual chunks.
                                     smol::Timer::after(Duration::from_millis(200)).await;
                                     while changes.try_recv().is_ok() {}
                                     if snapshots.is_closed() { break; }
-                                    let result = this.update(cx, |app, _| {
+                                    if workspace_check.elapsed() >= REMOTE_WORKSPACE_REFRESH { workspace_check = Instant::now(); }
+                                    let result = this.update(cx, |app, cx| {
                                         if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
                                         let index = app.remote_session_index(session_id)?;
+                                        app.refresh_remote_workspace_changes(index, cx);
                                         Ok(app.remote_session_projection(index, true))
                                     });
                                     let value = match result {
@@ -730,6 +740,7 @@ impl Fintwind {
         self.remote_uploads.0.clear();
         self.remote_composer_catalogs.clear();
         self.remote_model_catalogs.clear();
+        self.remote_workspace_changes = RemoteWorkspaceChanges::default();
         self.remote_pairing_url = None;
         self.remote_pairing_qr = None;
         self.remote_error = None;
@@ -793,6 +804,7 @@ impl Fintwind {
             }
             fintwind_remote::RemoteCommand::GetSession { session_id } => {
                 let index = self.remote_session_index(session_id)?;
+                self.refresh_remote_workspace_changes(index, cx);
                 if !self.state.sessions[index].detail_loaded {
                     if !self.runtimes.contains_key(&session_id)
                         || !self.state.sessions[index].status.is_busy()
@@ -1019,6 +1031,42 @@ impl Fintwind {
         Ok(index)
     }
 
+    fn refresh_remote_workspace_changes(&mut self, index: usize, cx: &mut Context<Self>) {
+        let session = &self.state.sessions[index];
+        let session_id = session.id;
+        let Some(path) = self.workspace_path_for_session(session).map(std::path::Path::to_path_buf) else { return; };
+        let cache = &mut self.remote_workspace_changes;
+        if cache.entries.get(&path).is_some_and(|(at, _)| at.elapsed() < REMOTE_WORKSPACE_REFRESH)
+            || cache.pending.contains(&path) || cache.pending.len() >= 8 { return; }
+        cache.pending.insert(path.clone());
+        let generation = self.remote_generation;
+        let workspace = fintwind_client::WorkspaceClient::new(self.daemon.client());
+        cx.spawn(async move |this, cx| {
+            let location = path.clone();
+            let counts = cx.background_executor().spawn(async move {
+                match workspace.request(fintwind_client::WorkspaceOperation::InspectBranches { cwd: location }) {
+                    Ok(fintwind_client::WorkspaceResult::Branches { snapshot }) => snapshot.map(|snapshot| (snapshot.additions, snapshot.deletions)),
+                    _ => None,
+                }
+            }).await;
+            let _ = this.update(cx, |app, cx| {
+                if app.remote_generation != generation { return; }
+                app.remote_workspace_changes.pending.remove(&path);
+                let Ok(index) = app.remote_session_index(session_id) else { return; };
+                if app.workspace_path_for_session(&app.state.sessions[index]) != Some(path.as_path()) { return; }
+                let cache = &mut app.remote_workspace_changes.entries;
+                let previous = cache.get(&path).and_then(|(_, counts)| *counts);
+                if cache.len() >= 8 && !cache.contains_key(&path)
+                    && let Some(oldest) = cache.iter().min_by_key(|(_, (at, _))| *at).map(|(path, _)| path.clone()) {
+                    cache.remove(&oldest);
+                }
+                cache.insert(path, (Instant::now(), counts));
+                // Do not redraw the desktop or send new frames for unchanged counts.
+                if previous != counts { cx.notify(); }
+            });
+        }).detach();
+    }
+
     fn remote_session_snapshot(&self, index: usize) -> Value {
         self.remote_session_projection(index, false)
     }
@@ -1161,7 +1209,7 @@ impl Fintwind {
                 })).collect::<Vec<_>>(),
             }));
         let (entries, entries_truncated) = remote_transcript_entries(session, &timing);
-        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas"];
+        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges"];
         if session.provider == "opencode" { features.push("goals"); }
         let mut snapshot = json!({
             "id": session.id,
@@ -1176,6 +1224,11 @@ impl Fintwind {
             "canSend": session.detail_loaded,
             "entries": entries,
             "features": features,
+            "todos": remote_todo_snapshot(session),
+            "workspaceChanges": self.workspace_path_for_session(session)
+                .and_then(|path| self.remote_workspace_changes.entries.get(path))
+                .and_then(|(_, counts)| *counts)
+                .map(|(additions, deletions)| json!({"additions": additions, "deletions": deletions})),
             "goal": session.goal.as_ref().map(|goal| json!({
                 "objective": bounded_text(&goal.objective, 8192), "status": goal.status,
                 "turns": goal.turns, "maxTurns": goal.max_turns,
@@ -1331,12 +1384,39 @@ fn remote_message_timing(session: &AgentSession) -> HashMap<Uuid, (u64, Option<u
     timing
 }
 
+fn remote_todo_snapshot(session: &AgentSession) -> Option<Value> {
+    use super::background_work::todo::{TodoStatus, latest_snapshot};
+
+    let snapshot = latest_snapshot(session)?;
+    let mut truncated = snapshot.items.len() > 64;
+    let items = snapshot.items.iter().take(64).map(|item| {
+        let content = bounded_text(&item.content, 512);
+        truncated |= content.len() != item.content.len();
+        let status = match item.status {
+            TodoStatus::Pending => "pending",
+            TodoStatus::InProgress => "in_progress",
+            TodoStatus::Completed => "completed",
+            TodoStatus::Cancelled => "cancelled",
+        };
+        json!({"content": content, "status": status})
+    }).collect::<Vec<_>>();
+    Some(json!({"items": items, "completed": snapshot.completed,
+        "total": snapshot.items.len(), "truncated": truncated}))
+}
+
 fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64, Option<u64>)>) -> (Vec<Value>, bool) {
     enum Entry<'a> {
         Message(&'a crate::model::Message),
-        Activity(&'a ActivityItem),
+        Activity(&'a ActivityItem, Option<Uuid>),
     }
     let start = session.messages.len().saturating_sub(REMOTE_MESSAGE_LIMIT);
+    let turns = session.turns.iter().map(|turn| (turn.id, turn)).collect::<HashMap<_, _>>();
+    let mut terminal = HashMap::new();
+    for message in session.messages.iter().skip(start).rev() {
+        if message.role == MessageRole::Assistant && let Some(turn_id) = message.turn_id {
+            terminal.entry(turn_id).or_insert(message.id);
+        }
+    }
     let mut ordered = Vec::new();
     for (index, message) in session.messages.iter().enumerate().skip(start) {
         if matches!(message.role, MessageRole::User | MessageRole::Assistant) {
@@ -1353,7 +1433,7 @@ fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64
                 block.after_message,
                 0,
                 (block_index, index),
-                Entry::Activity(activity),
+                Entry::Activity(activity, block.turn_id),
             ));
         }
     }
@@ -1371,12 +1451,18 @@ fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64
                     bounded_text(content, 16 * 1024)
                 };
                 truncated |= text.len() != content.len();
+                let turn = message.turn_id.and_then(|id| turns.get(&id));
+                let response_complete = message.role == MessageRole::Assistant && !message.streaming
+                    && message.turn_id.is_none_or(|id| terminal.get(&id) == Some(&message.id)
+                        && turn.is_some_and(|turn| turn.status != crate::model::TurnStatus::Running));
                 json!({"type": "message", "id": message.id, "role": message.role, "text": text,
+                    "turnId": message.turn_id, "turnRunning": turn.map(|turn| turn.status == crate::model::TurnStatus::Running),
+                    "responseComplete": response_complete,
                     "createdAt": timing.get(&message.id).and_then(|(at, _)| (*at > 0).then_some(*at)),
                     "elapsedSeconds": timing.get(&message.id).and_then(|(_, elapsed)| *elapsed), "streaming": message.streaming,
                     "attachments": message.attachments.iter().take(8).map(|file| json!({"name": bounded_text(&file.name, 128), "isImage": file.is_image})).collect::<Vec<_>>()})
             }
-            Entry::Activity(activity) => {
+            Entry::Activity(activity, turn_id) => {
                 let content = if activity.kind == ActivityKind::Reasoning {
                     activity
                         .reasoning
@@ -1389,6 +1475,7 @@ fn remote_transcript_entries(session: &AgentSession, timing: &HashMap<Uuid, (u64
                 let limit = 12 * 1024;
                 let text = bounded_tail_text(content, limit);
                 json!({"type": "activity", "id": activity.id, "kind": activity.kind,
+                    "turnId": turn_id, "turnRunning": turn_id.and_then(|id| turns.get(&id)).map(|turn| turn.status == crate::model::TurnStatus::Running),
                     "title": bounded_text(&activity.title, 256),
                     "text": text, "complete": activity.complete, "failed": activity.failed,
                     "truncated": content.len() > limit})

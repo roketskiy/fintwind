@@ -22,6 +22,8 @@ function Fixture() {
     streamError: fixture.failWatch,
     completeActivity: fixture.completeActivity,
     appendActivity: fixture.appendActivity,
+    finishTurn: fixture.finishTurn,
+    waitForApproval: fixture.waitForApproval,
     mutationError: () => { fixture.failMutation(); void app.mutate("stop", { sessionId: "fixture-session" }); },
   };
   return <>

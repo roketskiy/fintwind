@@ -1358,6 +1358,7 @@ pub struct Fintwind {
     remote_error: Option<String>,
     remote_session_hydrations: HashSet<Uuid>,
     remote_model_catalogs: HashMap<PathBuf, (Instant, ProviderProbe)>,
+    remote_workspace_changes: remote::RemoteWorkspaceChanges,
     remote_composer_catalogs: HashMap<Uuid, (PathBuf, ProviderProbe, Instant, u64)>,
     remote_uploads: remote::RemoteUploads,
     /// Session details currently being fetched from the daemon. Sidebar rows
@@ -3702,6 +3703,7 @@ impl Fintwind {
                 remote_error: None,
                 remote_session_hydrations: HashSet::new(),
                 remote_model_catalogs: HashMap::new(),
+                remote_workspace_changes: remote::RemoteWorkspaceChanges::default(),
                 remote_composer_catalogs: HashMap::new(),
                 remote_uploads: remote::RemoteUploads::default(),
                 session_hydrations: HashSet::new(),

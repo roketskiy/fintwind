@@ -19,8 +19,6 @@ use fintwind_protocol::browser::{BrowserAction, BrowserResult, BrowserScope};
 use fintwind_protocol::browser_tools::{BrowserToolPage, BrowserToolReply};
 
 const MAX_TOOL_SERVERS: usize = 32;
-const MAX_TOOL_SESSIONS: usize = 1024;
-const MAX_SESSION_ID_BYTES: usize = 128;
 // Desktop subscribers count up from zero. Plugin callers use the upper half,
 // so closing one transport can never retire another transport's capabilities.
 static NEXT_TOOL_CONNECTION: AtomicU64 = AtomicU64::new(1 << 63);
@@ -36,20 +34,17 @@ struct State {
 
 struct Connection {
     server_id: Uuid,
-    binding_id: Option<Uuid>,
 }
 
 struct Server {
     activated: bool,
     token: String,
-    sessions: HashMap<String, Mapping>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Mapping {
-    session_id: Uuid,
-    runtime_id: Uuid,
-    binding_id: Uuid,
+/// Held while a driver owns a native OpenCode session. The lease is only
+/// a lifetime guard: it carries no session binding.
+pub struct BrowserToolBinding {
+    _server: Arc<BrowserToolServer>,
 }
 
 /// One registry per daemon. It is never written to a database or shared with
@@ -149,7 +144,6 @@ impl BrowserTools {
             Server {
                 activated: false,
                 token: token.clone(),
-                sessions: HashMap::new(),
             },
         );
         Ok(Arc::new(BrowserToolServer {
@@ -184,13 +178,7 @@ impl BrowserTools {
             .get_mut(&server_id)
             .expect("matched live server")
             .activated = true;
-        state.connections.insert(
-            id,
-            Connection {
-                server_id,
-                binding_id: None,
-            },
-        );
+        state.connections.insert(id, Connection { server_id });
         Ok(id)
     }
 
@@ -207,37 +195,17 @@ impl BrowserTools {
         self.state.lock().connections.contains_key(&connection)
     }
 
-    fn resolve(
-        &self,
-        connection: u64,
-        native_session: &str,
-    ) -> anyhow::Result<(Arc<BrowserBroker>, Mapping)> {
-        if native_session.is_empty() || native_session.len() > MAX_SESSION_ID_BYTES {
-            bail!("invalid OpenCode session identity");
+    fn resolve(&self, connection: u64) -> anyhow::Result<Arc<BrowserBroker>> {
+        // No session binding: any tool connection may address any live
+        // page by page id.
+        let state = self.state.lock();
+        if !state.connections.contains_key(&connection) {
+            bail!("browser tool connection has ended");
         }
-        let mut state = self.state.lock();
-        let mapping = state
-            .connections
-            .get(&connection)
-            .and_then(|entry| state.servers.get(&entry.server_id))
-            .and_then(|server| server.sessions.get(native_session))
-            .copied()
-            .context("this OpenCode session has no Fintwind browser binding")?;
-        let entry = state
-            .connections
-            .get_mut(&connection)
-            .context("browser tool connection ended")?;
-        if entry.binding_id.is_some_and(|id| id != mapping.binding_id) {
-            bail!("browser tool connection cannot change session binding");
-        }
-        entry.binding_id = Some(mapping.binding_id);
-        Ok((
-            state
-                .broker
-                .upgrade()
-                .context("browser daemon is unavailable")?,
-            mapping,
-        ))
+        state
+            .broker
+            .upgrade()
+            .context("browser daemon is unavailable")
     }
 
     /// Every capability except a cancel is refused while the setting is off:
@@ -250,15 +218,11 @@ impl BrowserTools {
         Ok(())
     }
 
-    pub(crate) fn list(
-        &self,
-        connection: u64,
-        native_session: &str,
-    ) -> anyhow::Result<Vec<BrowserToolPage>> {
+    pub(crate) fn list(&self, connection: u64) -> anyhow::Result<Vec<BrowserToolPage>> {
         self.ensure_enabled()?;
-        let (broker, mapping) = self.resolve(connection, native_session)?;
+        let broker = self.resolve(connection)?;
         Ok(broker
-            .list_for_caller(mapping.session_id, mapping.runtime_id, connection)?
+            .list_for_caller(connection)?
             .into_iter()
             .map(|page| BrowserToolPage {
                 page_id: page.scope.page_id,
@@ -272,7 +236,6 @@ impl BrowserTools {
     pub(crate) fn invoke(
         &self,
         connection: u64,
-        native_session: &str,
         request_id: Uuid,
         page_id: Uuid,
         grant_id: Uuid,
@@ -281,14 +244,14 @@ impl BrowserTools {
         if let Err(error) = self.ensure_enabled() {
             return BrowserResult::error(error.to_string());
         }
-        let (broker, mapping) = match self.resolve(connection, native_session) {
+        let broker = match self.resolve(connection) {
             Ok(bound) => bound,
             Err(error) => return BrowserResult::error(error.to_string()),
         };
         broker.invoke(
             BrowserScope {
-                session_id: mapping.session_id,
-                runtime_id: mapping.runtime_id,
+                session_id: Uuid::nil(),
+                runtime_id: Uuid::nil(),
                 page_id,
                 grant_id,
             },
@@ -298,32 +261,17 @@ impl BrowserTools {
         )
     }
 
-    /// Open a new tab for the mapped session runtime. The caller names no
-    /// page: the mapping resolved from the connection's own binding decides
-    /// the session and runtime, and the broker routes to that runtime's
-    /// registered launcher or refuses. The URL is validated by the broker,
-    /// which owns the navigation rules.
-    pub(crate) fn open(
-        &self,
-        connection: u64,
-        native_session: &str,
-        request_id: Uuid,
-        url: &str,
-    ) -> BrowserResult {
+    /// Open a new tab through the global launcher. There is no session
+    /// binding: any tool connection may open.
+    pub(crate) fn open(&self, connection: u64, request_id: Uuid, url: &str) -> BrowserResult {
         if let Err(error) = self.ensure_enabled() {
             return BrowserResult::error(error.to_string());
         }
-        let (broker, mapping) = match self.resolve(connection, native_session) {
+        let broker = match self.resolve(connection) {
             Ok(bound) => bound,
             Err(error) => return BrowserResult::error(error.to_string()),
         };
-        broker.open(
-            mapping.session_id,
-            mapping.runtime_id,
-            url,
-            connection,
-            request_id,
-        )
+        broker.open(url, connection, request_id)
     }
 
     pub(crate) fn cancel(&self, connection: u64, request_id: Uuid) -> anyhow::Result<()> {
@@ -378,45 +326,16 @@ impl BrowserToolServer {
 
     pub fn bind(
         self: &Arc<Self>,
-        native_session: String,
+        _native_session: String,
         runtime: &BrowserToolRuntime,
     ) -> anyhow::Result<BrowserToolBinding> {
-        if !Arc::ptr_eq(&self.registry, &runtime.registry)
-            || native_session.is_empty()
-            || native_session.len() > MAX_SESSION_ID_BYTES
-            || runtime.session_id.is_nil()
-            || runtime.runtime_id.is_nil()
-        {
+        if !Arc::ptr_eq(&self.registry, &runtime.registry) {
             bail!("invalid browser runtime binding");
         }
-        let mapping = Mapping {
-            session_id: runtime.session_id,
-            runtime_id: runtime.runtime_id,
-            binding_id: Uuid::new_v4(),
-        };
-        let mut state = self.registry.state.lock();
-        let server = state
-            .servers
-            .get_mut(&self.id)
-            .context("private browser tool server ended")?;
-        if server.sessions.len() >= MAX_TOOL_SESSIONS
-            && !server.sessions.contains_key(&native_session)
-        {
-            bail!("too many browser session bindings");
-        }
-        if let Some(previous) = server.sessions.get(&native_session)
-            && previous.session_id != runtime.session_id
-        {
-            bail!("OpenCode session already belongs to another Fintwind session");
-        }
-        let previous = server.sessions.insert(native_session.clone(), mapping);
-        if let Some(previous) = previous {
-            retire_binding_connections(&mut state, previous.binding_id);
-        }
+        // No session binding: the lease is only a lifetime guard for the
+        // private server. Any tool connection may address any live page.
         Ok(BrowserToolBinding {
-            server: self.clone(),
-            native_session_id: native_session,
-            mapping,
+            _server: self.clone(),
         })
     }
 }
@@ -428,29 +347,7 @@ impl Drop for BrowserToolServer {
 }
 
 impl Drop for BrowserToolBinding {
-    fn drop(&mut self) {
-        let mut state = self.server.registry.state.lock();
-        if let Some(server) = state.servers.get_mut(&self.server.id)
-            && server.sessions.get(&self.native_session_id) == Some(&self.mapping)
-        {
-            server.sessions.remove(&self.native_session_id);
-            retire_binding_connections(&mut state, self.mapping.binding_id);
-        }
-    }
-}
-
-fn retire_binding_connections(state: &mut State, binding_id: Uuid) {
-    let connections: Vec<_> = state
-        .connections
-        .iter()
-        .filter_map(|(id, entry)| (entry.binding_id == Some(binding_id)).then_some(*id))
-        .collect();
-    for connection in connections {
-        state.connections.remove(&connection);
-        if let Some(broker) = state.broker.upgrade() {
-            broker.remove_connection(connection);
-        }
-    }
+    fn drop(&mut self) {}
 }
 
 #[cfg(test)]

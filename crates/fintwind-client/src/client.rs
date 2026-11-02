@@ -41,17 +41,15 @@ pub enum BrowserNotification {
     Request(BrowserRequest),
     /// The daemon gave up on a request (timeout or the invoker vanished).
     Cancel(Uuid),
-    /// The daemon refused a publish. The listed scopes are the ones that did
-    /// not take, so the GUI drops exactly those grants and shows the error.
+    /// The daemon refused a publish or launcher registration. The listed
+    /// scopes are the ones that did not take, so the GUI drops exactly
+    /// those pages and shows the error. This is validation, never a
+    /// session or grant decision.
     ShareRejected {
         scopes: Vec<BrowserScope>,
         message: String,
     },
-    /// These scopes lost their grant because their session runtime ended or
-    /// was replaced. A later re-share under a new grant is a different scope
-    /// and is not listed here.
-    ScopesRevoked(Vec<BrowserScope>),
-    /// The connection ended. Pending page grants are gone with it.
+    /// The connection ended. Published pages go with it.
     Disconnected,
 }
 
@@ -595,17 +593,6 @@ fn run_client(
                         if let Some(events) = subscriber
                             && events
                                 .try_send(BrowserNotification::ShareRejected { scopes, message })
-                                .is_err()
-                        {
-                            browser_notification_undeliverable(&inner);
-                            break 'connection;
-                        }
-                    }
-                    ServerMessage::BrowserScopesRevoked { scopes } => {
-                        let subscriber = inner.browser.lock().clone();
-                        if let Some(events) = subscriber
-                            && events
-                                .try_send(BrowserNotification::ScopesRevoked(scopes))
                                 .is_err()
                         {
                             browser_notification_undeliverable(&inner);

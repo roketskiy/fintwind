@@ -1,22 +1,20 @@
-//! Ephemeral browser collaboration messages. Never persist or replay these.
+//! Ephemeral browser messages. Never persist or replay these.
 //!
-//! The messages here form a live-only bridge between a daemon-owned session
-//! runtime and the GUI connection that currently holds the browser page.
-//! Authorization is issued per page by the GUI and bound to one session,
-//! runtime, page and grant; the daemon never guesses a "current page". Every
-//! design decision favors failing closed: an unknown scope answers with an
-//! error instead of falling back to another page. Tools have full access to the
-//! current session's pages, including local files and page data. The bounded
-//! [`BrowserAction::Evaluate`] runs in the page's isolated world; its output is
-//! untrusted page data, never instructions. Arbitrary CDP method names are not
-//! accepted by this channel.
+//! The messages here form a live-only bridge between tools and the GUI
+//! connection that currently holds the browser page. There is no
+//! authorization system: no per-page grant, no session or runtime binding,
+//! no launcher capability, no approval. A page is addressed by its page id
+//! only; session, runtime and grant ids remain on the wire for compatibility
+//! and are ignored. Every design decision favors failing closed on unknown
+//! pages: an unknown page id answers with an error instead of falling back
+//! to another page. Tools have full access to open pages, including local
+//! files and page data. The bounded [`BrowserAction::Evaluate`] runs in the
+//! page's isolated world; its output is untrusted page data, never
+//! instructions. Arbitrary CDP method names are not accepted by this channel.
 //!
-//! A GUI connection may additionally register one *launcher* scope per live
-//! session runtime. The launcher's page and grant ids are capability
-//! identities, not a real tab: they never appear in any page list, and only
-//! [`BrowserAction::Open`] is ever routed to them. Exactly one launcher per
-//! session runtime may exist at a time; a second registration is refused
-//! instead of guessing which one to use.
+//! A GUI connection may register one *launcher* scope so tool opens have a
+//! target. The launcher is global, not per session or runtime: the first
+//! registered launcher serves every open.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -59,8 +57,9 @@ pub const MAX_BROWSER_SCROLL_DELTA: u64 = 2_000;
 /// and pre-checked by the client so an oversized publish fails locally.
 pub const MAX_BROWSER_PAGES_PER_CONNECTION: usize = 256;
 
-/// A fresh, GUI-issued capability for one page and one live session runtime.
-/// The transport additionally binds it to the publishing GUI connection.
+/// A page identity for one open tab. The transport additionally binds it to
+/// the publishing GUI connection. Session, runtime and grant ids ride along
+/// for wire compatibility and are ignored: only the page id routes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowserScope {
@@ -71,13 +70,10 @@ pub struct BrowserScope {
 }
 
 impl BrowserScope {
-    /// Every id must be present: a nil session, runtime, page or grant is a
-    /// malformed scope and is refused rather than interpreted.
+    /// Only the page id matters. Session, runtime and grant ids stay on the
+    /// wire for compatibility and are ignored.
     pub fn is_well_formed(&self) -> bool {
-        !self.session_id.is_nil()
-            && !self.runtime_id.is_nil()
-            && !self.page_id.is_nil()
-            && !self.grant_id.is_nil()
+        !self.page_id.is_nil()
     }
 }
 
@@ -93,17 +89,16 @@ pub struct BrowserShare {
 /// payloads. Navigation accepts URLs supported by the native browser, including
 /// local files; the browser decides which schemes it can load.
 ///
-/// [`Self::Open`] is the one launcher-side action: only a registered browser
-/// launcher may ever be routed an `Open`. [`Self::Scroll`] is an ordinary
+/// [`Self::Open`] is the one launcher-side action: only the registered global
+/// launcher is ever routed an `Open`. [`Self::Scroll`] is an ordinary
 /// page action and is served only by a page publication, like the rest.
 ///
 /// [`Self::Evaluate`] is the deliberate exception to "no raw scripts": one
-/// bounded expression, authorized like every other mutation, executed in the
-/// page's isolated world with an untrusted, size-capped result. See the
-/// module documentation. [`Self::Screenshot`] answers as
-/// [`BrowserResult::Media`], bounded by capture parameters rather than trust.
-/// [`Self::Close`] is launcher-side like `Open`: the app host closes any
-/// surface belonging to this session.
+/// bounded expression, executed in the page's isolated world with an
+/// untrusted, size-capped result. See the module documentation.
+/// [`Self::Screenshot`] answers as [`BrowserResult::Media`], bounded by
+/// capture parameters rather than trust. [`Self::Close`] is launcher-side
+/// like `Open`: the app host closes any open surface by page id.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -123,9 +118,9 @@ pub enum BrowserAction {
     Navigate {
         url: String,
     },
-    /// Ask the GUI that registered the session runtime's launcher to open a
+    /// Ask the GUI that registered the global launcher to open a
     /// new tab. The answered value is the new page's identity, and the page
-    /// is then shared under a fresh scope of its own.
+    /// is then shared under a fresh identity of its own.
     Open {
         url: String,
     },
@@ -178,20 +173,15 @@ pub enum BrowserAction {
         from: String,
         to: String,
     },
-    /// Close the page this grant names. Launcher-side like [`Self::Open`]:
-    /// only the app host can close the surface, and it must belong to this
-    /// session's live runtime.
+    /// Close the page this request names. Launcher-side like [`Self::Open`]:
+    /// only the app host can close the surface.
     Close,
 }
 
 impl BrowserAction {
-    /// Whether this action is outside the default observation permission.
-    /// It does **not** mean the daemon demands a per-request approval: the
-    /// page owner decides, and an owner in full-access mode answers these
-    /// without prompting. Snapshot is the only action an owner may treat as
-    /// always permitted.
+    /// No per-action approval.
     pub fn requires_approval(&self) -> bool {
-        !matches!(self, Self::Snapshot)
+        false
     }
 
     /// Check the URL envelope without limiting the browser's schemes. The

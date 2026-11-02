@@ -150,12 +150,10 @@ impl SystemChannel {
 
     pub fn begin_runtime(&self, session_id: Uuid, runtime_id: Uuid) {
         self.hub.begin_runtime(session_id, runtime_id);
-        self.broker.note_runtime(session_id, runtime_id);
     }
 
     pub fn end_runtime(&self, session_id: Uuid, runtime_id: Option<Uuid>) {
         self.hub.end_runtime(session_id, runtime_id);
-        self.broker.forget_runtime(session_id, runtime_id);
     }
 
     pub fn notify_catalog(&self) {
@@ -807,7 +805,7 @@ fn handle_connection(
                 Ok(ClientMessage::Hello { .. }) => {}
                 Ok(ClientMessage::BrowserPublish { pages }) => {
                     // Bound the refusal too: raw authenticated clients need
-                    // not respect the desktop's local 16-page cap.
+                    // not respect the desktop's local 256-page cap.
                     let attempted_scopes: Vec<_> = pages
                         .iter()
                         .take(fintwind_protocol::browser::MAX_BROWSER_PAGES_PER_CONNECTION)
@@ -825,12 +823,10 @@ fn handle_connection(
                 }
                 Ok(ClientMessage::BrowserHost { scope }) => {
                     // A launcher registration is bound to this connection,
-                    // exactly like a page publish. A refusal — a nil id, a
-                    // runtime that is not the session's live one, or another
-                    // connection already holding the session runtime's
-                    // launcher — carries the attempted scope so the GUI drops
-                    // exactly the capability the daemon did not accept. A
-                    // refusal never disturbs the connection's pages.
+                    // exactly like a page publish. A refusal carries the
+                    // attempted scope so the GUI drops the capability it
+                    // just tried to register. A refusal never disturbs the
+                    // connection's pages.
                     if let Err(error) =
                         broker.register_host(subscriber_id, scope.clone(), outgoing.clone())
                     {
@@ -1001,7 +997,6 @@ fn run_runtime_mailbox(
                     // runtime unconditionally, a close only ends it when it
                     // is still the active one.
                     hub.end_runtime(session_id, (!removes_session).then_some(runtime_id));
-                    broker.forget_runtime(session_id, (!removes_session).then_some(runtime_id));
                     active_runtime_id = None;
                 }
             } else if !runtime_id.is_nil()
@@ -1119,7 +1114,6 @@ fn handle_request(
     } else {
         if starts_runtime {
             hub.begin_runtime(session_id, runtime_id);
-            broker.note_runtime(session_id, runtime_id);
         }
         let mut sink = hub.event_sink(session_id, runtime_id);
         sink.source_subscriber_id = Some(source_subscriber_id);
@@ -1136,7 +1130,6 @@ fn handle_request(
     };
     if executed && starts_runtime && matches!(&outcome, ResponseOutcome::Error { .. }) {
         hub.end_runtime(session_id, Some(runtime_id));
-        broker.forget_runtime(session_id, Some(runtime_id));
     }
     if executed {
         match (&task_catalog_action, &outcome) {
@@ -1209,22 +1202,11 @@ fn browser_command_outcome(
     broker: &BrowserBroker,
 ) -> ResponseOutcome {
     let value = match &request.command {
-        Command::BrowserList => {
-            serde_json::to_value(broker.list(request.session_id, request.runtime_id))
-                .unwrap_or_else(|_| serde_json::Value::Array(Vec::new()))
-        }
+        Command::BrowserList => serde_json::to_value(broker.list())
+            .unwrap_or_else(|_| serde_json::Value::Array(Vec::new())),
         Command::BrowserInvoke { scope, action } => {
-            // The outer request must name the same session and runtime as
-            // the scope it targets; anything else is refused before a GUI
-            // ever sees it.
-            if request.session_id != scope.session_id || request.runtime_id != scope.runtime_id {
-                return ResponseOutcome::Error {
-                    error: RpcError {
-                        message: "browser scope does not match the request session or runtime"
-                            .into(),
-                    },
-                };
-            }
+            // Pages are addressed by page id only. The outer request's
+            // session and runtime are provider routing and are ignored here.
             // A nil request id is the fire-and-forget form used by
             // notifications; an action with side effects never runs in that
             // form, because there is no id to refuse replays with.

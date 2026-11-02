@@ -42,10 +42,9 @@ pub enum BrowserToolMessage {
         grant_id: Uuid,
         action: BrowserAction,
     },
-    /// Ask the GUI that registered this session runtime's launcher to open a
-    /// new tab. The caller never names a page: the daemon resolves the live
-    /// session runtime from the connection's own binding and refuses when no
-    /// unique launcher is registered for it.
+    /// Ask the GUI that registered the global launcher to open a new tab.
+    /// The caller never names a page: the daemon routes to the registered
+    /// launcher.
     Open {
         request_id: Uuid,
         session_id: String,

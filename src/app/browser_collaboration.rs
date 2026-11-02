@@ -1,10 +1,10 @@
-//! Desktop half of the browser collaboration bridge.
+//! Desktop half of the browser bridge.
 //!
-//! A grant names one session, one runtime, one page and one random grant id;
-//! nothing here addresses a "current page" globally, and a grant never
-//! outlives the session, runtime, page or daemon connection it was issued
-//! for. Requests arrive on a direct, per-connection inbox — never through
-//! the replayable driver event stream — and are answered by request id.
+//! Pages are addressed by page id only. There is no session, runtime or
+//! grant binding, no launcher capability per session, and no approval:
+//! tools have full access to every published page. Requests arrive on a
+//! direct, per-connection inbox — never through the replayable driver
+//! event stream — and are answered by request id.
 //!
 //! Threading: one dedicated bridge thread owns the blocking receives, so the
 //! UI thread never waits on a socket. It forwards work into a bounded wake
@@ -52,13 +52,13 @@ enum BridgeWake {
     },
 }
 
-/// All browser-collaboration state the app owns. Grants live on the
+/// All browser state the app owns. Page shares live on the
 /// `BrowserView` entities; this holds the bridge, the subscriptions and the
 /// client each in-flight request must be answered on.
 pub(super) struct AppBrowserCollaborationState {
     /// The set last successfully published. Only written after the client
     /// accepted the publish, so a failed attempt cannot leave the app
-    /// believing a grant the daemon never took.
+    /// believing in pages the daemon never took.
     shares: HashMap<Uuid, BrowserShare>,
     /// One subscription per live `BrowserView`, keyed by page id, so a closed
     /// tab stops delivering events.
@@ -71,19 +71,15 @@ pub(super) struct AppBrowserCollaborationState {
     /// entity; the bridge thread exits once this channel's receiver drops.
     task: Task<()>,
     /// Bumped for every daemon client, so a late receipt from a previous
-    /// connection is refused rather than applied to the new one's grants.
+    /// connection is refused rather than applied to the new pages.
     generation: u64,
     /// The client the current bridge publishes to. `None` between a
     /// disconnect and the supervisor's replacement, and after a failed
     /// publish until then.
     client: Option<DaemonClient>,
-    /// Connection-scoped launcher for the selected local build session. It is
+    /// Global launcher for tool opens. It is
     /// not a browser page and never appears in the shared-page list.
     host: Option<BrowserScope>,
-    /// A daemon-retired cursor cannot be republished while its replacement's
-    /// driver event is still queued. A new runtime gets a fresh launcher,
-    /// never the predecessor's page grants.
-    retired_browser_runtime: Option<(Uuid, Uuid)>,
     automation_pages: std::collections::HashSet<Uuid>,
     /// A cancelled opening must never share its page when loading finishes.
     openings: HashMap<Uuid, Uuid>,
@@ -106,7 +102,6 @@ impl AppBrowserCollaborationState {
             generation: 0,
             client: None,
             host: None,
-            retired_browser_runtime: None,
             automation_pages: Default::default(),
             openings: HashMap::new(),
             opened_pages: HashMap::new(),
@@ -265,9 +260,7 @@ impl Fintwind {
                 notification,
             } => {
                 // A receipt from a connection that has since been replaced
-                // describes a world that no longer exists. Applying it — a
-                // rejection, a revocation, a disconnect — would reach grants
-                // the current connection just published.
+                // describes a world that no longer exists.
                 if generation != self.browser_collaboration.generation {
                     return true;
                 }
@@ -278,29 +271,27 @@ impl Fintwind {
                     BrowserNotification::Cancel(request_id) => {
                         self.cancel_browser_request(request_id, cx);
                     }
-                    // The connection died. Grants go with it; the bridge
-                    // thread waits for the supervisor's replacement, so this
-                    // loop stays alive rather than treating a reconnect as
-                    // shutdown.
+                    // The connection died. Published pages go with it; the
+                    // bridge thread waits for the supervisor's replacement,
+                    // so this loop stays alive rather than treating a
+                    // reconnect as shutdown.
                     BrowserNotification::Disconnected => {
                         self.drop_browser_connection(cx);
                     }
                     // The daemon refused one or more of this connection's
-                    // published pages. Only a view whose current grant is
-                    // exactly the refused scope is revoked, so a rejection
-                    // that crossed a re-share cannot take the new grant.
+                    // published pages or the launcher registration
+                    // (validation only). Revoke the affected pages by page
+                    // id so a rejection that crossed a re-share cannot take
+                    // a newer share.
                     BrowserNotification::ShareRejected { scopes, message } => {
-                        let host_rejected = self
-                            .browser_collaboration
-                            .host
-                            .as_ref()
-                            .is_some_and(|host| scopes.contains(host));
-                        if host_rejected {
-                            self.browser_collaboration.retired_browser_runtime = self
-                                .browser_collaboration
+                        let host_rejected =
+                            self.browser_collaboration
                                 .host
                                 .as_ref()
-                                .map(|host| (host.session_id, host.runtime_id));
+                                .is_some_and(|host| {
+                                    scopes.iter().any(|scope| scope.page_id == host.page_id)
+                                });
+                        if host_rejected {
                             self.pause_browser_automation(cx);
                             self.withdraw_browser_automation_host();
                         }
@@ -312,37 +303,13 @@ impl Fintwind {
                             ));
                         }
                     }
-                    // The daemon retired scopes itself — most importantly
-                    // because the session's runtime was replaced. The UI must
-                    // not keep claiming a share the daemon no longer honors.
-                    BrowserNotification::ScopesRevoked(scopes) => {
-                        let host_revoked = self
-                            .browser_collaboration
-                            .host
-                            .as_ref()
-                            .is_some_and(|host| scopes.contains(host));
-                        if host_revoked {
-                            let retired = self
-                                .browser_collaboration
-                                .host
-                                .as_ref()
-                                .map(|host| (host.session_id, host.runtime_id));
-                            self.pause_browser_automation(cx);
-                            self.browser_collaboration.retired_browser_runtime = retired;
-                            self.withdraw_browser_automation_host();
-                        }
-                        let revoked = self.revoke_receipt_scopes(&scopes, cx);
-                        if revoked || host_revoked {
-                            self.show_toast(tr!("browser_collaboration.runtime_replaced"));
-                        }
-                    }
                 }
             }
         }
         true
     }
 
-    /// Adopt a daemon client. A reconnect never inherits a grant: every
+    /// Adopt a daemon client. A reconnect never inherits pages: every
     /// share is revoked first and the previous connection's consumer is
     /// already retired by the bridge thread.
     fn rebind_browser_collaboration(
@@ -353,12 +320,11 @@ impl Fintwind {
     ) {
         self.drop_browser_connection(cx);
         self.browser_collaboration.generation = generation;
-        self.browser_collaboration.retired_browser_runtime = None;
         self.browser_collaboration.client = Some(client);
         self.sync_browser_automation_host(cx);
     }
 
-    /// Drop the current connection's publishing ability and every grant.
+    /// Drop the current connection's publishing ability and every page.
     /// Used on disconnect, on a failed publish, and before a rebind.
     fn drop_browser_connection(&mut self, cx: &mut Context<Self>) {
         self.browser_collaboration.client = None;
@@ -522,7 +488,7 @@ impl Fintwind {
                     .shares
                     .get(&share.scope.page_id)
                     .is_some_and(|previous| {
-                        previous.scope == share.scope
+                        previous.scope.page_id == share.scope.page_id
                             && previous.url == share.url
                             && previous.title == share.title
                     })
@@ -556,9 +522,8 @@ impl Fintwind {
         cx.notify();
     }
 
-    /// Apply the daemon's own revocation or rejection of scopes. A scope only
-    /// bites when the view's current grant is exactly that scope, so a stale
-    /// receipt cannot take a grant the user issued afterwards.
+    /// Apply the daemon's validation rejection. A page is revoked when its
+    /// page id is listed, so a stale receipt cannot take a newer share.
     fn revoke_receipt_scopes(&mut self, scopes: &[BrowserScope], cx: &mut Context<Self>) -> bool {
         let mut revoked_any = false;
         for scope in scopes {
@@ -568,7 +533,7 @@ impl Fintwind {
             let matches = browser
                 .read(cx)
                 .browser_share()
-                .is_some_and(|share| share.scope == *scope);
+                .is_some_and(|share| share.scope.page_id == scope.page_id);
             if matches {
                 browser.update(cx, |view, cx| view.revoke_browser_share(cx));
                 revoked_any = true;
@@ -577,9 +542,8 @@ impl Fintwind {
         revoked_any
     }
 
-    /// Route one daemon-delivered request to the page it names. A stale
-    /// grant — wrong session, or a runtime that moved on — is refused and
-    /// revoked rather than executed.
+    /// Route one daemon-delivered request to the page it names. Pages match
+    /// by page id only: there is no session, runtime or grant check.
     fn dispatch_browser_request(
         &mut self,
         request: BrowserRequest,
@@ -621,36 +585,21 @@ impl Fintwind {
             return;
         }
         let scope = request.scope.clone();
-        let runtime_current = self.state.selected_session == Some(scope.session_id)
-            && self.runtimes.contains_key(&scope.session_id)
-            && self
-                .selected_session()
-                .and_then(|session| session.runtime_event_cursor)
-                .is_some_and(|cursor| cursor.runtime_id == scope.runtime_id);
-        if !runtime_current {
-            // A late request can name a tab that now has a new session grant.
-            // Refuse the old request without revoking that newer grant.
-            let _ = client.complete_browser_request(
-                request.request_id,
-                BrowserResult::error("This page's session or runtime changed."),
-            );
-            return;
-        }
         let Some(browser) = self.right_panel_browsers.get(&scope.page_id).cloned() else {
             let _ = client.complete_browser_request(
                 request.request_id,
-                BrowserResult::error("The shared page is no longer open."),
+                BrowserResult::error("The browser page is no longer open."),
             );
             return;
         };
-        let granted = browser
+        let published = browser
             .read(cx)
             .browser_share()
-            .is_some_and(|share| share.scope == scope);
-        if !granted {
+            .is_some_and(|share| share.scope.page_id == scope.page_id);
+        if !published {
             let _ = client.complete_browser_request(
                 request.request_id,
-                BrowserResult::error("This page is not shared under the requested grant."),
+                BrowserResult::error("This browser page is no longer published."),
             );
             return;
         }
@@ -682,19 +631,13 @@ impl Fintwind {
                             return true;
                         }
                         let current = this.browser_collaboration.generation == generation
-                            && this.state.selected_session == Some(scope.session_id)
-                            && this.runtimes.contains_key(&scope.session_id)
-                            && this
-                                .selected_session()
-                                .and_then(|session| session.runtime_event_cursor)
-                                .is_some_and(|cursor| cursor.runtime_id == scope.runtime_id)
                             && this
                                 .right_panel_browsers
                                 .get(&scope.page_id)
                                 .is_some_and(|page| {
                                     page.read(cx)
                                         .browser_share()
-                                        .is_some_and(|share| share.scope == scope)
+                                        .is_some_and(|share| share.scope.page_id == scope.page_id)
                                 });
                         if !current || std::time::Instant::now() >= deadline {
                             if let Some(client) = this
@@ -705,7 +648,7 @@ impl Fintwind {
                                 let message = if current {
                                     "The browser page did not become visible."
                                 } else {
-                                    "The browser session or page changed before execution."
+                                    "The browser page changed before execution."
                                 };
                                 let _ = client.complete_browser_request(
                                     request.request_id,
@@ -740,16 +683,16 @@ impl Fintwind {
             browser.update(cx, |view, cx| view.cancel_browser_opening(cx));
         }
         if let Some(scope) = self.browser_collaboration.opened_pages.remove(&request_id) {
-            let exact = self
-                .right_panel_browsers
-                .get(&scope.page_id)
-                .is_some_and(|browser| {
-                    browser
-                        .read(cx)
-                        .browser_share()
-                        .is_some_and(|share| share.scope == scope)
-                });
-            if exact {
+            let still_shared =
+                self.right_panel_browsers
+                    .get(&scope.page_id)
+                    .is_some_and(|browser| {
+                        browser
+                            .read(cx)
+                            .browser_share()
+                            .is_some_and(|share| share.scope.page_id == scope.page_id)
+                    });
+            if still_shared {
                 if let Some(browser) = self.right_panel_browsers.get(&scope.page_id) {
                     browser.update(cx, |view, cx| view.cancel_browser_opening(cx));
                 }
@@ -764,10 +707,10 @@ impl Fintwind {
         }
     }
 
-    /// Revoke every live grant. Used on session switches, tab and session
-    /// removal, and daemon reconnects. Revoking cancels in-flight operations;
-    /// their already-issued side effects may still have happened. The share
-    /// cache is touched by the publication those revocations trigger.
+    /// Revoke every live page. Used on tab removal and daemon reconnects.
+    /// Revoking cancels in-flight operations; their already-issued side
+    /// effects may still have happened. The share cache is touched by the
+    /// publication those revocations trigger.
     pub(super) fn revoke_all_browser_shares(&mut self, cx: &mut Context<Self>) {
         self.withdraw_browser_automation_host();
         self.pause_browser_automation(cx);
@@ -784,7 +727,7 @@ impl Fintwind {
         self.browser_collaboration.pending.clear();
     }
 
-    /// Revoke one page's grant, by page id.
+    /// Revoke one page's share, by page id.
     fn revoke_browser_grant(&mut self, page_id: Uuid, cx: &mut Context<Self>) {
         if let Some(browser) = self.right_panel_browsers.get(&page_id).cloned() {
             // The view's own `ShareChanged` publishes the reduced set — the

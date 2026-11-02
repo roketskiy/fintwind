@@ -487,7 +487,7 @@ impl Fintwind {
                                 .update(cx, |input, cx| input.set_content(String::new(), cx));
                             this.providers_api_key_revealed = false;
                         }
-                        this.rebuild_image_models(cx);
+                        this.rebuild_image_models_report(cx, true);
                         this.refresh_provider_detection();
                         this.refresh_integrations(cx);
                     }

@@ -173,6 +173,7 @@
   height: 100%;
 }
 .app-shell {
+  position: relative;
   width: 100%;
   max-width: 54rem;
   height: var(--app-height, 100dvh);
@@ -503,6 +504,19 @@
 .markdown-body input[type="checkbox"] {
   margin-inline-end: 0.4rem;
 }
+.markdown-body .katex { font-size: 1.06em; overflow-wrap: normal; }
+.markdown-body .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; margin-block: 12px; padding: 10px 4px; overscroll-behavior-x: contain; }
+.markdown-body .katex-display > .katex { width: max-content; min-width: 100%; font-size: max(1.14em, 17px); }
+.markdown-body .katex-display > .katex > .katex-html { counter-reset: katexEqnNo; }
+.markdown-body .katex-display > .katex > .katex-html:has(> .tag) { padding-inline: 3em; }
+.markdown-body .katex-display:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; border-radius: 4px; }
+.mermaid-diagram { min-width: 0; margin: 0; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.mermaid-actions { display: flex; align-items: center; gap: 4px; padding-inline: 8px; color: var(--muted-foreground); font-size: 11px; }
+.mermaid-actions > span { flex: 1; }
+.mermaid-actions button { min-height: 44px; min-width: 44px; }
+.mermaid-scroll { max-height: 60dvh; overflow: auto; padding: 8px; }
+.mermaid-scroll img { display: block; max-width: none; height: auto; margin-inline: auto; }
+.mermaid-diagram pre { max-height: 30dvh; overflow: auto; padding: 8px; font-size: 12px; }
 .approval-card {
   margin-block: 0.5rem;
 }
@@ -515,7 +529,7 @@
 .composer-region {
   flex: none;
   position: relative;
-  padding: 4px 8px calc(4px + env(safe-area-inset-bottom));
+  padding: 4px 8px calc(12px + env(safe-area-inset-bottom));
   background: var(--background);
 }
 .composer-notice {
@@ -539,40 +553,16 @@
   overflow: auto;
   max-height: 75dvh;
 }
-.model-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.125rem;
-  overflow: auto;
-  min-height: 0;
-}
-.model-list [data-slot="button"] {
-  width: 100%;
-  height: auto;
-  min-height: 44px;
-  justify-content: space-between;
-  padding: 6px 8px;
-  border-radius: 8px;
-  text-align: left;
-}
-.model-list span {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.model-list strong {
-  font-size: 12px;
-  font-weight: 550;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-.model-list small {
-  font-size: 11px;
-  color: var(--muted-foreground);
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
+.error-reason { white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-alerts { position: absolute; inset: calc(56px + env(safe-area-inset-top)) 12px auto; pointer-events: none; }
+.task-alerts:empty { display: none; }
+.task-alert-bar { pointer-events: auto; display: flex; align-items: center; height: 44px; padding-inline: 4px; border: 1px solid var(--border); border-radius: 10px; background: var(--popover); box-shadow: var(--bui-shadow); }
+.task-alert-open[data-slot="button"] { display: flex; min-width: 0; flex: 1; height: 42px; gap: 8px; justify-content: flex-start; padding: 6px 8px; border-radius: 6px; font-size: 12px; transition: none; }
+.task-alert-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.task-alert-status { flex: none; font-size: 11px; font-weight: 400; color: var(--muted-foreground); }
+.task-alert-bar > [data-slot="button"]:not(.task-alert-open) { width: 44px; height: 42px; flex: none; font-size: 11px; border-radius: 6px; }
+.task-alert-menu[data-slot="popover-content"] { width: min(340px, calc(100vw - 24px)); max-height: 260px; gap: 2px; padding: 4px; border-radius: 10px; overflow-y: auto; }
+.task-alert-menu .task-alert-open { flex: none; width: 100%; }
 .attachment-tray {
   display: flex;
   gap: 0.5rem;

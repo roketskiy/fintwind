@@ -786,6 +786,23 @@ impl Fintwind {
         cx: &mut Context<Self>,
     ) -> Result<Value, String> {
         match command {
+            fintwind_remote::RemoteCommand::GetTaskActivity => {
+                let cutoff = unix_time().saturating_sub(REMOTE_WINDOW_SECS);
+                let mut sessions = self.state.sessions.iter().filter(|session| {
+                    self.remote_project_ids.contains(&session.project_id) && session_is_recent(session, cutoff)
+                }).collect::<Vec<_>>();
+                sessions.sort_unstable_by_key(|session| std::cmp::Reverse(session_updated_at(session)));
+                let tasks = sessions.into_iter().take(REMOTE_SESSION_LIMIT).map(|session| {
+                    let runtime = self.runtimes.get(&session.id);
+                    let completed = session.turns.iter().rev().find(|turn| turn.status != crate::model::TurnStatus::Running)
+                        .map(|turn| json!({"id": turn.id, "status": turn.status, "at": turn.completed_at.unwrap_or(turn.started_at)}));
+                    json!({"id": session.id, "projectId": session.project_id, "title": bounded_text(session.display_title(), 256),
+                        "completed": completed,
+                        "permissionId": runtime.and_then(|runtime| runtime.pending_permission.as_ref()).map(|pending| bounded_text(&pending.request_id, 256)),
+                        "questionId": runtime.and_then(|runtime| runtime.pending_user_input.as_ref()).map(|pending| bounded_text(&pending.request_id, 256))})
+                }).collect::<Vec<_>>();
+                Ok(json!({"tasks": tasks}))
+            }
             fintwind_remote::RemoteCommand::WatchSession { .. } => {
                 Err("Subscription must be handled by the encrypted transport".to_owned())
             }
@@ -802,7 +819,7 @@ impl Fintwind {
                     self.remote_project_ids.contains(id)
                         && self.state.projects.iter().any(|project| project.id == *id)
                 });
-                Ok(json!({"workspaces": workspaces, "selectedProjectId": selected}))
+                Ok(json!({"workspaces": workspaces, "selectedProjectId": selected, "features": ["taskActivity"]}))
             }
             fintwind_remote::RemoteCommand::ListSessions { project_id } => {
                 self.remote_check_project(project_id)?;
@@ -1254,7 +1271,7 @@ impl Fintwind {
                 })).collect::<Vec<_>>(),
             }));
         let (entries, entries_truncated) = remote_transcript_entries(session, &timing);
-        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges", "sessionPermissions", "steering"];
+        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges", "sessionPermissions", "steering", "contextUsage"];
         if session.provider == "opencode" { features.push("goals"); }
         let mut snapshot = json!({
             "id": session.id,
@@ -1268,9 +1285,19 @@ impl Fintwind {
             "desktopRequired": !permission_supported || !questions_supported,
             "canSend": session.detail_loaded,
             "canSteer": self.remote_can_steer(index),
+            "failureReason": if session.status == SessionStatus::Failed {
+                session.messages.iter().rev().take(32).take_while(|message| {
+                    message.role != MessageRole::User && session.turns.last().is_none_or(|turn| {
+                        message.turn_id.is_none_or(|id| id == turn.id) && message.created_at >= turn.started_at
+                    })
+                })
+                    .find(|message| message.role == MessageRole::System)
+                    .map(|message| self.remote_error_text(&message.content))
+            } else { None },
             "entries": entries,
             "features": features,
             "todos": remote_todo_snapshot(session),
+            "usage": remote_usage_snapshot(session.context_usage.as_ref(), self.configured_context_window(session.model.as_deref())),
             "workspaceChanges": self.workspace_path_for_session(session)
                 .and_then(|path| self.remote_workspace_changes.entries.get(path))
                 .and_then(|(_, counts)| *counts)
@@ -1303,7 +1330,7 @@ impl Fintwind {
         let models = probe.models.iter().filter(|model| !model.id.is_empty() && model.id.len() <= 512)
             .take(1024).map(|model| json!({
                 "id": bounded_text(&model.id, 512), "name": bounded_text(&model.name, 256),
-                "provider": model.sub_provider.as_deref().map(|value| bounded_text(value, 128)),
+                "provider": bounded_text(&super::composer::model_picker_provider_label(model.sub_provider.as_deref()), 128),
                 "efforts": model.reasoning_efforts.iter().take(32).map(|option| json!({"id": bounded_text(&option.id, 128), "label": bounded_text(&option.label, 128)})).collect::<Vec<_>>()
             })).take_while(|value| {
                 let size = serde_json::to_vec(value).map_or(budget + 1, |bytes| bytes.len());
@@ -1313,6 +1340,8 @@ impl Fintwind {
             }).collect::<Vec<_>>();
         json!({
             "models": models, "canConfigure": session.detail_loaded && session.can_choose_model(),
+            "favoriteModelIds": self.state.favorite_models.iter().filter(|favorite| models.iter().any(|model| model["id"].as_str() == Some(favorite.model.as_str())))
+                .take(1024).map(|favorite| favorite.model.as_str()).collect::<Vec<_>>(),
             "commands": session.available_commands.iter().take(64).map(|command| json!({"name": bounded_text(&command.name, 128), "description": bounded_text(&command.description, 256)})).collect::<Vec<_>>()
         })
     }
@@ -1330,6 +1359,16 @@ impl Fintwind {
                     && runtime.pending_steers.iter().filter(|pending| !pending.interrupted).count() < 8
                     && !runtime.pending_steers.iter().any(|pending| !pending.interrupted && pending.remote_origin)
             })
+    }
+
+    fn remote_error_text(&self, text: &str) -> String {
+        let mut text = text.to_owned();
+        for provider in &self.providers_store {
+            if !provider.api_key.is_empty() { text = text.replace(&provider.api_key, "[REDACTED]"); }
+        }
+        static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+        let pattern = PATTERN.get_or_init(|| regex::Regex::new(r#"(?i)(?:bearer\s+[^\s\"',;]+|(?:api[_-]?key|authorization|access[_-]?token|password|secret)[\"']?\s*[:=]\s*[\"']?[^\s\"',;&]+|sk-[a-z0-9_-]{8,}|https?://[^\s]+)"#).expect("constant remote error pattern"));
+        bounded_text(&pattern.replace_all(&text, "[REDACTED]"), 4096)
     }
 
     fn hydrate_remote_session(&mut self, session_id: Uuid, cx: &mut Context<Self>) {
@@ -1444,6 +1483,19 @@ fn remote_message_timing(session: &AgentSession) -> HashMap<Uuid, (u64, Option<u
         timing.insert(message_id, (completed_at, elapsed));
     }
     timing
+}
+
+fn remote_usage_snapshot(usage: Option<&crate::model::ContextUsage>, configured_window: Option<u64>) -> Value {
+    // Copy only the five in-memory counters, not request composition or history.
+    // Keep the desktop's configured-window override and unknown/zero semantics.
+    let safe = |value: Option<u64>| value.filter(|value| *value <= 9_007_199_254_740_991);
+    json!({
+        "contextTokens": safe(usage.filter(|usage| usage.measured || usage.tokens > 0).map(|usage| usage.tokens)),
+        "contextWindow": safe(configured_window.or_else(|| usage.and_then(|usage| usage.window)).filter(|window| *window > 0)),
+        "totalTokens": safe(usage.and_then(|usage| usage.total_tokens)),
+        "cacheReadTokens": safe(usage.and_then(|usage| usage.cache_read)),
+        "promptTokens": safe(usage.and_then(|usage| usage.prompt_tokens)),
+    })
 }
 
 fn remote_todo_snapshot(session: &AgentSession) -> Option<Value> {

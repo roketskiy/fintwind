@@ -74,6 +74,7 @@ export function mutationScope(
 ): string {
   if (
     type === "listWorkspaces" ||
+    type === "getTaskActivity" ||
     type === "listSessions" ||
     type === "getSession" ||
     type === "getComposer" ||
@@ -100,6 +101,7 @@ export function checkFieldBounds(
       reqBool(fields["enabled"]);
       return;
     case "listWorkspaces":
+    case "getTaskActivity":
       return;
     case "listSessions":
     case "createSession":
@@ -306,6 +308,22 @@ export function parseRevision(value: unknown): string | undefined {
 export function parseResult(type: CommandType, data: unknown): unknown {
   if (!isRecord(data)) throw new Error("响应格式无效");
   switch (type) {
+    case "getTaskActivity":
+      return {
+        tasks: reqArr(data["tasks"], 200, (task) => {
+          if (!isRecord(task)) throw new Error("响应格式无效");
+          let completed = null;
+          if (task["completed"] !== null) {
+            const value = task["completed"];
+            if (!isRecord(value) || !["completed", "failed", "interrupted"].includes(String(value["status"]))) throw new Error("响应格式无效");
+            completed = { id: reqStr(value["id"], 256), status: value["status"], at: timestamp(value["at"]) };
+          }
+          return { id: reqStr(task["id"], 256), projectId: reqStr(task["projectId"], 256), title: optStr(task["title"], 1024), completed,
+            permissionId: task["permissionId"] === null ? null : reqStr(task["permissionId"], 256),
+            questionId: task["questionId"] === null ? null : reqStr(task["questionId"], 256) };
+        }),
+        revision: parseRevision(data["revision"]),
+      };
     case "listWorkspaces": {
       const selected = data["selectedProjectId"];
       if (
@@ -316,6 +334,7 @@ export function parseResult(type: CommandType, data: unknown): unknown {
       return {
         workspaces: reqArr(data["workspaces"], 4096, parseWorkspace),
         selectedProjectId: selected as string | null,
+        ...(data["features"] === undefined ? {} : { features: reqArr(data["features"], 32, (value) => reqStr(value, 128)) }),
         revision: parseRevision(data["revision"]),
       };
     }
@@ -358,6 +377,27 @@ export function parseResult(type: CommandType, data: unknown): unknown {
         ...(data["canSteer"] === undefined ? {} : { canSteer: reqBool(data["canSteer"]) }),
       };
       const revision = parseRevision(data["revision"]);
+      if (data["failureReason"] !== undefined) detail.failureReason = data["failureReason"] === null ? null : reqStr(data["failureReason"], 4096, 0);
+      if (data["usage"] !== undefined) {
+        const usage = data["usage"];
+        if (usage === null) detail.usage = null;
+        else {
+          if (!isRecord(usage)) throw new Error("响应格式无效");
+          const counter = (value: unknown): number | null => {
+            if (value === null) return null;
+            const number = reqNum(value);
+            if (!Number.isSafeInteger(number) || number < 0) throw new Error("响应格式无效");
+            return number;
+          };
+          detail.usage = {
+            contextTokens: counter(usage["contextTokens"]),
+            contextWindow: counter(usage["contextWindow"]),
+            totalTokens: counter(usage["totalTokens"]),
+            cacheReadTokens: counter(usage["cacheReadTokens"]),
+            promptTokens: counter(usage["promptTokens"]),
+          };
+        }
+      }
       if (data["runtimeMode"] !== undefined) detail.runtimeMode = parseRuntimeMode(data["runtimeMode"]);
       if (data["workspaceChanges"] !== undefined) {
         const changes = data["workspaceChanges"];
@@ -407,6 +447,7 @@ export function parseResult(type: CommandType, data: unknown): unknown {
       return { sessionId: reqStr(data["sessionId"], 256) };
     case "getComposer":
       return {
+        ...(data["favoriteModelIds"] === undefined ? {} : { favoriteModelIds: reqArr(data["favoriteModelIds"], 1024, (id) => reqStr(id, 512)) }),
         canConfigure: reqBool(data["canConfigure"]),
         models: reqArr(data["models"], 1024, (entry) => {
           if (!isRecord(entry)) throw new Error("响应格式无效");

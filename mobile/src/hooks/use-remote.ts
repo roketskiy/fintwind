@@ -66,6 +66,7 @@ export function useRemote() {
   const [data, setData] = useState<Data>(emptyData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [stopping, setStopping] = useState(false);
   const generation = useRef(0);
@@ -266,6 +267,7 @@ export function useRemote() {
   const selectWorkspace = useCallback((projectId: string) => {
     generation.current++;
     setError(null);
+    setOperationError(null);
     setData((value) => ({ ...value, sessions: [], detail: null, projectId }));
     setSelection({ projectId, sessionId: "", page: "sessions" });
     saveSelection("fintwind-project", projectId);
@@ -273,19 +275,27 @@ export function useRemote() {
     saveSelection("fintwind-page", "sessions");
   }, []);
 
-  const openSession = useCallback((sessionId: string) => {
-    generation.current++;
+  const openSession = useCallback((sessionId: string, targetProjectId?: string) => {
+    const projectId = targetProjectId ?? currentSelection.current.projectId;
     setError(null);
+    setOperationError(null);
+    // A reminder can target the already-open conversation. Invalidating its
+    // generation without changing effect dependencies would freeze its stream.
+    if (currentSelection.current.page === "conversation" &&
+      currentSelection.current.sessionId === sessionId && currentSelection.current.projectId === projectId) return;
+    generation.current++;
     if (currentSelection.current.page !== "conversation")
       history.pushState(
         {
           fintwindPage: "conversation",
           sessionId,
-          projectId: currentSelection.current.projectId,
+          projectId,
         },
         "",
       );
-    setSelection((value) => ({ ...value, sessionId, page: "conversation" }));
+    else history.replaceState({ fintwindPage: "conversation", sessionId, projectId }, "");
+    setSelection({ projectId, sessionId, page: "conversation" });
+    saveSelection("fintwind-project", projectId);
     saveSelection("fintwind-session", sessionId);
     saveSelection("fintwind-page", "conversation");
   }, []);
@@ -304,14 +314,14 @@ export function useRemote() {
       if (stopOperation.current) return null;
       if (stop) { stopOperation.current = true; setStopping(true); }
       else { operation.current = type; setBusy(true); }
-      setError(null);
+      setOperationError(null);
       try {
         const result = await remoteClient.command(type, fields);
         return result;
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : "操作失败。";
         if (onFailure) onFailure(message);
-        else setError(message);
+        else setOperationError(message);
         return null;
       } finally {
         // A timeout still needs a fresh read to resolve operation identities;
@@ -340,7 +350,7 @@ export function useRemote() {
     detail: data.detail?.id === selection.sessionId ? data.detail : null,
     sessions: data.projectId === selection.projectId ? data.sessions : [],
     loading,
-    error: error || client.error,
+    error: operationError || error || client.error,
     busy,
     stopping,
     selectWorkspace,
@@ -348,7 +358,7 @@ export function useRemote() {
     back,
     mutate,
     createSession,
-    setError,
+    setError: setOperationError,
     refresh: () => setRefreshVersion((value) => value + 1),
     reconnect: () => remoteClient.reconnect(),
     forget: async () => {
@@ -358,6 +368,7 @@ export function useRemote() {
         setData(emptyData);
         setSelection({ projectId: "", sessionId: "", page: "sessions" });
         setError(null);
+        setOperationError(null);
       } catch (cause) { setError(cause instanceof Error ? cause.message : "无法忘记配对。"); }
     },
   };

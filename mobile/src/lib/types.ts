@@ -44,6 +44,7 @@ export interface RemoteActivity {
 export type TranscriptEntry = RemoteMessage | RemoteActivity;
 export type RuntimeMode = "ask" | "autoAcceptEdits" | "fullAccess";
 export interface ComposerOptions {
+  favoriteModelIds?: string[];
   canConfigure: boolean;
   models: {
     id: string;
@@ -76,6 +77,14 @@ export interface TodoSnapshot {
   truncated: boolean;
 }
 export interface SessionDetail {
+  failureReason?: string | null;
+  usage?: {
+    contextTokens: number | null;
+    contextWindow: number | null;
+    totalTokens: number | null;
+    cacheReadTokens: number | null;
+    promptTokens: number | null;
+  } | null;
   workspaceChanges?: { additions: number; deletions: number } | null;
   todos?: TodoSnapshot | null;
   goal?: { objective: string; status: "active" | "paused" | "blocked" | "done"; turns: number; maxTurns: number; reason: string; result: string; elapsedSeconds?: number; tools?: number } | null;
@@ -100,11 +109,16 @@ export interface SessionDetail {
   revision?: string;
 }
 export interface CommandMap {
+  getTaskActivity: {
+    fields: Record<string, never>;
+    result: { tasks: TaskActivity[]; revision?: string };
+  };
   listWorkspaces: {
     fields: Record<string, never>;
     result: {
       workspaces: Workspace[];
       selectedProjectId: string | null;
+      features?: string[];
       revision?: string;
     };
   };
@@ -161,6 +175,14 @@ export interface CommandMap {
     };
     result: { accepted: boolean };
   };
+}
+export interface TaskActivity {
+  id: string;
+  projectId: string;
+  title: string;
+  completed: { id: string; status: "completed" | "failed" | "interrupted"; at: number } | null;
+  permissionId: string | null;
+  questionId: string | null;
 }
 export type CommandType = keyof CommandMap;
 export type ConnectionPhase =

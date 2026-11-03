@@ -36,6 +36,13 @@ fn main() -> anyhow::Result<()> {
     let mut update_bytes = 0;
     let start = Instant::now();
     for tick in 0..60 {
+        value["usage"] = json!({"contextTokens": 42_000 + tick, "contextWindow": 200_000,
+            "totalTokens": 1_234_567 + tick, "cacheReadTokens": 800_000, "promptTokens": 1_000_000});
+        if tick == 0 { value["usage"]["contextTokens"] = Value::Null; }
+        if tick == 20 { value["usage"]["cacheReadTokens"] = json!(0); value["usage"]["promptTokens"] = json!(0); }
+        if tick == 30 { value["usage"]["contextWindow"] = Value::Null; }
+        if tick == 40 { value["usage"]["totalTokens"] = Value::Null; }
+        if tick == 59 { value["usage"] = Value::Null; }
         if tick == 15 { value["runtimeMode"] = json!("autoAcceptEdits"); }
         if tick == 35 { value["runtimeMode"] = json!("fullAccess"); }
         if tick == 55 { value["runtimeMode"] = json!("ask"); }

@@ -145,6 +145,7 @@ pub struct DesktopRequest {
 )]
 pub enum RemoteCommand {
     ListWorkspaces,
+    GetTaskActivity,
     ListSessions {
         project_id: Uuid,
     },
@@ -216,6 +217,7 @@ impl RemoteCommand {
         !matches!(
             self,
             Self::ListWorkspaces
+                | Self::GetTaskActivity
                 | Self::ListSessions { .. }
                 | Self::GetSession { .. }
                 | Self::WatchSession { .. }
@@ -226,7 +228,7 @@ impl RemoteCommand {
     fn within_limits(&self) -> bool {
         let ok = |s: &str, max: usize| !s.is_empty() && s.len() <= max;
         match self {
-            Self::ListWorkspaces => true,
+            Self::ListWorkspaces | Self::GetTaskActivity => true,
             Self::WatchSession {
                 session_id,
                 watch_id,

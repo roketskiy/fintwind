@@ -70,6 +70,7 @@
 .bui-branch-trigger:active { background: var(--muted); }
 .bui-branch-chevron { width: 14px; height: 14px; transition: transform 120ms var(--bui-ease); }
 .bui-branch-trigger[aria-expanded="true"] .bui-branch-chevron { transform: rotate(90deg); }
+.bui-turn-history-content { display: flex; flex-direction: column; gap: 2rem; padding-block: 8px; }
 .bui-branch-status { margin-left: 2px; color: var(--muted-foreground); font-size: 11px; font-weight: 400; }
 .bui-branch-status[data-failed] { color: var(--destructive); }
 .bui-branch .bui-branch-list { gap: 0; margin-left: 0; width: auto; }

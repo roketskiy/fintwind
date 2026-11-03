@@ -2,6 +2,7 @@ import * as React from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { HighlightedCode } from "./highlighted-code";
+import { MermaidDiagram } from "./mermaid-diagram";
 
 import {
   CodeBlock,
@@ -13,6 +14,9 @@ import {
 } from "@/components/ui/code-block";
 
 const remarkPlugins = [remarkGfm];
+type MathPlugins = typeof import("./math-plugins");
+let mathPlugins: MathPlugins | undefined;
+let mathLoading: Promise<MathPlugins> | undefined;
 
 function textFromChildren(children: React.ReactNode): string {
   if (typeof children === "string" || typeof children === "number") {
@@ -99,7 +103,7 @@ const components: Components = {
     const language = /(?:^|\s)language-([^\s]+)/.exec(className)?.[1];
     const code = textFromChildren(child.props.children).replace(/\n$/, "");
 
-    return <MarkdownCodeBlock code={code} language={language} />;
+    return language?.toLowerCase() === "mermaid" ? <MermaidDiagram source={code} /> : <MarkdownCodeBlock code={code} language={language} />;
   },
   code({ node: _node, className, children, ...props }) {
     return (
@@ -110,6 +114,9 @@ const components: Components = {
   },
   table({ node: _node, ...props }) {
     return <table {...props} tabIndex={0} aria-label="表格" />;
+  },
+  span({ node: _node, className, ...props }) {
+    return <span {...props} className={className} {...(className?.split(/\s+/).includes("katex-display") ? { tabIndex: 0, "aria-label": "块级公式" } : {})} />;
   },
 };
 
@@ -122,15 +129,26 @@ export const Markdown = React.memo(function Markdown({
 }: {
   text: string;
 }) {
+  const hasMath = /\$|\\(?:\(|\[|begin\{)|(?:```|~~~)math\b/.test(text);
+  const [math, setMath] = React.useState(() => mathPlugins);
+  React.useEffect(() => {
+    if (!hasMath || math) return;
+    let active = true;
+    mathLoading ??= import("./math-plugins").then(plugins => { mathPlugins = plugins; return plugins; });
+    void mathLoading.then(plugins => { if (active) setMath(plugins); }, () => { /* Keep readable plain Markdown if loading fails. */ });
+    return () => { active = false; };
+  }, [hasMath, math]);
+  const content = React.useMemo(() => hasMath && math ? math.normalizeTexMath(text) : text, [text, hasMath, math]);
   return (
     <div className="markdown-body min-w-0">
       <ReactMarkdown
-        remarkPlugins={remarkPlugins}
+        remarkPlugins={hasMath && math ? math.remarkPlugins : remarkPlugins}
+        rehypePlugins={hasMath && math ? math.rehypePlugins : undefined}
         skipHtml
         urlTransform={transformUrl}
         components={components}
       >
-        {text}
+        {content}
       </ReactMarkdown>
     </div>
   );

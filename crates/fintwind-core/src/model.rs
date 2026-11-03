@@ -95,6 +95,9 @@ pub fn probe_provider_version(binary: &Path) -> Option<String> {
     let output = crate::command_env::output_with_timeout(command, Duration::from_secs(5))
         .ok()
         .flatten()?;
+    if !output.status.success() {
+        return None;
+    }
     let combined = format!(
         "{}\n{}",
         String::from_utf8_lossy(&output.stdout),

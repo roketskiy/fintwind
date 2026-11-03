@@ -39,6 +39,7 @@ pub struct FintwindBackend {
     terminals: Mutex<HashMap<Uuid, (Uuid, crate::terminal::DaemonTerminal)>>,
     settings: DaemonSettingsStore,
     settings_update_gate: Mutex<()>,
+    opencode_management_gate: Mutex<()>,
     task_store: Arc<StateStore>,
     task_state: Arc<Mutex<PersistedState>>,
     removed_session_ids: Mutex<HashSet<Uuid>>,
@@ -134,6 +135,7 @@ impl FintwindBackend {
             terminals: Mutex::new(HashMap::new()),
             settings,
             settings_update_gate: Mutex::new(()),
+            opencode_management_gate: Mutex::new(()),
             scheduled_store: Arc::new(ScheduledStore::new(task_store.clone())),
             task_store,
             task_state: Arc::new(Mutex::new(task_state)),
@@ -1571,6 +1573,97 @@ impl Backend for FintwindBackend {
                     probe = crate::model::discover_provider_models(probe, directory.as_deref());
                 }
                 Ok(ResponsePayload::ProviderProbe { probe, version })
+            }
+            Command::CheckOpenCodeUpdate => {
+                ensure_shell_environment();
+                let probe = crate::model::provider_probe(&self.settings.get(), None);
+                let current_version = probe
+                    .path
+                    .as_deref()
+                    .and_then(crate::model::probe_provider_version);
+                let (latest_version, update_available, check_error) =
+                    if let Some(current) = &current_version {
+                        match crate::opencode_management::latest_version_from(
+                            crate::opencode_management::LATEST_URL,
+                        ) {
+                            Ok(latest) => {
+                                match crate::opencode_management::is_newer(current, &latest) {
+                                    Ok(available) => (Some(latest), available, None),
+                                    Err(error) => (Some(latest), false, Some(error.to_string())),
+                                }
+                            }
+                            Err(error) => (None, false, Some(error.to_string())),
+                        }
+                    } else if probe.installed {
+                        (
+                            None,
+                            false,
+                            Some("could not read the OpenCode version".into()),
+                        )
+                    } else {
+                        (None, false, None)
+                    };
+                Ok(ResponsePayload::OpenCodeUpdateStatus {
+                    path: probe.path,
+                    current_version,
+                    latest_version,
+                    update_available,
+                    check_error,
+                })
+            }
+            Command::InstallOpenCode => {
+                let _operation = self
+                    .opencode_management_gate
+                    .try_lock()
+                    .context("another OpenCode operation is running")?;
+                ensure_shell_environment();
+                let settings_before = self.settings.get();
+                anyhow::ensure!(
+                    !crate::model::provider_probe(&settings_before, None).installed,
+                    "OpenCode is already detected"
+                );
+                // An invalid custom path must not hide a usable automatic installation.
+                anyhow::ensure!(
+                    crate::command_env::find_executable("opencode").is_none(),
+                    "another OpenCode executable exists; restore automatic detection"
+                );
+                let latest = crate::opencode_management::latest_version_from(
+                    crate::opencode_management::LATEST_URL,
+                )?;
+                let destination = crate::opencode_management::install(&latest)?;
+                let _settings_guard = self.settings_update_gate.lock();
+                let mut current = self.settings.get();
+                if current.opencode_binary_path() == settings_before.opencode_binary_path() {
+                    current.extra.insert(
+                        fintwind_protocol::settings::OPENCODE_BINARY_PATH_KEY.into(),
+                        destination.to_string_lossy().into_owned().into(),
+                    );
+                    self.settings.replace(current.clone())?;
+                }
+                Ok(ResponsePayload::OpenCodeInstalled { settings: current })
+            }
+            Command::UpdateOpenCode { path, version } => {
+                let _operation = self
+                    .opencode_management_gate
+                    .try_lock()
+                    .context("another OpenCode operation is running")?;
+                ensure_shell_environment();
+                anyhow::ensure!(
+                    crate::model::provider_probe(&self.settings.get(), None)
+                        .path
+                        .as_ref()
+                        == Some(&path),
+                    "the selected OpenCode executable changed; check again"
+                );
+                let latest = crate::opencode_management::latest_version_from(
+                    crate::opencode_management::LATEST_URL,
+                )?;
+                anyhow::ensure!(
+                    version == latest,
+                    "the latest OpenCode version changed; check again"
+                );
+                crate::opencode_management::upgrade(&path, &version)?;
+                Ok(ResponsePayload::Ack)
             }
             Command::FetchPlanUsage {
                 binary_override: _,
@@ -3039,6 +3132,9 @@ fn handle_driver_command(
         | Command::GetSettings
         | Command::UpdateSettings { .. }
         | Command::ProbeProvider { .. }
+        | Command::CheckOpenCodeUpdate
+        | Command::InstallOpenCode
+        | Command::UpdateOpenCode { .. }
         | Command::FetchPlanUsage { .. }
         | Command::LoadSkills { .. }
         | Command::SetSkillsEnabled { .. }

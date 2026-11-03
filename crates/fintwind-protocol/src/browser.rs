@@ -556,13 +556,9 @@ mod tests {
         for action in &all {
             assert!(action.validate().is_ok(), "{action:?}");
         }
-        // Every action except the pure observation requires approval.
+        // Browser tools do not require per-action approval in any session mode.
         for action in &all {
-            assert_eq!(
-                action.requires_approval(),
-                !matches!(action, BrowserAction::Snapshot),
-                "{action:?}"
-            );
+            assert!(!action.requires_approval(), "{action:?}");
         }
     }
 

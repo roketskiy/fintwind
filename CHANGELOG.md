@@ -22,21 +22,21 @@ the original feature bullet instead of adding separate entries for them.
 
 ### 新功能
 
-新增手机远程控制：从桌面侧边栏开启后，扫码或打开配对链接，即可在手机网页切换工作区、查看和新建会话、发送消息、停止任务、调整会话权限、处理权限审批与回答问题。输入框支持模型、Build/Plan 与思考强度选择、斜杠命令、图片和小文件附件，也可在模型运行时发送引导消息，收到接收确认后才清空草稿，失败时保留内容。对话支持 Markdown、公式、Mermaid 图表与代码高亮，按顺序展示思考和工具活动，可展开查看思考及活动列表；提供 Todo 与 Goal 状态、消息时间和回合耗时，支持实时增量更新与滚动跟随。连接使用端到端加密，无需账号登录，同一浏览器可记住配对。使用时桌面须保持运行，仅开放启用时已登记的工作区及最近 72 小时内更新的会话；关闭远控、退出桌面或重新配对后，旧授权失效。详情见 [手机远控说明](docs/remote-control.md)。
+新增手机远程控制：从桌面侧边栏开启后，扫码或打开配对链接，即可在手机网页切换工作区、查看和新建会话、发送消息、停止任务、调整会话权限、处理权限审批与回答问题（[0531afbe](https://github.com/roketskiy/fintwind/commit/0531afbeb73f0ef9dd23c91c0775ce82798fa72f)、[df1449a9](https://github.com/roketskiy/fintwind/commit/df1449a9dd46d808b752b5ca28e5c4e77e2d68ca)、[74423b20](https://github.com/roketskiy/fintwind/commit/74423b204a52581808f6e34766e18e380300dc3e)）。输入框支持模型、Build/Plan 与思考强度选择、斜杠命令、图片和小文件附件，也可在模型运行时发送引导消息，收到接收确认后才清空草稿，失败时保留内容（[6423f6da](https://github.com/roketskiy/fintwind/commit/6423f6dafd43c4abce58840ae5c0e10a35f71c0d)、[854fbf5a](https://github.com/roketskiy/fintwind/commit/854fbf5afb72d0b25567b8a40406f23ea4b3cd71)、[ef218f6a](https://github.com/roketskiy/fintwind/commit/ef218f6a19805adad2014b46df057da7d76b2623)）。对话支持 Markdown、公式、Mermaid 图表与代码高亮，按顺序展示思考和工具活动，可展开查看思考及活动列表；提供 Todo 与 Goal 状态、消息时间和回合耗时，支持实时增量更新与滚动跟随（[fda2598a](https://github.com/roketskiy/fintwind/commit/fda2598ace87a1ad2a7717c38dcd8e0993d47abf)、[9054e02e](https://github.com/roketskiy/fintwind/commit/9054e02ef2571524ac515003cbb8e2eb8d8dedf2)、[b9b8c469](https://github.com/roketskiy/fintwind/commit/b9b8c46966fafc76761afc603fe19ee586d1370a)、[d24dc943](https://github.com/roketskiy/fintwind/commit/d24dc943becf4003a01d0682dfa16fab221e17ac)）。连接使用端到端加密，无需账号登录，同一浏览器可记住配对（[22e91c89](https://github.com/roketskiy/fintwind/commit/22e91c89f5e3e86346df643a27bb9de31c2d9a74)）。使用时桌面须保持运行，仅开放启用时已登记的工作区及最近 72 小时内更新的会话；关闭远控、退出桌面或重新配对后，旧授权失效。详情见 [手机远控说明](docs/remote-control.md)。
 
 ### 改进
 
-- Git 历史改用多分支泳道图，展示本地分支、远程分支、标签、当前检出位置与合并节点。分支保持固定列位与连续连线，当前检出分支的主线固定在首列，配色保持稳定；排除 Fintwind 内部快照引用，避免历史图被无关记录挤满。
-- 审阅页新增卡片式提交框，输入区带独立边框并随内容增高，支持 Ctrl+Enter 提交已暂存更改。主按钮按仓库状态显示提交、拉取或推送，右侧下拉菜单与主按钮连为一体，提供提交并推送、全部暂存并提交、拉取、推送与获取等操作，移除原底部操作栏。
-- 内置浏览器移除逐页授权和会话隔离：启用浏览器工具后，所有会话均可操作已打开的标签页，包括手动打开的页面，计划与构建模式不再区别处理。支持本机文件页面和密码框操作；页面快照可包含密码、隐藏字段及其他表单值。
-- 图像模型后台检查失败时延迟重试一次，不再因启动期间服务尚未就绪弹出错误；用户主动调整相关配置后，重试仍失败时才显示提示。
-- 卡片保留原有背景色，增加顶部高光与分层阴影；新会话的 ASCII 背景延伸至工作区底部，减少边缘断层。
-- 图表图片缓存容量上限由 32 MiB 提高至 256 MiB，最多保留 64 项，减少较大图表被反复移出缓存的情况。
+- Git 历史改用多分支泳道图，展示本地分支、远程分支、标签、当前检出位置与合并节点。分支保持固定列位与连续连线，当前检出分支的主线固定在首列，配色保持稳定；排除 Fintwind 内部快照引用，避免历史图被无关记录挤满（[a10058cd](https://github.com/roketskiy/fintwind/commit/a10058cdef9900abb3fd1f73f2f1a2a813f29d39)、[4e80f58a](https://github.com/roketskiy/fintwind/commit/4e80f58a70619f7e1b97a5dc465e96fe976961a6)、[111048d0](https://github.com/roketskiy/fintwind/commit/111048d0b314634231b9233a7adc9eac5ea9a449)、[40fad9ba](https://github.com/roketskiy/fintwind/commit/40fad9ba0b5d3d9caabccdef76827f298b275c2b)）。
+- 审阅页新增卡片式提交框，输入区带独立边框并随内容增高，支持 Ctrl+Enter 提交已暂存更改。主按钮按仓库状态显示提交、拉取或推送，右侧下拉菜单与主按钮连为一体，提供提交并推送、全部暂存并提交、拉取、推送与获取等操作，移除原底部操作栏（[a10058cd](https://github.com/roketskiy/fintwind/commit/a10058cdef9900abb3fd1f73f2f1a2a813f29d39)、[4e80f58a](https://github.com/roketskiy/fintwind/commit/4e80f58a70619f7e1b97a5dc465e96fe976961a6)、[7e4dc7cb](https://github.com/roketskiy/fintwind/commit/7e4dc7cb3e24b83766b661d228d57b4fbd0e45cc)）。
+- 内置浏览器移除逐页授权和会话隔离：启用浏览器工具后，所有会话均可操作已打开的标签页，包括手动打开的页面，计划与构建模式不再区别处理。支持本机文件页面和密码框操作；页面快照可包含密码、隐藏字段及其他表单值（[beb28ae2](https://github.com/roketskiy/fintwind/commit/beb28ae2f439e07f7f3791e504846d4fe6bd4a79)）。
+- 图像模型后台检查失败时延迟重试一次，不再因启动期间服务尚未就绪弹出错误；用户主动调整相关配置后，重试仍失败时才显示提示（[6534e8e4](https://github.com/roketskiy/fintwind/commit/6534e8e4acb583075cee15d0bd4246d6826bdfa4)）。
+- 卡片保留原有背景色，增加顶部高光与分层阴影；新会话的 ASCII 背景延伸至工作区底部，减少边缘断层（[26679b71](https://github.com/roketskiy/fintwind/commit/26679b717ed81483a831c95fd65affd293e1ef54)、[34eaa052](https://github.com/roketskiy/fintwind/commit/34eaa05292f918a4474d5cad198bc852f05dff9c)、[d1f69304](https://github.com/roketskiy/fintwind/commit/d1f693048203218d0bf1007859df8a8876b07946)）。
+- 图表图片缓存容量上限由 32 MiB 提高至 256 MiB，最多保留 64 项，减少较大图表被反复移出缓存的情况（[4496a5d7](https://github.com/roketskiy/fintwind/commit/4496a5d7dd5694f35d61dcb4a2786f0845fb48f6)）。
 
 ### 修复
 
-- 修复图表全屏预览中缩放比例变化但图像大小不变的问题，并支持触控板双指缩放。
-- 修复多行独立公式被 Markdown 块解析拆分，导致公式显示异常的问题。
+- 修复图表全屏预览中缩放比例变化但图像大小不变的问题，并支持触控板双指缩放（[b437afaa](https://github.com/roketskiy/fintwind/commit/b437afaaba52b28692edbc8494629aab68751751)）。
+- 修复多行独立公式被 Markdown 块解析拆分，导致公式显示异常的问题（[4fc01a97](https://github.com/roketskiy/fintwind/commit/4fc01a97415a506404f104366b6b407695cae3a3)）。
 
 ### 兼容性
 

@@ -148,9 +148,19 @@ fn options() -> Options {
 
 /// pulldown-cmark only tokenizes `$…$` / `$$…$$`. Models often emit TeX
 /// brackets, which CommonMark would unescape into `[…]` / `(…)`. Rewrite those
-/// delimiters into dollars before parsing, then map ranges back.
+/// delimiters before parsing, then map ranges back. Standalone display math
+/// uses temporary code fences so Markdown block syntax cannot split its body.
 struct OffsetMap {
     points: Vec<(usize, usize)>,
+    math_fences: Vec<MathFence>,
+}
+
+#[derive(Clone)]
+struct MathFence {
+    start: usize,
+    delimiter: &'static str,
+    leading: String,
+    closed: bool,
 }
 
 impl OffsetMap {
@@ -181,6 +191,7 @@ impl Rewriter {
             orig: 0,
             map: OffsetMap {
                 points: vec![(0, 0)],
+                math_fences: Vec::new(),
             },
         }
     }
@@ -220,17 +231,143 @@ fn unescaped_backslash(bytes: &[u8], index: usize) -> bool {
     bytes[index] == b'\\' && bytes.get(index.wrapping_sub(1)) != Some(&b'\\')
 }
 
+/// Skip Markdown container prefixes without treating four-space indented code
+/// as a fence. The parser still owns container nesting and content de-indenting.
+fn block_content_start(source: &str, mut index: usize) -> usize {
+    let bytes = source.as_bytes();
+    loop {
+        let mut spaces = 0;
+        while bytes.get(index) == Some(&b' ') && spaces < 3 {
+            index += 1;
+            spaces += 1;
+        }
+        if bytes.get(index) == Some(&b'>') {
+            index += 1;
+            if bytes.get(index) == Some(&b' ') {
+                index += 1;
+            }
+            continue;
+        }
+        let marker_end = match bytes.get(index) {
+            Some(b'-' | b'+' | b'*') => index + 1,
+            Some(b'0'..=b'9') => {
+                let mut end = index;
+                while bytes.get(end).is_some_and(u8::is_ascii_digit) && end - index < 9 {
+                    end += 1;
+                }
+                if matches!(bytes.get(end), Some(b'.' | b')')) {
+                    end + 1
+                } else {
+                    return index;
+                }
+            }
+            _ => return index,
+        };
+        if bytes.get(marker_end) != Some(&b' ') {
+            return index;
+        }
+        index = marker_end + 1;
+    }
+}
+
+fn line_end(source: &str, index: usize) -> usize {
+    source[index..]
+        .find('\n')
+        .map_or(source.len(), |end| index + end)
+}
+
+fn display_fence(
+    source: &str,
+    index: usize,
+    limit: usize,
+    opening: &'static str,
+    closing: &'static str,
+) -> Option<(String, bool)> {
+    let content = index + opening.len();
+    if !source[content..line_end(source, content)].trim().is_empty() {
+        return None;
+    }
+    let end = source[content..limit]
+        .match_indices(closing)
+        .find_map(|(offset, _)| {
+            let offset = content + offset;
+            let backslashes = source.as_bytes()[..offset]
+                .iter()
+                .rev()
+                .take_while(|&&byte| byte == b'\\')
+                .count();
+            (backslashes % 2 == 0).then_some(offset)
+        });
+    if let Some(end) = end {
+        let start = source[..end].rfind('\n').map_or(0, |start| start + 1);
+        if block_content_start(source, start) != end
+            || !source[end + closing.len()..line_end(source, end)]
+                .trim()
+                .is_empty()
+        {
+            // Keep existing inline-math behavior when the closer shares a line
+            // with formula text or prose.
+            return None;
+        }
+    }
+    let longest = source.as_bytes()[content..end.unwrap_or(limit)]
+        .split(|&byte| byte != b'~')
+        .map(<[u8]>::len)
+        .max()
+        .unwrap_or(0);
+    Some(("~".repeat(longest.max(2) + 1), end.is_some()))
+}
+
 fn rewrite_tex_brackets(source: &str) -> (String, OffsetMap) {
     let bytes = source.as_bytes();
     let mut index = 0;
     let mut rewriter = Rewriter::new(source.len());
-    let mut fence: Option<(u8, usize)> = None;
-    let mut inline_ticks = 0;
+    if !source.contains("$$") && !source.contains(r"\[") && !source.contains(r"\(") {
+        rewriter.copy_to(source, source.len());
+        return (rewriter.out, rewriter.map);
+    }
+    // Let CommonMark identify literal code, including nested and indented
+    // blocks, instead of duplicating its container/fence rules in the scanner.
+    let mut literal = Vec::new();
+    let mut containers = Vec::new();
+    for (event, range) in Parser::new_ext(source, options()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) | Event::Code(_) => literal.push(range),
+            Event::Start(Tag::BlockQuote(_) | Tag::Item) => containers.push(range),
+            _ => {}
+        }
+    }
+    let mut literal = literal.into_iter().peekable();
+    let mut containers = containers.into_iter().peekable();
+    let mut container_ends = Vec::new();
     let mut dollars = 0;
     let mut tex_display = 0usize;
     let mut tex_inline = 0usize;
+    let mut math_fence: Option<(String, &'static str, usize)> = None;
 
     while index < bytes.len() {
+        if let Some((marker, closing, limit)) = &math_fence {
+            if index >= *limit {
+                math_fence = None;
+                continue;
+            }
+            if line_start(source, index) {
+                let cursor = block_content_start(source, index);
+                if source[cursor..].starts_with(closing)
+                    && source[cursor + closing.len()..line_end(source, cursor)]
+                        .trim()
+                        .is_empty()
+                {
+                    rewriter.copy_to(source, cursor);
+                    rewriter.replace(cursor + closing.len(), marker);
+                    index = cursor + closing.len();
+                    math_fence = None;
+                    continue;
+                }
+            }
+            index += 1;
+            continue;
+        }
         if tex_display > 0 {
             if unescaped_backslash(bytes, index) && bytes.get(index + 1) == Some(&b']') {
                 rewriter.copy_to(source, index);
@@ -254,52 +391,58 @@ fn rewrite_tex_brackets(source: &str) -> (String, OffsetMap) {
             continue;
         }
 
-        if inline_ticks == 0 && dollars == 0 && line_start(source, index) {
-            let mut cursor = index;
-            let mut spaces = 0;
-            while cursor < bytes.len() && bytes[cursor] == b' ' && spaces < 3 {
-                cursor += 1;
-                spaces += 1;
-            }
-            let marker = match bytes.get(cursor) {
-                Some(b'`') => Some(b'`'),
-                Some(b'~') => Some(b'~'),
-                _ => None,
-            };
-            if let Some(marker) = marker {
-                let count = tick_run(bytes, cursor, marker);
-                if count >= 3 {
-                    match fence {
-                        Some((open, needed)) if marker == open && count >= needed => {
-                            fence = None;
-                        }
-                        None => fence = Some((marker, count)),
-                        Some(_) => {}
-                    }
-                    rewriter.copy_to(source, cursor + count);
-                    index = cursor + count;
-                    continue;
+        while literal.peek().is_some_and(|range| range.start < index) {
+            literal.next();
+        }
+        if let Some(range) = literal.peek()
+            && range.start == index
+        {
+            index = range.end;
+            continue;
+        }
+
+        if dollars == 0 && line_start(source, index) {
+            let cursor = block_content_start(source, index);
+            while containers.peek().is_some_and(|range| range.start <= cursor) {
+                let range = containers.next().unwrap();
+                while container_ends.last().is_some_and(|&end| end <= range.start) {
+                    container_ends.pop();
                 }
+                container_ends.push(range.end);
+            }
+            while container_ends.last().is_some_and(|&end| end <= cursor) {
+                container_ends.pop();
+            }
+            let limit = container_ends.last().copied().unwrap_or(source.len());
+            let delimiters = if source[cursor..].starts_with("$$") {
+                Some(("$$", "$$"))
+            } else if source[cursor..].starts_with(r"\[") {
+                Some((r"\[", r"\]"))
+            } else {
+                None
+            };
+            if let Some((opening, closing)) = delimiters
+                && let Some((marker, closed)) =
+                    display_fence(source, cursor, limit, opening, closing)
+            {
+                let end = line_end(source, cursor);
+                let leading_end = if end < source.len() { end + 1 } else { end };
+                rewriter.copy_to(source, cursor);
+                rewriter.map.math_fences.push(MathFence {
+                    start: rewriter.out.len(),
+                    delimiter: opening,
+                    leading: source[cursor + opening.len()..leading_end].to_owned(),
+                    closed,
+                });
+                rewriter.replace(cursor + opening.len(), &marker);
+                math_fence = Some((marker, closing, limit));
+                index = cursor + opening.len();
+                continue;
             }
         }
 
-        if fence.is_some() {
-            index += 1;
-            continue;
-        }
-
-        if dollars == 0 && bytes[index] == b'`' {
-            let count = tick_run(bytes, index, b'`');
-            if inline_ticks == 0 {
-                inline_ticks = count;
-            } else if count == inline_ticks {
-                inline_ticks = 0;
-            }
-            index += count;
-            continue;
-        }
-        if inline_ticks > 0 {
-            index += 1;
+        if bytes[index] == b'\\' && bytes.get(index + 1) == Some(&b'$') {
+            index += 2;
             continue;
         }
 
@@ -361,6 +504,7 @@ pub fn parse(source: &str) -> BlockTree {
     let mut cursor = Cursor {
         events: &events,
         index: 0,
+        math_fences: &map.math_fences,
     };
     let mut blocks = Vec::new();
     while let Some((event, range)) = cursor.peek() {
@@ -392,6 +536,7 @@ pub fn parse(source: &str) -> BlockTree {
 struct Cursor<'a, 'e> {
     events: &'a [(Event<'e>, Range<usize>)],
     index: usize,
+    math_fences: &'a [MathFence],
 }
 
 impl<'e> Cursor<'_, 'e> {
@@ -445,6 +590,13 @@ fn heading_level(level: HeadingLevel) -> u8 {
 /// Consume a `Start(tag)` and everything through its matching `End`. Unknown
 /// containers are transparent: their children splice into the parent.
 fn parse_started_block(cursor: &mut Cursor) -> Vec<Block> {
+    let math_fence = cursor.peek().and_then(|(_, range)| {
+        cursor
+            .math_fences
+            .binary_search_by_key(&range.start, |fence| fence.start)
+            .ok()
+            .map(|index| cursor.math_fences[index].clone())
+    });
     let Some(Event::Start(tag)) = cursor.next_event() else {
         return Vec::new();
     };
@@ -470,6 +622,23 @@ fn parse_started_block(cursor: &mut Cursor) -> Vec<Block> {
                     Some(Event::End(_)) | None => break,
                     Some(_) => {}
                 }
+            }
+            if let Some(fence) = math_fence {
+                return vec![if fence.closed {
+                    Block::DisplayMath {
+                        latex: format!("{}{code}", fence.leading),
+                    }
+                } else {
+                    // Keep unfinished formulas literal, but atomic: later
+                    // streamed paragraphs must not settle ahead of the closer.
+                    let code = code.strip_suffix('\n').unwrap_or(&code);
+                    Block::Paragraph {
+                        runs: vec![InlineRun::plain(format!(
+                            "{}{}{code}",
+                            fence.delimiter, fence.leading
+                        ))],
+                    }
+                }];
             }
             // Fenced blocks carry a trailing newline; rendering is per line so
             // the empty final line would otherwise add a phantom row.

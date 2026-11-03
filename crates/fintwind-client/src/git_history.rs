@@ -21,8 +21,8 @@ pub struct GraphStroke {
     pub from: usize,
     pub to: usize,
     pub half: GraphHalf,
-    /// Index into the branch palette. Stable per branch: the first parent
-    /// inherits its commit's color, each extra parent rotates to the next.
+    /// Index into the branch palette. An edge keeps its color until it
+    /// reaches its parent node, including when it joins another branch.
     pub color: usize,
 }
 
@@ -62,27 +62,27 @@ fn fresh_color(next: &mut usize) -> usize {
 
 /// Leftmost empty slot at or after 1; slot 0 belongs to the mainline.
 /// Pushes new slots when every existing one is busy.
-fn free_side_slot(lanes: &mut Vec<Vec<(String, usize)>>) -> usize {
+fn free_side_slot<'a>(lanes: &mut Vec<Option<(&'a str, usize)>>) -> usize {
     if let Some(index) = lanes
         .iter()
         .enumerate()
         .skip(1)
-        .find(|(_, queue)| queue.is_empty())
+        .find(|(_, pending)| pending.is_none())
         .map(|(index, _)| index)
     {
         return index;
     }
     if lanes.is_empty() {
-        lanes.push(Vec::new());
+        lanes.push(None);
     }
-    lanes.push(Vec::new());
+    lanes.push(None);
     lanes.len() - 1
 }
 
-fn find_slot(lanes: &[Vec<(String, usize)>], hash: &str) -> Option<usize> {
-    lanes.iter().position(|queue| {
-        queue.iter().any(|(wait, _)| wait == hash)
-    })
+fn find_slot(lanes: &[Option<(&str, usize)>], hash: &str) -> Option<usize> {
+    lanes
+        .iter()
+        .position(|pending| pending.is_some_and(|(wait, _)| wait == hash))
 }
 
 impl CommitGraph {
@@ -113,137 +113,71 @@ impl CommitGraph {
                 .and_then(|commit| commit.parents.first())
                 .map(String::as_str);
         }
-        // Fixed columns, like `git log --graph`: once a branch opens a lane
-        // it keeps that x forever, so every branch draws as one straight
-        // vertical line and bends happen only at real joins. Each slot holds
-        // a queue of the commits it still waits for: slot 0 belongs to the
-        // mainline, so a side branch that reaches a shared ancestor first
-        // queues behind the mainline waiter instead of stealing the ancestor
-        // into its own column — the main line can never be bent by
-        // processing order.
-        let mut lanes: Vec<Vec<(String, usize)>> = Vec::new();
+        // A slot represents one visible edge waiting for one parent, not a
+        // queue of ancestors sharing the same line. Multiple slots may wait
+        // for the same ancestor: keep them separate until that node's row.
+        // Slot zero is reserved for the mainline, even above HEAD when other
+        // refs have newer tips. Never compact live slots after a join.
+        let mut lanes: Vec<Option<(&str, usize)>> = vec![None];
         let mut next_color: usize = 0;
 
         for commit in commits {
             let arrival = find_slot(&lanes, &commit.hash);
-            let lane = match arrival {
-                Some(index) => index,
-                None => {
-                    if mainline.contains(commit.hash.as_str()) {
-                        if lanes.is_empty() {
-                            lanes.push(Vec::new());
-                        }
-                        if lanes[0].is_empty() {
-                            0
-                        } else {
-                            // A mainline tip while slot 0 is busy (a second
-                            // disconnected history): fall back to a side slot
-                            // rather than evicting the pending waiter.
-                            free_side_slot(&mut lanes)
-                        }
-                    } else {
-                        free_side_slot(&mut lanes)
-                    }
-                }
+            let is_mainline = mainline.contains(commit.hash.as_str());
+            let lane = if is_mainline {
+                0
+            } else {
+                arrival.unwrap_or_else(|| free_side_slot(&mut lanes))
             };
-            let row_color = if mainline.contains(commit.hash.as_str()) {
+            let row_color = if is_mainline {
                 MAIN_COLOR
             } else {
-                match arrival {
-                    Some(index) => lanes[index]
-                        .iter()
-                        .find(|(wait, _)| wait == &commit.hash)
-                        .map(|(_, color)| *color)
-                        .unwrap_or_else(|| fresh_color(&mut next_color)),
-                    None => fresh_color(&mut next_color),
-                }
+                arrival
+                    .and_then(|index| lanes[index].map(|(_, color)| color))
+                    .unwrap_or_else(|| fresh_color(&mut next_color))
             };
 
-            // Consume the arrival; any queue behind it stays and keeps the
-            // column alive. The snapshot below decides Through strokes: a
-            // column whose waiter survives this row still draws straight
-            // down, even through the arrival's own row.
-            let before = lanes.clone();
-            if arrival.is_some() {
-                let queue = &mut lanes[lane];
-                if let Some(position) =
-                    queue.iter().position(|(wait, _)| wait == &commit.hash)
-                {
-                    queue.remove(position);
-                }
-            }
-            // Parents: a mainline parent always queues in slot 0 (appending
-            // behind any pending waiter); otherwise the first parent reuses
-            // this row's slot so the branch continues straight, and extra
-            // parents open side slots. A parent already waited on by another
-            // slot joins that slot instead of opening a duplicate.
-            let mut bottoms: Vec<(usize, usize)> = Vec::new();
-            for (parent_index, parent) in commit.parents.iter().enumerate() {
-                if let Some(target) = find_slot(&lanes, parent) {
-                    let color = lanes[target]
-                        .iter()
-                        .find(|(wait, _)| wait == parent)
-                        .map(|(_, color)| *color)
-                        .unwrap_or(row_color);
-                    bottoms.push((target, color));
-                    continue;
-                }
-                let target = if mainline.contains(parent.as_str()) {
-                    if lanes.is_empty() {
-                        lanes.push(Vec::new());
+            // Only edges that entered from the previous row can have Top
+            // or Through strokes. New parent edges start at this node's
+            // midpoint; drawing them Through would invent an edge above it.
+            let mut strokes = Vec::new();
+            for (index, pending) in lanes.iter_mut().enumerate() {
+                if let Some((hash, color)) = *pending {
+                    let arrives = hash == commit.hash;
+                    strokes.push(GraphStroke {
+                        from: index,
+                        to: if arrives { lane } else { index },
+                        half: if arrives {
+                            GraphHalf::Top
+                        } else {
+                            GraphHalf::Through
+                        },
+                        color,
+                    });
+                    if arrives {
+                        *pending = None;
                     }
-                    0
-                } else if parent_index == 0 {
-                    lane
-                } else {
-                    free_side_slot(&mut lanes)
-                };
-                let color = if mainline.contains(parent.as_str()) {
-                    MAIN_COLOR
-                } else if parent_index == 0 {
-                    row_color
-                } else {
-                    fresh_color(&mut next_color)
-                };
-                lanes[target].push((parent.clone(), color));
-                bottoms.push((target, color));
+                }
             }
 
-            let bottom_to_lane = bottoms.iter().any(|(target, _)| *target == lane);
-            let mut strokes = Vec::new();
-            if arrival.is_some() {
-                strokes.push(GraphStroke {
-                    from: lane,
-                    to: lane,
-                    half: GraphHalf::Top,
-                    color: row_color,
-                });
-            }
-            // Every column still waiting for something draws straight down.
-            // The arrival column is already covered by Top, plus Bottom when
-            // a parent continues in it — except a second edge can share that
-            // column (a side branch already queued behind the main waiter),
-            // which still needs its own Through segment to stay continuous.
-            for (index, queue) in lanes.iter().enumerate() {
-                let Some((hash, color)) = queue.first() else {
-                    continue;
+            // The first parent continues straight in this branch's own slot,
+            // even if another slot already waits for that ancestor. Joining
+            // now would bend the branch early and overlay distinct edges.
+            // Extra parents fork at this node into an existing or free slot.
+            for (parent_index, parent) in commit.parents.iter().enumerate() {
+                let target = if parent_index == 0 {
+                    lane
+                } else {
+                    find_slot(&lanes, parent).unwrap_or_else(|| free_side_slot(&mut lanes))
                 };
-                if Some(index) == arrival && bottom_to_lane {
-                    let shared = before
-                        .get(index)
-                        .is_some_and(|pending| pending.iter().any(|(wait, _)| wait == hash));
-                    if !shared {
-                        continue;
-                    }
-                }
-                strokes.push(GraphStroke {
-                    from: index,
-                    to: index,
-                    half: GraphHalf::Through,
-                    color: *color,
-                });
-            }
-            for (target, color) in bottoms {
+                let color = if parent_index == 0 {
+                    row_color
+                } else {
+                    lanes[target]
+                        .map(|(_, color)| color)
+                        .unwrap_or_else(|| fresh_color(&mut next_color))
+                };
+                lanes[target] = Some((parent.as_str(), color));
                 strokes.push(GraphStroke {
                     from: lane,
                     to: target,
@@ -253,7 +187,7 @@ impl CommitGraph {
             }
             let occupied = lanes
                 .iter()
-                .rposition(|queue| !queue.is_empty())
+                .rposition(Option::is_some)
                 .map_or(0, |index| index + 1);
             graph.width = graph.width.max(occupied).max(lane + 1);
             graph.rows.push(GraphRow {

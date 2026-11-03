@@ -2256,6 +2256,7 @@ dependencies = [
  "parking_lot",
  "rusqlite",
  "rust-i18n",
+ "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",

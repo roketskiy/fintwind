@@ -325,6 +325,7 @@ fn search_paths_from(
 #[cfg(not(windows))]
 fn user_tool_directories(home: &Path) -> Vec<PathBuf> {
     vec![
+        home.join(".opencode/bin"),
         home.join(".local/bin"),
         home.join(".bun/bin"),
         home.join(".cargo/bin"),
@@ -336,6 +337,7 @@ fn user_tool_directories(home: &Path) -> Vec<PathBuf> {
 #[cfg(windows)]
 fn user_tool_directories(home: &Path) -> Vec<PathBuf> {
     vec![
+        home.join(".opencode/bin"),
         // npm's global prefix, where a `claude.cmd` shim lands.
         home.join("AppData/Roaming/npm"),
         home.join(".bun/bin"),

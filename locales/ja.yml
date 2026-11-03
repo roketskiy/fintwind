@@ -204,6 +204,21 @@ settings.auto_compact_threshold_description: 使用量がしきい値に届か�
 settings.auto_compact_threshold_placeholder: 例：500K
 settings.auto_compact_threshold_invalid: しきい値の形式が正しくありません
 settings.network_proxy: ネットワークプロキシ
+settings.opencode_check: 更新を確認
+settings.opencode_checking: 確認中…
+settings.opencode_install: インストール
+settings.opencode_installing: インストール中…
+settings.opencode_update: 更新
+settings.opencode_updating: 更新中…
+settings.opencode_not_installed: 未検出
+settings.opencode_version_unknown: バージョン不明
+settings.opencode_update_available: "%{current} · 新しいバージョン %{latest}"
+settings.opencode_up_to_date: "%{current} · 最新です"
+settings.opencode_check_failed_short: 更新の確認に失敗しました
+settings.opencode_check_failed: "OpenCode の更新を確認できませんでした: %{error}"
+settings.opencode_operation_failed: "OpenCode の操作に失敗しました: %{error}"
+settings.opencode_installed: OpenCode をインストールしました
+settings.opencode_updated: OpenCode を更新しました。実行中のプロセスは再起動していません
 settings.opencode_binary: "OpenCode 実行ファイル"
 settings.general_workspace: "共通ワークスペース"
 settings.general_workspace_choose: "フォルダーを選択…"

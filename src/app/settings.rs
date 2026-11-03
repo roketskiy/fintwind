@@ -11,6 +11,21 @@ use super::*;
 
 actions!(fintwind_settings, [ClearSearch]);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum OpenCodeManagementAction {
+    Check,
+    Install,
+    Update,
+}
+
+pub(super) struct OpenCodeUpdateStatus {
+    path: Option<PathBuf>,
+    current_version: Option<String>,
+    latest_version: Option<String>,
+    update_available: bool,
+    check_error: Option<String>,
+}
+
 fn general_settings_group(title: String, theme: Theme) -> Div {
     div()
         .mt(px(20.0))
@@ -230,6 +245,7 @@ impl Fintwind {
             self.sync_network_proxy_input(cx);
             self.load_opencode_shell(cx);
             self.load_image_generate(cx);
+            self.manage_opencode(OpenCodeManagementAction::Check, cx);
         }
         if page == SettingsPage::McpServers {
             // Same contract as Providers: transient editors drop, the roster
@@ -627,6 +643,146 @@ impl Fintwind {
             },
         );
         div()
+            .child(
+                general_settings_group(tr!("settings.group_environment"), theme)
+                    .child(self.render_opencode_version_setting(cx))
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.network_proxy")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.network_proxy_description")),
+                                    ),
+                            )
+                            .child(
+                                TextField::new(
+                                    "network-proxy-field",
+                                    self.network_proxy_input.clone(),
+                                )
+                                .w(px(220.0)),
+                            ),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(24.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.opencode_shell")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .line_height(ui_px(18.0))
+                                            .text_color(theme.text_secondary)
+                                            .child(tr!("settings.opencode_shell_description")),
+                                    ),
+                            )
+                            .child(shell_selector),
+                    )
+                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_h(px(60.0))
+                            .px(px(20.0))
+                            .py(px(12.0))
+                            .flex()
+                            .items_center()
+                            .gap(px(12.0))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_size(ui_px(13.5))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(theme.text)
+                                            .child(tr!("settings.opencode_binary")),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt(px(5.0))
+                                            .text_size(ui_px(12.5))
+                                            .text_color(theme.text_secondary)
+                                            .overflow_hidden()
+                                            .child(binary_path.map(str::to_owned).unwrap_or_else(
+                                                || tr!("settings.opencode_binary_auto"),
+                                            )),
+                                    ),
+                            )
+                            .child(
+                                Button::new(
+                                    "opencode-binary-choose",
+                                    tr!("settings.opencode_binary_choose"),
+                                )
+                                .variant(ButtonVariant::Secondary)
+                                .size(ControlSize::Sm)
+                                .disabled(
+                                    self.opencode_binary_busy
+                                        || self.opencode_management_action.is_some()
+                                        || self.daemon.is_remote(),
+                                )
+                                .on_click(
+                                    cx.listener(|this, _, _, cx| this.choose_opencode_binary(cx)),
+                                ),
+                            )
+                            .when(binary_path.is_some(), |row| {
+                                row.child(
+                                    Button::new(
+                                        "opencode-binary-reset",
+                                        tr!("settings.opencode_binary_reset"),
+                                    )
+                                    .variant(ButtonVariant::Ghost)
+                                    .size(ControlSize::Sm)
+                                    .disabled(
+                                        self.opencode_binary_busy
+                                            || self.opencode_management_action.is_some(),
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| this.set_opencode_binary(None, cx),
+                                    )),
+                                )
+                            }),
+                    ),
+            )
             .child(
                 general_settings_group(tr!("settings.group_features"), theme)
                     .child(
@@ -1063,137 +1219,6 @@ impl Fintwind {
                                 )
                                 .w(px(120.0)),
                             ),
-                    ),
-            )
-            .child(
-                general_settings_group(tr!("settings.group_environment"), theme)
-                    .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.network_proxy")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.network_proxy_description")),
-                                    ),
-                            )
-                            .child(
-                                TextField::new(
-                                    "network-proxy-field",
-                                    self.network_proxy_input.clone(),
-                                )
-                                .w(px(220.0)),
-                            ),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-                    .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(24.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.opencode_shell")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .line_height(ui_px(18.0))
-                                            .text_color(theme.text_secondary)
-                                            .child(tr!("settings.opencode_shell_description")),
-                                    ),
-                            )
-                            .child(shell_selector),
-                    )
-                    .child(div().mx(px(20.0)).h(px(1.0)).bg(theme.border))
-                    .child(
-                        div()
-                            .w_full()
-                            .min_h(px(60.0))
-                            .px(px(20.0))
-                            .py(px(12.0))
-                            .flex()
-                            .items_center()
-                            .gap(px(12.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(
-                                        div()
-                                            .text_size(ui_px(13.5))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(theme.text)
-                                            .child(tr!("settings.opencode_binary")),
-                                    )
-                                    .child(
-                                        div()
-                                            .mt(px(5.0))
-                                            .text_size(ui_px(12.5))
-                                            .text_color(theme.text_secondary)
-                                            .overflow_hidden()
-                                            .child(binary_path.map(str::to_owned).unwrap_or_else(
-                                                || tr!("settings.opencode_binary_auto"),
-                                            )),
-                                    ),
-                            )
-                            .child(
-                                Button::new(
-                                    "opencode-binary-choose",
-                                    tr!("settings.opencode_binary_choose"),
-                                )
-                                .variant(ButtonVariant::Secondary)
-                                .size(ControlSize::Sm)
-                                .disabled(self.opencode_binary_busy || self.daemon.is_remote())
-                                .on_click(
-                                    cx.listener(|this, _, _, cx| this.choose_opencode_binary(cx)),
-                                ),
-                            )
-                            .when(binary_path.is_some(), |row| {
-                                row.child(
-                                    Button::new(
-                                        "opencode-binary-reset",
-                                        tr!("settings.opencode_binary_reset"),
-                                    )
-                                    .variant(ButtonVariant::Ghost)
-                                    .size(ControlSize::Sm)
-                                    .disabled(self.opencode_binary_busy)
-                                    .on_click(cx.listener(
-                                        |this, _, _, cx| this.set_opencode_binary(None, cx),
-                                    )),
-                                )
-                            }),
                     ),
             )
             .child(
@@ -1772,6 +1797,223 @@ impl Fintwind {
             .into_any_element()
     }
 
+    fn render_opencode_version_setting(&self, cx: &mut Context<Self>) -> Div {
+        let theme = Theme::current(cx);
+        let busy = self.opencode_management_action.is_some() || self.opencode_binary_busy;
+        let status = self.opencode_update_status.as_ref();
+        let installed = status.is_some_and(|status| status.path.is_some());
+        let detail = match self.opencode_management_action {
+            Some(OpenCodeManagementAction::Check) => tr!("settings.opencode_checking"),
+            Some(OpenCodeManagementAction::Install) => tr!("settings.opencode_installing"),
+            Some(OpenCodeManagementAction::Update) => tr!("settings.opencode_updating"),
+            None => match status {
+                None => tr!("settings.opencode_check_failed_short"),
+                Some(status) if status.path.is_none() => tr!("settings.opencode_not_installed"),
+                Some(status) => {
+                    let current = status
+                        .current_version
+                        .clone()
+                        .unwrap_or_else(|| tr!("settings.opencode_version_unknown"));
+                    if status.check_error.is_some() {
+                        format!(
+                            "{current} · {}",
+                            tr!("settings.opencode_check_failed_short")
+                        )
+                    } else if status.update_available {
+                        tr!(
+                            "settings.opencode_update_available",
+                            current = current,
+                            latest = status.latest_version.as_deref().unwrap_or_default()
+                        )
+                    } else {
+                        tr!("settings.opencode_up_to_date", current = current)
+                    }
+                }
+            },
+        };
+        div()
+            .w_full()
+            .min_h(px(60.0))
+            .px(px(20.0))
+            .py(px(12.0))
+            .flex()
+            .items_center()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_size(ui_px(13.5))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(theme.text)
+                            .child("OpenCode"),
+                    )
+                    .child(
+                        div()
+                            .mt(px(5.0))
+                            .text_size(ui_px(12.5))
+                            .text_color(theme.text_secondary)
+                            .child(detail),
+                    ),
+            )
+            .when(status.is_some_and(|status| status.path.is_none()), |row| {
+                row.child(
+                    Button::new("opencode-install", tr!("settings.opencode_install"))
+                        .variant(ButtonVariant::Secondary)
+                        .size(ControlSize::Sm)
+                        .disabled(busy)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.manage_opencode(OpenCodeManagementAction::Install, cx)
+                        })),
+                )
+            })
+            .when(installed || status.is_none(), |row| {
+                row.child(
+                    Button::new("opencode-check-update", tr!("settings.opencode_check"))
+                        .variant(ButtonVariant::Secondary)
+                        .size(ControlSize::Sm)
+                        .disabled(busy)
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.manage_opencode(OpenCodeManagementAction::Check, cx)
+                        })),
+                )
+            })
+            .when(
+                status.is_some_and(|status| status.update_available),
+                |row| {
+                    row.child(
+                        Button::new("opencode-update", tr!("settings.opencode_update"))
+                            .variant(ButtonVariant::Secondary)
+                            .size(ControlSize::Sm)
+                            .disabled(busy)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.manage_opencode(OpenCodeManagementAction::Update, cx)
+                            })),
+                    )
+                },
+            )
+    }
+
+    fn manage_opencode(&mut self, action: OpenCodeManagementAction, cx: &mut Context<Self>) {
+        if self.opencode_management_action.is_some() || self.opencode_binary_busy {
+            return;
+        }
+        let command = match action {
+            OpenCodeManagementAction::Check => fintwind_client::Command::CheckOpenCodeUpdate,
+            OpenCodeManagementAction::Install
+                if self
+                    .opencode_update_status
+                    .as_ref()
+                    .is_some_and(|status| status.path.is_none()) =>
+            {
+                fintwind_client::Command::InstallOpenCode
+            }
+            OpenCodeManagementAction::Update => {
+                let Some(status) = self
+                    .opencode_update_status
+                    .as_ref()
+                    .filter(|status| status.update_available)
+                else {
+                    return;
+                };
+                let (Some(path), Some(version)) =
+                    (status.path.clone(), status.latest_version.clone())
+                else {
+                    return;
+                };
+                fintwind_client::Command::UpdateOpenCode { path, version }
+            }
+            _ => return,
+        };
+        self.opencode_management_action = Some(action);
+        let generation = self.provider_binary_generation;
+        let daemon = self.daemon.client();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    daemon.request_with_timeout(
+                        Uuid::nil(),
+                        Uuid::nil(),
+                        command,
+                        Duration::from_secs(330),
+                    )
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.opencode_management_action = None;
+                if generation != this.provider_binary_generation {
+                    this.opencode_update_status = None;
+                    this.manage_opencode(OpenCodeManagementAction::Check, cx);
+                    return;
+                }
+                match result {
+                    Ok(fintwind_client::ResponsePayload::OpenCodeUpdateStatus {
+                        path,
+                        current_version,
+                        latest_version,
+                        update_available,
+                        check_error,
+                    }) if action == OpenCodeManagementAction::Check => {
+                        if let Some(error) = &check_error {
+                            this.show_toast(tr!("settings.opencode_check_failed", error = error));
+                        }
+                        this.opencode_update_status = Some(OpenCodeUpdateStatus {
+                            path,
+                            current_version,
+                            latest_version,
+                            update_available,
+                            check_error,
+                        });
+                    }
+                    Ok(fintwind_client::ResponsePayload::OpenCodeInstalled { settings })
+                        if action == OpenCodeManagementAction::Install =>
+                    {
+                        this.state.apply_daemon_settings(settings);
+                        this.refresh_opencode_after_management(cx);
+                        this.show_toast(tr!("settings.opencode_installed"));
+                    }
+                    Ok(fintwind_client::ResponsePayload::Ack)
+                        if action == OpenCodeManagementAction::Update =>
+                    {
+                        this.refresh_opencode_after_management(cx);
+                        this.show_toast(tr!("settings.opencode_updated"));
+                    }
+                    Ok(_) => this.show_toast(tr!(
+                        "settings.opencode_operation_failed",
+                        error = "invalid daemon response"
+                    )),
+                    Err(error) => {
+                        if action != OpenCodeManagementAction::Check {
+                            this.opencode_update_status = None;
+                            this.refresh_provider_detection();
+                        }
+                        this.show_toast(tr!("settings.opencode_operation_failed", error = error))
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn refresh_opencode_after_management(&mut self, cx: &mut Context<Self>) {
+        self.provider_binary_generation = self.provider_binary_generation.wrapping_add(1);
+        self.provider_detection_generation = self.provider_detection_generation.wrapping_add(1);
+        self.provider_detection_remaining = 0;
+        self.provider_model_discoveries.clear();
+        self.provider_model_discoveries_pending.clear();
+        self.provider_version_probes_pending.clear();
+        self.provider_versions.clear();
+        self.probes.clear();
+        self.opencode_update_status = None;
+        self.refresh_provider_detection();
+        self.manage_opencode(OpenCodeManagementAction::Check, cx);
+    }
+
     fn render_general_workspace_setting(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let path = crate::projectless::workspace_root()
@@ -1999,17 +2241,7 @@ impl Fintwind {
                     Ok(()) => {
                         this.state.set_opencode_binary_path(path);
                         this.save();
-                        this.provider_binary_generation =
-                            this.provider_binary_generation.wrapping_add(1);
-                        this.provider_detection_generation =
-                            this.provider_detection_generation.wrapping_add(1);
-                        this.provider_detection_remaining = 0;
-                        this.provider_model_discoveries.clear();
-                        this.provider_model_discoveries_pending.clear();
-                        this.provider_version_probes_pending.clear();
-                        this.provider_versions.clear();
-                        this.probes.clear();
-                        this.refresh_provider_detection();
+                        this.refresh_opencode_after_management(cx);
                     }
                     Err(error) => {
                         this.show_toast(tr!("settings.opencode_binary_failed", error = error))

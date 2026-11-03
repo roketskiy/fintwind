@@ -211,6 +211,21 @@ settings.auto_compact_threshold_description: 用量到不了阈值的窗口不�
 settings.auto_compact_threshold_placeholder: 如 500K
 settings.auto_compact_threshold_invalid: 阈值格式不对
 settings.network_proxy: 网络代理
+settings.opencode_check: 检查更新
+settings.opencode_checking: 正在检查…
+settings.opencode_install: 安装
+settings.opencode_installing: 正在安装…
+settings.opencode_update: 更新
+settings.opencode_updating: 正在更新…
+settings.opencode_not_installed: 未检测到
+settings.opencode_version_unknown: 版本未知
+settings.opencode_update_available: "%{current} · 发现新版本 %{latest}"
+settings.opencode_up_to_date: "%{current} · 已是最新版本"
+settings.opencode_check_failed_short: 检查更新失败
+settings.opencode_check_failed: "无法检查 OpenCode 更新：%{error}"
+settings.opencode_operation_failed: "OpenCode 操作失败：%{error}"
+settings.opencode_installed: OpenCode 已安装
+settings.opencode_updated: OpenCode 已更新，正在运行的进程未重启
 settings.opencode_binary: "OpenCode 可执行文件"
 settings.general_workspace: "通用工作区"
 settings.general_workspace_choose: "选择文件夹…"

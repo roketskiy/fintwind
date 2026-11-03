@@ -204,6 +204,12 @@ pub enum Command {
         discover_models: bool,
         probe_version: bool,
     },
+    CheckOpenCodeUpdate,
+    InstallOpenCode,
+    UpdateOpenCode {
+        path: PathBuf,
+        version: String,
+    },
     FetchPlanUsage {
         binary_override: Option<String>,
         cli_version: Option<String>,
@@ -702,6 +708,16 @@ pub enum ResponsePayload {
     ProviderProbe {
         probe: ProviderProbe,
         version: Option<String>,
+    },
+    OpenCodeUpdateStatus {
+        path: Option<PathBuf>,
+        current_version: Option<String>,
+        latest_version: Option<String>,
+        update_available: bool,
+        check_error: Option<String>,
+    },
+    OpenCodeInstalled {
+        settings: DaemonSettings,
     },
     PlanUsage {
         usage: Option<PlanUsage>,

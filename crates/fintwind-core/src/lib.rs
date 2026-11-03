@@ -50,6 +50,7 @@ pub mod model;
 pub mod model_catalog;
 mod opencode_diagnostics;
 pub mod opencode_events;
+pub mod opencode_management;
 pub mod opencode_pool;
 pub mod opencode_session;
 pub mod persistence;

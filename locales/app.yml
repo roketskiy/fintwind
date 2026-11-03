@@ -470,6 +470,36 @@ settings.auto_compact_threshold_invalid:
   en: The threshold format is not recognized
 settings.network_proxy:
   en: Network proxy
+settings.opencode_check:
+  en: Check for updates
+settings.opencode_checking:
+  en: Checking…
+settings.opencode_install:
+  en: Install
+settings.opencode_installing:
+  en: Installing…
+settings.opencode_update:
+  en: Update
+settings.opencode_updating:
+  en: Updating…
+settings.opencode_not_installed:
+  en: Not detected
+settings.opencode_version_unknown:
+  en: Version unknown
+settings.opencode_update_available:
+  en: "%{current} · Update available: %{latest}"
+settings.opencode_up_to_date:
+  en: "%{current} · Up to date"
+settings.opencode_check_failed_short:
+  en: Update check failed
+settings.opencode_check_failed:
+  en: "Could not check OpenCode updates: %{error}"
+settings.opencode_operation_failed:
+  en: "OpenCode operation failed: %{error}"
+settings.opencode_installed:
+  en: OpenCode installed
+settings.opencode_updated:
+  en: OpenCode updated. Running OpenCode processes were not restarted.
 settings.opencode_binary:
   en: "OpenCode executable"
 settings.general_workspace:

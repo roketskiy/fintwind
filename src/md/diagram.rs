@@ -16,7 +16,7 @@
 //!   canvas costs a bounded allocation while the image keeps its aspect ratio.
 //!   Pathological aspect ratios that cannot produce even one pixel of height
 //!   fail and fall back rather than allocate.
-//! - **Cache pressure.** At most 64 results / 32 MiB of rasters are retained and
+//! - **Cache pressure.** At most 64 results / 256 MiB of rasters are retained and
 //!   16 jobs may be pending. Only resolved entries are evicted and a pending job
 //!   is never dropped or overwritten by a newer request. The last committed
 //!   request set stays protected across idle time; the next render's requests
@@ -63,7 +63,7 @@ use super::render::Palette;
 /// here; their rasters are bounded by [`MAX_RASTER_PIXELS`] instead.
 const MAX_ENTRIES: usize = 64;
 /// Total raster bytes retained by resolved results.
-const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_CACHE_BYTES: usize = 256 * 1024 * 1024;
 const MAX_PENDING: usize = 16;
 const WORKERS: usize = 2;
 const BATCH_SIZE: usize = 1;

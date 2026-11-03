@@ -2101,14 +2101,8 @@ impl Fintwind {
             .as_ref()
             .map(|status| {
                 (
-                    status
-                        .entries
-                        .iter()
-                        .any(source_control_entry_is_staged),
-                    status
-                        .entries
-                        .iter()
-                        .any(source_control_entry_is_unstaged),
+                    status.entries.iter().any(source_control_entry_is_staged),
+                    status.entries.iter().any(source_control_entry_is_unstaged),
                 )
             })
             .unwrap_or((false, false));
@@ -2197,7 +2191,7 @@ impl Fintwind {
 
         let weak = cx.entity().downgrade();
         let primary_icon_color = if primary_ready {
-            theme.on_inverse
+            theme.on_accent
         } else {
             theme.text_ghost
         };
@@ -2207,7 +2201,7 @@ impl Fintwind {
             .h(px(30.0))
             .flex_1()
             .min_w_0()
-            .rounded(px(7.0))
+            .rounded_l(px(7.0))
             .flex()
             .items_center()
             .justify_center()
@@ -2233,17 +2227,63 @@ impl Fintwind {
 
         let handle = self.menu_handle("source-control-commit-more", cx);
         let menu_weak = weak.clone();
-        let dropdown = {
+        let more_trigger = div()
+            .id("source-control-commit-more")
+            .h(px(30.0))
+            .w(px(30.0))
+            .flex_none()
+            .rounded_r(px(7.0))
+            .border_l_1()
+            .border_color(if primary_ready {
+                theme.on_accent.opacity(0.25)
+            } else {
+                theme.border_strong
+            })
+            .flex()
+            .items_center()
+            .justify_center()
+            .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
+            .when(enabled, |button| {
+                button
+                    .cursor_pointer()
+                    .hover(|button| {
+                        button.bg(if primary_ready {
+                            theme.accent_text
+                        } else {
+                            theme.overlay
+                        })
+                    })
+                    .active(|button| {
+                        button.bg(if primary_ready {
+                            theme.accent_text
+                        } else {
+                            theme.overlay_strong
+                        })
+                    })
+            })
+            .when(enabled && handle.is_open(), |button| {
+                button.bg(if primary_ready {
+                    theme.accent_text
+                } else {
+                    theme.overlay
+                })
+            })
+            .tooltip(Tooltip::text(tr!("source_control.repository_actions")))
+            .child(icon(
+                "icons/chevron-down.svg",
+                13.0,
+                if primary_ready {
+                    theme.on_accent
+                } else if enabled {
+                    theme.text_secondary
+                } else {
+                    theme.text_ghost
+                },
+            ));
+        let dropdown = if enabled {
             let items_weak = menu_weak.clone();
             dropdown_menu(
-                MenuChip::new("source-control-commit-more")
-                    .icon("icons/chevron-down.svg", theme.text_tertiary)
-                    .icon_only(true)
-                    .caret(false)
-                    .height(px(30.0))
-                    .tooltip(tr!("source_control.repository_actions"))
-                    .disabled(!enabled)
-                    .selected(enabled && handle.is_open()),
+                more_trigger,
                 "source-control-commit-more-menu",
                 &handle,
                 MenuAlign::BelowRight,
@@ -2264,51 +2304,44 @@ impl Fintwind {
                         .icon("icons/check.svg")
                         .disabled(!can_commit),
                         MenuItem::new(tr!("source_control.commit_and_push"), move |_, cx| {
-                            let _ = commit_push_weak.update(cx, |this, cx| {
-                                this.commit_source_control(false, true, cx)
-                            });
+                            let _ = commit_push_weak
+                                .update(cx, |this, cx| this.commit_source_control(false, true, cx));
                         })
                         .icon("icons/arrow-up.svg")
                         .disabled(!can_commit),
                         MenuItem::new(tr!("source_control.stage_all_commit"), move |_, cx| {
-                            let _ = stage_commit_weak.update(cx, |this, cx| {
-                                this.commit_source_control(true, false, cx)
-                            });
+                            let _ = stage_commit_weak
+                                .update(cx, |this, cx| this.commit_source_control(true, false, cx));
                         })
                         .icon("icons/plus.svg")
                         .disabled(!can_stage_commit),
-                        MenuItem::new(
-                            tr!("source_control.stage_all_commit_push"),
-                            move |_, cx| {
-                                let _ = stage_commit_push_weak.update(cx, |this, cx| {
-                                    this.commit_source_control(true, true, cx)
-                                });
-                            },
-                        )
+                        MenuItem::new(tr!("source_control.stage_all_commit_push"), move |_, cx| {
+                            let _ = stage_commit_push_weak
+                                .update(cx, |this, cx| this.commit_source_control(true, true, cx));
+                        })
                         .icon("icons/cloud-upload.svg")
                         .disabled(!can_stage_commit),
                         MenuItem::Separator,
                         MenuItem::new(tr!("source_control.pull"), move |_, cx| {
-                            let _ = pull_weak
-                                .update(cx, |this, cx| this.pull_source_control(cx));
+                            let _ = pull_weak.update(cx, |this, cx| this.pull_source_control(cx));
                         })
                         .icon("icons/arrow-down.svg")
                         .disabled(!enabled),
                         MenuItem::new(tr!("source_control.push"), move |_, cx| {
-                            let _ = push_weak
-                                .update(cx, |this, cx| this.push_source_control(cx));
+                            let _ = push_weak.update(cx, |this, cx| this.push_source_control(cx));
                         })
                         .icon("icons/arrow-up.svg")
                         .disabled(!enabled),
                         MenuItem::new(tr!("source_control.fetch"), move |_, cx| {
-                            let _ = fetch_weak
-                                .update(cx, |this, cx| this.fetch_source_control(cx));
+                            let _ = fetch_weak.update(cx, |this, cx| this.fetch_source_control(cx));
                         })
                         .icon("icons/download.svg")
                         .disabled(!enabled),
                     ]
                 },
             )
+        } else {
+            more_trigger.into_any_element()
         };
 
         let message = self.source_control_commit_input.clone();
@@ -2331,8 +2364,14 @@ impl Fintwind {
                     .gap(px(8.0))
                     .child(
                         div()
+                            .w_full()
                             .min_h(px(22.0))
-                            .px(px(2.0))
+                            .px(px(6.0))
+                            .py(px(4.0))
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(theme.border_strong)
+                            .bg(theme.composer)
                             .text_size(ui_px(12.5))
                             .line_height(ui_px(19.0))
                             .child(message),
@@ -2342,7 +2381,12 @@ impl Fintwind {
                             .flex_none()
                             .flex()
                             .items_center()
-                            .gap(px(6.0))
+                            .rounded(px(7.0))
+                            .bg(if primary_ready {
+                                theme.accent_fill
+                            } else {
+                                theme.overlay_strong
+                            })
                             .child(primary_button)
                             .child(dropdown),
                     ),

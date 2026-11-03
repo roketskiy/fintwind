@@ -2183,6 +2183,8 @@ environment.history:
   en: History
 git_history.head:
   en: HEAD (current)
+git_history.all_refs:
+  en: All
 git_history.loading:
   en: Loading history…
 git_history.loading_description:
@@ -2533,6 +2535,12 @@ source_control.commit:
   en: Commit
 source_control.commit_to:
   en: Commit to %{branch}
+source_control.commit_message_on_branch:
+  en: Message (Ctrl+Enter to commit on "%{branch}")
+source_control.commit_and_push:
+  en: Commit & Push
+source_control.stage_all_commit_push:
+  en: Stage all & Commit & Push
 source_control.commit_hint:
   en: Commit the staged changes
 source_control.commit_empty_message:

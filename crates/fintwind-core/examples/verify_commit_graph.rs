@@ -3,13 +3,15 @@
 //! Failures covered: lost/reordered parents, clock-skew ordering, broken merge
 //! lanes, roots, truncated history, branch filters, refs/unpushed state, empty
 //! repositories, non-repositories, invalid revisions and wire round trips.
+//! Also checks phantom strokes, boundary/color continuity, premature joins,
+//! nested/octopus merges, disconnected tips and real repository windows.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context as _, ensure};
-use fintwind_client::git_history::{CommitEntry, CommitGraph, GraphHalf};
+use fintwind_client::git_history::{CommitEntry, CommitGraph, GraphHalf, MAIN_COLOR};
 use fintwind_core::{WorkspaceOperation, WorkspaceResult};
 use serde_json::json;
 
@@ -68,14 +70,57 @@ fn verify_edges(commits: &[CommitEntry], graph: &CommitGraph) -> anyhow::Result<
         .enumerate()
         .map(|(i, c)| (c.hash.as_str(), i))
         .collect();
+    let mut previous_bottom = BTreeSet::new();
     for (index, commit) in commits.iter().enumerate() {
         let row = &graph.rows[index];
+        let mut top = BTreeSet::new();
+        let mut bottom = BTreeSet::new();
+        for stroke in &row.strokes {
+            ensure!(
+                stroke.from < graph.width && stroke.to < graph.width,
+                "stroke outside graph at {}",
+                commit.subject
+            );
+            if stroke.half != GraphHalf::Bottom {
+                ensure!(
+                    top.insert((stroke.from, stroke.color)),
+                    "overlapping incoming strokes"
+                );
+            }
+            if stroke.half != GraphHalf::Top {
+                // An extra parent can fork into an already active edge, so
+                // several paths may share one outgoing boundary endpoint.
+                bottom.insert((stroke.to, stroke.color));
+            }
+            match stroke.half {
+                GraphHalf::Top => ensure!(stroke.to == row.lane, "arrival misses node"),
+                GraphHalf::Bottom => ensure!(stroke.from == row.lane, "parent misses node"),
+                GraphHalf::Through => ensure!(
+                    stroke.from == stroke.to && stroke.from != row.lane,
+                    "unrelated lane bends or crosses node at {}",
+                    commit.subject
+                ),
+            }
+        }
+        ensure!(
+            top == previous_bottom,
+            "phantom/discontinuous/color-changing boundary at {}: above={previous_bottom:?}, below={top:?}",
+            commit.subject
+        );
+        previous_bottom = bottom;
         let outgoing: Vec<_> = row
             .strokes
             .iter()
             .filter(|s| s.half == GraphHalf::Bottom)
             .collect();
         ensure!(outgoing.len() == commit.parents.len(), "lost parent edge");
+        if let Some(first_parent) = outgoing.first() {
+            ensure!(
+                first_parent.to == row.lane && first_parent.color == row.color,
+                "first-parent branch bends or changes color before its ancestor at {}",
+                commit.subject
+            );
+        }
         for (parent, edge) in commit.parents.iter().zip(outgoing) {
             ensure!(edge.from == row.lane, "edge does not leave commit node");
             let Some(&parent_index) = positions.get(parent.as_str()) else {
@@ -95,6 +140,10 @@ fn verify_edges(commits: &[CommitEntry], graph: &CommitGraph) -> anyhow::Result<
                             }
                 });
                 let continuation = continuation.context("discontinuous parent edge")?;
+                ensure!(
+                    continuation.color == edge.color,
+                    "parent edge changes color"
+                );
                 lane = continuation.to;
             }
             ensure!(
@@ -103,7 +152,108 @@ fn verify_edges(commits: &[CommitEntry], graph: &CommitGraph) -> anyhow::Result<
             );
         }
     }
+    if commits
+        .iter()
+        .flat_map(|commit| &commit.parents)
+        .all(|parent| positions.contains_key(parent.as_str()))
+    {
+        ensure!(
+            previous_bottom.is_empty(),
+            "complete history has dangling edges"
+        );
+    }
+    let mut main = commits
+        .iter()
+        .find(|commit| commit.is_head)
+        .or(commits.first());
+    while let Some(commit) = main {
+        let row = &graph.rows[positions[commit.hash.as_str()]];
+        ensure!(
+            row.lane == 0 && row.color == MAIN_COLOR,
+            "mainline moved or changed color"
+        );
+        main = commit
+            .parents
+            .first()
+            .and_then(|parent| positions.get(parent.as_str()))
+            .map(|index| &commits[*index]);
+    }
     Ok(())
+}
+
+fn graph_rows(commits: &[CommitEntry], graph: &CommitGraph) -> serde_json::Value {
+    json!({
+        "width": graph.width,
+        "rows": graph.rows.iter().zip(commits).map(|(row, commit)| json!({
+            "hash": commit.hash, "subject": commit.subject, "parents": commit.parents,
+            "lane": row.lane, "color": row.color,
+            "strokes": row.strokes.iter().map(|stroke| json!({
+                "from": stroke.from, "to": stroke.to, "half": format!("{:?}", stroke.half),
+                "color": stroke.color,
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
+    })
+}
+
+fn verify_window(
+    repo: &Path,
+    limit: usize,
+    branch: Option<&str>,
+) -> anyhow::Result<serde_json::Value> {
+    let commits = fetch(repo, limit, branch)?.context("repository missing")?;
+    let graph = CommitGraph::new(&commits);
+    verify_edges(&commits, &graph)?;
+    Ok(json!({ "limit": limit, "branch": branch, "graph": graph_rows(&commits, &graph) }))
+}
+
+// Real Git objects and refs exercise ListCommits ordering and serialization too.
+fn graph_commit(
+    repo: &Path,
+    tree: &str,
+    subject: &str,
+    parents: &[&str],
+) -> anyhow::Result<String> {
+    let mut args = vec!["commit-tree", tree, "-m", subject];
+    for parent in parents {
+        args.extend(["-p", parent]);
+    }
+    git(repo, &args, Some("2026-02-01T12:00:00Z"))
+}
+
+fn verify_complex_history(repo: &Path, base: &str) -> anyhow::Result<Vec<serde_json::Value>> {
+    let tree = git(repo, &["rev-parse", "HEAD^{tree}"], None)?;
+    let left = graph_commit(repo, &tree, "Left", &[base])?;
+    let left_tip = graph_commit(repo, &tree, "Left tip", &[&left])?;
+    let right = graph_commit(repo, &tree, "Right", &[base])?;
+    let nested = graph_commit(repo, &tree, "Nested merge", &[&left_tip, &right])?;
+    let main = graph_commit(repo, &tree, "Main before merge", &[base])?;
+    let merge = graph_commit(repo, &tree, "Outer merge", &[&main, &nested])?;
+    let other = graph_commit(repo, &tree, "Other tip", &[base])?;
+    let octopus = graph_commit(repo, &tree, "Octopus merge", &[&merge, &other, &right])?;
+    let independent = graph_commit(repo, &tree, "Independent root", &[])?;
+    git(repo, &["update-ref", "refs/heads/main", &octopus], None)?;
+    git(
+        repo,
+        &["update-ref", "refs/heads/unmerged", &left_tip],
+        None,
+    )?;
+    git(
+        repo,
+        &["update-ref", "refs/heads/independent", &independent],
+        None,
+    )?;
+    let mut windows = Vec::new();
+    for limit in [1, 2, 3, 5, 100] {
+        windows.push(verify_window(repo, limit, None)?);
+    }
+    windows.push(verify_window(repo, 100, Some("unmerged"))?);
+    windows.push(verify_window(repo, 100, Some("independent"))?);
+    // An unmerged tip can appear above HEAD. Reserving lane zero must not
+    // create a mainline stroke above HEAD or let that tip steal lane zero.
+    let future = graph_commit(repo, &tree, "Unmerged above HEAD", &[&octopus])?;
+    git(repo, &["update-ref", "refs/heads/future", &future], None)?;
+    windows.push(verify_window(repo, 100, None)?);
+    Ok(windows)
 }
 
 // Exercise the daemon entry and wire format, not a duplicate of its parser.
@@ -258,19 +408,6 @@ fn main() -> anyhow::Result<()> {
         fetch(&output, 100, None)?.is_none(),
         "non-repository returned commits"
     );
-    let rows: Vec<_> = graph
-        .rows
-        .iter()
-        .zip(&commits)
-        .map(|(row, commit)| {
-            json!({
-                "hash": commit.hash, "subject": commit.subject, "parents": commit.parents,
-                "lane": row.lane, "strokes": row.strokes.iter().map(|s| json!({
-                    "from": s.from, "to": s.to, "half": format!("{:?}", s.half),
-                })).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
     git(&repo, &["mv", "root.txt", "renamed.txt"], None)?;
     let renamed = commit(&repo, "Rename", "2026-01-07T12:00:00Z")?;
     let rename_stats = verify_stats(&repo, &renamed, (1, 0, 0))?;
@@ -293,14 +430,23 @@ fn main() -> anyhow::Result<()> {
         .is_err(),
         "missing commit was not an error"
     );
+    let complex = verify_complex_history(&repo, &deleted)?;
+    let real_repository = std::env::args_os().nth(2).map(PathBuf::from);
+    let mut real_windows = Vec::new();
+    if let Some(repository) = &real_repository {
+        for limit in [1, 2, 10, 100, 500] {
+            real_windows.push(verify_window(repository, limit, None)?);
+        }
+    }
     let report = output.join("commit-graph-report.json");
     std::fs::write(
         &report,
         serde_json::to_vec_pretty(&json!({
-            "status": "passed", "fixture": repo, "width": graph.width, "rows": rows,
+            "status": "passed", "fixture": repo, "graph": graph_rows(&commits, &graph),
+            "complex_windows": complex, "real_repository": real_repository, "real_windows": real_windows,
             "stats_checks": ["root", "text additions and deletions", "binary", "first-parent merge", "empty commit", "rename", "delete", "invalid hash", "missing commit"],
             "stats_results": [root_stats, main_stats, binary_stats, merge_stats, empty_stats, rename_stats, delete_stats],
-            "checks": ["wire round trip", "empty repository", "clock-skew topology", "merge edges", "stable first-parent lane", "root", "refs and unpushed", "branch filter", "truncation", "invalid revision", "non-repository"],
+            "checks": ["wire round trip", "empty repository", "clock-skew topology", "merge edges", "stable first-parent lane and color", "boundary continuity without phantom strokes", "no premature joins", "nested and octopus merges", "disconnected and unmerged tips", "root", "refs and unpushed", "branch filter", "truncation", "invalid revision", "non-repository"],
         }))?,
     )?;
     println!("[OK] Git-to-graph E2E passed: {}", report.display());

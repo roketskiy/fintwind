@@ -2142,9 +2142,6 @@ impl Fintwind {
             .content()
             .trim()
             .is_empty();
-        let has_session = self.selected_session().is_some();
-        let has_provider = self.provider_probe().is_some();
-        let can_generate = enabled && staged && has_session && has_provider;
         let untracked_ready = self.source_control_untracked_fully_loaded();
         let can_commit = enabled && staged && has_message;
         let can_stage_commit = enabled && has_message && untracked_ready && dirty;
@@ -2207,23 +2204,23 @@ impl Fintwind {
         let primary_button = div()
             .id("source-control-commit-primary")
             .tab_index(0)
-            .h(px(28.0))
+            .h(px(30.0))
             .flex_1()
             .min_w_0()
-            .rounded(px(6.0))
+            .rounded(px(7.0))
             .flex()
             .items_center()
             .justify_center()
-            .gap(px(5.0))
-            .text_size(ui_px(11.5))
+            .gap(px(7.0))
+            .text_size(ui_px(12.5))
             .font_weight(FontWeight::MEDIUM)
             .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
             .when(primary_ready, |button| {
                 button
-                    .bg(theme.inverse)
-                    .text_color(theme.on_inverse)
-                    .cursor_default()
-                    .hover(|button| button.opacity(0.9))
+                    .bg(theme.accent_fill)
+                    .text_color(theme.on_accent)
+                    .cursor_pointer()
+                    .hover(|button| button.bg(theme.accent_text))
                     .on_activation(cx, move |this, _, cx| {
                         primary_action(this, cx);
                     })
@@ -2242,7 +2239,8 @@ impl Fintwind {
                 MenuChip::new("source-control-commit-more")
                     .icon("icons/chevron-down.svg", theme.text_tertiary)
                     .icon_only(true)
-                    .height(px(28.0))
+                    .caret(false)
+                    .height(px(30.0))
                     .tooltip(tr!("source_control.repository_actions"))
                     .disabled(!enabled)
                     .selected(enabled && handle.is_open()),
@@ -2313,60 +2311,41 @@ impl Fintwind {
             )
         };
 
-        let generate = div()
-            .id("source-control-commit-generate")
-            .tab_index(0)
-            .size(px(28.0))
-            .rounded(px(6.0))
-            .flex_none()
-            .flex()
-            .items_center()
-            .justify_center()
-            .when(can_generate, |button| {
-                button
-                    .cursor_default()
-                    .hover(|button| button.bg(theme.overlay))
-            })
-            .when(!can_generate, |button| button.opacity(0.4))
-            .tooltip(Tooltip::text(tr!("source_control.generate_message")))
-            .on_click(cx.listener(|this, _, _, cx| {
-                cx.stop_propagation();
-                this.generate_source_control_commit_message(cx);
-            }))
-            .child(icon("icons/sparkle.svg", 13.0, theme.text_tertiary));
-
         let message = self.source_control_commit_input.clone();
         div()
             .flex_none()
             .px(px(12.0))
             .pt(px(10.0))
             .pb(px(8.0))
-            .flex()
-            .flex_col()
-            .gap(px(8.0))
             .child(
                 div()
-                    .id("source-control-commit-message")
-                    .h(px(84.0))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.source_control_commit_scroll)
-                    .rounded(px(8.0))
+                    .w_full()
+                    .rounded(px(12.0))
                     .border_1()
-                    .border_color(theme.border)
-                    .bg(theme.composer)
-                    .text_size(ui_px(12.5))
-                    .line_height(ui_px(19.0))
-                    .child(message),
-            )
-            .child(
-                div()
-                    .flex_none()
+                    .border_color(theme.border_strong)
+                    .bg(theme.raised)
+                    .shadow_lg()
+                    .p(px(10.0))
                     .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(generate)
-                    .child(primary_button)
-                    .child(dropdown),
+                    .flex_col()
+                    .gap(px(8.0))
+                    .child(
+                        div()
+                            .min_h(px(22.0))
+                            .px(px(2.0))
+                            .text_size(ui_px(12.5))
+                            .line_height(ui_px(19.0))
+                            .child(message),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(primary_button)
+                            .child(dropdown),
+                    ),
             )
     }
 

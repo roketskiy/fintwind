@@ -58,9 +58,11 @@ pub fn list(
         command.arg(branch);
     } else {
         // Like VSCode's Source Control Graph, the unfiltered view shows every
-        // branch, remote and tag so merges keep all of their lanes. A named
-        // filter still narrows to that revision's own ancestry.
-        command.arg("--all");
+        // real branch, remote and tag so merges keep all of their lanes.
+        // Never `--all`: it would also drag in the daemon's private
+        // `refs/fintwind/*` checkpoint snapshots. A named filter still narrows
+        // to that revision's own ancestry.
+        command.args(["--branches", "--remotes", "--tags"]);
     }
     command
         .arg("--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%at%x1f%D%x1f%P%x1e")

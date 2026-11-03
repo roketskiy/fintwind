@@ -1824,6 +1824,9 @@ pub struct Fintwind {
     source_control_discard: Option<source_control::DiscardRequest>,
     /// The commit message input of the source-control page's commit area.
     source_control_commit_input: Entity<ComposerInput>,
+    /// Viewport of the commit message input above. Long messages scroll
+    /// inside the fixed box instead of growing into the file groups.
+    source_control_commit_scroll: ScrollHandle,
     /// Local branches of the pinned-or-followed workspace, for the branch
     /// menu. Refreshed alongside each status query; `None` until one lands.
     source_control_branches: Option<Arc<fintwind_client::git::BranchSnapshot>>,
@@ -2962,6 +2965,11 @@ impl Fintwind {
         let session_rename_input = cx.new(|cx| ComposerInput::new(window, cx).search_field());
         let source_control_branch_create_input =
             cx.new(|cx| ComposerInput::new(window, cx).search_field());
+        let source_control_commit_input = cx.new(|cx| {
+            ComposerInput::new(window, cx)
+                .code_editor(None)
+                .placeholder(tr!("commit.message_placeholder"))
+        });
         let right_panel_diff_filter = cx.new(|cx| {
             ComposerInput::new(window, cx)
                 .search_field()
@@ -3608,6 +3616,19 @@ impl Fintwind {
             )
             .detach();
             cx.subscribe(
+                &source_control_commit_input,
+                |this: &mut Self, _, event: &ComposerEvent, cx| match event {
+                    ComposerEvent::Submit(_) | ComposerEvent::SubmitSteer(_) => {
+                        // Ctrl+Enter in the commit box runs the primary
+                        // action, like VSCode's accept-input command.
+                        this.accept_source_control_input(cx);
+                    }
+                    ComposerEvent::Edited => cx.notify(),
+                    _ => {}
+                },
+            )
+            .detach();
+            cx.subscribe(
                 &source_control_branch_create_input,
                 |this: &mut Self, _, event: &ComposerEvent, cx| {
                     if let ComposerEvent::Submit(name) = event {
@@ -3959,11 +3980,8 @@ impl Fintwind {
                 review_workspace_override: None,
                 source_control_busy: None,
                 source_control_discard: None,
-                source_control_commit_input: cx.new(|cx| {
-                    ComposerInput::new(window, cx)
-                        .code_editor(None)
-                        .placeholder(tr!("commit.message_placeholder"))
-                }),
+                source_control_commit_input,
+                source_control_commit_scroll: ScrollHandle::new(),
                 source_control_branches: None,
                 source_control_branch_generation: 0,
                 source_control_branch_create_input,

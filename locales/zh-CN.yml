@@ -1072,6 +1072,7 @@ capsule.tasks: 会话工具
 capsule.git_tools: Git 工具
 environment.history: 历史
 git_history.head: HEAD(当前)
+git_history.all_refs: 全部
 git_history.loading: 正在加载历史…
 git_history.loading_description: 正在读取此工作区的提交历史
 git_history.not_a_repository: 不是 Git 仓库
@@ -1245,6 +1246,9 @@ source_control.push_done: Push 完成
 source_control.action_failed: Git 操作失败
 source_control.commit: 提交
 source_control.commit_to: 提交到 %{branch}
+source_control.commit_message_on_branch: 消息（Ctrl+Enter在“%{branch}”提交）
+source_control.commit_and_push: 提交并推送
+source_control.stage_all_commit_push: 全部暂存并提交并推送
 source_control.commit_hint: 提交已暂存的更改
 source_control.stage_all_commit: 暂存全部并提交
 source_control.commit_empty_message: 请先输入提交信息

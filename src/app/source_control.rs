@@ -1275,14 +1275,6 @@ impl Fintwind {
         cx.notify();
     }
 
-    pub(super) fn open_source_control_commit_dialog(&mut self, cx: &mut Context<Self>) {
-        if self.source_control_commit_dialog {
-            return;
-        }
-        self.source_control_commit_dialog = true;
-        cx.notify();
-    }
-
     pub(super) fn close_source_control_commit_dialog(&mut self, cx: &mut Context<Self>) {
         if self.source_control_commit_dialog {
             self.source_control_commit_dialog = false;
@@ -2088,60 +2080,323 @@ impl Fintwind {
             .flex_col()
             .bg(theme.sidebar)
             .child(self.render_source_control_workspace_block(cx))
+            .child(self.render_source_control_commit_box(cx))
             .child(self.render_source_control_file_list(cx))
-            .child(self.render_source_control_commit_bar(cx))
     }
 
-    /// The action bar below the file groups: the commit button, which opens
-    /// the commit dialog. The dialog decides what is possible from there —
-    /// plain commit needs staged content, "stage all and commit" only needs
-    /// a dirty tree — so the bar itself only gates on writes in flight.
-    fn render_source_control_commit_bar(&self, cx: &mut Context<Self>) -> Div {
+    /// The VSCode-style commit box above the file groups: the message input
+    /// with `Ctrl+Enter` to accept, then the primary action button with its
+    /// dropdown. The primary follows the repository state like VSCode's
+    /// action button: commit while dirty, pull/push while clean and
+    /// diverged, disabled otherwise. The file groups below stay untouched.
+    fn render_source_control_commit_box(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let writable = !self.review_is_history_snapshot();
-        let ready = writable && self.source_control_busy.is_none();
+        let busy = self.source_control_busy.is_some();
+        let enabled = writable && !busy;
+        // Booleans only: the path lists are cloned from the cached status
+        // on demand by the actions, never once per frame for the layout.
+        let (staged, unstaged) = self
+            .source_control_status
+            .as_ref()
+            .map(|status| {
+                (
+                    status
+                        .entries
+                        .iter()
+                        .any(source_control_entry_is_staged),
+                    status
+                        .entries
+                        .iter()
+                        .any(source_control_entry_is_unstaged),
+                )
+            })
+            .unwrap_or((false, false));
+        let dirty = staged || unstaged;
+        let (ahead, behind) = self
+            .source_control_status
+            .as_ref()
+            .map(|status| (status.ahead, status.behind))
+            .unwrap_or((0, 0));
+        let branch = self
+            .source_control_status
+            .as_ref()
+            .and_then(|status| status.branch.clone());
+
+        // Placeholder names the branch like VSCode's
+        // `Message (Ctrl+Enter to commit on "…")`.
+        let placeholder = match branch {
+            Some(branch) => tr!("source_control.commit_message_on_branch", branch = branch),
+            None => tr!("commit.message_placeholder"),
+        };
+        self.source_control_commit_input.update(cx, |input, cx| {
+            input.set_placeholder(placeholder, cx);
+            // A history snapshot is read-only and an in-flight action owns
+            // the box, like VSCode disabling its input while committing.
+            input.set_read_only(!enabled);
+        });
+
+        let has_message = !self
+            .source_control_commit_input
+            .read(cx)
+            .content()
+            .trim()
+            .is_empty();
+        let has_session = self.selected_session().is_some();
+        let has_provider = self.provider_probe().is_some();
+        let can_generate = enabled && staged && has_session && has_provider;
+        let untracked_ready = self.source_control_untracked_fully_loaded();
+        let can_commit = enabled && staged && has_message;
+        let can_stage_commit = enabled && has_message && untracked_ready && dirty;
+
+        enum Primary {
+            Commit,
+            Pull,
+            Push,
+            Idle,
+        }
+        let primary = if !enabled {
+            Primary::Idle
+        } else if dirty {
+            Primary::Commit
+        } else if behind > 0 {
+            Primary::Pull
+        } else if ahead > 0 {
+            Primary::Push
+        } else {
+            Primary::Idle
+        };
+        let (primary_label, primary_icon, primary_ready, primary_action): (
+            String,
+            &'static str,
+            bool,
+            fn(&mut Self, &mut Context<Self>),
+        ) = match primary {
+            Primary::Commit => (
+                tr!("source_control.commit"),
+                "icons/check.svg",
+                can_commit,
+                Self::commit_source_control_staged,
+            ),
+            Primary::Pull => (
+                tr!("source_control.pull"),
+                "icons/arrow-down.svg",
+                enabled,
+                Self::pull_source_control,
+            ),
+            Primary::Push => (
+                tr!("source_control.push"),
+                "icons/arrow-up.svg",
+                enabled,
+                Self::push_source_control,
+            ),
+            Primary::Idle => (
+                tr!("source_control.commit"),
+                "icons/check.svg",
+                false,
+                Self::commit_source_control_staged,
+            ),
+        };
+
+        let weak = cx.entity().downgrade();
+        let primary_icon_color = if primary_ready {
+            theme.on_inverse
+        } else {
+            theme.text_ghost
+        };
+        let primary_button = div()
+            .id("source-control-commit-primary")
+            .tab_index(0)
+            .h(px(28.0))
+            .flex_1()
+            .min_w_0()
+            .rounded(px(6.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .gap(px(5.0))
+            .text_size(ui_px(11.5))
+            .font_weight(FontWeight::MEDIUM)
+            .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
+            .when(primary_ready, |button| {
+                button
+                    .bg(theme.inverse)
+                    .text_color(theme.on_inverse)
+                    .cursor_default()
+                    .hover(|button| button.opacity(0.9))
+                    .on_activation(cx, move |this, _, cx| {
+                        primary_action(this, cx);
+                    })
+            })
+            .when(!primary_ready, |button| {
+                button.bg(theme.overlay_strong).text_color(theme.text_ghost)
+            })
+            .child(icon(primary_icon, 13.0, primary_icon_color))
+            .child(primary_label);
+
+        let handle = self.menu_handle("source-control-commit-more", cx);
+        let menu_weak = weak.clone();
+        let dropdown = {
+            let items_weak = menu_weak.clone();
+            dropdown_menu(
+                MenuChip::new("source-control-commit-more")
+                    .icon("icons/chevron-down.svg", theme.text_tertiary)
+                    .icon_only(true)
+                    .height(px(28.0))
+                    .tooltip(tr!("source_control.repository_actions"))
+                    .disabled(!enabled)
+                    .selected(enabled && handle.is_open()),
+                "source-control-commit-more-menu",
+                &handle,
+                MenuAlign::BelowRight,
+                move |_| {
+                    let commit_weak = items_weak.clone();
+                    let commit_push_weak = items_weak.clone();
+                    let stage_commit_weak = items_weak.clone();
+                    let stage_commit_push_weak = items_weak.clone();
+                    let pull_weak = items_weak.clone();
+                    let push_weak = items_weak.clone();
+                    let fetch_weak = items_weak.clone();
+                    vec![
+                        MenuItem::new(tr!("source_control.commit"), move |_, cx| {
+                            let _ = commit_weak.update(cx, |this, cx| {
+                                this.commit_source_control(false, false, cx)
+                            });
+                        })
+                        .icon("icons/check.svg")
+                        .disabled(!can_commit),
+                        MenuItem::new(tr!("source_control.commit_and_push"), move |_, cx| {
+                            let _ = commit_push_weak.update(cx, |this, cx| {
+                                this.commit_source_control(false, true, cx)
+                            });
+                        })
+                        .icon("icons/arrow-up.svg")
+                        .disabled(!can_commit),
+                        MenuItem::new(tr!("source_control.stage_all_commit"), move |_, cx| {
+                            let _ = stage_commit_weak.update(cx, |this, cx| {
+                                this.commit_source_control(true, false, cx)
+                            });
+                        })
+                        .icon("icons/plus.svg")
+                        .disabled(!can_stage_commit),
+                        MenuItem::new(
+                            tr!("source_control.stage_all_commit_push"),
+                            move |_, cx| {
+                                let _ = stage_commit_push_weak.update(cx, |this, cx| {
+                                    this.commit_source_control(true, true, cx)
+                                });
+                            },
+                        )
+                        .icon("icons/cloud-upload.svg")
+                        .disabled(!can_stage_commit),
+                        MenuItem::Separator,
+                        MenuItem::new(tr!("source_control.pull"), move |_, cx| {
+                            let _ = pull_weak
+                                .update(cx, |this, cx| this.pull_source_control(cx));
+                        })
+                        .icon("icons/arrow-down.svg")
+                        .disabled(!enabled),
+                        MenuItem::new(tr!("source_control.push"), move |_, cx| {
+                            let _ = push_weak
+                                .update(cx, |this, cx| this.push_source_control(cx));
+                        })
+                        .icon("icons/arrow-up.svg")
+                        .disabled(!enabled),
+                        MenuItem::new(tr!("source_control.fetch"), move |_, cx| {
+                            let _ = fetch_weak
+                                .update(cx, |this, cx| this.fetch_source_control(cx));
+                        })
+                        .icon("icons/download.svg")
+                        .disabled(!enabled),
+                    ]
+                },
+            )
+        };
+
+        let generate = div()
+            .id("source-control-commit-generate")
+            .tab_index(0)
+            .size(px(28.0))
+            .rounded(px(6.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .when(can_generate, |button| {
+                button
+                    .cursor_default()
+                    .hover(|button| button.bg(theme.overlay))
+            })
+            .when(!can_generate, |button| button.opacity(0.4))
+            .tooltip(Tooltip::text(tr!("source_control.generate_message")))
+            .on_click(cx.listener(|this, _, _, cx| {
+                cx.stop_propagation();
+                this.generate_source_control_commit_message(cx);
+            }))
+            .child(icon("icons/sparkle.svg", 13.0, theme.text_tertiary));
+
+        let message = self.source_control_commit_input.clone();
         div()
             .flex_none()
             .px(px(12.0))
-            .py(px(10.0))
-            .border_t_1()
-            .border_color(theme.sidebar_border)
+            .pt(px(10.0))
+            .pb(px(8.0))
             .flex()
-            .items_center()
+            .flex_col()
+            .gap(px(8.0))
             .child(
                 div()
-                    .id("source-control-commit-open")
-                    .tab_index(0)
-                    .h(px(28.0))
-                    .w_full()
-                    .rounded(px(6.0))
+                    .id("source-control-commit-message")
+                    .h(px(84.0))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.source_control_commit_scroll)
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(theme.border)
+                    .bg(theme.composer)
+                    .text_size(ui_px(12.5))
+                    .line_height(ui_px(19.0))
+                    .child(message),
+            )
+            .child(
+                div()
+                    .flex_none()
                     .flex()
                     .items_center()
-                    .justify_center()
-                    .gap(px(5.0))
-                    .text_size(ui_px(11.5))
-                    .font_weight(FontWeight::MEDIUM)
-                    .focus_visible(|button| button.border_1().border_color(theme.accent_focus))
-                    .when(ready, |button| {
-                        button
-                            .bg(theme.inverse)
-                            .text_color(theme.on_inverse)
-                            .cursor_default()
-                            .hover(|button| button.opacity(0.9))
-                            .on_activation(cx, |this, _, cx| {
-                                this.open_source_control_commit_dialog(cx);
-                            })
-                    })
-                    .when(!ready, |button| {
-                        button.bg(theme.overlay_strong).text_color(theme.text_ghost)
-                    })
-                    .child(icon(
-                        "icons/git-commit-horizontal.svg",
-                        13.0,
-                        theme.on_inverse,
-                    ))
-                    .child(tr!("source_control.commit")),
+                    .gap(px(6.0))
+                    .child(generate)
+                    .child(primary_button)
+                    .child(dropdown),
             )
+    }
+
+    /// Plain staged commit used by the primary button and `Ctrl+Enter`.
+    fn commit_source_control_staged(&mut self, cx: &mut Context<Self>) {
+        self.commit_source_control(false, false, cx);
+    }
+
+    /// Runs the primary commit-box action for `Ctrl+Enter`: commit while
+    /// dirty, otherwise pull-then-push order like the button labels.
+    pub(super) fn accept_source_control_input(&mut self, cx: &mut Context<Self>) {
+        if !self.source_control_allows_writes() || self.source_control_busy.is_some() {
+            return;
+        }
+        let dirty = !self.source_control_staged_paths().is_empty()
+            || !self.source_control_unstaged_paths().is_empty();
+        if dirty {
+            self.commit_source_control(false, false, cx);
+            return;
+        }
+        let (ahead, behind) = self
+            .source_control_status
+            .as_ref()
+            .map(|status| (status.ahead, status.behind))
+            .unwrap_or((0, 0));
+        if behind > 0 {
+            self.pull_source_control(cx);
+        } else if ahead > 0 {
+            self.push_source_control(cx);
+        }
     }
 
     /// The workspace block: the workspace picker (which shows the current
@@ -2149,9 +2404,23 @@ impl Fintwind {
     fn render_source_control_workspace_block(&self, cx: &mut Context<Self>) -> Div {
         let theme = Theme::current(cx);
         let status = self.source_control_status.as_ref();
-        let branch_label = match status.map(|status| status.branch.as_deref()) {
-            Some(Some(branch)) => branch.to_owned(),
-            Some(None) => tr!("source_control.detached_head"),
+        // Ahead/behind ride on the branch chip like VSCode's sync badge;
+        // arrows and numbers need no translation.
+        let branch_label = match status {
+            Some(status) => {
+                let base = match status.branch.as_deref() {
+                    Some(branch) => branch.to_owned(),
+                    None => tr!("source_control.detached_head"),
+                };
+                let mut counts = String::new();
+                if status.ahead > 0 {
+                    counts.push_str(&format!(" ↑{}", status.ahead));
+                }
+                if status.behind > 0 {
+                    counts.push_str(&format!(" ↓{}", status.behind));
+                }
+                format!("{base}{counts}")
+            }
             None => String::new(),
         };
 

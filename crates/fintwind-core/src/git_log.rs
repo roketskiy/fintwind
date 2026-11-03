@@ -56,6 +56,11 @@ pub fn list(
     command.args(["log", "--topo-order", "-n", &limit.to_string()]);
     if let Some(branch) = branch {
         command.arg(branch);
+    } else {
+        // Like VSCode's Source Control Graph, the unfiltered view shows every
+        // branch, remote and tag so merges keep all of their lanes. A named
+        // filter still narrows to that revision's own ancestry.
+        command.arg("--all");
     }
     command
         .arg("--pretty=format:%H%x1f%h%x1f%s%x1f%an%x1f%at%x1f%D%x1f%P%x1e")

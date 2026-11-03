@@ -82,6 +82,14 @@ detection, data locations, and WebView2 details.
 
 ## Features
 
+- **Phone remote control.** Enable it from the desktop sidebar, then scan the QR
+  code or open the pairing link to use the mobile web client. Switch workspaces,
+  view and create sessions, send messages and attachments, stop tasks, and handle
+  approvals and questions over an end-to-end encrypted connection without an
+  account. The desktop must stay running; access covers workspaces registered
+  when remote control starts and sessions updated within the last 72 hours.
+  Stopping remote control, closing the desktop, or pairing again invalidates the
+  old pairing. See [remote control](docs/remote-control.md).
 - **Image generation.** Enable OpenCode's experimental image tool in General
   settings and choose a default from the current workspace's available image models.
 - **Native Goal.** Set a goal with `/goal <goal>`, then inspect, pause, resume,
@@ -130,13 +138,17 @@ detection, data locations, and WebView2 details.
 - **Files and Git.** Browse workspace files and open multiple file tabs. Review
   staged, unstaged, untracked, and ignored files in a directory tree, load
   directories on demand, and inspect nested repositories and per-file diffs.
-  Read Git history as a commit graph. Attach files from the composer or by
+  Read Git history in a fixed-lane branch graph with branch and tag labels.
+  A card-style commit box supports Ctrl+Enter, with commit, pull, push, and more
+  actions in a split button. Attach files from the composer or by
   dropping them onto the conversation; images and PDFs are sent inline to OpenCode.
 - **Terminal and browser.** Work in a built-in terminal or the optional
   WebView2 browser panel. Enable the browser tools in settings (off by
-  default) and the agent can operate browser tabs you share with the session —
-  open, observe, click, fill, scroll, navigate, screenshot — within the
-  session's access mode. The session interface itself remains native GPUI.
+  default) and agents in any session can operate all open browser tabs,
+  including manually opened tabs, without per-page approval or session isolation.
+  Tools can open, observe, click, fill, scroll, navigate, and take screenshots;
+  they support local file pages and password fields, and snapshots can include
+  passwords and hidden form values. The session interface itself remains native GPUI.
 - **Appearance settings.** Choose Fintwind or one of 13 additional theme
   families, select light/dark/system mode, and customize UI and code fonts and
   text sizes. Animations honor the system's reduce-motion preference.

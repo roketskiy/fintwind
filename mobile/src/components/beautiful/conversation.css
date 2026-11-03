@@ -16,7 +16,11 @@
 }
 
 /* Assistant commentary remains ordinary body text, as on desktop. Activity
- * disclosures use compact spacing; replies return to the main text axis. */
+ * disclosures use compact spacing; replies return to the main text axis. Activity
+ * text stays secondary: slightly transparent versus body. */
+.conversation-content [data-transcript-kind="activity"] {
+  opacity: 0.85;
+}
 .conversation-content [data-transcript-kind="activity"] + :is([data-transcript-kind="progress"], [data-transcript-kind="answer"]) {
   padding-block-start: 4px;
 }

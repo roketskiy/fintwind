@@ -1549,6 +1549,7 @@ impl Fintwind {
         // A user stop withdraws the backoff with the turn it belonged to.
         self.provider_retries.remove(&session_id);
         if let Some(runtime) = runtime.as_mut() {
+            runtime.interrupt_remote_steers("当前回复已停止");
             runtime.stream_phase = None;
             runtime.open_reasoning.clear();
             runtime.settled_reasoning.clear();

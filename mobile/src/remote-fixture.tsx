@@ -24,6 +24,8 @@ function Fixture() {
     appendActivity: fixture.appendActivity,
     finishTurn: fixture.finishTurn,
     waitForApproval: fixture.waitForApproval,
+    acceptSteer: fixture.acceptSteer,
+    rejectSteer: fixture.rejectSteer,
     mutationError: () => { fixture.failMutation(); void app.mutate("stop", { sessionId: "fixture-session" }); },
   };
   return <>

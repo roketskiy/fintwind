@@ -122,6 +122,7 @@ export function checkFieldBounds(
       )
         throw bad();
       return;
+    case "steerPrompt":
     case "sendPrompt": {
       id(fields["sessionId"]);
       const attachments = fields["attachmentIds"] ?? [];
@@ -354,6 +355,7 @@ export function parseResult(type: CommandType, data: unknown): unknown {
         questions: parseQuestions(data["questions"]),
         desktopRequired: reqBool(data["desktopRequired"]),
         canSend: reqBool(data["canSend"]),
+        ...(data["canSteer"] === undefined ? {} : { canSteer: reqBool(data["canSteer"]) }),
       };
       const revision = parseRevision(data["revision"]);
       if (data["runtimeMode"] !== undefined) detail.runtimeMode = parseRuntimeMode(data["runtimeMode"]);
@@ -432,6 +434,7 @@ export function parseResult(type: CommandType, data: unknown): unknown {
       };
     case "watchSession":
     case "configureSession":
+    case "steerPrompt":
     case "sendPrompt":
     case "stop":
     case "respondPermission":

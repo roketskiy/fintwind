@@ -96,6 +96,7 @@ export interface SessionDetail {
   questions: Questions | null;
   desktopRequired: boolean;
   canSend: boolean;
+  canSteer?: boolean;
   revision?: string;
 }
 export interface CommandMap {
@@ -129,6 +130,10 @@ export interface CommandMap {
     result: { sessionId: string };
   };
   sendPrompt: {
+    fields: { sessionId: string; text: string; attachmentIds?: string[] };
+    result: { accepted: boolean };
+  };
+  steerPrompt: {
     fields: { sessionId: string; text: string; attachmentIds?: string[] };
     result: { accepted: boolean };
   };

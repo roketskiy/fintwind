@@ -67,8 +67,10 @@ export function useRemote() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const generation = useRef(0);
-  const operation = useRef(false);
+  const operation = useRef<CommandType | null>(null);
+  const stopOperation = useRef(false);
   const currentSelection = useRef(selection);
   const [refreshVersion, setRefreshVersion] = useState(0);
   currentSelection.current = selection;
@@ -136,9 +138,20 @@ export function useRemote() {
     let unwatch: (() => void) | null = null;
     let streamUnavailable = false;
     let streamFailures = 0;
+    let timer = 0;
+    const idleInterval = selection.page === "conversation" ? 2500 : 8000;
+    let refreshInterval = idleInterval;
+    const sessionInterval = (detail: SessionDetail) =>
+      ["connecting", "working", "waiting"].includes(detail.status) ? 300 : idleInterval;
+    const scheduleRefresh = () => {
+      window.clearTimeout(timer);
+      if (active && !document.hidden && !unwatch)
+        timer = window.setTimeout(() => void refresh(), refreshInterval);
+    };
     const stopWatching = () => { unwatch?.(); unwatch = null; };
     const refresh = async () => {
       if (!active || fetching || document.hidden || unwatch) return;
+      window.clearTimeout(timer);
       fetching = true;
       try {
         if (selection.page === "conversation" && selection.sessionId) {
@@ -153,6 +166,7 @@ export function useRemote() {
             sessionId: selection.sessionId,
           });
           if (!active || epoch !== generation.current) return;
+          refreshInterval = sessionInterval(detail);
           setData((value) =>
             value.detail === detail ? value : { ...value, detail },
           );
@@ -160,6 +174,7 @@ export function useRemote() {
           if (!document.hidden && !streamUnavailable && detail.features.includes("sessionDeltas")) {
             unwatch = remoteClient.watchSession(selection.sessionId, (updated) => {
               if (!active || epoch !== generation.current || document.hidden) return;
+              refreshInterval = sessionInterval(updated);
               setData((value) => ({ ...value, detail: updated }));
               setError(null);
             }, () => {
@@ -216,6 +231,7 @@ export function useRemote() {
         setError(null);
       } catch (cause) {
         if (active && epoch === generation.current) {
+          refreshInterval = idleInterval;
           // A transient read failure must not unmount the transcript and lose
           // its scroll position. Selection changes clear stale content below.
           setError(cause instanceof Error ? cause.message : "无法刷新会话。");
@@ -223,23 +239,20 @@ export function useRemote() {
       } finally {
         fetching = false;
         if (active && epoch === generation.current) setLoading(false);
+        scheduleRefresh();
       }
     };
     setLoading(true);
     void refresh();
-    const timer = window.setInterval(
-      () => void refresh(),
-      selection.page === "conversation" ? 2500 : 8000,
-    );
     const onVisible = () => {
-      if (document.hidden) stopWatching();
+      if (document.hidden) { stopWatching(); window.clearTimeout(timer); }
       else { streamUnavailable = false; streamFailures = 0; void refresh(); }
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
       active = false;
       stopWatching();
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [
@@ -285,23 +298,27 @@ export function useRemote() {
   }, []);
 
   const mutate = useCallback(
-    async <K extends CommandType>(type: K, fields: CommandMap[K]["fields"]) => {
-      if (operation.current) return null;
-      operation.current = true;
-      setBusy(true);
+    async <K extends CommandType>(type: K, fields: CommandMap[K]["fields"], onFailure?: (message: string) => void) => {
+      const stop = type === "stop";
+      if (operation.current && !stop) return null;
+      if (stopOperation.current) return null;
+      if (stop) { stopOperation.current = true; setStopping(true); }
+      else { operation.current = type; setBusy(true); }
       setError(null);
       try {
         const result = await remoteClient.command(type, fields);
         return result;
       } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "操作失败。");
+        const message = cause instanceof Error ? cause.message : "操作失败。";
+        if (onFailure) onFailure(message);
+        else setError(message);
         return null;
       } finally {
         // A timeout still needs a fresh read to resolve operation identities;
         // unsolicited pushes are not proof of a post-operation snapshot.
         setRefreshVersion((value) => value + 1);
-        operation.current = false;
-        setBusy(false);
+        if (stop) { stopOperation.current = false; setStopping(false); }
+        else { operation.current = null; setBusy(false); }
       }
     },
     [],
@@ -325,6 +342,7 @@ export function useRemote() {
     loading,
     error: error || client.error,
     busy,
+    stopping,
     selectWorkspace,
     openSession,
     back,

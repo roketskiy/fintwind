@@ -553,6 +553,7 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
               onDraft={(value) => setDrafts((previous) => ({ ...previous, [detail.id]: value }))}
               disabled={disabled || app.page !== "conversation"}
               busy={app.busy}
+              stopDisabled={!connected || app.stopping || app.page !== "conversation"}
               onError={app.setError}
               mutate={app.mutate}
             />

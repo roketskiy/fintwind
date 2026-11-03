@@ -16,6 +16,7 @@ interface Props {
   canSend: boolean;
   sending: boolean;
   running: boolean;
+  stopDisabled: boolean;
   attachmentsSupported: boolean;
   configurable: boolean;
   modelName: string;
@@ -59,10 +60,10 @@ export const PromptBar = forwardRef<HTMLTextAreaElement, Props>(function PromptB
         </PopoverTrigger>
       </>}
       {!props.configurable && <span className="bui-prompt-model" />}
-      {props.running && <button type="button" className="bui-prompt-control bui-prompt-icon" disabled={props.locked}
+      {props.running && <button type="button" className="bui-prompt-control bui-prompt-icon" disabled={props.stopDisabled}
         aria-label="停止" onClick={props.onStop}><span className="bui-prompt-surface bui-prompt-stop"><StopIcon /></span></button>}
       <button type="submit" className="bui-prompt-control bui-prompt-icon bui-prompt-send" disabled={!props.canSend}
-        aria-label={props.running ? "加入待发送" : "发送消息"}>
+        aria-label={props.running ? "发送引导" : "发送消息"}>
         <span className="bui-prompt-surface">{props.sending ? <Spinner /> : <ArrowUpIcon />}</span>
       </button>
     </div>

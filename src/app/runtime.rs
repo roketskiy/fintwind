@@ -2528,7 +2528,7 @@ impl Fintwind {
             runtime
                 .driver
                 .steer(submission.provider_prompt(), submission.prompt_files());
-            runtime.pending_steers.push_back(submission);
+            runtime.pending_steers.push_back(submission.into());
         } else {
             self.enqueue_follow_up_submission(session.id, submission, cx);
         }

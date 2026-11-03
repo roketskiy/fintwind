@@ -110,6 +110,8 @@ const REMOTE_RESPONSE_LIMIT: usize = 512 * 1024;
 const REMOTE_MESSAGE_TEXT_LIMIT: usize = 16 * 1024;
 const REMOTE_QR_SIZE: f32 = 224.0;
 const REMOTE_WORKSPACE_REFRESH: Duration = Duration::from_secs(5);
+// Keep projection work within the desktop's 120ms stream-commit budget.
+const REMOTE_STREAM_INTERVAL: Duration = Duration::from_millis(120);
 
 #[derive(Default)]
 pub(super) struct RemoteWorkspaceChanges {
@@ -558,6 +560,7 @@ impl Fintwind {
                             cx.spawn(async move |this, cx| {
                                 let _observation = observation;
                                 let mut clock = false;
+                                let mut last_projection: Option<Instant> = None;
                                 let mut workspace_check = Instant::now();
                                 loop {
                                     if snapshots.is_closed() { break; }
@@ -566,10 +569,14 @@ impl Fintwind {
                                         async { smol::Timer::after(Duration::from_secs(1)).await; false },
                                     ).await;
                                     if !notified && !clock && workspace_check.elapsed() < REMOTE_WORKSPACE_REFRESH { continue; }
-                                    // Fold notifications, never the provider's individual chunks.
-                                    smol::Timer::after(Duration::from_millis(200)).await;
+                                    // Send the first/idle update immediately; only a busy stream
+                                    // waits for the remainder of its bounded projection interval.
+                                    if let Some(at) = last_projection {
+                                        smol::Timer::at(at + REMOTE_STREAM_INTERVAL).await;
+                                    }
                                     while changes.try_recv().is_ok() {}
                                     if snapshots.is_closed() { break; }
+                                    last_projection = Some(Instant::now());
                                     if workspace_check.elapsed() >= REMOTE_WORKSPACE_REFRESH { workspace_check = Instant::now(); }
                                     let result = this.update(cx, |app, cx| {
                                         if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
@@ -679,6 +686,30 @@ impl Fintwind {
                                     }
                             };
                             let _ = request.respond.send(response).await;
+                            return;
+                        }
+                        if let fintwind_remote::RemoteCommand::SteerPrompt { session_id, text, attachment_ids } = &request.command {
+                            let response = this.update(cx, |app, cx| {
+                                if app.remote_generation != generation { return Err("远控已关闭。".to_owned()); }
+                                let index = app.remote_session_index(*session_id)?;
+                                if !app.remote_can_steer(index) { return Err("当前会话无法接收引导。".to_owned()); }
+                                if app.runtimes.get(session_id).is_some_and(|runtime| runtime.pending_steers.iter().any(|pending| pending.interrupted && pending.submission.provider_prompt() == *text)) {
+                                    return Err("该引导先前结果待确认，请核对会话后再发送。".to_owned());
+                                }
+                                if (text.trim().is_empty() && attachment_ids.is_empty()) || text.len() > 32 * 1024 {
+                                    return Err("引导消息为空或过长。".to_owned());
+                                }
+                                let attachments = app.remote_uploads.resolve(*session_id, attachment_ids)?;
+                                let submission = ComposerSubmission { prompt: text.clone(), display_content: None, attachments };
+                                let runtime = app.runtimes.get_mut(session_id).ok_or("当前会话无法接收引导。")?;
+                                runtime.driver.steer(submission.provider_prompt(), submission.prompt_files());
+                                runtime.pending_steers.push_back(PendingSteer { submission, remote_origin: true, interrupted: false, remote_reply: Some(request.respond.clone()) });
+                                for id in attachment_ids { app.remote_uploads.0.remove(id); }
+                                cx.notify();
+                                Ok(())
+                            }).unwrap_or_else(|_| Err("桌面窗口已关闭。".to_owned()));
+                            if let Err(error) = response { let _ = request.respond.send(Err(error)).await; }
+                            // Success is replied to only by SteerAccepted/SteerRejected.
                             return;
                         }
                         let attachment_ids = match &request.command {
@@ -816,6 +847,9 @@ impl Fintwind {
             }
             fintwind_remote::RemoteCommand::GetComposer { .. } => {
                 Err("请重新打开会话选项。".into())
+            }
+            fintwind_remote::RemoteCommand::SteerPrompt { .. } => {
+                Err("引导必须等待运行中的会话确认。".into())
             }
             fintwind_remote::RemoteCommand::ConfigureSession {
                 session_id,
@@ -1220,7 +1254,7 @@ impl Fintwind {
                 })).collect::<Vec<_>>(),
             }));
         let (entries, entries_truncated) = remote_transcript_entries(session, &timing);
-        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges", "sessionPermissions"];
+        let mut features = vec!["orderedTranscript", "composerOptions", "attachments", "sessionDeltas", "turnMetadata", "todoList", "workspaceChanges", "sessionPermissions", "steering"];
         if session.provider == "opencode" { features.push("goals"); }
         let mut snapshot = json!({
             "id": session.id,
@@ -1233,6 +1267,7 @@ impl Fintwind {
             "questions": questions,
             "desktopRequired": !permission_supported || !questions_supported,
             "canSend": session.detail_loaded,
+            "canSteer": self.remote_can_steer(index),
             "entries": entries,
             "features": features,
             "todos": remote_todo_snapshot(session),
@@ -1280,6 +1315,21 @@ impl Fintwind {
             "models": models, "canConfigure": session.detail_loaded && session.can_choose_model(),
             "commands": session.available_commands.iter().take(64).map(|command| json!({"name": bounded_text(&command.name, 128), "description": bounded_text(&command.description, 256)})).collect::<Vec<_>>()
         })
+    }
+
+    fn remote_can_steer(&self, index: usize) -> bool {
+        let session = &self.state.sessions[index];
+        session.detail_loaded
+            && matches!(session.status, SessionStatus::Working | SessionStatus::Waiting)
+            && !self.submission_preparations.contains(&session.id)
+            && !self.response_fork_preparations.contains_key(&session.id)
+            && !self.undo_redo_preparations.contains(&session.id)
+            && !self.pending_goal_actions.contains_key(&session.id)
+            && self.runtimes.get(&session.id).is_some_and(|runtime| {
+                runtime.driver.supports_steer()
+                    && runtime.pending_steers.iter().filter(|pending| !pending.interrupted).count() < 8
+                    && !runtime.pending_steers.iter().any(|pending| !pending.interrupted && pending.remote_origin)
+            })
     }
 
     fn hydrate_remote_session(&mut self, session_id: Uuid, cx: &mut Context<Self>) {

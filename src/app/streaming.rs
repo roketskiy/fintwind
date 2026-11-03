@@ -686,6 +686,7 @@ impl Fintwind {
             return true;
         }
         if preparing && matches!(&event, DriverEvent::ProcessExited) {
+            runtime.interrupt_remote_steers("运行已退出");
             self.mark_background_work_lost(session_id);
             return false;
         }
@@ -1066,16 +1067,18 @@ impl Fintwind {
                 }
             }
             DriverEvent::SteerAccepted { message } => {
-                let submission = runtime
+                let pending = runtime
                     .pending_steers
                     .iter()
-                    .position(|submission| submission.provider_prompt() == message)
+                    .position(|pending| pending.submission.provider_prompt() == message)
                     .and_then(|index| runtime.pending_steers.remove(index))
                     // Providers normally echo the exact transport text, but a
                     // normalized echo still acknowledges the oldest pending
                     // steer. Preserve its attachment presentation metadata.
-                    .or_else(|| runtime.pending_steers.pop_front())
-                    .unwrap_or_else(|| ComposerSubmission::plain(message.clone()));
+                    .or_else(|| runtime.pending_steers.iter().position(|pending| !pending.interrupted).and_then(|index| runtime.pending_steers.remove(index)))
+                    .unwrap_or_else(|| ComposerSubmission::plain(message.clone()).into());
+                if pending.interrupted { return true; }
+                let submission = pending.submission;
                 // The provider folded the message into the live turn. Append
                 // it to the same turn so the transcript mirrors the provider
                 // conversation (no new turn boundary).
@@ -1087,15 +1090,26 @@ impl Fintwind {
                     );
                     session.updated_at = unix_time();
                 }
+                if let Some(reply) = pending.remote_reply {
+                    let _ = reply.try_send(Ok(serde_json::json!({"accepted": true})));
+                }
             }
             DriverEvent::SteerRejected { message, reason } => {
-                let submission = runtime
+                let pending = runtime
                     .pending_steers
                     .iter()
-                    .position(|submission| submission.provider_prompt() == message)
+                    .position(|pending| pending.submission.provider_prompt() == message)
                     .and_then(|index| runtime.pending_steers.remove(index))
-                    .or_else(|| runtime.pending_steers.pop_front())
-                    .unwrap_or_else(|| ComposerSubmission::plain(message));
+                    .or_else(|| runtime.pending_steers.iter().position(|pending| !pending.interrupted).and_then(|index| runtime.pending_steers.remove(index)));
+                // An unmatched rejection cannot prove there is a user-owned
+                // message to queue. In particular, never revive an old remote steer.
+                let Some(pending) = pending else { return true; };
+                if pending.interrupted { return true; }
+                let submission = pending.submission;
+                if let Some(reply) = pending.remote_reply {
+                    let _ = reply.try_send(Err(format!("引导未交付：{}", compact_driver_error(&reason))));
+                    return true;
+                }
                 let (busy, settled_cleanly) = self
                     .state
                     .sessions
@@ -1335,6 +1349,7 @@ impl Fintwind {
                 }
             }
             DriverEvent::TurnFinished { success, summary } => {
+                runtime.interrupt_remote_steers("当前回复已结束");
                 // Last chance for this turn's first-token sample: the plugin
                 // measurement should already have landed with its step, so
                 // this only fires for provider paths that bypass it.
@@ -1506,6 +1521,7 @@ impl Fintwind {
                 }
             }
             DriverEvent::ProcessExited => {
+                runtime.interrupt_remote_steers("运行已退出");
                 self.mark_background_work_lost(session_id);
                 let previous_kinds = self.snapshot_selected_transcript_rows(session_id);
                 self.finish_streaming_assistant(session_id);

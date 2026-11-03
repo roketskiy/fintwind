@@ -26,6 +26,8 @@ use crate::{
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_TIMEOUT: Duration = Duration::from_millis(200);
+// Only an active phone subscription needs to notice desktop output promptly.
+const WATCH_POLL_TIMEOUT: Duration = Duration::from_millis(50);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(8);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 const INITIAL_RETRY: Duration = Duration::from_secs(1);
@@ -53,6 +55,7 @@ async fn timeout<F: std::future::Future>(
 struct DeadlineStream {
     stream: TcpStream,
     handshake_deadline: Option<Instant>,
+    poll_timeout: Duration,
 }
 
 impl DeadlineStream {
@@ -74,7 +77,7 @@ impl DeadlineStream {
 impl Read for DeadlineStream {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
         self.stream
-            .set_read_timeout(Some(self.timeout(POLL_TIMEOUT)?))?;
+            .set_read_timeout(Some(self.timeout(self.poll_timeout)?))?;
         self.stream.read(buffer)
     }
 }
@@ -262,6 +265,7 @@ fn connect_and_run(
     let stream = DeadlineStream {
         stream,
         handshake_deadline: Some(Instant::now() + CONNECT_TIMEOUT),
+        poll_timeout: POLL_TIMEOUT,
     };
     let (mut socket, _) = client_tls_with_config(request, stream, Some(ws_config), None)
         .context("relay handshake failed")?;
@@ -289,7 +293,7 @@ fn connect_and_run(
             let _ = socket.close(None);
             return Ok(());
         }
-        match read_message(&mut socket)? {
+        match read_message(&mut socket, POLL_TIMEOUT)? {
             Some(Message::Text(text)) => {
                 if text.len() > MAX_FRAME {
                     bail!("relay frame is too large");
@@ -478,7 +482,7 @@ fn serve_phone(
                 index += 1;
             }
         }
-        match read_message(socket)? {
+        match read_message(socket, if watch.is_some() { WATCH_POLL_TIMEOUT } else { POLL_TIMEOUT })? {
             Some(Message::Text(text)) => {
                 if text.len() > MAX_FRAME {
                     bail!("phone frame is too large");
@@ -606,6 +610,7 @@ fn serve_phone(
                 let allow_deferred = matches!(
                     &request.command,
                     RemoteCommand::GetComposer { .. }
+                        | RemoteCommand::SteerPrompt { .. }
                         | RemoteCommand::UploadChunk { complete: true, .. }
                 );
                 if allow_deferred && deferred.len() >= 8 {
@@ -805,7 +810,7 @@ fn recv_json_until(
         if Instant::now() >= deadline {
             bail!("relay registration timed out");
         }
-        match read_message(socket)? {
+        match read_message(socket, POLL_TIMEOUT)? {
             Some(Message::Text(text)) => {
                 if text.len() > MAX_FRAME {
                     bail!("relay frame is too large");
@@ -837,7 +842,7 @@ fn recv_tunnel_text(
         if Instant::now() >= deadline {
             bail!("phone handshake timed out");
         }
-        let Some(Message::Text(text)) = read_message(socket)? else {
+        let Some(Message::Text(text)) = read_message(socket, POLL_TIMEOUT)? else {
             continue;
         };
         if text.len() > MAX_FRAME {
@@ -859,7 +864,12 @@ fn recv_tunnel_text(
     }
 }
 
-fn read_message(socket: &mut Socket) -> anyhow::Result<Option<Message>> {
+fn read_message(socket: &mut Socket, poll_timeout: Duration) -> anyhow::Result<Option<Message>> {
+    match socket.get_mut() {
+        MaybeTlsStream::Rustls(stream) => stream.sock.poll_timeout = poll_timeout,
+        MaybeTlsStream::Plain(stream) => stream.poll_timeout = poll_timeout,
+        _ => {}
+    }
     match socket.read() {
         Ok(Message::Ping(_) | Message::Pong(_)) => {
             socket.flush()?;

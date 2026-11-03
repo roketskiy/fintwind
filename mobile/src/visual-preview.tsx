@@ -60,7 +60,7 @@ function Preview() {
       { id: detail.id, projectId: detail.projectId, title: detail.title, status: "working", updatedAt: Date.now() / 1000 },
       { id: "visual-2", projectId: detail.projectId, title: "统一日间与夜间的界面层级", status: "idle", updatedAt: Date.now() / 1000 - 3600 },
       { id: "visual-3", projectId: detail.projectId, title: "检查远控审批与目标状态", status: "waiting", updatedAt: Date.now() / 1000 - 86400 },
-    ], detail: showing, loading: false, busy: false,
+    ], detail: showing, loading: false, busy: false, stopping: false,
     selectWorkspace: () => {}, openSession: () => setPage("conversation"), back: () => setPage("sessions"), createSession: async () => {}, setError: () => {}, refresh: () => {}, reconnect: () => {}, forget: async () => {},
     mutate: async (type, fields) => {
       if (type === "configureSession") {

@@ -262,7 +262,10 @@ export class RemoteClient {
       sessionId?: string;
     };
     checkFieldBounds(type, fields as unknown as Record<string, unknown>);
-    const scope = mutationScope(type, fieldView);
+    const requestedScope = mutationScope(type, fieldView);
+    // Stop must remain usable while a steering acknowledgement is pending.
+    // Never overwrite that earlier mutation's durable uncertainty record.
+    const scope = type === "stop" && this.unresolved.has(requestedScope) ? "" : requestedScope;
     if (scope && this.unresolved.has(scope))
       throw new Error("操作结果待确认，请先等待会话状态刷新。");
     if (scope && this.unresolved.size >= UNRESOLVED_MAX_ITEMS)

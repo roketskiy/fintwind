@@ -12,6 +12,7 @@ import { Popover, PopoverContent, PopoverTitle } from "@/components/ui/popover";
 import { PromptBar } from "@/components/beautiful/prompt-bar";
 import { composerCommands, slashQuery, type ComposerCommand } from "@/lib/composer-commands";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
@@ -30,10 +31,12 @@ interface Props {
   onDraft: (value: string) => void;
   disabled: boolean;
   busy: boolean;
+  stopDisabled?: boolean;
   onError: (value: string) => void;
   mutate: <K extends CommandType>(
     type: K,
     fields: CommandMap[K]["fields"],
+    onFailure?: (message: string) => void,
   ) => Promise<CommandMap[K]["result"] | null>;
   previewOptions?: ComposerOptions;
 }
@@ -54,6 +57,7 @@ export function Composer({
   onDraft,
   disabled,
   busy,
+  stopDisabled,
   onError,
   mutate,
   previewOptions,
@@ -67,6 +71,7 @@ export function Composer({
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState("");
+  const [deliveryError, setDeliveryError] = useState<string | null>(null);
   const input = useRef<HTMLInputElement>(null);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const [highlight, setHighlight] = useState(0);
@@ -79,6 +84,7 @@ export function Composer({
   const optionsId = useId();
   const attachmentsSupported = session.features.includes("attachments");
   const running = ["connecting", "working", "waiting"].includes(session.status);
+  const canSteer = session.features.includes("steering") && session.canSteer === true;
   const locked = disabled || busy || uploading;
   const query = slashQuery(draft);
   const commands = composerCommands(session, previewOptions ?? options);
@@ -185,6 +191,7 @@ export function Composer({
       locked ||
       sending.current ||
       !session.canSend ||
+      (running && !canSteer) ||
       session.desktopRequired ||
       (!draft.trim() && !files.length)
     )
@@ -194,8 +201,10 @@ export function Composer({
       return;
     }
     sending.current = true;
+    setDeliveryError(null);
     setUploading(true);
     const text = draft;
+    const steering = running;
     try {
       const attachmentIds: string[] = [];
       for (const entry of files) {
@@ -219,12 +228,12 @@ export function Composer({
         attachmentIds.push(uploadId);
       }
       if (!active.current) return;
-      setProgress("");
-      const result = await mutate("sendPrompt", {
+      setProgress(steering ? "正在提交引导…" : "");
+      const result = await mutate(steering ? "steerPrompt" : "sendPrompt", {
         sessionId: session.id,
         text,
         ...(attachmentIds.length ? { attachmentIds } : {}),
-      });
+      }, (message) => { if (active.current) setDeliveryError(message); });
       if (result && active.current) {
         onDraft("");
         files.forEach((entry) => {
@@ -234,7 +243,7 @@ export function Composer({
       }
     } catch (error) {
       if (active.current)
-        onError(error instanceof Error ? error.message : "附件发送失败。");
+        setDeliveryError(error instanceof Error ? error.message : "消息发送失败。");
     } finally {
       sending.current = false;
       if (active.current) {
@@ -292,15 +301,15 @@ export function Composer({
         }}
       />
       <PromptBar ref={textarea}
-        draft={draft} placeholder={running ? "补充消息…" : "发送消息…"}
+        draft={draft} placeholder={running ? "引导当前回复…" : "发送消息…"}
         inputDisabled={uploading || busy} locked={locked}
-        canSend={!locked && session.canSend && !session.desktopRequired && (!!draft.trim() || !!files.length)}
-        sending={uploading || busy} running={running} attachmentsSupported={attachmentsSupported}
+        canSend={!locked && session.canSend && (!running || canSteer) && !session.desktopRequired && (!!draft.trim() || !!files.length)}
+        sending={uploading || busy} running={running} stopDisabled={stopDisabled ?? locked} attachmentsSupported={attachmentsSupported}
         configurable={configurable} modelName={session.modelName}
         mode={session.interactionMode === "plan" ? "Plan" : "Build"} effort={session.reasoningEffort || "默认思考"}
         commandsOpen={commandOpen}
         activeCommand={commandOpen && matches.length ? `slash-option-${Math.min(highlight, matches.length - 1)}` : undefined}
-        onDraft={(value) => { setDismissed(null); onDraft(value); }} onPaste={paste} onKeyDown={keyDown}
+        onDraft={(value) => { setDismissed(null); setDeliveryError(null); onDraft(value); }} onPaste={paste} onKeyDown={keyDown}
         onAttach={() => input.current?.click()}
         onModel={() => { setSearch(""); setPanel("model"); }} onOptions={() => setPanel("options")}
         onStop={() => { void mutate("stop", { sessionId: session.id }); }} onSend={() => { void send(); }}
@@ -340,6 +349,7 @@ export function Composer({
           {progress}
         </p>
       )}
+      {deliveryError && <Alert variant="destructive"><AlertDescription>{deliveryError}</AlertDescription></Alert>}
       {!configurable && (
         <p className="composer-notice">更新桌面端后可使用模型选项和附件。</p>
       )}

@@ -65,6 +65,53 @@ Verify all three choices and reopen after each accepted change. Use
 `?permissions=1&busy=1` for disabled controls. These checks are not live desktop
 permission enforcement. Do not send real approvals or prompts to validate them.
 
+Live-output latency failure cases (before implementation):
+
+- Every notification pays a full batching delay, including the first update
+  after an idle period; socket reads add another full idle polling interval.
+- Faster output raises desktop projection/render cadence above the 120ms stream
+  budget, sends unchanged payloads, or creates an unbounded pending queue.
+- Legacy active sessions remain on a 2.5-second refresh, but speeding them up
+  also accelerates idle/error/background reads or overlaps slow requests.
+- Ending/hiding a subscription retains its fast socket-read setting or starts
+  fallback polling while a subscription is already delivering updates.
+
+Before changing the hook, observe `fixtureState.reads` in `/remote-fixture.html?legacy=1`
+with a MutationObserver and retain timestamps across at least three reads. Repeat
+afterwards for running, settled (`finishTurn`), hidden, held-read and failed-read
+states. A subscribed page must not poll. This is a hook scheduling measurement,
+not live phone/relay latency. Keep baseline and changed observations in `target/`.
+
+Remote steering failure cases (before implementation):
+
+- A busy phone send silently queues a follow-up or steers the desktop's selected
+  session instead of the requested session. Only the requested live runtime may
+  receive it; unsupported, connecting or settled sessions must reject it.
+- The phone clears the draft or reports delivery before SteerAccepted. A rejected
+  remote steer must return an error and retain the draft, not fall back to queueing
+  or start a new turn. Existing desktop steer fallback must remain unchanged.
+- Attachments, duplicate prompt text, a stopped runtime, or lost acknowledgements
+  assign a reply to the wrong pending steer or cause automatic resubmission.
+- Old desktops receive the new command despite lacking its capability. Hidden
+  pages continue polling; timed-out requests are blindly retried.
+
+The 500ms update target includes the network and is a target, not a hard guarantee.
+Measure hook scheduling separately from actual phone/relay delivery. A 300ms
+legacy active-session pause leaves roughly 200ms for network and rendering only
+under suitable network conditions. Desktop subscription projections stay at most
+once per 120ms, with no fixed delay after idle; active socket reads use 50ms.
+
+For isolated steering UI behavior open `/remote-fixture.html?steering=1`, enter a
+draft and use the real `发送引导` button. Until `acceptSteer`, the draft must remain
+and the composer reports pending delivery; acceptance appends one user message
+and clears the draft. Use `rejectSteer` on a second draft: the draft and a visible
+error must survive subsequent subscription updates. Neither case creates a queue.
+`?steering=1&unsupported=1` and `?steering=1&legacy=1` must disable busy sending.
+This boundary simulates provider acknowledgement only; it does not validate the
+Rust dispatcher or real provider execution. For latency use
+`?legacy=1&latency=active&readMs=140`; fixtureState exposes bounded readTimes and
+maxInFlightReads. Retain the measured intervals and scope in target artifacts.
+
 Build `bunx vite build --config vite.remote-fixture.config.ts` from `mobile`,
 then serve with the same bounded static preview command. Open the printed origin
 at `/remote-fixture.html`. This separate build aliases only the public client

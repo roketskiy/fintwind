@@ -941,6 +941,44 @@ struct NavigationRailVisualState {
     emphasized_turn: Option<Uuid>,
 }
 
+struct PendingSteer {
+    submission: ComposerSubmission,
+    remote_origin: bool,
+    interrupted: bool,
+    // Remote sends wait for provider acknowledgement. Desktop sends retain
+    // their existing queue fallback and have no response channel.
+    remote_reply: Option<smol::channel::Sender<Result<serde_json::Value, String>>>,
+}
+
+impl From<ComposerSubmission> for PendingSteer {
+    fn from(submission: ComposerSubmission) -> Self {
+        Self { submission, remote_origin: false, interrupted: false, remote_reply: None }
+    }
+}
+
+impl PendingSteer {
+    fn interrupt_remote(&mut self, reason: &str) {
+        if !self.remote_origin { return; }
+        self.interrupted = true;
+        if let Some(reply) = self.remote_reply.take() {
+            // Delivery may have raced the terminal event. Do not claim it was
+            // rejected, and never retry or queue it on the user's behalf.
+            let _ = reply.try_send(Err(format!("引导结果待确认：{reason}，请核对会话后再发送。")));
+        }
+    }
+}
+
+impl SessionRuntime {
+    fn interrupt_remote_steers(&mut self, reason: &str) {
+        for pending in &mut self.pending_steers { pending.interrupt_remote(reason); }
+        // Keep only a small late-ack tombstone tail, separate from active work.
+        let mut discard = self.pending_steers.iter().filter(|pending| pending.interrupted).count().saturating_sub(8);
+        self.pending_steers.retain(|pending| {
+            if pending.interrupted && discard > 0 { discard -= 1; false } else { true }
+        });
+    }
+}
+
 struct SessionRuntime {
     driver: DriverHandle,
     /// Invalidates stale ApplyOptions responses when settings change again or
@@ -950,7 +988,7 @@ struct SessionRuntime {
     pending_events: VecDeque<DriverEvent>,
     /// Presentation metadata for steering messages awaiting the provider's
     /// accepted/rejected acknowledgement, in transport order.
-    pending_steers: VecDeque<ComposerSubmission>,
+    pending_steers: VecDeque<PendingSteer>,
     stream_phase: Option<StreamPhase>,
     stream_remeasure_pending: bool,
     /// The provider's open reasoning fragments (opencode part keys) mapped to

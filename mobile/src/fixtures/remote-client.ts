@@ -5,10 +5,18 @@ import { checkFieldBounds } from "../lib/remote-validation";
 
 const params = new URLSearchParams(location.search);
 const permissions = params.get("permissions") === "1";
+const steering = params.get("steering") === "1";
+const readMs = Math.min(2000, Math.max(0, Number(params.get("readMs")) || 0));
+const readTimes: { start: number; end?: number }[] = [];
+let inFlightReads = 0;
+let maxInFlightReads = 0;
+let steerAck: ((accepted: boolean) => void) | null = null;
+const steers: CommandMap["steerPrompt"]["fields"][] = [];
+const deliveredSteers: { id: string; role: "user"; text: string; turnId: string; turnRunning: boolean }[] = [];
 let runtimeMode: RuntimeMode = "ask";
 const configurations: CommandMap["configureSession"]["fields"][] = [];
 const noop = () => {};
-const historical = Array.from({ length: permissions ? 0 : params.get("activities") === "1" ? 20 : 60 }, (_, index) => [
+const historical = Array.from({ length: permissions || steering || params.has("latency") ? 0 : params.get("activities") === "1" ? 20 : 60 }, (_, index) => [
   { id: `u${index}`, role: "user" as const, text: `历史问题 ${index}` },
   { id: `a${index}`, role: "assistant" as const, text: `历史回答 ${index}\n\n${"用于核对阅读位置的历史内容。".repeat(24)}` },
 ]).flat();
@@ -25,13 +33,14 @@ let waiting = false;
 let activityCount = params.get("activities") === "1" ? 100 : 1;
 let snapshot: ClientSnapshot = { connection: "idle", error: null, pendingScopes: [] };
 const listeners = new Set<() => void>();
-const counters = { reads: 0, watches: 0, activeWatches: 0, mutations: 0, deliveries: 0 };
+const counters = { reads: 0, watches: 0, activeWatches: 0, mutations: 0, deliveries: 0, stops: 0 };
 function publish() {
-  document.documentElement.dataset.fixtureState = JSON.stringify({ ...counters, tick, hidden, held: releaseRead !== null, runtimeMode, configurations });
+  document.documentElement.dataset.fixtureState = JSON.stringify({ ...counters, tick, hidden, held: releaseRead !== null, runtimeMode, configurations, readTimes, inFlightReads, maxInFlightReads, steers, steerPending: steerAck !== null });
 }
 function detail(): SessionDetail {
   return { id: "fixture-session", projectId: "fixture-project", title: "隔离流式会话", status: permissions && params.get("busy") !== "1" ? "idle" : turnEnded ? "idle" : waiting ? "waiting" : "working", messages: [],
-    features: permissions ? ["composerOptions", ...(params.get("legacy") === "1" ? [] : ["sessionDeltas", "sessionPermissions"])] : params.get("legacy") === "1" ? [] : ["sessionDeltas"],
+    features: [...(permissions ? ["composerOptions", ...(params.get("legacy") === "1" ? [] : ["sessionDeltas", "sessionPermissions"])] : params.get("legacy") === "1" ? [] : ["sessionDeltas"]), ...(steering && params.get("legacy") !== "1" ? ["steering"] : [])],
+    ...(steering ? { canSteer: !turnEnded && !steerAck && params.get("unsupported") !== "1" } : {}),
     ...(permissions && params.get("legacy") !== "1" ? { runtimeMode } : {}),
     model: "fixture", modelName: "Fixture", interactionMode: "build", reasoningEffort: "high", truncated: false,
     permission: null, questions: null, desktopRequired: false, canSend: true,
@@ -46,7 +55,9 @@ function detail(): SessionDetail {
         { id: "verify-tool", type: "activity" as const, kind: "tool", title: "验证", target: "", text: "", complete: true, failed: false, truncated: false },
       ] : []),
       { id: "live", role: "assistant", text: `更新 ${tick}\n\n${"持续输出的内容。\n".repeat(Math.min(tick, 180))}`, streaming: !turnEnded, createdAt: 1793635210,
+        ...(steering ? { turnId: "fixture-live", turnRunning: !turnEnded } : {}),
         ...(turnEnded ? { elapsedSeconds: 10 } : {}) },
+      ...deliveredSteers,
     ] };
 }
 function phase(connection: ClientSnapshot["connection"]) {
@@ -63,7 +74,12 @@ export const remoteClient = {
     else if (type === "listSessions") result = { sessions: [], cutoff: 0 };
     else if (type === "getSession") {
       counters.reads++;
+      const timing: { start: number; end?: number } = { start: performance.now() };
+      readTimes.push(timing);
+      if (readTimes.length > 64) readTimes.shift();
+      maxInFlightReads = Math.max(maxInFlightReads, ++inFlightReads);
       publish();
+      try {
       if (holdRead) {
         holdRead = false;
         await new Promise<void>((resolve, reject) => {
@@ -73,11 +89,32 @@ export const remoteClient = {
         });
       }
       if (failRead) { failRead = false; throw new Error("隔离读取失败"); }
+      if (readMs) await new Promise<void>((resolve) => window.setTimeout(resolve, readMs));
       result = detail();
+      } finally { timing.end = performance.now(); inFlightReads--; publish(); }
     } else if (type === "getComposer") result = { canConfigure: permissions, models: [], commands: [] };
     else {
       counters.mutations++;
       if (failMutation) { failMutation = false; throw new Error("隔离操作结果待确认"); }
+      if (type === "stop" && steering) {
+        counters.stops++; turnEnded = true; steerAck?.(false); publish();
+      }
+      if (type === "steerPrompt") {
+        checkFieldBounds(type, _fields);
+        const fields = _fields as CommandMap["steerPrompt"]["fields"];
+        if (!steering || !detail().canSteer || fields.sessionId !== "fixture-session") throw new Error("当前会话无法接收引导。");
+        steers.push({ ...fields });
+        await new Promise<void>((resolve, reject) => {
+          const timer = window.setTimeout(() => { steerAck = null; publish(); reject(new Error("引导结果待确认")); }, 60000);
+          steerAck = (accepted) => {
+            window.clearTimeout(timer); steerAck = null;
+            if (accepted) { deliveredSteers.push({ id: `steer-${steers.length}`, role: "user", text: fields.text, turnId: "fixture-live", turnRunning: true }); resolve(); }
+            else reject(new Error("引导未交付：隔离拒绝"));
+            publish();
+          };
+          publish();
+        });
+      }
       if (type === "configureSession") {
         checkFieldBounds(type, _fields);
         if (!permissions || detail().status !== "idle") throw new Error("会话当前不可配置");
@@ -114,6 +151,8 @@ export const fixture = {
   releaseRead: () => releaseRead?.(),
   failMutation: () => { failMutation = true; },
   failWatch: () => (failWatch ?? noop)(),
+  acceptSteer: () => steerAck?.(true),
+  rejectSteer: () => steerAck?.(false),
   visibility(value: boolean) { hidden = value; document.dispatchEvent(new Event("visibilitychange")); publish(); },
   state: () => ({ ...counters, tick, hidden, held: releaseRead !== null }),
 };

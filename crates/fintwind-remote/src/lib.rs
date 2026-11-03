@@ -175,6 +175,12 @@ pub enum RemoteCommand {
         #[serde(default)]
         attachment_ids: Vec<Uuid>,
     },
+    SteerPrompt {
+        session_id: Uuid,
+        text: String,
+        #[serde(default)]
+        attachment_ids: Vec<Uuid>,
+    },
     UploadChunk {
         session_id: Uuid,
         upload_id: Uuid,
@@ -252,6 +258,11 @@ impl RemoteCommand {
                     })
             }
             Self::SendPrompt {
+                session_id,
+                text,
+                attachment_ids,
+            }
+            | Self::SteerPrompt {
                 session_id,
                 text,
                 attachment_ids,

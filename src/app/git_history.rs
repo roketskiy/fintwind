@@ -1,7 +1,7 @@
 use crate::git_history::{CommitEntry, CommitGraph, GraphHalf};
 use crate::theme::{code_px, ui_px};
 use crate::ui::ActivationExt;
-use gpui::{PathBuilder, relative, size};
+use gpui::{PathBuilder, Point, Pixels, relative, size};
 
 use std::path::Path as StdPath;
 
@@ -306,7 +306,7 @@ impl Fintwind {
         let handle = self.menu_handle("history-branch-filter", cx);
         let filter_label = branch_filter
             .clone()
-            .unwrap_or_else(|| tr!("git_history.head"));
+            .unwrap_or_else(|| tr!("git_history.all_refs"));
         let menu_weak = weak.clone();
         let filter = dropdown_menu(
             MenuChip::new("history-branch-filter")
@@ -322,7 +322,7 @@ impl Fintwind {
                 let mut items = Vec::new();
                 let head_weak = menu_weak.clone();
                 items.push(
-                    MenuItem::new(tr!("git_history.head"), move |_, cx| {
+                    MenuItem::new(tr!("git_history.all_refs"), move |_, cx| {
                         let _ = head_weak.update(cx, |this, cx| {
                             this.set_history_branch_filter(None, cx);
                         });
@@ -662,8 +662,11 @@ impl Fintwind {
     }
 }
 
-/// Ely-style lane cell, painted independently for each virtualized row. The
-/// shared span preserves connections even when neighboring rows are unmounted.
+/// Branch-graph lane cell, painted independently for each virtualized row.
+/// The shared span preserves connections even when neighboring rows are
+/// unmounted. Lane geometry follows VSCode's `renderSCMHistoryItemGraph`
+/// (`swimlanes`, rounded `curve` bends); branch colors cycle its five
+/// `scmGraph.foreground` registrations so a lane keeps its color.
 fn graph_cell(
     row: crate::git_history::GraphRow,
     span: usize,
@@ -673,13 +676,13 @@ fn graph_cell(
     selected: bool,
     theme: Theme,
 ) -> AnyElement {
-    let palette = [
-        theme.gauge,
-        theme.success,
-        theme.code_keyword,
-        theme.warning,
-        theme.link,
-        theme.accent,
+    // VSCode scmGraph.foreground1-5: #FFB000 #DC267F #994F00 #40B0A6 #B66DFF.
+    let palette: [Hsla; 5] = [
+        rgb(0xFFB000).into(),
+        rgb(0xDC267F).into(),
+        rgb(0x994F00).into(),
+        rgb(0x40B0A6).into(),
+        rgb(0xB66DFF).into(),
     ];
     canvas(
         |_, _, _| (),
@@ -689,24 +692,40 @@ fn graph_cell(
             let top = bounds.origin.y;
             let middle = top + bounds.size.height / 2.0;
             let bottom = top + bounds.size.height;
-            for stroke in &row.strokes {
-                let (from, to) = match stroke.half {
-                    GraphHalf::Top => (point(x(stroke.from), top), point(x(stroke.to), middle)),
-                    GraphHalf::Bottom => {
-                        (point(x(stroke.from), middle), point(x(stroke.to), bottom))
-                    }
-                    GraphHalf::Through => (point(x(stroke.from), top), point(x(stroke.to), bottom)),
-                };
-                let mut path = PathBuilder::stroke(px(1.5));
+            // One S-curve with vertical tangents at both ends, like VSCode's
+            // paired arc bends: straight verticals stay straight, lane hops
+            // bend smoothly instead of cutting diagonally across lanes.
+            let mut curve = |from: Point<Pixels>, to: Point<Pixels>, color: Hsla| {
+                let mut path = PathBuilder::stroke(px(2.0));
                 path.move_to(from);
-                path.line_to(to);
+                if (f32::from(from.x) - f32::from(to.x)).abs() < 0.5 {
+                    path.line_to(to);
+                } else {
+                    let mid = point((from.x + to.x) / 2.0, (from.y + to.y) / 2.0);
+                    path.curve_to(mid, point(from.x, mid.y));
+                    path.curve_to(to, point(to.x, mid.y));
+                }
                 if let Ok(path) = path.build() {
-                    window.paint_path(path, palette[stroke.from.max(stroke.to) % palette.len()]);
+                    window.paint_path(path, color);
+                }
+            };
+            for stroke in &row.strokes {
+                let color = palette[stroke.color % palette.len()];
+                match stroke.half {
+                    GraphHalf::Top => {
+                        curve(point(x(stroke.from), top), point(x(stroke.to), middle), color)
+                    }
+                    GraphHalf::Bottom => {
+                        curve(point(x(stroke.from), middle), point(x(stroke.to), bottom), color)
+                    }
+                    GraphHalf::Through => {
+                        curve(point(x(stroke.from), top), point(x(stroke.to), bottom), color)
+                    }
                 }
             }
             let center = point(x(row.lane), middle);
             let dot = step.min(px(16.0)) * 0.45;
-            let color = palette[row.lane % palette.len()];
+            let color = palette[row.color % palette.len()];
             let paint_dot = |window: &mut Window, diameter: Pixels, color: Hsla| {
                 window.paint_quad(
                     fill(
@@ -719,12 +738,19 @@ fn graph_cell(
                     .corner_radii(diameter / 2.0),
                 );
             };
-            if is_head || selected {
-                paint_dot(window, dot + px(5.0), color.opacity(0.22));
-            }
-            paint_dot(window, dot, color);
-            if merge {
-                paint_dot(window, dot * 0.45, theme.surface);
+            if is_head {
+                // VSCode HEAD node: outer ring plus inner dot.
+                paint_dot(window, dot + px(5.0), color);
+                paint_dot(window, dot * 0.5, theme.surface);
+            } else {
+                if selected {
+                    paint_dot(window, dot + px(5.0), color.opacity(0.22));
+                }
+                paint_dot(window, dot, color);
+                if merge {
+                    // VSCode multi-parent node: outer ring with a smaller core.
+                    paint_dot(window, dot * 0.45, theme.surface);
+                }
             }
         },
     )
@@ -854,6 +880,8 @@ fn commit_details(commit: &CommitEntry, index: usize, now: u64, theme: Theme) ->
 }
 
 /// Ref decorations stay bounded so long branch names do not consume a row.
+/// Colors follow VSCode's history-item refs: local branches blue, remote
+/// branches purple, tags amber, HEAD solid. Icons match each kind.
 fn ref_chip(
     id: String,
     label: String,
@@ -862,10 +890,15 @@ fn ref_chip(
     theme: &Theme,
     tooltip: Option<String>,
 ) -> Stateful<Div> {
-    let color = if is_head {
-        theme.accent_text
+    let is_tag = label.starts_with("tag: ");
+    let (color, icon_path) = if is_head {
+        (theme.on_accent, None)
+    } else if is_tag {
+        (theme.warning_text, Some("icons/tag.svg"))
+    } else if remote {
+        (theme.code_keyword, Some("icons/globe.svg"))
     } else {
-        theme.text_tertiary
+        (theme.link, Some("icons/git-branch.svg"))
     };
     div()
         .id(SharedString::from(id))
@@ -877,8 +910,9 @@ fn ref_chip(
         .rounded(px(4.0))
         .flex()
         .items_center()
-        .when(remote, |chip| {
-            chip.gap(px(3.0)).child(icon("icons/globe.svg", 9.0, color))
+        .gap(px(3.0))
+        .when_some(icon_path, |chip, path| {
+            chip.child(icon(path, 9.0, color))
         })
         .tooltip(Tooltip::text(tooltip.unwrap_or_else(|| {
             if remote {
@@ -889,6 +923,7 @@ fn ref_chip(
         })))
         .text_size(ui_px(10.0))
         .text_color(color)
-        .bg(theme.overlay)
+        .when(is_head, |chip| chip.bg(theme.accent))
+        .when(!is_head, |chip| chip.bg(theme.overlay))
         .child(div().min_w_0().truncate().child(SharedString::from(label)))
 }

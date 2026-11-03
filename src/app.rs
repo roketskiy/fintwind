@@ -1824,9 +1824,6 @@ pub struct Fintwind {
     source_control_discard: Option<source_control::DiscardRequest>,
     /// The commit message input of the source-control page's commit area.
     source_control_commit_input: Entity<ComposerInput>,
-    /// Viewport of the commit message input above. Long messages scroll
-    /// inside the fixed box instead of growing into the file groups.
-    source_control_commit_scroll: ScrollHandle,
     /// Local branches of the pinned-or-followed workspace, for the branch
     /// menu. Refreshed alongside each status query; `None` until one lands.
     source_control_branches: Option<Arc<fintwind_client::git::BranchSnapshot>>,
@@ -3981,7 +3978,6 @@ impl Fintwind {
                 source_control_busy: None,
                 source_control_discard: None,
                 source_control_commit_input,
-                source_control_commit_scroll: ScrollHandle::new(),
                 source_control_branches: None,
                 source_control_branch_generation: 0,
                 source_control_branch_create_input,

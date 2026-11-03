@@ -1,0 +1,4 @@
+html, body { height: 100%; margin: 0; background: #eceeef; }
+html.dark, html.dark body { background: #101113; }
+body { display: flex; justify-content: center; align-items: center; }
+iframe { display: block; max-width: 100vw; height: min(860px, 100dvh); border: 0; }

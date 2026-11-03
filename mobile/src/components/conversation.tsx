@@ -130,12 +130,14 @@ const ActivityBranch = React.memo(function ActivityBranch({ activities, turnActi
   </Collapsible>;
 }, (previous, next) => previous.turnActive === next.turnActive && previous.activities.length === next.activities.length && previous.activities.every((activity, index) => activity === next.activities[index]));
 
+interface TranscriptGroup {
+  id: string;
+  message?: RemoteMessage;
+  activities?: RemoteActivity[];
+}
+
 function transcriptGroups(entries: TranscriptEntry[]) {
-  const groups: {
-    id: string;
-    message?: RemoteMessage;
-    activities?: RemoteActivity[];
-  }[] = [];
+  const groups: TranscriptGroup[] = [];
   for (const entry of entries) {
     if (entry.type !== "activity")
       groups.push({ id: `message:${entry.id}`, message: entry });
@@ -148,12 +150,68 @@ function transcriptGroups(entries: TranscriptEntry[]) {
   return groups;
 }
 
+function transcriptTurns(groups: TranscriptGroup[]) {
+  const turns: { id: string; turnId?: string; groups: { group: TranscriptGroup; index: number }[] }[] = [];
+  groups.forEach((group, index) => {
+    const turnId = (group.message ?? group.activities?.[0])?.turnId;
+    const previous = turns.at(-1);
+    // Provider turn IDs keep steering prompts in their original turn. Older
+    // desktops can only delimit turns by the next user message.
+    if (previous && (turnId ? previous.turnId === turnId : !previous.turnId && group.message?.role !== "user")) {
+      previous.groups.push({ group, index });
+    } else {
+      turns.push({ id: `turn:${turnId ?? group.id}`, turnId, groups: [{ group, index }] });
+    }
+  });
+  return turns;
+}
+
+function TurnTranscript({ turn, settled, renderGroup }: {
+  turn: ReturnType<typeof transcriptTurns>[number];
+  settled: boolean;
+  renderGroup: (group: TranscriptGroup, index: number, nested?: boolean) => React.ReactNode;
+}) {
+  const { end: readingAboveLatest } = useMessageScrollerScrollable();
+  const [deferCollapse, setDeferCollapse] = React.useState(!settled);
+  const [expanded, setExpanded] = React.useState(false);
+  React.useEffect(() => {
+    if (!settled) setDeferCollapse(true);
+    else if (!readingAboveLatest) setDeferCollapse(false);
+  }, [settled, readingAboveLatest]);
+  const preceding = turn.groups.slice(0, -1);
+  // The opening user message is never process content. Later user messages
+  // with the same provider turn ID are steering and may share the disclosure.
+  const prompt = preceding[0]?.group.message?.role === "user" ? preceding[0] : undefined;
+  const history = prompt ? preceding.slice(1) : preceding;
+  const answer = turn.groups.at(-1)!;
+  const disclose = settled && history.length > 0 && !(deferCollapse && readingAboveLatest);
+  return <>
+    {prompt && renderGroup(prompt.group, prompt.index)}
+    {disclose ? (
+      <MessageScrollerItem key={turn.id} messageId={turn.id} data-transcript-kind="turn-history">
+        <Collapsible className="bui-turn-history" open={expanded} onOpenChange={setExpanded}>
+          <CollapsibleTrigger className="bui-branch-trigger">
+            <ChevronRightIcon className="bui-branch-chevron" />
+            <span>本轮过程</span>
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="bui-turn-history-content">
+              {history.map(({ group, index }) => renderGroup(group, index, true))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      </MessageScrollerItem>
+    ) : history.map(({ group, index }) => renderGroup(group, index))}
+    {renderGroup(answer.group, answer.index)}
+  </>;
+}
+
 export interface ConversationProps {
   session: SessionDetail;
   disabled: boolean;
   busy: boolean;
   onPermission: (optionId: string) => void;
-  onAnswers: (answers: { questionId: string; answers: string[] }[]) => void;
+  onAnswers: (answers: { questionId: string; answers: string[] }[]) => Promise<boolean> | void;
   onError: (message: string) => void;
 }
 
@@ -378,6 +436,20 @@ export function Conversation({
       if (message.responseComplete && !message.streaming) responseFooters.add(message.id);
     }
   }
+  const turns = transcriptTurns(groups);
+  const renderGroup = (group: TranscriptGroup, index: number, nested = false) => {
+    const message = group.message;
+    const activity = group.activities?.[0];
+    const segmentRunning = activity?.turnRunning ?? (turnActive && index > currentTurnStart);
+    const lastSegmentReply = activity?.turnId ? lastReplyByTurn.get(activity.turnId) ?? -1 : lastReply;
+    const intermediate = Boolean(message?.role === "assistant" && !responseFooters.has(message.id) && index < groups.length - 1);
+    const kind = group.activities ? "activity" : message?.role === "user" ? "prompt" : intermediate ? "progress" : "answer";
+    const content = message ? <MessageRow message={message} responseComplete={responseFooters.has(message.id)} onError={onError} />
+      : <ActivityBranch activities={group.activities ?? []} turnActive={segmentRunning && index > lastSegmentReply} />;
+    // A closed turn registers one measured scroller item, never nested items.
+    return nested ? <div key={group.id} data-message-id={group.id} data-transcript-kind={kind}>{content}</div>
+      : <MessageScrollerItem key={group.id} messageId={group.id} data-transcript-kind={kind}>{content}</MessageScrollerItem>;
+  };
   const pending = session.permission !== null || session.questions !== null;
   const desktopBlocked = session.desktopRequired;
   const empty =
@@ -400,12 +472,13 @@ export function Conversation({
             <EmptyTitle>开始新的对话</EmptyTitle>
           </EmptyHeader>
         </Empty>
+        <TodoCapsule key={session.id} todos={session.todos} changes={session.workspaceChanges} usage={session.usage} />
       </div>
     );
   }
 
   return (
-    <div className="conversation-body flex min-h-0 min-w-0 flex-1 flex-col" data-capsule-clearance={Boolean(session.todos?.total || session.workspaceChanges || session.features.includes("todoList") || session.features.includes("workspaceChanges")) || undefined}>
+    <div className="conversation-body flex min-h-0 min-w-0 flex-1 flex-col" data-capsule-clearance>
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller>
           <MessageScrollerViewport aria-label="消息" preserveScrollOnPrepend>
@@ -421,30 +494,13 @@ export function Conversation({
                 </MessageScrollerItem>
               ) : null}
 
-              {groups.map((group, index) => {
-                const message = group.message;
-                const activity = group.activities?.[0];
-                const segmentRunning = activity?.turnRunning ?? (turnActive && index > currentTurnStart);
-                const lastSegmentReply = activity?.turnId ? lastReplyByTurn.get(activity.turnId) ?? -1 : lastReply;
-                const intermediate = Boolean(message?.role === "assistant" && !responseFooters.has(message.id) && index < groups.length - 1);
-                const kind = group.activities ? "activity" : message?.role === "user" ? "prompt" : intermediate ? "progress" : "answer";
-                return (
-                  <MessageScrollerItem
-                    key={group.id}
-                    messageId={group.id}
-                    data-transcript-kind={kind}
-                  >
-                    {group.message ? (
-                      <MessageRow
-                        message={group.message}
-                        responseComplete={responseFooters.has(group.message.id)}
-                        onError={onError}
-                      />
-                    ) : (
-                      <ActivityBranch activities={group.activities ?? []} turnActive={segmentRunning && index > lastSegmentReply} />
-                    )}
-                  </MessageScrollerItem>
-                );
+              {turns.map((turn) => {
+                const last = turn.groups.at(-1)!;
+                const message = last.group.message;
+                const settled = Boolean(message?.role === "assistant" && responseFooters.has(message.id)
+                  && !turn.groups.some(({ group }) => (group.message ?? group.activities?.[0])?.turnRunning === true)
+                  && (message.turnRunning === false || !turnActive || last.index < currentTurnStart));
+                return <TurnTranscript key={`${session.id}:${turn.id}`} turn={turn} settled={settled} renderGroup={renderGroup} />;
               })}
 
               {desktopBlocked ? (
@@ -503,7 +559,7 @@ export function Conversation({
           <MessageScrollerButton />
         </MessageScroller>
       </MessageScrollerProvider>
-      <TodoCapsule key={session.id} todos={session.todos} changes={session.workspaceChanges} />
+      <TodoCapsule key={session.id} todos={session.todos} changes={session.workspaceChanges} usage={session.usage} />
     </div>
   );
 }

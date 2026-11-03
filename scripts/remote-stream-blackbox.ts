@@ -32,6 +32,11 @@ for (const [index, sealed] of bundle.frames.entries()) {
   plainFrames.push(frame);
   const start = performance.now();
   const detail = updates.apply(frame);
+  const expectedUsage = bundle.expected[index].usage;
+  if (expectedUsage === null ? detail.usage !== null : !detail.usage ||
+    ["contextTokens", "contextWindow", "totalTokens", "cacheReadTokens", "promptTokens"].some(key =>
+      detail.usage?.[key as keyof NonNullable<typeof detail.usage>] !== expectedUsage[key]))
+    throw new Error(`Usage projection mismatch at ${index}`);
   if (detail.runtimeMode !== bundle.expected[index].runtimeMode) throw new Error(`Permission projection mismatch at ${index}`);
   if (detail.runtimeMode) permissionModes.add(detail.runtimeMode);
   maximumApplyMs = Math.max(maximumApplyMs, performance.now() - start);
@@ -53,11 +58,14 @@ rejected({ ...second, edits: [{ path: ["entries", "999999"], set: {} }] }, "arra
 rejected({ ...second, edits: [{ path: ["entries", "121", "text"], append: "x".repeat(65537) }] }, "oversized text");
 rejected({ ...second, revision: "invalid" }, "revision format");
 rejected({ ...second, edits: [{ path: ["runtimeMode"], set: "auto" }, { path: ["revision"], set: second.revision }] }, "permission mode");
+rejected({ ...second, edits: [{ path: ["usage", "totalTokens"], set: -1 }, { path: ["revision"], set: second.revision }] }, "negative usage");
+rejected({ ...second, edits: [{ path: ["usage", "contextTokens"], set: 1.5 }, { path: ["revision"], set: second.revision }] }, "fractional usage");
+rejected({ ...second, edits: [{ path: ["usage", "promptTokens"], set: Number.MAX_SAFE_INTEGER + 1 }, { path: ["revision"], set: second.revision }] }, "unsafe usage");
 let replayRejected = false;
 try { await openEnvelope(bundle.frames[1], receiveKey, 2); } catch { replayRejected = true; }
 if (!replayRejected || reused < 50 || permissionModes.size !== 3) throw new Error("Replay, structural sharing or permission round-trip failed");
 const report = { ...bundle.metrics, receiverMaximumApplyMs: maximumApplyMs, reusedHistoryFrames: reused,
-  invalidCasesRejected: 7, permissionModes: [...permissionModes], plaintextReduction: 1 - bundle.metrics.updateBytes / bundle.metrics.fullSnapshotBytes,
+   invalidCasesRejected: 10, permissionModes: [...permissionModes], usageFramesVerified: bundle.frames.length, plaintextReduction: 1 - bundle.metrics.updateBytes / bundle.metrics.fullSnapshotBytes,
   scope: "synthetic Rust-to-TypeScript encrypted codec integration; not a live desktop/relay test" };
 await Bun.write(resolve(artifacts, "report.json"), JSON.stringify(report, null, 2));
 await Bun.write(resolve(artifacts, "browser-fixture.json"), JSON.stringify({ sessionId: bundle.sessionId, frames: plainFrames }));

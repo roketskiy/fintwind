@@ -9,5 +9,5 @@ export default defineConfig({
     { find: "@/lib/remote-client", replacement: fileURLToPath(new URL("./src/fixtures/remote-client.ts", import.meta.url)) },
     { find: "@", replacement: fileURLToPath(new URL("./src", import.meta.url)) },
   ] },
-  build: { outDir: "../target/mobile-visual", emptyOutDir: true, rollupOptions: { input: ["remote-fixture.html", "recorded-history.html"] } },
+  build: { ...base.build, outDir: "../target/mobile-visual", emptyOutDir: true, rollupOptions: { input: ["remote-fixture.html", "recorded-history.html", "ui-frame.html"] } },
 });

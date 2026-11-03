@@ -15,6 +15,8 @@ import {
 import { GlideMenu, PixelLoader } from "@/components/beautiful/primitives";
 import { GoalCard } from "@/components/goal-card";
 import { PhoneSettings } from "@/components/phone-settings";
+import { TaskAlerts } from "@/components/task-alerts";
+import { errorMessage } from "@/lib/error-message";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -354,7 +356,7 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
           {app.error && app.connection !== "unpaired" && (
             <Alert variant="destructive" className="mb-4">
               <AlertTitle>无法完成操作</AlertTitle>
-              <AlertDescription>{app.error}</AlertDescription>
+              <AlertDescription>{errorMessage(app.error)}</AlertDescription>
             </Alert>
           )}
           {projectPending && (
@@ -496,10 +498,11 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
         {app.error && (
           <Alert variant="destructive" className="screen-alert">
             <AlertTitle>无法完成操作</AlertTitle>
-            <AlertDescription>{app.error}</AlertDescription>
+            <AlertDescription>{errorMessage(app.error)}</AlertDescription>
           </Alert>
         )}
         {detail?.goal && <GoalCard goal={detail.goal} disabled={disabled || !detail.canSend || detail.desktopRequired} onControl={(action) => { void app.mutate("sendPrompt", { sessionId: detail.id, text: `/goal ${action}` }); }} />}
+        {detail?.failureReason && <Alert variant="destructive" className="screen-alert"><AlertTitle>任务失败</AlertTitle><AlertDescription className="error-reason">{errorMessage(detail.failureReason)}</AlertDescription></Alert>}
         {detail ? (
           <Suspense
             fallback={
@@ -530,13 +533,14 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
                     optionId,
                   });
               }}
-              onAnswers={(answers) => {
+              onAnswers={async (answers) => {
                 if (detail.questions)
-                  void app.mutate("answerQuestions", {
+                  return Boolean(await app.mutate("answerQuestions", {
                     sessionId: detail.id,
                     requestId: detail.questions.requestId,
                     answers,
-                  });
+                  }));
+                return false;
               }}
             />
             <div className="composer-status">
@@ -582,6 +586,7 @@ export function RemoteView({ app, previewOptions }: { app: ReturnType<typeof use
           </Empty>
         )}
       </section>
+      <TaskAlerts connection={app.connection} viewing={app.page === "conversation" ? { sessionId: app.sessionId, projectId: app.projectId } : null} onOpen={app.openSession} />
     </main>
   );
 }

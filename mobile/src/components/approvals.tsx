@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 import { textBytes } from "@/lib/remote-validation";
+import { errorMessage } from "@/lib/error-message";
 import { RadioGroup } from "@/components/ui/radio-group";
 import {
   ApprovalAction,
@@ -40,7 +41,7 @@ function optionDescription(option: Question["options"][number]) {
 }
 
 function questionKey(questions: Questions) {
-  return JSON.stringify(questions);
+  return JSON.stringify([questions.requestId, questions.questions.map(question => [question.id, question.question, question.multiSelect, question.options.map(option => [option.label, option.description])])]);
 }
 
 function controlId(formId: string, questionIndex: number, suffix: string) {
@@ -131,7 +132,7 @@ export function QuestionsCard({
   questions: Questions;
   disabled: boolean;
   busy: boolean;
-  onAnswers: (answers: { questionId: string; answers: string[] }[]) => void;
+  onAnswers: (answers: { questionId: string; answers: string[] }[]) => Promise<boolean> | void;
 }) {
   return (
     <QuestionForm
@@ -153,7 +154,7 @@ function QuestionForm({
   questions: Questions;
   disabled: boolean;
   busy: boolean;
-  onAnswers: (answers: { questionId: string; answers: string[] }[]) => void;
+  onAnswers: (answers: { questionId: string; answers: string[] }[]) => Promise<boolean> | void;
 }) {
   const formId = React.useId();
   const [answers, setAnswers] = React.useState<AnswerState[]>(() =>
@@ -165,8 +166,14 @@ function QuestionForm({
   // same validation and a single final submit.
   const [step, setStep] = React.useState(0);
   const [reviewing, setReviewing] = React.useState(false);
+  const submitting = React.useRef(false);
+  const [submitted, setSubmitted] = React.useState(false);
+  const [sending, setSending] = React.useState(false);
+  const [submissionError, setSubmissionError] = React.useState<string | null>(null);
+  const review = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => { if (reviewing) review.current?.focus(); }, [reviewing]);
   const total = questions.questions.length;
-  const locked = disabled || busy;
+  const locked = disabled || busy || sending || submitted;
   const pendingFocus = React.useRef<number | null>(null);
   React.useLayoutEffect(() => {
     if (pendingFocus.current === null || reviewing) return;
@@ -332,11 +339,8 @@ function QuestionForm({
     setStep(questionIndex);
   }
 
-  function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-
-    if (locked) return;
-    if (!reviewing) { continueFrom(step); return; }
+  async function submit() {
+    if (locked || submitting.current || !reviewing) return;
 
     const nextErrors = questions.questions.map((_, index) => errorFor(index));
 
@@ -350,25 +354,28 @@ function QuestionForm({
       return;
     }
 
-    onAnswers(
-      questions.questions.map((question, index) => ({
-        questionId: question.id,
-        answers: resolveAnswers(index),
-      })),
-    );
+    submitting.current = true;
+    setSubmissionError(null);
+    setSending(true);
+    try {
+      const accepted = await onAnswers(questions.questions.map((question, index) => ({ questionId: question.id, answers: resolveAnswers(index) })));
+      if (accepted === true) setSubmitted(true);
+    } catch (error) {
+      setSubmissionError(errorMessage(error, "提交失败，请重试。"));
+    } finally { submitting.current = false; setSending(false); }
   }
 
   return (
     <form
       noValidate
-      aria-busy={busy || undefined}
-      onSubmit={submit}
+      aria-busy={busy || sending || undefined}
+      onSubmit={(event) => event.preventDefault()}
       className="min-w-0"
     >
       <Card size="sm" className="apc-card min-w-0">
         <CardContent className="min-w-0">
           {reviewing ? (
-            <div aria-live="polite" className="apc-review">
+            <div ref={review} tabIndex={-1} aria-label="检查回答" aria-live="polite" className="apc-review">
               {questions.questions.map((question, questionIndex) => {
                 const resolved = resolveAnswers(questionIndex);
                 return (
@@ -526,6 +533,7 @@ function QuestionForm({
               );
             })
           )}
+          {submissionError && <FieldError>{submissionError}</FieldError>}
         </CardContent>
         <CardFooter className="justify-between gap-3">
           <div className="apc-step" aria-label="问题导航">
@@ -566,12 +574,13 @@ function QuestionForm({
             )}
           </div>
           {reviewing ? (
-            <ApprovalAction type="submit" disabled={locked}>
-              {busy ? <Spinner data-icon="inline-start" /> : null}
-              提交
+            <ApprovalAction key="submit" type="button" disabled={locked} onClick={() => void submit()}>
+              {busy || sending ? <Spinner data-icon="inline-start" /> : null}
+              {submitted ? "已提交" : "提交"}
             </ApprovalAction>
           ) : (
             <ApprovalAction
+              key="review"
               type="button"
               disabled={locked}
               onClick={() => continueFrom(step)}

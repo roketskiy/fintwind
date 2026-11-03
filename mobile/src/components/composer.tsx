@@ -1,7 +1,6 @@
 // Prompt layout and token selection adapted from Beautiful UI PromptBar (MIT).
 import { useEffect, useId, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
 import {
-  CheckIcon,
   CloseIcon,
   PaperclipIcon,
   TerminalIcon,
@@ -14,10 +13,11 @@ import { composerCommands, slashQuery, type ComposerCommand } from "@/lib/compos
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
+import { ModelPicker } from "@/components/model-picker";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import "./beautiful/segmented-control.css";
 import { remoteClient } from "@/lib/remote-client";
+import { errorMessage } from "@/lib/error-message";
 import type {
   CommandMap,
   CommandType,
@@ -67,7 +67,6 @@ export function Composer({
   >(null);
   const [options, setOptions] = useState<ComposerOptions | null>(null);
   const [optionsLoading, setOptionsLoading] = useState(false);
-  const [search, setSearch] = useState("");
   const [files, setFiles] = useState<PickedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const [progress, setProgress] = useState("");
@@ -311,7 +310,7 @@ export function Composer({
         activeCommand={commandOpen && matches.length ? `slash-option-${Math.min(highlight, matches.length - 1)}` : undefined}
         onDraft={(value) => { setDismissed(null); setDeliveryError(null); onDraft(value); }} onPaste={paste} onKeyDown={keyDown}
         onAttach={() => input.current?.click()}
-        onModel={() => { setSearch(""); setPanel("model"); }} onOptions={() => setPanel("options")}
+        onModel={() => setPanel("model")} onOptions={() => setPanel("options")}
         onStop={() => { void mutate("stop", { sessionId: session.id }); }} onSend={() => { void send(); }}
         attachments={!!files.length && (
         <div className="attachment-tray">
@@ -349,12 +348,12 @@ export function Composer({
           {progress}
         </p>
       )}
-      {deliveryError && <Alert variant="destructive"><AlertDescription>{deliveryError}</AlertDescription></Alert>}
+      {deliveryError && <Alert variant="destructive"><AlertDescription className="error-reason">{errorMessage(deliveryError)}</AlertDescription></Alert>}
       {!configurable && (
         <p className="composer-notice">更新桌面端后可使用模型选项和附件。</p>
       )}
-      <PopoverContent side="top" align="start" sideOffset={8} className="composer-popover">
-        <PopoverTitle>{panel === "model" ? "模型" : "会话选项"}</PopoverTitle>
+      <PopoverContent side="top" align="start" sideOffset={8} className={panel === "model" ? "composer-popover model-picker-popup" : "composer-popover"}>
+        <PopoverTitle className={panel === "model" ? "sr-only" : undefined}>{panel === "model" ? "选择模型" : "会话选项"}</PopoverTitle>
         <div className="composer-panel">
             {optionsLoading && !catalog ? (
               <PixelLoader label="正在加载选项" />
@@ -363,47 +362,13 @@ export function Composer({
             ) : (
               <>
                 {panel === "model" && (
-                  <>
-                    <FieldGroup>
-                      <Field>
-                        <FieldLabel className="sr-only" htmlFor="model-search">
-                          搜索模型
-                        </FieldLabel>
-                        <Input
-                          id="model-search"
-                          placeholder="搜索模型或提供商"
-                          value={search}
-                          onChange={(event) => setSearch(event.target.value)}
-                        />
-                      </Field>
-                    </FieldGroup>
-                    <div className="model-list">
-                      {catalog.models
-                        .filter((item) =>
-                          `${item.name} ${item.provider} ${item.id}`
-                            .toLowerCase()
-                            .includes(search.toLowerCase()),
-                        )
-                        .map((item) => (
-                          <Button
-                            key={item.id}
-                            variant="row"
-                            disabled={
-                              locked || running || !catalog.canConfigure
-                            }
-                            onClick={() => void configure({ model: item.id })}
-                          >
-                            <span>
-                              <strong>{item.name}</strong>
-                              <small>{item.provider || item.id}</small>
-                            </span>
-                            {item.id === session.model && (
-                              <CheckIcon data-icon="inline-end" />
-                            )}
-                          </Button>
-                        ))}
-                    </div>
-                  </>
+                  <ModelPicker catalog={catalog} selected={session.model} disabled={locked || running || !catalog.canConfigure}
+                    onSelect={async model => {
+                      let failure = "无法切换模型，请重试。";
+                      const result = await mutate("configureSession", { sessionId: session.id, model }, message => { failure = errorMessage(message); });
+                      if (result && active.current) { setPanel(null); return null; }
+                      return failure;
+                    }} />
                 )}
                 {panel === "options" && (
                   <FieldGroup className="session-options">

@@ -46,6 +46,131 @@ connection and cannot send messages.
 
 ## Hook and view checks
 
+Mobile UI correction failure cases (before implementation, 2026-11-03):
+
+- Provider groups wrap into a wall of chips, squeeze model names on a 320px
+  screen, or make the popup height jump. Both columns must scroll independently;
+  long provider/model names must not overflow, and keyboard focus stays visible.
+- Search loses cross-provider matches, favorites lose desktop ordering, selecting
+  a model closes on failure, or a rapid double click submits twice.
+- Several reminders cover the transcript with large cards. The default surface
+  must be one compact row, with explicit access to queued reminders and session
+  navigation. Closing a reminder must not activate the session behind it.
+- TeX bracket delimiters are unescaped by Markdown before reaching KaTeX;
+  one-line display math becomes inline math, or common equation environments
+  stay raw. Existing dollar math must still work, including aligned equations.
+- KaTeX markup and stylesheet resolve different versions, equation tags collide,
+  inline formulas dominate the body text, or wide display math shrinks to an
+  unreadable size. Verify font sizes, tag geometry and horizontal scrolling.
+- A delimiter normalization rewrites fenced, indented or inline code, escaped
+  backslashes, link targets, or TeX already inside dollar math. Streaming partial
+  expressions must not swallow subsequent prose. Unsafe math remains untrusted.
+- A diagram smaller than the viewport stays left-aligned. Center fitting images
+  with equal side margins; oversized images must retain their width and expose
+  both edges through scrolling, without negative margins hiding the start.
+
+Use the isolated workflow fixture and save a correction-specific artifact. Check
+actual screenshots in both themes and a narrow viewport; do not deploy until the
+user has seen and approved the revised UI.
+
+Mobile workflow completion failure cases (before implementation):
+
+- Page-open reminders announce old completed history, repeat on every refresh,
+  confuse a stopped task with success, or open a same-ID task in the wrong
+  workspace. Hidden pages must not poll; disconnected/legacy desktops must not
+  trigger repeated unsupported requests. Monitor only bounded in-memory metadata.
+- A task failure or operation error flashes away on the next stream update,
+  leaks credentials, or shows a notice from an older turn as the current failure.
+- Model groups differ from desktop provider labels/favorite ordering, search
+  excludes other providers, or a failed selection closes the picker.
+- A question's Check button becomes Submit during the same click and submits
+  without a separate confirmation; implicit form submission, a double tap, or
+  identical streamed questions resets answers or briefly shows/closes review.
+- Math renders in code, unsafe LaTeX commands create links, malformed math
+  crashes the transcript, or a wide equation overflows the screen.
+- Mermaid markup executes script/links/directives, malformed/streaming diagrams
+  crash the transcript, queued renders outlive their source, or expensive work
+  is repeated on unchanged stream frames. Render generated SVG as an inert image;
+  keep source/copy fallback and bounded lazy rendering. No external assets.
+- Composer clearance changes keyboard/safe-area behavior or overlays controls.
+
+Use isolated workflow fixture controls for reminder transitions, cross-workspace
+navigation, model groups, persistent failures, question review/submit and rich
+Markdown. Do not send real prompts or approvals. Keep repeatable blackbox results
+in `target/`; builds alone do not prove interaction or live provider behavior.
+
+2026-11-03 isolated workflow results are in
+`target/mobile-workflow-validation.json`, including repeat instructions. Open
+`remote-fixture.html?workflow=1` after a remote-fixture build. The fixture exposes
+completion/failure/permission/question actions, injected next-mutation failure,
+visibility controls, a cross-workspace target, ordered favorites and rich Markdown.
+Question selection/review sent nothing; a failed submit retained the answer, and
+an explicit double click sent one successful answer. Workspace navigation,
+reminder deduplication/visibility pause, grouped model search and failed model
+selection were exercised without real pairing or provider requests.
+Opening a reminder for the already-open session keeps its generation unchanged;
+the final check observed a later status transition through the same subscription
+without a replacement watch or read.
+
+The workflow preview uses production script/style/font restrictions, with
+`connect-src 'none'` to prohibit real traffic. KaTeX fonts stay same-origin files;
+math and Mermaid dependencies are absent from a no-math fixture's resource list.
+Unsafe LaTeX links/images and Mermaid click/URL sources stayed inert. The earlier
+Mermaid.js implementation hit CSP restrictions on temporary measurement styles.
+It has since been replaced with lazy Pele rendering and has no measurement DOM.
+Correction checks covered flowcharts, sequence diagrams, cached-layout theme
+changes and unsafe-source fallback without CSP violations. Keep the production
+CSP unchanged. The correction evidence is in
+`target/mobile-corrections-validation.json`; the centering follow-up is in
+`target/mobile-mermaid-centering-validation.json`.
+Clipboard read-back timed out and is not counted as a passed check. Real mobile
+keyboard/safe-area behavior and the new desktop projection remain separate live
+verification work; this run did not rebuild or restart the installed desktop.
+
+Session-usage capsule failure cases (before implementation):
+
+- Cumulative throughput is shown as context occupancy, or cached tokens are
+  divided by total output-inclusive throughput instead of cumulative input.
+- A configured context-window override differs from the desktop meter. Missing
+  counters, an unmeasured zero, or zero prompt tokens appear as measured 0%.
+- Full snapshots or deltas discard counters; negative, fractional or unsafe
+  numeric values pass the phone trust boundary.
+- The right-hand usage trigger toggles todos, both panels overlap, Escape loses
+  focus, or opening either panel changes the transcript viewport/scroll offset.
+- No-todo, unknown-data, over-capacity and narrow-screen states hide the meter
+  or overflow the viewport. A stream update resets an open usage panel.
+
+Use `/remote-fixture.html?usage=1` for production-view interactions; repeat with
+`usage=unknown`, `usage=zero`, `usage=over`, `usage=only` and `usage=legacy`.
+Open the usage trigger, observe updates, switch to todos, close with Escape and
+check focus/scroll geometry. The known case is 42,000/200,000 context tokens,
+1,234,567 cumulative tokens and 80% cumulative cache hits (800,000/1,000,000).
+The encrypted codec blackbox also carries usage through snapshots/deltas and
+rejects malformed counters. These are isolated boundaries, not live provider
+evidence; do not send real prompts or approvals for this check.
+
+Completed-turn disclosure failure cases (before implementation):
+
+- Only the last activity block collapses instead of the assistant's earlier
+  progress and work sharing one disclosure. The opening user prompt must always
+  remain outside the disclosure; same-turn steering messages may be folded.
+- A non-streaming intermediate reply, a completed tool, approval waiting, or a
+  same-turn steering prompt is mistaken for the final response.
+- The final response (including its copy/time footer) is hidden with the process,
+  or a truncated turn is merged with a different turn.
+- Manual reopening is reset by subscription updates or the next turn. A reader
+  above the latest output loses the inspected content when the turn settles.
+- Legacy records without turn metadata stop rendering or fold a running turn.
+
+Use `/remote-fixture.html?folding=1` for isolated production-view checks. Finish
+with `finishTurn`: progress, steering and activity rows must share one closed
+disclosure while the opening user prompt and final reply remain visible. Reopen
+using its real trigger (including keyboard), observe later deliveries, then use
+`nextTurn` to ensure the next running turn is not folded. Repeat with `legacy=1`,
+`settled=1`, `truncated=1`, and `noFinal=1`. Above-latest readers defer automatic
+folding until they return to the bottom. These are rendering-boundary checks,
+not provider/relay end-to-end evidence. Keep observations in `target/` only.
+
 Permission-setting failure cases (before implementation):
 
 - Old desktop capabilities display an unusable permission control or imply a

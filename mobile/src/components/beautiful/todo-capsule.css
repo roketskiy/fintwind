@@ -1,7 +1,7 @@
 /* Float above the composer; clearance belongs to the scrollable history, not
  * a reserved footer strip. Keep the full message viewport available. */
 .conversation-body { position: relative; }
-.todo-region { position: absolute; bottom: 4px; left: 12px; width: max-content; max-width: min(420px, calc(100% - 24px)); min-width: 0; }
+.todo-region { position: absolute; bottom: 4px; left: 12px; display: flex; align-items: center; gap: 6px; width: max-content; max-width: min(420px, calc(100% - 24px)); min-width: 0; }
 .todo-region[data-open] { width: calc(100% - 24px); }
 /* Clearance is only for the collapsed pill. Opening the plan must not change
  * transcript padding, viewport size or scroll position. */
@@ -9,8 +9,10 @@
 .conversation-body[data-capsule-clearance] [data-slot="message-scroller-button"][data-direction="end"] { bottom: 64px; }
 /* The initial scroll is hidden by the primitive. Its sibling must wait too. */
 .conversation-body:has(> [data-slot="message-scroller"] > [data-slot="message-scroller-viewport"][data-pending-scroll]) > .todo-region { visibility: hidden; }
-.todo-capsule-trigger { display: flex; align-items: center; min-height: 44px; min-width: 44px; padding: 0; border-radius: 8px; text-align: start; }
-.todo-capsule-label { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--muted-foreground); font-size: 12px; line-height: 20px; box-shadow: var(--bui-shadow); white-space: nowrap; }
+.todo-capsule-section { min-width: 0; }
+.usage-capsule-section { flex: none; }
+.todo-capsule-trigger { display: flex; align-items: center; min-height: 44px; min-width: 44px; max-width: 100%; padding: 0; border-radius: 8px; text-align: start; }
+.todo-capsule-label { display: flex; align-items: center; gap: 7px; min-height: 30px; max-width: 100%; overflow: hidden; padding: 4px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--muted-foreground); font-size: 12px; line-height: 20px; box-shadow: var(--bui-shadow); white-space: nowrap; }
 .workspace-change-count { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-variant-numeric: tabular-nums; }
 .workspace-additions { color: var(--bui-green); }
 .workspace-deletions { color: var(--destructive); }
@@ -20,7 +22,7 @@
 .todo-capsule-trigger:focus-visible { outline: 2px solid var(--ring); outline-offset: 1px; }
 .todo-capsule-trigger[aria-expanded="true"] .todo-chevron { transform: rotate(180deg); }
 .todo-count { font-size: 11px; font-variant-numeric: tabular-nums; }
-.todo-capsule-panel { min-width: 0; }
+.todo-capsule-panel { position: absolute; bottom: 48px; left: 0; width: 100%; min-width: 0; }
 .todo-capsule-list { max-height: min(28dvh, 240px); overflow-y: auto; overscroll-behavior: contain; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); color: var(--foreground); }
 .todo-capsule-list:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 .todo-capsule-list ol { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
@@ -33,3 +35,10 @@
 .todo-capsule-list li[data-status="completed"] .todo-content { text-decoration: line-through; }
 .todo-capsule-list li[data-status="in_progress"] .todo-mark { color: var(--primary); }
 .todo-truncated { margin: 10px 0 0; color: var(--muted-foreground); font-size: 11px; }
+.usage-capsule-percent { min-width: 5ch; text-align: end; font-variant-numeric: tabular-nums; }
+.usage-capsule-ring { width: 14px; height: 14px; flex: none; border-radius: 50%; background: conic-gradient(currentColor var(--usage-fill), var(--border) 0); mask: radial-gradient(farthest-side, transparent calc(100% - 2px), black 0); }
+.usage-capsule-trigger [data-tone="full"] { color: var(--destructive); }
+.usage-capsule-details { display: flex; flex-direction: column; gap: 12px; margin: 0; font-size: 12px; }
+.usage-capsule-details > div { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 12px; }
+.usage-capsule-details dt { color: var(--muted-foreground); }
+.usage-capsule-details dd { margin: 0 0 0 auto; font-variant-numeric: tabular-nums; text-align: end; overflow-wrap: anywhere; }

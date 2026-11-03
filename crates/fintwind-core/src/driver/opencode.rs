@@ -6500,6 +6500,7 @@ mod tests {
             json!([
                 { "action": "edit", "resource": "*", "effect": "ask" },
                 { "action": "shell", "resource": "*", "effect": "ask" },
+                { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
             ])
         );
         assert_eq!(
@@ -6507,6 +6508,7 @@ mod tests {
             json!([
                 { "action": "edit", "resource": "*", "effect": "allow" },
                 { "action": "shell", "resource": "*", "effect": "ask" },
+                { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
             ])
         );
         assert_eq!(
@@ -6515,11 +6517,17 @@ mod tests {
         );
         assert_eq!(
             opencode_session_permissions(RuntimeMode::Ask, InteractionMode::Plan),
-            json!([{ "action": "shell", "resource": "*", "effect": "ask" }])
+            json!([
+                { "action": "shell", "resource": "*", "effect": "ask" },
+                { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
+            ])
         );
         assert_eq!(
             opencode_session_permissions(RuntimeMode::FullAccess, InteractionMode::Plan),
-            json!([{ "action": "shell", "resource": "*", "effect": "allow" }])
+            json!([
+                { "action": "shell", "resource": "*", "effect": "allow" },
+                { "action": "fintwind_browser_*", "resource": "*", "effect": "allow" },
+            ])
         );
     }
 

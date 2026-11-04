@@ -1,6 +1,9 @@
-Allowance response mappings and contract examples adapted from:
+Allowance response mappings, Claude terminal screen/usage handling,
+Windows process argument quoting and contract examples adapted from:
 https://github.com/steipete/CodexBar
 https://github.com/yetone/magpie
+
+Magpie source snapshot: 43849d51c3273881839a8ef3e5aa7109bd2c8d36
 
 MIT License
 

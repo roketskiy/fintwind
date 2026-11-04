@@ -2198,10 +2198,18 @@ impl Backend for FintwindBackend {
                 provider_id,
                 force,
             } => {
-                let server = crate::opencode_pool::acquire(&binary, &directory)?;
-                let quota = self
-                    .provider_quotas
-                    .fetch_from_server(&server, &provider_id, force);
+                let quota = if fintwind_protocol::provider_quota::is_local_quota_source(
+                    &provider_id,
+                ) {
+                    // Claude/Codex subscriptions live on this machine, not in
+                    // the workspace's OpenCode server: no remote IPC carries
+                    // them, whatever workspace is selected.
+                    self.provider_quotas.fetch_local(&provider_id, force)
+                } else {
+                    let server = crate::opencode_pool::acquire(&binary, &directory)?;
+                    self.provider_quotas
+                        .fetch_from_server(&server, &provider_id, force)
+                };
                 Ok(ResponsePayload::ProviderQuota { quota })
             }
             Command::StoreCustomProviderKey {

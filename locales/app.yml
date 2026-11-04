@@ -638,6 +638,10 @@ providers.quota_unavailable:
   en: Could not refresh
 providers.quota_no_data:
   en: No allowance data returned
+providers.quota_unsupported:
+  en: Allowance query unavailable
+providers.quota_no_credential:
+  en: No usable allowance credential
 providers.quota_measured:
   en: "Updated %{time}"
 providers.quota_cached_measured:
@@ -664,6 +668,10 @@ providers.quota_completions:
   en: Code completions
 providers.quota_premium:
   en: Premium requests
+providers.quota_extra_usage:
+  en: Extra usage
+providers.quota_in_use:
+  en: In use
 providers.builtin_no_endpoint:
   en: This provider has no API-key sign-in (it uses OAuth, an environment variable, or the opencode CLI), so there is no connection to test here.
 providers.builtin_models_truncated:
@@ -3220,12 +3228,28 @@ usage_page.cost_sessions:
   en: "%{count} sessions at API price"
 usage_page.cost_unavailable:
   en: Price catalog unavailable
+usage_page.cost_unknown:
+  en: No cost data
 usage_page.cache_hit_short:
   en: hit
 usage_page.projects_title:
   en: Projects
 usage_page.projects_caption:
   en: "%{count} projects"
+usage_page.subscriptions_title:
+  en: Subscriptions
+usage_page.statistics_title:
+  en: Usage statistics
+usage_page.cache_title:
+  en: Cache usage
+usage_page.subscriptions_empty:
+  en: No connected services with usage limits
+usage_page.connections_failed:
+  en: Could not load connected services
+usage_page.subscriptions_caption:
+  en: "%{count} services"
+usage_page.history_title:
+  en: History
 tabs.new_session:
   en: New session tab
 tabs.close:

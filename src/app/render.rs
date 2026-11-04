@@ -224,18 +224,14 @@ impl Fintwind {
             .child(self.render_composer(window, cx))
             .child(self.render_workspace_footer(cx))
             .child(
-                div()
-                    .flex_1()
-                    .min_h(px(16.0))
-                    .relative()
-                    .child(
-                        canvas(
-                            move |bounds, _, _| bottom_gap.set(Some(bounds.size.height)),
-                            |_, _, _, _| (),
-                        )
-                        .absolute()
-                        .inset_0(),
-                    ),
+                div().flex_1().min_h(px(16.0)).relative().child(
+                    canvas(
+                        move |bounds, _, _| bottom_gap.set(Some(bounds.size.height)),
+                        |_, _, _, _| (),
+                    )
+                    .absolute()
+                    .inset_0(),
+                ),
             )
             .into_any_element()
     }
@@ -477,34 +473,58 @@ impl Render for Fintwind {
                     ))
                 })
                 .into_any_element(),
-            WorkspaceMode::Usage => div()
-                .id("usage-page-scroll")
-                .flex_1()
-                .h_full()
-                .min_w_0()
-                .relative()
-                .flex()
-                .flex_col()
-                .overflow_y_scroll()
-                .track_scroll(&self.settings_scroll)
-                .bg(theme.surface)
-                .child(
-                    div()
-                        .w_full()
-                        .max_w(px(settings::SETTINGS_CONTENT_MAX_WIDTH))
-                        .mx_auto()
-                        .child(
-                            div()
-                                .pt(px(2.0))
-                                .flex_none()
-                                .text_size(ui_px(18.0))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(theme.text)
-                                .child(tr!("settings.usage")),
-                        )
-                        .child(self.render_usage_page(window, cx)),
-                )
-                .into_any_element(),
+            WorkspaceMode::Usage => {
+                let measure_width = cx.listener(|this, bounds: &Bounds<Pixels>, _, cx| {
+                    if this.usage_content_width != bounds.size.width {
+                        this.usage_content_width = bounds.size.width;
+                        cx.notify();
+                    }
+                });
+                div()
+                    .flex_1()
+                    .h_full()
+                    .min_w_0()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .bg(theme.canvas)
+                    .child(
+                        div()
+                            .flex_none()
+                            .w_full()
+                            .px_4()
+                            .pt_3()
+                            .pb_3()
+                            .bg(theme.surface)
+                            .border_b_1()
+                            .border_color(theme.border)
+                            .flex()
+                            .flex_col()
+                            .child(self.render_usage_toolbar(&theme, cx)),
+                    )
+                    .child(
+                        div()
+                            .id("usage-page-scroll")
+                            .flex_1()
+                            .min_h_0()
+                            .w_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.settings_scroll)
+                            .child(
+                                div().p_4().child(
+                                    ely_gpui_component::primitives::Measure::new(
+                                        "usage-content-width",
+                                        move |bounds, window, cx| {
+                                            measure_width(&bounds, window, cx)
+                                        },
+                                    )
+                                    .w_full()
+                                    .child(self.render_usage_page(window, cx)),
+                                ),
+                            ),
+                    )
+                    .into_any_element()
+            }
         };
 
         let content = div()

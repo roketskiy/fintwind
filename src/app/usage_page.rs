@@ -12,18 +12,23 @@ use chrono::{Datelike as _, Duration as ChronoDuration, Local, NaiveDate, Timeli
 #[cfg(test)]
 use chrono::TimeZone as _;
 
-use crate::theme::ui_px;
-use crate::usage::{cache_hit_percent, format_percent, format_tokens};
+use crate::usage::{cache_hit_percent, format_tokens};
 use fintwind_client::models_dev::{self, ModelsDevTable};
 
-use super::usage_treemap::{TreemapTile, usage_treemap};
 use super::*;
-use crate::ui::ActivationExt;
-use ely_gpui_component::buttons::SegmentedControl;
-use ely_gpui_component::theme::ControlSize;
+use ely_gpui_component::{
+    buttons::{Button, ButtonVariant, IconButton, SegmentedControl},
+    charts::{CalendarHeatmap, LineChart, Series},
+    feedback::{Alert, EmptyState},
+    forms::Choice,
+    layout::CardHeader,
+    lists::{List, ListItem},
+    navigation::Tabs,
+    primitives::{IconName, Severity},
+    theme::ControlSize,
+    typography::{Caption, Label, tabular},
+};
 use fintwind_client::provider_session::{UsageDayShare, UsageEntry, UsageStats};
-use gpui::PathBuilder;
-use gpui::relative;
 
 #[cfg(test)]
 use fintwind_client::provider_session::UsageModelLane;
@@ -32,12 +37,7 @@ use fintwind_client::provider_session::UsageModelLane;
 pub(super) const HEATMAP_WEEKS: i64 = 26;
 /// Timeline horizon for the unbounded range.
 const BAR_HORIZON_DAYS: i64 = 30;
-const DAILY_CHART_PX: f32 = 96.0;
 const DAY_WINDOW: i64 = 30;
-const HEAT_CELL_PX: f32 = 12.0;
-const HEAT_GAP_PX: f32 = 3.0;
-const HEAT_LABEL_PX: f32 = 14.0;
-const HEAT_LABEL_GAP_PX: f32 = 4.0;
 /// Chart scrubbing restarts the tooltip timer on every bar, so the framework
 /// default of 500ms feels stuck. Zero still waits one timer tick.
 pub(super) const CHART_TOOLTIP_DELAY: Duration = Duration::from_millis(0);
@@ -49,6 +49,13 @@ const STALE_AFTER: Duration = Duration::from_secs(60);
 /// that is actively streaming lands within half a minute of its next hop.
 /// Model rows drawn before the rest collapse into the header's model count.
 const MAX_MODEL_ROWS: usize = 8;
+
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+pub(super) enum UsageTab {
+    Subscriptions,
+    #[default]
+    Statistics,
+}
 
 /// What the KPI cards, timelines, and model ranking aggregate over. The
 /// heatmap keeps its own fixed week window, like GitHub's, so a short range
@@ -188,8 +195,10 @@ pub(super) struct UsageHour {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct UsageHeatCell {
     pub date: NaiveDate,
+    #[cfg(test)]
     pub total: u64,
     pub direct: u64,
+    #[cfg(test)]
     pub sessions: u32,
     /// 0 (quiet) through 4 (heaviest), keyed to the window's busiest day.
     pub level: u8,
@@ -201,6 +210,7 @@ pub(super) struct UsageModelRow {
     pub model: Option<String>,
     pub sessions: u32,
     pub total: u64,
+    #[cfg(test)]
     pub cost: f64,
     pub last_used: u64,
 }
@@ -211,6 +221,7 @@ pub(super) struct UsageProjectRow {
     pub directory: String,
     pub sessions: u32,
     pub total: u64,
+    #[cfg(test)]
     pub cost: f64,
 }
 
@@ -224,6 +235,7 @@ pub(super) struct UsageProviderRow {
     pub provider: String,
     pub models: u32,
     pub total: u64,
+    #[cfg(test)]
     pub cost: f64,
 }
 
@@ -233,6 +245,7 @@ pub(super) struct UsageViews {
     /// Contiguous days ending today (or the selected day), oldest first.
     pub daily: Vec<UsageDay>,
     pub hourly: Vec<UsageHour>,
+    #[cfg(test)]
     pub hourly_estimated: bool,
     /// Week columns of seven cells, Monday first; `None` past today.
     pub weeks: Vec<Vec<Option<UsageHeatCell>>>,
@@ -246,6 +259,57 @@ pub(super) struct UsageViews {
 }
 
 impl Fintwind {
+    /// Keep peer widths equal and center a short final row. Two tracks per
+    /// card allow half-column offsets without stretching the final cards.
+    fn usage_grid(
+        &self,
+        window: &Window,
+        min_rems: f32,
+        items: impl IntoIterator<Item = impl IntoElement>,
+    ) -> Div {
+        let items: Vec<_> = items
+            .into_iter()
+            .map(IntoElement::into_any_element)
+            .collect();
+        let count = items.len();
+        let gap = gpui::rems(1.0).to_pixels(window.rem_size());
+        let min = gpui::rems(min_rems).to_pixels(window.rem_size());
+        let width = if self.usage_content_width > px(0.0) {
+            self.usage_content_width
+        } else {
+            window.viewport_size().width - gpui::rems(6.0).to_pixels(window.rem_size())
+        };
+        let mut columns =
+            (((width + gap) / (min + gap)).floor().max(1.0) as usize).min(count.max(1));
+        while columns > 1 && count % columns != 0 && (count % columns) * 2 < columns {
+            columns -= 1;
+        }
+        let remainder = count % columns;
+        let last_row = count / columns;
+        div()
+            .w_full()
+            .grid()
+            .grid_cols((columns * 2) as u16)
+            .items_stretch()
+            .gap_4()
+            .children(items.into_iter().enumerate().map(|(index, item)| {
+                let row = index / columns;
+                let offset = if row == last_row && remainder != 0 {
+                    columns - remainder
+                } else {
+                    0
+                };
+                div()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .col_span(2)
+                    .col_start((index % columns * 2 + offset + 1) as i16)
+                    .row_start((row + 1) as i16)
+                    .child(item)
+            }))
+    }
+
     /// Price-network latency must never gate token snapshots. Stale prices
     /// remain usable while this independent task refreshes the catalog.
     fn refresh_usage_pricing(&mut self, cx: &mut Context<Self>) {
@@ -286,7 +350,9 @@ impl Fintwind {
                     this.usage_price_table = Some(table);
                     this.usage_stats_loaded_at = None;
                     if this.mode == WorkspaceMode::Usage {
-                        this.ensure_usage_stats(false, cx);
+                        if this.usage_tab == UsageTab::Statistics {
+                            this.ensure_usage_stats(false, cx);
+                        }
                     }
                 }
             });
@@ -443,7 +509,9 @@ impl Fintwind {
                             this.usage_refresh_running = false;
                             return false;
                         }
-                        this.ensure_usage_stats(false, cx);
+                        if this.usage_tab == UsageTab::Statistics {
+                            this.ensure_usage_stats(false, cx);
+                        }
                         true
                     })
                     .unwrap_or(false);
@@ -511,9 +579,31 @@ impl Fintwind {
         let no_workspace =
             self.native_binary_path().is_none() || self.state.selected_project.is_none();
 
-        let mut column = div().mt(px(15.0)).flex().flex_col().gap(px(12.0));
+        let mut column = div().flex().flex_col().gap_6().min_w_0().w_full();
 
-        column = column.child(self.render_usage_toolbar(&theme, cx));
+        if self.usage_tab == UsageTab::Subscriptions {
+            if self.subscriptions_connection_error() {
+                column = column.child(Alert::new(
+                    "usage-connections-error",
+                    Severity::Warning,
+                    tr!("usage_page.connections_failed"),
+                ));
+            }
+            if let Some(board) = self.render_usage_subscriptions(window, &theme, cx) {
+                column = column.child(board);
+            } else if self.subscriptions_loading() {
+                column = column.child(self.render_usage_subscriptions_loading(window, &theme));
+            } else if self.subscriptions_connection_error() {
+                // The alert above owns this state; a failed snapshot is not empty.
+            } else {
+                column = column.child(EmptyState::new(
+                    "usage-subscriptions-empty",
+                    IconName::Gauge,
+                    tr!("usage_page.subscriptions_empty"),
+                ));
+            }
+            return column.into_any_element();
+        }
 
         if let Some(error) = &self.usage_stats_error {
             column = column.child(
@@ -523,7 +613,7 @@ impl Fintwind {
                     theme.warning,
                     tr!("usage_page.load_failed", error = error.clone()),
                 )
-                .child(usage_retry_button(&theme, cx)),
+                .action(usage_retry_button(&theme, cx)),
             );
         } else if first_load
             && (self.usage_stats_pending
@@ -532,23 +622,7 @@ impl Fintwind {
                     .as_ref()
                     .is_some_and(|stats| stats.refreshing))
         {
-            let label = tr!("usage_page.loading").to_owned();
-            column = column.child(
-                motion::pulse(Duration::from_millis(1400), move |phase| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.0))
-                        .text_size(ui_px(12.0))
-                        .text_color(theme.text_tertiary)
-                        .child(icon("icons/loader-circle.svg", 13.0, theme.text_tertiary))
-                        .child(SharedString::from(label.clone()))
-                        .opacity(pulsating_between(0.5, 1.0)(phase))
-                        .into_any_element()
-                })
-                .every(2)
-                .into_any_element(),
-            );
+            column = column.child(Caption::new(tr!("usage_page.loading")));
         }
 
         if no_workspace {
@@ -585,22 +659,182 @@ impl Fintwind {
                     ));
                 }
                 let views = &self.usage_views;
-                column = column.child(self.render_usage_kpis(views, &theme));
-                if !matches!(self.usage_range, UsageRange::Day(_)) {
-                    column = column.child(self.render_usage_heatmap(views, &theme));
-                }
-                column = column
-                    .child(self.render_usage_daily(views, &theme))
-                    .child(self.render_usage_models(window, cx, views, &theme))
-                    .child(self.render_usage_providers(views, &theme))
-                    .child(self.render_usage_projects(views, &theme));
+                // Only the statistics subpage builds these elements. Its
+                // filter and refresh never change the subscription snapshot.
+                let mut history = div()
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .child(self.render_usage_history_filter(window, &theme, cx))
+                    .child(self.render_usage_kpis(views, window, &theme));
+                let show_heat = !matches!(self.usage_range, UsageRange::Day(_));
+                let trend = self.render_usage_daily(views, &theme);
+                history = history.child(if show_heat {
+                    self.usage_grid(
+                        window,
+                        28.0,
+                        [trend, self.render_usage_heatmap(views, &theme)],
+                    )
+                } else {
+                    trend
+                });
+                let rankings = [
+                    self.render_usage_models(window, cx, views, &theme),
+                    self.render_usage_providers(views, &theme, false),
+                    self.render_usage_projects(views, &theme, false),
+                ];
+                history = history.child(self.usage_grid(window, 22.0, rankings));
+                column = column.child(history);
             }
         }
 
         column.into_any_element()
     }
 
-    fn render_usage_toolbar(&self, theme: &Theme, cx: &mut Context<Self>) -> Div {
+    /// Connected subscriptions are independent of the history's workspace
+    /// and time filter. Hide an empty board without leaving a header.
+    fn render_usage_subscriptions(
+        &self,
+        window: &Window,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let cards = self.subscription_cards();
+        if cards.is_empty() {
+            return None;
+        }
+        let mut section = div().flex().flex_col().gap_4();
+        let mut grid_cards = Vec::new();
+        let mut balance_cards = Vec::new();
+        let slots = cards
+            .iter()
+            .map(|(provider, _, reading)| {
+                let (_, windows) = providers_quota::subscription_layout(provider, reading.as_ref());
+                (
+                    windows,
+                    reading
+                        .as_ref()
+                        .filter(|q| !q.windows.is_empty())
+                        .map_or(0, |q| q.balances.len()),
+                )
+            })
+            .fold((1, 0), |(windows, balances), next| {
+                (windows.max(next.0), balances.max(next.1))
+            });
+        for (provider, loading, reading) in &cards {
+            let (balance_only, _) =
+                providers_quota::subscription_layout(provider, reading.as_ref());
+            let card = self.render_subscription_card(
+                provider,
+                *loading,
+                reading.as_ref(),
+                slots,
+                theme,
+                cx,
+            );
+            if balance_only {
+                balance_cards.push(card);
+            } else {
+                grid_cards.push(card);
+            }
+        }
+        if !grid_cards.is_empty() {
+            section = section.child(self.usage_grid(window, 22.0, grid_cards));
+        }
+        // Balance-only cards form a compact peer group, rather than borrowing
+        // the height of services with several reset windows.
+        if !balance_cards.is_empty() {
+            let single_balance = balance_cards.len() == 1;
+            section = section.child(
+                self.usage_grid(window, 22.0, balance_cards)
+                    .when(single_balance, |grid| {
+                        grid.max_w(gpui::rems(32.0)).self_center()
+                    }),
+            );
+        }
+        Some(section.into_any_element())
+    }
+
+    fn render_usage_subscriptions_loading(&self, window: &Window, theme: &Theme) -> Div {
+        // Generic shapes, not guessed provider connections or quota values.
+        div()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(self.usage_grid(
+                window,
+                22.0,
+                [
+                    providers_quota::subscription_loading_card(false, theme),
+                    providers_quota::subscription_loading_card(false, theme),
+                ],
+            ))
+            .child(
+                self.usage_grid(
+                    window,
+                    22.0,
+                    [providers_quota::subscription_loading_card(true, theme)],
+                )
+                .max_w(gpui::rems(32.0))
+                .self_center(),
+            )
+    }
+
+    pub(super) fn render_usage_toolbar(&self, _theme: &Theme, cx: &mut Context<Self>) -> Div {
+        let tabs = Tabs::new(
+            "usage-pages",
+            [
+                Choice::new("statistics", tr!("usage_page.statistics_title")),
+                Choice::new("subscriptions", tr!("usage_page.subscriptions_title")),
+            ],
+            match self.usage_tab {
+                UsageTab::Subscriptions => "subscriptions",
+                UsageTab::Statistics => "statistics",
+            },
+        )
+        .on_change(cx.listener(|this, value: &SharedString, _, cx| {
+            this.usage_tab = if value.as_ref() == "statistics" {
+                UsageTab::Statistics
+            } else {
+                UsageTab::Subscriptions
+            };
+            this.settings_scroll.set_offset(point(px(0.0), px(0.0)));
+            if this.usage_tab == UsageTab::Statistics {
+                this.ensure_usage_stats(false, cx);
+            } else {
+                this.load_subscriptions(false, cx);
+            }
+            cx.notify();
+        }));
+        let pending = match self.usage_tab {
+            UsageTab::Statistics => self.usage_stats_pending,
+            UsageTab::Subscriptions => self.subscriptions_loading(),
+        };
+        let refresh = IconButton::new("usage-refresh", IconName::RefreshCw)
+            .size(ControlSize::Sm)
+            .disabled(pending)
+            .tooltip(tr!("usage_page.refresh"))
+            .on_click(cx.listener(|this, _, _, cx| match this.usage_tab {
+                UsageTab::Subscriptions => this.load_subscriptions(true, cx),
+                UsageTab::Statistics => this.ensure_usage_stats(true, cx),
+            }));
+        div()
+            .flex()
+            .items_center()
+            .h_8()
+            .gap_3()
+            .child(div().flex_none().child(tabs))
+            .child(div().flex_1().min_w_0())
+            .child(refresh)
+    }
+
+    /// Statistics-only controls; no control here changes a quota snapshot.
+    fn render_usage_history_filter(
+        &self,
+        window: &Window,
+        theme: &Theme,
+        cx: &mut Context<Self>,
+    ) -> Div {
         let mut selector =
             SegmentedControl::new("usage-range", self.usage_range.key()).size(ControlSize::Sm);
         for range in UsageRange::ALL {
@@ -609,32 +843,13 @@ impl Fintwind {
         let selector = selector.on_change(cx.listener(|this, value: &SharedString, _, cx| {
             this.set_usage_range(UsageRange::from_key(value), cx);
         }));
-
-        let refresh = icon_button("usage-refresh", "icons/rotate-cw.svg", *theme)
-            .tab_index(0)
-            .when(self.usage_stats_pending, |element| element.opacity(0.5))
-            .tooltip(Tooltip::text(tr!("usage_page.refresh")))
-            .on_activation(cx, |this, _, cx| {
-                this.ensure_usage_stats(true, cx);
-            });
-
-        // The freshness reading doubles as the "a scan ran" signal: nothing
-        // shows before the first one lands.
-        let freshness = self.usage_freshness_label().map(|label| {
-            div()
-                .flex_none()
-                .text_size(ui_px(10.5))
-                .text_color(theme.text_tertiary)
-                .child(label)
-        });
-
         let day_navigation = if let UsageRange::Day(offset) = self.usage_range {
             let date = Local::now().date_naive() - ChronoDuration::days(i64::from(offset));
             Some(
                 div()
                     .flex()
                     .items_center()
-                    .gap(px(4.0))
+                    .gap_1()
                     .child(usage_day_button(
                         "usage-day-previous",
                         "icons/chevron-left.svg",
@@ -643,14 +858,7 @@ impl Fintwind {
                         theme,
                         cx,
                     ))
-                    .child(
-                        div()
-                            .min_w(px(88.0))
-                            .text_center()
-                            .text_size(ui_px(11.0))
-                            .text_color(theme.text_secondary)
-                            .child(date.format("%Y-%m-%d").to_string()),
-                    )
+                    .child(tabular(Label::new(date.format("%Y-%m-%d").to_string())))
                     .child(usage_day_button(
                         "usage-day-next",
                         "icons/chevron-right.svg",
@@ -663,19 +871,37 @@ impl Fintwind {
         } else {
             None
         };
+        let stacked = self.usage_content_width > px(0.0)
+            && self.usage_content_width < gpui::rems(36.0).to_pixels(window.rem_size());
         div()
             .flex()
-            .flex_wrap()
-            .items_center()
-            .gap(px(8.0))
-            .child(div().flex_1().min_w_0())
-            .children(freshness)
-            .children(day_navigation)
-            .child(div().flex_none().child(selector))
-            .child(refresh)
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_4()
+                    .when(stacked, |row| row.flex_col().items_start())
+                    .child(div().flex_none().child(selector))
+                    .child(div().flex_1().min_w_0())
+                    // Keep the same date lane even outside the single-day range.
+                    .child(
+                        div()
+                            .w(gpui::rems(11.0))
+                            .h_6()
+                            .flex_none()
+                            .children(day_navigation),
+                    ),
+            )
+            .child(
+                div()
+                    .h_4()
+                    .children(self.usage_freshness_label().map(Caption::new)),
+            )
     }
 
-    fn render_usage_kpis(&self, views: &UsageViews, theme: &Theme) -> Div {
+    fn render_usage_kpis(&self, views: &UsageViews, window: &Window, theme: &Theme) -> Div {
         let totals = &views.totals;
         let hit = cache_hit_percent(
             totals.cache_read,
@@ -684,308 +910,67 @@ impl Fintwind {
                 .saturating_add(totals.cache_read)
                 .saturating_add(totals.cache_write),
         );
-        div()
-            .w_full()
-            .p_5()
-            .rounded_xl()
-            .bg(theme.raised)
-            .shadow_xs()
-            .flex()
-            .flex_col()
-            .gap_4()
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .items_start()
-                    .gap_6()
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex_basis(ui_px(240.0))
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .text_size(ui_px(11.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(tr!("usage_page.kpi_total_tokens")),
-                            )
-                            .child(
-                                div()
-                                    .text_size(ui_px(40.0))
-                                    .line_height(ui_px(48.0))
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(theme.accent)
-                                    .child(format_tokens(totals.total())),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .flex_basis(ui_px(440.0))
-                            .min_w_0()
-                            .flex()
-                            .flex_wrap()
-                            .gap_4()
-                            .child(usage_kpi_metric(
-                                theme,
-                                tr!("usage_page.kpi_generated_tokens"),
-                                format_tokens(totals.generated()),
-                            ))
-                            .child(usage_kpi_metric(
-                                theme,
-                                tr!("usage_page.kpi_sessions"),
-                                totals.sessions.to_string(),
-                            ))
-                            .child(usage_kpi_metric(
-                                theme,
-                                tr!("usage_page.kpi_cache_hit"),
-                                hit.map(format_percent).unwrap_or_else(|| "—".into()),
-                            )),
-                    ),
-            )
-            .child(
-                div()
-                    .pt_3()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .flex()
-                    .flex_wrap()
-                    .gap_x_6()
-                    .gap_y_2()
-                    .children(
-                        [
-                            (tr!("usage_page.tokens_input"), totals.input),
-                            (tr!("usage_page.tokens_output"), totals.output),
-                            (
-                                tr!("usage_page.tokens_cache"),
-                                totals.cache_read.saturating_add(totals.cache_write),
-                            ),
-                        ]
-                        .into_iter()
-                        .map(|(label, value)| {
-                            div()
-                                .flex_1()
-                                .flex_basis(ui_px(160.0))
-                                .min_w_0()
-                                .flex()
-                                .flex_wrap()
-                                .items_baseline()
-                                .gap_2()
-                                .text_size(ui_px(11.0))
-                                .child(div().text_color(theme.text_tertiary).child(label))
-                                .child(
-                                    div()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(theme.text_secondary)
-                                        .child(format_tokens(value)),
-                                )
-                        }),
-                    ),
-            )
+        let metrics = [
+            usage_metric(
+                theme,
+                tr!("usage_page.kpi_total_tokens"),
+                format_tokens(totals.total()),
+                format!(
+                    "{} {}",
+                    tr!("usage_page.tokens_input"),
+                    format_tokens(totals.input)
+                ),
+            ),
+            usage_metric(
+                theme,
+                tr!("usage_page.kpi_generated_tokens"),
+                format_tokens(totals.generated()),
+                tr!("usage_page.incl_reasoning"),
+            ),
+            usage_metric(
+                theme,
+                tr!("usage_page.kpi_sessions"),
+                totals.sessions.to_string(),
+                tr!("usage_page.active_days_value", count = totals.active_days),
+            ),
+            usage_metric(
+                theme,
+                tr!("usage_page.kpi_cache_hit"),
+                hit.map(|value| format!("{value:.1}%"))
+                    .unwrap_or_else(|| "—".into()),
+                tr!(
+                    "usage_page.cache_read_tokens",
+                    tokens = format_tokens(totals.cache_read)
+                ),
+            ),
+        ];
+        self.usage_grid(window, 13.0, metrics)
     }
 
     fn render_usage_heatmap(&self, views: &UsageViews, theme: &Theme) -> Div {
-        let cell_size = px(HEAT_CELL_PX);
-        let gap = px(HEAT_GAP_PX);
-        let label_h = px(HEAT_LABEL_PX);
-        let label_gap = px(HEAT_LABEL_GAP_PX);
-
-        // Weekday gutter on the Monday/Wednesday/Friday rows. The top spacer
-        // matches each month group's label plus the gap under it, so the
-        // rows stay locked to the cells.
-        let weekday_row = |label: String| {
-            div()
-                .h(cell_size)
-                .flex_none()
-                .flex()
-                .items_center()
-                .text_size(ui_px(9.0))
-                .text_color(theme.text_tertiary)
-                .child(label)
+        let card = usage_card(theme).h_full().p_5().gap_4().child(
+            CardHeader::new(tr!("usage_page.heatmap_title")).description(tr!(
+                "usage_page.heatmap_caption",
+                weeks = HEATMAP_WEEKS,
+                active = views.heatmap_active_days
+            )),
+        );
+        let mut cells = views.weeks.iter().flatten().flatten();
+        let Some(first) = cells.next() else {
+            return card;
         };
-        let gutter = div()
-            .w(px(18.0))
-            .mr(px(6.0))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .child(div().h(px(HEAT_LABEL_PX + HEAT_LABEL_GAP_PX)).flex_none())
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(gap)
-                    .child(weekday_row(tr!("usage_page.weekday_mon")))
-                    .child(div().h(cell_size).flex_none())
-                    .child(weekday_row(tr!("usage_page.weekday_wed")))
-                    .child(div().h(cell_size).flex_none())
-                    .child(weekday_row(tr!("usage_page.weekday_fri")))
-                    .child(div().h(cell_size).flex_none())
-                    .child(div().h(cell_size).flex_none()),
-            );
-
-        // One band per calendar month. Weeks stay intact (a column is always
-        // Mon–Sun); the band opens on the week that contains the 1st, and a
-        // hairline sits in the gap so months don't run together. Labels are
-        // not squeezed into a single cell — that wrapped "9月" onto two lines.
-        let bands = heatmap_month_bands(&views.weeks);
-        let grid = div()
-            .flex()
-            .items_end()
-            .children(bands.iter().enumerate().map(|(band_index, band)| {
-                let weeks = div().flex().gap(gap).children(
-                    views.weeks[band.start..band.end]
-                        .iter()
-                        .enumerate()
-                        .map(|(offset, week)| {
-                            let column_index = band.start + offset;
-                            div().flex_none().flex().flex_col().gap(gap).children(
-                                week.iter().enumerate().map(|(row_index, cell)| {
-                                    let id = SharedString::from(format!(
-                                        "usage-heat-{column_index}-{row_index}"
-                                    ));
-                                    match cell {
-                                        Some(cell) => div()
-                                            .id(id)
-                                            .size(cell_size)
-                                            .rounded(px(3.0))
-                                            .flex_none()
-                                            .bg(heat_level_color(theme, cell.level))
-                                            .border_1()
-                                            .border_color(gpui::transparent_black())
-                                            .hover(|element| {
-                                                element.border_color(theme.text_tertiary)
-                                            })
-                                            .when(
-                                                cell.direct > 0 || cell.sessions > 0,
-                                                |cell_el| {
-                                                    cell_el
-                                                        .tooltip(Tooltip::text(usage_day_tooltip(
-                                                            cell.date,
-                                                            cell.direct,
-                                                            cell.total,
-                                                            cell.sessions,
-                                                        )))
-                                                        .tooltip_show_delay(CHART_TOOLTIP_DELAY)
-                                                },
-                                            ),
-                                        None => div()
-                                            .id(id)
-                                            .size(cell_size)
-                                            .rounded(px(3.0))
-                                            .flex_none()
-                                            .bg(theme.inset),
-                                    }
-                                }),
-                            )
-                        }),
-                );
-                div()
-                    .flex()
-                    .flex_none()
-                    .items_end()
-                    .when(band_index > 0, |row| {
-                        row.child(
-                            div()
-                                .w(px(1.0))
-                                .h(px(heat_grid_px()))
-                                .mx(px(6.0))
-                                .flex_none()
-                                .bg(theme.text_tertiary),
-                        )
-                    })
-                    .child(
-                        div()
-                            .flex_none()
-                            .min_w(ui_px(36.0))
-                            .flex()
-                            .flex_col()
-                            .gap(label_gap)
-                            .child(
-                                div()
-                                    .h(label_h)
-                                    .flex()
-                                    .items_end()
-                                    .whitespace_nowrap()
-                                    .text_size(ui_px(10.0))
-                                    .text_color(theme.text_secondary)
-                                    .child(band.label()),
-                            )
-                            .child(weeks),
-                    )
-            }));
-
-        let legend_cell = |level: u8| {
-            div()
-                .size(px(10.0))
-                .rounded(px(2.5))
-                .flex_none()
-                .bg(heat_level_color(theme, level))
+        let Ok(start) = first.date.to_string().parse() else {
+            return card;
         };
-
-        div()
-            .w_full()
-            .px(px(16.0))
-            .py(px(14.0))
-            .rounded(px(13.0))
-            .bg(theme.raised)
-            .shadow_xs()
-            .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(ui_px(13.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child(tr!("usage_page.heatmap_title")),
-                    )
-                    .child(div().flex_1().min_w_0())
-                    .child(
-                        div()
-                            .text_size(ui_px(10.5))
-                            .text_color(theme.text_tertiary)
-                            .child(tr!(
-                                "usage_page.heatmap_caption",
-                                weeks = HEATMAP_WEEKS,
-                                active = views.heatmap_active_days
-                            )),
-                    ),
-            )
-            .child(div().flex().items_start().child(gutter).child(grid))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap(px(4.0))
-                    .child(
-                        div()
-                            .text_size(ui_px(9.5))
-                            .text_color(theme.text_tertiary)
-                            .child(tr!("usage_page.legend_less")),
-                    )
-                    .child(legend_cell(0))
-                    .child(legend_cell(1))
-                    .child(legend_cell(2))
-                    .child(legend_cell(3))
-                    .child(legend_cell(4))
-                    .child(
-                        div()
-                            .text_size(ui_px(9.5))
-                            .text_color(theme.text_tertiary)
-                            .child(tr!("usage_page.legend_more")),
-                    ),
-            )
+        // Omit future dates instead of drawing them as zero-usage days.
+        let counts = std::iter::once(first)
+            .chain(cells)
+            .map(|cell| cell.direct as f64);
+        card.child(
+            CalendarHeatmap::new("usage-activity", start, counts)
+                .h_48()
+                .format(|value| format_tokens(value as u64)),
+        )
     }
 
     fn render_usage_daily(&self, views: &UsageViews, theme: &Theme) -> Div {
@@ -998,9 +983,6 @@ impl Fintwind {
                     label: format!("{:02}:00", hour.hour),
                     input: hour.input,
                     output: hour.output,
-                    cache_write: hour.cache_write,
-                    cache_read: hour.cache_read,
-                    cost: hour.cost,
                 })
                 .collect()
         } else {
@@ -1011,101 +993,43 @@ impl Fintwind {
                     label: format_day_label(day.date),
                     input: day.input,
                     output: day.output,
-                    cache_write: day.cache_write,
-                    cache_read: day.cache_read,
-                    cost: day.cost,
                 })
                 .collect()
         };
-        let horizon = points.len() as i64;
-        let chart = usage_line_chart(&points, theme);
-        let label_step = if single_day {
-            4
-        } else if horizon > 14 {
-            7
-        } else {
-            2
-        };
-        let axis = div()
-            .flex()
-            .mt(px(6.0))
-            .children(points.iter().enumerate().map(|(index, point)| {
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .whitespace_nowrap()
-                    .text_size(ui_px(9.0))
-                    .text_color(theme.text_tertiary)
-                    .child(if index % label_step == 0 {
-                        point.label.clone()
-                    } else {
-                        String::new()
-                    })
-            }));
-
-        div()
-            .w_full()
-            .px(px(16.0))
-            .py(px(14.0))
-            .rounded(px(13.0))
-            .bg(theme.raised)
-            .shadow_xs()
-            .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_size(ui_px(13.0))
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.text)
-                            .child(if single_day {
-                                tr!("usage_page.hourly_title")
-                            } else {
-                                tr!("usage_page.daily_title")
-                            }),
-                    )
-                    .child(div().flex_1().min_w_0())
-                    .child(
-                        div()
-                            .text_size(ui_px(10.5))
-                            .text_color(theme.text_tertiary)
-                            .child(if single_day {
-                                tr!("usage_page.hourly_caption")
-                            } else {
-                                tr!("usage_page.daily_caption", days = horizon)
-                            }),
-                    ),
-            )
+        let labels: Vec<_> = points.iter().map(|point| point.label.clone()).collect();
+        let chart = LineChart::new("usage-token-trend", labels)
+            .h_64()
+            .smooth()
+            .series(Series::new(
+                tr!("usage_page.plot_input"),
+                points.iter().map(|p| p.input as f64),
+            ))
+            .series(Series::new(
+                tr!("usage_page.kpi_generated_tokens"),
+                points.iter().map(|p| p.output as f64),
+            ))
+            .format(|value| format_tokens(value.max(0.0) as u64));
+        usage_card(theme)
+            .h_full()
+            .p_5()
+            .gap_4()
+            .child(CardHeader::new(if single_day {
+                tr!("usage_page.hourly_title")
+            } else {
+                tr!("usage_page.daily_title")
+            }))
             .child(chart)
-            .child(axis)
-            .child(usage_chart_legend(theme))
-            .when(single_day && views.hourly_estimated, |card| {
-                card.child(
-                    div()
-                        .text_size(ui_px(10.5))
-                        .text_color(theme.text_tertiary)
-                        .child(tr!("usage_page.hourly_estimated")),
-                )
-            })
     }
 
-    /// Where the store's tokens went by model, as a treemap: one tile per
-    /// model, its area its share. A ranked list answered "which model is
-    /// biggest"; the area answers that and "how much bigger" in the same
-    /// glance, which is what a share question is actually about.
+    /// Readable model comparisons even when only one or two models were used.
     fn render_usage_models(
         &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
         views: &UsageViews,
         theme: &Theme,
     ) -> Div {
-        let tiles: Vec<TreemapTile> = views
+        let rows = views
             .models
             .iter()
             .map(|row| {
@@ -1119,62 +1043,38 @@ impl Fintwind {
                     },
                     None => (tr!("usage_page.unknown_model").to_owned(), String::new()),
                 };
-                TreemapTile {
-                    name,
-                    qualified,
+                UsageRankRow {
+                    id: format!("usage-model-{qualified}"),
+                    display: name,
+                    tooltip: qualified,
                     count_label: tr!("usage_page.model_sessions", count = row.sessions),
                     total: row.total,
-                    cost: row.cost,
-                    value_label: None,
-                    color: None,
                 }
             })
             .collect();
-        let card = div()
-            .w_full()
-            .px(px(16.0))
-            .py(px(14.0))
-            .rounded(px(13.0))
-            .bg(theme.raised)
-            .shadow_xs()
-            .flex()
-            .flex_col()
-            .gap(px(10.0))
-            .child(usage_card_header(
-                tr!("usage_page.models_title"),
-                tr!("usage_page.models_caption", count = views.model_count),
-                theme,
-            ));
-        // Nothing to divide: every model in view spent no tokens, so the card
-        // keeps its header rather than an empty field.
-        if tiles.is_empty() {
-            return card;
-        }
-        card.child(usage_treemap(
-            "usage-model-treemap",
-            window,
-            cx,
-            &tiles,
+        usage_ranking_card(
+            tr!("usage_page.models_title"),
+            tr!("usage_page.models_caption", count = views.model_count),
+            rows,
             theme,
-        ))
+            ranking_row_count(views),
+            views.totals.total(),
+        )
     }
 
     /// The per-provider ranking: where the store's usage actually went.
     /// Derived from the model strings the scan already carries, so it costs
     /// no extra request and no extra protocol field.
-    fn render_usage_providers(&self, views: &UsageViews, theme: &Theme) -> Div {
+    fn render_usage_providers(&self, views: &UsageViews, theme: &Theme, _narrow: bool) -> Div {
         let rows: Vec<UsageRankRow> = views
             .providers
             .iter()
-            .enumerate()
-            .map(|(index, row)| UsageRankRow {
-                id: format!("usage-provider-{index}"),
-                icon_path: "icons/globe.svg",
+            .map(|row| UsageRankRow {
+                id: format!("usage-provider-{}", row.provider),
                 tooltip: row.provider.clone(),
                 display: row.provider.clone(),
                 count_label: tr!("usage_page.provider_models", count = row.models),
                 total: row.total,
-                cost: row.cost,
             })
             .collect();
         usage_ranking_card(
@@ -1182,24 +1082,23 @@ impl Fintwind {
             tr!("usage_page.providers_caption", count = views.provider_count),
             rows,
             theme,
+            ranking_row_count(views),
+            views.totals.total(),
         )
     }
 
     /// The per-project ranking: which working directories the store's
     /// sessions actually ran in, largest share first.
-    fn render_usage_projects(&self, views: &UsageViews, theme: &Theme) -> Div {
+    fn render_usage_projects(&self, views: &UsageViews, theme: &Theme, _narrow: bool) -> Div {
         let rows: Vec<UsageRankRow> = views
             .projects
             .iter()
-            .enumerate()
-            .map(|(index, row)| UsageRankRow {
-                id: format!("usage-project-{index}"),
-                icon_path: "icons/folder.svg",
+            .map(|row| UsageRankRow {
+                id: format!("usage-project-{}", row.directory),
                 tooltip: row.directory.clone(),
                 display: project_display_name(&row.directory),
                 count_label: tr!("usage_page.model_sessions", count = row.sessions),
                 total: row.total,
-                cost: row.cost,
             })
             .collect();
         usage_ranking_card(
@@ -1207,44 +1106,39 @@ impl Fintwind {
             tr!("usage_page.projects_caption", count = views.project_count),
             rows,
             theme,
+            ranking_row_count(views),
+            views.totals.total(),
         )
     }
 }
 
 fn usage_day_button(
     id: &'static str,
-    icon_path: &'static str,
+    _icon_path: &'static str,
     enabled: bool,
     delta: i64,
-    theme: &Theme,
+    _theme: &Theme,
     cx: &mut Context<Fintwind>,
-) -> Stateful<Div> {
-    div()
-        .id(id)
-        .tab_index(0)
-        .tab_stop(enabled)
-        .size(px(24.0))
-        .rounded(px(5.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .border_1()
-        .border_color(gpui::transparent_black())
-        .focus_visible(|style| style.border_color(theme.accent))
-        .when(enabled, |button| {
-            button.hover(|style| style.bg(theme.overlay))
-        })
-        .when(!enabled, |button| button.opacity(0.35))
-        .child(icon(icon_path, 12.0, theme.text_secondary))
-        .tooltip(Tooltip::text(tr!(match delta {
-            1 => "usage_page.previous_day",
-            _ => "usage_page.next_day",
-        })))
-        .on_activation(cx, move |this, _, cx| {
-            if enabled {
-                this.shift_usage_day(delta, cx);
-            }
-        })
+) -> IconButton {
+    IconButton::new(
+        id,
+        if delta > 0 {
+            IconName::ChevronLeft
+        } else {
+            IconName::ChevronRight
+        },
+    )
+    .size(ControlSize::Sm)
+    .disabled(!enabled)
+    .tooltip(tr!(match delta {
+        1 => "usage_page.previous_day",
+        _ => "usage_page.next_day",
+    }))
+    .on_click(cx.listener(move |this, _, _, cx| {
+        if enabled {
+            this.shift_usage_day(delta, cx);
+        }
+    }))
 }
 
 #[derive(Clone)]
@@ -1252,9 +1146,6 @@ struct UsagePlotPoint {
     label: String,
     input: u64,
     output: u64,
-    cache_write: u64,
-    cache_read: u64,
-    cost: f64,
 }
 
 /// The hue series every chart on this page draws from. The treemap borrows it
@@ -1268,548 +1159,133 @@ pub(super) fn plot_colors(theme: &Theme) -> [Hsla; 5] {
     colors.map(|color| rgb(color).into())
 }
 
-fn plot_values(point: &UsagePlotPoint) -> [f64; 5] {
-    [
-        point.input as f64,
-        point.output as f64,
-        point.cache_write as f64,
-        point.cache_read as f64,
-        point.cost,
-    ]
-}
-
-/// How many straight segments approximate one interval of the spline. At the
-/// plot's width a segment is a couple of pixels long, so the joins disappear
-/// under the 2px stroke.
-const CURVE_SAMPLES: usize = 8;
-
-/// Continue `path` from its current point through a uniform Catmull-Rom spline
-/// over `points`, sampled as short straight segments. Only y is splined: x stays
-/// linear, so a curve cannot double back over its neighbours, and the spline
-/// passes through every datum the hover dots sit on. y is kept inside the plot
-/// so a peak's overshoot cannot paint outside the chart.
-fn trace_curve(path: &mut PathBuilder, points: &[(f32, f32)], ceiling: f32, floor: f32) {
-    if points.len() < 2 {
-        return;
-    }
-    for index in 0..points.len() - 1 {
-        let y0 = points[index.saturating_sub(1)].1;
-        let y1 = points[index].1;
-        let y2 = points[index + 1].1;
-        let y3 = points[(index + 2).min(points.len() - 1)].1;
-        let x1 = points[index].0;
-        let x2 = points[index + 1].0;
-        for step in 1..=CURVE_SAMPLES {
-            let t = step as f32 / CURVE_SAMPLES as f32;
-            let t2 = t * t;
-            let t3 = t2 * t;
-            let y = 0.5
-                * (2.0 * y1
-                    + (y2 - y0) * t
-                    + (2.0 * y0 - 5.0 * y1 + 4.0 * y2 - y3) * t2
-                    + (3.0 * y1 - y0 - 3.0 * y2 + y3) * t3);
-            path.line_to(point(px(x1 + (x2 - x1) * t), px(y.clamp(ceiling, floor))));
-        }
-    }
-}
-
-fn usage_line_chart(points: &[UsagePlotPoint], theme: &Theme) -> Div {
-    let colors = plot_colors(theme);
-    let values: Vec<_> = points.iter().map(plot_values).collect();
-    let token_max = values
-        .iter()
-        .flat_map(|v| v[..4].iter())
-        .copied()
-        .fold(1.0_f64, f64::max);
-    let cost_max = values.iter().map(|v| v[4]).fold(0.0_f64, f64::max);
-    let count = points.len();
-    let plot = canvas(
-        |_, _, _| (),
-        move |bounds, _, window, _| {
-            if count == 0 {
-                return;
-            }
-            let width = f32::from(bounds.size.width);
-            let height = f32::from(bounds.size.height);
-            let left = f32::from(bounds.origin.x);
-            let top = f32::from(bounds.origin.y);
-            let ceiling = top + 2.0;
-            let floor = top + height;
-            // The fill and the strokes ride the same spline, so the area under
-            // cache hits cannot drift away from the line above it.
-            let series_points = |series: usize| -> Vec<(f32, f32)> {
-                let max = if series == 4 { cost_max } else { token_max };
-                values
-                    .iter()
-                    .enumerate()
-                    .map(|(index, datum)| {
-                        let x = (index as f32 + 0.5) * width / count as f32;
-                        let y =
-                            height - (datum[series] / max.max(1e-12)) as f32 * (height - 5.0) - 2.0;
-                        (left + x, top + y)
-                    })
-                    .collect()
-            };
-            // A subtle area under cache hits mirrors the reference chart
-            // without hiding the other four independent traces.
-            let cache_points = series_points(3);
-            let mut area = PathBuilder::fill();
-            area.move_to(point(px(left + width / (2.0 * count as f32)), px(floor)));
-            if let Some(&(first_x, first_y)) = cache_points.first() {
-                area.line_to(point(px(first_x), px(first_y)));
-            }
-            trace_curve(&mut area, &cache_points, ceiling, floor);
-            area.line_to(point(
-                px(left + width - width / (2.0 * count as f32)),
-                px(floor),
-            ));
-            area.close();
-            if let Ok(area) = area.build() {
-                window.paint_path(area, colors[3].opacity(0.10));
-            }
-            for series in 0..5 {
-                let points = series_points(series);
-                let Some(&(first_x, first_y)) = points.first() else {
-                    continue;
-                };
-                let mut path = PathBuilder::stroke(px(2.0));
-                path.move_to(point(px(first_x), px(first_y)));
-                trace_curve(&mut path, &points, ceiling, floor);
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, colors[series]);
-                }
-            }
-        },
-    );
-    div()
-        .h(px(DAILY_CHART_PX + 44.0))
-        .relative()
-        .child(plot.absolute().inset_0())
-        .child(
-            div()
-                .absolute()
-                .inset_0()
-                .flex()
-                .children(points.iter().enumerate().map(|(index, datum)| {
-                    let id = SharedString::from(format!("usage-plot-{index}"));
-                    let datum = datum.clone();
-                    let values = plot_values(&datum);
-                    div()
-                        .id(id.clone())
-                        .group(id.clone())
-                        .tab_index(0)
-                        .relative()
-                        .flex_1()
-                        .min_w_0()
-                        .h_full()
-                        .border_1()
-                        .border_color(gpui::transparent_black())
-                        .focus_visible(|style| style.border_color(theme.accent))
-                        .child(
-                            div()
-                                .absolute()
-                                .left(gpui::relative(0.5))
-                                .top_0()
-                                .h_full()
-                                .w(px(1.0))
-                                .bg(gpui::transparent_black())
-                                .group_hover(id.clone(), |line| line.bg(theme.border_strong)),
-                        )
-                        .children((0..5).map(|series| {
-                            let max = if series == 4 { cost_max } else { token_max };
-                            let bottom = (values[series] / max.max(1e-12)) as f32
-                                * (DAILY_CHART_PX + 39.0)
-                                - 1.5;
-                            div()
-                                .absolute()
-                                .left(gpui::relative(0.5))
-                                .ml(px(-3.5))
-                                .bottom(px(bottom))
-                                .size(px(7.0))
-                                .rounded_full()
-                                .border_1()
-                                .border_color(theme.raised)
-                                .bg(colors[series])
-                                .opacity(0.0)
-                                .group_hover(id.clone(), |dot| dot.opacity(1.0))
-                        }))
-                        .tooltip(move |_, cx| {
-                            cx.new(|_| UsagePlotTooltip {
-                                point: datum.clone(),
-                            })
-                            .into()
-                        })
-                        .tooltip_show_delay(CHART_TOOLTIP_DELAY)
-                })),
-        )
-}
-
-struct UsagePlotTooltip {
-    point: UsagePlotPoint,
-}
-
-impl Render for UsagePlotTooltip {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::current(cx);
-        let values = plot_values(&self.point);
-        let labels = [
-            tr!("usage_page.plot_input"),
-            tr!("usage_page.plot_output"),
-            tr!("usage_page.plot_cache_write"),
-            tr!("usage_page.plot_cache_read"),
-            tr!("usage_page.plot_cost"),
-        ];
-        let colors = plot_colors(&theme);
-        div().pt(px(4.0)).child(
-            div()
-                .px(px(13.0))
-                .py(px(10.0))
-                .rounded(px(10.0))
-                .border_1()
-                .border_color(theme.border_strong)
-                .bg(theme.raised)
-                .shadow_md()
-                .flex()
-                .flex_col()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .mb(px(3.0))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.text)
-                        .child(self.point.label.clone()),
-                )
-                .children((0..5).map(|index| {
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(7.0))
-                        .text_size(ui_px(11.0))
-                        .text_color(colors[index])
-                        .child(div().size(px(7.0)).rounded_full().bg(colors[index]))
-                        .child(format!(
-                            "{}: {}",
-                            labels[index],
-                            if index == 4 {
-                                format!("${:.6}", values[index])
-                            } else {
-                                format_grouped_tokens(values[index] as u64)
-                            }
-                        ))
-                })),
-        )
-    }
-}
-
-fn format_grouped_tokens(tokens: u64) -> String {
-    tokens
-        .to_string()
-        .as_bytes()
-        .rchunks(3)
-        .rev()
-        .map(|group| std::str::from_utf8(group).unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn usage_chart_legend(theme: &Theme) -> Div {
-    let labels = [
-        tr!("usage_page.plot_input"),
-        tr!("usage_page.plot_output"),
-        tr!("usage_page.plot_cache_write"),
-        tr!("usage_page.plot_cache_read"),
-        tr!("usage_page.plot_cost"),
-    ];
-    let colors = plot_colors(theme);
-    div()
-        .flex()
-        .flex_wrap()
-        .gap(px(12.0))
-        .children((0..5).map(|index| {
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .text_size(ui_px(10.0))
-                .text_color(theme.text_secondary)
-                .child(div().size(px(7.0)).rounded_full().bg(colors[index]))
-                .child(labels[index].clone())
-        }))
-}
-
 /// One row of a usage ranking card. The model, provider, and project rankings
 /// differ only in what fills these fields, so they share one renderer; the
 /// alternative was three copies of the same bar, tooltip, and focus handling.
 struct UsageRankRow {
     id: String,
-    icon_path: &'static str,
     /// The label, truncated to fit its column.
     display: String,
-    /// Hover text, with the cost appended when there is one.
+    /// Full model identity or directory for the tooltip.
     tooltip: String,
     /// The trailing count, already localized — "3 个会话" or "2 个模型".
     count_label: String,
     total: u64,
-    cost: f64,
 }
 
-/// The titled line every card on this page opens with: the name on the left,
-/// the count on the right.
-fn usage_card_header(title: String, caption: String, theme: &Theme) -> Div {
-    div()
-        .flex()
-        .items_center()
-        .gap(px(8.0))
-        .child(
-            div()
-                .text_size(ui_px(13.0))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
-                .child(title),
-        )
-        .child(div().flex_1().min_w_0())
-        .child(
-            div()
-                .text_size(ui_px(10.5))
-                .text_color(theme.text_tertiary)
-                .child(caption),
-        )
-}
-
-/// A ranking card: a titled list of rows, each a label, a share bar scaled to
-/// the busiest row, and a token total. Rows are keyboard-reachable in the
-/// order they are drawn.
+/// Horizontal share comparisons using the same total across all three cards.
+/// Ely rows keep names and exact figures readable without hovering; the bars
+/// sit directly below their labels instead of duplicating the ranking.
 fn usage_ranking_card(
     title: String,
     caption: String,
     rows: Vec<UsageRankRow>,
     theme: &Theme,
+    row_count: usize,
+    total: u64,
 ) -> Div {
-    let max_total = rows.first().map(|row| row.total).unwrap_or_default();
-    let mut card = div()
-        .w_full()
-        .px(px(16.0))
-        .py(px(14.0))
-        .rounded(px(13.0))
-        .bg(theme.raised)
-        .shadow_xs()
-        .flex()
-        .flex_col()
-        .gap(px(4.0))
-        .child(usage_card_header(title, caption, theme));
-
-    for (index, row) in rows.iter().enumerate() {
-        let share = if max_total > 0 {
-            (row.total as f32 / max_total as f32).clamp(0.0, 1.0)
+    let list = List::new().divided().children(rows.into_iter().map(|row| {
+        let share = if total > 0 {
+            row.total as f64 / total as f64 * 100.0
         } else {
             0.0
         };
-        let mut tooltip = row.tooltip.clone();
-        if row.cost > 0.0 {
-            tooltip = format!("{} · {}", tooltip, format_cost(row.cost));
-        }
-        let last = index + 1 >= rows.len();
-        card = card.child(
-            div()
-                .id(SharedString::from(row.id.clone()))
-                .tab_index(0)
-                .focus_visible(|style| style.border_color(theme.accent))
-                .flex()
-                .items_center()
-                .gap(px(10.0))
-                .py(px(7.0))
-                .border_b_1()
-                .when(last, |row| row.border_color(gpui::transparent_black()))
-                .when(!last, |row| row.border_color(theme.border))
-                .child(icon(row.icon_path, 14.0, theme.text_tertiary))
-                .child(
+        div()
+            .id(SharedString::from(format!("{}-detail", row.id)))
+            .min_h(gpui::rems(4.5))
+            .tooltip(Tooltip::text(row.tooltip))
+            .child(
+                ListItem::new(SharedString::from(row.id), row.display)
+                    .description(row.count_label)
+                    .trailing(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .items_end()
+                            .gap_0p5()
+                            .child(tabular(Label::new(format_tokens(row.total))))
+                            .child(tabular(Caption::new(format!("{share:.1}%")))),
+                    ),
+            )
+            .child(
+                div().px_3().pb_3().child(
                     div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .flex()
-                        .flex_col()
-                        .gap(px(3.0))
+                        .w_full()
+                        .h(px(8.0))
+                        .rounded(px(3.0))
+                        .overflow_hidden()
+                        .bg(theme.accent.opacity(0.12))
                         .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.0))
-                                .child(
-                                    div()
-                                        .min_w(px(0.0))
-                                        .truncate()
-                                        .text_size(ui_px(12.0))
-                                        .text_color(theme.text)
-                                        .child(SharedString::from(row.display.clone())),
-                                )
-                                .child(div().flex_1().min_w_0())
-                                .child(
-                                    div()
-                                        .flex_none()
-                                        .text_size(ui_px(10.0))
-                                        .text_color(theme.text_tertiary)
-                                        .child(SharedString::from(row.count_label.clone())),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .h(px(4.0))
-                                .w_full()
-                                .rounded_full()
-                                .bg(theme.overlay_strong)
-                                .child(
-                                    div()
-                                        .h_full()
-                                        .w(relative(share))
-                                        .rounded_full()
-                                        .bg(theme.gauge),
-                                ),
+                                .h_full()
+                                .w(gpui::relative((share / 100.0).clamp(0.0, 1.0) as f32))
+                                .rounded(px(3.0))
+                                .bg(theme.accent),
                         ),
-                )
-                .child(
-                    div()
-                        .flex_none()
-                        .w(px(64.0))
-                        .flex()
-                        .flex_col()
-                        .items_end()
-                        .gap(px(1.0))
-                        .child(
-                            div()
-                                .text_size(ui_px(11.5))
-                                .text_color(theme.text_secondary)
-                                .child(SharedString::from(format_tokens(row.total))),
-                        )
-                        .when(row.cost > 0.0, |cost| {
-                            cost.child(
-                                div()
-                                    .text_size(ui_px(9.5))
-                                    .text_color(theme.text_tertiary)
-                                    .child(SharedString::from(format_cost(row.cost))),
-                            )
-                        }),
-                )
-                .tooltip(Tooltip::text(SharedString::from(tooltip))),
-        );
-    }
-
-    card
+                ),
+            )
+    }));
+    usage_card(theme)
+        .h_full()
+        .p_5()
+        .gap_4()
+        .child(CardHeader::new(title).action(Caption::new(caption)))
+        .child(div().min_h(gpui::rems(4.5 * row_count as f32)).child(list))
 }
 
-fn usage_kpi_metric(theme: &Theme, label: impl IntoElement, value: impl IntoElement) -> Div {
-    div()
-        .flex_1()
-        .flex_basis(ui_px(128.0))
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .child(
-            div()
-                .text_size(ui_px(11.0))
-                .text_color(theme.text_tertiary)
-                .child(label),
-        )
-        .child(
-            div()
-                .text_size(ui_px(24.0))
-                .line_height(ui_px(32.0))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(theme.text)
-                .child(value),
-        )
+fn ranking_row_count(views: &UsageViews) -> usize {
+    views
+        .models
+        .len()
+        .max(views.providers.len())
+        .max(views.projects.len())
+        .max(1)
 }
 
-fn usage_notice(
-    theme: &Theme,
-    icon_path: &'static str,
-    tint: Hsla,
-    message: impl IntoElement,
-) -> Div {
-    div()
-        .w_full()
-        .px(px(14.0))
-        .py(px(11.0))
-        .rounded(px(10.0))
-        .bg(theme.raised)
-        .border_1()
-        .border_color(theme.border)
-        .flex()
-        .items_center()
-        .gap(px(9.0))
-        .child(icon(icon_path, 13.0, tint))
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .whitespace_normal()
-                .text_size(ui_px(11.5))
-                .line_height(ui_px(16.0))
-                .text_color(theme.text_secondary)
-                .child(message),
-        )
+/// Product-owned surface treatment around Ely content. Match the composer
+/// and inspector cards, rather than Ely's unrelated default flat surface.
+pub(super) fn usage_card(theme: &Theme) -> Div {
+    crate::ui::card(theme)
 }
 
-fn usage_retry_button(theme: &Theme, cx: &mut Context<Fintwind>) -> Stateful<Div> {
-    div()
-        .id("usage-stats-retry")
-        .tab_index(0)
-        .h(px(26.0))
-        .px(px(10.0))
-        .rounded(px(7.0))
-        .border_1()
-        .border_color(theme.border_strong)
-        .flex()
-        .items_center()
-        .cursor_default()
-        .text_size(ui_px(11.0))
-        .text_color(theme.text_secondary)
-        .focus_visible(|style| style.border_color(theme.accent))
-        .hover(|element| element.bg(theme.overlay))
-        .active(|element| element.bg(theme.overlay_strong))
-        .child(tr!("usage_page.retry"))
-        .on_activation(cx, |this, _, cx| {
+fn usage_metric(theme: &Theme, label: String, value: String, caption: String) -> Div {
+    usage_card(theme)
+        .h_full()
+        .min_h(gpui::rems(8.0))
+        .p_5()
+        .gap_2()
+        .child(Caption::new(label))
+        .child(
+            tabular(Label::new(value))
+                .text_3xl()
+                .font_weight(FontWeight::MEDIUM),
+        )
+        .child(Caption::new(caption))
+}
+
+fn usage_notice(_theme: &Theme, icon_path: &'static str, _tint: Hsla, message: String) -> Alert {
+    Alert::new(
+        SharedString::from(format!("usage-notice-{icon_path}")),
+        if icon_path == "icons/alert.svg" {
+            Severity::Warning
+        } else {
+            Severity::Info
+        },
+        message,
+    )
+}
+
+fn usage_retry_button(_theme: &Theme, cx: &mut Context<Fintwind>) -> Button {
+    Button::new("usage-stats-retry", tr!("usage_page.retry"))
+        .size(ControlSize::Sm)
+        .variant(ButtonVariant::Ghost)
+        .on_click(cx.listener(|this, _, _, cx| {
             this.ensure_usage_stats(true, cx);
-        })
+        }))
 }
 
-fn usage_empty_card(theme: &Theme, title: String, body: String) -> Div {
-    div()
-        .w_full()
-        .px(px(20.0))
-        .py(px(36.0))
-        .rounded(px(13.0))
-        .bg(theme.raised)
-        .shadow_xs()
-        .flex()
-        .flex_col()
-        .items_center()
-        .gap(px(6.0))
-        .child(icon("icons/chart-column.svg", 22.0, theme.text_ghost))
-        .child(
-            div()
-                .mt(px(6.0))
-                .text_size(ui_px(13.0))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(theme.text)
-                .child(title),
-        )
-        .child(
-            div()
-                .text_size(ui_px(11.5))
-                .text_color(theme.text_tertiary)
-                .child(body),
-        )
-}
-
-fn heat_level_color(theme: &Theme, level: u8) -> Hsla {
-    match level {
-        0 => theme.inset,
-        1 => theme.accent.opacity(0.25),
-        2 => theme.accent.opacity(0.45),
-        3 => theme.accent.opacity(0.7),
-        _ => theme.accent,
-    }
+fn usage_empty_card(_theme: &Theme, title: String, body: String) -> EmptyState {
+    EmptyState::new("usage-history-empty", IconName::ChartColumn, title).body(body)
 }
 
 /// One day's aggregate bucket, zeroed.
@@ -2531,6 +2007,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
             ..Default::default()
         })
         .collect::<Vec<_>>();
+    #[cfg(test)]
     let mut hourly_estimated = false;
     // Model rows key on the raw `provider/id` string, except a session the
     // server recorded no model for — it folds into the unknown-model row so
@@ -2621,7 +2098,10 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         if let Some(selected) = selected_day {
             if entry.hours.is_empty() {
                 if entry.total_tokens() > 0 && local_date(entry.timestamp) == Some(selected) {
-                    hourly_estimated = true;
+                    #[cfg(test)]
+                    {
+                        hourly_estimated = true;
+                    }
                     let hour = local_hour(entry.timestamp) as usize;
                     let bucket = &mut hourly[hour];
                     bucket.input = bucket.input.saturating_add(entry.input_tokens);
@@ -2638,7 +2118,10 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                     if local_date(share.timestamp) != Some(selected) {
                         continue;
                     }
-                    hourly_estimated |= share.estimated;
+                    #[cfg(test)]
+                    {
+                        hourly_estimated |= share.estimated;
+                    }
                     let bucket = &mut hourly[local_hour(share.timestamp) as usize];
                     bucket.input = bucket.input.saturating_add(share.input);
                     bucket.output = bucket.output.saturating_add(share.output);
@@ -2648,7 +2131,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                 }
                 // A session summary can contain tokens absent from its
                 // message walk (including folded sub-agents). Attribute the
-                // unlocated remainder to last activity and label the estimate.
+                // unlocated remainder to last activity.
                 if local_date(entry.timestamp) == Some(selected) {
                     let missing_input = entry
                         .input_tokens
@@ -2666,15 +2149,15 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
                     let missing_cost = (entry.cost.unwrap_or_default()
                         - entry.hours.iter().map(|h| h.cost).sum::<f64>())
                     .max(0.0);
-                    // The pricing pass re-derives each hour's cost by token
-                    // share, so what is left here is normally f64 dust; only
-                    // a real remainder — half a cent or more — means hours
-                    // the scan could not place.
-                    hourly_estimated |= missing_input > 0
-                        || missing_output > 0
-                        || missing_read > 0
-                        || missing_write > 0
-                        || missing_cost > 0.005;
+                    #[cfg(test)]
+                    {
+                        // Ignore floating-point dust from the pricing pass.
+                        hourly_estimated |= missing_input > 0
+                            || missing_output > 0
+                            || missing_read > 0
+                            || missing_write > 0
+                            || missing_cost > 0.005;
+                    }
                     let bucket = &mut hourly[local_hour(entry.timestamp) as usize];
                     bucket.input = bucket.input.saturating_add(missing_input);
                     bucket.output = bucket.output.saturating_add(missing_output);
@@ -2715,8 +2198,10 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
             let day = days.get(&date);
             Some(UsageHeatCell {
                 date,
+                #[cfg(test)]
                 total: day.map(|day| day.total).unwrap_or(0),
                 direct: day.map(|day| day.direct).unwrap_or(0),
+                #[cfg(test)]
                 sessions: day.map(|day| day.sessions).unwrap_or(0),
                 level: 0,
             })
@@ -2761,11 +2246,12 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
     let mut models: Vec<UsageModelRow> = models
         .into_iter()
         .map(
-            |(model, (sessions, total, cost, last_used))| UsageModelRow {
+            |(model, (sessions, total, _cost, last_used))| UsageModelRow {
                 model,
                 sessions,
                 total,
-                cost,
+                #[cfg(test)]
+                cost: _cost,
                 last_used,
             },
         )
@@ -2776,11 +2262,12 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
 
     let mut provider_rows: Vec<UsageProviderRow> = providers
         .into_iter()
-        .map(|(provider, (models, total, cost))| UsageProviderRow {
+        .map(|(provider, (models, total, _cost))| UsageProviderRow {
             provider,
             models,
             total,
-            cost,
+            #[cfg(test)]
+            cost: _cost,
         })
         .collect();
     provider_rows.sort_by(|a, b| b.total.cmp(&a.total));
@@ -2789,11 +2276,12 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
 
     let mut projects: Vec<UsageProjectRow> = projects
         .into_iter()
-        .map(|(_, (directory, sessions, total, cost))| UsageProjectRow {
+        .map(|(_, (directory, sessions, total, _cost))| UsageProjectRow {
             directory,
             sessions,
             total,
-            cost,
+            #[cfg(test)]
+            cost: _cost,
         })
         .collect();
     projects.sort_by(|a, b| b.total.cmp(&a.total).then(b.directory.cmp(&a.directory)));
@@ -2804,6 +2292,7 @@ pub(super) fn build_views(stats: Option<&UsageStats>, range: UsageRange) -> Usag
         totals,
         daily,
         hourly,
+        #[cfg(test)]
         hourly_estimated,
         weeks,
         heatmap_active_days,
@@ -2822,10 +2311,6 @@ fn local_hour(timestamp: u64) -> u32 {
         .unwrap_or(0)
 }
 
-fn heat_grid_px() -> f32 {
-    HEAT_CELL_PX * 7.0 + HEAT_GAP_PX * 6.0
-}
-
 /// 0 when the day is quiet, otherwise 1–4 by equal shares of `max_direct`.
 fn heat_level(direct: u64, max_direct: u64) -> u8 {
     if direct == 0 || max_direct == 0 {
@@ -2837,25 +2322,14 @@ fn heat_level(direct: u64, max_direct: u64) -> u8 {
     }
 }
 
-/// Tooltip copy for a heatmap cell and a daily bar. `tokens` is the non-cache
-/// amount the mark encodes; `cache` is the rest, so a short bar with a huge
-/// raw total is explained instead of looking inverted.
-fn usage_day_tooltip(date: NaiveDate, direct: u64, total: u64, sessions: u32) -> SharedString {
-    SharedString::from(tr!(
-        "usage_page.day_tooltip",
-        date = format_day_label(date),
-        tokens = format_tokens(direct),
-        cache = format_tokens(total.saturating_sub(direct)),
-        sessions = sessions,
-    ))
-}
-
+#[cfg(test)]
 struct HeatMonthBand {
     key: (i32, u32),
     start: usize,
     end: usize,
 }
 
+#[cfg(test)]
 impl HeatMonthBand {
     fn label(&self) -> String {
         NaiveDate::from_ymd_opt(self.key.0, self.key.1, 1)
@@ -2868,6 +2342,7 @@ impl HeatMonthBand {
 /// its 1st when it contains one (so September opens on the column that
 /// actually enters September, even if that Monday is still August);
 /// otherwise it belongs to its Monday. Weeks are never split.
+#[cfg(test)]
 fn heatmap_month_bands(weeks: &[Vec<Option<UsageHeatCell>>]) -> Vec<HeatMonthBand> {
     let mut bands: Vec<HeatMonthBand> = Vec::new();
     for (index, week) in weeks.iter().enumerate() {
@@ -2893,6 +2368,7 @@ fn heatmap_month_bands(weeks: &[Vec<Option<UsageHeatCell>>]) -> Vec<HeatMonthBan
     bands
 }
 
+#[cfg(test)]
 fn week_month(week: &[Option<UsageHeatCell>]) -> Option<(i32, u32)> {
     let mut monday = None;
     for cell in week.iter().flatten() {
@@ -2932,6 +2408,7 @@ fn project_display_name(directory: &str) -> String {
         .to_owned()
 }
 
+#[cfg(test)]
 fn month_label(date: NaiveDate) -> String {
     if crate::i18n::uses_east_asian_date_format() {
         format!("{}月", date.month())

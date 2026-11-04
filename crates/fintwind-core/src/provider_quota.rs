@@ -1,7 +1,6 @@
 //! Read-only vendor allowance adapters. All I/O stays on the daemon request thread.
 //! OpenCode owns credentials and their refresh. No discovery, inference, or writes.
-//! Kimi ratio reconciliation is adapted from CodexBar (278e9056), and MiniMax
-//! response handling follows CodexBar and Magpie (8d2a4a7). See
+//! Vendor response handling follows Magpie's 43849d51 snapshot. See
 //! docs/provider-quota-upstream-license.txt for their MIT license notices.
 
 use std::collections::HashMap;
@@ -12,22 +11,11 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use fintwind_protocol::provider_quota::{
-    ProviderQuota, QuotaBalance, QuotaStatus, QuotaWindow, QuotaWindowKind, supports_provider_quota,
+    ProviderQuota, QuotaBalance, QuotaStatus, QuotaWindow, QuotaWindowKind, is_local_quota_source,
+    supports_provider_quota,
 };
 
-/// Daemon-only transport seam. Deliberately not Debug/Serialize: contains secrets.
-pub struct QuotaRequest {
-    pub method: &'static str,
-    pub url: String,
-    pub headers: Vec<String>,
-    pub body: Option<String>,
-}
-
-pub struct QuotaResponse {
-    pub status: u16,
-    pub body: String,
-    pub retry_after: Option<u64>,
-}
+pub use fintwind_client::local_quota::{QuotaRequest, QuotaResponse};
 
 pub trait QuotaSource {
     fn credentials(&self) -> anyhow::Result<Value>;
@@ -54,12 +42,6 @@ impl QuotaSource for ServerSource<'_> {
 
     fn credentials_for(&self, provider: &str) -> anyhow::Result<Value> {
         let credentials = self.credentials()?;
-        // Leave OpenAI's existing handling unchanged as requested. For the other
-        // adapters the connection list owns selection, including legacy rows
-        // without an active flag. Do not infer order from /api/credential.
-        if provider == "openai" {
-            return Ok(credentials);
-        }
         let integration = self
             .0
             .request("GET", &format!("/api/integration/{provider}"), None)?;
@@ -122,6 +104,7 @@ struct Cached {
 #[derive(Default)]
 pub struct QuotaService {
     entries: Mutex<HashMap<(String, String), Arc<Mutex<Cached>>>>,
+    pub(crate) local: fintwind_client::local_quota::LocalQuotaCache,
 }
 
 impl QuotaService {
@@ -131,12 +114,120 @@ impl QuotaService {
         provider: &str,
         force: bool,
     ) -> ProviderQuota {
+        if provider == "opencode" {
+            return self.fetch_opencode_limits(server, force);
+        }
         self.fetch(
             &ServerSource(server),
             &server.port.to_string(),
             provider,
             force,
         )
+    }
+
+    /// Console OAuth belongs to OpenCode, not the `opencode-go` inference
+    /// provider. Ask the running server to resolve its own membership and
+    /// workspace; do not extract its OAuth token or require a second API key.
+    fn fetch_opencode_limits(
+        &self,
+        server: &crate::opencode_session::OpenCodeServer,
+        force: bool,
+    ) -> ProviderQuota {
+        let entry = self
+            .entries
+            .lock()
+            .entry((server.port.to_string(), "opencode".into()))
+            .or_default()
+            .clone();
+        let mut cache = entry.lock();
+        let connection_identity = || -> anyhow::Result<Option<[u8; 32]>> {
+            let integration = server.request("GET", "/api/integration/opencode", None)?;
+            let integration = integration.get("data").unwrap_or(&integration);
+            Ok(integration["connections"]
+                .as_array()
+                .filter(|rows| !rows.is_empty())
+                .map(|rows| Sha256::digest(serde_json::to_vec(rows).unwrap_or_default()).into()))
+        };
+        let identity = match connection_identity() {
+            Ok(Some(identity)) => identity,
+            Ok(None) => {
+                *cache = Cached::default();
+                return ProviderQuota::empty(QuotaStatus::NoCredential);
+            }
+            Err(_) => return ProviderQuota::empty(QuotaStatus::Unavailable),
+        };
+        if cache.identity != Some(identity) {
+            *cache = Cached {
+                identity: Some(identity),
+                ..Default::default()
+            };
+        }
+        let now = chrono::Utc::now().timestamp();
+        if now
+            < if force {
+                cache.next_manual
+            } else {
+                cache.next_auto
+            }
+            && let Some(last) = &cache.last
+        {
+            return last.clone();
+        }
+        let mut reading = match server.request("GET", "/api/experimental/usage/limits", None) {
+            Ok(body) => {
+                let data = body.get("data").unwrap_or(&body);
+                let mut reading = ProviderQuota::empty(QuotaStatus::Ready);
+                if data["go"].is_object() {
+                    reading.service = Some("OpenCode Go".into());
+                    reading.plan = Some("Go".into());
+                    for (key, kind, span) in [
+                        ("rolling", QuotaWindowKind::Rolling, Some(18000)),
+                        ("weekly", QuotaWindowKind::Weekly, Some(604800)),
+                        ("monthly", QuotaWindowKind::Monthly, None),
+                    ] {
+                        let meter = &data["go"][key];
+                        if let Some(used) = percent(&meter["percent"]) {
+                            reading.windows.push(window(
+                                key,
+                                kind,
+                                Some(used),
+                                timestamp(&meter["resetsAt"]),
+                                span,
+                            ));
+                        }
+                    }
+                }
+                if reading.windows.is_empty() {
+                    reading.status = QuotaStatus::NoData;
+                }
+                reading
+            }
+            Err(_) => ProviderQuota::empty(QuotaStatus::Unavailable),
+        };
+        if connection_identity().ok().flatten() != Some(identity) {
+            *cache = Cached::default();
+            return ProviderQuota::empty(QuotaStatus::Unavailable);
+        }
+        let now = chrono::Utc::now().timestamp();
+        cache.next_manual = now.saturating_add(15);
+        cache.next_auto = now.saturating_add(60);
+        if reading.status == QuotaStatus::Ready {
+            reading.measured_at = Some(now);
+            cache.good = Some(reading.clone());
+        } else if reading.status == QuotaStatus::Unavailable {
+            if let Some(good) = cache.good.as_ref().filter(|good| {
+                good.measured_at
+                    .is_some_and(|at| now.saturating_sub(at) < 86400)
+            }) {
+                reading = good.clone();
+                reading.status = QuotaStatus::Unavailable;
+            }
+        } else {
+            cache.good = None;
+        }
+        reading.retry_at = (reading.status != QuotaStatus::Ready).then_some(cache.next_auto);
+        cache.last = Some(reading.clone());
+        reading
     }
 
     pub fn fetch(
@@ -209,7 +300,7 @@ impl QuotaService {
         let mut q = match &response {
             Ok(r) if (200..300).contains(&r.status) => serde_json::from_str::<Value>(&r.body)
                 .ok()
-                .map(|body| parse(provider, &body, now))
+                .map(|body| parse(provider, &body))
                 .unwrap_or_else(|| ProviderQuota::empty(QuotaStatus::Unavailable)),
             Ok(r) => ProviderQuota::empty(match r.status {
                 401 => QuotaStatus::NeedsAuth,
@@ -272,10 +363,25 @@ impl QuotaService {
 fn quota_environment_name(provider: &str) -> Option<&'static str> {
     match provider {
         "deepseek" => Some("DEEPSEEK_API_KEY"),
-        "zhipuai-coding-plan" | "zai-coding-plan" => Some("ZHIPU_API_KEY"),
+        // Exact variable names from the models.dev catalog; matched against
+        // the server's env connection, never interpolated into a request.
+        "zhipuai" | "zhipuai-coding-plan" | "zai" | "zai-coding-plan" => Some("ZHIPU_API_KEY"),
         "kimi-code-plan-cn" | "kimi-code-plan-global" => Some("KIMI_API_KEY"),
-        "minimax-coding-plan" | "minimax-cn-coding-plan" => Some("MINIMAX_API_KEY"),
-        "stepfun" => Some("STEPFUN_API_KEY"),
+        "minimax" | "minimax-cn" | "minimax-coding-plan" | "minimax-cn-coding-plan" => {
+            Some("MINIMAX_API_KEY")
+        }
+        "stepfun" | "stepfun-ai" | "stepfun-ai-step-plan" | "stepfun-step-plan" => {
+            Some("STEPFUN_API_KEY")
+        }
+        // Exact variable names from the models.dev catalog; matched against
+        // the server's env connection, never interpolated into a request.
+        "ollama-cloud" => Some("OLLAMA_API_KEY"),
+        "openrouter" => Some("OPENROUTER_API_KEY"),
+        "siliconflow" => Some("SILICONFLOW_API_KEY"),
+        "siliconflow-cn" => Some("SILICONFLOW_CN_API_KEY"),
+        "moonshotai" | "moonshotai-cn" => Some("MOONSHOT_API_KEY"),
+        "opencode-go" => Some("OPENCODE_API_KEY"),
+        "commandcode" => Some("CMD_API_KEY"),
         _ => None,
     }
 }
@@ -345,8 +451,61 @@ fn selected_credential<'a>(body: &'a Value, provider: &str) -> Option<&'a Value>
 fn request_for(provider: &str, credential: &Value, now: i64) -> Result<QuotaRequest, QuotaStatus> {
     let value = &credential["value"];
     let kind = value["type"].as_str().unwrap_or_default();
-    let oauth = matches!(provider, "openai" | "google" | "github-copilot");
-    if kind != if oauth { "oauth" } else { "key" } {
+    // Local subscription sources never query through the workspace server;
+    // the daemon answers them from the machine's own sign-in.
+    if is_local_quota_source(provider) {
+        return Err(QuotaStatus::Unsupported);
+    }
+    // The long-standing adapters keep their exact credential shape: OAuth
+    // for the first-party logins, a key for the plan/balance vendors.
+    // Adapters added with the Magpie port accept either a stored key or an
+    // OAuth access token, whichever the OpenCode connection holds.
+    let flexible_oauth = matches!(
+        provider,
+        "commandcode"
+            | "ollama-cloud"
+            | "openrouter"
+            | "siliconflow"
+            | "siliconflow-cn"
+            | "moonshotai"
+            | "moonshotai-cn"
+            | "opencode-go"
+            | "zhipuai"
+            | "zai"
+            | "minimax"
+            | "minimax-cn"
+            | "stepfun-ai"
+            | "stepfun-ai-step-plan"
+            | "stepfun-step-plan"
+    );
+    let oauth =
+        matches!(provider, "google" | "github-copilot") || (flexible_oauth && kind == "oauth");
+    // Tencent Token Plan and Volcengine Ark plans: their account usage APIs
+    // need an AccessKey ID + Secret pair (TC3 / Volc HMAC), never the plan's
+    // own inference key. OpenCode's connection info for these IDs expresses
+    // exactly one secret per key connection (a single models.dev env key, a
+    // single-key /connect flow, sanitized key_accounts with id/label only),
+    // so the pair is not expressible and no account call can be signed.
+    // The bundled models.dev endpoints confirm the plan mapping
+    // (api.lkeap.../coding and /plan, tokenhub.tencentmaas.com/v1,
+    // ark.cn-beijing.volces.com/api/coding/v3 vs /api/v3 pay-as-you-go),
+    // but without an expressible key pair every one of these IDs is
+    // unreachable: Unsupported, never a fabricated zero.
+    if matches!(
+        provider,
+        "tencent-coding-plan"
+            | "tencent-token-plan"
+            | "tencent-tokenhub"
+            | "volcengine"
+            | "volcengine-coding-plan"
+    ) {
+        return Err(QuotaStatus::Unsupported);
+    }
+    if !flexible_oauth {
+        if kind != if oauth { "oauth" } else { "key" } {
+            return Err(QuotaStatus::Unsupported);
+        }
+    } else if kind != "key" && kind != "oauth" {
         return Err(QuotaStatus::Unsupported);
     }
     if oauth && provider != "github-copilot" {
@@ -371,20 +530,6 @@ fn request_for(provider: &str, credential: &Value, now: i64) -> Result<QuotaRequ
         body: None,
     };
     req.url = match provider {
-        "openai" => {
-            if !matches!(
-                value["methodID"].as_str(),
-                Some("chatgpt-browser" | "chatgpt-headless")
-            ) {
-                return Err(QuotaStatus::Unsupported);
-            }
-            let account = metadata["accountID"]
-                .as_str()
-                .filter(|s| !s.is_empty())
-                .ok_or(QuotaStatus::Unsupported)?;
-            req.headers.push(format!("chatgpt-account-id: {account}"));
-            "https://chatgpt.com/backend-api/wham/usage"
-        }
         "github-copilot" => {
             if metadata.get("enterpriseUrl").is_some() {
                 return Err(QuotaStatus::Unsupported);
@@ -405,12 +550,30 @@ fn request_for(provider: &str, credential: &Value, now: i64) -> Result<QuotaRequ
         }
         "zhipuai-coding-plan" => "https://open.bigmodel.cn/api/monitor/usage/quota/limit",
         "zai-coding-plan" => "https://api.z.ai/api/monitor/usage/quota/limit",
+        // The base (non-coding) Zhipu/Z.ai provider reads its account report
+        // instead of plan windows, as Magpie does: a Coding Plan key stays
+        // on the *-coding-plan ID above.
+        "zhipuai" => "https://open.bigmodel.cn/api/biz/account/query-customer-account-report",
+        "zai" => "https://api.z.ai/api/biz/account/query-customer-account-report",
         "kimi-code-plan-cn" => "https://api.kimi.com/coding/v1/usages",
         "kimi-code-plan-global" => "https://api.kimi.ai/coding/v1/usages",
+        "commandcode" => "https://api.commandcode.ai/alpha/billing/credits",
+        "ollama-cloud" => "https://ollama.com/api/balance",
+        "openrouter" => "https://openrouter.ai/api/v1/credits",
+        "siliconflow" => "https://api.siliconflow.com/v1/user/info",
+        "siliconflow-cn" => "https://api.siliconflow.cn/v1/user/info",
+        "moonshotai" => "https://api.moonshot.ai/v1/users/me/balance",
+        "moonshotai-cn" => "https://api.moonshot.cn/v1/users/me/balance",
+        "opencode-go" => "https://opencode.ai/zen/go/v1/usage",
         "minimax-coding-plan" => "https://api.minimax.io/v1/token_plan/remains",
         "minimax-cn-coding-plan" => "https://api.minimaxi.com/v1/token_plan/remains",
+        // Base MiniMax IDs share the Token Plan query; a pay-as-you-go key
+        // answers without windows and becomes NoData, never a zero card.
+        "minimax" => "https://api.minimax.io/v1/token_plan/remains",
+        "minimax-cn" => "https://api.minimax.cn/v1/token_plan/remains",
         "deepseek" => "https://api.deepseek.com/user/balance",
-        "stepfun" => "https://api.stepfun.com/v1/accounts",
+        "stepfun" | "stepfun-step-plan" => "https://api.stepfun.com/v1/accounts",
+        "stepfun-ai" | "stepfun-ai-step-plan" => "https://api.stepfun.ai/v1/accounts",
         _ => return Err(QuotaStatus::Unsupported),
     }
     .into();
@@ -491,50 +654,21 @@ fn add_count(w: &mut QuotaWindow, limit: &Value, used: &Value, remaining: &Value
     }
 }
 
-fn parse(provider: &str, body: &Value, now: i64) -> ProviderQuota {
+fn parse(provider: &str, body: &Value) -> ProviderQuota {
     let mut q = ProviderQuota::empty(QuotaStatus::Ready);
     match provider {
-        "openai" => {
-            q.plan = body["plan_type"].as_str().map(str::to_owned);
-            for id in ["primary_window", "secondary_window"] {
-                let v = &body["rate_limit"][id];
-                if let Some(used) = percent(&v["used_percent"]) {
-                    let span = v["limit_window_seconds"].as_u64();
-                    let kind = if span == Some(604800) {
-                        QuotaWindowKind::Weekly
-                    } else {
-                        QuotaWindowKind::Rolling
-                    };
-                    q.windows.push(window(
-                        id,
-                        kind,
-                        Some(used),
-                        timestamp(&v["reset_at"]).or_else(|| {
-                            v["reset_after_seconds"]
-                                .as_i64()
-                                .filter(|s| *s > 0)
-                                .map(|s| now.saturating_add(s))
-                        }),
-                        span,
-                    ));
-                }
-            }
-            let c = &body["credits"];
-            if c["unlimited"].as_bool() == Some(true) {
-                q.balances.push(QuotaBalance {
-                    unit: "credits".into(),
-                    remaining: String::new(),
-                    unlimited: true,
-                });
-            } else if c["has_credits"].as_bool() == Some(true) {
-                if let Some(amount) = money(&c["balance"]) {
-                    q.balances.push(QuotaBalance {
-                        unit: "credits".into(),
-                        remaining: amount,
-                        unlimited: false,
-                    });
-                }
-            }
+        "commandcode" => parse_commandcode(body, &mut q),
+        "ollama-cloud" => parse_ollama(body, &mut q),
+        "opencode-go" => parse_opencode_go(body, &mut q),
+        "openrouter" => parse_dollar_balance(body, &mut q, "USD"),
+        "siliconflow" => parse_total_balance(body, &mut q, "USD"),
+        "siliconflow-cn" => parse_total_balance(body, &mut q, "CNY"),
+        "moonshotai" => parse_available_balance(body, &mut q, "USD"),
+        "moonshotai-cn" => parse_available_balance(body, &mut q, "CNY"),
+        "zhipuai" => parse_zhipu_balance(body, &mut q, "CNY"),
+        "zai" => parse_zhipu_balance(body, &mut q, "USD"),
+        "minimax" | "minimax-cn" | "minimax-coding-plan" | "minimax-cn-coding-plan" => {
+            parse_minimax(body, &mut q)
         }
         "google" => {
             for v in body["buckets"].as_array().into_iter().flatten() {
@@ -604,7 +738,6 @@ fn parse(provider: &str, body: &Value, now: i64) -> ProviderQuota {
             }
         }
         "kimi-code-plan-cn" | "kimi-code-plan-global" => parse_kimi(body, &mut q),
-        "minimax-coding-plan" | "minimax-cn-coding-plan" => parse_minimax(body, &mut q),
         "deepseek" => {
             for v in body["balance_infos"].as_array().into_iter().flatten() {
                 let (Some(unit), Some(remaining)) =
@@ -621,7 +754,7 @@ fn parse(provider: &str, body: &Value, now: i64) -> ProviderQuota {
                 }
             }
         }
-        "stepfun" => {
+        "stepfun" | "stepfun-ai" | "stepfun-ai-step-plan" | "stepfun-step-plan" => {
             if body["object"].as_str() == Some("account") {
                 if let Some(remaining) = money(&body["balance"]) {
                     q.balances.push(QuotaBalance {
@@ -638,6 +771,235 @@ fn parse(provider: &str, body: &Value, now: i64) -> ProviderQuota {
         q.status = QuotaStatus::NoData;
     }
     q
+}
+
+/// Magpie's money without the sign: two decimals, as the vendors print them.
+fn format_amount(v: f64) -> String {
+    format!("{v:.2}")
+}
+
+/// Command Code's credits reply: the plan's 5-hour and weekly windows plus
+/// the dollars left on the account. Shapes from Magpie's commandcode_plan.go
+/// (MIT): `used/cap` counters, `resetAt` in seconds or milliseconds, and the
+/// CLI's own plan-name table.
+fn parse_commandcode(body: &Value, q: &mut ProviderQuota) {
+    const PLANS: &[(&str, &str)] = &[
+        ("individual-provider", "Provider"),
+        ("individual-pro-v1", "Pro"),
+        ("individual-goat", "GOAT"),
+        ("individual-ultra", "Ultra"),
+        ("individual-max", "Max"),
+        ("individual-pro", "Pro"),
+        ("individual-go", "Go"),
+        ("teams-pro", "Teams Pro"),
+    ];
+    let credits = &body["credits"];
+    q.plan = credits["planId"].as_str().map(|id| {
+        let normalized = id.to_lowercase().replace('_', "-");
+        PLANS
+            .iter()
+            .find(|(prefix, _)| normalized.starts_with(prefix))
+            .map(|(_, name)| (*name).to_owned())
+            .unwrap_or_else(|| id.to_owned())
+    });
+    let limits = &body["windowLimits"];
+    for (key, id, kind, span) in [
+        (
+            "fiveHour",
+            "fiveHour",
+            QuotaWindowKind::Rolling,
+            Some(18000),
+        ),
+        ("weekly", "weekly", QuotaWindowKind::Weekly, Some(604800)),
+    ] {
+        let w = &limits[key];
+        if let (Some(used), Some(cap)) = (number(&w["used"]), number(&w["cap"]))
+            && cap > 0.0
+        {
+            q.windows.push(window(
+                id,
+                kind,
+                Some((used / cap * 100.0).clamp(0.0, 100.0)),
+                timestamp(&w["resetAt"]),
+                span,
+            ));
+        }
+    }
+    let mut left = 0.0;
+    let mut any = false;
+    for key in ["monthlyCredits", "purchasedCredits", "freeCredits"] {
+        if let Some(v) = number(&credits[key]) {
+            left += v.max(0.0);
+            any = true;
+        }
+    }
+    if any {
+        q.balances.push(QuotaBalance {
+            unit: "USD".into(),
+            remaining: format_amount(left),
+            unlimited: false,
+        });
+    }
+}
+
+/// Ollama Cloud's balance reply: the plan's included allowance (dollars or
+/// legacy session/weekly limits) plus purchased credits. Shapes from Magpie's
+/// ollama_usage.go (MIT).
+fn parse_ollama(body: &Value, q: &mut ProviderQuota) {
+    let included = &body["included"];
+    for (key, id, kind, span) in [
+        ("session", "session", QuotaWindowKind::Rolling, None),
+        ("weekly", "weekly", QuotaWindowKind::Weekly, Some(604800)),
+    ] {
+        let limit = &included[key];
+        if let Some(left) = number(&limit["remaining_percent"]) {
+            q.windows.push(window(
+                id,
+                kind,
+                Some((100.0 - left).clamp(0.0, 100.0)),
+                timestamp(&limit["resets_at"]),
+                span,
+            ));
+        }
+    }
+    if let (Some(allowance), Some(left)) = (
+        number(&included["allowance_usd"]),
+        number(&included["balance_usd"]),
+    ) && allowance > 0.0
+    {
+        let used = (allowance - left).clamp(0.0, allowance) / allowance * 100.0;
+        let mut w = window(
+            "allowance",
+            QuotaWindowKind::Rolling,
+            Some(used),
+            timestamp(&included["period"]["until"]),
+            None,
+        );
+        if let (Some(from), Some(until)) = (
+            timestamp(&included["period"]["from"]),
+            timestamp(&included["period"]["until"]),
+        ) && until > from
+        {
+            w.span_seconds = Some((until - from).max(0) as u64);
+            let days = (until - from) as f64 / 86400.0;
+            if (27.0..=32.0).contains(&days) {
+                w.id = "month".into();
+                w.kind = QuotaWindowKind::Monthly;
+            }
+        }
+        w.remaining = Some(format_amount(left.max(0.0)));
+        w.limit = Some(format_amount(allowance));
+        q.windows.push(w);
+    }
+    if let Some(purchased) = number(&body["purchased"]["balance_usd"]) {
+        q.balances.push(QuotaBalance {
+            unit: "USD".into(),
+            remaining: format_amount(purchased),
+            unlimited: false,
+        });
+    }
+}
+
+/// OpenCode Go's usage reply: rolling, weekly and monthly windows.
+/// From Magpie's readOpenCodeGo (MIT). A 0% window names no reset.
+fn parse_opencode_go(body: &Value, q: &mut ProviderQuota) {
+    for (key, id, kind, span) in [
+        ("rolling", "rolling", QuotaWindowKind::Rolling, Some(18000)),
+        ("weekly", "weekly", QuotaWindowKind::Weekly, Some(604800)),
+        ("monthly", "monthly", QuotaWindowKind::Monthly, None),
+    ] {
+        let w = &body["usage"][key];
+        // A 0% window names a reset nothing happens at; Magpie leaves it
+        // out rather than showing an idle gauge.
+        if let Some(used) = percent(&w["percent"]).filter(|p| *p > 0.0) {
+            q.windows.push(window(
+                id,
+                kind,
+                Some(used),
+                timestamp(&w["resetsAt"]),
+                span,
+            ));
+        }
+    }
+}
+
+/// OpenRouter's credits reply: what is left of the dollars bought.
+/// From Magpie's readOpenRouter (MIT).
+fn parse_dollar_balance(body: &Value, q: &mut ProviderQuota, unit: &str) {
+    if let (Some(credits), Some(used)) = (
+        number(&body["data"]["total_credits"]),
+        number(&body["data"]["total_usage"]),
+    ) {
+        q.balances.push(QuotaBalance {
+            unit: unit.into(),
+            remaining: format_amount(credits - used),
+            unlimited: false,
+        });
+    }
+}
+
+/// SiliconFlow's user-info reply. From Magpie's readSiliconFlow (MIT).
+fn parse_total_balance(body: &Value, q: &mut ProviderQuota, unit: &str) {
+    if let Some(total) = number(&body["data"]["totalBalance"]) {
+        q.balances.push(QuotaBalance {
+            unit: unit.into(),
+            remaining: format_amount(total),
+            unlimited: false,
+        });
+    }
+}
+
+/// Moonshot's balance reply. From Magpie's readMoonshot (MIT).
+fn parse_available_balance(body: &Value, q: &mut ProviderQuota, unit: &str) {
+    if let Some(available) = number(&body["data"]["available_balance"]) {
+        q.balances.push(QuotaBalance {
+            unit: unit.into(),
+            remaining: format_amount(available),
+            unlimited: false,
+        });
+    }
+}
+
+/// Whether a Zhipu/Z.ai account-report envelope refuses the key
+/// (codes 1000-1005: wrong, missing, expired or single-sign-on keys).
+/// From Magpie's zhipu_envelope.go (MIT).
+fn zhipu_key_refused(body: &Value) -> bool {
+    let code = body["code"]
+        .as_i64()
+        .or_else(|| body["error"]["code"].as_str()?.parse::<i64>().ok());
+    code.is_some_and(|code| (1000..=1005).contains(&code))
+}
+
+fn zhipu_envelope_ok(body: &Value) -> bool {
+    if body["success"].as_bool() == Some(false) {
+        return false;
+    }
+    match body["code"].as_i64() {
+        Some(200) | None if body["error"].is_null() => true,
+        _ => false,
+    }
+}
+
+/// Zhipu/Z.ai base account report: the cash left to spend. A refused key is
+/// NeedsAuth; any other envelope failure is Unavailable, never a zero.
+/// From Magpie's readZhipuBalance (MIT), pay-as-you-go semantics: a zero
+/// balance is a real reading on the base endpoint.
+fn parse_zhipu_balance(body: &Value, q: &mut ProviderQuota, unit: &str) {
+    if !zhipu_envelope_ok(body) {
+        q.status = if zhipu_key_refused(body) {
+            QuotaStatus::NeedsAuth
+        } else {
+            QuotaStatus::Unavailable
+        };
+        return;
+    }
+    if let Some(balance) = money(&body["data"]["availableBalance"]) {
+        q.balances.push(QuotaBalance {
+            unit: unit.into(),
+            remaining: balance,
+            unlimited: false,
+        });
+    }
 }
 
 fn parse_copilot(body: &Value, q: &mut ProviderQuota) {
@@ -694,6 +1056,10 @@ fn parse_copilot(body: &Value, q: &mut ProviderQuota) {
 fn parse_minimax(body: &Value, q: &mut ProviderQuota) {
     let payload = body.get("data").filter(|v| v.is_object()).unwrap_or(body);
     let verdict = payload.get("base_resp").or_else(|| body.get("base_resp"));
+    if verdict.is_none() {
+        q.status = QuotaStatus::Unavailable;
+        return;
+    }
     if let Some(code) = verdict
         .and_then(|v| v["status_code"].as_i64())
         .filter(|n| *n != 0)
@@ -714,7 +1080,11 @@ fn parse_minimax(body: &Value, q: &mut ProviderQuota) {
     .find_map(|key| payload[*key].as_str().filter(|s| !s.trim().is_empty()))
     .map(str::to_owned);
     for bucket in payload["model_remains"].as_array().into_iter().flatten() {
-        let Some(model) = bucket["model_name"].as_str() else {
+        let Some(model) = bucket["model_name"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
             continue;
         };
         for (id, kind, start, end, left, status) in [
@@ -738,13 +1108,13 @@ fn parse_minimax(body: &Value, q: &mut ProviderQuota) {
             let state = bucket[status].as_i64();
             // Percent-bearing legacy replies may omit status; status 3 is not
             // a metered allowance. Never fabricate a window from an absent value.
-            if state.is_some_and(|state| !matches!(state, 1 | 2)) {
+            if state == Some(3) {
                 continue;
             }
             let used = if state == Some(2) {
                 Some(100.0)
             } else {
-                percent(&bucket[left]).map(|n| 100.0 - n)
+                number(&bucket[left]).map(|n| (100.0 - n).clamp(0.0, 100.0))
             };
             if used.is_none() {
                 continue;
@@ -752,9 +1122,10 @@ fn parse_minimax(body: &Value, q: &mut ProviderQuota) {
             let reset = timestamp(&bucket[end]);
             let span = timestamp(&bucket[start])
                 .zip(reset)
-                .and_then(|(a, b)| (b > a).then_some((b - a) as u64));
+                .and_then(|(a, b)| (b > a).then_some((b - a) as u64))
+                .or((kind == QuotaWindowKind::Weekly).then_some(604800));
             let mut w = window(&format!("{model}:{id}"), kind, used, reset, span);
-            if model != "general" {
+            if !model.eq_ignore_ascii_case("general") {
                 w.model = Some(model.into());
             }
             q.windows.push(w);
@@ -765,7 +1136,16 @@ fn parse_minimax(body: &Value, q: &mut ProviderQuota) {
 fn kimi_reset(value: &Value) -> Option<i64> {
     ["resetTime", "resetAt", "reset_time", "reset_at"]
         .iter()
-        .find_map(|key| timestamp(&value[*key]))
+        .find_map(|key| {
+            timestamp(&value[*key]).or_else(|| {
+                let n = number(&value[*key]).filter(|n| *n > 0.0)?;
+                Some(if n > 1e11 {
+                    (n / 1000.0) as i64
+                } else {
+                    n as i64
+                })
+            })
+        })
 }
 
 fn kimi_counts(id: &str, kind: QuotaWindowKind, span: Option<u64>, value: &Value) -> QuotaWindow {
@@ -773,15 +1153,11 @@ fn kimi_counts(id: &str, kind: QuotaWindowKind, span: Option<u64>, value: &Value
     let Some(total) = number(&value["limit"]).filter(|n| *n > 0.0) else {
         return w;
     };
-    // CodexBar: used is authoritative if remaining contradicts it. Missing or
-    // invalid counters remain unknown rather than becoming a zero-percent gauge.
-    let left = number(&value["used"])
-        .filter(|n| *n >= 0.0)
-        .map(|used| (total - used).max(0.0))
-        .or_else(|| number(&value["remaining"]).filter(|n| *n >= 0.0 && *n <= total));
-    if let Some(left) = left {
-        w.used_percent = Some(((total - left) / total * 100.0).clamp(0.0, 100.0));
-        w.remaining = Some(left.to_string());
+    let used =
+        number(&value["used"]).or_else(|| number(&value["remaining"]).map(|left| total - left));
+    if let Some(used) = used {
+        w.used_percent = Some((used / total * 100.0).clamp(0.0, 100.0));
+        w.remaining = Some((total - used).max(0.0).to_string());
         w.limit = money(&value["limit"]);
     }
     w
@@ -790,20 +1166,35 @@ fn kimi_counts(id: &str, kind: QuotaWindowKind, span: Option<u64>, value: &Value
 fn parse_kimi(body: &Value, q: &mut ProviderQuota) {
     let mut counts = Vec::new();
     for (i, v) in body["limits"].as_array().into_iter().flatten().enumerate() {
-        let duration = v["window"]["duration"].as_u64().filter(|n| *n > 0);
-        let span = match v["window"]["timeUnit"].as_str() {
-            Some("TIME_UNIT_MINUTE") => duration.and_then(|n| n.checked_mul(60)),
-            Some("TIME_UNIT_HOUR") => duration.and_then(|n| n.checked_mul(3600)),
-            Some("TIME_UNIT_SECOND") => duration,
-            Some("TIME_UNIT_DAY") => duration.and_then(|n| n.checked_mul(86400)),
-            _ => None,
+        let duration = number(&v["window"]["duration"]).unwrap_or(0.0);
+        let unit = v["window"]["timeUnit"].as_str().unwrap_or_default();
+        let seconds = if unit.contains("MINUTE") {
+            60.0
+        } else if unit.contains("HOUR") {
+            3600.0
+        } else if unit.contains("DAY") {
+            86400.0
+        } else if unit.contains("WEEK") {
+            604800.0
+        } else if unit.contains("MONTH") {
+            2592000.0
+        } else {
+            0.0
         };
+        let span = (duration * seconds > 0.0).then_some((duration * seconds) as u64);
         let d = if v["detail"].is_object() {
             &v["detail"]
         } else {
             &v["window"]
         };
-        let w = kimi_counts(&format!("limit-{i}"), QuotaWindowKind::Rolling, span, d);
+        let kind = if span == Some(2592000) {
+            QuotaWindowKind::Monthly
+        } else if span == Some(604800) {
+            QuotaWindowKind::Weekly
+        } else {
+            QuotaWindowKind::Rolling
+        };
+        let w = kimi_counts(&format!("limit-{i}"), kind, span, d);
         if w.used_percent.is_some() {
             counts.push(w);
         }
@@ -817,45 +1208,54 @@ fn parse_kimi(body: &Value, q: &mut ProviderQuota) {
     if weekly.used_percent.is_some() {
         counts.push(weekly);
     }
-    for (id, kind, span) in [
-        ("limit_5h", QuotaWindowKind::Rolling, Some(18000)),
-        ("limit_7d", QuotaWindowKind::Weekly, Some(604800)),
-        ("limit_month_total", QuotaWindowKind::Monthly, None),
+    let mut shares = Vec::new();
+    for (id, camel, kind, span) in [
+        ("limit_5h", "limit5h", QuotaWindowKind::Rolling, Some(18000)),
+        ("limit_7d", "limit7d", QuotaWindowKind::Weekly, Some(604800)),
+        (
+            "limit_month_total",
+            "limitMonthTotal",
+            QuotaWindowKind::Monthly,
+            Some(2592000),
+        ),
+        (
+            "limit_month_code",
+            "limitMonthCode",
+            QuotaWindowKind::Monthly,
+            Some(2592000),
+        ),
     ] {
-        let pool = &body["usages"][id];
-        let Some(ratio) = number(&pool["used_ratio"]).filter(|n| *n >= 0.0) else {
+        let pools = &body["usages"];
+        let pool = pools
+            .get(id)
+            .filter(|v| v.is_object())
+            .unwrap_or(&pools[camel]);
+        let Some(ratio) = number(&pool["used_ratio"]).or_else(|| number(&pool["usedRatio"])) else {
             continue;
         };
-        let mut w = window(
+        if shares.iter().any(|w: &QuotaWindow| w.span_seconds == span) {
+            continue;
+        }
+        let w = window(
             id,
             kind,
-            Some(ratio.min(1.0) * 100.0),
+            Some((ratio * 100.0).clamp(0.0, 100.0)),
             kimi_reset(pool),
             span,
         );
-        if kind != QuotaWindowKind::Monthly {
-            // Count and ratio clocks differing by <=2 seconds describe one
-            // quota. Keep the tighter value only for matching windows/resets;
-            // counters from another period must not override a new zero pool.
-            for count in counts
+        shares.push(w);
+    }
+    if !shares.is_empty() {
+        counts.retain(|w| {
+            !shares
                 .iter()
-                .filter(|c| c.span_seconds == span && c.kind == kind)
-            {
-                if count
-                    .resets_at
-                    .zip(w.resets_at)
-                    .is_some_and(|(a, b)| a.abs_diff(b) <= 2)
-                    && count.used_percent > w.used_percent
-                {
-                    w.used_percent = count.used_percent;
-                    w.resets_at = count.resets_at;
-                    w.remaining = count.remaining.clone();
-                    w.limit = count.limit.clone();
-                }
-            }
-            counts.retain(|c| c.kind != kind || c.span_seconds != span);
-        }
-        q.windows.push(w);
+                .any(|share| share.span_seconds == w.span_seconds)
+        });
+        counts.extend(shares);
+        counts.sort_by_key(|w| w.span_seconds.unwrap_or(u64::MAX));
+    }
+    if counts.is_empty() {
+        q.status = QuotaStatus::Unavailable;
     }
     q.windows.extend(counts);
 }

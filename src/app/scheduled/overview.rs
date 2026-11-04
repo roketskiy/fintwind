@@ -1,6 +1,7 @@
 use crate::ui::menu::{ContextMenuHandle, MenuAlign, MenuItem, dropdown_menu};
 
 use super::*;
+use ely_gpui_component::data_display::{Badge, Tone};
 
 impl ScheduledTasksView {
     pub(super) fn render_error(&self, message: &SharedString, cx: &mut Context<Self>) -> Div {
@@ -147,17 +148,17 @@ impl ScheduledTasksView {
             .read(cx)
             .clone();
         let state = TaskState::of(task);
-        let (status, color) = if !enabled {
-            (tr!("scheduled_tasks.paused"), theme.text_tertiary)
-        } else {
-            let color = match state {
-                TaskState::Rejected | TaskState::NotSent | TaskState::Unconfirmed => {
-                    theme.danger_text
-                }
-                _ => theme.text_tertiary,
-            };
-            (state.label(), color)
+        let color = match state {
+            TaskState::Rejected | TaskState::NotSent | TaskState::Unconfirmed => theme.danger_text,
+            _ => theme.text_tertiary,
         };
+        let enabled_badge = Badge::new(tr!(if enabled {
+            "scheduled_tasks.enabled"
+        } else {
+            "scheduled_tasks.paused"
+        }))
+        .tone(if enabled { Tone::Success } else { Tone::Danger })
+        .dot();
         let target = &self.task_targets[task_index];
         let mut metadata = format!(
             "{target} · {} · {}",
@@ -175,17 +176,12 @@ impl ScheduledTasksView {
             ));
         }
         let result_session = last_session(task).filter(|id| self.session_ids.contains(id));
-        div()
-            .id(SharedString::from(format!("scheduled-task-{}", id.0)))
-            .h(self.row_height)
-            .w_full()
-            .min_w_0()
-            .flex()
+        let card = crate::ui::card(&theme)
+            .h_full()
+            .flex_row()
             .items_center()
             .gap_4()
-            .border_b_1()
-            .border_color(theme.border)
-            .px_3()
+            .p_4()
             .child(
                 div()
                     .flex_1()
@@ -206,7 +202,15 @@ impl ScheduledTasksView {
                                 cx,
                                 move |this, window, cx| this.open_task(id, window, cx),
                             ))
-                            .child(div().text_size(ui_px(11.0)).text_color(color).child(status)),
+                            .child(enabled_badge)
+                            .when(enabled, |row| {
+                                row.child(
+                                    div()
+                                        .text_size(ui_px(11.0))
+                                        .text_color(color)
+                                        .child(state.label()),
+                                )
+                            }),
                     )
                     .child(
                         div()
@@ -284,7 +288,15 @@ impl ScheduledTasksView {
                         MenuAlign::BelowRight,
                         move |_| menu.clone(),
                     )),
-            )
+            );
+        div()
+            .id(SharedString::from(format!("scheduled-task-{}", id.0)))
+            .h(self.row_height)
+            .w_full()
+            .min_w_0()
+            .px_3()
+            .py(ui_px(6.0))
+            .child(card)
             .into_any_element()
     }
 
@@ -359,7 +371,7 @@ impl Render for ScheduledTasksView {
             .size_full()
             .min_h_0()
             .min_w_0()
-            .bg(theme.surface)
+            .bg(theme.canvas)
             .relative()
             .flex()
             .flex_col()

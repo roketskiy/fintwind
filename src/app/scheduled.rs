@@ -32,7 +32,8 @@ mod editor;
 mod overview;
 use overview::command_button;
 
-const ROW_HEIGHT: f32 = 112.0;
+// Includes the card's padding, optional outcome line and space for its shadow.
+const ROW_HEIGHT: f32 = 152.0;
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 const PICKER_LIMIT: usize = 40;
 const WEEKDAY_ORDER: [(u8, &str); 7] = [
@@ -244,9 +245,7 @@ impl Editor {
             ScheduleKind::Once => {
                 let at = parse_once_datetime(&self.once_date, &self.time)
                     .ok_or_else(|| tr!("scheduled_tasks.error_datetime"))?;
-                if self.enabled
-                    && at <= Local::now().timestamp().max(0) as u64
-                {
+                if self.enabled && at <= Local::now().timestamp().max(0) as u64 {
                     return Err(tr!("scheduled_tasks.error_past"));
                 }
                 Recurrence::Once { at }

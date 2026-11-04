@@ -1,5 +1,5 @@
 //! Real compiler + native SVG decoder acceptance, without a window or service.
-//! Failure matrix: docs/diagram-native-acceptance.md. No user processes are used.
+//! Failure matrix: docs/dev-notes/diagram-native-acceptance.md. No user processes are used.
 
 use std::{borrow::Cow, path::PathBuf, sync::Arc};
 

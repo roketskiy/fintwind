@@ -2,7 +2,8 @@
 
 Fintwind 在自己的 OpenCode 进程中提供 `fintwind_scheduled_tasks` MCP。需要
 OpenCode 2.1.4 或更新版本，使用其仍标为 experimental 的客户端托管 MCP
-WebSocket 接口。无需安装插件或修改用户的 MCP 配置。
+WebSocket 接口。无需安装插件或修改用户的 MCP 配置。旧版 OpenCode 缺少该接口
+时，普通对话仍可继续。
 
 在「设置 → 通用 → 功能」中开启「定时任务 MCP」。默认关闭；开启后自动建立
 实验性 MCP 连接，当前会话无需重启。关闭时移除工具，已有定时任务继续调度。
@@ -38,27 +39,3 @@ return await tools.fintwind_scheduled_tasks.create({
 `enabled: false` 创建暂停的任务。返回值包含任务 ID、已保存的规则和目标，
 以及 `nextDueAt` 和带时区偏移的 `nextRunLocal`；暂停任务的下次运行时间为
 `null`。daemon 运行时才会调度任务。创建响应丢失时，不应自动重试，以免重复创建。
-
-每个 OpenCode 进程的每个工作区共享一条 MCP 连接。OpenCode 的 Basic 认证
-保护该连接，调用中的 `_meta["ai.opencode/sessionID"]` 用于查找仍然有效的
-Fintwind 会话绑定。缺少绑定、运行时已结束或输入校验失败时不保存任务。
-连接随最后一个会话绑定释放，断线后按退避间隔重连。旧版 OpenCode 缺少该接口
-时记录不可用原因，普通对话仍可继续。
-
-黑盒验证沿用隔离数据目录、环境白名单和 Windows Job Object，运行真实 daemon、
-OpenCode 和本地脚本化模型服务：
-
-```powershell
-python scripts/scheduled-tasks-e2e.py --mcp-only
-```
-
-该验证包含真实模型工具调用、目标和规则保存、变更通知、任务执行及非法输入拒绝，
-也覆盖桌面设置持久化、默认关闭、运行中启停和连续切换。去掉 `--mcp-only` 可继续运行原有调度器验证。
-
-2026-10-27 使用真实 OpenCode 2.1.4 和本地模拟模型服务完成 21 项检查，全部通过。
-该记录不代表完整的模型或版本兼容区间，也不包含设置界面的视觉验证。
-源码协议依据：
-[OpenCode 客户端 MCP 实现](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/client/src/mcp.ts)
-及[服务端接口](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/server/src/handlers/mcp.ts)。
-OpenCode 2.1.4 的[实验性配置定义](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/schema/src/config/experimental.ts)
-没有额外的客户端 MCP 开关。

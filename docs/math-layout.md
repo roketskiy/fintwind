@@ -1,45 +1,23 @@
-# Native formula layout
+# 公式排版说明
 
-Fintwind keeps RaTeX parsing, layout, SVG ink measurement and rasterization on
-bounded background workers. Rendering only reads cached results.
+Fintwind 把 RaTeX 解析、排版、SVG 墨迹测量与光栅化放在有界后台线程，渲染只读
+缓存结果。
 
-## Readability and geometry
+## 可读性与几何
 
-- Inline math uses 1.21 times the surrounding text's em size (KaTeX's default
-  optical compensation); display math uses 1.25 times. Both follow text-size
-  settings. TeX still controls the relative sizes of scripts and large operators.
-- Mixed rows share the shaped text's alphabetic baseline. Formula ascent and
-  descent expand the row as needed; short rows receive symmetric leading instead
-  of a fabricated 80/20 ascent/descent split.
-- SVG framing preserves the TeX layout box and expands it to include outlined
-  ink and one logical pixel of padding. Baseline coordinates move with the
-  viewport origin, not by scaling glyphs. Ink measurement uses the same usvg
-  version as GPUI and runs only on workers. It is inspired by Ely's formula
-  framing: <https://docs.rs/ely-documents/latest/src/ely_documents/math.rs.html>.
-- Source-size, item-count, texture-size, raster-pixel and cache limits remain
-  bounded. An unsupported or oversized formula retains the source fallback.
+- 行内公式取周围文本字号的 1.21 倍（KaTeX 默认视觉补偿），独立公式取 1.25 倍；
+  都跟随字号设置。上下标与大运算符的相对尺寸仍由 TeX 决定。
+- 混合行共享正文基线；公式高度撑开行高，不足时用对称行距，不伪造 80/20 上下分割。
+- SVG 外框保留 TeX 排版盒，并扩展到包住轮廓墨迹与 1 逻辑像素边距。基线随视口
+  原点移动，不缩放字形。墨迹外框处理借鉴 Ely 的公式排版，许可见
+  `licenses/ely-gpui-components-MIT.txt`。
+- 来源长度、条目数、纹理尺寸、光栅像素与缓存均有界；不支持或超限的公式保留源码回退。
 
-## Overflow
+## 超宽公式
 
-An overwide formula occupies its own row at natural size. Only that formula
-scrolls; surrounding prose keeps its wrapping and position. Its small, permanent
-scroll track needs no animation timer.
+超宽公式独占一行按自然尺寸绘制，只有该公式可横向滚动，周围正文保持换行与位置
+不变。其滚动条小而常驻，无需动画计时器。
 
-Use horizontal wheel/trackpad input, Shift+wheel, or click/drag the scroll track.
-Focus the math paragraph and use Left/Right or Home/End. Up/Down chooses between
-multiple overflowing formulas in the same paragraph. Ordinary vertical wheel
-input remains available to the enclosing transcript. Selection and expression
-copying retain the original LaTeX source while scrolled.
-
-## Nonvisual verification
-
-```sh
-cargo check --locked --offline -p fintwind
-python scripts/math-layout-e2e.py --timeout 1200
-```
-
-The runner uses a fresh data directory, an environment whitelist and a Windows
-Job Object containing only its own process tree. It starts no real application,
-daemon or provider. Artifacts are `proof.json` and `test.log` in the printed
-`target/math-layout-e2e/<run>/` directory. These checks do not replace checking
-the visible result in the signed development app when visual testing is requested.
+可用横向滚轮/触控板、Shift+滚轮，或点拖滚动条；聚焦公式段落后用 Left/Right、
+Home/End，同一段落多个超宽公式用 Up/Down 切换。普通纵向滚轮仍作用于外层对话；
+选中与复制保留原始 LaTeX 源码，不受滚动影响。

@@ -37,7 +37,11 @@
 
 ## worktree
 - 新建worktree放在项目的同一个父文件夹下
-- 
+-
+## 文档
+- Git 只放正式介绍/说明文档（`docs/` 根 17 篇：windows、performance、remote-control、remote-control-protocol、goals、scheduled-tasks-mcp、opencode-executable、activity、diagrams、btw、git-history、context-composition、custom-provider-credentials、mermaid-prompt、math-layout、provider-quota、cargo-cache-diagnostics；另有 `licenses/`、`media/`）。
+- 功能开发过程文档（bug 记录、迁移评估、plan、acceptance、failure-matrix、阶段验证）一律写 `docs/dev-notes/`，该目录已 ignore，不提交。
+- `.zcode/plans/` 本地保留，不提交。`docs/` 根新增正式文档需确认后再 `git add`。 
 ## 测试
 - 禁止写单元测试，制作大模块整体黑盒测试和e2e测试
 - 测试不得终止用户或其他会话的进程。禁止按名称、监听端口、命令行子串或目录匹配杀进程；端口冲突应另选随机端口或失败退出。

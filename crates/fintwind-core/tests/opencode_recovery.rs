@@ -8,7 +8,7 @@
 //! the network, starts the real public OpenCode service, or sends a model
 //! request.
 //!
-//! Each case is a behavioural acceptance from `docs/opencode-recovery.md`, not
+//! Each case is a behavioural acceptance from `docs/dev-notes/opencode-recovery.md`, not
 //! a source-string check. The driver's private serve, its per-request Basic
 //! auth, and the driver/`Backend`/`StateStore` interfaces are unchanged; the
 //! driver reconciliation is under construction, so several cases are expected

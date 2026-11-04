@@ -15,13 +15,3 @@
 不会自动改用另一份 OpenCode；仍可修改其他设置或清除此路径。
 
 连接远程 daemon 时，本机文件选择按钮禁用；远程路径可由该主机的配置文件指定。
-
-## 验证
-
-```powershell
-cargo run --locked --package fintwind-core --example opencode_binary_blackbox -- target/opencode-binary-blackbox
-```
-
-黑盒检查使用独立目录，覆盖便携文件名、中文和空格路径、配置重新打开、
-无效路径拒绝保存、临时覆盖优先级、文件删除，以及恢复自动检测。
-检查不启动 OpenCode，不写入用户配置。结果保存在该次运行的 `report.json`。

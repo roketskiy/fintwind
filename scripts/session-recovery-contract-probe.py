@@ -1,4 +1,4 @@
-"""Batch-A contract probe for docs/session-recovery-plan.md against isolated real OpenCode.
+"""Batch-A contract probe for docs/dev-notes/session-recovery-plan.md against isolated real OpenCode.
 
 Verifies on the actual OpenCode binary (v2.2.1): prompt admission with a
 client-supplied input ID, exact-ID history lookup, duplicate-ID behaviour,

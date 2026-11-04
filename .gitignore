@@ -38,6 +38,12 @@ skills-lock.json
 # Generated architecture diagram (archify), local only
 docs/architecture*
 
+# Feature development process notes: local only, never commit.
+docs/dev-notes/
+
+# ZCode session plans: local only, never commit.
+.zcode/plans/
+
 # Cloudflare Worker local state and generated types (regen via `wrangler types`)
 .wrangler/
 workers/**/worker-configuration.d.ts

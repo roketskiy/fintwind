@@ -39,9 +39,17 @@
 - 新建worktree放在项目的同一个父文件夹下
 -
 ## 文档
-- Git 只放正式介绍/说明文档（`docs/` 根 17 篇：windows、performance、remote-control、remote-control-protocol、goals、scheduled-tasks-mcp、opencode-executable、activity、diagrams、btw、git-history、context-composition、custom-provider-credentials、mermaid-prompt、math-layout、provider-quota、cargo-cache-diagnostics；另有 `licenses/`、`media/`）。
-- 功能开发过程文档（bug 记录、迁移评估、plan、acceptance、failure-matrix、阶段验证）一律写 `docs/dev-notes/`，该目录已 ignore，不提交。
-- `.zcode/plans/` 本地保留，不提交。`docs/` 根新增正式文档需确认后再 `git add`。 
+### 存放
+- Git 只放正式介绍/说明文档（`docs/` 根，另有 `licenses/`、`media/`）。
+- 过程稿（bug 记录、迁移评估、plan、acceptance、failure-matrix、阶段验证）一律写 `docs/dev-notes/`，该目录已 ignore，不提交。
+- `.zcode/plans/` 本地保留，不提交。
+- `docs/` 根新增/删除/移动正式文档需先确认；移动或删除时同步修复 README、CHANGELOG、RELEASING 与源码注释中的引用，不留死链。
+### 写作
+- 中文说明体，句子通顺；面向用户/贡献者讲行为、用法、边界。
+- 实现写到模块级（crate、模块、脚本、协议）为止，不展开到函数签名级。
+- 用到的开源项目要点名并注明许可，许可文件放 `docs/licenses/`。
+- 不写过程内容：验证记录、失败用例表、日期验收、“本次”口吻。
+- 只引用 git 跟踪中的文件，不引用 `docs/dev-notes/`。
 ## 测试
 - 禁止写单元测试，制作大模块整体黑盒测试和e2e测试
 - 测试不得终止用户或其他会话的进程。禁止按名称、监听端口、命令行子串或目录匹配杀进程；端口冲突应另选随机端口或失败退出。

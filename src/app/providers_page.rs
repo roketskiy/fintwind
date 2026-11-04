@@ -266,7 +266,6 @@ impl Fintwind {
         self.load_provider_fields(&id, cx);
         self.providers_detail_scroll
             .set_offset(gpui::Point::default());
-        self.load_selected_provider_quota(false, cx);
         cx.notify();
     }
 
@@ -299,7 +298,7 @@ impl Fintwind {
     /// last visit is already on the roster. Called when the page opens; a
     /// half-finished rename or model edit never survives the visit.
     pub(super) fn reset_providers_page(&mut self, cx: &mut Context<Self>) {
-        self.invalidate_provider_quota();
+        self.invalidate_subscriptions();
         self.exit_provider_form(cx);
         self.providers_renaming = false;
         self.providers_api_key_revealed = false;
@@ -1814,7 +1813,6 @@ impl Fintwind {
                     "icons/lock.svg",
                     tr!("providers.builtin_key_hidden"),
                 ))
-                .children(self.render_provider_quota(&provider.id, theme, cx))
                 .child(div().mt(px(18.0)).child(models_header_with_label(
                     theme,
                     tr!("providers.models_label"),

@@ -682,44 +682,60 @@ impl Fintwind {
             .detach();
         }
         if !self.providers_auth_loading {
-            self.providers_auth_loading = true;
-            let workspace = self.provider_workspace();
-            let daemon = self.daemon.clone();
-            cx.spawn(async move |this, cx| {
-                let integrations = cx
-                    .background_executor()
-                    .spawn(async move {
-                        workspace
-                            .map(|(binary, directory)| {
-                                fintwind_client::persistence::StateStore::remote(daemon)
-                                    .fetch_integrations(binary, directory)
-                            })
-                            .unwrap_or_else(|| {
-                                Err(std::io::Error::other("no OpenCode server to ask"))
-                            })
-                    })
-                    .await;
-                let _ = this.update(cx, |this, cx| {
-                    this.providers_auth_loading = false;
-                    match integrations {
-                        Ok(integrations) => {
-                            this.apply_integrations(integrations);
-                            this.load_selected_provider_quota(false, cx);
-                        }
-                        Err(error) => {
-                            if report_failure {
-                                this.show_toast(tr!(
-                                    "providers.auth_load_failed",
-                                    error = error.to_string()
-                                ));
-                            }
+            self.fetch_provider_integrations(report_failure, cx);
+        }
+    }
+
+    /// Shared by page entry and credential changes. Starting a newer read
+    /// supersedes older callbacks, including their loading/error state.
+    fn fetch_provider_integrations(&mut self, report_failure: bool, cx: &mut Context<Self>) {
+        self.providers_integrations_generation =
+            self.providers_integrations_generation.wrapping_add(1);
+        let generation = self.providers_integrations_generation;
+        self.providers_auth_loading = true;
+        let workspace = self.provider_workspace();
+        let requested_workspace = workspace.clone();
+        let daemon = self.daemon.clone();
+        cx.spawn(async move |this, cx| {
+            let integrations = cx
+                .background_executor()
+                .spawn(async move {
+                    workspace
+                        .map(|(binary, directory)| {
+                            fintwind_client::persistence::StateStore::remote(daemon)
+                                .fetch_integrations(binary, directory)
+                        })
+                        .unwrap_or_else(|| Err(std::io::Error::other("no OpenCode server to ask")))
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.providers_integrations_generation != generation {
+                    return;
+                }
+                this.providers_auth_loading = false;
+                if this.provider_workspace() != requested_workspace {
+                    this.fetch_provider_integrations(report_failure, cx);
+                    return;
+                }
+                match integrations {
+                    Ok(integrations) => {
+                        this.apply_integrations(integrations);
+                        this.subscriptions_connections_updated(cx);
+                    }
+                    Err(error) => {
+                        this.subscriptions_connections_failed();
+                        if report_failure {
+                            this.show_toast(tr!(
+                                "providers.auth_load_failed",
+                                error = error.to_string()
+                            ));
                         }
                     }
-                    cx.notify();
-                });
-            })
-            .detach();
-        }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Store one integration fetch: the authorized set, the key-method set,
@@ -854,11 +870,11 @@ impl Fintwind {
                         this.exit_provider_form(cx);
                         this.select_provider(builtin_selection_id(&provider_id), cx);
                         this.show_success_toast(tr!("providers.authorized_toast"));
-                        this.refresh_integrations(cx);
                     }
                     Err(error) => this
                         .show_toast(tr!("providers.auth_save_failed", error = error.to_string())),
                 }
+                this.refresh_integrations(cx);
                 cx.notify();
             });
         })
@@ -873,7 +889,7 @@ impl Fintwind {
             return;
         };
         self.providers_auth_loading = true;
-        self.invalidate_provider_quota();
+        self.invalidate_subscriptions();
         self.providers_delete_arming = None;
         let daemon = self.daemon.clone();
         cx.spawn(async move |this, cx| {
@@ -911,11 +927,11 @@ impl Fintwind {
                                 vars = env_names.join(", ")
                             ));
                         }
-                        this.refresh_integrations(cx);
                     }
                     Err(error) => this
                         .show_toast(tr!("providers.auth_save_failed", error = error.to_string())),
                 }
+                this.refresh_integrations(cx);
                 cx.notify();
             });
         })
@@ -1329,31 +1345,12 @@ impl Fintwind {
     }
 
     /// Re-fetch the integration list in the background, so the authorized
-    /// set mirrors the server rather than what this action assumed. Failure
-    /// is quiet — the optimistic set from the action stands.
+    /// set mirrors the server rather than what this action assumed. It uses
+    /// the same generation and workspace guards as the page-entry read.
     pub(super) fn refresh_integrations(&mut self, cx: &mut Context<Self>) {
-        let Some(workspace) = self.provider_workspace() else {
-            return;
-        };
-        let daemon = self.daemon.clone();
-        cx.spawn(async move |this, cx| {
-            let integrations = cx
-                .background_executor()
-                .spawn(async move {
-                    let (binary, directory) = workspace;
-                    fintwind_client::persistence::StateStore::remote(daemon)
-                        .fetch_integrations(binary, directory)
-                })
-                .await;
-            let _ = this.update(cx, |this, cx| {
-                if let Ok(integrations) = integrations {
-                    this.apply_integrations(integrations);
-                    this.load_selected_provider_quota(false, cx);
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
+        // Credential edits must not reuse the previous account's quota snapshot.
+        self.invalidate_subscriptions();
+        self.fetch_provider_integrations(false, cx);
     }
 
     pub(super) fn switch_custom_provider_account(
@@ -1389,11 +1386,11 @@ impl Fintwind {
                 match result {
                     Ok(id) => {
                         this.clear_provider_probe_results(&id);
-                        this.refresh_integrations(cx);
                     }
                     Err(error) => this
                         .show_toast(tr!("providers.auth_save_failed", error = error.to_string())),
                 }
+                this.refresh_integrations(cx);
                 cx.notify();
             });
         })

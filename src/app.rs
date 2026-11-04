@@ -1981,12 +1981,18 @@ pub struct Fintwind {
     providers_oauth_generation: u64,
     /// The integration fetch (authorization set included) is in flight.
     providers_auth_loading: bool,
+    /// Only the newest integration snapshot may replace connection state.
+    providers_integrations_generation: u64,
     /// A connectivity probe of the selected built-in provider is in flight.
     providers_builtin_catalog_check: Option<providers_fetch::BuiltinCatalogState>,
     /// The id of the built-in provider the current connectivity probe names;
     /// a stale result for a different provider never renders.
     providers_builtin_catalog_check_id: Option<String>,
-    provider_quota: providers_quota::QuotaViewState,
+    provider_quota: providers_quota::SubscriptionBoard,
+    /// Desktop-local subscription cache (Claude/Codex sign-in): account
+    /// isolation, single-flight de-duplication and failure backoff, so
+    /// repeated board opens share one CLI run per account and cooldown.
+    local_quota_cache: std::sync::Arc<fintwind_client::local_quota::LocalQuotaCache>,
     /// Which provider the add form has picked — the picker page, the custom
     /// free-endpoint form, or a chosen built-in provider's key form.
     providers_form_stage: providers_page::ProviderFormStage,
@@ -2175,6 +2181,9 @@ pub struct Fintwind {
     /// What the Usage page's KPIs, daily bars, and model ranking aggregate
     /// over. The heatmap keeps its own fixed week window.
     usage_range: usage_page::UsageRange,
+    usage_tab: usage_page::UsageTab,
+    /// Measured content width, shared by every usage-page grid.
+    usage_content_width: Pixels,
     /// Aggregated view models for the current range, rebuilt when a scan
     /// lands or the range changes. Frames read only this.
     usage_views: usage_page::UsageViews,
@@ -4039,9 +4048,13 @@ impl Fintwind {
                 providers_oauth_draft: None,
                 providers_oauth_generation: 0,
                 providers_auth_loading: false,
+                providers_integrations_generation: 0,
                 providers_builtin_catalog_check: None,
                 providers_builtin_catalog_check_id: None,
                 provider_quota: Default::default(),
+                local_quota_cache: std::sync::Arc::new(
+                    fintwind_client::local_quota::LocalQuotaCache::default(),
+                ),
                 providers_form_stage: Default::default(),
                 models_dev_table: None,
                 models_dev_fetching: false,
@@ -4131,6 +4144,8 @@ impl Fintwind {
                 usage_loaded_label: None,
                 usage_refresh_running: false,
                 usage_range: Default::default(),
+                usage_tab: Default::default(),
+                usage_content_width: px(0.0),
                 usage_views: Default::default(),
                 settings_scroll: ScrollHandle::new(),
                 settings_scrollbar: ScrollbarState::new(),

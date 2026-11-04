@@ -292,6 +292,8 @@ providers.quota_access_denied: 照会が拒否されました。アカウント�
 providers.quota_rate_limited: リクエストが多すぎます。しばらくしてから再試行してください。
 providers.quota_unavailable: 更新できませんでした
 providers.quota_no_data: 利用枠データがありません
+providers.quota_unsupported: 利用枠の照会は未対応です
+providers.quota_no_credential: 利用枠を照会できる認証情報がありません
 providers.quota_measured: "%{time} 更新"
 providers.quota_cached_measured: "前回正常に取得した結果 %{time}"
 providers.quota_resets: "%{time} リセット"
@@ -305,6 +307,8 @@ providers.quota_tool_calls: ツール呼び出し
 providers.quota_chat: チャットリクエスト
 providers.quota_completions: コード補完
 providers.quota_premium: プレミアムリクエスト
+providers.quota_extra_usage: 追加使用量
+providers.quota_in_use: 使用中
 providers.builtin_no_endpoint: このプロバイダーは API Key でのサインインに対応していません（OAuth・環境変数・opencode CLI を使用）。ここでテストできる接続がありません。
 providers.builtin_models_truncated: 他 %{count} 件のモデルは表示されていません
 providers.oauth_cli_hint: "%{name} はここではキーも OAuth も使えません。ターミナルで opencode auth login を実行するか、TUI の /connect を使ってから、このページを更新してください。"
@@ -1621,6 +1625,14 @@ usage_page.providers_caption: 全%{count}プロバイダー
 usage_page.provider_models: "%{count} モデル"
 usage_page.truncated_notice: "%{sessions} 件のセッションをスキャンした時点で上限に達しました。それより古いセッションは以下の集計に含まれていません。"
 usage_page.updated_at: "%{time} 更新"
+usage_page.subscriptions_title: サブスクリプション
+usage_page.statistics_title: 使用量統計
+usage_page.cache_title: キャッシュ使用量
+usage_page.subscriptions_empty: 使用枠を取得できる接続済みサービスはありません
+usage_page.cost_unknown: コストデータなし
+usage_page.connections_failed: 接続済みサービスを取得できません
+usage_page.subscriptions_caption: "%{count} サービス"
+usage_page.history_title: 履歴
 tabs.new_session: 新規セッションタブ
 tabs.close: タブを閉じる
 tabs.waiting: 入力を待っています

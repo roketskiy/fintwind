@@ -57,6 +57,7 @@ pub mod opencode_session;
 pub mod persistence;
 pub mod projectless;
 pub mod provider_quota;
+pub mod local_quota;
 pub mod pull_requests;
 mod scheduled;
 pub mod session_cleanup;

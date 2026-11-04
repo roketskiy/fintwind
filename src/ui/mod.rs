@@ -18,6 +18,21 @@ pub mod tooltip;
 use crate::model::{ActivityKind, SessionStatus};
 use crate::theme::Theme;
 
+/// Shared product card surface. Contents own their padding and layout; the
+/// theme owns the radius, border, lift and inset top highlight.
+pub fn card(theme: &Theme) -> Div {
+    div()
+        .w_full()
+        .min_w_0()
+        .flex()
+        .flex_col()
+        .rounded(theme.card_radius())
+        .border_1()
+        .border_color(theme.card_border())
+        .bg(theme.composer)
+        .shadow(theme.card_shadow())
+}
+
 /// A monochrome icon from the embedded set, tinted via text color.
 pub fn icon(path: &'static str, size: f32, color: Hsla) -> Svg {
     svg()

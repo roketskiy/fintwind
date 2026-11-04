@@ -392,12 +392,14 @@ impl Theme {
         }
     }
 
-    /// Inset 1px top edge: the cards' only implied light source.
+    /// A brighter, softly inset top edge: the cards' only implied light source.
     /// `BoxShadow::inset` paints after the fill and before the border,
-    /// which is exactly a hairline highlight.
+    /// keeping the glow inside the existing card geometry.
     pub fn card_top_highlight(&self) -> BoxShadow {
-        let alpha = if self.is_dark { 0.10 } else { 0.70 };
-        BoxShadow::new(px(0.0), px(1.0), hsla(0.0, 0.0, 1.0, alpha)).inset()
+        let alpha = if self.is_dark { 0.22 } else { 0.92 };
+        BoxShadow::new(px(0.0), px(2.0), hsla(0.0, 0.0, 1.0, alpha))
+            .blur_radius(px(2.0))
+            .inset()
     }
 
     /// Three black-only layers for lift: contact, mid, ambient. The top

@@ -187,7 +187,7 @@ providers.protocol_inherit: プロバイダーから継承
 settings.image_generation_load_failed: "画像生成の設定を読み込めませんでした：%{error}"
 settings.image_generation_save_failed: "画像生成の設定を保存できませんでした：%{error}"
 settings.browser_tools: ブラウザツール
-settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します
+settings.browser_tools_description: 既定でオフ。オンにするとモデルに内蔵ブラウザ操作ツールと説明が渡され、コンテキストを少し消費します。OpenCode 2.1.4 以降が必要
 settings.todo_list: Todo リスト
 settings.todo_list_description: 既定でオフ。オンにすると、エージェントは todowrite でタスクリストを管理でき、入力欄の上に表示されます
 settings.todo_list_failed: "OpenCode の Todo 設定を更新できませんでした: %{error}"

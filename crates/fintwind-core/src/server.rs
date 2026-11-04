@@ -73,6 +73,12 @@ impl Drop for ConnectionGuard {
 pub trait Backend: Send + Sync + 'static {
     fn handle(&self, request: Request, events: EventSink) -> anyhow::Result<ResponsePayload>;
 
+    fn browser_mcp(&self) -> Option<Arc<crate::browser_mcp::Registry>> {
+        None
+    }
+
+    /// Previous plugin wire. Production no longer serves it; the isolated
+    /// e2e harness still drives it directly.
     fn browser_tools(&self) -> Option<Arc<crate::browser_tools::BrowserTools>> {
         None
     }
@@ -580,18 +586,21 @@ pub fn serve(
         .context("could not configure fintwind daemon listener")?;
     let hub = Arc::new(Hub::default());
     let broker = Arc::new(BrowserBroker::new());
-    let backend_tools = backend.browser_tools();
-    let tools = backend_tools.clone().unwrap_or_default();
-    tools.attach(
-        format!(
-            "ws://{}{}",
-            listener.local_addr()?,
-            fintwind_protocol::browser_tools::BROWSER_TOOL_ENDPOINT
-        ),
-        &broker,
-    );
-    if backend_tools.is_some() {
-        crate::opencode_pool::attach_browser_tools(&tools)?;
+    if let Some(registry) = backend.browser_mcp() {
+        registry.attach(&broker);
+    }
+    // Previous plugin wire. Production no longer provides it; the isolated
+    // e2e harness still drives it directly through its own backend.
+    let legacy_tools = backend.browser_tools();
+    if let Some(legacy) = &legacy_tools {
+        legacy.attach(
+            format!(
+                "ws://{}{}",
+                listener.local_addr()?,
+                fintwind_protocol::browser_tools::BROWSER_TOOL_ENDPOINT
+            ),
+            &broker,
+        );
     }
     // The mermaid check endpoint rides the same listener. A failure to
     // install only removes the model's validation tool; the daemon itself
@@ -629,7 +638,7 @@ pub fn serve(
                 let dispatcher = dispatcher.clone();
                 let hub = hub.clone();
                 let broker = broker.clone();
-                let tools = tools.clone();
+                let legacy_tools = legacy_tools.clone();
                 let shutdown = shutdown.clone();
                 let options = options.clone();
                 std::thread::Builder::new()
@@ -637,7 +646,14 @@ pub fn serve(
                     .spawn(move || {
                         let _connection_permit = connection_permit;
                         if let Err(error) = handle_connection(
-                            stream, &token, dispatcher, hub, broker, tools, shutdown, &options,
+                            stream,
+                            &token,
+                            dispatcher,
+                            hub,
+                            broker,
+                            legacy_tools,
+                            shutdown,
+                            &options,
                         ) {
                             eprintln!("fintwind-daemon connection ended: {error:#}");
                         }
@@ -665,7 +681,7 @@ fn handle_connection(
     dispatcher: Arc<RequestDispatcher>,
     hub: Arc<Hub>,
     broker: Arc<BrowserBroker>,
-    tools: Arc<crate::browser_tools::BrowserTools>,
+    legacy_tools: Option<Arc<crate::browser_tools::BrowserTools>>,
     shutdown: Arc<AtomicBool>,
     options: &ServerOptions,
 ) -> anyhow::Result<()> {
@@ -677,21 +693,24 @@ fn handle_connection(
     let config = WebSocketConfig::default()
         .max_message_size(Some(MAX_HANDSHAKE_MESSAGE_BYTES))
         .max_frame_size(Some(MAX_HANDSHAKE_MESSAGE_BYTES));
-    let is_browser_tool = Arc::new(AtomicBool::new(false));
-    let handshake_browser_tool = is_browser_tool.clone();
+    let is_legacy_browser_tool = Arc::new(AtomicBool::new(false));
+    let handshake_legacy_browser_tool = is_legacy_browser_tool.clone();
     let is_mermaid_check = Arc::new(AtomicBool::new(false));
     let handshake_mermaid_check = is_mermaid_check.clone();
+    let legacy_has_tools = legacy_tools.is_some();
     let mut socket = accept_hdr_with_config(
         stream,
         move |request: &HandshakeRequest, response| {
-            if request.uri().path() == fintwind_protocol::browser_tools::BROWSER_TOOL_ENDPOINT {
+            if legacy_has_tools
+                && request.uri().path() == fintwind_protocol::browser_tools::BROWSER_TOOL_ENDPOINT
+            {
                 if request.headers().contains_key("origin") {
                     return Err(handshake_error(
                         StatusCode::FORBIDDEN,
                         "browser tool connections must originate from the private plugin",
                     ));
                 }
-                handshake_browser_tool.store(true, Ordering::Relaxed);
+                handshake_legacy_browser_tool.store(true, Ordering::Relaxed);
                 Ok(response)
             } else if request.uri().path() == fintwind_protocol::mermaid::MERMAID_CHECK_ENDPOINT {
                 if request.headers().contains_key("origin") {
@@ -709,7 +728,8 @@ fn handle_connection(
         Some(config),
     )
     .context("WebSocket handshake failed")?;
-    if is_browser_tool.load(Ordering::Relaxed) {
+    if is_legacy_browser_tool.load(Ordering::Relaxed) {
+        let tools = legacy_tools.context("legacy browser tools are unavailable")?;
         return crate::browser_tools_transport::handle(socket, tools, shutdown);
     }
     if is_mermaid_check.load(Ordering::Relaxed) {

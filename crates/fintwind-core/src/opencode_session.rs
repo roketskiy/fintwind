@@ -527,8 +527,8 @@ fn fork_message_id(message_ids: &[String], retained_turns: usize) -> anyhow::Res
 pub(crate) struct OpenCodeServer {
     child: Arc<Mutex<Child>>,
     pub(crate) scheduled_mcp: Mutex<HashMap<String, std::sync::Weak<crate::scheduled::mcp::Host>>>,
-    pub(crate) browser_tools: Option<Arc<crate::browser_tools::BrowserToolServer>>,
-    _browser_plugin: Option<crate::browser_plugin::BrowserPlugin>,
+    pub(crate) browser_mcp: Mutex<HashMap<String, std::sync::Weak<crate::browser_mcp::Host>>>,
+    _browser_plugin: crate::browser_plugin::BrowserPlugin,
     _context_plugin: crate::context_plugin::ContextPlugin,
     pub(crate) port: u16,
 }
@@ -540,40 +540,26 @@ impl OpenCodeServer {
 
     /// Starts the server with extra environment, so a caller can hand it the
     /// Computer Use configuration the same way a one-shot invocation got it.
+    /// Every private server carries the suppression-only browser plugin: it
+    /// removes OpenCode's built-in desktop browser stack and repeats the
+    /// in-app instruction when the browser MCP is present. Browser capability
+    /// itself rides the per-directory MCP host, not per-server tokens.
     pub(crate) fn start_with_env(
         binary: &Path,
         cwd: &Path,
         environment: &[(String, String)],
     ) -> anyhow::Result<Self> {
-        Self::start_inner(binary, cwd, environment, None, None)
-    }
-
-    pub(crate) fn start_with_browser(
-        binary: &Path,
-        cwd: &Path,
-        tools: Arc<crate::browser_tools::BrowserToolServer>,
-    ) -> anyhow::Result<Self> {
         let plugin = crate::browser_plugin::BrowserPlugin::create(cwd)?;
-        let environment = vec![
-            ("OPENCODE_CONFIG_CONTENT".into(), plugin.config()?),
-            (
-                crate::browser_plugin::ADDRESS_ENV.into(),
-                tools.address().into(),
-            ),
-            (
-                crate::browser_plugin::TOKEN_ENV.into(),
-                tools.token().into(),
-            ),
-        ];
-        Self::start_inner(binary, cwd, &environment, Some(tools), Some(plugin))
+        let mut environment: Vec<(String, String)> = environment.to_vec();
+        environment.push(("OPENCODE_CONFIG_CONTENT".into(), plugin.config()?));
+        Self::start_inner(binary, cwd, &environment, plugin)
     }
 
     fn start_inner(
         binary: &Path,
         cwd: &Path,
         environment: &[(String, String)],
-        browser_tools: Option<Arc<crate::browser_tools::BrowserToolServer>>,
-        browser_plugin: Option<crate::browser_plugin::BrowserPlugin>,
+        browser_plugin: crate::browser_plugin::BrowserPlugin,
     ) -> anyhow::Result<Self> {
         let listener = TcpListener::bind(("127.0.0.1", 0))
             .context("could not reserve a local port for OpenCode")?;
@@ -636,31 +622,11 @@ impl OpenCodeServer {
         let server = Self {
             child: Arc::new(Mutex::new(child)),
             scheduled_mcp: Mutex::new(HashMap::new()),
-            browser_tools,
+            browser_mcp: Mutex::new(HashMap::new()),
             _browser_plugin: browser_plugin,
             _context_plugin: context_plugin,
             port,
         };
-        if let Some(tools) = &server.browser_tools {
-            let child = Arc::downgrade(&server.child);
-            let tools = Arc::downgrade(tools);
-            thread::Builder::new()
-                .name("fintwind-browser-tool-process".into())
-                .spawn(move || {
-                    loop {
-                        let alive = child.upgrade().is_some_and(|child| {
-                            child.lock().try_wait().is_ok_and(|status| status.is_none())
-                        });
-                        if !alive {
-                            if let Some(tools) = tools.upgrade() {
-                                tools.revoke();
-                            }
-                            break;
-                        }
-                        thread::sleep(Duration::from_millis(100));
-                    }
-                })?;
-        }
         let started_at = Instant::now();
         loop {
             if server_is_ready(&server) {
@@ -763,9 +729,6 @@ impl OpenCodeServer {
     /// Terminates and reaps the owned child. The timeout is a graceful-exit
     /// budget; a server that ignores TERM is killed afterward.
     pub(crate) fn shutdown(&self, timeout: Duration) {
-        if let Some(tools) = &self.browser_tools {
-            tools.revoke();
-        }
         release_port(self.port);
         let mut child = self.child.lock();
         if child.try_wait().is_ok_and(|status| status.is_some()) {
@@ -797,9 +760,6 @@ impl OpenCodeServer {
 
 impl Drop for OpenCodeServer {
     fn drop(&mut self) {
-        if let Some(tools) = &self.browser_tools {
-            tools.revoke();
-        }
         release_port(self.port);
         let mut child = self.child.lock();
         if child.try_wait().is_ok_and(|status| status.is_some()) {

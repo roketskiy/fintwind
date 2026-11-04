@@ -457,17 +457,25 @@ impl BrowserBroker {
             );
         }
         // `Open` is launcher-only: the lookup never consults page
-        // publications. Every other action is page-only and never resolves
-        // through a launcher. Pages match by page id only: session, runtime
-        // and grant ids are ignored because there is no authorization.
-        let (owner_subscriber_id, owner_outgoing) = if matches!(action, BrowserAction::Open { .. })
-        {
+        // publications, and the request carries the launcher's scope no
+        // matter which scope the caller named. The GUI answers opens
+        // against its launcher registration, and completion checks the
+        // launcher the same way — a caller scope would neither route nor
+        // ever verify.
+        let (owner_subscriber_id, owner_outgoing, scope) = if matches!(
+            action,
+            BrowserAction::Open { .. }
+        ) {
             let Some(host) = state.hosts.first() else {
                 return BrowserResult::error(
                     "no browser host (launcher) is connected; open this chat in the local Fintwind window",
                 );
             };
-            (host.subscriber_id, host.outgoing.clone())
+            (
+                host.subscriber_id,
+                host.outgoing.clone(),
+                host.scope.clone(),
+            )
         } else {
             let Some(publication) = state
                 .publications
@@ -476,7 +484,11 @@ impl BrowserBroker {
             else {
                 return BrowserResult::error("no live browser page is available for this page id");
             };
-            (publication.subscriber_id, publication.outgoing.clone())
+            (
+                publication.subscriber_id,
+                publication.outgoing.clone(),
+                scope,
+            )
         };
         if state
             .pending

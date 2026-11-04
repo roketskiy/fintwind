@@ -437,7 +437,7 @@ settings.image_generation_save_failed:
 settings.browser_tools:
   en: Browser tools
 settings.browser_tools_description:
-  en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context
+  en: Off by default. When on, the model gets the built-in browser tools and instructions, which use some context. Requires OpenCode 2.1.4+
 settings.todo_list:
   en: Todo list
 settings.todo_list_description:
